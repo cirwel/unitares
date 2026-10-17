@@ -5,12 +5,18 @@ Handles executing resolutions from dialectic sessions.
 Applies conditions and resumes agents based on peer agreement.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
+from types import SimpleNamespace
 
 from src.dialectic_protocol import DialecticSession, Resolution
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.logging_utils import get_logger
-from ..support.condition_parser import parse_condition, apply_condition
+from ..support.condition_parser import (
+    apply_condition,
+    apply_condition_to_metadata,
+    parse_condition,
+)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
 logger = get_logger(__name__)
@@ -43,7 +49,80 @@ async def agent_pause_is_live(agent_id: str) -> bool:
     return bool(meta is not None and getattr(meta, "status", None) == "paused")
 
 
-async def execute_resolution(session: DialecticSession, resolution: Resolution) -> Dict[str, Any]:
+async def record_resolution_outcome(
+    session: DialecticSession,
+    resolution: Resolution,
+    execution_result: Dict[str, Any],
+) -> None:
+    """Record a successfully persisted dialectic resolution outcome.
+
+    The terminal session row is the effect owner.  Callers that still need to
+    perform that write pass ``record_outcome=False`` to ``execute_resolution``
+    and invoke this helper only after the write succeeds, so a CAS refusal or
+    already-terminal answer cannot manufacture a successful outcome event.
+    """
+    applied_conditions = execution_result.get("applied_conditions") or []
+    reconciliation_reason = None
+    if execution_result.get("manually_reconciled"):
+        reconciliation_reason = execution_result.get(
+            "reconciliation_reason"
+        ) or execution_result.get("reason")
+    try:
+        applied_count = sum(
+            1
+            for condition in applied_conditions
+            if isinstance(condition, dict) and condition.get("status") == "applied"
+        )
+        await _record_outcome_event_inline({
+            # In-process emitter, computed server-side from session protocol
+            # state -- vouched so its server-observed provenance is honoured,
+            # up to what that provenance itself asserts.
+            "_trusted_ingestion": True,
+            "agent_id": session.paused_agent_id,
+            "outcome_type": "dialectic_resolved",
+            "is_bad": False,
+            "outcome_score": 1.0,
+            "decision_action": "proceed",
+            # Dialectic resolution is computed server-side from session
+            # protocol state (conditions applied, synthesis convergence),
+            # not the agent's claim of resolution. Architect council
+            # 2026-05-19 flagged dialectic as peer-mediated and not a clean
+            # fit for the v1 enum; classify as server_observation pending v2.
+            "verification_source": "server_observation",
+            "detail": {
+                "dialectic_session_id": session.session_id,
+                "session_type": getattr(session, "session_type", None),
+                "root_cause": resolution.root_cause,
+                "conditions": resolution.conditions,
+                "conditions_applied": applied_count,
+                "conditions_total": len(applied_conditions),
+                "synthesis_round": session.synthesis_round,
+                "resolution_hash": resolution.hash(),
+                "discovery_id": session.discovery_id,
+                "status_changed": bool(execution_result.get("status_changed")),
+                "no_op": bool(execution_result.get("no_op")),
+                "manually_reconciled": bool(
+                    execution_result.get("manually_reconciled")
+                ),
+                "reconciliation_reason": reconciliation_reason,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "outcome_event emit on dialectic_resolved failed for session %s: %s",
+            session.session_id,
+            exc,
+        )
+
+
+async def execute_resolution(
+    session: DialecticSession,
+    resolution: Resolution,
+    *,
+    record_outcome: bool = True,
+    expected_pause_token: Optional[str] = None,
+    enforce_pause_token: bool = False,
+) -> Dict[str, Any]:
     """
     Execute the resolution: resume agent with agreed conditions.
     
@@ -64,13 +143,15 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
     # cache.set awaits (~16s) on every resolution call.
     await mcp_server.load_metadata_async()
 
-    if agent_id not in mcp_server.agent_metadata:
+    if agent_id not in mcp_server.agent_metadata and not enforce_pause_token:
         raise ValueError(f"Agent '{agent_id}' not found")
-    
-    meta = mcp_server.agent_metadata[agent_id]
-    
-    # Verify agent is actually paused
-    if meta.status != "paused":
+
+    meta = mcp_server.agent_metadata.get(agent_id)
+
+    # Legacy callers execute against the live cache as before. Durable callers
+    # use the PostgreSQL pause-token CAS below as authority; a cache status read
+    # cannot safely decide whether a later pause generation may be resumed.
+    if not enforce_pause_token and meta.status != "paused":
         return {
             "success": False,
             "warning": f"Agent status is '{meta.status}', not 'paused'. No action taken."
@@ -106,16 +187,58 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
                 "cannot authorize its own resume. No action taken."
             ),
         }
+
+    reviewed_work_authorship = read_reviewed_work_authorship(
+        getattr(session, "paused_agent_state", {}),
+        expected_declared_by_agent_id=agent_id,
+    )
+    if reviewed_work_authorship.is_invalid:
+        logger.warning("Refusing resume: reviewed-work authorship metadata is malformed")
+        return {
+            "success": False,
+            "refused": "review_authorship_invalid",
+            "warning": (
+                "Reviewed-work authorship metadata is malformed, so independent "
+                "review authority cannot be established. No action taken."
+            ),
+        }
+    if reviewed_work_authorship.recuses(
+        session.reviewer_agent_id, paused_agent_id=agent_id
+    ):
+        logger.warning(
+            "Refusing resume: assigned reviewer authored the reviewed work"
+        )
+        return {
+            "success": False,
+            "refused": "reviewer_author_conflict",
+            "warning": (
+                "The assigned reviewer is a declared author of the reviewed work "
+                "and cannot independently authorize this resume. No action taken."
+            ),
+        }
     
     # Apply conditions using condition parser
+    original_conditions = list(
+        getattr(meta, "dialectic_conditions", None) or []
+    ) if meta is not None else []
+    staged_meta = SimpleNamespace(dialectic_conditions=[])
     applied_conditions = []
     for condition in resolution.conditions:
         try:
             # Parse condition into structured format
             parsed = parse_condition(condition)
-            
-            # Apply condition to agent metadata
-            apply_result = await apply_condition(parsed, agent_id, mcp_server)
+
+            # A durable effect stages changes off-cache until the authoritative
+            # pause-generation transaction commits. Legacy callers retain the
+            # existing direct cache mutation path.
+            if enforce_pause_token:
+                apply_result = apply_condition_to_metadata(
+                    parsed, agent_id, staged_meta
+                )
+            else:
+                apply_result = await apply_condition(
+                    parsed, agent_id, mcp_server
+                )
             
             applied_conditions.append(apply_result)
         except Exception as e:
@@ -125,40 +248,120 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
                 "error": str(e)
             })
             logger.warning(f"Failed to apply condition '{condition}': {e}", exc_info=True)
+
+    failed_conditions = [
+        item for item in applied_conditions if item.get("status") == "failed"
+    ]
+    if failed_conditions:
+        if meta is not None and not enforce_pause_token:
+            meta.dialectic_conditions = original_conditions
+        return {
+            "success": False,
+            "warning": "One or more resolution conditions could not be applied.",
+            "applied_conditions": applied_conditions,
+            "status_changed": False,
+        }
     
     # Resume the agent (if paused - skip if discovery dispute)
     status_changed = False
-    if meta.status == "paused":
+    if enforce_pause_token:
         resume_reason = f"Resumed via dialectic synthesis: {resolution.root_cause}"
+        lifecycle_event = {
+            "event": "resumed",
+            "timestamp": datetime.now().isoformat(),
+            "reason": resume_reason,
+        }
+        from src import agent_storage
+
+        resume = await agent_storage.resume_agent_if_pause_token(
+            agent_id,
+            expected_pause_token=expected_pause_token or "",
+            dialectic_condition_additions=list(staged_meta.dialectic_conditions),
+            lifecycle_event=lifecycle_event,
+        )
+        if not resume.get("applied"):
+            reason = resume.get("reason") or "pause_resume_cas_refused"
+            if reason == "pause_generation_superseded":
+                # The row lock and compare-and-set prove this exact generation
+                # is already gone and this call wrote nothing. Consume it as a
+                # no-op; never resume whichever generation is current now.
+                return {
+                    "success": True,
+                    "no_op": True,
+                    "superseded": True,
+                    "reason": reason,
+                    "resume_cas": resume,
+                    "applied_conditions": [],
+                    "status_changed": False,
+                }
+            return {
+                "success": False,
+                "refused": reason,
+                "warning": (
+                    "The authoritative agent state could not safely consume "
+                    "the reviewed pause generation."
+                ),
+                "resume_cas": resume,
+                "applied_conditions": [],
+                "status_changed": False,
+            }
+
+        durable_conditions = list(resume.get("dialectic_conditions") or [])
+        if meta is not None:
+            # Publish only after commit. The locked durable writer owns the
+            # bounded condition list; merging the pre-commit cache here would
+            # resurrect entries that the durable 20-item cap just evicted.
+            meta.dialectic_conditions = durable_conditions
+            cached_pause_token = getattr(meta, "paused_at", None)
+            if (
+                getattr(meta, "status", None) == "paused"
+                and (
+                    not cached_pause_token
+                    or cached_pause_token == expected_pause_token
+                )
+            ):
+                # A tokenless paused cache is a legacy-invalid snapshot that
+                # the durable pause writer repairs. The successful exact-token
+                # CAS above proves that repaired generation was consumed. A
+                # different non-empty cache token may be a newer pause, so it
+                # remains write-held.
+                meta.status = "active"
+                meta.paused_at = None
+                meta.add_lifecycle_event("resumed", resume_reason)
+        status_changed = True
+    elif meta.status == "paused":
+        resume_reason = f"Resumed via dialectic synthesis: {resolution.root_cause}"
+        lifecycle_event = {
+            "event": "resumed",
+            "timestamp": datetime.now().isoformat(),
+            "reason": resume_reason,
+        }
+        from src import agent_storage
+
+        # Legacy direct callers predate durable dialectic effects. Preserve
+        # their call shape, but a persistence refusal is a failed execution,
+        # never a successful resolution.
+        runtime_persisted = await agent_storage.persist_runtime_state(
+            agent_id,
+            paused_at=None,
+            append_lifecycle_event=lifecycle_event,
+        )
+        status_persisted = await agent_storage.update_agent(
+            agent_id, status="active"
+        )
+        if runtime_persisted is not True or status_persisted is not True:
+            meta.dialectic_conditions = original_conditions
+            return {
+                "success": False,
+                "warning": "The resume could not be persisted authoritatively.",
+                "applied_conditions": applied_conditions,
+                "status_changed": False,
+            }
+
         meta.status = "active"
         meta.paused_at = None
         meta.add_lifecycle_event("resumed", resume_reason)
         status_changed = True
-
-        # P011: persist runtime-state mutations so paused_at=None and the
-        # lifecycle event survive reload (Watcher #81b876bf, #a8b049c8, #9cf3ec6a).
-        try:
-            from src import agent_storage
-            await agent_storage.persist_runtime_state(
-                agent_id,
-                paused_at=None,
-                append_lifecycle_event={
-                    "event": "resumed",
-                    "timestamp": datetime.now().isoformat(),
-                    "reason": resume_reason,
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"persist_runtime_state(resumed) failed for {agent_id[:8]}...: {e}"
-            )
-
-        # PostgreSQL: Update status (single source of truth)
-        try:
-            from src import agent_storage
-            await agent_storage.update_agent(agent_id, status="active")
-        except Exception as e:
-            logger.debug(f"PostgreSQL status update failed: {e}")
 
     # If linked to discovery, update discovery status based on resolution
     discovery_updated = False
@@ -207,9 +410,10 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
     result = {
         "success": True,
         "agent_id": agent_id,
-        "new_status": meta.status,
+        "new_status": getattr(meta, "status", "active"),
         "applied_conditions": applied_conditions,
-        "resolution_hash": resolution.hash()
+        "resolution_hash": resolution.hash(),
+        "status_changed": status_changed,
     }
 
     # Add discovery update info if present
@@ -219,51 +423,9 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
         if discovery_updated:
             result["discovery_status"] = "resolved" if resolution.action == "resume" else "open"
 
-    # Emit outcome_event so downstream calibration / back-tests can correlate
-    # resumption with subsequent agent state. dialectic_resolved is neutral
-    # (process succeeded); whether conditions hold up is a separate later test.
-    # Failure isolation: emit failure must not break resolution execution.
-    try:
-        applied_count = sum(
-            1 for c in applied_conditions
-            if isinstance(c, dict) and c.get("status") == "applied"
-        )
-        await _record_outcome_event_inline({
-            # In-process emitter, computed server-side from session protocol
-            # state -- vouched so its server-observed provenance is honoured,
-            # up to what that provenance itself asserts.
-            "_trusted_ingestion": True,
-            "agent_id": agent_id,
-            "outcome_type": "dialectic_resolved",
-            "is_bad": False,
-            "outcome_score": 1.0,
-            "decision_action": "proceed",
-            # Dialectic resolution is computed server-side from session
-            # protocol state (conditions applied, synthesis convergence),
-            # not the agent's claim of resolution. Architect council
-            # 2026-05-19 flagged dialectic as peer-mediated and not a clean
-            # fit for the v1 enum; classifying as server_observation pending
-            # the v2 taxonomy redesign (see project_outcome-verification-
-            # taxonomy-redesign in memory) which would introduce a
-            # peer_attested value.
-            "verification_source": "server_observation",
-            "detail": {
-                "dialectic_session_id": session.session_id,
-                "session_type": getattr(session, "session_type", None),
-                "root_cause": resolution.root_cause,
-                "conditions": resolution.conditions,
-                "conditions_applied": applied_count,
-                "conditions_total": len(applied_conditions),
-                "synthesis_round": session.synthesis_round,
-                "resolution_hash": resolution.hash(),
-                "discovery_id": session.discovery_id,
-                "status_changed": status_changed,
-            },
-        })
-    except Exception as e:
-        logger.warning(
-            f"outcome_event emit on dialectic_resolved failed for "
-            f"session {session.session_id}: {e}"
-        )
+    # Direct callers retain the historical behavior. The synthesis handler
+    # defers this until its terminal effect-owner write succeeds.
+    if record_outcome:
+        await record_resolution_outcome(session, resolution, result)
 
     return result

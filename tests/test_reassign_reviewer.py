@@ -24,7 +24,7 @@ from src.dialectic_protocol import (
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
-from tests.helpers import parse_result
+from tests.helpers import parse_result, successful_dialectic_message_append
 
 
 def _make_mock_server(agents=None):
@@ -93,7 +93,10 @@ async def test_reassign_reviewer_manual():
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock) as mock_update, \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ) as mock_append:
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         result = parse_result(await handle_reassign_reviewer({
             "session_id": session.session_id,
@@ -108,7 +111,10 @@ async def test_reassign_reviewer_manual():
     assert session.reviewer_agent_id == "agent-new"
     assert "unresponsive" not in result["recovery"]["what_happened"].lower()
     assert "previous reviewer ended session" in result["recovery"]["what_happened"].lower()
-    mock_update.assert_called_once_with(session.session_id, "agent-new")
+    mock_update.assert_not_awaited()
+    mock_append.assert_awaited_once()
+    assert mock_append.await_args.kwargs["expected_reviewer"] == "agent-reviewer"
+    assert mock_append.await_args.kwargs["next_reviewer"] == "agent-new"
 
 
 @pytest.mark.asyncio
@@ -125,7 +131,10 @@ async def test_reassign_reviewer_auto_select():
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value="agent-candidate"), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ):
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         result = parse_result(await handle_reassign_reviewer({
             "session_id": session.session_id,
@@ -192,7 +201,10 @@ async def test_reassign_facilitates_standing_rejection_in_synthesis():
                return_value=None), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.audit_db.append_audit_event_async", new_callable=AsyncMock):
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         result = parse_result(await handle_reassign_reviewer({
@@ -282,7 +294,10 @@ async def test_reassign_clears_awaiting_facilitation():
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ):
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         result = parse_result(await handle_reassign_reviewer({
             "session_id": session.session_id,
@@ -306,7 +321,10 @@ async def test_reassign_adds_transcript_message():
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ):
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         await handle_reassign_reviewer({
             "session_id": session.session_id,
@@ -331,7 +349,10 @@ async def test_reassign_during_thesis_phase():
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ):
         from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
         result = parse_result(await handle_reassign_reviewer({
             "session_id": session.session_id,
@@ -395,7 +416,10 @@ async def test_stuck_reviewer_triggers_reassignment():
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value="agent-candidate"), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.mcp_handlers.context.get_context_agent_id", return_value="test-bound-agent"):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
         result = parse_result(await handle_get_dialectic_session({
@@ -431,7 +455,10 @@ async def test_stuck_reviewer_no_replacement_awaits_facilitation():
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.mcp_handlers.context.get_context_agent_id", return_value="test-bound-agent"):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
         result = parse_result(await handle_get_dialectic_session({
@@ -501,7 +528,10 @@ async def test_reassignment_emits_audit_event():
     session = _make_session()
     emit = AsyncMock(return_value=True)
     with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.audit_db.append_audit_event_async", emit):
         from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
         result = await _apply_reviewer_reassignment(
@@ -531,7 +561,10 @@ async def test_reassignment_emits_source_discriminator():
     session = _make_session()
     emit = AsyncMock(return_value=True)
     with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.audit_db.append_audit_event_async", emit):
         from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
         await _apply_reviewer_reassignment(
@@ -555,9 +588,8 @@ async def test_no_emission_when_persistence_fails_non_strict():
     """
     session = _make_session()
     emit = AsyncMock(return_value=True)
-    with patch(f"{DIALECTIC}.pg_update_reviewer",
-               new_callable=AsyncMock, return_value=False), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+    with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock(return_value=0)), \
          patch("src.audit_db.append_audit_event_async", emit):
         from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
         await _apply_reviewer_reassignment(
@@ -574,7 +606,10 @@ async def test_reassignment_emit_failure_is_fail_soft():
     session = _make_session()
     emit = AsyncMock(side_effect=RuntimeError("audit db down"))
     with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch("src.audit_db.append_audit_event_async", emit):
         from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
         result = await _apply_reviewer_reassignment(

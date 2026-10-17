@@ -157,7 +157,10 @@ def _infer_model_family(user_agent: Optional[str]) -> Optional[str]:
         return "gpt-family"
     if any(marker in ua for marker in ("claude", "anthropic")):
         return "claude-family"
-    if any(marker in ua for marker in ("gemini", "google")):
+    tokens = set(re.split(r"[^a-z]+", ua))
+    if any(
+        marker in ua for marker in ("antigravity", "gemini", "gemma", "google")
+    ) or (tokens & {"argon", "agy"}):
         return "gemini-family"
     if "llama" in ua:
         return "llama-family"
@@ -179,6 +182,8 @@ def infer_harness_version(
         aliases = ("codex", "codex-cli", "codex-cli-rs", "codex_cli_rs")
     elif "claude" in harness:
         aliases = ("claude", "claude-code", "claude_code")
+    elif "antigravity" in harness or harness == "agy":
+        aliases = ("antigravity", "antigravity-cli", "antigravity_cli", "agy")
     elif "cursor" in harness:
         aliases = ("cursor",)
     elif "chatgpt" in harness:

@@ -58,7 +58,66 @@ async def test_save_session_falls_back_to_python_when_beam_declines(monkeypatch)
         await sess_mod.save_session(_resolved_session())
 
     beam.assert_awaited_once()
-    pg.assert_awaited_once()  # fail-safe fallback
+    pg.assert_awaited_once_with(
+        session_id="sess-save-1",
+        resolution=pg.await_args.kwargs["resolution"],
+        status="resolved",
+        winner={},
+        expected_phase="synthesis",
+        expected_reviewer="rev-1",
+        expected_transcript_revision=0,
+        expected_awaiting_facilitation=False,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_session_failed_fallback_remains_phase_agnostic(monkeypatch):
+    """Liveness may fail a session from any non-terminal phase."""
+    monkeypatch.setattr(sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False)
+    session = _resolved_session()
+    session.phase = DialecticPhase.FAILED
+    beam = AsyncMock(return_value=None)
+    pg = AsyncMock(return_value=True)
+
+    with patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", beam), \
+         patch("src.dialectic_db.resolve_session_async", pg):
+        await sess_mod.save_session(session)
+
+    pg.assert_awaited_once()
+    assert pg.await_args.kwargs["status"] == "failed"
+    assert "expected_phase" not in pg.await_args.kwargs
+    assert pg.await_args.kwargs["expected_reviewer"] == "rev-1"
+    assert pg.await_args.kwargs["expected_transcript_revision"] == 0
+    assert pg.await_args.kwargs["expected_resolution_saga_revision"] == 0
+    assert pg.await_args.kwargs["exclude_inflight_saga"] is True
+
+
+@pytest.mark.asyncio
+async def test_save_session_snapshot_only_never_replays_a_stale_phase(monkeypatch):
+    """The guarded message transaction already owns phase/round persistence."""
+    monkeypatch.setattr(
+        sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False
+    )
+    session = SimpleNamespace(
+        session_id="sess-save-frontier",
+        phase=DialecticPhase.ANTITHESIS,
+        synthesis_round=1,
+        transcript_revision=4,
+        resolution=None,
+    )
+    beam_phase = AsyncMock()
+    pg_phase = AsyncMock()
+
+    with patch(
+        "src.mcp_handlers.dialectic.beam_resolve_client.beam_update_phase",
+        beam_phase,
+    ), patch("src.dialectic_db.update_session_phase_async", pg_phase):
+        await sess_mod.save_session(session, primary_already_synced=True)
+
+    beam_phase.assert_not_awaited()
+    pg_phase.assert_not_awaited()
 
 
 @pytest.mark.asyncio

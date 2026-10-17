@@ -98,7 +98,9 @@ async def _run_mixed_cycle(recorder: _Recorder):
         _row("reassign", hours=2.5, phase="antithesis", reviewer="gone-2"),
     ]
 
-    async def status_write(session_id, status, winner=None):
+    async def status_write(
+        session_id, _resolution, _status, *, winner=None, **_guards
+    ):
         if session_id == "reap-refused":
             winner.update(winner_status="failed", winner_reason="liveness_timeout",
                           row_missing=False)
@@ -124,7 +126,7 @@ async def _run_mixed_cycle(recorder: _Recorder):
          patch(f"{AUTO}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
          patch(f"{AUTO}.probe_saga_since_async", side_effect=probe), \
-         patch(f"{AUTO}.update_session_status_async", side_effect=status_write), \
+         patch(f"{AUTO}.resolve_session_async", side_effect=status_write), \
          patch(f"{AUTO}.update_session_reviewer_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO}.mark_awaiting_facilitation_async",
@@ -244,7 +246,9 @@ class TestHungCycleStillReports:
         recorder = _Recorder()
         hang = _Hang()
 
-        async def status_write(session_id, status, winner=None):
+        async def status_write(
+            session_id, _resolution, _status, *, winner=None, **_guards
+        ):
             if session_id == "wedged":
                 await hang()
             return True
@@ -255,7 +259,7 @@ class TestHungCycleStillReports:
                    new_callable=AsyncMock, return_value=False), \
              patch(f"{AUTO}.probe_saga_since_async",
                    new_callable=AsyncMock, return_value={}), \
-             patch(f"{AUTO}.update_session_status_async", side_effect=status_write), \
+             patch(f"{AUTO}.resolve_session_async", side_effect=status_write), \
              patch(f"{AUTO}.add_message_async", new_callable=AsyncMock), \
              patch(f"{AUTO}.emit_guarded_write", side_effect=recorder.write), \
              patch(f"{AUTO}.emit_sweep_cycle", side_effect=recorder.cycle):
@@ -293,7 +297,7 @@ class TestHungCycleStillReports:
              patch(f"{AUTO}.has_inflight_saga_async",
                    new_callable=AsyncMock, return_value=False), \
              patch(f"{AUTO}.probe_saga_since_async", side_effect=hang.fn), \
-             patch(f"{AUTO}.update_session_status_async",
+             patch(f"{AUTO}.resolve_session_async",
                    new_callable=AsyncMock, return_value=True), \
              patch(f"{AUTO}.add_message_async", new_callable=AsyncMock), \
              patch(f"{AUTO}.emit_guarded_write", side_effect=recorder.write), \
@@ -380,14 +384,16 @@ async def test_a_write_interrupted_by_shutdown_still_gets_its_row():
     recorder = _Recorder()
     hang = _Hang()
 
-    async def status_write(session_id, status, winner=None):
+    async def status_write(
+        session_id, _resolution, _status, *, winner=None, **_guards
+    ):
         await hang()
 
     with patch(f"{AUTO}.get_active_sessions_async", new_callable=AsyncMock,
                return_value=[_row("s1")]), \
          patch(f"{AUTO}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
-         patch(f"{AUTO}.update_session_status_async", side_effect=status_write), \
+         patch(f"{AUTO}.resolve_session_async", side_effect=status_write), \
          patch(f"{AUTO}.emit_guarded_write", side_effect=recorder.write), \
          patch(f"{AUTO}.emit_sweep_cycle", side_effect=recorder.cycle):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions

@@ -26,7 +26,7 @@ def main() -> None:
         agent_id="memory-bridge",
         type="note",
         summary="Production uses SQLite.",
-        tags=["memory-sync", "source-external-memory"],
+        tags=["source-external-memory"],
     )
     evidence = DiscoveryNode(
         id="evidence-1",

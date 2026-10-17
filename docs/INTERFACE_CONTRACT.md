@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.42.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.48.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -667,3 +667,221 @@ sampling controls or a further operator decision. Client action: use
 `temperature` or `max_tokens` on an HTTP host keeps calling `call_model` and
 should say so with `leave_note`. Model selection on a CLI host stays on
 `delegate_inference`.
+
+## 1.43.0 (2026-10-16)
+
+call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: the `migration` text of `describe_tool(tool_name='call_model')`
+and the descriptions of `call_model` and `consult` now state the removal
+window and that the raw controls retire with the tool. The decision, delegated
+by the operator, keeps `consult` bounded as the advisory facade designs it
+(`docs/proposals/active/consult-advisory-facade-v1.md`, amended 2026-10-16).
+
+Compatibility: every `call_model` call still works until the removal. No input
+schema changes, so no input digest or the surface digest moves. The removal
+itself will be a breaking change taken under this deprecation window, no
+earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
+action: move to `consult(brief=..., effort='standard')` before then. A client
+that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
+say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+
+Affected outputs: a `knowledge(action=search)` / `search_shared_memory` call
+with no `query` may now return fewer rows. When it left imported memory out it
+adds `imported_omitted` (a count of rows skipped while filling the page) and
+`imported_omitted_hint`, both lifted into the lean digest's `state_summary`.
+Check-in `relevant_discoveries` and `_mirror_kg_results` no longer include
+unpromoted imported memory. Promoted governed claims and channel messages are
+unaffected; query search is unchanged.
+
+Compatibility: no parameter name, type, default or requiredness changes. A
+client that listed imported rows by sweeping open work sees them omitted and
+gets them back with `authority_mode="all"` or an imported-memory tag filter.
+Schema digests move for `knowledge`, `search_knowledge_graph` and
+`search_shared_memory` (the `authority_mode` description); no other digest
+moves. Client action: none required; read `imported_omitted` where useful.
+
+## 1.45.0 (2026-10-17)
+
+Output and description changes from the 2026-10-16 agent-experience dogfood
+read (`docs/evaluations/ax-dogfood/read-2026-10-16.md`). Nothing is added,
+removed, retyped or renamed.
+
+- **`search_shared_memory` output.** The `lean` and `compact` tiers now list
+  the results after the three digests under `more_results` when `limit` is
+  unset, with the same rows, 17-row cap and 2,000-byte budget as before. A
+  `limit` of 3 or less omits them; an explicit `limit` above 3 behaves as in
+  1.33.0. When the shown digests carry more than one `relevance_basis`,
+  `state_summary.relevance_note` says the scores are not comparable and that
+  list order is the ranking.
+- **Response hints.** A server-written hint that named
+  `knowledge(action=..., ...)` (`next_action`,
+  `discovery_retrieval_options.open_one`, `raw_governance_hint`,
+  `resolution_notes_hint` and the other lifted search notes) now names
+  `use_tool(tool_name='knowledge', arguments={...})`. The router is not on the
+  progressive surface, and `use_tool` is reachable on every surface, as
+  `update_finding` hints have been since they moved to `use_tool`. The
+  `next_action` of a finding alias called with an explicit other action
+  reports what ran as "the knowledge router's '<action>' action" rather than
+  as a call, so the rewrite cannot present a route the caller never took.
+- **Descriptions.** `store_finding`'s field descriptions drop router wording
+  ("for action=store or promote", "action=search", "S22 H5 provenance") and
+  `discovery_type` lists every value in its brief. The knowledge router's
+  `response_to` description lists the valid `response_type` values.
+  `search_shared_memory`'s `include_details` brief names the `use_tool`
+  route.
+
+**Compatibility.** A client that relied on a no-`limit` lean search returning
+exactly three digests should pass `limit=3`. A client that parses hint text
+for `knowledge(` should read the `use_tool` form; the call it names is the same
+read.
+
+**Schema digests.** `search_shared_memory`, `store_finding` and `knowledge`
+move (descriptions only); `surface_sha256` moves with them.
+
+**Client action.** None required beyond the compatibility notes above.
+
+## 1.46.0 (2026-10-17)
+
+Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
+
+Affected outputs: the `authority` block on knowledge search, get and details
+rows (`tier`, `trust`, `ranking_multiplier`), the `imported_memory` marker,
+and everything keyed on that tier: the close-contest down-rank, queryless
+listing omission (1.44.0), check-in suggestion filtering, and the lane-filter
+test. A row whose only memory-related tag is one of those four words now
+classifies as `native_finding`. Rows tagged `source-<provider>-memory` are
+unchanged. In the live graph on 2026-10-17, four rows carried a bare word:
+three native writes that were misclassified, and one import that also carried
+`source-claude-memory`.
+
+Compatibility: no parameter or schema change, so no digest moves. A writer
+that marked imports with a bare word alone must use `source-<provider>-memory`.
+None is known; the repository's own writers and the memory sync use the
+source pattern. Client action: none.
+
+## 1.47.0 (2026-10-17)
+
+Dialectic review requests accept requester-declared author-agent UUIDs and
+recuse those authors from independent reviewer selection, assignment, and
+verdict paths. Terminal decisions also bind their runtime mutation to a
+durable resolution-effect record, with explicit operator recovery for an
+interrupted effect. `request_review` and `dialectic(action="request")` accept
+`reviewed_work_author_agent_ids`, a bounded list of canonical registered-agent
+UUIDs. The server records the declaration with `authorship_verified: false` and
+returns its status as `reviewed_work_authorship`; omission remains
+`not_supplied`, while an explicit empty list is refused.
+
+The declaration only removes authority. Declared authors cannot be selected,
+claim an open slot, be assigned or reassigned, or supply the independent
+antithesis/synthesis verdict. A malformed stored declaration fails closed for
+independent assignment. Explicit self-review remains represented as self-review
+and never becomes independent merely because the marker is absent or malformed.
+
+Accepted thesis, antithesis, and synthesis messages advance a monotonic durable
+`transcript_revision`; the message, next phase and synthesis round commit in one
+transaction. Reviewer reassignment likewise binds the prior reviewer and
+revision while committing its audit message. A terminal decision
+compare-and-sets the exact phase, reviewer, and revision on which it was
+computed. If another worker appends a message or changes the reviewer first,
+the stale message or terminal decision is refused and the caller must reload. A
+BEAM `saga_in_flight` response is also an authoritative contention result; it
+never opens a concurrent Python terminal writer. A deterministic post-claim
+frontier refusal releases that request's reserved saga immediately. Ambiguous
+reviewer-claim responses fail closed rather than treating a same-identity
+readback as proof that this request won the claim.
+
+`dialectic(action="reconcile_effect")` is operator-only. Its default
+`effect_disposition="inspect"` is read-only. `apply_pending` may claim and apply
+an untouched pending effect. An `applying` effect is never replayed
+automatically: after confirming its worker stopped, the operator fences that
+exact owner token with `mark_uncertain`, inspects and repairs live state, then
+uses `mark_applied` with a reason and the exact `effect_updated_at` returned by
+that inspect. The timestamp is a compare-and-set version: a changed record is
+refused even when its state is still `unknown_partial`. Repeating an
+already-applied acknowledgement is idempotent and emits no second downstream
+signal. The durable effect row is authoritative; outcome, calibration and
+lifecycle telemetry after application are best-effort and cannot make an
+applied effect replayable.
+
+Operators can enumerate every non-applied row without mutating it with
+`python3 scripts/ops/dialectic_resolution_effects.py`; the state-specific
+procedure and the limits of `mark_applied` are documented in
+`docs/operations/dialectic-resolution-effects.md`.
+
+Exact-token pause expiry and resolution resume both lock the two durable
+status copies with the identity metadata. TTL expiry has a narrower repair
+path of its own: matching `active` copies are authoritative, and an exact-token
+`active`/`paused` split may be normalized because expiry carries no dialectic
+conditions or verdict effects. Matching active copies clear any stale string
+`paused_at` under an observed-token fence; a different token refuses when a
+durable paused copy exists. Unrelated status, terminal status, or a missing
+durable agent still refuses without mutation and reports that operator
+reconciliation is required.
+
+An elapsed pause TTL is eligibility for that durable transition, not proof it
+committed. State reads therefore keep `write_gate.writes_held=true` until the
+resume succeeds and expose `expiry_eligible=true` separately; a gated write may
+start or retry expiry but remains refused and must be resubmitted after the
+pause lifts.
+
+Compatibility: additive for callers that omit the authorship field or never
+use the recovery action, and deliberately restrictive only when a requester
+declares a conflict. Existing dialectic calls retain their action and parameter
+meanings. Migrations 075, 077, and 078 are hard deployment prerequisites for
+this server version: Python session reads and terminal writes use the
+durable-effect table, transcript frontier, and resolution-saga generation, and
+the Python client selects the distinct frontier-required
+`/v2/dialectic/resolve-with-effect` route whenever BEAM resolution is enabled.
+An older service returns 404 before Python falls back to its own guarded writer;
+it cannot accept and ignore the revision as an unknown JSON field.
+NULL-to-reviewer claims likewise use a distinct guarded BEAM route. The BEAM
+service retains its v1 resolution endpoints for protocol compatibility and
+offline diagnosis, not as an online old-Python rollback guarantee.
+Before applying the migrations, block dialectic traffic and stop/drain both old
+writer runtimes; then apply 075/077/078, start new Python and new BEAM, verify
+both revisions, and restore traffic. A pre-078 lease plane is below the
+rollback floor after migration 078 removes the permanent same-payload
+uniqueness constraint it assumes. Old Python is also below the online rollback
+floor because its maintenance writers do not bind the saga generation; any
+rollback keeps dialectic traffic and both liveness sweepers quiesced until the
+generation-aware Python/BEAM pair is restored. The
+`request_review` input digest moves from
+`4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3` to
+`df7154d376086bb0af83bfcaee7e0e48d5821f347d9efce60d9487bfd7ba8e84`;
+the `dialectic` input digest moves from
+`246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50` to
+`958b4c233a91937c83e555761aff659b71f04c0ffc6f9f5daba488ffddfc9e28`.
+The full-surface digest moves from
+`b4e12f036620def817aa7e7cc5f28918b4987e80a5f12c8d2a8edc8e401e4b88` to
+`56ffafc140a6f92d248be154354f1467b17684d92a0419257f78b80ac82316f6`.
+Client action: proxy requesters should pass every known UNITARES author UUID;
+ordinary self-filed review requests require no change. Operators should use
+`reconcile_effect` only after reading the returned state and recovery guidance,
+and must echo the inspected `effect_updated_at` when using `mark_applied`.
+
+## 1.48.0 (2026-10-17)
+
+`store_finding` accepts an optional `response_to`
+(`{discovery_id, response_type}`), the typed link `knowledge(action='store')`
+already takes, with the same validation: a malformed link or an unknown
+`response_type` is refused rather than stored unthreaded. Its description
+lists the nine `response_type` values. The `store_finding` and
+`update_finding` acknowledgements lift the record's link as
+`state_summary.response_to`; a record without one carries no such field.
+Item 5 of the 2026-10-16 agent-experience dogfood read: a linked finding no
+longer needs `describe_tool` plus `use_tool(tool_name='knowledge', ...)`.
+
+**Compatibility.** Additive: an optional parameter on an existing alias.
+Calls without it are unchanged.
+
+**Schema digests.** `store_finding` moves (one added optional property);
+`surface_sha256` moves with it.
+
+**Client action.** None. A client that links findings through
+`use_tool(tool_name='knowledge', arguments={'action': 'store', ...})` may call
+`store_finding(..., response_to=...)` instead.

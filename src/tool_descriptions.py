@@ -135,10 +135,11 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     "call_model": (
         "Deprecated since 2026-10-16: use consult(effort='standard'), which "
         "reaches the same local host.\n\n"
-        "Still callable during the deprecation window, and still the only way "
-        "to set model, temperature or max_tokens on an HTTP host "
-        "(delegate_inference takes model for a CLI host); if you depend on "
-        "one of those, say so with leave_note. "
+        "Still callable until its removal, no earlier than 2026-12-02. Its "
+        "model, temperature and max_tokens controls for HTTP hosts go with "
+        "it (consult does not take them, by design; delegate_inference keeps "
+        "model for a CLI host); if you depend on one, say so with leave_note "
+        "before then. "
         "One synchronous advisory completion on the local Ollama lane or the "
         "Hugging Face router, returning tool evidence, never a governed review "
         "record. provider='hf' also needs privacy='cloud' or 'auto', "
@@ -192,8 +193,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "cloud_allowed and pinned calls require "
         "allow_degraded=false. No host fallback or same-family exclusion applies "
         "to explicit selection. Use delegate_inference for model or timeout "
-        "control on a CLI host; model and sampling control on an HTTP host "
-        "exist only on the deprecated call_model. Full diagnostics explain "
+        "control on a CLI host. consult takes no model or sampling control "
+        "by design; the deprecated call_model, removed no earlier than "
+        "2026-12-02, is the last tool with them for an HTTP host. Full "
+        "diagnostics explain "
         "tokens_used: backend "
         "aggregate usage, not answer length or comparable billed cost."
     ),
@@ -201,7 +204,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "Request governed, on-record judgment through the dialectic lifecycle. "
         "The response identifies the actual reviewer path and provenance. This "
         "is categorically different from consult, which returns advisory model "
-        "evidence only."
+        "evidence only. For proxy filing, declare author UUIDs to recuse them."
     ),
     "dialectic": (
         "Open and advance governed, on-record peer review sessions. To OPEN a "
@@ -209,7 +212,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and "
         "list serve unbound callers; every other action needs a bound "
         "identity, quick fails without issue_description, and thesis, "
-        "antithesis, synthesis and reassign each need a session_id the "
+        "antithesis, synthesis, reassign and reconcile_effect each need a "
+        "session_id the "
         "schema does not mark required. request refuses "
         "with SESSION_EXISTS while your agent already has an active session. "
         "For a bound caller get with check_timeout=true becomes a write that "
@@ -224,7 +228,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "one-call alias for request. The separate consult tool advises "
         "without opening a record; dialectic(action='consult') is different: "
         "it files an outside verdict on an existing session as a "
-        "non-authoritative transcript record."
+        "non-authoritative transcript record. reconcile_effect is an "
+        "operator-only recovery action: it may apply a still-pending durable "
+        "terminal effect, but it never automatically replays an applying or "
+        "unknown-partial effect."
     ),
 }
 

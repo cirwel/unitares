@@ -35,6 +35,8 @@ parsed =
     %{username: user, password: pass, host: host, port: port, database: db}
   end)
 
+pool_size = Application.get_env(:lease_plane, :pool_size, 2)
+
 {:ok, _} =
   Postgrex.start_link(
     name: UnitaresLeasePlane.DB,
@@ -43,7 +45,7 @@ parsed =
     username: parsed.username,
     password: parsed.password,
     database: parsed.database,
-    pool_size: 2
+    pool_size: pool_size
   )
 
 {:ok, _} = Registry.start_link(keys: :unique, name: UnitaresLeasePlane.HolderRegistry)

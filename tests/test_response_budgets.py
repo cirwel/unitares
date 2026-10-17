@@ -17,11 +17,13 @@ reason to raise a budget, stated in the PR, not a regression.
 start_session budgets per mint class, measured on the real handler
 (2026-09-26; re-measured 2026-10-06 after the keyed client_session_id,
 which adds 49 B to every class: 21 characters in the id and its base64
-share of the continuity token, so each base budget rose by 50 B):
+share of the continuity token, so each base budget rose by 50 B; re-measured
+2026-10-17 after next_action gained the ~94 B note that a fresh mint's tier
+describes the minting call only, so each base budget rose by 100 B):
 
-- anonymous, thread position 1: 1,201 B against 1,250.
+- anonymous, thread position 1: 1,295 B against 1,350.
 - sibling_locus (a fresh uuid on a thread earlier process-instances
-  occupied): 1,479 B against 1,600. It adds predecessor_uuid,
+  occupied): 1,573 B against 1,700. It adds predecessor_uuid,
   episode_fork_kind and the ~210 B sentence saying co-location does not
   establish lineage. That sentence is kept, not trimmed to fit: it is what
   stops the earlier node's uuid being read as this process's parent.
@@ -30,8 +32,8 @@ share of the continuity token, so each base budget rose by 50 B):
   (the status plus a short detail: what it costs, that this identity cannot
   gain the tags, and the roster -> restart -> fresh-mint fix) and 70-81 B for
   the other statuses; a written bootstrap ack is
-  224 B. Named at position 1: 1,483 B against 1,550; named sibling_locus:
-  1,761 B against 1,900.
+  224 B. Named at position 1: 1,577 B against 1,650; named sibling_locus:
+  1,855 B against 2,000.
 """
 
 from __future__ import annotations
@@ -57,8 +59,8 @@ if str(SDK_SRC) not in sys.path:
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
 # start_session, per mint class; see the module docstring.
-START_SESSION_BUDGET = 1_250
-START_SESSION_SIBLING_BUDGET = 1_600
+START_SESSION_BUDGET = 1_350
+START_SESSION_SIBLING_BUDGET = 1_700
 START_SESSION_NOTICE_ALLOWANCE = 300
 # Raised from 900 in #2448: the margin now carries its scope (~75 B), which
 # is the cost of an honest "comfortable" on the normal live decision.
@@ -95,9 +97,11 @@ def _onboard_payload(**assurance_overrides) -> dict:
         ),
         "baseline": "fresh_identity",
         "baseline_note": (
-            "Expected baseline for a just-minted identity — not a deficiency. Use "
-            "the returned client_session_id on the next call; adapters may inject "
-            "it automatically."
+            "Expected baseline for a just-minted identity — not a deficiency. "
+            "The tier describes this minting call only. Use the returned "
+            "client_session_id on the next call; adapters may inject it "
+            "automatically. check_working_state(client_session_id=...) "
+            "returning your uuid as agent_uuid confirms the threading."
         ),
     }
     assurance.update(assurance_overrides)
@@ -184,6 +188,23 @@ def _sync_envelope(source: dict) -> dict:
 
 
 # --- start_session ---------------------------------------------------------
+
+
+def test_a_fresh_unproven_mint_says_its_tier_describes_the_minting_call():
+    """The routine shape drops baseline_note, so next_action carries it."""
+    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
+
+    assert env["identity_assurance"]["tier"] == "weak"
+    assert "baseline_note" not in env["identity_assurance"]
+    assert envelope_step._FRESH_MINT_ASSURANCE_NOTE in env["next_action"]
+    assert "check_working_state(client_session_id=...)" in env["next_action"]
+
+
+def test_a_caller_proven_mint_gets_no_minting_call_note():
+    payload = _onboard_payload(tier="strong", caller_proven=True)
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert envelope_step._FRESH_MINT_ASSURANCE_NOTE not in env["next_action"]
 
 
 def test_default_start_session_fits_budget_and_keeps_what_adapters_read():

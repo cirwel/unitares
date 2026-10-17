@@ -18,6 +18,7 @@ PROTOCOL_VERSION = "v1.0"
 
 from .client import LeasePlaneClient, LeasePlaneClientConfig, LeasePlaneDisabledClient
 from .models import (
+    AcquireEffectInProgress,
     AcquireHeldByOther,
     AcquireOk,
     AcquirePermissionDenied,
@@ -48,6 +49,7 @@ from .models import (
 
 __all__ = [
     "PROTOCOL_VERSION",
+    "AcquireEffectInProgress",
     "AcquireHeldByOther",
     "AcquireOk",
     "AcquirePermissionDenied",

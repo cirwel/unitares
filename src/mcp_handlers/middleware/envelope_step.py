@@ -159,12 +159,15 @@ _SEARCH_LEAN_BUDGET_BYTES = 3_000
 _SEARCH_FULL_MODE_ROUTE = "search_shared_memory(response_mode='full')"
 _SEARCH_FULL_MODE_HINT = f"Re-call {_SEARCH_FULL_MODE_ROUTE} for the complete result set."
 # A lean search shows three digests whatever `limit` asked for, so a caller
-# who asked for twenty rows had one route to row four: the full tier, which
-# serializes every record. An explicit `limit` above the digest count is a
-# request for more rows, and the bounded read answers it with one line per
-# further result (id, type, status, short summary) under `more_results`.
-# The rows have their own budget on top of the digest's, so a search that
-# passes no `limit` is byte-identical to before and still fits 3 KB.
+# who wanted row four had one route to it: the full tier, which serializes
+# every record. The bounded read therefore lists one line per further result
+# (id, type, status, short summary) under `more_results`. Until 2026-10-17
+# that needed an explicit `limit` above the digest count, and a search that
+# passed none showed "3 of 20" with nothing about the other 17: the 2026-10-16
+# dogfood read (docs/evaluations/ax-dogfood/read-2026-10-16.md, item 1) paid a
+# 32 KB full read to learn they held nothing. Now an unset `limit` lists them
+# too, and an explicit `limit` of 3 or less is the way to omit them. The rows
+# have their own budget on top of the digest's 3 KB.
 _SEARCH_MORE_ROW_LIMIT = 17
 _SEARCH_MORE_BUDGET_BYTES = 2_000
 _SEARCH_MORE_SUMMARY_CHARS = 100
@@ -172,12 +175,14 @@ _SEARCH_MORE_SUMMARY_CHARS = 100
 # the measurements). An anonymous mint at thread position 1: continuity_token
 # alone is ~330 B of it. The keyed client_session_id (identity/stable_session.py)
 # adds 49 B: 21 characters in the id and its base64 share of the token.
-_START_SESSION_BUDGET_BYTES = 1_250
+_START_SESSION_BUDGET_BYTES = 1_350
+# Both base budgets rose 100 B on 2026-10-17 for _FRESH_MINT_ASSURANCE_NOTE
+# (~95 B): a weak tier at mint otherwise reached the agent unexplained.
 # A fresh mint on a thread earlier process-instances occupied (sibling_locus)
 # also carries predecessor_uuid, episode_fork_kind and the ~210 B sentence
 # saying co-location does not establish lineage, which stays: it is what stops
 # the earlier node being read as this process's parent.
-_START_SESSION_SIBLING_BUDGET_BYTES = 1_600
+_START_SESSION_SIBLING_BUDGET_BYTES = 1_700
 # Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
 # paid for on top of its class budget; the largest measured is 294 B (a
 # not_on_roster verdict), a written bootstrap ack 224 B.
@@ -208,6 +213,14 @@ _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
 # baseline stays: "fresh_identity" is what says a weak mint binding is
 # expected, not a deficiency to fix.
 _ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven", "baseline")
+# Appended to a fresh mint's next_action when the minting call was not
+# caller-proven. Such a call has no session signal of its own (the /mcp/
+# transport is stateless and issues no Mcp-Session-Id), so its tier describes
+# that call, not the threading of later ones.
+_FRESH_MINT_ASSURANCE_NOTE = (
+    " Tier describes this mint only; "
+    "check_working_state(client_session_id=...) confirms threading."
+)
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -614,6 +627,37 @@ def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
         state.pop("status", None)
         state.pop("health_status", None)
     envelope["response_shape"] = "routine"
+
+
+def _drop_all_clear_status(envelope: Dict[str, Any]) -> None:
+    """Keep a bare "healthy" off the check-in's friendly state_summary.
+
+    ``status`` / ``health_status`` are bands computed from the state
+    estimate: "healthy" means risk below HealthThresholds.risk_healthy_max
+    with no active void (and, for ``status``, coherence above its critical
+    line). Lifted as the word "healthy", they sat beside "not a validated
+    all-clear" on a provisional verdict and beside a coherence value labelled
+    "not health-rated" (AX dogfood 2026-10-16, item 10), and the contract's
+    deployed posture keeps health language off produced readings. The
+    response already carries the risk itself (``risk_score``, and
+    ``risk_summary`` in advisory words), so the word added nothing but the
+    contradiction.
+
+    Only the all-clear value goes. "moderate" and "critical" stay, because
+    they ask the reader to look, and "critical" can come from the void or
+    coherence checks that the risk fields do not cover. The canonical payload,
+    raw_governance and every persisted field keep the value unchanged. No
+    caller reads it from this surface (the routine shape already drops the
+    pair, see _drop_routine_proceed_duplicates), so its absence is nothing a
+    consumer can depend on. Runs after the routine check, which still keys on
+    the positive "healthy" evidence.
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    for key in ("status", "health_status"):
+        if state.get(key) == "healthy":
+            state.pop(key)
 
 
 def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1186,15 +1230,16 @@ def _append_more_results(
     source_payload: Dict[str, Any],
     arguments: Optional[Dict[str, Any]],
 ) -> None:
-    """List the results after the digests, one line each, on an explicit limit.
+    """List the results after the digests, one line each.
 
     Runs after the digest budget has settled. It adds nothing when the caller
-    passed no `limit`, when the limit is within the digest count, or when the
-    budget steps had to drop a digest: a response that could not afford its
-    third digest has no room to promise a fourth result.
+    passed a `limit` within the digest count, or when the budget steps had to
+    drop a digest: a response that could not afford its third digest has no
+    room to promise a fourth result. An unset `limit` lists whatever further
+    results the search returned.
     """
     limit = _explicit_search_limit(arguments)
-    if limit is None or limit <= _MEMORY_SUGGESTION_LIMIT:
+    if limit is not None and limit <= _MEMORY_SUGGESTION_LIMIT:
         return
     suggestions = envelope.get("memory_suggestions")
     if not isinstance(suggestions, list) or len(suggestions) != _MEMORY_SUGGESTION_LIMIT:
@@ -1383,6 +1428,9 @@ def _knowledge_write_summary(
         "updated_at",
         "resolved_at",
         "related_to",
+        # The typed link the record carries, so a linked store_finding
+        # confirms it in the ack. Absent when the record has none.
+        "response_to",
     )
     if not summary.get("related_to"):
         # The record's links: on store_finding, the similar findings this
@@ -2297,11 +2345,42 @@ def _enforce_search_projection_budget(
     # The staleness note is written before the budget steps so they measure
     # it, and re-checked after them: it goes if no stale digest survived.
     _note_stale_digests(envelope)
+    _note_mixed_relevance(envelope)
     _prune_resolution_notes_hint(envelope, notes_in_more)
     if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
         _truncate_search_projection(envelope, wire_bytes, notes_in_more=notes_in_more)
         _note_stale_digests(envelope)
+        _note_mixed_relevance(envelope)
     _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+_MIXED_RELEVANCE_NOTE = (
+    "relevance values on different relevance_basis are not comparable; "
+    "list order is the ranking."
+)
+
+
+def _note_mixed_relevance(envelope: Dict[str, Any]) -> None:
+    """Say once that scores on different bases do not compare.
+
+    A hybrid search can show a lexical-rank-only score (around 0.016) next to
+    a semantic similarity (around 0.5) in one list; read as one scale, the
+    first looks like a non-match. Written only while the shown digests carry
+    two or more bases (2026-10-16 dogfood read, item 2).
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    suggestions = envelope.get("memory_suggestions")
+    bases = {
+        item.get("relevance_basis")
+        for item in suggestions or []
+        if isinstance(item, dict) and item.get("relevance_basis")
+    } if isinstance(suggestions, list) else set()
+    if len(bases) > 1:
+        state["relevance_note"] = _MIXED_RELEVANCE_NOTE
+    else:
+        state.pop("relevance_note", None)
 
 
 _STALENESS_NOTE = (
@@ -2651,6 +2730,13 @@ def build_experience_envelope(
                 if _onboard_assurance_is_abnormal(assurance)
                 else _lift(assurance, *_ONBOARD_ASSURANCE_KEYS)
             )
+            if (
+                assurance.get("baseline") == "fresh_identity"
+                and assurance.get("caller_proven") is not True
+            ):
+                # The routine shape drops baseline_note, so without this the
+                # agent sees tier=weak beside nothing that says it is expected.
+                next_action += _FRESH_MINT_ASSURANCE_NOTE
         token = payload.get("continuity_token")
         if isinstance(token, str) and token:
             # Grouped with its caveat: the token is an advanced same-process
@@ -2801,6 +2887,17 @@ def build_experience_envelope(
         # mode can omit the repeated canonical payload without making the state
         # tool useless.
         state_summary = _metrics_state_summary(payload)
+        write_gate = payload.get("write_gate")
+        if isinstance(write_gate, dict) and "writes_held" in write_gate:
+            # The first read answers "am I paused, will my writes be held"
+            # from the gate itself (pause_ttl.describe_write_gate), so a fresh
+            # identity's "uninitialized" no longer sends the agent to a write
+            # to find out.
+            gate_summary = envelope.setdefault("action_summary", {})
+            gate_summary.update(_lift(
+                write_gate, "paused", "writes_held", "expiry_eligible",
+                "held", "expires_at", "note"
+            ))
         next_action = _metrics_next_action(payload)
         if next_action is not None:
             # One next step, at the top level. The verdict's step is either
@@ -2894,10 +2991,12 @@ def build_experience_envelope(
             # "updated"/"stored" line would misreport it. The other action may
             # itself write (store, update, supersede, note...), so the line
             # names what ran and makes no claim about whether it wrote. Its
-            # payload stays inline (#2457).
+            # payload stays inline (#2457). It reports what ran, so it is not
+            # written as a call: the hint rewrite would turn a call into a
+            # use_tool route the caller never took.
             ran = str(call_arguments.get("action")).strip().lower()
             next_action = (
-                f"{friendly_name} ran knowledge(action='{ran}') because an "
+                f"{friendly_name} ran the knowledge router's '{ran}' action because an "
                 "explicit action was passed, not this alias's own action. "
                 "That action's full response is under raw_governance; read "
                 "it there before repeating the call, since a writing action "
@@ -2987,6 +3086,10 @@ def build_experience_envelope(
             "low_confidence",
             "search_degraded",
             "tag_filter_dropped",
+            # Present only when a queryless listing left imported memory out;
+            # the hint names the two ways to read that lane.
+            "imported_omitted",
+            "imported_omitted_hint",
             # How the list was ordered and windowed. Present only when the
             # caller changed the default, so the default digest is unchanged;
             # without them the friendly alias silently dropped the echo.
@@ -3171,7 +3274,10 @@ def build_experience_envelope(
     ):
         value = source_payload.get(key)
         if value is not None:
-            envelope[key] = value
+            # Server-written hints, not caller text: route any tool call they
+            # name the way next_action is routed (a knowledge(...) read is
+            # reachable on the progressive surface only through use_tool).
+            envelope[key] = _friendly_action_hint(value) if isinstance(value, str) else value
 
     hint = _recovery_hint(source_payload, coherence, risk)
     if hint:
@@ -3231,10 +3337,14 @@ def build_experience_envelope(
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:
-            envelope["raw_governance_hint"] = raw_hint
+            # A finding write's hint names a knowledge(action='details') read;
+            # route it like next_action so it names a reachable call.
+            envelope["raw_governance_hint"] = _friendly_action_hint(raw_hint)
     if routine_sync and _is_routine_proceed(envelope):
         _drop_routine_proceed_duplicates(envelope)
-    bounded_search = friendly_name == "search_shared_memory" and not include_raw
+    if canonical_name == "process_agent_update":
+        _drop_all_clear_status(envelope)
+    bounded_search =friendly_name == "search_shared_memory" and not include_raw
     bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
         # Preview the separately bounded extra rows to reserve coaching only

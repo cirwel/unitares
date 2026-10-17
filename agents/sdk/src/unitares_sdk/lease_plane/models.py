@@ -74,6 +74,7 @@ class LeaseRecord(BaseModel):
     last_heartbeat_at: datetime | None = None
     released_at: datetime | None = None
     release_reason: ReleaseReason | None = None
+    active_effect_id: str | None = None
     audit_session: str | None = None
     earned_status: EarnedStatus = "provisional"
     # RFC §7.13: resident substrate observation. Optional — only resident:/
@@ -253,6 +254,13 @@ class AcquireHeldByOther(BaseModel):
     retry_after_hint_ms: int = 0
 
 
+class AcquireEffectInProgress(BaseModel):
+    """An admitted operation retains custody, possibly beyond its lease TTL."""
+
+    ok: Literal[False]
+    error: Literal["effect_in_progress"]
+
+
 class AcquirePermissionDenied(BaseModel):
     ok: Literal[False]
     error: Literal["permission_denied"]
@@ -280,6 +288,7 @@ class AcquireServiceUnavailable(BaseModel):
 AcquireResult: TypeAlias = (
     AcquireOk
     | AcquireHeldByOther
+    | AcquireEffectInProgress
     | AcquirePermissionDenied
     | AcquireSchemaInvalid
     | AcquireServiceUnavailable
@@ -321,6 +330,7 @@ class SimpleError(BaseModel):
         "expired",
         "not_holder",
         "already_released",
+        "effect_in_progress",
         "permission_denied",
         "schema_invalid",
         "service_unavailable",

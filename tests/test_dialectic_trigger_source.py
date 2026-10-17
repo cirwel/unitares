@@ -31,7 +31,15 @@ from tests.test_dialectic_handlers import (  # noqa: F401 — pytest fixtures
 
 async def _request(fixtures, **arguments):
     server, require, ownership, pg_create, in_session, context = fixtures
-    with require("agent-paused"), ownership, pg_create as created, in_session, context:
+    with require("agent-paused"), ownership, pg_create as created, in_session, context, \
+         patch(
+             "src.agent_storage.read_authoritative_pause_binding",
+             new=AsyncMock(return_value={
+                 "pause_effect_required": True,
+                 "pause_token": "pause-test",
+                 "status": "paused",
+             }),
+         ):
         result = await handle_request_dialectic_review({
             "agent_id": "agent-paused",
             "_agent_uuid": "agent-paused",

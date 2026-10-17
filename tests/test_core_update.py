@@ -503,7 +503,7 @@ class TestProcessAgentUpdate:
         assert data["error_category"] == "state_error"
         assert "archived" in data["error"] and "cannot" in data["error"]
         assert data["context"]["status"] == "archived"
-        assert "self_recovery" in data["recovery"]["related_tools"]
+        assert data["recovery"]["related_tools"] == ["start_session"]
         mock_server.lock_manager.acquire_agent_lock_async.assert_not_called()
 
     @pytest.mark.asyncio
@@ -905,7 +905,7 @@ class TestProcessAgentUpdateExtended:
         """Archived agent is refused when it checks in via process_agent_update.
 
         Pre-Stage 3 this reactivated implicitly. Now it returns an error;
-        recovery is via self_recovery() or onboard(force_new=true).
+        recovery is via start_session(resume=true) or start_session(force_new=true).
         """
         agent_uuid = "test-uuid-archived-refused"
         mock_server.agent_metadata = {}

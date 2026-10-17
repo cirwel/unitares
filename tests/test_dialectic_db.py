@@ -42,8 +42,29 @@ from src.dialectic_protocol import DialecticPhase
 
 # The row every session writer's `RETURNING clock_timestamp() AS effect_ts`
 # yields when the write lands.
-EFFECT_ROW = {"effect_ts": datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc),
-              "session_id": "sess-001", "message_id": 1, "timestamp": None}
+EFFECT_ROW = {
+    "effect_ts": datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc),
+    "session_id": "sess-001",
+    "message_id": 1,
+    "timestamp": None,
+    "transcript_revision": 1,
+}
+
+
+class _AsyncpgRecordLike:
+    """Small non-Mapping stand-in for asyncpg.Record."""
+
+    def __init__(self, values):
+        self._values = dict(values)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+    def items(self):
+        return self._values.items()
 
 # ============================================================================
 # Fixtures
@@ -263,6 +284,60 @@ class TestCreateSession:
         assert call_args[0][7] is None  # reason
         assert call_args[0][12] == 0     # synthesis_round defaults to 0
         assert call_args[0][13] is None  # paused_agent_state_json (None state)
+
+    @pytest.mark.asyncio
+    async def test_create_session_refuses_declared_author_as_reviewer(self, db):
+        """The Python effect owner must defend create even if a handler is bypassed."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        author = "22222222-2222-4222-8222-222222222222"
+        proxy = "11111111-1111-4111-8111-111111111111"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([author], declared_by_agent_id=proxy),
+        )
+
+        with pytest.raises(ValueError, match="reviewer_recused"):
+            await instance.create_session(
+                session_id="sess-conflict",
+                paused_agent_id=proxy,
+                reviewer_agent_id=author,
+                paused_agent_state=state,
+            )
+
+        conn.fetchrow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_session_refuses_declarer_mismatch_even_for_self_review(
+        self, db
+    ):
+        """Malformed server-owned provenance never gets a self-review bypass."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        paused = "11111111-1111-4111-8111-111111111111"
+        other = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([other], declared_by_agent_id=other),
+        )
+
+        with pytest.raises(ValueError, match="malformed"):
+            await instance.create_session(
+                session_id="sess-bad-declarer",
+                paused_agent_id=paused,
+                reviewer_agent_id=paused,
+                paused_agent_state=state,
+            )
+
+        conn.fetchrow.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_create_session_duplicate_key(self, db):
@@ -715,7 +790,59 @@ class TestUpdateSessionReviewer:
         await instance.update_session_reviewer("sess-001", "reviewer-B")
         sql = conn.fetchrow.call_args_list[0][0][0]
         assert "NOT IN ('resolved', 'failed')" in sql
+        assert "_dialectic_reviewed_work_authorship" in sql
+        assert "reviewed_work_author_agent_ids" in sql
+        assert conn.fetchrow.call_args_list[0][0][3] == (
+            "unitares.dialectic-reviewed-work-authorship.v1"
+        )
         assert instance.TERMINAL_WRITE_GUARD == ("resolved", "failed")
+
+    @pytest.mark.asyncio
+    async def test_claim_if_unassigned_is_a_null_to_reviewer_cas(self, db):
+        """Two first responders that read an open slot cannot overwrite."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+
+        assert await instance.update_session_reviewer(
+            "sess-001", "reviewer-B", claim_if_unassigned=True
+        ) is True
+
+        sql = " ".join(conn.fetchrow.await_args.args[0].split())
+        assert "reviewer_agent_id IS NULL" in sql
+
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        await instance.update_session_reviewer("sess-001", "reviewer-C")
+        sql = " ".join(conn.fetchrow.await_args.args[0].split())
+        assert "reviewer_agent_id IS NULL" not in sql
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_refuses_declared_author(self, db):
+        """The fallback writer enforces the same recusal as the BEAM writer."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        author = "22222222-2222-4222-8222-222222222222"
+        proxy = "11111111-1111-4111-8111-111111111111"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([author], declared_by_agent_id=proxy),
+        )
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            {
+                "status": "active",
+                "paused_agent_id": proxy,
+                "paused_agent_state_json": state,
+                "reason": None,
+            },
+        ])
+
+        assert await instance.update_session_reviewer(
+            "sess-conflict", author
+        ) is False
 
     @pytest.mark.asyncio
     async def test_update_session_reviewer_refused_on_terminal(self, db):
@@ -725,6 +852,35 @@ class TestUpdateSessionReviewer:
 
         result = await instance.update_session_reviewer("sess-001", "reviewer-B")
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_can_bind_the_sweep_snapshot(self, db):
+        """A stale reviewer cannot overwrite a later operator reassignment."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        updated_at = datetime(2026, 10, 16, tzinfo=timezone.utc)
+
+        assert await instance.update_session_reviewer(
+            "sess-001",
+            "reviewer-new",
+            expected_phase="antithesis",
+            expected_updated_at=updated_at,
+            expected_reviewer="reviewer-old",
+            expected_transcript_revision=3,
+        ) is True
+
+        sql, *args = conn.fetchrow.await_args.args
+        normalized = " ".join(sql.split())
+        assert "phase IS NOT DISTINCT FROM $6" in normalized
+        assert "updated_at IS NOT DISTINCT FROM $7" in normalized
+        assert "reviewer_agent_id IS NOT DISTINCT FROM $8" in normalized
+        assert "transcript_revision = $9" in normalized
+        assert args[5:] == [
+            "antithesis",
+            updated_at,
+            "reviewer-old",
+            3,
+        ]
 
 
 # ============================================================================
@@ -823,6 +979,45 @@ class TestUpdateSessionAwaitingFacilitation:
         result = await instance.update_session_awaiting_facilitation("sess-gone", True)
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_general_writer_carries_frontier_and_inflight_saga_guards(
+        self, db
+    ):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+
+        assert await instance.update_session_awaiting_facilitation(
+            "sess-001",
+            True,
+            expected_phase="synthesis",
+            expected_reviewer="reviewer-a",
+            expected_transcript_revision=5,
+            expected_awaiting_facilitation=False,
+            expected_resolution_saga_revision=9,
+            exclude_inflight_saga=True,
+            live_only=True,
+        ) is True
+
+        call = conn.fetchrow.await_args.args
+        sql = " ".join(call[0].split())
+        assert "status NOT IN ('resolved', 'failed')" in sql
+        assert "phase IS NOT DISTINCT FROM $3" in sql
+        assert "reviewer_agent_id IS NOT DISTINCT FROM $4" in sql
+        assert "transcript_revision = $5" in sql
+        assert "awaiting_facilitation IS NOT DISTINCT FROM $6" in sql
+        assert "resolution_saga_revision = $7" in sql
+        assert "NOT EXISTS" in sql
+        assert "session_resolution_sagas" in sql
+        assert call[1:] == (
+            True,
+            "sess-001",
+            "synthesis",
+            "reviewer-a",
+            5,
+            False,
+            9,
+        )
+
 
 # ============================================================================
 # DialecticDB.mark_awaiting_facilitation
@@ -846,6 +1041,7 @@ class TestMarkAwaitingFacilitation:
         sql = " ".join(conn.fetchrow.call_args_list[0][0][0].split())
         assert "awaiting_facilitation = true" in sql
         assert "status NOT IN ('resolved', 'failed')" in sql
+        assert "awaiting_facilitation IS DISTINCT FROM true" in sql
         assert conn.fetchrow.call_args_list[0][0][1] == "sess-001"
 
     @pytest.mark.asyncio
@@ -869,8 +1065,8 @@ class TestMarkAwaitingFacilitation:
         assert "updated_at" not in sql  # no CAS args passed: no predicate either
 
     @pytest.mark.asyncio
-    async def test_compare_and_set_on_observed_phase_and_updated_at(self, db):
-        """#2367: the write lands only if phase/updated_at still match the sweep's read.
+    async def test_compare_and_set_on_observed_phase_updated_at_and_reviewer(self, db):
+        """The write lands only if every supplied observation still matches.
 
         The CAS READS `updated_at` in the WHERE clause; the SET clause must
         still never write it.
@@ -880,14 +1076,51 @@ class TestMarkAwaitingFacilitation:
         ts = object()
 
         assert await instance.mark_awaiting_facilitation(
-            "sess-001", expected_phase="synthesis", expected_updated_at=ts) is True
+            "sess-001", expected_phase="synthesis", expected_updated_at=ts,
+            expected_reviewer="reviewer-a", expected_transcript_revision=7,
+        ) is True
 
         call = conn.fetchrow.call_args_list[0][0]
         sql = " ".join(call[0].split())
         assert "SET awaiting_facilitation = true WHERE" in sql
         assert "AND phase IS NOT DISTINCT FROM $2" in sql
         assert "AND updated_at IS NOT DISTINCT FROM $3" in sql
-        assert call[1:] == ("sess-001", "synthesis", ts)
+        assert "AND reviewer_agent_id IS NOT DISTINCT FROM $4" in sql
+        assert "AND transcript_revision = $5" in sql
+        assert call[1:] == ("sess-001", "synthesis", ts, "reviewer-a", 7)
+
+    @pytest.mark.asyncio
+    async def test_interactive_transition_touches_updated_at(self, db):
+        """Interactive requests advance liveness while sweeper writes do not."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+
+        assert await instance.mark_awaiting_facilitation(
+            "sess-001", touch_updated_at=True
+        ) is True
+
+        sql = " ".join(conn.fetchrow.call_args_list[0][0][0].split())
+        assert "SET awaiting_facilitation = true, updated_at = now()" in sql
+
+    @pytest.mark.asyncio
+    async def test_two_sweepers_only_one_marks_the_transition(self, db):
+        """A same-snapshot retry cannot count or emit a second transition."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(
+            side_effect=[EFFECT_ROW, None, {"status": "active"}]
+        )
+
+        first = await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="antithesis",
+            expected_reviewer="reviewer-a", expected_transcript_revision=3,
+        )
+        second = await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="antithesis",
+            expected_reviewer="reviewer-a", expected_transcript_revision=3,
+        )
+
+        assert first is True
+        assert second is False
 
     @pytest.mark.asyncio
     async def test_compare_and_set_refused_when_row_moved(self, db):
@@ -942,6 +1175,9 @@ class TestResolveSession:
         assert call_args[3] == json.dumps(resolution)
         assert call_args[4] == "sess-001"
         assert "NOT IN ('resolved', 'failed')" in call_args[0]  # idempotent guard
+        assert "legacy_unbound_session" in call_args[0]
+        normalized_sql = " ".join(call_args[0].split())
+        assert "ELSE FALSE END AS effect_required" in normalized_sql
 
     @pytest.mark.asyncio
     async def test_resolve_session_custom_status(self, db):
@@ -954,6 +1190,68 @@ class TestResolveSession:
         call_args = conn.fetchrow.call_args_list[0][0]
         assert call_args[1] == "failed"   # status
         assert call_args[2] == "failed"   # phase matches status (no longer hardcoded 'resolved')
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_refuses_declared_author_authority(self, db):
+        """The terminal effect owner enforces authorship without the handler."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        paused = "11111111-1111-4111-8111-111111111111"
+        author = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {}, declaration_for_request([author], declared_by_agent_id=paused)
+        )
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            _AsyncpgRecordLike({
+                "status": "active",
+                "paused_agent_id": paused,
+                "reviewer_agent_id": author,
+                "paused_agent_state_json": state,
+            }),
+        ])
+        detail = {}
+
+        result = await instance.resolve_session(
+            "sess-recused", {"action": "resume"}, detail=detail
+        )
+
+        assert result is False
+        assert detail["written"] is False
+        assert detail["refused"] == "reviewer_recused"
+        sql = conn.fetchrow.await_args_list[0].args[0]
+        assert "reviewed_work_author_agent_ids" in sql
+        assert "declared_by_agent_id" in sql
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_refuses_pause_bound_self_review(self, db):
+        """The terminal effect owner enforces independent pause authority."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            _AsyncpgRecordLike({
+                "status": "active",
+                "paused_agent_id": "agent-a",
+                "reviewer_agent_id": "agent-a",
+                "paused_agent_state_json": json.dumps({
+                    "pause_effect_required": True,
+                    "pause_token": "pause-1",
+                }),
+            }),
+        ])
+        detail = {}
+
+        assert await instance.resolve_session(
+            "sess-self", {"action": "resume"}, detail=detail
+        ) is False
+        assert detail["refused"] == "self_review_not_authorizing"
+        sql = conn.fetchrow.await_args_list[0].args[0]
+        assert "pause_effect_required" in sql
+        assert "reviewer_agent_id IS DISTINCT FROM paused_agent_id" in sql
 
     @pytest.mark.asyncio
     async def test_compare_and_set_predicates_are_added_only_when_passed(self, db):
@@ -976,10 +1274,10 @@ class TestResolveSession:
         await instance.resolve_session("sess-001", {"x": 1})
         sql = conn.fetchrow.call_args_list[0][0][0]
         assert "IS NOT DISTINCT FROM" not in sql
-        assert "awaiting_facilitation" not in sql
+        assert "awaiting_facilitation = false" in sql
 
     @pytest.mark.asyncio
-    async def test_clear_facilitation_is_part_of_the_terminal_statement(self, db):
+    async def test_clear_facilitation_is_part_of_every_terminal_statement(self, db):
         instance, pool, conn = db
         conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
 
@@ -999,6 +1297,40 @@ class TestResolveSession:
             detail=detail,
         ) is False
         assert detail == {"written": False, "existing_status": "active"}
+
+    @pytest.mark.asyncio
+    async def test_idempotent_terminal_read_exposes_exact_resolution_snapshot(self, db):
+        """A lost BEAM response can be reconciled without a second/racy read."""
+        instance, pool, conn = db
+        resolution = {"action": "resume", "conditions": ["monitor"], "receipt": "r1"}
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            {
+                "status": "resolved",
+                "phase": "resolved",
+                "paused_agent_id": "paused-A",
+                "reviewer_agent_id": "reviewer-B",
+                "paused_agent_state_json": {},
+                "resolution_json": json.dumps(resolution),
+            },
+        ])
+        detail = {}
+
+        assert await instance.resolve_session(
+            "sess-001", resolution, expected_phase="synthesis", detail=detail
+        ) is True
+        assert detail == {
+            "written": False,
+            "existing_status": "resolved",
+            "existing_phase": "resolved",
+            "existing_paused_agent_id": "paused-A",
+            "existing_reviewer_agent_id": "reviewer-B",
+            "existing_resolution": resolution,
+            "existing_transcript_revision": None,
+        }
+        followup_sql = conn.fetchrow.await_args_list[1].args[0]
+        assert "phase" in followup_sql
+        assert "resolution_json" in followup_sql
 
     @pytest.mark.asyncio
     async def test_resolve_session_not_found(self, db):
@@ -1037,12 +1369,113 @@ class TestAddMessage:
 
         async def fetchrow(sql, *a):
             events.append("insert" if "INSERT" in sql else "bump")
-            return {"message_id": 1, "timestamp": None, "effect_ts": None}
+            return {
+                "message_id": 1,
+                "timestamp": None,
+                "effect_ts": None,
+                "transcript_revision": 1,
+            }
 
         conn.transaction = transaction
         conn.fetchrow = fetchrow
         await instance.add_message("sess-001", "agent-A", "thesis")
         assert events == ["begin", "bump", "insert", "commit"]
+
+    @pytest.mark.asyncio
+    async def test_guarded_add_message_binds_phase_reviewer_and_revision(self, db):
+        """A protocol append advances only the exact session state it loaded."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[
+            EFFECT_ROW,
+            {"message_id": 9, "timestamp": None},
+        ])
+        detail = {}
+
+        assert await instance.add_message(
+            "sess-001",
+            "agent-reviewer",
+            "synthesis",
+            expected_phase="synthesis",
+            expected_reviewer="agent-reviewer",
+            expected_transcript_revision=0,
+            detail=detail,
+        ) == 9
+
+        sql, *args = conn.fetchrow.await_args_list[0].args
+        normalized = " ".join(sql.split())
+        assert "status NOT IN ('resolved', 'failed', 'escalated')" in normalized
+        assert "phase IS NOT DISTINCT FROM $2" in normalized
+        assert "reviewer_agent_id IS NOT DISTINCT FROM $3" in normalized
+        assert "transcript_revision = $4" in normalized
+        assert args == ["sess-001", "synthesis", "agent-reviewer", 0]
+        assert detail["transcript_revision"] == 1
+        assert detail["written"] is True
+
+    @pytest.mark.asyncio
+    async def test_guarded_add_message_refusal_never_inserts(self, db):
+        """A stale or terminal session refuses before any transcript insert."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+        detail = {}
+
+        assert await instance.add_message(
+            "sess-001",
+            "agent-reviewer",
+            "synthesis",
+            expected_phase="synthesis",
+            expected_reviewer="agent-reviewer",
+            expected_transcript_revision=4,
+            detail=detail,
+        ) == 0
+
+        conn.fetchrow.assert_awaited_once()
+        assert detail == {"written": False}
+
+    @pytest.mark.asyncio
+    async def test_protocol_message_advances_phase_round_and_reviewer_atomically(
+        self, db
+    ):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[
+            EFFECT_ROW,
+            {"message_id": 11, "timestamp": None},
+        ])
+
+        assert await instance.add_message(
+            "sess-001",
+            "system",
+            "system",
+            expected_phase="antithesis",
+            expected_reviewer="reviewer-old",
+            expected_transcript_revision=4,
+            expected_awaiting_facilitation=True,
+            next_phase="synthesis",
+            next_synthesis_round=1,
+            next_reviewer="reviewer-new",
+            next_awaiting_facilitation=False,
+        ) == 11
+
+        sql, *args = conn.fetchrow.await_args_list[0].args
+        normalized = " ".join(sql.split())
+        assert "phase = $6" in normalized
+        assert "synthesis_round = $7" in normalized
+        assert "reviewer_agent_id = $8" in normalized
+        assert "awaiting_facilitation = $12" in normalized
+        assert "reviewed_work_author_agent_ids" in normalized
+        assert args == [
+            "sess-001",
+            "antithesis",
+            "reviewer-old",
+            4,
+            True,
+            "synthesis",
+            1,
+            "reviewer-new",
+            dialectic_db_module.REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+            dialectic_db_module.CANONICAL_AGENT_UUID_PATTERN,
+            dialectic_db_module.MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS,
+            False,
+        ]
 
     @pytest.mark.asyncio
     async def test_add_message_full_args(self, db):
@@ -1664,8 +2097,36 @@ class TestConvenienceWrappers:
         result = await update_session_reviewer_async("s1", "reviewer-B")
 
         mock_singleton.update_session_reviewer.assert_awaited_once_with(
-            "s1", "reviewer-B", winner=None, detail=ANY)
+            "s1",
+            "reviewer-B",
+            claim_if_unassigned=False,
+            exclude_inflight_saga=False,
+            clear_facilitation=False,
+            winner=None,
+            detail=ANY,
+        )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_async_forwards_open_slot_cas(
+        self, mock_singleton
+    ):
+        mock_singleton.update_session_reviewer = AsyncMock(return_value=False)
+
+        result = await update_session_reviewer_async(
+            "s1", "reviewer-B", claim_if_unassigned=True
+        )
+
+        mock_singleton.update_session_reviewer.assert_awaited_once_with(
+            "s1",
+            "reviewer-B",
+            claim_if_unassigned=True,
+            exclude_inflight_saga=False,
+            clear_facilitation=False,
+            winner=None,
+            detail=ANY,
+        )
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_update_session_status_async(self, mock_singleton):
@@ -1884,6 +2345,7 @@ class TestTerminalWriteGuardIsLoadBearing:
         "update_session_reviewer",
         "update_session_status",
         "mark_awaiting_facilitation",
+        "update_session_awaiting_facilitation",
         "resolve_session",
     )
 
@@ -2186,6 +2648,134 @@ class TestSessionTerminalState:
         assert await instance.get_session_terminal_state("s1") is None
 
 
+class TestResolutionEffectOutbox:
+    @pytest.mark.asyncio
+    async def test_claim_binds_outbox_and_terminal_row_to_exact_decision(self, db):
+        instance, _pool, conn = db
+        resolution = {"action": "resume", "conditions": ["observe"]}
+        conn.fetchrow = AsyncMock(return_value={
+            "session_id": "s1",
+            "paused_agent_id": "paused-a",
+            "reviewer_agent_id": "reviewer-b",
+            "effect_required": True,
+            "pause_token": "pause-1",
+            "resolution_payload_json": resolution,
+            "state": "applying",
+            "claimed": True,
+        })
+
+        row = await instance.claim_resolution_effect(
+            "s1",
+            "owner-1",
+            paused_agent_id="paused-a",
+            reviewer_agent_id="reviewer-b",
+            effect_required=True,
+            pause_token="pause-1",
+            resolution=resolution,
+        )
+
+        assert row["claimed"] is True
+        sql, *params = conn.fetchrow.call_args.args
+        assert params == [
+            "s1", "owner-1", "paused-a", "reviewer-b",
+            json.dumps(resolution), "pause-1", True,
+        ]
+        assert "state = 'pending'" in sql
+        assert "FROM core.dialectic_sessions" in sql
+        assert "s.status = 'resolved'" in sql
+        assert "s.phase = 'resolved'" in sql
+        assert "s.resolution_json = ($5::text)::jsonb" in sql
+
+    @pytest.mark.asyncio
+    async def test_losing_claim_returns_live_row_without_claiming(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[None, {
+            "session_id": "s1",
+            "resolution_payload_json": '{"action": "resume"}',
+            "execution_result_json": '{"success": true}',
+            "state": "applied",
+            "claimed": False,
+        }])
+        row = await instance.claim_resolution_effect(
+            "s1",
+            "owner-2",
+            paused_agent_id="paused-a",
+            reviewer_agent_id="reviewer-b",
+            effect_required=True,
+            pause_token="pause-1",
+            resolution={"action": "resume"},
+        )
+        assert row["claimed"] is False
+        assert row["resolution_payload_json"] == {"action": "resume"}
+        assert row["execution_result_json"] == {"success": True}
+        assert conn.fetchrow.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_complete_is_owner_and_state_guarded(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.complete_resolution_effect(
+            "s1", "owner-1", {"success": True}
+        ) is True
+        sql = conn.fetchrow.call_args.args[0]
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+
+    @pytest.mark.asyncio
+    async def test_failure_records_unknown_partial_not_retryable_failure(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.fail_resolution_effect(
+            "s1", "owner-1", "uncertain", execution_result={"success": False}
+        ) is True
+        sql = conn.fetchrow.call_args.args[0]
+        assert "state = 'unknown_partial'" in sql
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+
+    @pytest.mark.asyncio
+    async def test_acknowledge_only_closes_unknown_partial(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        inspected_at = datetime(2026, 10, 16, tzinfo=timezone.utc)
+        assert await instance.acknowledge_resolution_effect(
+            "s1",
+            "operator repaired live state",
+            expected_updated_at=inspected_at,
+        ) is True
+        sql, *params = conn.fetchrow.call_args.args
+        assert "state = 'unknown_partial'" in sql
+        assert "state IN ('applying'" not in sql
+        assert "COALESCE(execution_result_json" in sql
+        assert "updated_at IS NOT DISTINCT FROM $3" in sql
+        assert params[0] == "s1"
+        metadata = json.loads(params[1])
+        assert metadata == {
+            "manually_reconciled": True,
+            "reconciliation_reason": "operator repaired live state",
+            "operator_reconciliation": {
+                "success": True,
+                "reason": "operator repaired live state",
+            },
+        }
+        assert params[2] == inspected_at
+        assert "success" not in metadata
+        assert "reason" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_quarantine_fences_exact_applying_owner(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.quarantine_resolution_effect(
+            "s1", "owner-1", "worker confirmed stopped"
+        ) is True
+        sql, *params = conn.fetchrow.call_args.args
+        assert params == ["s1", "owner-1", "worker confirmed stopped"]
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+        assert "state = 'unknown_partial'" in sql
+
+
 
 class TestEffectTimeFromTheDatabaseClock:
     """Every Python session writer returns its effect time from the SAME
@@ -2233,6 +2823,7 @@ class TestEffectTimeFromTheDatabaseClock:
         assert "SET updated_at = now()" in bump_sql and "clock_timestamp()" in bump_sql
         assert detail["effect_ts"] == EFFECT_ROW["effect_ts"]
         assert detail["message_ts"] == msg["timestamp"]
+        assert detail["transcript_revision"] == 1
 
     @pytest.mark.asyncio
     async def test_return_contracts_are_unchanged_without_detail(self, db):

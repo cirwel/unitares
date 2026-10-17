@@ -11,6 +11,7 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     DialecticLiveness,
     DialecticLivenessSupervisor,
     DialecticLivenessReconciler,
+    DialecticSaga,
     DB
   }
 
@@ -118,6 +119,174 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     assert :ok = wait_until(fn -> DialecticLiveness.snapshot(session_id) == :gone end)
     # Untouched: it was already resolved before the watcher ran.
     assert session_status(session_id) == "resolved"
+  end
+
+  test "a message after the liveness read refuses the stale reap" do
+    session_id =
+      insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    assert {:ok, info} = DialecticSaga.get_session_liveness(session_id)
+
+    Postgrex.query!(
+      DB,
+      "UPDATE core.dialectic_sessions SET transcript_revision = transcript_revision + 1, updated_at = now() WHERE session_id = $1",
+      [session_id]
+    )
+
+    assert {:error, :session_revision_mismatch} =
+             DialecticSaga.resolve(%{
+               session_id: session_id,
+               paused_agent_id: info.paused_agent_id,
+               reviewer_agent_id: info.reviewer_agent_id,
+               resolution_payload: %{"action" => "failed", "reason" => "liveness_timeout"},
+               status: "failed",
+               expected_phase: info.phase,
+               expected_transcript_revision: info.transcript_revision,
+               expected_awaiting_facilitation: info.awaiting_facilitation
+             })
+
+    assert session_status(session_id) == "active"
+  end
+
+  test "a facilitation request after the liveness read refuses the stale reap" do
+    session_id =
+      insert_dialectic_session(
+        paused_agent_id: "p",
+        reviewer_agent_id: "r",
+        awaiting_facilitation: false
+      )
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    assert {:ok, info} = DialecticSaga.get_session_liveness(session_id)
+
+    Postgrex.query!(
+      DB,
+      "UPDATE core.dialectic_sessions SET awaiting_facilitation = true WHERE session_id = $1",
+      [session_id]
+    )
+
+    assert {:error, :session_facilitation_mismatch} =
+             DialecticSaga.resolve(%{
+               session_id: session_id,
+               paused_agent_id: info.paused_agent_id,
+               reviewer_agent_id: info.reviewer_agent_id,
+               resolution_payload: %{"action" => "failed", "reason" => "liveness_timeout"},
+               status: "failed",
+               expected_phase: info.phase,
+               expected_transcript_revision: info.transcript_revision,
+               expected_awaiting_facilitation: info.awaiting_facilitation
+             })
+
+    assert session_status(session_id) == "active"
+  end
+
+  test "same-state activity after the liveness read refuses the stale reap" do
+    session_id =
+      insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    assert {:ok, info} = DialecticSaga.get_session_liveness(session_id)
+
+    Postgrex.query!(
+      DB,
+      "UPDATE core.dialectic_sessions SET updated_at = updated_at + interval '1 second' WHERE session_id = $1",
+      [session_id]
+    )
+
+    assert {:error, :session_activity_mismatch} =
+             DialecticSaga.resolve(%{
+               session_id: session_id,
+               paused_agent_id: info.paused_agent_id,
+               reviewer_agent_id: info.reviewer_agent_id,
+               resolution_payload: %{"action" => "failed", "reason" => "liveness_timeout"},
+               status: "failed",
+               expected_phase: info.phase,
+               expected_transcript_revision: info.transcript_revision,
+               expected_awaiting_facilitation: info.awaiting_facilitation,
+               expected_updated_at: info.updated_at
+             })
+
+    assert session_status(session_id) == "active"
+  end
+
+  test "watcher stays alive when activity makes its reap stale" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+
+    session_id =
+      insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+
+    on_exit(fn ->
+      case Registry.lookup(
+             UnitaresLeasePlane.DialecticLivenessRegistry,
+             session_id
+           ) do
+        [{pid, _}] ->
+          :ok =
+            DynamicSupervisor.terminate_child(
+              UnitaresLeasePlane.DialecticLivenessSupervisor,
+              pid
+            )
+
+        [] ->
+          :ok
+      end
+
+      :ok =
+        wait_until(fn ->
+          Registry.lookup(
+            UnitaresLeasePlane.DialecticLivenessRegistry,
+            session_id
+          ) == []
+        end)
+
+      cleanup_dialectic_session(session_id)
+    end)
+
+    parent = self()
+
+    locker =
+      Task.async(fn ->
+        Postgrex.transaction(DB, fn conn ->
+          Postgrex.query!(
+            conn,
+            "SELECT session_id FROM core.dialectic_sessions WHERE session_id = $1 FOR UPDATE",
+            [session_id]
+          )
+
+          send(parent, :liveness_row_locked)
+
+          receive do
+            :advance_activity ->
+              Postgrex.query!(
+                conn,
+                "UPDATE core.dialectic_sessions SET updated_at = updated_at + interval '1 second' WHERE session_id = $1",
+                [session_id]
+              )
+          after
+            2_000 -> raise "timed out waiting to advance liveness activity"
+          end
+        end)
+      end)
+
+    assert_receive :liveness_row_locked, 1_000
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 10_000
+      )
+
+    # The watcher reads the old committed frontier, then blocks trying to lock
+    # the row for its claim. Commit newer activity underneath that decision.
+    Process.sleep(50)
+    send(locker.pid, :advance_activity)
+    assert {:ok, _} = Task.await(locker, 2_000)
+    Process.sleep(100)
+
+    assert session_status(session_id) == "active"
+    assert :gone != DialecticLiveness.snapshot(session_id)
   end
 
   # The reap row is the only artifact that outlives the session. When it said

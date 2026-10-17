@@ -7,12 +7,15 @@ wraps DatabaseBackend operations into a higher-level AgentRecord API.
 """
 
 import hashlib
+import json
 from datetime import datetime, timezone
+from types import MethodType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.db.base import AgentStateRecord, IdentityRecord
+from src.db.mixins.identity import IdentityMixin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,6 +101,46 @@ def _mock_db(**overrides) -> MagicMock:
         ))
 
     return db
+
+
+class _AsyncContext:
+    """Small observable async context manager for mocked pool/transactions."""
+
+    def __init__(self, value=None):
+        self.value = value
+        self.exit_exc_type = None
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, exc_type, _exc, _tb):
+        self.exit_exc_type = exc_type
+        return False
+
+
+def _mock_transactional_db(*, row, execute_results=()):
+    """Return a DB/connection pair suitable for direct SQL storage helpers."""
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(return_value=row)
+    conn.execute = AsyncMock(side_effect=list(execute_results))
+    transaction = _AsyncContext()
+    conn.transaction = MagicMock(return_value=transaction)
+
+    db = _mock_db()
+    acquire = _AsyncContext(conn)
+    db.acquire = MagicMock(return_value=acquire)
+    for method_name in (
+        "pause_agent_with_token",
+        "resume_agent_if_pause_token",
+        "expire_pause_if_token",
+        "read_authoritative_pause_binding",
+    ):
+        setattr(
+            db,
+            method_name,
+            MethodType(getattr(IdentityMixin, method_name), db),
+        )
+    return db, conn, transaction
 
 
 @pytest.fixture(autouse=True)
@@ -464,6 +507,754 @@ class TestUpdateAgent:
         fields_call = db.update_agent_fields.call_args
         assert fields_call.kwargs.get("parent_agent_id") == "parent-2"
         assert fields_call.kwargs.get("spawn_reason") == "forked"
+
+
+# ---------------------------------------------------------------------------
+# authoritative pause publication, binding, and exact-generation resume
+# ---------------------------------------------------------------------------
+
+class TestPauseAgentWithToken:
+
+    @pytest.mark.asyncio
+    async def test_pause_publishes_token_event_and_both_statuses_atomically(self):
+        old_event = {"event": "onboarded"}
+        pause_event = {"event": "paused", "actuation_id": "act-1"}
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "metadata": {"lifecycle_events": [old_event]},
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            result = await pause_agent_with_token(
+                "agent-1",
+                pause_token="pause-1",
+                lifecycle_event=pause_event,
+            )
+
+        assert result == {"applied": True, "pause_token": "pause-1"}
+        assert transaction.exit_exc_type is None
+        assert conn.execute.await_count == 2
+        agent_update, identity_update = conn.execute.await_args_list
+        assert "status = 'paused'" in agent_update.args[0]
+        assert agent_update.args[1:] == ("agent-1", "active")
+        assert "status = 'paused'" in identity_update.args[0]
+        assert identity_update.args[1] == "agent-1"
+        assert json.loads(identity_update.args[2]) == {
+            "paused_at": "pause-1",
+            "lifecycle_events": [old_event, pause_event],
+        }
+        assert identity_update.args[3] == "active"
+
+    @pytest.mark.asyncio
+    async def test_same_committed_generation_is_idempotent(self):
+        db, conn, transaction = _mock_transactional_db(row={
+            "agent_status": "paused",
+            "identity_status": "paused",
+            "metadata": {"paused_at": "pause-1"},
+        })
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            result = await pause_agent_with_token(
+                "agent-1",
+                pause_token="pause-1",
+                lifecycle_event={"event": "paused"},
+            )
+
+        assert result == {
+            "applied": True,
+            "idempotent": True,
+            "pause_token": "pause-1",
+        }
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_status_disagreement_is_atomically_repaired_by_new_pause(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+            "agent_status": "active",
+            "identity_status": "paused",
+            "metadata": {"paused_at": "pause-1"},
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            result = await pause_agent_with_token(
+                "agent-1",
+                pause_token="pause-2",
+                lifecycle_event={"event": "paused"},
+            )
+
+        assert result == {
+            "applied": True,
+            "pause_token": "pause-2",
+            "reconciled_status_mismatch": True,
+            "previous_agent_status": "active",
+            "previous_identity_status": "paused",
+        }
+        assert conn.execute.await_count == 2
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_terminal_status_disagreement_still_refuses_without_writes(self):
+        db, conn, transaction = _mock_transactional_db(row={
+            "agent_status": "active",
+            "identity_status": "archived",
+            "metadata": {},
+        })
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            result = await pause_agent_with_token(
+                "agent-1",
+                pause_token="pause-2",
+                lifecycle_event={"event": "paused"},
+            )
+
+        assert result == {
+            "applied": False,
+            "reason": "terminal_agent_status",
+            "agent_status": "active",
+            "identity_status": "archived",
+        }
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_paused_rows_without_a_token_are_repaired_by_new_pause(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {},
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            result = await pause_agent_with_token(
+                "agent-1",
+                pause_token="pause-2",
+                lifecycle_event={"event": "paused"},
+            )
+
+        assert result["applied"] is True
+        assert result["pause_token"] == "pause-2"
+        assert result["repaired_missing_pause_token"] is True
+        assert conn.execute.await_count == 2
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_second_update_failure_exits_transaction_with_exception(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "metadata": {},
+            },
+            execute_results=("UPDATE 1", "UPDATE 0"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import pause_agent_with_token
+
+            with pytest.raises(RuntimeError, match="CAS lost on core.identities"):
+                await pause_agent_with_token(
+                    "agent-1",
+                    pause_token="pause-1",
+                    lifecycle_event={"event": "paused"},
+                )
+
+        assert conn.execute.await_count == 2
+        assert transaction.exit_exc_type is RuntimeError
+
+
+class TestReadAuthoritativePauseBinding:
+
+    @pytest.mark.asyncio
+    async def test_paused_status_binds_exact_generation_token(self):
+        db, conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "pause_token": "pause-2026-10-16T10:00:00Z",
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import read_authoritative_pause_binding
+
+            result = await read_authoritative_pause_binding("agent-1")
+
+        assert result == {
+            "pause_effect_required": True,
+            "pause_token": "pause-2026-10-16T10:00:00Z",
+            "status": "paused",
+        }
+        sql, bound_agent_id = conn.fetchrow.await_args.args
+        assert "JOIN core.identities" in sql
+        assert bound_agent_id == "agent-1"
+
+    @pytest.mark.asyncio
+    async def test_active_status_records_explicit_no_op_binding(self):
+        db, _conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "pause_token": None,
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import read_authoritative_pause_binding
+
+            result = await read_authoritative_pause_binding("agent-1")
+
+        assert result == {
+            "pause_effect_required": False,
+            "pause_token": None,
+            "status": "active",
+        }
+
+    @pytest.mark.asyncio
+    async def test_active_status_ignores_stale_metadata_pause_token(self):
+        """Old active rows can retain an expired token; status is authoritative."""
+        db, _conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "pause_token": "stale-pause-token",
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import read_authoritative_pause_binding
+
+            result = await read_authoritative_pause_binding("agent-1")
+
+        assert result == {
+            "pause_effect_required": False,
+            "pause_token": None,
+            "status": "active",
+        }
+
+    @pytest.mark.asyncio
+    async def test_status_disagreement_fails_closed(self):
+        db, _conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "active",
+                "pause_token": "pause-1",
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import read_authoritative_pause_binding
+
+            with pytest.raises(RuntimeError, match="status copies disagree"):
+                await read_authoritative_pause_binding("agent-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pause_token", [None, "", "   "])
+    async def test_paused_status_without_generation_token_fails_closed(
+        self, pause_token
+    ):
+        db, _conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "pause_token": pause_token,
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import read_authoritative_pause_binding
+
+            with pytest.raises(RuntimeError, match="no pause generation token"):
+                await read_authoritative_pause_binding("agent-1")
+
+
+class TestResumeAgentIfPauseToken:
+
+    @pytest.mark.asyncio
+    async def test_exact_token_merges_locked_conditions_and_updates_both_statuses(self):
+        existing_condition = {"condition": "preserve durable condition"}
+        added_condition = {"condition": "add reviewer condition"}
+        old_event = {"event": "paused"}
+        resume_event = {"event": "dialectic_resumed"}
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {
+                    "paused_at": "pause-1",
+                    "dialectic_conditions": [existing_condition],
+                    "lifecycle_events": [old_event],
+                },
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            result = await resume_agent_if_pause_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                dialectic_condition_additions=[added_condition],
+                lifecycle_event=resume_event,
+            )
+
+        assert result == {
+            "applied": True,
+            "pause_token": "pause-1",
+            "dialectic_conditions": [existing_condition, added_condition],
+        }
+        assert transaction.exit_exc_type is None
+        assert conn.execute.await_count == 2
+        agent_update, identity_update = conn.execute.await_args_list
+        assert "UPDATE core.agents" in agent_update.args[0]
+        assert "status = 'active'" in agent_update.args[0]
+        assert agent_update.args[1:] == ("agent-1",)
+        assert "UPDATE core.identities" in identity_update.args[0]
+        assert "status = 'active'" in identity_update.args[0]
+        assert identity_update.args[1] == "agent-1"
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch == {
+            "paused_at": None,
+            "loop_cooldown_until": None,
+            "loop_detected_at": None,
+            "lifecycle_events": [old_event, resume_event],
+            "dialectic_conditions": [existing_condition, added_condition],
+        }
+        assert identity_update.args[3] == "pause-1"
+
+    @pytest.mark.asyncio
+    async def test_condition_cap_returns_exact_newest_twenty(self):
+        existing = [{"condition": f"old-{index}"} for index in range(20)]
+        additions = [{"condition": f"new-{index}"} for index in range(15)]
+        expected = (existing + additions)[-20:]
+        db, conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {
+                    "paused_at": "pause-1",
+                    "dialectic_conditions": existing,
+                },
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            result = await resume_agent_if_pause_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                dialectic_condition_additions=additions,
+                lifecycle_event={"event": "dialectic_resumed"},
+            )
+
+        assert result["dialectic_conditions"] == expected
+        identity_update = conn.execute.await_args_list[1]
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch["dialectic_conditions"] == expected
+
+    @pytest.mark.asyncio
+    async def test_token_mismatch_refuses_without_writes(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {"paused_at": "pause-new"},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            result = await resume_agent_if_pause_token(
+                "agent-1",
+                expected_pause_token="pause-old",
+                dialectic_condition_additions=[],
+                lifecycle_event={"event": "dialectic_resumed"},
+            )
+
+        assert result == {
+            "applied": False,
+            "reason": "pause_generation_superseded",
+            "agent_status": "paused",
+            "identity_status": "paused",
+            "current_pause_token": "pause-new",
+        }
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_status_mismatch_refuses_without_writes(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "active",
+                "metadata": {"paused_at": "pause-1"},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            result = await resume_agent_if_pause_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                dialectic_condition_additions=[],
+                lifecycle_event={"event": "dialectic_resumed"},
+            )
+
+        assert result["applied"] is False
+        assert result["reason"] == "durable_status_mismatch"
+        assert result["agent_status"] == "paused"
+        assert result["identity_status"] == "active"
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_second_update_failure_exits_transaction_with_exception(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {"paused_at": "pause-1"},
+            },
+            execute_results=("UPDATE 1", "UPDATE 0"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            with pytest.raises(RuntimeError, match="CAS lost on core.identities"):
+                await resume_agent_if_pause_token(
+                    "agent-1",
+                    expected_pause_token="pause-1",
+                    dialectic_condition_additions=[],
+                    lifecycle_event={"event": "dialectic_resumed"},
+                )
+
+        assert conn.execute.await_count == 2
+        assert transaction.exit_exc_type is RuntimeError
+
+
+class TestExpirePauseIfToken:
+
+    @pytest.mark.asyncio
+    async def test_exact_paused_generation_expires_atomically(self):
+        old_event = {"event": "paused"}
+        expiry_event = {"event": "pause_auto_expired"}
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {
+                    "paused_at": "pause-1",
+                    "lifecycle_events": [old_event],
+                },
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                lifecycle_event=expiry_event,
+            )
+
+        assert result == {"applied": True, "pause_token": "pause-1"}
+        agent_update, identity_update = conn.execute.await_args_list
+        assert agent_update.args[1:] == ("agent-1", "paused")
+        assert identity_update.args[3:] == ("pause-1", "paused")
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch == {
+            "paused_at": None,
+            "loop_cooldown_until": None,
+            "loop_detected_at": None,
+            "lifecycle_events": [old_event, expiry_event],
+        }
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_matching_active_statuses_without_token_are_authoritative(
+        self,
+    ):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "metadata": {"paused_at": None},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-local",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result == {
+            "applied": True,
+            "already_active": True,
+            "pause_token": "pause-local",
+            "current_pause_token": None,
+        }
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_matching_active_statuses_clean_exact_stale_token(self):
+        old_event = {"event": "paused"}
+        expiry_event = {"event": "pause_auto_expired"}
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "metadata": {
+                    "paused_at": "pause-local",
+                    "lifecycle_events": [old_event],
+                },
+            },
+            execute_results=("UPDATE 1",),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-local",
+                lifecycle_event=expiry_event,
+            )
+
+        assert result == {
+            "applied": True,
+            "pause_token": "pause-local",
+            "repaired_stale_pause_token": True,
+        }
+        identity_update = conn.execute.await_args
+        assert identity_update.args[3:] == ("pause-local", "active")
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch["paused_at"] is None
+        assert metadata_patch["lifecycle_events"][0] == old_event
+        assert metadata_patch["lifecycle_events"][1]["event"] == (
+            "pause_metadata_reconciled"
+        )
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stale_token", ["pause-other", ""])
+    async def test_active_statuses_clean_any_stale_string_token(
+        self, stale_token
+    ):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "active",
+                "metadata": {"paused_at": stale_token},
+            },
+            execute_results=("UPDATE 1",),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-old",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result == {
+            "applied": True,
+            "pause_token": "pause-old",
+            "repaired_stale_pause_token": True,
+        }
+        identity_update = conn.execute.await_args
+        assert identity_update.args[3:] == (stale_token, "active")
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch["paused_at"] is None
+        assert metadata_patch["lifecycle_events"][0]["event"] == (
+            "pause_metadata_reconciled"
+        )
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("agent_status", "identity_status"),
+        [("active", "paused"), ("paused", "active")],
+    )
+    async def test_exact_token_repairs_active_paused_split(
+        self, agent_status, identity_status
+    ):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": agent_status,
+                "identity_status": identity_status,
+                "metadata": {"paused_at": "pause-1"},
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result["applied"] is True
+        assert result["reconciled_status_mismatch"] is True
+        assert result["previous_agent_status"] == agent_status
+        assert result["previous_identity_status"] == identity_status
+        agent_update, identity_update = conn.execute.await_args_list
+        assert agent_update.args[1:] == ("agent-1", agent_status)
+        assert identity_update.args[3:] == (
+            "pause-1", identity_status
+        )
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("durable_token", [None, "pause-new"])
+    async def test_unbound_status_split_requires_operator_reconciliation(
+        self, durable_token
+    ):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "active",
+                "identity_status": "paused",
+                "metadata": {"paused_at": durable_token},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-old",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result["applied"] is False
+        assert result["reason"] == "operator_reconciliation_required"
+        assert result["current_pause_token"] == durable_token
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_missing_durable_identity_requires_repair(self):
+        db, conn, transaction = _mock_transactional_db(row=None)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result == {
+            "applied": False,
+            "reason": "durable_identity_missing",
+        }
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_terminal_status_never_reactivates(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "archived",
+                "identity_status": "archived",
+                "metadata": {"paused_at": "pause-1"},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result["applied"] is False
+        assert result["reason"] == "terminal_agent_status"
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pause_token", [None, "", "   "])
+    async def test_missing_expected_token_refuses_before_read(self, pause_token):
+        db, conn, transaction = _mock_transactional_db(row=None)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token=pause_token,
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result == {"applied": False, "reason": "pause_token_missing"}
+        conn.fetchrow.assert_not_awaited()
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_unrelated_nonterminal_status_refuses_without_writes(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "waiting_input",
+                "identity_status": "paused",
+                "metadata": {"paused_at": "pause-1"},
+            }
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            result = await expire_pause_if_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                lifecycle_event={"event": "pause_auto_expired"},
+            )
+
+        assert result["applied"] is False
+        assert result["reason"] == "operator_reconciliation_required"
+        conn.execute.assert_not_awaited()
+        assert transaction.exit_exc_type is None
+
+    @pytest.mark.asyncio
+    async def test_second_update_failure_rolls_back_expiry(self):
+        db, conn, transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {"paused_at": "pause-1"},
+            },
+            execute_results=("UPDATE 1", "UPDATE 0"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import expire_pause_if_token
+
+            with pytest.raises(
+                RuntimeError, match="pause expiry CAS lost on core.identities"
+            ):
+                await expire_pause_if_token(
+                    "agent-1",
+                    expected_pause_token="pause-1",
+                    lifecycle_event={"event": "pause_auto_expired"},
+                )
+
+        assert conn.execute.await_count == 2
+        assert transaction.exit_exc_type is RuntimeError
 
 
 # ---------------------------------------------------------------------------
