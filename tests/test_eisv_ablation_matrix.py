@@ -853,17 +853,24 @@ def test_code_version_never_refuses_a_read(monkeypatch, tmp_path):
 
 
 def test_code_version_lists_uncommitted_executed_modules(monkeypatch):
-    porcelain = " M scripts/analysis/eisv_skeptic_report.py\n"
-    monkeypatch.setattr(
-        matrix_module,
-        "_git_output",
-        lambda *argv: porcelain.strip("\n") if argv[0] == "status" else "a" * 40,
-    )
+    """Exercise the real git-output normalization, not a mock of it."""
+    outputs = {
+        "status": " M scripts/analysis/eisv_skeptic_report.py\nM  src/grounding/outcome_anchors.py\n",
+        "rev-parse": "a" * 40 + "\n",
+    }
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=outputs[cmd[3]], stderr="")
+
+    monkeypatch.setattr(matrix_module.subprocess, "run", fake_run)
 
     version = matrix_module.read_code_version()
 
     assert version["git_commit"] == "a" * 40
-    assert version["dirty_paths"] == ["scripts/analysis/eisv_skeptic_report.py"]
+    assert version["dirty_paths"] == [
+        "scripts/analysis/eisv_skeptic_report.py",
+        "src/grounding/outcome_anchors.py",
+    ]
 
 
 def test_validation_slices_keep_rows_whose_identity_self_declared_testing():

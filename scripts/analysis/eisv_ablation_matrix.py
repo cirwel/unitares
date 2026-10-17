@@ -1324,7 +1324,9 @@ def _git_output(*argv: str) -> str | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.strip()
+    # Only trailing newlines: porcelain status lines start with a meaningful
+    # space (" M path" is an unstaged change).
+    return completed.stdout.rstrip("\n")
 
 
 def read_code_version(root: Path = REPO_ROOT) -> dict[str, Any]:
@@ -1343,7 +1345,7 @@ def read_code_version(root: Path = REPO_ROOT) -> dict[str, Any]:
             sha256[rel] = None
     status = _git_output("status", "--porcelain", "--", *CODE_VERSION_PATHS)
     return {
-        "git_commit": _git_output("rev-parse", "HEAD"),
+        "git_commit": (_git_output("rev-parse", "HEAD") or "").strip() or None,
         "dirty_paths": (
             None
             if status is None
