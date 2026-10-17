@@ -51,6 +51,7 @@ REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
 DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.governance-mcp"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 UID_NUM="$(id -u)"
 PORT="${UNITARES_MCP_PORT:-8767}"
 TAG="deploy-mcp"
@@ -74,11 +75,30 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY/src/mcp_server.py" \
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
+# Rollback is allowed only after a positive read proving the DB is below the
+# runtime floor. Unknown must fail closed: a failed version probe is not
+# evidence that pre-078 writers are safe.
+DIALECTIC_FRONTIER_LIVE=1
+
+recover_or_hold_forward() {
+  local reason="$1"
+  if [[ "$DIALECTIC_FRONTIER_LIVE" == 1 ]]; then
+    echo "[deploy-mcp] FORWARD RECOVERY REQUIRED — $reason" >&2
+    echo "[deploy-mcp] The live DB is at/above dialectic schema 078, or could not be proven below it; arbitrary PREV may contain unfenced Python/BEAM writers." >&2
+    echo "[deploy-mcp] Leaving the reviewed forward tree in place and unloading both dialectic writers." >&2
+    launchctl bootout "gui/$UID_NUM/com.unitares.governance-mcp" >/dev/null 2>&1 || :
+    launchctl bootout "gui/$UID_NUM/com.unitares.lease-plane" >/dev/null 2>&1 || :
+    echo "[deploy-mcp] Repair forward from $DEPLOY, then deploy new Python before new BEAM." >&2
+    return 1
+  fi
+  deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV"
+}
+
 verify_migration_revision() {
   if deploy_lib_verify_expected_revision "$TAG" "$DEPLOY" HEAD; then
     return 0
   fi
-  deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
+  recover_or_hold_forward "the reviewed migration revision changed" || :
   return 1
 }
 mkdir -p "$DEPLOY/data/logs"
@@ -95,44 +115,75 @@ mkdir -p "$DEPLOY/data/logs"
 #     still-running process (that mismatch is its own reboot-time foot-gun).
 #   - --apply-migrations: apply pending migrations FIRST (schema before code),
 #     re-verify, then proceed to the restart.
-# Note: a later health-failure rollback resets the worktree but NOT the DB —
-# migrations are forward-only and additive (IF NOT EXISTS), so new-schema +
-# old-code is the safe direction (the inverse is the failure mode above).
+# Migration 078 is a runtime floor, not a generically additive change. Once it
+# is live, old Python sweepers and pre-078 BEAM must not be restarted; later
+# failures hold both writers stopped and require forward recovery.
 MIGRATE="$DEPLOY/scripts/dev/apply_migrations.py"
-MIGRATE_DBURL=()
-[[ -n "${UNITARES_DEPLOY_DB_URL:-}" ]] && MIGRATE_DBURL=(--db-url "$UNITARES_DEPLOY_DB_URL")
-# Expand with the ${arr[@]+"${arr[@]}"} guard everywhere below: on macOS bash 3.2
-# (the default /bin/bash) "${empty_array[@]}" trips `set -u` ("unbound variable")
-# and aborts the deploy when no UNITARES_DEPLOY_DB_URL is set (the common case).
-if [[ -f "$MIGRATE" ]]; then
-  verify_migration_revision
-  echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
-  migration_check_rc=0
-  python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" || migration_check_rc=$?
-  verify_migration_revision
-  if [[ "$migration_check_rc" != 0 ]]; then
-    if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
-      # Still under the shared checkout lock. A failed schema check must not
-      # authorize SQL from a checkout that moved after the caller's review.
-      verify_migration_revision
-      echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
-      if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
-         || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
-        echo "[deploy-mcp] FAILED — migrations did not reach sync; rolling worktree back to ${PREV:0:8} and NOT restarting." >&2
-        deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
-        exit 1
-      fi
-    else
-      echo "[deploy-mcp] REFUSING: live DB is not in sync with the migration manifest in the code about to deploy." >&2
-      echo "[deploy-mcp] Restarting now would bring up code expecting an unapplied schema (the Phase-A / #042 half-deploy failure mode)." >&2
-      echo "[deploy-mcp] Rolling the worktree back to ${PREV:0:8} (so disk does not sit ahead of the running process)." >&2
-      deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
-      echo "[deploy-mcp] Then either apply the gap and re-deploy:" >&2
-      echo "[deploy-mcp]     python3 $MIGRATE --apply" >&2
-      echo "[deploy-mcp]   or re-run this deploy with migrations applied automatically:" >&2
-      echo "[deploy-mcp]     $0 --apply-migrations" >&2
+read_mcp_runtime_db_url() {
+  # launchd does not inherit the operator shell.  The plist value is therefore
+  # the only database this deployment is allowed to inspect or migrate.  Use
+  # PlistBuddy rather than text parsing so XML escaping cannot redirect the
+  # schema probe.  deploy-mcp is a macOS LaunchAgent operator script, so this
+  # system utility is part of its runtime contract.
+  "$PLIST_BUDDY" \
+    -c 'Print :EnvironmentVariables:DB_POSTGRES_URL' "$PLIST" 2>/dev/null
+}
+
+RUNTIME_DB_URL=""
+if ! RUNTIME_DB_URL="$(read_mcp_runtime_db_url)" || [[ -z "$RUNTIME_DB_URL" ]]; then
+  echo "[deploy-mcp] REFUSING: $PLIST has no readable EnvironmentVariables/DB_POSTGRES_URL." >&2
+  echo "[deploy-mcp] The migration preflight cannot prove which database the restarted MCP will use." >&2
+  recover_or_hold_forward "the runtime database could not be resolved from the service plist" || :
+  exit 1
+fi
+if [[ ! -f "$MIGRATE" ]]; then
+  echo "[deploy-mcp] REFUSING: migration checker is missing from the reviewed deploy revision." >&2
+  recover_or_hold_forward "the migration checker is missing" || :
+  exit 1
+fi
+MIGRATE_DBURL=(--db-url "$RUNTIME_DB_URL")
+live_db_version=""
+if live_db_version=$(python3 "$MIGRATE" --print-db-version \
+     "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" 2>/dev/null) \
+   && [[ "$live_db_version" =~ ^[0-9]+$ ]]; then
+  if [[ "$((10#$live_db_version))" -lt 78 ]]; then
+    DIALECTIC_FRONTIER_LIVE=0
+  fi
+else
+  echo "[deploy-mcp] WARNING: live DB version is unknown; any failure will hold both writers for forward recovery." >&2
+fi
+if [[ -n "${UNITARES_DEPLOY_DB_URL:-}" && "$UNITARES_DEPLOY_DB_URL" != "$RUNTIME_DB_URL" ]]; then
+  echo "[deploy-mcp] REFUSING: UNITARES_DEPLOY_DB_URL does not match the governance MCP runtime database." >&2
+  recover_or_hold_forward "an ambient deployment database override disagrees with the service plist" || :
+  exit 1
+fi
+verify_migration_revision
+echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
+migration_check_rc=0
+python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" || migration_check_rc=$?
+verify_migration_revision
+if [[ "$migration_check_rc" != 0 ]]; then
+  if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
+    # Still under the shared checkout lock. A failed schema check must not
+    # authorize SQL from a checkout that moved after the caller's review.
+    verify_migration_revision
+    echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
+    if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
+       || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
+      echo "[deploy-mcp] FAILED — migrations did not reach sync; NOT restarting." >&2
+      recover_or_hold_forward "migration apply/check failed" || :
       exit 1
     fi
+  else
+    echo "[deploy-mcp] REFUSING: live DB is not in sync with the migration manifest in the code about to deploy." >&2
+    echo "[deploy-mcp] Restarting now would bring up code expecting an unapplied schema (the Phase-A / #042 half-deploy failure mode)." >&2
+    recover_or_hold_forward "the schema manifest check failed" || :
+    echo "[deploy-mcp] Then either apply the gap and re-deploy:" >&2
+    echo "[deploy-mcp]     python3 $MIGRATE --apply" >&2
+    echo "[deploy-mcp]   or re-run this deploy with migrations applied automatically:" >&2
+    echo "[deploy-mcp]     $0 --apply-migrations" >&2
+    echo "[deploy-mcp] For dialectic migrations 077/078, use the coordinated schema-only lease-plane command with explicit writer quiescence instead." >&2
+    exit 1
   fi
 fi
 
@@ -147,8 +198,22 @@ verify_migration_revision
 # RELOADED by the restart below, including on a host with no plist baseline.
 if ! deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
   "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"; then
-  echo "[deploy-mcp] FAILED — required overlay did not apply; rolling worktree back to ${PREV:0:8}." >&2
-  git -C "$DEPLOY" reset --hard "$PREV"
+  echo "[deploy-mcp] FAILED — required overlay did not apply." >&2
+  recover_or_hold_forward "the required environment overlay failed" || :
+  exit 1
+fi
+
+# The overlay is allowed to change service settings, but never to switch the
+# database after the schema preflight.  A changed or unreadable value is an
+# unknown frontier, so hold the reviewed forward tree and both writers stopped.
+POST_OVERLAY_DB_URL=""
+if ! POST_OVERLAY_DB_URL="$(read_mcp_runtime_db_url)" \
+   || [[ -z "$POST_OVERLAY_DB_URL" || "$POST_OVERLAY_DB_URL" != "$RUNTIME_DB_URL" ]]; then
+  echo "[deploy-mcp] REFUSING: the environment overlay changed or obscured the governance MCP runtime database." >&2
+  # The plist now names an unprobed database.  A pre-overlay read below 078 no
+  # longer authorizes rollback or restart against this future runtime target.
+  DIALECTIC_FRONTIER_LIVE=1
+  recover_or_hold_forward "the runtime database changed after migration preflight" || :
   exit 1
 fi
 
@@ -156,13 +221,11 @@ fi
 # kickstart when the plist is unchanged since the last deploy restart; full
 # RELOAD (bootout + bootstrap) when it changed — kickstart reuses the cached
 # service definition, so a plist env edit silently never loads (2026-08-27).
-# Called in a conditional (set -e would otherwise exit before the rollback):
-# a restart failure — reload refused with the old process still up, or the
-# service down after a dead bootstrap — rolls the worktree back to $PREV so
-# disk never sits ahead of whatever is (or is not) running, then fails loudly.
+# Called in a conditional so a restart failure can choose its recovery by the
+# proven DB floor: ordinary rollback below 078, forward-only hold otherwise.
 if ! deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"; then
-  echo "[deploy-mcp] FAILED — restart did not complete (see above). Rolling the worktree back to ${PREV:0:8}." >&2
-  git -C "$DEPLOY" reset --hard "$PREV"
+  echo "[deploy-mcp] FAILED — restart did not complete (see above)." >&2
+  recover_or_hold_forward "the governance MCP restart failed" || :
   exit 1
 fi
 
@@ -179,13 +242,14 @@ if deploy_lib_poll 40 3 check_mcp_running_deploy_code; then
   # The ff above moved the SHARED worktree; if it touched elixir/lease_plane,
   # the running BEAM's disk just shifted under it — the RAM-vs-disk drift class
   # behind the 06-27 fail-open (#1277 fix 1). Restart the plane at disturbance
-  # time, not at first failure. The rollback paths above need no nudge: they
-  # return the worktree to $PREV, net-zero for the plane's on-disk sources.
+  # time, not at first failure. Below the frontier, rollback restores PREV;
+  # at/above it, failures unload both writers and leave this forward tree.
   deploy_lib_nudge_lease_plane "$TAG" "deploy-mcp.sh" "$DEPLOY"
 else
-  echo "[deploy-mcp] FAILED — new code did not come up healthy. Rolling the worktree back to ${PREV:0:8} and restarting." >&2
-  git -C "$DEPLOY" reset --hard "$PREV"
-  launchctl kickstart -k "gui/$UID_NUM/$LABEL"
-  echo "[deploy-mcp] rolled back. Investigate ${DEPLOY}/data/logs/mcp_server_error.log" >&2
+  echo "[deploy-mcp] FAILED — new code did not come up healthy." >&2
+  if recover_or_hold_forward "the new governance MCP failed its health check"; then
+    launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+    echo "[deploy-mcp] rolled back. Investigate ${DEPLOY}/data/logs/mcp_server_error.log" >&2
+  fi
   exit 1
 fi

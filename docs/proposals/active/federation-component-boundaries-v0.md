@@ -291,6 +291,14 @@ item 6).
   `eisv-core-boundary-v0`; any change to the check-in path; any Compose or
   deployment change for the lease plane.
 
+*Amended 2026-10-15.* The horizon no longer gates these changes. Under the
+[stop-rule amendment of 2026-10-15](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change),
+a change that reaches the read-feeding deployment and can alter what the read's
+features see may land once its PR records `instrument_change_at` in
+`REGISTERED_READ_MANIFEST`, no later than its deployment; the read then admits
+only outcomes before that instant. The reasoning below about what a change can
+reach still decides whether a change counts.
+
 Why resolve waits: its `dialectic_resolved` outcome rows carry
 `verification_source="server_observation"`, a tier the read excludes, so the
 read's labels are not at risk. Its features are. Resolution writes

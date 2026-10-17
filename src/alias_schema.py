@@ -84,6 +84,10 @@ ALIAS_SCHEMA_KEEP = {
         "memory_context",
         "task_label",
         "task_outcome",
+        # A linked record in one call (2026-10-16 dogfood read, item 5):
+        # before this, linking needed describe_tool plus
+        # use_tool(tool_name='knowledge', action='store'), about 10.6 KB.
+        "response_to",
     }),
     "update_finding": frozenset({
         "discovery_id",
@@ -108,6 +112,7 @@ ALIAS_SCHEMA_KEEP = {
         "reasoning",
         "root_cause",
         "proposed_conditions",
+        "reviewed_work_author_agent_ids",
         "use_brief_as_thesis",
     }),
 }
@@ -203,11 +208,12 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "Inline details require response_mode='full'; imports are capped at 2 KiB. "
                 "Compact/lean search suppresses detail serialization upstream "
                 "and returns bounded previews; open one result with "
-                "knowledge(action='details', discovery_id='...')."
+                "use_tool(tool_name='knowledge', arguments={'action': 'details', "
+                "'discovery_id': '...'})."
             ),
             "brief": (
-                "Inline details need response_mode='full'; else open one with "
-                "knowledge(action='details')."
+                "Inline details need response_mode='full'; else open one via "
+                "use_tool(tool_name='knowledge', arguments={'action': 'details', ...})."
             ),
         },
         # The router's text for these describes the store action (discovery_type
@@ -234,10 +240,11 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         "authority_mode": {
             "description": (
                 "Search authority policy. Default prefer_governed down-ranks "
-                "imported memory in close relevance contests; all preserves raw "
-                "relevance order."
+                "imported memory in close relevance contests and leaves it out "
+                "of queryless listings; all preserves raw relevance order and "
+                "lists it."
             ),
-            "brief": "prefer_governed (default) down-ranks imported memory; all keeps raw order.",
+            "brief": "prefer_governed (default) down-ranks imported memory and omits it from queryless listings; all keeps raw order.",
         },
         "search_mode": {
             "description": (
@@ -265,8 +272,9 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
             "description": (
                 "Max results (for action=search: min 1, values above 100 are "
                 "capped, 0 or negative is rejected). search_shared_memory's "
-                "bounded tiers show three digests; pass limit above 3 and they "
-                "list up to 17 further results as one-line more_results rows"
+                "bounded tiers show three digests and list up to 17 further "
+                "results as one-line more_results rows; limit=3 or less omits "
+                "those rows"
             ),
             "brief": "Max results, 1-100 (more is capped).",
         },
@@ -314,6 +322,62 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "severity needs a session bound to the writing agent."
             ),
             "brief": "Leave unset; the bound session is the writer.",
+        },
+        # The router's text for these names the knowledge actions that share
+        # the field ("for action=store or promote", "action=search") or the
+        # internal spec that added it ("S22 H5 provenance"). This alias only
+        # stores, so describe each as a field of the finding (same class as
+        # the search alias fix in #2627).
+        "summary": {"description": "One-line summary of the finding (required)."},
+        "details": {"description": "Extended details. Alias: content."},
+        "content": {"description": "Extended details; alias of details."},
+        "discovery_type": {
+            "description": (
+                "One of architectural_decision, learning, pattern, bug_fix, "
+                "refactoring, documentation, experiment, question, note "
+                "(default), rule, insight, bug_found, bug, improvement, "
+                "exploration, observation."
+            ),
+            # Authored, so the advertised list is not cut at the brief budget.
+            "brief": (
+                "One of architectural_decision, learning, pattern, bug_fix, "
+                "refactoring, documentation, experiment, question, note "
+                "(default), rule, insight, bug_found, bug, improvement, "
+                "exploration, observation."
+            ),
+        },
+        "tags": {
+            "description": (
+                "Tags for the finding; ephemeral archives it after seven days."
+            ),
+        },
+        "severity": {"description": "low, medium, high or critical."},
+        "comparison_key": {
+            "description": (
+                "Optional stable key for comparing the same bounded task across "
+                "harnesses."
+            ),
+        },
+        "response_to": {
+            "description": (
+                "Optional typed link to the finding this one answers: "
+                "{discovery_id, response_type}, where response_type is one of "
+                "extend, question, disagree, support, answer, follow_up, "
+                "correction, elaboration, supersedes."
+            ),
+            "brief": (
+                "Optional link {discovery_id, response_type}; type: extend, "
+                "question, disagree, support, answer, follow_up, correction, "
+                "elaboration, supersedes."
+            ),
+        },
+        "task_label": {"description": "Optional readable label for the bounded task."},
+        "task_outcome": {"description": "Optional outcome label for the bounded task."},
+        "memory_context": {
+            "description": (
+                "Optional memory, knowledge-graph or transcript surfaces visible "
+                "to the writer."
+            ),
         },
     },
 }

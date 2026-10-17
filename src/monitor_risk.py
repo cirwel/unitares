@@ -14,11 +14,18 @@ def estimate_risk(state, agent_state: Dict, score_result: Optional[Dict] = None,
     Estimate risk score using governance_core phi_objective and verdict_from_phi.
 
     **Risk Score Composition:**
-    - 70% UNITARES phi-based risk (includes ethical drift, E, I, S, V state)
-    - 30% Traditional safety risk (length, complexity, coherence, keywords)
+    - ``RISK_PHI_WEIGHT`` x phi-based risk (includes ethical drift, E, I, S, V state)
+    - ``RISK_TRADITIONAL_WEIGHT`` x traditional safety risk (length, complexity,
+      coherence, keywords)
+    - plus a velocity term capped at 0.15
+    The deployed weights are 1.0 and 0.0 (config/governance_config.py), so the
+    blend is phi-based risk only; the traditional term is computed and zeroed.
 
     When behavioral_risk is provided and BEHAVIORAL_VERDICT_ENABLED, uses that
-    as primary risk signal instead of phi-based.
+    as primary risk signal instead of phi-based. No live caller passes
+    behavioral_risk, so every value this appends to ``state.risk_history`` is
+    the phi-derived risk, including under UNITARES_PHI_TELEMETRY_ONLY (the
+    resolved verdict risk is chosen later, in governance_monitor).
 
     Args:
         state: GovernanceState instance.

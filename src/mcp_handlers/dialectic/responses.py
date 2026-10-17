@@ -180,7 +180,7 @@ def llm_failed_recovery() -> Dict[str, Any]:
     """Recovery payload when dialectic LLM call returns no result."""
     return {
         "action": "Check Ollama status and retry",
-        "related_tools": ["health_check", "call_model"],
+        "related_tools": ["health_check", "consult"],
     }
 
 

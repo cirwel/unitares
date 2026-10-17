@@ -144,19 +144,14 @@ def test_padded_and_empty_conditions_survive_reload_verification():
     assert reloaded.resolution.verify_signatures("key-a", "key-b") is True
 
 
-def test_stored_conditions_are_not_modified_by_signing():
-    """Only the signed bytes are canonicalized. What finalize stores, and what
-    check_hard_limits therefore sees, is unchanged by this fix."""
+def test_finalize_stores_the_same_canonical_conditions_reload_will_read():
+    """Response-loss replay must compare the same payload on both sides."""
     s = _converged_session(["agreed", "  padded  ", ""])
     res = s.finalize_resolution()
-    assert "  padded  " in res.conditions
-    assert "" in res.conditions
-    # The hard-limit gate evaluates the same raw list it always did.
+    assert res.conditions == ["agreed", "padded"]
     assert s.check_hard_limits(res)[0] is True
     whitespace_only = _converged_session(["   "]).finalize_resolution()
-    # _merge_proposals keeps each party's entry; the point here is only that
-    # the raw whitespace survives finalize untouched.
-    assert whitespace_only.conditions and all(c == "   " for c in whitespace_only.conditions)
+    assert whitespace_only.conditions == []
 
 
 def test_clean_rows_sign_byte_identical_payloads():

@@ -1,6 +1,7 @@
 """Natural language intent classification — routes questions to the right gateway tool.
 
-Uses governance's call_model tool for LLM routing, with keyword fallback.
+Uses governance's consult tool (standard effort, local) for LLM routing, with
+keyword fallback.
 """
 
 from __future__ import annotations
@@ -71,23 +72,28 @@ async def classify_intent(
 ) -> str:
     """Classify a natural language question into a gateway intent.
 
-    Tries LLM classification via call_model first, falls back to keyword matching.
+    Tries LLM classification via consult first, falls back to keyword matching.
     """
-    # Try LLM classification
+    # Try LLM classification. consult replaced the deprecated call_model here
+    # (2026-10-16); it takes no max_tokens, so the one-word reply is enforced
+    # by the prompt and by _normalize_intent rather than by a token cap.
     try:
         args = {
-            "prompt": ROUTING_PROMPT.format(question=question),
-            "max_tokens": 10,
+            "brief": ROUTING_PROMPT.format(question=question),
+            "purpose": "answer",
+            "effort": "standard",
+            "privacy": "local",
         }
-        # call_model needs a bound caller; without the id it is refused and the
+        # consult needs a bound caller; without the id it is refused and the
         # keyword fallback below silently takes over.
         if client_session_id:
             args["client_session_id"] = client_session_id
-        result = await client.call_tool("call_model", args)
+        result = await client.call_tool("consult", args)
         if isinstance(result, dict):
-            intent = (result.get("response") or result.get("text") or "").strip().lower()
+            raw = result.get("advice") or result.get("response") or result.get("text") or ""
         else:
-            intent = str(result).strip().lower()
+            raw = str(result)
+        intent = _normalize_intent(raw)
 
         # Validate it's a known intent
         if intent in INTENTS:
@@ -98,6 +104,16 @@ async def classify_intent(
         logger.debug("LLM classification failed (%s), using keyword fallback", exc)
 
     return _keyword_classify(question)
+
+
+def _normalize_intent(raw: object) -> str:
+    """Reduce a model reply to its first word, lowercased, punctuation stripped.
+
+    "Search.", "**status**" and "help - the user asks..." all reduce to an
+    intent name; anything else falls through to the keyword classifier.
+    """
+    words = str(raw or "").strip().lower().split()
+    return words[0].strip("*`'\".,:;!?()[]") if words else ""
 
 
 def _keyword_classify(question: str) -> str:
@@ -126,7 +142,7 @@ async def route_query(
     if intent == "status":
         return {"tool": "status", "args": {}}
     elif intent == "checkin":
-        # Can't auto-fill summary from a question, use call_model to generate one
+        # The question itself is the check-in summary; nothing generates one.
         return {"tool": "checkin", "args": {"summary": question}}
     elif intent == "search":
         return {"tool": "search", "args": {"query": question}}

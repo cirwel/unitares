@@ -1257,6 +1257,30 @@ def test_signal_degeneracy_passes_when_all_metrics_vary(doctor, monkeypatch):
     assert result.status == doctor.Status.PASS
 
 
+def test_signal_degeneracy_names_instrument_changes_in_detail_only(doctor, monkeypatch):
+    note = "The window spans EISV instrument change(s) X1 (config/eisv_instrument_eras.json), ..."
+    monkeypatch.setattr(doctor, "_eisv_era_note", lambda days: note)
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        (0.0432, 6192, 6232, 0.1, 0.8), ("", 1, 6232, 0.4, 0.4), *_HEALTHY[:2]))
+    warned = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert warned.status == doctor.Status.WARN
+    assert note in warned.detail and "X1" not in warned.message
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        (0.0217, 5000, 6232, 0.35, 0.66), *_HEALTHY))
+    passed = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert passed.status == doctor.Status.PASS and passed.detail == note
+
+
+def test_eisv_era_note_never_raises(doctor, monkeypatch):
+    import src.eisv_eras as eras
+
+    def boom(*_a, **_k):
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(eras, "crossing_report", boom)
+    assert doctor._eisv_era_note(7) == ""
+
+
 def test_signal_degeneracy_skips_thin_data(doctor, monkeypatch):
     """A flat metric on 10 rows is small-sample, not a defect."""
     _mock_psql(doctor, monkeypatch, _degeneracy_row(

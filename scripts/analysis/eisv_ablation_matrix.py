@@ -22,7 +22,9 @@ Usage:
 
 Every CLI database read must declare its protocol and unique read ID. Registered
 reads also require frozen ``--as-of`` and ``--not-before`` boundaries. The CLI
-records an atomic access receipt before querying; repeated IDs fail closed.
+records an atomic access receipt before querying; repeated IDs fail closed. A
+registered protocol that records ``instrument_change_at`` moves the applied data
+boundary to just before that instant (``effective_data_boundary``).
 
 Env:
     GOVERNANCE_DATABASE_URL  (default inherited from eisv_skeptic_report; redact in reports)
@@ -37,9 +39,10 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -114,6 +117,42 @@ class RegisteredReadProtocol:
     # cohort freezes the whole harness by sha256 at enrollment instead).
     candidate_models: tuple[str, ...] | None = None
     dispersion_feature: str | None = None
+    # The first deployment of any change to the live EISV update path (code,
+    # estimator constants, flags or environment, config, dependencies, or an
+    # input the sensor reads) after the protocol was registered. The PR that
+    # first makes such a change sets it, as a timezone-aware UTC instant no
+    # later than that change's deployment; an earlier value is conservative.
+    # Once recorded it may only move earlier, with disclosure. A registered
+    # read then admits only outcomes strictly before it: the effective data
+    # boundary is min(--as-of, instrument_change_at - 1 microsecond). None
+    # means no such change has deployed and the boundary is --as-of unchanged.
+    # Defined only for a protocol that names a `data_boundary_rule`.
+    instrument_change_at: datetime | None = None
+    # The registered document section that defines the rule above. When set,
+    # the receipt and the report print the registered boundary, the effective
+    # boundary and this reference, whether or not instrument_change_at is set.
+    data_boundary_rule: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instrument_change_at is not None:
+            if self.data_boundary_rule is None:
+                raise ValueError(
+                    f"{self.name}: instrument_change_at needs a data_boundary_rule "
+                    "naming the registered amendment that defines it"
+                )
+            if self.instrument_change_at.tzinfo is None:
+                raise ValueError(f"{self.name}: instrument_change_at must be timezone-aware")
+
+
+# Outcomes at or after the instrument-change instant are excluded. The data
+# boundary is applied as `o.ts <= as_of` (eisv_skeptic_report.fetch_rows), and
+# timestamptz resolves to the microsecond, so `o.ts <= T - 1us` is `o.ts < T`.
+STRICT_BOUNDARY_RESOLUTION = timedelta(microseconds=1)
+
+STOP_RULE_DATA_BOUNDARY_RULE = (
+    "docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md"
+    "#amendment-2026-10-15-data-boundary-at-the-first-instrument-change"
+)
 
 
 # The protocol manifest. A `--read-protocol registered` read must match exactly
@@ -142,6 +181,16 @@ REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
             "previous_bad_plus_dispersion",
         ),
         dispersion_feature="prior_s_disp",
+        # Amendment 2026-10-15 (operator): the data boundary moves to the
+        # first instrument change. Set by the basin setpoint repair (contract
+        # rows 50-52; branch claude/basin-setpoint-repair-1015) to its final
+        # commit's instant rounded down to the minute: the first change to the
+        # live EISV update path since registration. Its deployment follows the
+        # merge, so this precedes the deployment (conservative). Immutable once
+        # that change is deployed; a correction may only move it earlier, with
+        # disclosure in the amendment's instrument-change record.
+        instrument_change_at=datetime(2026, 10, 15, 13, 45, tzinfo=timezone.utc),
+        data_boundary_rule=STOP_RULE_DATA_BOUNDARY_RULE,
     ),
     RegisteredReadProtocol(
         name="independent-operator-cohort-v0.1",
@@ -170,6 +219,55 @@ def registered_read_protocol(read_id: str | None) -> RegisteredReadProtocol | No
             f"({', '.join(e.name for e in matches)}); fix REGISTERED_READ_MANIFEST"
         )
     return matches[0] if matches else None
+
+
+@dataclass(frozen=True)
+class DataBoundary:
+    """The data boundary a read declared and the one it actually applies."""
+
+    registered: datetime | None
+    effective: datetime | None
+    instrument_change_at: datetime | None = None
+    rule: str | None = None
+
+    @property
+    def clamped(self) -> bool:
+        return self.effective != self.registered
+
+
+def effective_data_boundary(args: argparse.Namespace) -> DataBoundary:
+    """The data boundary a read runs under.
+
+    The registered boundary is ``--as-of`` (for the stop-rule read, the
+    fleet-ops wrapper passes ``READ_CUTOFF=2026-12-01T16:00:00Z``). For a
+    registered read whose protocol records ``instrument_change_at`` T, the
+    effective boundary is ``min(--as-of, T - 1 microsecond)``: every admitted
+    outcome is strictly before T, and since the outcome is the anchor of each
+    row (its prior state, dispersion window and previous-outcome baseline all
+    look back from ``o.ts``), every input the row uses predates T. A T later
+    than ``--as-of`` changes nothing. Every other read applies ``--as-of``
+    unchanged.
+    """
+    as_of = getattr(args, "as_of", None)
+    entry = (
+        registered_read_protocol(getattr(args, "read_id", None))
+        if getattr(args, "read_protocol", None) == "registered"
+        else None
+    )
+    if entry is None or entry.data_boundary_rule is None:
+        return DataBoundary(registered=as_of, effective=as_of)
+    change_at = entry.instrument_change_at
+    effective = as_of
+    if change_at is not None and as_of is not None:
+        effective = min(as_of, change_at - STRICT_BOUNDARY_RESOLUTION)
+    return DataBoundary(
+        registered=as_of,
+        effective=effective,
+        instrument_change_at=change_at,
+        rule=entry.data_boundary_rule,
+    )
+
+
 DEFAULT_READ_LEDGER_DIR = Path(
     os.environ.get(
         "UNITARES_OUTCOME_READ_LEDGER_DIR",
@@ -789,6 +887,33 @@ def build_matrix_row(
     )
 
 
+def _iso_utc(value: datetime | None) -> str:
+    return value.astimezone(timezone.utc).isoformat() if value is not None else "none"
+
+
+def _format_data_boundary_lines(boundary: DataBoundary) -> list[str]:
+    if boundary.instrument_change_at is None:
+        effective_note = "equal to the registered boundary: no instrument change is recorded"
+    elif boundary.clamped:
+        effective_note = (
+            "outcomes strictly before the recorded instrument change "
+            f"`{_iso_utc(boundary.instrument_change_at)}`"
+        )
+    else:
+        effective_note = (
+            "equal to the registered boundary: the recorded instrument change "
+            f"`{_iso_utc(boundary.instrument_change_at)}` is not earlier"
+        )
+    return [
+        f"Registered data boundary: `{_iso_utc(boundary.registered)}` (--as-of)",
+        f"Effective data boundary: `{_iso_utc(boundary.effective)}` (frozen; {effective_note})",
+        f"Instrument change recorded: `{_iso_utc(boundary.instrument_change_at)}`",
+        f"Data boundary rule: `{boundary.rule}`",
+        "Frozen runs exclude mutable present-day identity metadata from fixture classification.",
+        "",
+    ]
+
+
 def format_matrix_report(
     rows: Sequence[AblationMatrixRow],
     *,
@@ -801,6 +926,7 @@ def format_matrix_report(
     protocol_not_before: datetime | None = None,
     contamination_acknowledged: bool = False,
     fixture_rule: str | None = None,
+    data_boundary: DataBoundary | None = None,
 ) -> str:
     """Render a compact markdown table for skeptical multi-slice reporting."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -872,7 +998,9 @@ def format_matrix_report(
                 "",
             ]
         )
-    if as_of is not None:
+    if data_boundary is not None and data_boundary.rule is not None:
+        lines.extend(_format_data_boundary_lines(data_boundary))
+    elif as_of is not None:
         lines.extend(
             [
                 f"Data boundary: `{as_of.astimezone(timezone.utc).isoformat()}` (frozen)",
@@ -1172,6 +1300,61 @@ def effective_fixture_rule(args: argparse.Namespace) -> str:
     return DEFAULT_FIXTURE_RULE
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The modules a read executes. Their bytes are what the receipt pins.
+CODE_VERSION_PATHS = (
+    "scripts/analysis/eisv_ablation_matrix.py",
+    "scripts/analysis/eisv_skeptic_report.py",
+    "scripts/analysis/outcome_inventory.py",
+    "src/grounding/outcome_anchors.py",
+)
+
+
+def _git_output(*argv: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *argv],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    # Only trailing newlines: porcelain status lines start with a meaningful
+    # space (" M path" is an unstaged change).
+    return completed.stdout.rstrip("\n")
+
+
+def read_code_version(root: Path = REPO_ROOT) -> dict[str, Any]:
+    """Describe the code a read ran, for its receipt.
+
+    Recorded, never checked: a value that cannot be determined is null and
+    does not refuse the read. ``sha256`` hashes each executed module's bytes,
+    so it holds outside a git checkout; ``dirty_paths`` lists those modules
+    with uncommitted changes, which the commit alone would not show.
+    """
+    sha256: dict[str, str | None] = {}
+    for rel in CODE_VERSION_PATHS:
+        try:
+            sha256[rel] = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        except OSError:
+            sha256[rel] = None
+    status = _git_output("status", "--porcelain", "--", *CODE_VERSION_PATHS)
+    return {
+        "git_commit": (_git_output("rev-parse", "HEAD") or "").strip() or None,
+        "dirty_paths": (
+            None
+            if status is None
+            else sorted(line[3:] for line in status.splitlines() if line)
+        ),
+        "sha256": sha256,
+    }
+
+
 def record_read_receipt(
     args: argparse.Namespace,
     *,
@@ -1191,6 +1374,7 @@ def record_read_receipt(
 
     digest = hashlib.sha256(args.read_id.encode("utf-8")).hexdigest()
     receipt_path = ledger_dir / f"{digest}.json"
+    boundary = effective_data_boundary(args)
     receipt = {
         "schema": "unitares.outcome_read_receipt.v1",
         "status": "access_started",
@@ -1198,8 +1382,21 @@ def record_read_receipt(
         "read_protocol": args.read_protocol,
         "recorded_at": checked_at.isoformat(),
         "not_before": args.not_before.isoformat() if args.not_before else None,
+        # `as_of` keeps its meaning (the --as-of the read declared); the
+        # boundary the query applies is `effective_as_of`.
         "as_of": args.as_of.isoformat() if args.as_of else None,
+        "data_boundary": {
+            "registered_as_of": boundary.registered.isoformat() if boundary.registered else None,
+            "effective_as_of": boundary.effective.isoformat() if boundary.effective else None,
+            "instrument_change_at": (
+                boundary.instrument_change_at.isoformat()
+                if boundary.instrument_change_at
+                else None
+            ),
+            "rule": boundary.rule,
+        },
         "contamination_acknowledged": bool(args.acknowledge_contamination),
+        "code_version": read_code_version(),
         "registered_protocol": (
             entry.name
             if args.read_protocol == "registered"
@@ -1412,7 +1609,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=parse_as_of,
         help=(
             "Freeze every window at a timezone-aware ISO-8601 boundary. Frozen "
-            "runs exclude mutable present-day identity metadata."
+            "runs exclude mutable present-day identity metadata. A registered "
+            "read whose protocol records instrument_change_at T applies "
+            "min(--as-of, T - 1 microsecond), so only outcomes strictly before T "
+            "are admitted; the receipt and report show both boundaries."
         ),
     )
     parser.add_argument(
@@ -1491,6 +1691,7 @@ async def main_async(args: argparse.Namespace) -> int:
         exclude_harness_lanes=exclude_harness_lanes,
     )
     fixture_rule = effective_fixture_rule(args)
+    boundary = effective_data_boundary(args)
     print(f"read receipt: {receipt_path}", file=sys.stderr)
     rows = await build_matrix_from_db(
         args.db_url,
@@ -1506,7 +1707,7 @@ async def main_async(args: argparse.Namespace) -> int:
         selective_null_resamples=args.selective_null_resamples,
         anchor_scope=args.anchor_scope,
         telemetry_strata=args.telemetry_strata,
-        as_of=args.as_of,
+        as_of=boundary.effective,
         fixture_rule=fixture_rule,
     )
     report = _redact_sensitive_report_text(
@@ -1515,12 +1716,13 @@ async def main_async(args: argparse.Namespace) -> int:
             generated_at=read_started_at,
             excluded_harness_lanes=exclude_harness_lanes,
             anchor_scope=args.anchor_scope,
-            as_of=args.as_of,
+            as_of=boundary.effective,
             read_protocol=args.read_protocol,
             read_id=args.read_id,
             protocol_not_before=args.not_before,
             contamination_acknowledged=args.acknowledge_contamination,
             fixture_rule=fixture_rule,
+            data_boundary=boundary,
         )
     )
     payload = (report + "\n").encode("utf-8")

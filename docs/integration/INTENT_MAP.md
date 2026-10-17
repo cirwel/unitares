@@ -35,7 +35,7 @@ name they were never given a schema for.
 | Revise a finding | `update_finding` *(hidden)* | `knowledge(action="update" \| "supersede" \| "promote")` *(hidden)* |
 | Notice changes to relevant findings | `knowledge_changes` on the next successful proved call | `knowledge(action="notices")` *(hidden)* reads/replays the bounded inbox; acknowledge exact revision UUIDs or mute. No wake or predecessor-inbox inheritance; requires migration 074. |
 | Ask another model for advice | `consult` | see [Model calls](#model-calls) |
-| Get a governed, on-record review | `request_review` (one call can reach a verdict) | `dialectic` *(hidden)* to read or advance a session (`get`, `list`, `thesis`, `antithesis`, `synthesis`, `reassign`) |
+| Get a governed, on-record review | `request_review` (one call can reach a verdict) | `dialectic` *(hidden)* to read or advance a session (`get`, `list`, `thesis`, `antithesis`, `synthesis`, `reassign`); operators use `reconcile_effect` only when a terminal decision's runtime effect needs inspection or repair |
 | Lift a pause on yourself | `self_recovery` (`check`, then `quick` or `review`) | `request_review` / `dialectic` when self-recovery is refused; `operator_resume_agent` *(hidden)* needs an operator token |
 | Coordinate with live agents | `cirs_protocol` *(hidden)* | in-memory, process-local buffers; anything durable goes to `store_finding`. No lease or surface-claim tool is in the catalog |
 | Look at other agents or the fleet | `observe` *(hidden)* | `agent(action="list" \| "get")`, `dashboard`, `detect_stuck_agents`, `export` *(all hidden)* |
@@ -49,12 +49,12 @@ record**. Privacy narrows the first.
 | You want | Use | Notes |
 |---|---|---|
 | Advice from whatever is configured, local only | `consult` (defaults: `effort="standard"`, `privacy="local"`) | `purpose` is `answer`, `critique`, `summarize` or `generate`. Writes an audit row with keyed hashes, not text (`_record_consultation`, `src/mcp_handlers/support/consultation.py`) |
-| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host: it excludes the caller's own family, inferred from transport signals, and takes the first available peer (`_THOROUGH_PEERS`, `_caller_family`). Set `host_id` to select a specific existing host instead |
+| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host from the `consult.thorough` job (the operator's inference hosts file, or claude, codex, antigravity by default): it skips the caller's own family, inferred from transport signals, and takes the first available host, reporting the rest in `skipped` with a reason code (`_thorough_plan`, `_caller_family`). Set `host_id` to select a specific existing host instead |
 | A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
-| Advice from a specific HTTP host | `consult(host_id=...)` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; raw model/token/temperature controls remain on `call_model` |
-| A raw completion on a local or Hugging Face host | `call_model` *(hidden)* | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
+| Advice from a specific HTTP host | `consult(host_id=...)` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; consult takes no raw model/token/temperature controls, by design; the deprecated `call_model` keeps them until its removal (no earlier than 2026-12-02) |
+| A raw completion on a local or Hugging Face host | `consult(effort='standard')`; `call_model` *(hidden, deprecated 2026-10-16, removal no earlier than 2026-12-02)* only for model, temperature or max_tokens control | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
 | Which configured hosts can serve | `list_inference_hosts`, `describe_inference_host` *(hidden)* | default list includes configured hosts, including temporary outages; inspect `available` and `cooldown`. Use `include_unconfigured=true` for the full inventory. Readable before `start_session`; inference calls need identity |
-| A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
+| A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config: the `dialectic_reviewer` job in the operator's inference hosts file when set, otherwise `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), resolved by the server and forwarded to the reviewer; a file that does not load or a job with no callable host fails closed, so nothing can approve (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
 
 **Routing facts.**
 
@@ -166,7 +166,11 @@ see (f). Raw model and timeout controls remain on hidden `delegate_inference`.
    revise it instead (step 3).
 2. `store_finding(summary="<one line>", details="<evidence>",
    discovery_type="bug_found", severity="medium", tags=["<topic>"])`. Keep the
-   returned `discovery_id`. Every call creates a new finding.
+   returned `discovery_id`. Every call creates a new finding. To link it to the
+   finding it answers, add `response_to={"discovery_id": "<parent id>",
+   "response_type": "extend"}` (or `question`, `disagree`, `support`, `answer`,
+   `follow_up`, `correction`, `elaboration`, `supersedes`); the ack's
+   `state_summary.response_to` confirms the link.
 3. Close it: `use_tool(tool_name="update_finding", arguments={"discovery_id":
    "<id>", "status": "resolved", "closure_class": "fix_verified",
    "closure_evidence": {"deployed": "<what shipped, confirmed in the running

@@ -91,6 +91,7 @@ from src.knowledge_authority import (
     PROMOTION_TAG,
     assess_authority,
     channel_lanes,
+    is_imported_context,
     is_lane_filter,
     rank_by_authority,
 )
@@ -2106,6 +2107,9 @@ class _KnowledgeSearchState:
     use_semantic: bool = False
     hybrid_path: bool = False
     authority_reranked: bool = False
+    # Unpromoted imported-memory rows the queryless listing skipped while
+    # filling its page (see _omits_imported_lane).
+    imported_omitted: int = 0
 
 
 def _optional_flag(value: Any) -> Optional[bool]:
@@ -3049,19 +3053,34 @@ async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
             **_window_kwargs(request),
         )
 
-    if not request.exclude_labels:
+    omit_imported = _omits_imported_lane(request)
+    if not request.exclude_labels and not omit_imported:
         state.results = await _read(request.limit)
     else:
-        # Writer-label exclusion cannot run in the query, so reading exactly
-        # `limit` rows let excluded writers take the page. Re-read with a
-        # doubling limit until the visible page fills, the rows run out, or
-        # the same row ceiling newest-first continuation uses is reached.
-        fetch_limit = min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+        # Writer-label and imported-lane exclusion cannot run in the query, so
+        # reading exactly `limit` rows let excluded rows take the page. Re-read
+        # with a doubling limit until the visible page fills, the rows run
+        # out, or the same row ceiling newest-first continuation uses is
+        # reached. Imports are the uncommon case on most graphs, so that
+        # exclusion alone starts at the page size and widens only when it
+        # actually dropped something.
+        fetch_limit = (
+            min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+            if request.exclude_labels
+            else request.limit
+        )
         while True:
             rows = await _read(fetch_limit)
-            state.results = [
+            visible = [
                 document for document in rows if not _label_excluded(document, request)
             ]
+            if omit_imported:
+                kept = [
+                    document for document in visible if not is_imported_context(document)
+                ]
+                state.imported_omitted = len(visible) - len(kept)
+                visible = kept
+            state.results = visible
             if (
                 len(state.results) >= request.limit
                 or len(rows) < fetch_limit
@@ -3180,6 +3199,21 @@ def _candidate_matches_semantic_fallback(
     if request.tags and not any(tag in set(document.tags or []) for tag in request.tags):
         return False
     return _within_window(document, request)
+
+
+def _omits_imported_lane(request: _KnowledgeSearchRequest) -> bool:
+    """Whether a queryless listing leaves unpromoted imported memory out.
+
+    With no query there is no relevance contest for the authority multiplier
+    to decide, so ranking only reshuffles a page imports have already filled,
+    and open imports read as open work to every sweep. The listing omits them
+    and reports the count instead. A caller still reads the lane by asking
+    for it: authority_mode='all', or a tag filter made only of
+    imported-memory tags (the same lane test ranking honours).
+    """
+    if request.authority_mode == "all":
+        return False
+    return not is_lane_filter(request.tags)
 
 
 def _label_excluded(document: Any, request: _KnowledgeSearchRequest) -> bool:
@@ -3339,6 +3373,13 @@ def _attach_search_diagnostics(
         response["fts_fallback_skipped_reason"] = state.fts_fallback_skipped_reason
     if state.tag_filter_dropped:
         response["tag_filter_dropped"] = state.tag_filter_dropped
+    if state.imported_omitted:
+        response["imported_omitted"] = state.imported_omitted
+        response["imported_omitted_hint"] = (
+            "This listing left out unpromoted imported-memory rows. Pass "
+            "authority_mode='all', or filter on an imported-memory tag, to "
+            "read them; a query search still returns them, down-ranked."
+        )
     if state.fallback_used:
         response["fallback_used"] = True
         response["fallback_message"] = state.fallback_explanation or (
@@ -6160,7 +6201,7 @@ async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
     Args:
         scope: "open" (default), "all", "by_agent"
         top_n: Number of stale entries to return (default: 10)
-        use_model: If true, use call_model to assess relevance (default: false)
+        use_model: If true, ask the local model to assess relevance (default: false)
 
     Returns audit report with bucket counts and top stale entries.
     """

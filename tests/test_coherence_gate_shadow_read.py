@@ -25,7 +25,9 @@ from scripts.analysis.coherence_gate_shadow_read import (
     reachability_report,
     render,
     render_positive_control,
+    render_by_sensor_class,
     summarize,
+    summarize_by_sensor_class,
 )
 from src.behavioral_state import V_MAX, V_MIN
 from src.coherence_gate_shadow import (
@@ -247,4 +249,64 @@ def test_cli_positive_control_and_jsonl_input(tmp_path: Path):
         capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout)["n_eligible"] == 3
+    report = json.loads(proc.stdout)
+    # JSONL rows carry no sensor class, so they are reported as unmatched.
+    assert report["sensor_class_counts"] == {"no_state_row": 3}
+    assert report["by_sensor_class"]["no_state_row"]["n_eligible"] == 3
+
+
+def test_summarize_by_sensor_class_never_pools_classes():
+    rows = (
+        [dict(_row(), sensor_class="physical", v_deviation_magnitude=2.6)] * 4
+        + [dict(_row(), sensor_class="behavioral", v_deviation_magnitude=0.1)] * 6
+    )
+    report = summarize_by_sensor_class(rows)
+    assert report["sensor_class_counts"] == {"behavioral": 6, "physical": 4}
+    physical = report["by_sensor_class"]["physical"]
+    behavioral = report["by_sensor_class"]["behavioral"]
+    assert physical["n_eligible"] == 4 and behavioral["n_eligible"] == 6
+    assert physical["magnitude_percentiles"]["max"] == 2.6
+    assert behavioral["magnitude_percentiles"]["max"] == 0.1
+    text = render_by_sensor_class(dict(report, eisv_era_provenance=["EISV instrument window: a .. b."]))
+    assert "## sensor class: behavioral" in text and "## sensor class: physical" in text
+    assert text.index("EISV instrument window") < text.index("## sensor class")
+
+
+# ---------------------------------------------------------------------------
+# EISV era guard: a crossing window is refused before any DB connection
+# ---------------------------------------------------------------------------
+
+# A century-long window crosses every registered instrument change, whatever
+# day the suite runs on.
+_CROSSING_WINDOW = ["--window-days", "36500"]
+
+
+class _ConnectCalled(Exception):
+    pass
+
+
+def _forbid_connect(monkeypatch):
+    import asyncpg
+
+    async def _connect(*_args, **_kwargs):
+        raise _ConnectCalled()
+
+    monkeypatch.setattr(asyncpg, "connect", _connect, raising=False)
+
+
+def test_soak_read_refuses_a_cross_era_window_without_connecting(monkeypatch, capsys):
+    _forbid_connect(monkeypatch)
+    assert reader.main(_CROSSING_WINDOW) == 2
+    assert "refused:" in capsys.readouterr().err
+
+
+def test_soak_read_accepts_allow_cross_era_and_proceeds_to_connect(monkeypatch):
+    _forbid_connect(monkeypatch)
+    with pytest.raises(_ConnectCalled):
+        reader.main(_CROSSING_WINDOW + ["--allow-cross-era", "test: pooled on purpose"])
+
+
+def test_render_prints_era_provenance_lines():
+    summary = summarize([_row()])
+    summary["eisv_era_provenance"] = ["EISV instrument window: a .. b."]
+    assert "EISV instrument window: a .. b." in render(summary)

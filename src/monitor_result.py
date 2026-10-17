@@ -36,7 +36,8 @@ _POLICY_INPUT_FIELDS = (
 
 
 def _build_policy_evaluation(decision: Dict, metrics: Dict,
-                             latest_risk: float = None) -> Dict:
+                             latest_risk: float = None,
+                             s_setpoint: float = None) -> Dict:
     """Describe the policy layer that consumed measurements.
 
     EISV/risk/coherence are instrument readings. ``monitor_decision`` is the
@@ -48,6 +49,11 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
     the most-recent raw observation. Surfacing both makes the relationship
     explicit so a reader can never conclude "the policy never sees the latest
     value" (F2) — and the fast-trip below acts on it.
+
+    ``s_setpoint`` is the S setpoint σ the basin's HIGH bound was detrended by
+    (``classify_basin``), recorded so a replay of ``basin`` from the persisted
+    ODE values needs no class-label fold. None when the caller did not supply
+    it; rows written before it was recorded were classified with σ = 0.
     """
     policy_basin = decision.get("basin")
     inputs = {
@@ -66,6 +72,7 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
         ),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
+        "s_setpoint": s_setpoint,
     }
     evaluation = {
         "policy_name": "monitor_decision",
@@ -415,6 +422,7 @@ def build_result(
                 if getattr(getattr(monitor, 'state', None), 'risk_history', None)
                 else None
             ),
+            s_setpoint=getattr(monitor, '_last_basin_s_setpoint', None),
         ),
         'enforcement': _build_enforcement_stub(decision),
         'metrics': metrics,

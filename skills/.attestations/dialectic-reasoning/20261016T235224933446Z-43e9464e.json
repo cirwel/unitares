@@ -1,0 +1,27 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-16T23:52:24Z",
+  "verified_date": "2026-10-16",
+  "verifier": "Claude Code e74dbd9e (call_model deprecation PR): re-read the six rules against contract 1.42.0 (no rule touches inference), rewrote the call_model entry as deprecated; dialectic-reasoning has no claim on llm_failed_recovery's related_tools; knowledge-graph cites no inference description text; unitares-governance only routes to the lifecycle skill",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "1f53d7379f30fb0e",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "c7e65b4e229d815d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "965217a27532f70d",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "9958fa1924098d8a",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "c2e3ee6733917d94",
+    "unitares/src/mcp_handlers/tool_stability.py": "4f8c61bdd6c3ce56"
+  },
+  "skill_digest": "75e38257f9c86108",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/dialectic/responses.py": [
+      "b9ccb7d0e1ed8ba3"
+    ]
+  }
+}

@@ -4,6 +4,16 @@
 **Read:** paper v6.8.1 tag `paper-v6.8.1` (latest master); specifically §4 "Class Structure in the Identity Layer" and §6.7 "Runtime labels and audit vocabulary" remark.
 **Compared against:** `docs/ontology/identity.md` v2.
 
+> **Claim status (2026-10-16): historical planning record.** This file
+> records how paper v7 was positioned from 2026-04 to 2026-06. Its text is kept
+> as written. Where its wording about EISV is stronger than the canonical
+> [EISV proprioception contract](eisv-proprioception-contract.md#canonical-operational-doctrine),
+> the contract wins. One case is the 2026-06-30 section's "engineering instance"
+> and "instantiates" phrasing, which goes further than the contract's
+> [§Prior art](eisv-proprioception-contract.md#prior-art--positioning). The
+> paper itself has moved on since then: as of tag `paper-v6.9.3` its formal
+> EISV definitions are stated as target semantics, with heuristics deployed.
+
 ---
 
 ## TL;DR
@@ -144,6 +154,14 @@ viable bounds" as the prior art EISV's contract describes):
   closest architectural prior art: homeostatic/allostatic/enactive principles
   with concrete viability variables (energy, actuator strain, prediction-error
   statistics, latent-state stability).
+
+> **Superseded wording (2026-10-16).** "Engineering instance of an existing
+> framework" and "the framework EISV instantiates" (below) are stronger than
+> the canonical contract, which says EISV is *informed by and structurally
+> adjacent to* interoceptive inference and is *not presented as a formal
+> implementation of that theory*. Cite these works as neighbors and research
+> context. "Near-direct rediscovery" was the prior-art audit's verdict on
+> novelty, not evidence that EISV implements the theory.
 
 **Posture (consistent with the 2026-04-23 demotion above):** these are
 Related-Work *neighbors*, not grounding. The paper cites interoceptive inference
