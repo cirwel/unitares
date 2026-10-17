@@ -260,8 +260,8 @@ async def process_update_authenticated_async(
     if meta is not None and getattr(meta, "status", None) == "archived":
         raise ValueError(
             f"Agent '{agent_id}' is archived and cannot be updated. "
-            f"Use self_recovery(action='quick') to restore, or "
-            f"onboard(force_new=true) for a new identity."
+            f"Reclaim it with start_session(resume=true) from the same live "
+            f"process, or start a new identity with start_session(force_new=true)."
         )
 
     # Check for loop pattern BEFORE processing

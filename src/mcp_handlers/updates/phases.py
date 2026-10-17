@@ -623,24 +623,24 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
     # self-tagging 'persistent' (PR #39) — sweep no longer targets live agents,
     # so nothing legitimate hits the archived branch anymore. Manual archives
     # (PR #33) and the 2026-04-18 incident race (PR #33) were never supposed
-    # to auto-resume anyway. Any archived agent must explicitly self_recovery
-    # or onboard(force_new=true) to come back.
+    # to auto-resume anyway. An archived agent comes back through a
+    # proof-carrying start_session(resume=true), which unarchives the same
+    # UUID, or starts over with start_session(force_new=true). self_recovery
+    # rejects archived identities, so it is not offered here.
     meta = mcp_server.agent_metadata.get(ctx.agent_uuid)
     ctx.meta = meta
 
     if meta:
         if meta.status == "archived":
             logger.warning(
-                f"Refused process_agent_update on archived agent {agent_id[:12]}.... "
-                f"Use self_recovery(action='quick') to restore, "
-                f"or onboard(force_new=true) for a new identity."
+                f"Refused process_agent_update on archived agent {agent_id[:12]}...."
             )
+            from ..support.pause_ttl import describe_write_gate
             return [error_response(
                 f"Agent '{agent_id}' is archived and cannot be updated.",
                 recovery={
-                    "action": "Use self_recovery(action='quick') to restore yourself, "
-                              "or start_session(force_new=true) for a new identity",
-                    "related_tools": ["self_recovery", "onboard"],
+                    "action": describe_write_gate(meta)["held"],
+                    "related_tools": ["start_session"],
                 },
                 context={
                     "agent_id": agent_id,
