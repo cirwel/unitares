@@ -312,10 +312,19 @@ async def execute_resolution(
             # bounded condition list; merging the pre-commit cache here would
             # resurrect entries that the durable 20-item cap just evicted.
             meta.dialectic_conditions = durable_conditions
+            cached_pause_token = getattr(meta, "paused_at", None)
             if (
                 getattr(meta, "status", None) == "paused"
-                and getattr(meta, "paused_at", None) == expected_pause_token
+                and (
+                    not cached_pause_token
+                    or cached_pause_token == expected_pause_token
+                )
             ):
+                # A tokenless paused cache is a legacy-invalid snapshot that
+                # the durable pause writer repairs. The successful exact-token
+                # CAS above proves that repaired generation was consumed. A
+                # different non-empty cache token may be a newer pause, so it
+                # remains write-held.
                 meta.status = "active"
                 meta.paused_at = None
                 meta.add_lifecycle_event("resumed", resume_reason)

@@ -342,6 +342,27 @@ class TestPauseGenerationBinding:
             with pytest.raises(RuntimeError, match="different pause generations"):
                 await _bind_pause_token({}, "agent-paused")
 
+    @pytest.mark.asyncio
+    async def test_tokenless_paused_cache_binds_repaired_durable_generation(self):
+        from src.mcp_handlers.dialectic.handlers import _bind_pause_token
+
+        meta = _make_agent_meta(status="paused")
+        meta.paused_at = None
+        server = _make_mock_server({"agent-paused": meta})
+        with patch(f"{DIALECTIC}.mcp_server", server), patch(
+            "src.agent_storage.read_authoritative_pause_binding",
+            new=AsyncMock(return_value={
+                "pause_effect_required": True,
+                "pause_token": "pause-repaired",
+                "status": "paused",
+            }),
+        ):
+            bound = await _bind_pause_token({}, "agent-paused")
+
+        assert bound["pause_effect_required"] is True
+        assert bound["pause_token"] == "pause-repaired"
+        assert meta.paused_at is None
+
 
 # ============================================================================
 # 1. handle_request_dialectic_review

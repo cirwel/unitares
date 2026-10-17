@@ -3,3 +3,4 @@
 - Expired pauses remain reported as write-held until their token-fenced durable resume commits. State reads expose `expiry_eligible` separately so a failed or delayed expiry cannot be mistaken for permission to write.
 - The dialectic resolution-effect inventory now follows the server's `DB_POSTGRES_URL` by default, while retaining the legacy environment-variable fallback and an explicit `--dsn` override.
 - Deploy scripts retain the macOS PlistBuddy default while allowing portable, isolated plist fixtures in CI.
+- Post-claim BEAM losers now return an unattributed already-terminal result, and a successful durable resume clears legacy tokenless paused cache snapshots without overwriting a newer non-empty pause generation.
