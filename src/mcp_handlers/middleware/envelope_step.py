@@ -616,6 +616,37 @@ def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
     envelope["response_shape"] = "routine"
 
 
+def _drop_all_clear_status(envelope: Dict[str, Any]) -> None:
+    """Keep a bare "healthy" off the check-in's friendly state_summary.
+
+    ``status`` / ``health_status`` are bands computed from the state
+    estimate: "healthy" means risk below HealthThresholds.risk_healthy_max
+    with no active void (and, for ``status``, coherence above its critical
+    line). Lifted as the word "healthy", they sat beside "not a validated
+    all-clear" on a provisional verdict and beside a coherence value labelled
+    "not health-rated" (AX dogfood 2026-10-16, item 10), and the contract's
+    deployed posture keeps health language off produced readings. The
+    response already carries the risk itself (``risk_score``, and
+    ``risk_summary`` in advisory words), so the word added nothing but the
+    contradiction.
+
+    Only the all-clear value goes. "moderate" and "critical" stay, because
+    they ask the reader to look, and "critical" can come from the void or
+    coherence checks that the risk fields do not cover. The canonical payload,
+    raw_governance and every persisted field keep the value unchanged. No
+    caller reads it from this surface (the routine shape already drops the
+    pair, see _drop_routine_proceed_duplicates), so its absence is nothing a
+    consumer can depend on. Runs after the routine check, which still keys on
+    the positive "healthy" evidence.
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    for key in ("status", "health_status"):
+        if state.get(key) == "healthy":
+            state.pop(key)
+
+
 def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Separate legacy ODE controller telemetry from behavioral verdict evidence."""
     metrics = payload.get("metrics")
@@ -2801,6 +2832,16 @@ def build_experience_envelope(
         # mode can omit the repeated canonical payload without making the state
         # tool useless.
         state_summary = _metrics_state_summary(payload)
+        write_gate = payload.get("write_gate")
+        if isinstance(write_gate, dict) and "writes_held" in write_gate:
+            # The first read answers "am I paused, will my writes be held"
+            # from the gate itself (pause_ttl.describe_write_gate), so a fresh
+            # identity's "uninitialized" no longer sends the agent to a write
+            # to find out.
+            gate_summary = envelope.setdefault("action_summary", {})
+            gate_summary.update(_lift(
+                write_gate, "paused", "writes_held", "held", "expires_at", "note"
+            ))
         next_action = _metrics_next_action(payload)
         if next_action is not None:
             # One next step, at the top level. The verdict's step is either
@@ -3238,7 +3279,9 @@ def build_experience_envelope(
             envelope["raw_governance_hint"] = raw_hint
     if routine_sync and _is_routine_proceed(envelope):
         _drop_routine_proceed_duplicates(envelope)
-    bounded_search = friendly_name == "search_shared_memory" and not include_raw
+    if canonical_name == "process_agent_update":
+        _drop_all_clear_status(envelope)
+    bounded_search =friendly_name == "search_shared_memory" and not include_raw
     bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
         # Preview the separately bounded extra rows to reserve coaching only
