@@ -263,6 +263,124 @@ def current_era_window_start(path: Path = REGISTRY_PATH) -> tuple[datetime, Opti
     return max(timed), current
 
 
+# ---------------------------------------------------------------------------
+# Command-line helpers for window reads
+# ---------------------------------------------------------------------------
+
+# Start of a read with no lower bound: before any persisted EISV row.
+ALL_TIME_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+CROSS_ERA_HELP = (
+    "run even if the window crosses an EISV instrument change "
+    "(config/eisv_instrument_eras.json); the reason is printed with the result "
+    "and does not make the pooled numbers one sample"
+)
+
+
+def add_cross_era_argument(parser: Any) -> None:
+    """Add ``--allow-cross-era REASON`` to an argparse parser."""
+    parser.add_argument("--allow-cross-era", metavar="REASON", default=None, help=CROSS_ERA_HELP)
+
+
+def check_window(
+    start: datetime,
+    end: datetime,
+    *,
+    allow_cross: Optional[str] = None,
+    id_counts: Optional[Mapping[Optional[str], int]] = None,
+    stamp_filtered: bool = False,
+    out: Any = None,
+    path: Path = REGISTRY_PATH,
+) -> Optional[list[str]]:
+    """Era and instrument-id check for a script, as printable provenance lines.
+
+    Returns the Markdown lines a report should print next to its result, or
+    ``None`` after printing the refusal to ``out`` (stderr by default); the
+    caller then exits 2. ``id_counts`` comes from
+    ``scripts/analysis/eisv_era_sql.instrument_id_counts_sql``;
+    without it only the time check runs and the lines say so.
+    """
+    import sys
+
+    out = out if out is not None else sys.stderr
+    try:
+        crossed = require_single_era(
+            start, end, allow_cross=allow_cross, stamp_filtered=stamp_filtered, path=path
+        )
+        stamped = (
+            require_single_instrument(id_counts, allow_cross=allow_cross)
+            if id_counts is not None
+            else None
+        )
+    except EraCrossingError as exc:
+        print(f"refused: {exc}", file=out)
+        return None
+    lines = [f"EISV instrument window: {start.isoformat()} .. {end.isoformat()}."]
+    if crossed:
+        lines.append(
+            "**Pooled across EISV instrument changes** "
+            + ", ".join(b.id for b in crossed)
+            + f" (allowed: {allow_cross.strip()}). Rows on either side come from different instruments."
+        )
+    if stamped is None:
+        lines.append("Stamped instrument ids were not checked by this read.")
+    else:
+        unstamped = int(id_counts.get(None, 0))
+        lines.append(
+            "Instrument ids: "
+            + (", ".join(f"`{k}` ({id_counts[k]} rows)" for k in stamped) or "none stamped")
+            + f"; unstamped rows: {unstamped}."
+        )
+        if len(stamped) > 1:
+            lines.append(f"**Pooled across stamped instrument ids** (allowed: {allow_cross.strip()}).")
+    return lines
+
+
+CROSSING_REPORT_SCHEMA = "eisv.era_crossing.v1"
+
+
+def crossing_report(
+    start: datetime, end: datetime, *, path: Path = REGISTRY_PATH
+) -> dict[str, Any]:
+    """Which instrument changes a window spans, for a reader that must not refuse.
+
+    Scheduled checks and served reports keep running across a maths change, so
+    instead of ``require_single_era`` they attach this and say their figures
+    pool instruments. Time-based only: a served route cannot see stamped ids
+    without its own query.
+    """
+    crossed = boundaries_crossed(start, end, path=path)
+    return {
+        "schema": CROSSING_REPORT_SCHEMA,
+        "window_start": _utc(start).isoformat(),
+        "window_end": _utc(end).isoformat(),
+        "current_era": current_era_id(path),
+        "pooled_across_changes": bool(crossed),
+        "crossed": [
+            {
+                "id": b.id,
+                "kind": b.kind,
+                "effective_at": b.effective_at.isoformat() if b.effective_at else None,
+                "summary": b.summary,
+            }
+            for b in crossed
+        ],
+    }
+
+
+def crossing_note(report: Mapping[str, Any]) -> str:
+    """One sentence for a human-readable report; empty inside one era."""
+    crossed = report.get("crossed") or []
+    if not crossed:
+        return ""
+    ids = ", ".join(entry["id"] for entry in crossed)
+    return (
+        f"The window spans EISV instrument change(s) {ids} "
+        "(config/eisv_instrument_eras.json), so these figures pool rows from "
+        "different instruments."
+    )
+
+
 def is_settled(stamp: Optional[Mapping[str, Any]], min_updates: int = DEFAULT_SETTLED_UPDATES) -> bool:
     """Whether a stamped row is past the restore transient of its instrument.
 

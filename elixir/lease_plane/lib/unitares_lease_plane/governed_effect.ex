@@ -84,6 +84,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     * `{:error, :idempotency_conflict}` — same key, different digest;
     * `{:error, :promotion_*}` — a declared shadow promotion could not be proven;
     * `{:error, :governance_blocked}` — governance vetoed (or could not clear) the effect;
+    * `{:error, :revoked | :custody_expired | :custody_unavailable}` — file-write custody lost or unverifiable;
     * `{:error, :persist_failed}` / `{:error, :spawn_failed}`;
     * `{:error, detail}` — `schema_invalid` detail string.
   """
@@ -97,6 +98,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           | {:error, :promotion_already_consumed}
           | {:error, :promotion_lookup_failed}
           | {:error, :governance_blocked}
+          | {:error, :revoked | :custody_expired | :custody_unavailable}
           | {:error, :persist_failed}
           | {:error, :spawn_failed}
           | {:error, String.t()}
@@ -730,9 +732,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # lease, re-check the §6 veto on the commit path, hand to FileWriteExecutor
   # (which captures the pre-image, then dry-runs or commits per
   # :execute_file_write_commit_enabled), release the lease. Crash recovery is
-  # EffectRecovery (boot) + the executor's in-process compensation; a fast write
-  # is covered by the min-TTL lease floor. (A supervised EffectCustodian with a
-  # lease heartbeat + immediate :transient recovery is a robustness follow-up.)
+  # EffectRecovery (boot) + the executor's in-process compensation. A durable
+  # reservation covers filesystem I/O; TTL alone cannot protect a slow writer.
   defp execute(%{effect_type: "file_write"} = env) do
     if execute_file_write_enabled?() do
       execute_file_write(env)
@@ -771,6 +772,17 @@ defmodule UnitaresLeasePlane.GovernedEffect do
                  env.idempotency_key,
                  @execute_event_type
                ) do
+            # These custody refusals happen before any filesystem mutation.
+            # A retry must acquire new custody, never replay the refusal as 202.
+            {:ok, %{idempotency_digest: ^digest, payload: %{"status" => status}}}
+            when status in [
+                   "revoked",
+                   "custody_expired",
+                   "custody_unavailable",
+                   "effect_in_progress"
+                 ] ->
+              file_write_under_custody(env, digest)
+
             {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
               {:ok, execute_idempotent_body(stored)}
 
@@ -815,15 +827,17 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
       case acquire_all(canon_leases, env.proposer_agent_uuid) do
         {:ok, acquired} ->
-          # No `after`: an exception leaves the leases to the TTL reaper, the
-          # contract's crash path (§4), instead of releasing a surface whose
-          # state is unknown.
-          {reply, custody} = under_custody(env, effect_id, digest, canon_leases)
+          # No `after`: a failed executor must retain its durable reservation.
+          # Expiry cannot release an admitted write whose outcome is unknown.
+          {reply, custody} = under_custody(env, effect_id, digest, acquired)
           if custody == :release, do: release_all(acquired)
           reply
 
         {:error, :held_by_other} ->
           {:error, :lease_held}
+
+        {:error, :effect_in_progress} ->
+          {:error, :effect_in_progress}
 
         {:error, reason} ->
           Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
@@ -832,47 +846,30 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end
   end
 
-  # Runs with every required lease held. Returns the reply plus what to do with
-  # the leases afterwards.
-  defp under_custody(env, effect_id, digest, canon_leases) do
-    # §6 veto re-checked HERE, on the commit path, with the lease held.
+  # Entered after acquisition; custody may change while the veto is pending.
+  # Returns the reply plus what to do with the acquired leases afterwards.
+  defp under_custody(env, effect_id, digest, acquired) do
+    # §6 veto re-checked HERE, followed by a fresh custody read.
     case governance_veto_client().check(env) do
       :allow ->
-        # Insert the durable effects.payloads row BEFORE the commit so the
-        # executor's record_pre_image UPDATE (and crash recovery) have a row
-        # to act on. record_pre_image is UPDATE-only; without this the file
-        # would commit with no rollback/pre-image record.
-        case ensure_payload_row(effect_id, env, digest) do
+        case Repo.check_effect_custody(acquired) do
           :ok ->
-            result =
-              FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
-
-            {status, extra} = result_audit(result)
-
-            _ =
-              persist_execute(
-                env,
-                execute_audit_payload(effect_id, env, digest, status, extra)
-              )
-
-            {result_to_reply(result, effect_id, env), custody_after(result)}
-
-          {:error, :promotion_already_consumed} ->
-            # The deterministic predecessor-derived effect id already
-            # owns a payload row. This caller lost the atomic claim;
-            # refuse before FileWriteExecutor can observe or mutate.
-            {{:error, :promotion_already_consumed}, :release}
+            apply_with_checked_custody(env, effect_id, digest, acquired)
 
           {:error, reason} ->
-            _ =
+            recorded =
               persist_execute(
                 env,
-                execute_audit_payload(effect_id, env, digest, "persist_failed", %{
-                  "error" => inspect(reason)
+                execute_audit_payload(effect_id, env, digest, Atom.to_string(reason), %{
+                  "lease_ids" => Enum.map(acquired, & &1.lease_id),
+                  "custody_check" => "after_veto"
                 })
               )
 
-            {{:error, :persist_failed}, :release}
+            case recorded do
+              :ok -> {{:error, reason}, :release}
+              {:error, _} -> {{:error, :persist_failed}, :release}
+            end
         end
 
       blocked ->
@@ -886,16 +883,46 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end
   end
 
-  # Keep custody, leaving the leases to the TTL reaper, when the surface is not
-  # known clean: a failed restore quarantined it (§3 note 3), or a durable write
-  # still awaits its committed mark and recovery reconciles it by hash.
+  # The veto is an external call. Never treat a lease acquired before that
+  # call as still current without checking its exact durable row afterwards.
+  # The executor then atomically reserves this exact lease before filesystem I/O.
+  defp apply_with_checked_custody(env, effect_id, digest, acquired) do
+    # The payload (including a single-consumer promotion claim) commits in the
+    # SAME transaction as custody admission. A refusal cannot strand a consumed
+    # promotion, and a successful admission always has its durable payload row.
+    result =
+      FileWriteExecutor.apply_effect(effect_id, env.payload, acquired, fn conn ->
+        case ensure_payload_row(effect_id, env, digest, conn) do
+          :ok -> :ok
+          {:error, :promotion_already_consumed} = error -> error
+          {:error, _} -> {:error, :persist_failed}
+        end
+      end)
+
+    case result do
+      {:rejected, :promotion_already_consumed} ->
+        # Preserve the prior terminal record for this deterministic effect ID.
+        # The failed admission transaction has already rolled back its fence.
+        {{:error, :promotion_already_consumed}, :release}
+
+      _ ->
+        {status, extra} = result_audit(result)
+        extra = Map.put(extra, "lease_ids", Enum.map(acquired, & &1.lease_id))
+        _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
+        {result_to_reply(result, effect_id, env), custody_after(result)}
+    end
+  end
+
+  # Unknown/dirty outcomes retain the durable reservation, not just the TTL.
+  # Recovery cannot clear it while an old writer may still resume.
   defp custody_after({:rejected, :rollback_failed}), do: :hold
+  defp custody_after({:committed, %{custody_retained: true}}), do: :hold
   defp custody_after({:committed, %{mark_deferred: true}}), do: :hold
   defp custody_after(_), do: :release
 
   # Durable row for the commit path only — a dry-run writes nothing and needs no
   # rollback row, so it would otherwise leave an orphan for recovery to reconcile.
-  defp ensure_payload_row(effect_id, env, digest) do
+  defp ensure_payload_row(effect_id, env, digest, conn) do
     if file_write_commit_enabled?() do
       case FileWriteExecutor.resolved_payload(env.payload) do
         {:ok, bytes, sha} ->
@@ -912,14 +939,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
           case Map.get(env, :promotion_receipt) do
             %{} ->
-              case EffectRepo.claim_promotion_payload(params) do
+              case EffectRepo.claim_promotion_payload(params, conn) do
                 :inserted -> :ok
                 :already -> {:error, :promotion_already_consumed}
                 {:error, _} = error -> error
               end
 
             _ ->
-              EffectRepo.insert_effect_payload(params)
+              EffectRepo.insert_effect_payload(params, conn)
           end
 
         {:error, reason} ->
@@ -992,6 +1019,11 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           :ok ->
             :ok
 
+          {:error, :not_found} ->
+            # Revocation/reaping already returned this exact lease. Never
+            # release a replacement lease merely because its surface matches.
+            :ok
+
           {:error, reason} ->
             Logger.warning(
               "governed_effect lease release failed lease_id=#{lease_id}: #{inspect(reason)}"
@@ -1003,6 +1035,12 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp result_audit({:committed, meta}),
     do: {if(meta[:dry_run], do: "dry_run", else: "committed"), %{"result" => stringify(meta)}}
+
+  defp result_audit({:rejected, reason})
+       when reason in [:revoked, :custody_expired, :custody_unavailable, :effect_in_progress],
+       do: {Atom.to_string(reason), %{"custody_check" => "durable_admission"}}
+
+  defp result_audit({:rejected, :persist_failed}), do: {"persist_failed", %{}}
 
   defp result_audit({:rejected, reason}),
     do: {"rejected", %{"error" => inspect(reason)}}

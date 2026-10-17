@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-10-13"
+last_verified: "2026-10-16"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_notices.py
@@ -57,11 +57,16 @@ router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
 The `lean` and `compact` tiers show three digests whatever `limit` asked for.
-Pass `limit` above 3 and the same response lists the results after those three
-under `more_results`, one row each (`discovery_id`, `type`, `status`, a short
-summary), up to 17 rows; `state_summary.more_results_shown` counts them. Open
-any row with `knowledge(action="details", discovery_id=...)`. Leave `limit`
-unset and the response is the three digests alone.
+The same response lists the results after those three under `more_results`,
+one row each (`discovery_id`, `type`, `status`, a short summary), up to 17
+rows; `state_summary.more_results_shown` counts them. Pass `limit` of 3 or
+less for the three digests alone. Open any row with
+`knowledge(action="details", discovery_id=...)`; on the progressive surface
+that router is reached as
+`use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": ...})`,
+which is the form the response hints name. When the digests carry scores on
+more than one `relevance_basis`, `state_summary.relevance_note` says they are
+not comparable; the list order is the ranking.
 
 Lean reads keep the result tier, an `open_one` route and any disclosure that an
 explicit `include_details=true` request was overridden. Repeated mode tutorials
@@ -127,6 +132,13 @@ This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
 to preserve raw backend order, or filter by a source-memory tag to inspect that
 lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
 window) apply no authority reorder: time order is what they asked for.
+
+A queryless listing (no `query`, for example a `status="open"` sweep) leaves
+unpromoted imported memory out by default, because with nothing to match there
+is no contest for the down-rank to decide and imports would fill the page. The
+response reports `imported_omitted` with a hint; the same two routes read them
+(`authority_mode="all"`, or a source-memory tag filter). Check-in memory
+suggestions leave them out as well. A query search still returns them.
 
 ## Quick Contribution
 

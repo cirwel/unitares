@@ -212,10 +212,10 @@ async def run_delegated_inference(
             },
             recovery={
                 "action": (
-                    "Use consult(effort='standard') or call_model for the "
-                    "local lane. " + HOST_ADAPTER_EXTENSION_NOTE
+                    "Use consult(effort='standard') for the local lane. "
+                    + HOST_ADAPTER_EXTENSION_NOTE
                 ),
-                "related_tools": ["consult", "call_model", "list_inference_hosts"],
+                "related_tools": ["consult", "list_inference_hosts"],
             },
         )
 

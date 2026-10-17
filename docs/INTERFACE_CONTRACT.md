@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.45.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -642,3 +642,105 @@ Compatibility: additive for callers. A client that cached the old enum will
 still send valid ids. Schema digests move for `consult` and
 `delegate_inference` (the `host_id` property lost its enum); no other digest
 moves. Client action: none required; read `skipped` and `family` where useful.
+
+## 1.42.0 (2026-10-16)
+
+call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: `describe_tool(tool_name='call_model')` gains a `deprecation`
+block (`deprecated_since` 2026-10-16, `superseded_by` consult, `migration`);
+`list_tools` keeps listing `call_model`, now with `deprecated: true` and
+`superseded_by: consult`, because a deprecated name the deployment still exposes
+stays in the negotiation index. The descriptions of `call_model`, `consult`,
+`delegate_inference`, `list_inference_hosts`, `describe_inference_host` and
+`dialectic`, and the recovery hints of `delegate_inference`'s missing-extension
+refusal and the dialectic LLM failure, now point at `consult`. Each server call
+of the old name logs `deprecated_tool_called`.
+
+Compatibility: every existing `call_model` call works unchanged, and
+`accepts_host_id_from` still lists it for the HTTP hosts. No input schema
+changes, so no input digest or the surface digest moves. Removal is not
+scheduled: it waits on the gateway intent classifier and the knowledge-graph
+stale-entry check moving off the handler, and on `consult` taking model and
+sampling controls or a further operator decision. Client action: use
+`consult(brief=..., effort='standard')`; a client that needs `model`,
+`temperature` or `max_tokens` on an HTTP host keeps calling `call_model` and
+should say so with `leave_note`. Model selection on a CLI host stays on
+`delegate_inference`.
+
+## 1.43.0 (2026-10-16)
+
+call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: the `migration` text of `describe_tool(tool_name='call_model')`
+and the descriptions of `call_model` and `consult` now state the removal
+window and that the raw controls retire with the tool. The decision, delegated
+by the operator, keeps `consult` bounded as the advisory facade designs it
+(`docs/proposals/active/consult-advisory-facade-v1.md`, amended 2026-10-16).
+
+Compatibility: every `call_model` call still works until the removal. No input
+schema changes, so no input digest or the surface digest moves. The removal
+itself will be a breaking change taken under this deprecation window, no
+earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
+action: move to `consult(brief=..., effort='standard')` before then. A client
+that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
+say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+
+Affected outputs: a `knowledge(action=search)` / `search_shared_memory` call
+with no `query` may now return fewer rows. When it left imported memory out it
+adds `imported_omitted` (a count of rows skipped while filling the page) and
+`imported_omitted_hint`, both lifted into the lean digest's `state_summary`.
+Check-in `relevant_discoveries` and `_mirror_kg_results` no longer include
+unpromoted imported memory. Promoted governed claims and channel messages are
+unaffected; query search is unchanged.
+
+Compatibility: no parameter name, type, default or requiredness changes. A
+client that listed imported rows by sweeping open work sees them omitted and
+gets them back with `authority_mode="all"` or an imported-memory tag filter.
+Schema digests move for `knowledge`, `search_knowledge_graph` and
+`search_shared_memory` (the `authority_mode` description); no other digest
+moves. Client action: none required; read `imported_omitted` where useful.
+
+## 1.45.0 (2026-10-17)
+
+Output and description changes from the 2026-10-16 agent-experience dogfood
+read (`docs/evaluations/ax-dogfood/read-2026-10-16.md`). Nothing is added,
+removed, retyped or renamed.
+
+- **`search_shared_memory` output.** The `lean` and `compact` tiers now list
+  the results after the three digests under `more_results` when `limit` is
+  unset, with the same rows, 17-row cap and 2,000-byte budget as before. A
+  `limit` of 3 or less omits them; an explicit `limit` above 3 behaves as in
+  1.33.0. When the shown digests carry more than one `relevance_basis`,
+  `state_summary.relevance_note` says the scores are not comparable and that
+  list order is the ranking.
+- **Response hints.** A server-written hint that named
+  `knowledge(action=..., ...)` (`next_action`,
+  `discovery_retrieval_options.open_one`, `raw_governance_hint`,
+  `resolution_notes_hint` and the other lifted search notes) now names
+  `use_tool(tool_name='knowledge', arguments={...})`. The router is not on the
+  progressive surface, and `use_tool` is reachable on every surface, as
+  `update_finding` hints have been since they moved to `use_tool`. The
+  `next_action` of a finding alias called with an explicit other action
+  reports what ran as "the knowledge router's '<action>' action" rather than
+  as a call, so the rewrite cannot present a route the caller never took.
+- **Descriptions.** `store_finding`'s field descriptions drop router wording
+  ("for action=store or promote", "action=search", "S22 H5 provenance") and
+  `discovery_type` lists every value in its brief. The knowledge router's
+  `response_to` description lists the valid `response_type` values.
+  `search_shared_memory`'s `include_details` brief names the `use_tool`
+  route.
+
+**Compatibility.** A client that relied on a no-`limit` lean search returning
+exactly three digests should pass `limit=3`. A client that parses hint text
+for `knowledge(` should read the `use_tool` form; the call it names is the same
+read.
+
+**Schema digests.** `search_shared_memory`, `store_finding` and `knowledge`
+move (descriptions only); `surface_sha256` moves with them.
+
+**Client action.** None required beyond the compatibility notes above.

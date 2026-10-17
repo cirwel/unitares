@@ -14,6 +14,16 @@ work *instantiates or differentiates from*, never as grounding. UNITARES's
 contribution is the engineering realization + the heterogeneity-as-differentiator
 frame, not a new theory of self.
 
+> **Claim status (2026-10-16): check before lifting into the paper.** This
+> draft is kept as written. Its "engineering instance" wording (§10.2 on
+> viability bounds, §10.3 on interoceptive inference) and the framing rule's
+> "instantiates" go further than the canonical contract's
+> [§Prior art](eisv-proprioception-contract.md#prior-art--positioning), which
+> says EISV is *informed by and structurally adjacent to* interoceptive
+> inference and is *not presented as a formal implementation of that theory*.
+> Wording consistent with the contract would be "is informed by and
+> structurally adjacent to". The final paper text is an operator decision.
+
 ---
 
 ## 10.1 Personal identity and continuity (philosophy)

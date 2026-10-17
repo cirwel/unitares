@@ -256,7 +256,8 @@ def test_finding_write_response_mode_is_not_a_full_request(
         friendly, canonical, make(), {**args, "response_mode": "full"}
     )
     assert "raw_governance" not in env
-    assert "knowledge(action='details'" in env["raw_governance_hint"]
+    assert "use_tool(tool_name='knowledge'" in env["raw_governance_hint"]
+    assert '"action": "details"' in env["raw_governance_hint"]
 
 
 def test_include_semantics_restores_raw_governance():
@@ -280,7 +281,10 @@ def test_knowledge_write_acks_keep_ids_and_write_warnings():
     assert env["_supersedes_warning"] == "supersedes target 'd-gone' not found"
     assert env["_truncated"] == {"summary": True}
     hint = env["raw_governance_hint"]
-    assert "knowledge(action='details', discovery_id='d-new')" in hint
+    assert (
+        "use_tool(tool_name='knowledge', arguments="
+        '{"action": "details", "discovery_id": "d-new"})'
+    ) in hint
     assert "returns the stored record" in hint
 
     update = _update_payload()
@@ -481,7 +485,7 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
         assert "repeating this identical call" in hint
     else:
         assert "response_mode" not in hint
-        assert "knowledge(action='details'" in hint
+        assert "use_tool(tool_name='knowledge'" in hint
 
 
 @pytest.mark.parametrize("friendly,args,older_flag,delivered", [
@@ -718,7 +722,7 @@ async def test_update_finding_with_an_explicit_other_action_keeps_its_payload(ac
     # next_action names the action that ran, not an update, and makes no
     # claim about whether it wrote (supersede does).
     assert "was updated" not in data["next_action"]
-    assert f"knowledge(action='{action}')" in data["next_action"]
+    assert f"the knowledge router's '{action}' action" in data["next_action"]
     assert "nothing was" not in data["next_action"]
 
 
@@ -748,7 +752,7 @@ async def test_store_finding_with_an_explicit_other_action_keeps_its_payload():
     assert data["raw_governance"] == payload
     assert "raw_governance_hint" not in data
     assert "Finding stored" not in data["next_action"]
-    assert "knowledge(action='details')" in data["next_action"]
+    assert "the knowledge router's 'details' action" in data["next_action"]
 
 
 @pytest.mark.asyncio
@@ -764,12 +768,7 @@ async def test_store_finding_rerouted_to_a_writing_action_does_not_claim_no_writ
     )
     assert arguments["action"] == "update"
     assert "raw_governance" in data
-    # The friendly-name rewrite may render knowledge(action='update') as
-    # update_finding(); either names the action that ran.
-    assert (
-        "knowledge(action='update')" in data["next_action"]
-        or "store_finding ran update_finding(" in data["next_action"]
-    )
+    assert "the knowledge router's 'update' action" in data["next_action"]
     assert "nothing was" not in data["next_action"]
     assert "writes again" in data["next_action"]
 

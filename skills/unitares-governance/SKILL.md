@@ -98,7 +98,7 @@ the same identity (pass `client_session_id`) with
 `response_mode="full"` replays the stored outcome in full. Otherwise it is
 `response_mode="full"` on a later `record_result` (without a `prediction_id` a
 repeat records a second outcome), or a `knowledge(action="details")` read of the
-stored finding.
+stored finding, which the hint names as `use_tool(tool_name="knowledge", ...)`.
 
 ## Session Continuity
 
