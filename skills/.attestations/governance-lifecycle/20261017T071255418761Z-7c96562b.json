@@ -1,0 +1,34 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-17T07:12:55Z",
+  "verified_date": "2026-10-17",
+  "verifier": "Claude Code agent 6359a70d (re-checked imported-memory classification claims against the source-<provider>-memory-only marker rule; governance-lifecycle and unitares-governance carry no marker claim, change is the 1.46.0 contract entry and knowledge-graph skill text)",
+  "source_digests": {
+    "unitares/commands/closeout.md": "abd5ddd6c2f17dc4",
+    "unitares/src/governance_monitor.py": "b5b880745cc2273c",
+    "unitares/src/interface_contract.py": "87f7ddc6549c45df",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "965217a27532f70d",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4a49fc5f10d53cce",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "34d7c23635ffddc4",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/tool_stability.py": "4f8c61bdd6c3ce56",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "4c7f11cecfa8e90d",
+    "unitares/src/mcp_handlers/updates/phases.py": "e855ad27fa88f7a4",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "fd5c6685c33f0d4d"
+  },
+  "skill_digest": "9a14736332a321d9",
+  "superseded_digests": {
+    "unitares/src/interface_contract.py": [
+      "ebc3a756b300f7c7"
+    ]
+  }
+}

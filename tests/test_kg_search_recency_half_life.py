@@ -116,7 +116,7 @@ class TestWeighting:
         # Recency alone: fresh imported 0.70 * ~0.98 = 0.68 beats a 20-day-old
         # native 0.77 * 0.63 = 0.49. With authority on top the imported row's
         # 0.55 multiplier (0.37) hands the contest back to the native row.
-        fresh_imported = _node("fresh-imported", age=timedelta(days=1), tags=["memory-sync"])
+        fresh_imported = _node("fresh-imported", age=timedelta(days=1), tags=["source-any-harness-memory"])
         native = _node("native", age=timedelta(days=20))
         scored = [(fresh_imported, 0.70), (native, 0.77)]
         raw = await _run(
