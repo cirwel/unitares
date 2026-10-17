@@ -132,6 +132,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           retry_after_hint_ms: retry_after_hint_ms
         })
 
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
+
       {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
         # RFC §7.13.5 typed-error contract. Map any CHECK violation to
         # HTTP 422 schema_invalid with the constraint name as detail (one
@@ -258,7 +261,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "a required surface is currently leased by another holder"
         })
 
-      {:error, reason} when reason in [:revoked, :custody_expired] ->
+      {:error, reason} when reason in [:revoked, :custody_expired, :effect_in_progress] ->
         json(conn, 409, %{
           ok: false,
           error: Atom.to_string(reason),
@@ -581,6 +584,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
+          {:error, :effect_in_progress} ->
+            json(conn, 409, %{ok: false, error: "effect_in_progress"})
+
           {:error, reason_atom} ->
             Logger.error("lease plane force-release failed: #{safe_reason(reason_atom)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
@@ -656,6 +662,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, :expired} ->
         json(conn, 409, %{ok: false, error: "expired"})
+
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
 
       {:error, reason} ->
         Logger.error("lease plane handoff accept failed: #{safe_reason(reason)}")
@@ -863,6 +872,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, :not_found} ->
         json(conn, 404, %{ok: false, error: "not_found"})
+
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
 
       {:error, reason_atom} ->
         Logger.error("lease plane release failed: #{safe_reason(reason_atom)}")
@@ -1373,6 +1385,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       last_heartbeat_at: iso(lease.last_heartbeat_at),
       released_at: iso(lease.released_at),
       release_reason: lease.release_reason,
+      active_effect_id: Map.get(lease, :effect_fence),
       audit_session: lease.audit_session,
       original_ttl_s: lease.original_ttl_s,
       earned_status: lease.earned_status,

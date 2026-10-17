@@ -1,71 +1,127 @@
-# File-write custody recheck: bounded revocation experiment
+# File-write custody: admission, revocation and recovery
 
 The October 5–12 frontier brief proposed revoking authority between planning
-and execution. This experiment applies that idea to the existing file-write
-executor, without adding a standing CapabilityLease or changing live flags.
-See the [brief's repository mapping](../ontology/frontier-brief-2026-10-12.md).
+and execution. This implements that experiment on the existing file-write
+executor. See the [brief's repository mapping](../ontology/frontier-brief-2026-10-12.md).
+It does not add a standing capability grant or enable live deployment flags.
 
-## Reproduction and result
+## Enforcement contract
 
-On base `543bab63c`, three deterministic interleavings all returned success
-and wrote the test payload after losing the originally acquired lease:
+A successful database reservation is the admission point for one file-write
+operation, including its compensation. Before admission, the exact lease ID,
+surface and holder must still match, be unreleased and have an unexpired TTL.
+The clock is checked **after** acquiring the lease-row lock, so waiting behind
+another transaction cannot spend the remaining TTL unnoticed.
 
-1. Force-release that lease while the governance veto call is pending.
-2. Expire it during the veto, without waiting for the reaper.
-3. Force-release it and acquire a replacement for the same surface and holder.
+Admission commits `surface_leases.effect_fence = effect_id` before reading the
+pre-image or calling any mutating filesystem operation. This is a durable
+reservation, not a connection-scoped database lock. Its commit serializes with
+release on the same lease row:
 
-The tests use the existing `governance_test` database, temporary test files,
-and an injected veto client. The real lease store, file executor and audit
-store are exercised; the external governance service is simulated. The veto
-returns `allow` after the custody change. This isolates custody freshness from
-the separate identity-lifecycle fix in PR #2840.
+- Release wins first: the executor is refused and never writes.
+- Admission wins first: release and handoff return `effect_in_progress` (HTTP
+  409). They have **not** revoked the admitted operation. TTL expiry cannot reap
+  its lease or admit a replacement, including for the same holder.
+- Commit or successful compensation completes: the executor retires only its
+  own reservation, after its last filesystem call has returned. Normal lease
+  release/reaping can then proceed.
+- Writer crash, interrupted I/O, failed compensation, or an unacknowledged
+  commit: the reservation remains. No timeout or reconnect retires it.
 
-The dispatch previously retained canonical surface names but did not reread
-the acquired lease rows after the veto. It now preserves those rows and checks
-the exact lease ID, surface and holder against the store. Released or missing
-rows return `revoked`; elapsed expiry returns `custody_expired`, using the
-database wall clock. Query errors fail closed as `custody_unavailable`.
+An admitted operation may finish after the original TTL. This deliberately
+orders revocation before or after admission; it does not promise cancellation
+of an OS operation already admitted. The semantics require operator review
+before deploying this enforcement change.
 
-The HTTP response is 409 for lost/expired custody and 503 when custody cannot
-be checked. Before executor dispatch, refusals are recorded in
-`governed_effect.execute` with `lease_ids` and `custody_check = after_veto`.
-An audit-write failure returns `persist_failed`; it does not authorize a write.
-These new refusal statuses do not consume the idempotency key: retries must
-acquire fresh custody and pass the veto again. Cleanup only releases the old
-lease ID, leaving a replacement untouched.
+Migration 076 supplies the reservation column and a database trigger that
+rejects release, deletion, or ownership/target changes while it is populated.
+Automatic expired acquisition and periodic reaping exclude reservations.
+Recovery scans exclude reserved payloads: neither old pre-image bytes nor a
+matching content hash prove that a paused writer cannot later resume.
 
-Run the experiment:
+The pre-image is committed separately before the write; it cannot disappear
+through rollback of a transaction spanning filesystem I/O. A missing, already
+pending, or already committed payload row cannot authorize another write.
+The live executor requires actual acquired lease rows; surface names alone
+are sufficient only for dry-run validation.
+
+The post-veto freshness check remains an early refusal with no payload row.
+The executor's reservation closes the later check-to-write interval. Refusal
+receipts distinguish `after_veto` from `durable_admission`, include lease IDs,
+and preserve idempotency conflict checks. A custody refusal can be retried
+only through fresh acquisition and the governance veto.
+
+## Verification
+
+Use the existing `governance_test` database, never the live governance DB:
 
 ```sh
+psql -X -v ON_ERROR_STOP=1 -h localhost -U postgres -d governance_test \
+  -f db/postgres/migrations/076_effect_custody_reservation.sql
 cd elixir/lease_plane
 mix test test/governed_effect_test.exs --only custody_revocation
+mix test test/effect_custody_fence_test.exs
+mix test
 ```
 
-Do not point this suite at the live governance database. The default test
-configuration uses `governance_test`. The three tests now exercise the HTTP
-route, assert unchanged bytes and no payload row after refusal, check the
-durable refusal and original lease ID, and verify replacement ownership or
-a successful retry with fresh custody. Existing successful commit, dry-run,
-compensation and recovery tests supply companion coverage.
+The three original HTTP regressions revoke, expire, or replace custody during
+the veto. The additional tests pause immediately before the OS write and
+before compensation, attempt release/handoff/reaping/replacement, and resume
+the writer. They also cover request death, a disconnected database session,
+expiry during lock contention, HTTP busy responses, and missing/replayed
+pre-images. They use real PostgreSQL rows and temporary test files with an
+injected filesystem barrier. No live external target is involved.
 
-## Limits and the next experiment
+The filesystem-barrier test fails with the previous executor at `6f6dd0d98`:
+force-release returns `:ok` while its write is paused. With reservations it
+returns `effect_in_progress`; a successor is admitted only after completion.
 
-This fixes custody changes completed before the post-veto check. It does
-**not** make the check and the filesystem write atomic. Payload persistence,
-pre-image capture and the OS write happen afterwards; a release or expiry in
-that interval is not excluded. A lease row is not a filesystem fencing token.
-The current file-write executor and compensation path still need a design
-that orders revocation against the actual mutation, with a defined point
-after which an in-flight operation is allowed to finish.
+## Deployment and retained-reservation recovery
 
-The next experiment should pause immediately before the OS write, complete
-revocation, allow a successor to acquire the surface, and then resume the
-old writer. Its deciding standard must cover the old writer, compensation,
-crash recovery and successor ownership. Holding a database transaction open
-around a file write alone is insufficient: connection loss can release the
-lock while the process can still mutate the file, and rolling back the
-transaction could erase the recovery pre-image after a real write.
+Migration 075 is occupied by PR #2836; this change uses 076 and has no dependency
+on that migration. Apply 076 before starting the new binary: lease queries now
+read its column even with execute flags disabled. Stop and drain **all** live
+file-write executors before the upgrade. Do not mix old live-writing binaries
+with the reservation protocol: the trigger protects reservations, but an old
+executor does not create one. No live migration or flag change is part of this
+PR's validation.
 
-No result here establishes protection for arbitrary shell or network tools,
-the agent-spawn executor, cross-tier capability grants, policy-version or
-safeguard-profile binding, or live deployment. Those are separate scopes.
+Inspect retained reservations through `/v1/lease/status` (`active_effect_id`)
+or an operator database connection:
+
+```sql
+SELECT lease_id, surface_id, holder_agent_uuid, effect_fence, expires_at
+FROM lease_plane.surface_leases
+WHERE effect_fence IS NOT NULL;
+```
+
+A retained reservation can outlive a process restart. Recovery is intentionally
+conservative because the database cannot prove that a disconnected filesystem
+writer is dead. To recover it:
+
+1. Stop every executor that can access this surface, including disconnected
+   nodes, and establish that their outstanding filesystem I/O has terminated.
+   A heartbeat timeout, expired TTL, or failed database connection is insufficient.
+   Keep dispatch stopped throughout recovery.
+2. Inspect the exact effect payload, pre-image, current bytes and reservation.
+   Use `EffectReconcile.reconcile_payload/2` from an isolated maintenance console
+   to persist the observed disposition; it never writes file bytes. Investigate
+   fresh rows without pre-images and quarantine/partial-write outcomes explicitly.
+3. Once the surface is reconciled and the old writer cannot resume, retire only
+   the inspected reservation with an operator transaction conditioned on both
+   its exact `lease_id` and `effect_fence`. Record the disposition and operator
+   recovery evidence. Release that lease through the existing release path,
+   then resume dispatch. Do not clear reservations in bulk or on a timer.
+
+A failed fence-retirement acknowledgment also retains custody. A successful
+write reports `custody_retained: true` in that case. If the commit mark itself
+failed, it reports `mark_deferred: true`. Neither response proves release.
+
+## Scope
+
+This orders cooperating lease-plane file writers, compensation and successor
+acquisition within one database authority. It is not an OS sandbox: arbitrary
+shell writers, privileged database administrators, symlink changes by external
+processes, and writers using a different authority database remain outside
+this boundary. It makes no claim about network tools, agent spawning, safeguard
+profiles, standing capability grants, or production deployment.

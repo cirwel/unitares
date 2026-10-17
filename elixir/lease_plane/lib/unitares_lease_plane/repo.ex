@@ -29,7 +29,7 @@ defmodule UnitaresLeasePlane.Repo do
   holder_class, holder_kind, holder_pid, heartbeat_required, intent,
   acquired_at, expires_at, last_heartbeat_at, released_at, release_reason,
   audit_session, original_ttl_s, earned_status,
-  substrate_state, substrate_state_observed_at
+  substrate_state, substrate_state_observed_at, effect_fence
   """
 
   # ---------- acquire ----------
@@ -89,6 +89,7 @@ defmodule UnitaresLeasePlane.Repo do
     SET released_at = now(), release_reason = 'reaped_remote_ttl'
     WHERE surface_id = $1
       AND released_at IS NULL
+      AND effect_fence IS NULL
       AND holder_kind = 'remote_heartbeat'
       AND expires_at < now()
     RETURNING #{@select_lease_columns}
@@ -106,6 +107,9 @@ defmodule UnitaresLeasePlane.Repo do
         {:error, e}
     end
   end
+
+  defp acquire_step(_conn, _p, %{effect_fence: fence}) when not is_nil(fence),
+    do: {:error, :effect_in_progress}
 
   defp acquire_step(conn, p, %{holder_agent_uuid: held} = existing)
        when is_binary(held) do
@@ -381,6 +385,92 @@ defmodule UnitaresLeasePlane.Repo do
 
   defp check_effect_lease(_), do: {:error, :custody_unavailable}
 
+  @doc """
+  Commit a durable, exclusive reservation before any filesystem observation or
+  mutation. This UPDATE is the admission point: it serializes with release on
+  the exact lease row. Expiry is checked here; admitted operations retain
+  custody until all their filesystem calls have returned, even after expiry.
+  A connection/process loss does NOT release this reservation.
+  """
+  def begin_effect_custody(effect_id, [
+        %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
+      ])
+      when is_binary(effect_id) do
+    sql = """
+    UPDATE lease_plane.surface_leases SET effect_fence = $4
+    WHERE lease_id = $1 AND surface_id = $2 AND holder_agent_uuid = $3
+      AND released_at IS NULL AND expires_at > clock_timestamp()
+      AND effect_fence IS NULL
+    RETURNING lease_id
+    """
+
+    # Take the lock before evaluating the clock. UPDATE's original WHERE may
+    # have been evaluated before waiting behind an unchanged row lock.
+    admission =
+      Postgrex.transaction(DB, fn conn ->
+        with {:ok, _lease} <- lock_active_lease(conn, id),
+             {:ok, %{num_rows: 1}} <-
+               Postgrex.query(conn, sql, [
+                 uuid_to_binary(id),
+                 surface,
+                 uuid_to_binary(holder),
+                 effect_id
+               ]) do
+          :ok
+        else
+          {:ok, %{num_rows: 0}} -> Postgrex.rollback(conn, :not_admitted)
+          {:error, reason} -> Postgrex.rollback(conn, reason)
+        end
+      end)
+
+    case admission do
+      {:ok, :ok} ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, :revoked}
+
+      {:error, :not_admitted} ->
+        case check_effect_custody([
+               %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
+             ]) do
+          :ok -> {:error, :effect_in_progress}
+          error -> error
+        end
+
+      {:error, _} ->
+        {:error, :custody_unavailable}
+    end
+  end
+
+  def begin_effect_custody(_, _), do: {:error, :custody_unavailable}
+
+  @doc """
+  Retire only this execution's reservation after its last possible filesystem
+  call. Never call from an `after` clause or a timeout/recovery sweep: those do
+  not establish that an outstanding filesystem operation has finished.
+  """
+  def finish_effect_custody(effect_id, [%{lease_id: id}]) do
+    case Postgrex.query(
+           DB,
+           """
+           UPDATE lease_plane.surface_leases SET effect_fence = NULL
+           WHERE lease_id = $1 AND effect_fence = $2 AND released_at IS NULL
+           """,
+           [uuid_to_binary(id), effect_id]
+         ) do
+      {:ok, %{num_rows: 1}} -> :ok
+      _ -> {:error, :custody_unavailable}
+    end
+  end
+
+  def finish_effect_custody(_, _), do: {:error, :custody_unavailable}
+
+  defp custody_error(%Postgrex.Error{postgres: %{constraint: "effect_custody_reserved"}}),
+    do: :effect_in_progress
+
+  defp custody_error(reason), do: reason
+
   # ---------- identity attestation replay ledger ----------
 
   @doc """
@@ -505,7 +595,7 @@ defmodule UnitaresLeasePlane.Repo do
            end
          end) do
       {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, custody_error(reason)}
     end
   end
 
@@ -551,7 +641,7 @@ defmodule UnitaresLeasePlane.Repo do
     end)
     |> case do
       {:ok, lease} -> {:ok, lease}
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, custody_error(reason)}
     end
   end
 
@@ -800,7 +890,7 @@ defmodule UnitaresLeasePlane.Repo do
   def expired_active_leases(limit) when is_integer(limit) and limit > 0 do
     sql =
       "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
-        "WHERE released_at IS NULL AND expires_at < now() " <>
+        "WHERE released_at IS NULL AND effect_fence IS NULL AND expires_at < now() " <>
         "ORDER BY expires_at ASC LIMIT $1"
 
     case Postgrex.query(DB, sql, [limit]) do
@@ -830,7 +920,7 @@ defmodule UnitaresLeasePlane.Repo do
            end
          end) do
       {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, custody_error(reason)}
     end
   end
 
@@ -1227,5 +1317,5 @@ defmodule UnitaresLeasePlane.Repo do
 
   defp normalize_tx_result({:ok, {:ok, lease, kind}}), do: {:ok, lease, kind}
   defp normalize_tx_result({:ok, {:error, code, detail}}), do: {:error, code, detail}
-  defp normalize_tx_result({:error, reason}), do: {:error, reason}
+  defp normalize_tx_result({:error, reason}), do: {:error, custody_error(reason)}
 end

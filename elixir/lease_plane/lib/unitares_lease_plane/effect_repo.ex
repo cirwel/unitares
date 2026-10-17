@@ -106,7 +106,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
            pre_image_sha256 = $2,
            pre_image_bytes = $3,
            pre_image_existed = $4
-     WHERE effect_id = $1 AND rollback_state IS NULL
+     WHERE effect_id = $1 AND rollback_state IS NULL AND committed_at IS NULL
     RETURNING effect_id
     """
 
@@ -171,8 +171,10 @@ defmodule UnitaresLeasePlane.EffectRepo do
   end
 
   @doc """
-  Orphans for the boot recovery scanner: pre-image captured, never committed.
-  Backed by the partial index in migration 052.
+  Orphans for recovery: pre-image captured, never committed, no durable custody
+  reservation. A pending row with a reservation may still have a live writer;
+  neither a timeout nor a DB reconnect establishes that it cannot resume.
+  Backed by the partial indexes in migrations 052 and 076.
   """
   @spec orphaned_payloads() :: {:ok, [map()]} | {:error, term()}
   def orphaned_payloads do
@@ -181,6 +183,10 @@ defmodule UnitaresLeasePlane.EffectRepo do
            pre_image_existed, rollback_state, committed_at, required_leases
       FROM effects.payloads
      WHERE rollback_state = 'pending' AND committed_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM lease_plane.surface_leases l
+         WHERE l.effect_fence = effects.payloads.effect_id
+       )
     """
 
     case Postgrex.query(DB, sql, []) do
