@@ -823,6 +823,12 @@ durable paused copy exists. Unrelated status, terminal status, or a missing
 durable agent still refuses without mutation and reports that operator
 reconciliation is required.
 
+An elapsed pause TTL is eligibility for that durable transition, not proof it
+committed. State reads therefore keep `write_gate.writes_held=true` until the
+resume succeeds and expose `expiry_eligible=true` separately; a gated write may
+start or retry expiry but remains refused and must be resubmitted after the
+pause lifts.
+
 Compatibility: additive for callers that omit the authorship field or never
 use the recovery action, and deliberately restrictive only when a requester
 declares a conflict. Existing dialectic calls retain their action and parameter

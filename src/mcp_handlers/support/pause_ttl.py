@@ -426,9 +426,10 @@ def describe_write_gate(meta: Any) -> dict:
     Read from the predicates the write gates apply:
     check_agent_can_operate (support/agent_auth.py) for new shared-memory
     entries, and the check-in phases in updates/phases.py. Both refuse while
-    ``status == "paused"`` and the pause is not past
-    PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``). Both also refuse an
-    archived identity. Its way back is a proof-carrying
+    ``status == "paused"`` until the token-fenced durable expiry transition
+    commits. Passing PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``) makes the
+    pause eligible for that transition; it does not itself make writes
+    available. Both also refuse an archived identity. Its way back is a proof-carrying
     start_session(resume=true), which unarchives the same UUID
     (require_registered_agent routes there); self_recovery rejects archived
     identities. The check-in phase refuses a deleted identity too, which
@@ -436,21 +437,33 @@ def describe_write_gate(meta: Any) -> dict:
     identity the server holds no record for yet, passes both gates.
 
     Read-only: unlike the gates it never expires a pause, so a stale pause is
-    reported as paused with writes not held, because the next gated write
-    lifts it.
+    still reported as held. ``expiry_eligible`` says a gated operation may
+    start or retry durable expiry without misrepresenting eligibility as a
+    completed resume.
     """
     status = getattr(meta, "status", None) if meta is not None else None
     if status == "paused":
         paused_at = getattr(meta, "paused_at", None)
         if _pause_is_stale(paused_at):
-            return {
+            gate = {
                 "paused": True,
-                "writes_held": False,
+                "writes_held": True,
+                "expiry_eligible": True,
+                "held": (
+                    "Check-ins and new shared-memory entries remain refused "
+                    "until the exact-token durable expiry commits. A gated "
+                    "operation starts or retries expiry; resubmit the write "
+                    "after the pause lifts."
+                ),
                 "note": (
-                    "The pause is past its expiry: the next check-in or new "
-                    "shared-memory entry lifts it."
+                    "The pause is past its expiry threshold, but eligibility "
+                    "is not a durable resume receipt."
                 ),
             }
+            expires_at = _pause_expires_at(paused_at)
+            if expires_at:
+                gate["expires_at"] = expires_at
+            return gate
         gate = {
             "paused": True,
             "writes_held": True,
