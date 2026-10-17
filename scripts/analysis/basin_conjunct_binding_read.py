@@ -27,8 +27,14 @@ What it prints (Markdown):
   6. Share of BOUNDARY rows whose agent-visible primary E sits below 0.6 while
      the deciding ODE E does not -- the penalty that is shown but never decides.
 
+The window defaults to the current EISV instrument era (src/eisv_eras.py); when
+that era's deploy time is not recorded yet, it reads only rows stamped with it.
+A window that crosses an instrument change is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
+
 Usage:
-  python3 scripts/analysis/basin_conjunct_binding_read.py --window-days 60
+  python3 scripts/analysis/basin_conjunct_binding_read.py
+  python3 scripts/analysis/basin_conjunct_binding_read.py --window-days 60 --allow-cross-era "why"
   GOVERNANCE_DATABASE_URL=postgresql://... python3 scripts/analysis/basin_conjunct_binding_read.py
 
 Historical reference read (2026-08-21): the old completeness predicate admitted
@@ -42,8 +48,13 @@ import argparse
 import asyncio
 import os
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import asyncpg
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
 
 DEFAULT_DB_URL = "postgresql://localhost:5432/governance"
 
@@ -67,9 +78,10 @@ WITH rows AS (
     s.state_json->'eisv_telemetry'->'policy_evaluation'->'inputs'->>'basin' AS basin,
     s.state_json->'eisv_telemetry'->'policy_evaluation'->>'sub_action' AS sub
   FROM core.agent_state s
-  WHERE s.recorded_at >= now() - ($1::int * INTERVAL '1 day')
+  WHERE s.recorded_at >= $1::timestamptz AND s.recorded_at < $2::timestamptz
     AND s.synthetic = false
     AND s.state_json ? 'eisv_telemetry'
+    AND ($3::text IS NULL OR s.state_json->'eisv_instrument'->>'era' = $3::text)
 ), eligible AS (
   SELECT * FROM rows WHERE e IS NOT NULL AND basin IS NOT NULL AND risk IS NOT NULL
 ), complete AS (
@@ -159,19 +171,49 @@ def _table(headers, rows) -> str:
     return "\n".join(out)
 
 
-async def run(db_url: str, window_days: int) -> int:
+Q_INSTRUMENT_IDS = """
+SELECT s.state_json->'eisv_instrument'->>'id' AS instrument_id, count(*) AS n
+FROM core.agent_state s
+WHERE s.recorded_at >= $1::timestamptz AND s.recorded_at < $2::timestamptz
+  AND s.synthetic = false
+  AND ($3::text IS NULL OR s.state_json->'eisv_instrument'->>'era' = $3::text)
+GROUP BY 1 ORDER BY 1 NULLS FIRST
+"""
+
+
+async def run(db_url: str, start: datetime, end: datetime, crossed=(),
+              allow_cross: str | None = None, stamp_era: str | None = None) -> int:
     conn = await asyncpg.connect(db_url)
     try:
-        completeness = await conn.fetch(Q_COMPLETENESS, window_days)
-        agreement = await conn.fetch(Q_AGREEMENT, window_days)
-        margin = await conn.fetch(Q_E_MARGIN, window_days)
-        failing = await conn.fetch(Q_FAILING_SETS, window_days)
-        sub = await conn.fetch(Q_SUB_BY_BASIN, window_days)
-        shown = await conn.fetchrow(Q_SHOWN_NOT_DECIDING, window_days)
+        id_rows = await conn.fetch(Q_INSTRUMENT_IDS, start, end, stamp_era)
+        id_counts = {r["instrument_id"]: r["n"] for r in id_rows}
+        try:
+            stamped_ids = eisv_eras.require_single_instrument(id_counts, allow_cross=allow_cross)
+        except eisv_eras.EraCrossingError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        completeness = await conn.fetch(Q_COMPLETENESS, start, end, stamp_era)
+        agreement = await conn.fetch(Q_AGREEMENT, start, end, stamp_era)
+        margin = await conn.fetch(Q_E_MARGIN, start, end, stamp_era)
+        failing = await conn.fetch(Q_FAILING_SETS, start, end, stamp_era)
+        sub = await conn.fetch(Q_SUB_BY_BASIN, start, end, stamp_era)
+        shown = await conn.fetchrow(Q_SHOWN_NOT_DECIDING, start, end, stamp_era)
     finally:
         await conn.close()
 
-    print(f"# Basin conjunct binding read — last {window_days} days\n")
+    print(f"# Basin conjunct binding read — {start.isoformat()} to {end.isoformat()}\n")
+    if stamp_era:
+        print(f"Rows stamped with era `{stamp_era}` only (its deploy time is not recorded).\n")
+    if crossed:
+        print("**Pooled across EISV instrument changes** (allowed by --allow-cross-era): "
+              + ", ".join(b.id for b in crossed) + ". Rows on either side of a change "
+              "come from different instruments.\n")
+    unstamped = id_counts.get(None, 0)
+    print("Instrument ids in window: "
+          + (", ".join(f"`{k}` ({id_counts[k]} rows)" for k in stamped_ids) or "none stamped")
+          + f"; unstamped rows: {unstamped}.\n")
+    if len(stamped_ids) > 1:
+        print("**Pooled across stamped instrument ids** (allowed by --allow-cross-era).\n")
     print("Verdict-path inputs = `eisv_telemetry.measurement.ode.values` + "
           "`measurement.coherence.value` + `policy_evaluation.inputs.risk_score`; "
           "persisted basin = `policy_evaluation.inputs.basin`.\n")
@@ -229,11 +271,33 @@ async def run(db_url: str, window_days: int) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--window-days", type=int, default=60)
+    ap.add_argument("--window-days", type=int, default=None,
+                    help="default: since the current instrument era began")
+    ap.add_argument("--allow-cross-era", metavar="REASON", default=None,
+                    help="run even if the window crosses an EISV instrument change")
     ap.add_argument("--db-url",
                     default=os.environ.get("GOVERNANCE_DATABASE_URL", DEFAULT_DB_URL))
     args = ap.parse_args(argv)
-    return asyncio.run(run(args.db_url, args.window_days))
+    end = datetime.now(timezone.utc)
+    stamp_era = None
+    if args.window_days is None:
+        start, stamp_era = eisv_eras.current_era_window_start()
+    else:
+        start = end - timedelta(days=args.window_days)
+    try:
+        crossed = eisv_eras.require_single_era(
+            start, end, allow_cross=args.allow_cross_era, stamp_filtered=stamp_era is not None,
+        )
+    except eisv_eras.EraCrossingError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    return asyncio.run(run(args.db_url, start, end, crossed, args.allow_cross_era, stamp_era))
+
+
+
+def current_era_start() -> datetime:
+    """Where the default read starts (see ``eisv_eras.current_era_window_start``)."""
+    return eisv_eras.current_era_window_start()[0]
 
 
 if __name__ == "__main__":

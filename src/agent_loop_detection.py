@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from src.logging_utils import get_logger
 from src.agent_metadata_model import agent_metadata
+from src import eisv_instrument
 from src.agent_monitor_state import monitors, save_monitor_state, save_monitor_state_async
 from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
@@ -195,6 +196,9 @@ def process_update_authenticated(
     result = monitor.process_update(agent_state)
 
     if auto_save:
+        # Count this check-in under the current EISV instrument before the
+        # save, so the count persists with the state it describes.
+        eisv_instrument.advance(monitor)
         save_monitor_state(agent_id, monitor)
 
         meta = agent_metadata[agent_id]
@@ -251,8 +255,8 @@ async def process_update_authenticated_async(
     if meta is not None and getattr(meta, "status", None) == "archived":
         raise ValueError(
             f"Agent '{agent_id}' is archived and cannot be updated. "
-            f"Use self_recovery(action='quick') to restore, or "
-            f"onboard(force_new=true) for a new identity."
+            f"Reclaim it with start_session(resume=true) from the same live "
+            f"process, or start a new identity with start_session(force_new=true)."
         )
 
     # Check for loop pattern BEFORE processing
@@ -469,6 +473,7 @@ async def process_update_authenticated_async(
             if datetime.now() >= cooldown_until:
                 meta.loop_cooldown_until = None
 
+        eisv_instrument.advance(monitor)
         await save_monitor_state_async(agent_id, monitor)
 
     return result

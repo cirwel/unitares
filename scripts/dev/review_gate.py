@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """review_gate.py — the PR review pass, as reflexive as the test gate.
 
-The delivery contract says an agent marks its PR ready once "CI green, review
-round joined" (docs/operations/github-workflow-conventions.md §2). Until this
-script, the second half was prose: some PRs carried a review in the body, some
-in a comment, most in neither, and nothing could tell which. This makes the
-review a command with a cache and a machine-checkable record, the way
-test-cache.sh made the test run one.
+Review is best-effort for ordinary changes; sensitive paths retain their
+required coverage (docs/operations/github-workflow-conventions.md §2).
+Local authors can run a reviewer directly. Any author with GitHub access can
+request the shared host with the review-requested label. Both routes publish
+the same diff-bound records; an unavailable reviewer never counts as a pass.
 
     review         run a review of HEAD's diff and post the record on its PR
     record         post a review that already happened elsewhere (a council,
@@ -52,8 +51,8 @@ findings from a reviewer that did not finish is not a review.
 
 What the gate does NOT establish
 --------------------------------
-That the record was honest. Local agents share a GitHub App and cloud agents
-still use the operator's account. Neither publisher identity proves an
+That the record was honest. Local and provisioned cloud agents share a GitHub
+App. Publisher identity does not prove an
 independent review, and nothing here signs reviewer output. The
 gate makes a review impossible to FORGET and visible to check — the record and
 its full text sit on the PR — not impossible to fake by an author with write
@@ -86,7 +85,7 @@ import unicodedata
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 
@@ -112,7 +111,18 @@ NATIVE_WAIT_S = 600
 # Full review cycles per PR. A cycle holds at most two distinct model families
 # on the same revision/diff; rerunning a family or changing the work starts
 # another cycle. Coverage remains separate from this spending budget.
+#
+# A cycle that found a serious problem (a P0/P1 or unlabelled finding) does
+# not count against ROUND_CAP, and the fix of a serious finding earns a full
+# review however many earlier cycles there were (CodexRounds.exhausted). The
+# cap exists to stop review that has stopped finding serious problems. A round
+# of lesser findings is answered by targeted fix verification either way
+# (capped_review in cmd_review).
+# Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
+# should be context based". ROUND_BACKSTOP bounds a review that never
+# converges.
 ROUND_CAP = 3
+ROUND_BACKSTOP = 10
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -247,6 +257,9 @@ def pr_fields(pr: dict) -> dict:
     of OPEN/CLOSED/MERGED, and require_open and its messages still use that.
     """
     merged = pr.get("merged") or pr.get("merged_at")
+    head_repo = (pr["head"].get("repo") or {}).get("id")
+    base_repo = (pr["base"].get("repo") or {}).get("id")
+    author = pr.get("user") or {}
     return {
         "number": pr["number"],
         "headRefOid": pr["head"]["sha"],
@@ -255,6 +268,14 @@ def pr_fields(pr: dict) -> dict:
         "state": "MERGED" if merged else str(pr["state"]).upper(),
         "isDraft": bool(pr.get("draft")),
         "author": {"login": (pr.get("user") or {}).get("login", "")},
+        # PR REST objects omit performed_via_github_app. Their GitHub-issued
+        # bot actor ID establishes routing eligibility only; review comments
+        # still require the full App/actor pair. Names/association grant neither.
+        "trustedReviewApp": (author.get("type") == "Bot"
+                             and type(author.get("id")) is int
+                             and author["id"] in TRUSTED_REVIEW_APPS.values()),
+        "sameRepository": (type(head_repo) is int and head_repo > 0
+                           and type(base_repo) is int and head_repo == base_repo),
         "updatedAt": pr.get("updated_at", ""),
         "labels": [{"name": label["name"]} for label in pr.get("labels") or []],
     }
@@ -457,6 +478,36 @@ def diff_text(base: str, head: str) -> str:
     return out.decode("utf-8", "replace")
 
 
+def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
+    """Separate subsequent PR edits from automatically integrated base changes.
+
+    Reconstruct the reviewed contribution on the base actually included in
+    HEAD. Comparing that tree with HEAD retains every later author edit,
+    including merge resolutions and reversions. Nothing is dropped: the
+    base integration diff accompanies it as interaction-review context.
+    """
+    integrated_base = git("merge-base", base, head).strip()
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
+                             previous, integrated_base], capture_output=True, text=True)
+    tree = merged.stdout.split("\n", 1)[0].strip()
+    if merged.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        return (diff_text(previous, head),
+                "Base integration could not be reconstructed conflict-free. The supplied delta "
+                "contains ALL changes since the full review, without separating upstream work. "
+                "Do not assume any changes are already covered; uncertain scope requires FULL_REQUIRED.")
+
+    def patch(left: str, right: str) -> str:
+        return subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "--no-renames",
+                               "--binary", left, right], capture_output=True,
+                              check=True).stdout.decode("utf-8", "replace")
+
+    return (patch(tree, head),
+            f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "
+            f"resulting tree {tree}. The supplied delta is every PR edit relative to that tree.\n\n"
+            "Base integration changes (context, not new PR scope; inspect relevant interactions):\n"
+            + (patch(previous, tree) or "(none)\n"))
+
+
 # --------------------------------------------------------------------------
 # records
 
@@ -497,7 +548,7 @@ class Record:
             return "success", f"{self.findings} finding(s) disposed ({self.reviewer})"
         if self.verdict == "FINDINGS":
             return "pending", f"{self.findings} finding(s) need fixes or dispositions"
-        return "pending", f"UNREVIEWED: {self.reviewer} unavailable; author must retry or hand off explicitly"
+        return "pending", f"UNREVIEWED: {self.reviewer} unavailable; no completed review"
 
 
 def render_marker(r: Record) -> str:
@@ -818,6 +869,12 @@ class ReviewCycle:
     head: str
     key: str
     families: set[str | None] = field(default_factory=set)
+    findings: list[dict] = field(default_factory=list)
+
+    def productive(self) -> bool:
+        """It found a serious problem: a P0/P1 finding, or an unlabelled one
+        (a local review can report data loss in prose), as last_severe reads."""
+        return any(_title_is_serious(f) for f in self.findings)
 
     def accepts(self, head: str, key: str, family: str | None) -> bool:
         same_head = (len(self.head) >= 7 and len(head) >= 7
@@ -825,6 +882,26 @@ class ReviewCycle:
         return bool(same_head and (not self.key or not key or self.key == key)
                     and family and None not in self.families
                     and family not in self.families and len(self.families) < 2)
+
+
+def _title_is_serious(finding: dict) -> bool:
+    """A finding's severity is its title's: the first non-empty line. A P0/P1
+    there, or no label at all, is serious; a label in the explanation below
+    (e.g. "the earlier [P1] issue was fixed") is not."""
+    lines = [line for line in (finding.get("body") or "").splitlines() if line.strip()]
+    title = lines[0] if lines else ""
+    return bool(SEVERE_BADGE_RE.search(title)) or not SEVERITY_LABEL_RE.search(title)
+
+
+def _changed_work(cycle: "ReviewCycle", key: str, head: str) -> bool:
+    """Positive evidence that the work under review differs from `cycle`'s:
+    both diff keys known and different, or, where the cycle has no key (a
+    native review), a different head commit. No evidence, no exemption."""
+    if key and cycle.key:
+        return key != cycle.key
+    if head and cycle.head and not cycle.key:
+        return not (head.startswith(cycle.head) or cycle.head.startswith(head))
+    return False
 
 
 @dataclass
@@ -841,6 +918,34 @@ class CodexRounds:
 
     def can_join(self, head: str, key: str, family: str | None) -> bool:
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
+
+    @property
+    def spent(self) -> int:
+        """Cycles that count against ROUND_CAP: all but those that found a
+        serious problem. ``count`` stays the full ledger (grants key on it)."""
+        return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
+
+    def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
+        """No new full cycle without the operator: too many unproductive
+        cycles, or a review that has not converged by the backstop."""
+        if not ROUND_CAP_ENABLED:
+            return False
+        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
+            return True
+        if joining:
+            # Finishing a cycle (its second family) costs nothing when starting
+            # it did not need the operator: the cycle before it was serious, or
+            # fewer than ROUND_CAP unproductive cycles came before it.
+            current = 0 if (self.cycles and self.cycles[-1].productive()) else 1
+            prior_spent = self.spent - current
+            prior_serious = (len(self.cycles) >= 2 and self.cycles[-2].productive()
+                             and _changed_work(self.cycles[-2], self.cycles[-1].key, self.cycles[-1].head))
+            return not (prior_serious or prior_spent < ROUND_CAP)
+        if self.cycles and self.cycles[-1].productive() and _changed_work(self.cycles[-1], key, head):
+            # The fix of a serious finding earns a full review; re-reviewing
+            # the same unchanged diff does not.
+            return False
+        return self.spent >= ROUND_CAP
 
     @property
     def last_severe(self) -> bool:
@@ -951,17 +1056,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        body = c.get("body", "")
-        titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
-        findings = []
-        for i, title in enumerate(titles):
-            finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
-            location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
-            if location:
-                finding.update(path=location[1], line=int(location[2]))
-            findings.append(finding)
-        if rec.verdict == "FINDINGS" and not findings:
-            findings = [{"body": "unlabelled finding; full review required"}]
+        findings = findings_from_review_text(c.get("body", ""), rec.verdict, rec.findings or 0)
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
                                    rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
@@ -978,6 +1073,35 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     return count_review_cycles(list(runs.values()), unknown_history, answered_at)
 
 
+# A finding's title leads with its label, after list or markup characters
+# ("[P1] ...", "- [P1] ...", "1. **[P1] ...", "**<sub><sub>![P1 Badge](...)").
+# A label later in a line is prose (e.g. "verified the prior [P1] fix").
+FINDING_TITLE_RE = re.compile(
+    r"(?m)^[ \t>#*\-]*(?:\d+\.[ \t]*)?[ \t*]*(?:<sub>[ \t]*)*"
+    r"(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$")
+
+
+def findings_from_review_text(body: str, verdict: str, declared: int = 0) -> list[dict]:
+    """The labelled findings in a review's text, one per title. A FINDINGS
+    verdict with no labelled title yields one unlabelled finding, which the
+    budget and the cap treat as serious, and so does each finding the
+    record declares (``declared``) beyond the labelled titles found. Any
+    other verdict has no findings, whatever its reasoning mentions."""
+    if verdict != "FINDINGS":
+        return []
+    titles = list(FINDING_TITLE_RE.finditer(body))
+    findings = []
+    for i, title in enumerate(titles):
+        finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
+        location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
+        if location:
+            finding.update(path=location[1], line=int(location[2]))
+        findings.append(finding)
+    missing = max(declared - len(findings), 0 if findings else 1)
+    findings += [{"body": "unlabelled finding; full review required"}] * missing
+    return findings
+
+
 def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
                         unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
     """Share spending accounting with the local reviewer, never coverage."""
@@ -991,6 +1115,7 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
             findings = []
         cycle = cycles[-1]
         cycle.families.add(family)
+        cycle.findings.extend(run_findings)
         cycle.key = cycle.key or key
         if len(last) > len(cycle.head):
             cycle.head = last
@@ -1036,10 +1161,20 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             when = int(match[1]) / 1e9
         if not isinstance(when, (int, float)) or not 0 < when <= time.time():
             raise ValueError(f'Invalid local review timestamp at {run}')
-        key = diff_key(receipt['base'], receipt['head'])
+        try:
+            key = diff_key(receipt['base'], receipt['head'])
+        except (SystemExit, subprocess.SubprocessError) as exc:
+            raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
+                             f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
+        # No severity from unposted runs: only a posted record, with its
+        # provenance, can exempt a cycle from the cap, so these always spend.
         runs.append((when, receipt['head'], [], key, family))
-    return count_review_cycles(runs, rounds.unknown_history)
+    # Unposted runs change the spending ledger only. The round cmd_review
+    # answers (its head, findings and whether it was answered) stays the one
+    # the posted records describe.
+    recount = count_review_cycles(runs, rounds.unknown_history)
+    return dc_replace(rounds, count=recount.count, cycles=recount.cycles, runs=recount.runs)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
@@ -1284,12 +1419,12 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 # workspace). The material used to ride inline in ONE argv element, which Linux
 # caps at 128 KiB: PR #2470's diff alone was 143 KB, so every agy review of it
 # failed before starting. Files have no such limit.
-#: Default model: Gemini 3.8 Flash (High), available in `agy models` on
-#: 2026-10-13. The former 3.1 Pro pin is no longer served. This restores
-#: availability; it is not evidence of equivalent review quality.
-#: REVIEW_AGY_MODEL overrides it;
-#: "default" leaves the choice to agy.
-AGY_DEFAULT_MODEL = "gemini-3.8-flash-high"
+#: Default model: Gemini 4 Argon (High), in `agy models` on 2026-10-13 (the
+#: former 3.1 Pro pin is no longer served). Chosen over 3.8 Flash on a replay
+#: of three past PRs with known defects: Argon found 5, Flash 1, Pro 1. One run
+#: per diff, so a sample, not a quality guarantee. REVIEW_AGY_MODEL overrides
+#: it; "default" leaves the choice to agy.
+AGY_DEFAULT_MODEL = "gemini-4-argon-high"
 #: A changed file whose name agy would load as instructions (AGENTS.md,
 #: GEMINI.md, CLAUDE.md, anything under .agents/, .agent/ or .gemini/) is
 #: written with this suffix, so the PR under review cannot configure its own
@@ -1495,6 +1630,18 @@ def reviewer_family(reviewer: str) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
+def followup_passes(rec: Record, body: str, originals: list[Record | None]) -> bool:
+    """A clean follow-up, or complete dispositions of its matching findings."""
+    return rec.verdict == "CLEAN" or (
+        rec.verdict == "FINDINGS" and rec.disposed
+        and dispositions_complete(body, rec.findings)
+        and any(r and r.scope == "fix" and not r.disposed
+                and r.verdict == "FINDINGS" and r.findings == rec.findings
+                and all(getattr(r, name) == getattr(rec, name) for name in
+                        ("key", "head", "base", "reviewer", "from_head", "from_key"))
+                for r in originals))
+
+
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
     """Full-review families, with independent coverage of any follow-up delta.
 
@@ -1524,14 +1671,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
-                answered = (rec.verdict == "FINDINGS" and rec.disposed
-                            and dispositions_complete(body, rec.findings)
-                            and any(r and r.scope == "fix" and not r.disposed
-                                    and r.verdict == "FINDINGS" and r.findings == rec.findings
-                                    and all(getattr(r, name) == getattr(rec, name) for name in
-                                            ("key", "head", "base", "reviewer", "from_head", "from_key"))
-                                    for _, r in trusted))
-                if rec.key == key and (rec.verdict == "CLEAN" or answered) and followup_objects_valid(rec):
+                if (rec.key == key and followup_passes(rec, body, [r for _, r in trusted])
+                        and followup_objects_valid(rec)):
                     families.update(record_family(source)
                                     for source in followup_sources(rec, comments, native))
                 continue
@@ -2191,6 +2332,25 @@ def _agy_output_limited(stdout: str) -> str | None:
     return _agy_truncation(stdout)[1]
 
 
+def reviewer_environment(github_config: str, agy_home: str | None = None) -> dict[str, str]:
+    """Keep fetch/publication credentials in the parent, never in the model.
+
+    An empty gh config and disabled Git credential helpers also prevent a
+    stripped token from falling back to the operator's configured login.
+    This is credential hygiene, not isolation from other same-user files.
+    """
+    env = agy_env(agy_home) if agy_home is not None else os.environ.copy()
+    for name in list(env):
+        if (name.startswith(("GH_", "GITHUB_", "UNITARES_GITHUB_", "GIT_CONFIG_"))
+                or name in ("GIT_CONFIG", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND")):
+            env.pop(name)
+    env.update(GH_CONFIG_DIR=github_config, GH_PROMPT_DISABLED="1",
+               GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/usr/bin/false",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="")
+    return env
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                  materials: list[tuple[str, bytes]] | None = None,
                  codex_model: str = "gpt-6.1-sol", codex_effort: str = "medium") -> tuple[str, str]:
@@ -2247,6 +2407,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             workspace.cleanup()
             return failure, "skipped: review material could not be written"
     deadline = time.monotonic() + budget_s
+    github_config = tempfile.TemporaryDirectory(prefix="review-github-")
+    model_env = reviewer_environment(github_config.name, agy_home if isolated else None)
 
     def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
@@ -2261,7 +2423,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                 proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if separate else subprocess.STDOUT,
                                         cwd=agy_cwd,
-                                        env=agy_env(agy_home) if isolated else None,
+                                        env=model_env,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
                 return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
@@ -2304,6 +2466,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                     ["agy", "-p", AGY_RESUME_PROMPTS[stall], "--conversation", cid, *cmd[3:]],
                     fh, deadline - time.monotonic())
     finally:
+        github_config.cleanup()
         if workspace:
             workspace.cleanup()
     resumed = sum(resumes.values())
@@ -2347,7 +2510,9 @@ def render_body(rec: Record, heading: str, text: str) -> str:
 
 def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     require_open(pr)  # a local reviewer may have finished after the merge
-    post_comment(pr, render_body(rec, heading, text))
+    body = render_body(rec, heading, text)
+    post_comment(pr, body)
+    rec.text = body  # only a successfully posted body can bridge API read lag
 
 
 def _resolve_offline(args) -> str:
@@ -2716,10 +2881,11 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (ROUND_CAP_ENABLED and (rounds.count > ROUND_CAP or
-                        (rounds.count == ROUND_CAP and not joining_cycle))
+                if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
-                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                    print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
+                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
@@ -2773,7 +2939,7 @@ def cmd_review(args) -> int:
             joined = True
         if time.monotonic() >= deadline:
             print("[review] still running; no completed review joined. "
-                  "Run scripts/dev/review.sh again before marking ready.")
+                  "The PR remains unreviewed until completion; sensitive paths still require coverage.")
             return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
@@ -2823,8 +2989,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         return UNREVIEWED
     families = passing_families(comments, key, native)
     completed = getattr(args, "completed_followup", None)
-    if (completed and completed.scope == "fix" and completed.verdict == "CLEAN"
-            and completed.key == key and completed.head == head and followup_objects_valid(completed)):
+    if (completed and completed.scope == "fix" and completed.key == key and completed.head == head
+            and followup_passes(completed, completed.text,
+                                [comment_record(c) for c in comments if trusted_review_comment(c)])
+            and followup_objects_valid(completed)):
         # This command just posted this receipt. Recheck its sources against
         # freshly read history, but do not let API read lag restart full reviews.
         families.update(record_family(source) for source in followup_sources(completed, comments, native))
@@ -3067,9 +3235,10 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
                 args.completed_followup = getattr(attempt, "completed_followup", None)
             return result
         print(f"[review] {provider} did not complete; no automatic provider cascade", flush=True)
-    print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
-          "this blocker and next action; retry scripts/dev/review.sh or record "
-          "an independent code review with record <file> --reviewer-name <who> --independent.")
+    print("[review] UNREVIEWED: no reviewer completed. Record that in the PR body. "
+          "Ordinary changes may proceed after validation; sensitive paths still need "
+          "their required review coverage. Add review-requested on the PR for the "
+          "shared host; do not repeatedly retry an unavailable provider.")
     return UNREVIEWED
 
 
@@ -3088,8 +3257,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if followup and (followup.head != reviewed_head_oid or followup.base != reviewed_base_oid):
         print("[review] UNREVIEWED: follow-up endpoints changed before launch")
         return UNREVIEWED
-    diff_base = followup.from_head if followup else reviewed_base_oid
-    diff_path.write_text(diff_text(diff_base, reviewed_head_oid))
+    integration_context = ""
+    if followup:
+        delta, integration_context = followup_diff(reviewed_base_oid, followup.from_head, reviewed_head_oid)
+    else:
+        delta = diff_text(reviewed_base_oid, reviewed_head_oid)
+    diff_path.write_text(delta)
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -3101,10 +3274,13 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
     if followup:
-        context = ("\n\nThis is an independent FOLLOW-UP review. The diff above contains the COMPLETE "
-                   f"cumulative delta from previously fully reviewed commit {followup.from_head} "
-                   f"to {reviewed_head_oid}. Review every changed line, relevant callers and "
-                   "interactions with the original PR. Documentation, tests and attestation corrections "
+        context = ("\n\nThis is an independent FOLLOW-UP review from previously fully reviewed commit "
+                   f"{followup.from_head} to {reviewed_head_oid}. Review every subsequent PR edit, "
+                   "relevant callers and interactions with the original PR and integrated base. "
+                   "Base changes are supplied separately when Git can reconstruct the integration. "
+                   "Do not equate upstream breadth alone with expanded PR scope. Even an empty "
+                   "PR-edit delta requires checking whether base integration invalidates prior reasoning. "
+                   "Documentation, tests and attestation corrections "
                    "are eligible, but are not exempt from review. Verify all prior findings below. "
                    "If this is a bounded correction or clarification that preserves the original "
                    "design and security assumptions, include a standalone SCOPE: FOLLOWUP line "
@@ -3112,7 +3288,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
                    "prior reasoning no longer applies, or you cannot establish the scope, use "
                    "SCOPE: FULL_REQUIRED instead. Do not approve incomplete context.\n\n"
                    "Prior full reviews:\n" + args.followup_reviews + "\n\nOriginal PR diff:\n"
-                   + diff_text(reviewed_base_oid, followup.from_head))
+                   + diff_text(reviewed_base_oid, followup.from_head)
+                   + "\n\nCurrent PR diff:\n" + diff_text(reviewed_base_oid, reviewed_head_oid)
+                   + "\n\n" + integration_context)
         if materials is not None:
             materials.append(("prior-review.txt", context.encode()))
             prompt += "\nRead prior-review.txt for the original review context and mandatory follow-up scope decision.\n"
@@ -3234,7 +3412,7 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
     if rec.status()[0] != "success":
         return 0  # findings recorded for later disposition: nothing passed yet
     args.branch = branch
-    if rec.scope == "fix" and rec.verdict == "CLEAN":
+    if rec.scope == "fix":
         args.completed_followup = rec
     return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
                               passed_family=record_family(rec) if rec.full() else None)
@@ -3355,11 +3533,11 @@ def failed_runs(comments: list[dict], key: str, reviewer: str | None = None) -> 
 def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> list[dict]:
     """Open PRs the sweep may review, oldest-updated first.
 
-    - Drafts are included: review is how their owners reach readiness. Reading
-      a diff never authorizes editing the branch, marking ready, or merging.
+    - Drafts need review-requested; ready PRs remain eligible automatically.
+      Reading never authorizes editing, marking ready, or merging.
     - `no-auto-review` explicitly holds automatic review of unfinished work.
-    - Only the owner's account and dependabot: a stranger's PR gets a human
-      first, not a model running over its code on this machine.
+    - Same-repository PRs from the owner, Dependabot, or an already trusted
+      review App. Forks, unknown authors and unreadable repository IDs wait.
     - Nothing updated in the last `quiet_s`: the pusher's own review may be
       about to start, and the lock only sees reviews already running.
     """
@@ -3373,7 +3551,10 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
             continue
         if SWEEP_HOLD_LABEL in labels:
             continue
-        if login.lower() != owner.lower() and login not in BOT_AUTHORS:
+        if not p.get("sameRepository"):
+            continue
+        if (login.lower() != owner.lower() and login not in BOT_AUTHORS
+                and not p.get("trustedReviewApp")):
             continue
         updated = datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")).timestamp()
         if now - updated < quiet_s:
@@ -3391,6 +3572,7 @@ def cmd_sweep(args) -> int:
     prs = open_prs(repo)
     candidates = 0
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
+        reviewer = None
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
         git("fetch", "--quiet", "--no-tags", "origin",
             f"+refs/heads/{base}:refs/remotes/origin/{base}",
@@ -3408,9 +3590,30 @@ def cmd_sweep(args) -> int:
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             continue  # cannot decide which findings remain open from partial evidence
-        # A sensitive diff with one family's pass is left to its author: the
-        # review check says what is missing, and no review starts on its own.
-        if rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
+        # An explicit host request covers the required review cycle. Continue
+        # its missing family on a later tick, one provider attempt per tick.
+        # Ordinary ready PRs without the label keep the original single pass.
+        requested = any(label["name"] == "review-requested" for label in p.get("labels", []))
+        if requested and rec is not None and rec.status()[0] == "success":
+            changed = changed_paths(f"origin/{base}", head)
+            sensitive = (["(changed paths unreadable)"] if changed is None else
+                         sensitive_paths(changed, base_policy_paths(f"origin/{base}"))
+                         if changed else [])
+            if sensitive:
+                native = read_native(repo, n, key, head, comments)
+                families = passing_families(comments, key, native.records)
+                if len(families) < 2:
+                    waived = waiver_reason_for(comments, key, changed, sensitive, families,
+                                               f"origin/{base}", head)
+                    eligible = ([] if waived else second_family_candidates(
+                        p["headRefName"], families, comments, key))
+                    if eligible:
+                        reviewer = eligible[0]
+                    elif waived:
+                        print(f"[sweep] PR #{n}: second family covered by operator waiver")
+                    else:
+                        print(f"[sweep] PR #{n}: required family unavailable; coverage remains incomplete")
+        if reviewer is None and rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
@@ -3425,7 +3628,8 @@ def cmd_sweep(args) -> int:
             continue  # report findings/retry exhaustion rather than silently skipping
         if native_activity_running(comments) or read_native(repo, n, key, head, comments).running or review_lock(f"pr-{n}").holder_alive():
             continue
-        print(f"[sweep] PR #{n} ({p['headRefName']}) has no review for {key[:12]}")
+        reason = f"needs required family via {reviewer}" if reviewer else "needs review"
+        print(f"[sweep] PR #{n} ({p['headRefName']}) {reason} for {key[:12]}")
         candidates += 1
         if args.dry_run:
             continue
@@ -3434,12 +3638,14 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        rc = subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                             "--pr", str(n), "review"], cwd=wt).returncode
+        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
+        if reviewer:
+            command += ["--reviewer", reviewer, "--fresh"]
+        rc = subprocess.run(command, cwd=wt).returncode
         if rc == NEEDS_SECOND_FAMILY:
-            # The review passed; the second family is the author's call. Not a
-            # job failure (launchd would flag it for the operator).
-            print(f"[sweep] PR #{n}: reviewed; a second model family is left to its author")
+            # Missing coverage is visible on the PR, not a runner crash.
+            next_step = "requested from shared host on a later tick" if requested else "needs the author's request"
+            print(f"[sweep] PR #{n}: first family passed; second family {next_step}")
             return 0
         return rc
     print(f"[sweep] {candidates} review candidate(s)" if candidates else
@@ -3452,9 +3658,13 @@ def cmd_key(args) -> int:
     return 0
 
 
-def review_check(rec: Record | None) -> tuple[str, str]:
+def review_check(rec: Record | None, *, requested: bool = False, held: bool = False) -> tuple[str, str]:
     if rec is None:
-        return "neutral", "UNREVIEWED: author should run scripts/dev/review.sh (drafts included)"
+        if held:
+            return "neutral", "UNREVIEWED: automatic review held by no-auto-review"
+        return "neutral", ("UNREVIEWED: requested from shared host; no completed review"
+                           if requested else
+                           "UNREVIEWED: add review-requested for shared-host review, or run review.sh locally")
     if rec.verdict == "FAILED":
         return "neutral", rec.status()[1]
     if rec.verdict == "FINDINGS" and not rec.disposed:
@@ -3497,7 +3707,13 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not ROUND_CAP_ENABLED:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
-    return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
+    if rounds.spent != rounds.count:
+        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
+                f"backstop {ROUND_BACKSTOP})")
+    serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
+    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
+                                     or (rounds.spent >= ROUND_CAP and not serious_last))
+    return note + (" (cap reached)" if reached else "")
 
 
 def cmd_ci(args) -> int:
@@ -3529,7 +3745,9 @@ def cmd_ci(args) -> int:
         url = f"https://github.com/{repo}/blob/{base_ref}/docs/operations/github-workflow-conventions.md#review-workflow"
     else:
         url = rec.url
-    conclusion, desc = review_check(rec)
+    labels = {label["name"] for label in info.get("labels", [])}
+    conclusion, desc = review_check(rec, requested="review-requested" in labels,
+                                  held=SWEEP_HOLD_LABEL in labels)
     changed = changed_paths(f"origin/{base_ref}", head)
     # A diff whose paths cannot be read is treated as sensitive: this is the
     # gate, and "could not tell" must not pass with a single family.
@@ -3639,8 +3857,10 @@ def main(argv: list[str] | None = None) -> int:
         # findings needing author action (exit 1), which is what the uncaught
         # FileNotFoundError traceback used to report.
         print(f"[review] UNREVIEWED: {exc}, so review evidence can be neither "
-              "read nor posted from here. Run review.sh where gh is available, "
-              "request native review (`@codex review` on the PR), or run an "
+              "read nor posted from here. Add the review-requested label through "
+              "GitHub or your connector for shared-host review. Ordinary changes "
+              "may proceed after validation with an explicit unreviewed note; "
+              "sensitive paths retain their required coverage. You can also run an "
               "independent review and render its record with `review.sh record "
               "FILE --reviewer-name NAME --independent --emit`, then post the "
               "printed body verbatim through your GitHub connector "

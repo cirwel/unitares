@@ -277,6 +277,91 @@ def _post_gap_repause_text() -> str:
     )
 
 
+def _pause_expires_at(paused_raw: Any) -> Optional[str]:
+    """When the current pause ages out under PAUSE_AUTO_EXPIRE_SECONDS, or None."""
+    paused_dt = _parse_utc(paused_raw) if isinstance(paused_raw, str) and paused_raw else None
+    if paused_dt is None:
+        return None
+    try:
+        from config.governance_config import GovernanceConfig
+
+        return (
+            paused_dt
+            + timedelta(seconds=int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS))
+        ).isoformat()
+    except (ValueError, TypeError, AttributeError, ImportError, OverflowError):
+        # OverflowError: an operator can effectively disable expiry with a
+        # huge PAUSE_AUTO_EXPIRE_SECONDS; callers must still render.
+        return None
+
+
+def describe_write_gate(meta: Any) -> dict:
+    """Whether this agent's governed writes would be refused right now.
+
+    Read from the predicates the write gates apply:
+    check_agent_can_operate (support/agent_auth.py) for new shared-memory
+    entries, and the check-in phases in updates/phases.py. Both refuse while
+    ``status == "paused"`` and the pause is not past
+    PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``). Both also refuse an
+    archived identity. Its way back is a proof-carrying
+    start_session(resume=true), which unarchives the same UUID
+    (require_registered_agent routes there); self_recovery rejects archived
+    identities. The check-in phase refuses a deleted identity too, which
+    check_agent_can_operate does not check. Any other status, and an
+    identity the server holds no record for yet, passes both gates.
+
+    Read-only: unlike the gates it never expires a pause, so a stale pause is
+    reported as paused with writes not held, because the next gated write
+    lifts it.
+    """
+    status = getattr(meta, "status", None) if meta is not None else None
+    if status == "paused":
+        paused_at = getattr(meta, "paused_at", None)
+        if _pause_is_stale(paused_at):
+            return {
+                "paused": True,
+                "writes_held": False,
+                "note": (
+                    "The pause is past its expiry: the next check-in or new "
+                    "shared-memory entry lifts it."
+                ),
+            }
+        gate = {
+            "paused": True,
+            "writes_held": True,
+            "held": (
+                "Check-ins and new shared-memory entries are refused, not "
+                "queued. Dialectic moves are still accepted."
+            ),
+        }
+        expires_at = _pause_expires_at(paused_at)
+        if expires_at:
+            gate["expires_at"] = expires_at
+        return gate
+    if status == "archived":
+        return {
+            "paused": False,
+            "writes_held": True,
+            "held": (
+                "Check-ins and new shared-memory entries are refused while "
+                "archived. The same live process reclaims this identity with "
+                "start_session(resume=true) and its client_session_id, which "
+                "unarchives it; otherwise start_session(force_new=true) "
+                "starts a new one."
+            ),
+        }
+    if status == "deleted":
+        return {
+            "paused": False,
+            "writes_held": True,
+            "held": (
+                "Check-ins are refused: this identity is deleted and cannot "
+                "be recovered. start_session(force_new=true) starts a new one."
+            ),
+        }
+    return {"paused": False, "writes_held": False}
+
+
 def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict:
     """The `recovery` block for a write refused because the agent is paused.
 
@@ -307,19 +392,7 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
             ):
                 reason = event.get("reason")
                 break
-    expires_at = None
-    if paused_dt is not None:
-        try:
-            from config.governance_config import GovernanceConfig
-
-            expires_at = (
-                paused_dt
-                + timedelta(seconds=int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS))
-            ).isoformat()
-        except (ValueError, TypeError, AttributeError, ImportError, OverflowError):
-            # OverflowError: an operator can effectively disable expiry with a
-            # huge PAUSE_AUTO_EXPIRE_SECONDS; the refusal must still render.
-            expires_at = None
+    expires_at = _pause_expires_at(paused_raw)
     if expires_at:
         re_evaluation = (
             f"After {expires_at} the next check-in or new shared-memory entry is let "

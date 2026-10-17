@@ -61,6 +61,7 @@ def _build_hard_stop_provenance(
     cirs_result: Mapping[str, Any] | None,
     basin: str,
     effective_coherence_threshold: float,
+    s_setpoint: float = 0.0,
 ) -> dict[str, Any]:
     """Record every satisfied hard-stop condition before priority selection.
 
@@ -96,6 +97,7 @@ def _build_hard_stop_provenance(
             V=V,
             coherence=coherence,
             risk_score=0.0,
+            s_setpoint=s_setpoint,
         )
 
     hard_block = response_tier == "hard_block"
@@ -358,6 +360,10 @@ def _build_hard_stop_provenance(
                 "void_active": void_observed,
                 "verdict": unitares_verdict,
                 "basin": basin,
+                # The S setpoint σ the basin's HIGH bound was detrended by
+                # (classify_basin). Absent on records written before it was
+                # recorded, which were classified with σ = 0.
+                "s_setpoint": s_setpoint,
             },
             "thresholds": {
                 "coherence_critical": coherence_threshold,
@@ -421,6 +427,8 @@ def make_decision(
     response_tier: Optional[str] = None,
     oscillation_state: Optional['OscillationState'] = None,
     cirs_result: Mapping[str, Any] | None = None,
+    s_setpoint: float = 0.0,
+    latest_risk_fast_trip: bool = True,
 ) -> Dict:
     """
     Make autonomous governance decision using basin membership, UNITARES
@@ -442,6 +450,14 @@ def make_decision(
         response_tier: CIRS tier — "hard_block", "soft_dampen", or "proceed".
         oscillation_state: CIRS oscillation state (for hard_block details).
         cirs_result: CIRS v2 result carrying exact hard-stop thresholds.
+        s_setpoint: The Stage A S setpoint σ the ODE rests at. The basin's
+            HIGH bound reads ``S - s_setpoint``, the detrend Φ already applies,
+            so the attractor move leaves the basin invariant (contract row 50).
+            ``state.S`` itself is passed unchanged (row 45's guard).
+        latest_risk_fast_trip: Whether the F2 fast-trip may read the latest
+            Φ-derived risk. The caller passes False when the behavioral
+            assessment owns the verdict, so telemetry-only Φ cannot move a
+            warmed agent's action (contract row 52). Φ cold start keeps it.
 
     Returns:
         Decision dict with action, reason, guidance, critical, basin,
@@ -470,6 +486,7 @@ def make_decision(
     basin = classify_basin(
         E=state.E, I=state.I, S=state.S, V=state.V,
         coherence=state.coherence, risk_score=risk_score,
+        s_setpoint=s_setpoint,
     )
     effective_coherence_threshold = get_effective_threshold(
         "coherence_critical_threshold",
@@ -484,6 +501,7 @@ def make_decision(
         cirs_result=cirs_result,
         basin=basin,
         effective_coherence_threshold=effective_coherence_threshold,
+        s_setpoint=s_setpoint,
     )
 
     # --- Priority 1: CIRS hard_block override ---
@@ -705,7 +723,11 @@ def make_decision(
     # The latest *raw* risk observation can spike past the pause threshold while
     # the adjusted/smoothed value still clears — a real spike then silently
     # approves. Surface at least a guide so the latent spike is not invisible.
-    decision = _maybe_latest_risk_fast_trip(state, decision, risk_score)
+    # Every risk_history entry is Φ-derived, so the trip is skipped when the
+    # behavioral assessment owns the verdict (Φ is telemetry there; contract
+    # row 52). Φ cold start still owns its verdict and keeps the trip.
+    if latest_risk_fast_trip:
+        decision = _maybe_latest_risk_fast_trip(state, decision, risk_score)
     return _with_hard_stop_provenance(decision, hard_stop_provenance)
 
 

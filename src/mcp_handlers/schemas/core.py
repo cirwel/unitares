@@ -890,10 +890,10 @@ class DelegateInferenceParams(AgentIdentityMixin):
         max_length=100_000,
         description="Prompt to send to the operator-authorized strong model.",
     )
-    host_id: Literal[
-        "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"
-    ] = Field(
+    host_id: str = Field(
         "claude:host-adapter",
+        min_length=1,
+        max_length=128,
         description=(
             "Long-running host adapter to invoke. All three subscription-CLI "
             "adapters are reachable here; each is opt-in and unavailable "
@@ -934,18 +934,18 @@ class ConsultParams(AgentIdentityMixin):
 
     model_config = ConfigDict(extra="forbid")
 
-    host_id: Optional[Literal[
-        "ollama:local", "hf:router", "claude:host-adapter",
-        "codex:host-adapter", "antigravity:host-adapter",
-    ]] = Field(
+    host_id: Optional[str] = Field(
         None,
+        min_length=1,
+        max_length=128,
         description=(
-            "Pin an existing advisory host; omitted means automatic routing. "
-            "Use standard effort for Ollama/HF, thorough for CLI hosts. External "
+            "Pin an existing advisory host (an id from list_inference_hosts that "
+            "accepts consult); omitted means automatic routing. "
+            "Omitted effort follows the host: standard for Ollama/HF, thorough for CLI. External "
             "hosts require cloud_allowed; allow_degraded must be false. No peer "
             "or local fallback occurs when a host is pinned."
         ),
-        json_schema_extra={"brief": "Pin a host; standard for Ollama/HF, thorough for CLI. External needs cloud_allowed; no fallback."},
+        json_schema_extra={"brief": "Pin a host; omitted effort follows it. External needs cloud_allowed; no fallback."},
     )
 
     brief: str = Field(
@@ -962,11 +962,20 @@ class ConsultParams(AgentIdentityMixin):
         ),
     )
     effort: Literal["standard", "thorough"] = Field(
-        "standard",
-        description=(
-            "standard uses the lower-overhead inference lane; thorough requests "
-            "the operator-authorized strong-model lane. Neither value is a latency SLA."
+        # host_id is declared first, so it is validated before this factory.
+        # Keep the schema free of an unconditional default: clients must not
+        # insert standard before we can infer a selected CLI host's lane.
+        default_factory=lambda data: (
+            "thorough" if data.get("host_id") in (
+                "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter",
+            ) else "standard"
         ),
+        description=(
+            "Omit to infer from host_id, or use standard when no host is selected. "
+            "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
+            "An explicit value must match the selected host. Neither is a latency SLA."
+        ),
+        json_schema_extra={"brief": "Omit: follows host_id, otherwise standard. Explicit effort must match the host."},
     )
     privacy: Literal["local", "cloud_allowed"] = Field(
         "local",
@@ -1002,10 +1011,11 @@ class ConsultParams(AgentIdentityMixin):
 class ListInferenceHostsParams(AgentIdentityMixin):
     """Parameters for list_inference_hosts"""
     include_unconfigured: bool = Field(
-        True,
+        False,
         description=(
-            "Include known but unconfigured adapter placeholders such as "
-            "codex:host-adapter, claude:host-adapter and antigravity:host-adapter."
+            "Include all registered hosts, including unconfigured adapters. "
+            "By default, list configured hosts only; inspect available and "
+            "cooldown before selecting one."
         ),
     )
     provider_kind: Optional[str] = Field(

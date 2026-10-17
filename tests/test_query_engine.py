@@ -22,7 +22,7 @@ from src.gateway.query_engine import (
 class _FakeClient:
     """Minimal GovernanceMCPClient stand-in for classify_intent.
 
-    Either returns a canned call_model result or raises, to exercise the
+    Either returns a canned consult result or raises, to exercise the
     LLM-success and LLM-failure branches.
     """
 
@@ -85,7 +85,7 @@ class TestKeywordClassify:
 class TestClassifyIntent:
     @pytest.mark.asyncio
     async def test_uses_valid_llm_intent(self):
-        client = _FakeClient(result={"response": "note"})
+        client = _FakeClient(result={"advice": "note"})
         # question keywords would say 'status', but a valid LLM answer wins.
         assert await classify_intent("what is my status", client) == "note"
 
@@ -129,7 +129,7 @@ class TestRouteQuery:
 
     @pytest.mark.asyncio
     async def test_note_carries_question_as_content(self):
-        client = _FakeClient(result={"response": "note"})
+        client = _FakeClient(result={"advice": "note"})
         out = await route_query("remember to rotate keys", client)
         assert out == {"tool": "note", "args": {"content": "remember to rotate keys"}}
 
@@ -148,28 +148,57 @@ class TestRouteQuery:
 
 
 class TestClassifierSessionBinding:
-    """call_model needs a bound caller, so the session id must reach it."""
+    """consult needs a bound caller, so the session id must reach it."""
 
     @pytest.mark.asyncio
     async def test_classify_forwards_client_session_id(self):
-        client = _FakeClient(result={"response": "note"})
+        client = _FakeClient(result={"advice": "note"})
         assert await classify_intent("keep this observation", client, client_session_id="agent-abc") == "note"
         name, args = client.calls[0]
-        assert name == "call_model"
+        assert name == "consult"
         assert args["client_session_id"] == "agent-abc"
+        # Local standard lane, and no call_model-only arguments (consult forbids extras).
+        assert args["effort"] == "standard" and args["privacy"] == "local"
+        assert "brief" in args and "prompt" not in args and "max_tokens" not in args
 
     @pytest.mark.asyncio
     async def test_classify_omits_client_session_id_when_absent(self):
-        client = _FakeClient(result={"response": "note"})
+        client = _FakeClient(result={"advice": "note"})
         await classify_intent("keep this observation", client)
         assert "client_session_id" not in client.calls[0][1]
 
     @pytest.mark.asyncio
     async def test_route_query_forwards_client_session_id(self):
-        client = _FakeClient(result={"response": "note"})
+        client = _FakeClient(result={"advice": "note"})
         route = await route_query("keep this observation", client, client_session_id="agent-abc")
         assert route["tool"] == "note"
         assert client.calls[0][1]["client_session_id"] == "agent-abc"
+
+
+class TestNormalizeIntent:
+    """consult takes no max_tokens, so a chatty one-word reply must still parse."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("advice, expected", [
+        ("note", "note"),
+        ("Search.", "search"),
+        ("**status**", "status"),
+        ("help - the user asks about tools", "help"),
+        ("  Checkin\n", "checkin"),
+    ])
+    async def test_reply_reduces_to_intent(self, advice, expected):
+        client = _FakeClient(result={"advice": advice})
+        assert await classify_intent("zxqw plover", client) == expected
+
+    @pytest.mark.asyncio
+    async def test_unknown_reply_falls_back_to_keywords(self):
+        client = _FakeClient(result={"advice": "I think the user wants their state"})
+        assert await classify_intent("show me the current verdict", client) == "status"
+
+    @pytest.mark.asyncio
+    async def test_empty_reply_falls_back_to_keywords(self):
+        client = _FakeClient(result={"advice": ""})
+        assert await classify_intent("please save this as a note", client) == "note"
 
 
 class TestExplainRoute:

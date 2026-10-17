@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.36.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.46.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -517,3 +517,249 @@ for the caller, excluded from audit storage. HF HTTP 401/402/429 failures now
 feed the existing bounded auth/quota cooldown; discovery reports the observed
 unavailability, without a model or billing probe. These output/description fixes
 change no raw-tool input schemas.
+
+## 1.37.0 (2026-10-14)
+
+Infer omitted consult effort from a selected host and explain aggregate token usage in full diagnostics.
+
+For `consult`, omitted `effort` becomes thorough for an explicitly selected CLI
+host, otherwise standard. An explicit value is never overwritten; incompatible
+host/effort pairs still fail before dispatch. Privacy, pinning, failover and
+advisory authority are unchanged. The compact request receipt and audit show
+the resolved effort.
+
+The `effort` input retains its string enum and optionality but no longer
+advertises an unconditional standard default. Descriptions state the
+conditional default. Only the `consult` input digest and aggregate surface hash
+move; refresh cached schemas and omit effort to use inference. Existing calls
+with a matching explicit effort, and automatic calls with no host, keep their
+behavior. Null remains outside the advertised effort schema.
+
+Full consultation diagnostics add `tokens_used_note` when a token aggregate is
+present. It explains provider-specific counting and zero-as-unreported behavior.
+Counts, pricing and EISV accounting are unchanged. Compact responses and the
+durable audit do not include this explanatory text. Full failure diagnostics
+also retain the backend message, bounded to 500 characters and excluded from
+compact responses and audit storage; the facade summary and failure semantics
+remain unchanged.
+
+## 1.38.0 (2026-10-14)
+
+KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+
+Output-only compatible addition to knowledge search, agent-scoped get and
+details. A record with recognizable dated `Resolution notes (...)` blocks in its
+full details carries `resolution_notes={source: "details_text", count,
+first_offset, latest_offset}`. Offsets count Unicode characters, matching the
+existing details pagination, and refer to the full stored text before any
+preview or imported-content truncation. Records without such blocks are unchanged.
+The metadata survives canonical lean search, the friendly search digests and
+`more_results`; a response-level `resolution_notes_hint` explains the read route.
+The existing 3,000-byte digest and 2,000-byte extra-row budgets still apply.
+
+Clients may call `knowledge(action="details", discovery_id=..., offset=...)`
+at `latest_offset` to read the last block or `first_offset` to inspect the history.
+The details read returns fresh locations: replacing text can invalidate an earlier
+offset. The locations are parsed from text, not authenticated update receipts;
+the last note may be administrative, and no claim of truth, current policy or
+note-author identity is implied. No excerpts are substituted for original claims.
+Stored content, identity, authority, ranking, input schemas and schema digests
+are unchanged. Existing clients may ignore the added fields; no schema refresh
+is needed to keep using existing inputs.
+
+## 1.39.0 (2026-10-14)
+
+The default/explicit `lean` response from `search_shared_memory` omits the optional
+`response_options` tier ladder and repeated write recipes in `next_action`.
+`discovery_retrieval_options` keeps `current_tier`, `open_one`, and, when present,
+`requested_tier` and `details_omitted_by`. Serialization diagnostics and all-inline
+coaching remain in `compact`; `full` retains the canonical response. Confidence,
+degradation and imported-memory caveats, lifecycle markers, correction pointers,
+and attribution keep their existing semantics and budgets.
+
+Under byte pressure, the full-mode hint may shrink to its executable call while
+preserving the expansion route. This also reserves room for the existing
+attribution-omitted marker after lean coaching is removed. Result summaries,
+ranking, storage and write behavior are unchanged. The digest and extra-row
+budgets remain 3 KB and 2 KB.
+
+This is output shaping within fields already optional under response budgeting;
+input schemas and schema digests are unchanged. Clients must tolerate absent
+optional coaching and should use the structured result count and retrieval tier.
+Request `compact` for serialization diagnostics or `full` for canonical fields.
+
+## 1.40.0 (2026-10-14)
+
+`list_inference_hosts` now defaults `include_unconfigured` to `false` in the
+advertised schema, handler, registry and both Python SDK clients. Omitted
+arguments list configured hosts only, including when `provider_kind` filters
+the result. Configured hosts remain
+listed during outages or quota/auth cooldowns; callers must inspect `available`
+and `cooldown` before selecting a host.
+
+Explicit `include_unconfigured=true` retains the complete registered inventory.
+`describe_inference_host` still accepts any registered host ID, and the static
+host enums remain unchanged. No adapter or invocation capability is removed.
+The discovery description and intent map now explain these distinctions.
+
+The `list_inference_hosts` input-schema digest and aggregate surface digest
+change; output envelope shapes and other input-schema digests are unchanged.
+Clients relying on omission to return every registered host must send
+`include_unconfigured=true`. Refresh cached schemas so clients do not inject
+the previous `true` default. Older Python SDK clients serialize `true` on
+omission; upgrade or explicitly pass `include_unconfigured=False` to request
+configured hosts only. Explicit `false` and `true` retain their existing behavior.
+
+## 1.41.0 (2026-10-15)
+
+`consult` and `delegate_inference` take `host_id` as a bounded string (1 to 128
+characters) instead of an enum. The handler checks it at runtime: `consult`
+accepts the hosts it can route (`ollama:local`, `hf:router` and the three
+host adapters), and `delegate_inference` keeps its registry check on
+`accepts_host_id_from`. Every id accepted before is still accepted; an unknown
+id is refused with the valid ids.
+
+`consult`'s thorough lane takes its host order from the `consult.thorough` job
+in the operator's inference hosts file, or claude, codex, antigravity when no
+job is set, which is the order the per-family peer table gave. Results:
+
+- `family` (compact and full) names the served host's model family, and the
+  audit record's route carries it.
+- `skipped` lists the hosts passed over before the one that served, in order,
+  each with a closed reason code (`disabled`, `unconfigured`, `cooldown`,
+  `excluded_family`) and a sentence. It appears only when a host was skipped,
+  and never on `privacy="local"`, which contacts no thorough host.
+- New refusals: `INFERENCE_CONFIG_INVALID` (the hosts file does not load; the
+  standard lane is unaffected), `CONSULT_NO_ELIGIBLE_HOST` (every host in the
+  job was skipped; with `allow_degraded=true` the call answers locally
+  instead, contacting no thorough host), `CONSULT_HOST_NOT_IN_JOB` and
+  `CONSULT_HOST_DISABLED` for a pinned host. All are recorded.
+
+`list_inference_hosts` and `describe_inference_host` report each host's
+`family` (added in the step 1 change, recorded here).
+
+Compatibility: additive for callers. A client that cached the old enum will
+still send valid ids. Schema digests move for `consult` and
+`delegate_inference` (the `host_id` property lost its enum); no other digest
+moves. Client action: none required; read `skipped` and `family` where useful.
+
+## 1.42.0 (2026-10-16)
+
+call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: `describe_tool(tool_name='call_model')` gains a `deprecation`
+block (`deprecated_since` 2026-10-16, `superseded_by` consult, `migration`);
+`list_tools` keeps listing `call_model`, now with `deprecated: true` and
+`superseded_by: consult`, because a deprecated name the deployment still exposes
+stays in the negotiation index. The descriptions of `call_model`, `consult`,
+`delegate_inference`, `list_inference_hosts`, `describe_inference_host` and
+`dialectic`, and the recovery hints of `delegate_inference`'s missing-extension
+refusal and the dialectic LLM failure, now point at `consult`. Each server call
+of the old name logs `deprecated_tool_called`.
+
+Compatibility: every existing `call_model` call works unchanged, and
+`accepts_host_id_from` still lists it for the HTTP hosts. No input schema
+changes, so no input digest or the surface digest moves. Removal is not
+scheduled: it waits on the gateway intent classifier and the knowledge-graph
+stale-entry check moving off the handler, and on `consult` taking model and
+sampling controls or a further operator decision. Client action: use
+`consult(brief=..., effort='standard')`; a client that needs `model`,
+`temperature` or `max_tokens` on an HTTP host keeps calling `call_model` and
+should say so with `leave_note`. Model selection on a CLI host stays on
+`delegate_inference`.
+
+## 1.43.0 (2026-10-16)
+
+call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: the `migration` text of `describe_tool(tool_name='call_model')`
+and the descriptions of `call_model` and `consult` now state the removal
+window and that the raw controls retire with the tool. The decision, delegated
+by the operator, keeps `consult` bounded as the advisory facade designs it
+(`docs/proposals/active/consult-advisory-facade-v1.md`, amended 2026-10-16).
+
+Compatibility: every `call_model` call still works until the removal. No input
+schema changes, so no input digest or the surface digest moves. The removal
+itself will be a breaking change taken under this deprecation window, no
+earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
+action: move to `consult(brief=..., effort='standard')` before then. A client
+that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
+say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+
+Affected outputs: a `knowledge(action=search)` / `search_shared_memory` call
+with no `query` may now return fewer rows. When it left imported memory out it
+adds `imported_omitted` (a count of rows skipped while filling the page) and
+`imported_omitted_hint`, both lifted into the lean digest's `state_summary`.
+Check-in `relevant_discoveries` and `_mirror_kg_results` no longer include
+unpromoted imported memory. Promoted governed claims and channel messages are
+unaffected; query search is unchanged.
+
+Compatibility: no parameter name, type, default or requiredness changes. A
+client that listed imported rows by sweeping open work sees them omitted and
+gets them back with `authority_mode="all"` or an imported-memory tag filter.
+Schema digests move for `knowledge`, `search_knowledge_graph` and
+`search_shared_memory` (the `authority_mode` description); no other digest
+moves. Client action: none required; read `imported_omitted` where useful.
+
+## 1.45.0 (2026-10-17)
+
+Output and description changes from the 2026-10-16 agent-experience dogfood
+read (`docs/evaluations/ax-dogfood/read-2026-10-16.md`). Nothing is added,
+removed, retyped or renamed.
+
+- **`search_shared_memory` output.** The `lean` and `compact` tiers now list
+  the results after the three digests under `more_results` when `limit` is
+  unset, with the same rows, 17-row cap and 2,000-byte budget as before. A
+  `limit` of 3 or less omits them; an explicit `limit` above 3 behaves as in
+  1.33.0. When the shown digests carry more than one `relevance_basis`,
+  `state_summary.relevance_note` says the scores are not comparable and that
+  list order is the ranking.
+- **Response hints.** A server-written hint that named
+  `knowledge(action=..., ...)` (`next_action`,
+  `discovery_retrieval_options.open_one`, `raw_governance_hint`,
+  `resolution_notes_hint` and the other lifted search notes) now names
+  `use_tool(tool_name='knowledge', arguments={...})`. The router is not on the
+  progressive surface, and `use_tool` is reachable on every surface, as
+  `update_finding` hints have been since they moved to `use_tool`. The
+  `next_action` of a finding alias called with an explicit other action
+  reports what ran as "the knowledge router's '<action>' action" rather than
+  as a call, so the rewrite cannot present a route the caller never took.
+- **Descriptions.** `store_finding`'s field descriptions drop router wording
+  ("for action=store or promote", "action=search", "S22 H5 provenance") and
+  `discovery_type` lists every value in its brief. The knowledge router's
+  `response_to` description lists the valid `response_type` values.
+  `search_shared_memory`'s `include_details` brief names the `use_tool`
+  route.
+
+**Compatibility.** A client that relied on a no-`limit` lean search returning
+exactly three digests should pass `limit=3`. A client that parses hint text
+for `knowledge(` should read the `use_tool` form; the call it names is the same
+read.
+
+**Schema digests.** `search_shared_memory`, `store_finding` and `knowledge`
+move (descriptions only); `surface_sha256` moves with them.
+
+**Client action.** None required beyond the compatibility notes above.
+
+## 1.46.0 (2026-10-17)
+
+Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
+
+Affected outputs: the `authority` block on knowledge search, get and details
+rows (`tier`, `trust`, `ranking_multiplier`), the `imported_memory` marker,
+and everything keyed on that tier: the close-contest down-rank, queryless
+listing omission (1.44.0), check-in suggestion filtering, and the lane-filter
+test. A row whose only memory-related tag is one of those four words now
+classifies as `native_finding`. Rows tagged `source-<provider>-memory` are
+unchanged. In the live graph on 2026-10-17, four rows carried a bare word:
+three native writes that were misclassified, and one import that also carried
+`source-claude-memory`.
+
+Compatibility: no parameter or schema change, so no digest moves. A writer
+that marked imports with a bare word alone must use `source-<provider>-memory`.
+None is known; the repository's own writers and the memory sync use the
+source pattern. Client action: none.

@@ -900,7 +900,7 @@ def test_app_findings_dispositions_failures_and_round_budget_share_admission():
     k = "a" * 64
     finding = _app_comment(full_record(k, "FINDINGS", 1, False, "codex"),
                            text="[P2] Check the input", url="finding")
-    clean = _app_comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.8-flash-high"))
+    clean = _app_comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-4-argon-high"))
     assert rg.latest_matching([finding, clean], k).status()[0] == "pending"
     disposition = _app_comment(full_record(k, "FINDINGS", 1, True, "codex"),
                               text="1. fixed in abc", url="answer")
@@ -1066,6 +1066,35 @@ def test_a_reviewer_that_cannot_start_is_a_failure_not_an_exception(tmp_path, mo
     assert note.startswith("could not start codex")
 
 
+@pytest.mark.parametrize("reviewer", ["codex", "claude", "antigravity"])
+def test_models_do_not_inherit_parent_github_credentials(tmp_path, monkeypatch, reviewer):
+    credentials = {"GH_TOKEN": "test-app-token", "GITHUB_TOKEN": "test-other-token",
+                   "GH_ENTERPRISE_TOKEN": "test-enterprise-token", "UNITARES_GITHUB_CHILD": "1",
+                   "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_1": "http.extraheader",
+                   "GIT_CONFIG_VALUE_1": "Authorization: test-header", "GIT_ASKPASS": "/old/helper"}
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
+    configs = []
+
+    def launch(cmd, **kwargs):
+        env = kwargs["env"]
+        assert env is not None
+        assert all(name not in env for name in credentials if name not in ("GIT_ASKPASS", "GIT_CONFIG_COUNT"))
+        assert env["GIT_ASKPASS"] == "/usr/bin/false"
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper" and env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+        config = Path(env["GH_CONFIG_DIR"])
+        assert config.is_dir() and list(config.iterdir()) == []
+        configs.append(config)
+        assert os.environ["GH_TOKEN"] == "test-app-token"  # publication parent unchanged
+        return SimpleNamespace(pid=0, wait=lambda timeout: 0)
+
+    monkeypatch.setattr(rg.subprocess, "Popen", launch)
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    assert configs and all(not path.exists() for path in configs)
+
+
 def test_a_failed_rerun_does_not_hide_open_findings():
     # Codex round 11 on #2318: FAILED after FINDINGS made dispose unreachable.
     k = "k" * 64
@@ -1090,14 +1119,15 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
 
 def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
     return {"labels": [{"name": "review-requested"}] if draft else [],
-            "number": n, "isDraft": draft, "author": {"login": login},
+            "number": n, "isDraft": draft, "author": {"login": login}, "sameRepository": True,
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
 def _rest_pr(n=7, state="open", **extra):
     return {"number": n, "state": state, "draft": False, "user": {"login": "cirwel"},
             "updated_at": "2026-10-03T00:00:00Z", "labels": [{"name": "x", "id": 1}],
-            "head": {"sha": "abc", "ref": "claude/topic"}, "base": {"ref": "master"}, **extra}
+            "head": {"sha": "abc", "ref": "claude/topic", "repo": {"id": 10}},
+            "base": {"ref": "master", "repo": {"id": 10}}, **extra}
 
 
 @pytest.mark.parametrize("state,extra,expected", [
@@ -1114,7 +1144,7 @@ def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, 
     assert info == {"number": 7, "headRefOid": "abc", "headRefName": "claude/topic",
                     "baseRefName": "master", "state": expected, "isDraft": False,
                     "author": {"login": "cirwel"}, "updatedAt": "2026-10-03T00:00:00Z",
-                    "labels": [{"name": "x"}]}
+                    "labels": [{"name": "x"}], "trustedReviewApp": False, "sameRepository": True}
 
 
 def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
@@ -2571,7 +2601,7 @@ def test_instruction_bearing_names_are_defused(repo):
 
 def test_agy_model_defaults_to_available_gemini_and_is_overridable(monkeypatch):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
-    assert rg.agy_model_args() == ["--model", "gemini-3.8-flash-high"]
+    assert rg.agy_model_args() == ["--model", "gemini-4-argon-high"]
     assert rg.provider_family("antigravity") == "google"
     monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
     assert rg.agy_model_args() == ["--model", "claude-opus-5-5-high"]
@@ -3899,6 +3929,80 @@ def test_draft_sweep_requires_explicit_request():
     assert [p['number'] for p in rg.sweep_candidates(prs,'cirwel',now,0)] == [2,3]
 
 
+@pytest.mark.parametrize("login,actor_id,actor_type,eligible", [
+    ("unitares-agents[bot]", 342195540, "Bot", True),
+    ("renamed-app[bot]", 342195540, "Bot", True),
+    ("unitares-agents[bot]", 1, "Bot", False),
+    ("unitares-agents[bot]", 342195540, "User", False),
+    ("unitares-agents[bot]", "342195540", "Bot", False),
+    ("unitares-agents[bot]", None, "Bot", False),
+])
+def test_sweep_app_eligibility_uses_github_metadata_not_name(login, actor_id, actor_type, eligible):
+    raw = _rest_pr(user={"login": login, "id": actor_id, "type": actor_type},
+                   author_association="COLLABORATOR")
+    pr = rg.pr_fields(raw)
+    assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+
+
+@pytest.mark.parametrize("head_repo", [{"id": 99}, None, {}, {"id": True}])
+def test_sweep_refuses_forks_and_unknown_repository_identity(head_repo):
+    raw = _rest_pr(head={"sha": "abc", "ref": "topic", "repo": head_repo})
+    assert rg.sweep_candidates([rg.pr_fields(raw)], "cirwel", rg.time.time(), 0) == []
+
+
+@pytest.mark.parametrize("verdict,requested,providers,waiver,expected", [
+    ("CLEAN", True, ["antigravity"], None, 1),
+    ("CLEAN", False, ["antigravity"], None, 0),
+    ("FINDINGS", True, ["antigravity"], None, 0),
+    ("CLEAN", True, [], None, 0),
+    ("CLEAN", True, ["antigravity"], "valid operator waiver", 0),
+])
+def test_requested_sweep_continues_required_family_without_bypassing_findings(
+        monkeypatch, tmp_path, verdict, requested, providers, waiver, expected):
+    pr = _pr(3)
+    pr["labels"] = [{"name": "review-requested"}] if requested else []
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: full_record("k", verdict, 1, False, "codex"))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    waiver_calls = []
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: waiver_calls.append(a) or waiver)
+    def candidates(*args):
+        assert not waiver, "a valid waiver must avoid selecting another provider"
+        return providers
+    monkeypatch.setattr(rg, "second_family_candidates", candidates)
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == expected
+    if verdict == "CLEAN" and requested:
+        assert waiver_calls == [([], "k", ["src/oauth_provider.py"],
+                                 ["src/oauth_provider.py"], {"openai"},
+                                 "origin/master", "h")]
+    else:
+        assert waiver_calls == []
+    if expected:
+        assert calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
+
+
+def test_shared_request_never_claims_a_completed_review_or_clears_findings():
+    state, desc = rg.review_check(None, requested=True)
+    assert state == "neutral" and "requested from shared host" in desc
+    assert "no completed review" in desc
+    finding = full_record("k", "FINDINGS", 1, False, "codex")
+    assert rg.review_check(finding, requested=True)[0] == "action_required"
+    assert rg.review_check(finding, requested=True, held=True)[0] == "action_required"
+    state, desc = rg.review_check(None, requested=True, held=True)
+    assert state == "neutral" and "held by no-auto-review" in desc
+
+
 @pytest.mark.parametrize('paths,expected', [(['docs/proposals/x.md'], True), (['docs/proposals/nested/x.md'], True),
     (['docs/proposals/x.md','src/auth.py'],False), (['docs/proposals/x.py'],False), (['docs/operations/x.md'],False), ([],False)])
 def test_advisory_proposal_classification_is_narrow_and_trusted(monkeypatch, paths, expected):
@@ -4273,6 +4377,94 @@ def test_followup_reviewer_gets_delta_and_original_context(repo, reviewed_follow
     assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 1
 
 
+@pytest.mark.parametrize('reviewer', ['codex', 'antigravity'])
+def test_followup_separates_merged_base_from_authored_work(repo, reviewed_followup, monkeypatch, reviewer):
+    comments, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('Upstream caller changed.\n')
+    (repo / 'upstream.txt').write_text('Unrelated upstream feature.\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'upstream work')
+    _git(repo, 'checkout', '-q', 'feature')
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    fix.head, fix.base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    fix.key = rg.diff_key(fix.base, fix.head)
+    def review(provider, prompt, out, budget, materials):
+        files = dict(materials) if materials is not None else {}
+        delta = files['diff.patch'].decode() if files else (out / 'diff.txt').read_text()
+        context = files['prior-review.txt'].decode() if files else (out / 'prior-review.txt').read_text()
+        assert '+Clarified usage.' in delta
+        assert 'Upstream caller changed.' not in delta
+        assert 'Unrelated upstream feature.' not in delta
+        assert 'Upstream caller changed.' in context  # integration evidence remains available
+        assert 'Unrelated upstream feature.' in context
+        assert 'Current PR diff:' in context and '+a changed' in context
+        assert 'upstream breadth alone' in context
+        return 'Examined the authored change and base integration.\nSCOPE: FOLLOWUP\nVERDICT: CLEAN', 'exit 0'
+    monkeypatch.setattr(rg, 'run_reviewer', review)
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Original reviews')
+    assert rg._review_locked(args, 1, fix.key, reviewer) == 0
+    assert rg.passing_families(comments + [_comment(posted[0])], fix.key) == {'openai', 'anthropic'}
+
+
+def test_base_merge_context_change_is_not_an_author_edit(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key('master', previous)
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, 'merge', '-q', '--no-edit', 'master')
+    assert key != rg.diff_key('master', 'HEAD')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert delta == ''  # integration still needs the independent scope decision
+    assert '+ONE on master' in context
+
+
+def test_followup_keeps_new_work_and_reverted_base_changes(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, 'merge', '-q', '--no-edit', 'master')
+    # A hand edit in the merge must remain reviewable, even if its text is
+    # identical to the old reviewed head and absent from a raw head-to-head diff.
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE by the PR\nfour\nfive\n')
+    (carry_repo / 'new.py').write_text('unrelated_new_work()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '--amend', '-qm', 'merge with author changes')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert '-ONE on master' in delta and '+one' in delta
+    assert '+unrelated_new_work()' in delta
+    assert '+ONE on master' in context
+
+
+def test_followup_does_not_subtract_base_changes_not_yet_merged(repo, reviewed_followup):
+    _, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('Not integrated yet.\n')
+    _git(repo, 'commit', '-qam', 'base advances')
+    _git(repo, 'checkout', '-q', 'feature')
+    delta, context = rg.followup_diff('master', fix.from_head, fix.head)
+    assert '+Clarified usage.' in delta
+    assert 'Not integrated yet.' not in delta + context
+
+
+def test_conflicting_base_keeps_the_complete_followup_delta(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    _git(carry_repo, 'checkout', '-q', 'master')
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE conflicting upstream\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'conflicting base')
+    _git(carry_repo, 'checkout', '-q', 'feature')
+    result = subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
+                            capture_output=True)
+    assert result.returncode == 1
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE manually resolved\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'resolve conflict')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert '+THREE manually resolved' in delta
+    assert delta == rg.diff_text(previous, 'HEAD')
+    assert 'could not be reconstructed conflict-free' in context
+    assert 'FULL_REQUIRED' in context
+
+
 def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
     comments, fix = reviewed_followup
     args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')
@@ -4488,6 +4680,72 @@ def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followu
     monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
     args = SimpleNamespace(base=fix.base, completed_followup=fix)
     assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
+
+
+def test_dispose_followup_preserves_families_during_api_read_lag(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    comments.append(_comment(fix, text='[P2] README.md:1 unclear input'))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # fresh POST remains unreadable
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    posted = []
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: posted.append(body))
+    disposition = repo / 'disposition.txt'
+    disposition.write_text('1. rebutted: the documented input is the supported one')
+    args = SimpleNamespace(base=fix.base, file=str(disposition))
+    assert rg.cmd_dispose(args) == 0
+    assert len(posted) == 1
+    assert rg.passing_families(comments, fix.key) == set()  # no API visibility invented
+    assert rg.passing_families(comments + [{'author_association': 'OWNER', 'body': posted[0]}],
+                               fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('invalid', ['missing-original', 'untrusted-original', 'incomplete', 'wrong-reviewer',
+                                      'serious', 'missing-source', 'stale-head'])
+def test_read_lag_does_not_relax_disposition_coverage(reviewed_followup, monkeypatch, invalid):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P1] README.md:1 unsafe' if invalid == 'serious'
+                        else '[P2] README.md:1 unclear input')
+    if invalid == 'untrusted-original':
+        original['author_association'] = 'NONE'
+        original['user'] = {'login': 'untrusted', 'type': 'User'}
+    if invalid != 'missing-original':
+        comments.append(original)
+    if invalid == 'missing-source':
+        comments = [original]
+    fix.disposed = True
+    fix.text = 'not a disposition' if invalid == 'incomplete' else '1. rebutted: checked the supported input'
+    if invalid == 'wrong-reviewer':
+        fix.reviewer = 'different-reviewer'
+    head = fix.head
+    if invalid == 'stale-head':
+        fix.head = 'f' * 40
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    args = SimpleNamespace(base=fix.base, completed_followup=fix)
+    assert rg.second_family_pass(args, 'o/r', 1, fix.key, head, 0) == rg.NEEDS_SECOND_FAMILY
+
+
+@pytest.mark.parametrize('missing', ['head', 'base'])
+def test_main_cli_missing_local_objects_reports_unreviewed(repo, monkeypatch, capsys, missing):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    run = repo / '.git/local-reviews/pr-1-missing'
+    run.mkdir(parents=True)
+    receipt = {'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+               'started_at': 100, 'architecture': 'gemma4'}
+    receipt[missing] = 'f' * 40
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('spent budget with missing history'))
+    assert rg.cmd_review(SimpleNamespace(base=base, budget=30, fresh=True, reviewer='codex')) == rg.UNREVIEWED
+    assert 'UNREVIEWED: Local review history incomplete' in capsys.readouterr().out
+    assert json.loads((run / 'manifest.json').read_text()) == receipt
 
 
 def test_disposed_serious_followup_still_requires_full_coverage(reviewed_followup):
@@ -4743,3 +5001,149 @@ def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, dis
     # Runtime carry provenance can never be supplied in a posted marker.
     emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
     assert emitted.original_key == ''
+
+
+def _cycles_with(*severities):
+    """One full cycle per entry: a list of severity labels ([] means clean)."""
+    runs = []
+    for i, labels in enumerate(severities):
+        findings = [{"body": f"[{label}] finding {i}.{j}"} for j, label in enumerate(labels)]
+        runs.append((1000.0 + i, f"{i:x}" * 40, findings, f"key{i}", "openai"))
+    return rg.count_review_cycles(runs)
+
+
+def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
+    """Operator 2026-10-15: the cap stops review that has stopped finding
+    things, not review that keeps finding real defects."""
+    rounds = _cycles_with(["P1"], ["P0", "P2"], ["P1"])
+    assert rounds.count == 3 and rounds.spent == 0
+    assert not rounds.exhausted(joining=False, key="fix-key")
+
+
+def test_clean_and_lesser_cycles_still_spend_the_cap():
+    rounds = _cycles_with(["P1"], [], ["P2"], ["P3", "P2"])
+    assert rounds.count == 4 and rounds.spent == 3
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)  # the second family may finish a cycle
+
+
+def test_an_unlabelled_finding_counts_as_serious():
+    rounds = _cycles_with(["P2"], ["P2"])
+    rounds.cycles[0].findings.append({"body": "data loss described in prose"})
+    assert rounds.spent == 1
+
+
+def test_the_backstop_bounds_a_review_that_never_converges():
+    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+    assert rounds.spent == 0
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)
+
+
+def test_the_round_note_says_when_serious_cycles_were_not_counted():
+    rounds = _cycles_with(["P1"], [], ["P1"])
+    assert rg.round_note(rounds) == (
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+
+
+def test_review_text_findings_keep_their_severity():
+    text = "Intro\n[P1] Broken thing — a.py:3\nDetails\n[P3] Nit — b.py:9\n"
+    found = rg.findings_from_review_text(text, "FINDINGS")
+    assert [f.get("path") for f in found] == ["a.py", "b.py"]
+    assert rg.findings_from_review_text("prose only", "FINDINGS") == [
+        {"body": "unlabelled finding; full review required"}]
+    assert rg.findings_from_review_text("VERDICT: CLEAN", "CLEAN") == []
+
+
+def test_unposted_local_runs_always_spend_their_cycle(repo):
+    """Only a posted record, with its provenance, can exempt a cycle: an
+    unposted local run spends whatever its review said."""
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    for i, status in enumerate(['FINDINGS', 'CLEAN']):
+        run = repo / f'.git/local-reviews/pr-1-local{i}'
+        run.mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps({
+            'pr': 1, 'status': status, 'head': head, 'base': base,
+            'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 300 + i * 100}))
+        (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
+    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 2 and rounds.spent == 2
+
+def test_a_clean_review_mentioning_labels_has_no_findings():
+    text = "Verified the prior [P1] fix in a.py:3; no [P2] issues remain.\nVERDICT: CLEAN"
+    assert rg.findings_from_review_text(text, "CLEAN") == []
+
+
+def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
+    """Three unproductive cycles, then one that found a P1: its fix gets a
+    full review without a grant (up to the backstop)."""
+    rounds = _cycles_with([], ["P2"], [], ["P1"])
+    assert rounds.spent == 3
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    after_fix = _cycles_with([], ["P2"], [], ["P1"], [])
+    assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
+
+
+def test_a_recount_keeps_the_posted_round_cmd_review_answers(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    run = repo / '.git/local-reviews/pr-1-local-late'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 10}))
+    posted = [{"body": "[P2] posted finding — b.py:2"}]
+    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted, answered_since=True)
+    rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 1
+    assert rounds.last_findings == posted and rounds.last_head == "a" * 40 and rounds.answered_since
+
+def test_the_second_family_finishes_a_cycle_the_exemption_opened():
+    """A serious cycle (here past the cap) earns its fix review; that review
+    coming back clean must not stop the second family finishing the cycle."""
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    assert rounds.spent == 4
+    assert not rounds.exhausted(joining=True)
+    assert rounds.exhausted(joining=False)
+
+
+def test_the_exemption_is_for_the_fix_not_the_same_diff():
+    rounds = _cycles_with([], [], [], ["P1"])
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    assert rounds.exhausted(joining=False, key=rounds.cycles[-1].key)
+
+
+def test_a_keyless_native_cycle_needs_a_different_head_for_the_exemption():
+    rounds = _cycles_with([], [], [], ["P1"])
+    last = rounds.cycles[-1]
+    last.key = ""  # native reviews enter the ledger without a diff key
+    assert rounds.exhausted(joining=False, key="any-key", head=last.head)
+    assert not rounds.exhausted(joining=False, key="any-key", head="f" * 40)
+    assert rounds.exhausted(joining=False)  # no evidence of changed work
+
+
+def test_only_leading_labels_are_titles_and_declared_findings_count():
+    prose = "Verified the prior [P1] fix in a.py:3.\n[P2] Minor thing — b.py:4\n"
+    found = rg.findings_from_review_text(prose, "FINDINGS")
+    assert len(found) == 1 and found[0]["body"].startswith("[P2]")
+    for title in ("- [P1] x — a.py:1", "1. **[P1] x — a.py:1**",
+                  "**<sub><sub>![P1 Badge](u)</sub></sub>  x**"):
+        assert len(rg.findings_from_review_text(title, "FINDINGS")) == 1
+    # Two declared, one labelled: the other counts as unlabelled (serious).
+    two = rg.findings_from_review_text("[P3] nit — c.py:1\n", "FINDINGS", declared=2)
+    assert len(two) == 2 and "unlabelled" in two[1]["body"]
+
+
+def test_joining_after_a_serious_cycle_needs_changed_work_too():
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    rounds.cycles[-1].key = rounds.cycles[-2].key  # same diff as the serious cycle
+    rounds.cycles[-1].head = rounds.cycles[-2].head
+    assert rounds.exhausted(joining=True)
+
+
+def test_severity_comes_from_the_title_not_the_explanation():
+    """A [P2] whose explanation mentions an earlier [P1] is not serious."""
+    runs = [(1000.0 + i, f"{i:x}" * 40,
+             [{"body": "[P2] Minor — a.py:1\nThe earlier [P1] issue was fixed."}], f"k{i}", "openai")
+            for i in range(3)]
+    rounds = rg.count_review_cycles(runs)
+    assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")

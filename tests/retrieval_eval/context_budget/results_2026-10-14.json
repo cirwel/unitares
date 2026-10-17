@@ -1,0 +1,39 @@
+{
+  "snapshot_sha256": "a0580b87910b0dcfb72fb4df6a5c7ac230ae24bd1de28697200c267ca31d810d",
+  "successors_sha256": "e0a7f0528b83f9d7187ab710695bfdbf4d15082ee19dfda366ffa786d6a9a43d",
+  "successors_captured_at": "2026-10-14T07:17:09.452934+00:00",
+  "visible_records": 702,
+  "cases": 1079,
+  "mode_envelopes_identical": {
+    "compact": 1079,
+    "full": 1079
+  },
+  "previously_visible_rows_lost": 0,
+  "changed_evidence_fields": 0,
+  "visible_row_occurrences": {
+    "before": 2309,
+    "after": 2309
+  },
+  "visible_replacement_pointer_occurrences": {
+    "before": 56,
+    "after": 56
+  },
+  "lean_wire_bytes": {
+    "before": {
+      "total": 2331826,
+      "min": 836,
+      "median": 1787,
+      "p95": 4199,
+      "max": 4973
+    },
+    "after": {
+      "total": 1783984,
+      "min": 540,
+      "median": 1249,
+      "p95": 3660,
+      "max": 4730
+    },
+    "total_reduction_percent": 23.49
+  },
+  "scope": "Frozen single-record and contiguous 3/10-record projections, plus an empty result. No query retrieval, model inference, live latency or agent-comprehension measurement. Byte counts are UTF-8 JSON, not tokenizer estimates. Full mode excludes inline details. The same record appears in multiple cases. Change-notice middleware is outside this replay."
+}

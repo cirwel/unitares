@@ -327,7 +327,8 @@ def _codex_host(*, configured=True, available=True, accepts=None):
 
 
 def test_schema_accepts_the_codex_host_id():
-    """The Literal was the hard gate — the service below it is host-agnostic."""
+    """host_id is a bounded string; the handler gates it on the registry's
+    accepts_host_id_from (test_delegate_inference_rejects_unwired_host)."""
     from pydantic import ValidationError
 
     from src.mcp_handlers.schemas.core import DelegateInferenceParams
@@ -338,7 +339,7 @@ def test_schema_accepts_the_codex_host_id():
     # Preserve the established explicit-tool default; consult handles reciprocity.
     assert DelegateInferenceParams(prompt="hi").host_id == "claude:host-adapter"
     with pytest.raises(ValidationError):
-        DelegateInferenceParams(prompt="hi", host_id="ollama:local")
+        DelegateInferenceParams(prompt="hi", host_id="")
 
 
 @pytest.mark.asyncio
@@ -816,3 +817,20 @@ async def test_a_success_clears_the_cooldown(monkeypatch):
         prompt="hi", requesting_agent_uuid=None))
     assert outcome.ok
     assert "claude:host-adapter" not in host_availability._state
+
+
+@pytest.mark.asyncio
+async def test_a_host_switched_off_in_the_hosts_file_is_refused(monkeypatch, tmp_path):
+    from src import inference_config
+
+    p = tmp_path / "inference.yaml"
+    p.write_text("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n")
+    p.chmod(0o600)
+    monkeypatch.setenv(inference_config.HOSTS_FILE_ENV, str(p))
+    inference_config._cache.update(key=None, result=None)
+    monkeypatch.setattr(
+        di, "get_inference_host", lambda _host_id: _claude_host(configured=True, available=True))
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert "inference hosts file" in parsed["error"] or "inference hosts file" in json.dumps(parsed)
+    inference_config._cache.update(key=None, result=None)

@@ -11,14 +11,11 @@ name: Plugin Skill Sync
 # in the plugin repo and a PR is opened there, or the open one is updated. An
 # operator's local deploy wrapper runs the same script, so the two can never
 # open competing PRs, and the push is a compare-and-swap either way. It never
-# merges; merging is the maintainer's.
+# merges; the plugin's Verified mirror delivery workflow verifies and lands it.
 #
-# Credentials. GITHUB_TOKEN cannot write to another repository, so the plugin
-# checkout, push and PR use the repository secret PLUGIN_SYNC_TOKEN: a
-# fine-grained token scoped to cirwel/unitares-governance-plugin with
-# Contents and Pull requests read/write. Without it the job warns and does
-# nothing. It runs only on master pushes and manual dispatch -- never on
-# pull_request -- so no PR's code ever runs with that secret.
+# Credentials come from the master-only plugin-sync environment. The App token
+# is short-lived and scoped to the plugin repository, with only contents and
+# pull-request writes. No PR code runs with the signing key or token.
 
 on:
   push:
@@ -38,25 +35,12 @@ concurrency:
 
 jobs:
   sync:
+    if: github.repository == 'cirwel/unitares' && github.ref == 'refs/heads/master'
+    environment: plugin-sync
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Secrets are read at step level only (as draft-base-refresh does); the
-      # rest of the job keys on this step's output, never on the secret itself.
-      - name: Is the push credential configured?
-        id: gate
-        env:
-          CONFIGURED: ${{ secrets.PLUGIN_SYNC_TOKEN != '' }}
-        run: echo "configured=$CONFIGURED" >> "$GITHUB_OUTPUT"
-
-      - name: Warn when the push credential is missing
-        if: steps.gate.outputs.configured != 'true'
-        run: |
-          echo "::warning::PLUGIN_SYNC_TOKEN is not configured, so the plugin skill mirror was not synced. Add a fine-grained token with Contents and Pull requests read/write on cirwel/unitares-governance-plugin."
-          echo "Plugin skill sync skipped: PLUGIN_SYNC_TOKEN not configured." >> "$GITHUB_STEP_SUMMARY"
-
       - name: Check out unitares
-        if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Default credentials kept: GITHUB_TOKEN is read-only here
         # (permissions: contents: read), and the script's fetch of master
@@ -70,24 +54,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Mint the plugin-scoped App token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app
+        with:
+          client-id: ${{ vars.UNITARES_AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UNITARES_AGENT_APP_PRIVATE_KEY }}
+          owner: cirwel
+          repositories: unitares-governance-plugin
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Check out the plugin
-        if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: cirwel/unitares-governance-plugin
-          token: ${{ secrets.PLUGIN_SYNC_TOKEN }}
+          token: ${{ steps.app.outputs.token }}
           path: _plugin
           fetch-depth: 1
 
       - name: Sync the mirror and open or update the PR
-        if: steps.gate.outputs.configured == 'true'
         env:
-          GH_TOKEN: ${{ secrets.PLUGIN_SYNC_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           UNITARES_REPO_DIR: ${{ github.workspace }}
           UNITARES_PLUGIN_REPO: ${{ github.workspace }}/_plugin
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "unitares-agents[bot]"
+          git config --global user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
           set +e
           out="$(bash scripts/dev/open-plugin-skill-sync-pr.sh 2>&1)"
           rc=$?

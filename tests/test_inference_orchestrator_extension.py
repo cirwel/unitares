@@ -2,8 +2,8 @@
 
 A default install runs no agent orchestrator, so the Codex, Claude and
 Antigravity adapters can never serve there. These tests pin that the catalog
-keeps listing them (reachability is a routing contract and does not flap with
-configuration) while every surface an agent reads on such an install says the
+keeps them in the explicit full inventory (reachability is a routing contract
+and does not flap with configuration) while every surface an agent reads on such an install says the
 extension is off and points at the lane that works, instead of listing flags as
 if one were missing.
 """
@@ -39,7 +39,7 @@ def default_install(monkeypatch):
 
 
 def _hosts_by_id():
-    return {host["host_id"]: host for host in registry.list_inference_hosts()}
+    return {host["host_id"]: host for host in registry.list_inference_hosts(include_unconfigured=True)}
 
 
 def test_lane_needs_both_the_flag_and_the_bearer(monkeypatch):
@@ -99,7 +99,9 @@ async def test_delegate_inference_names_the_missing_extension(default_install):
     assert "agent orchestrator extension" in parsed["error"]
     action = parsed["recovery"]["action"]
     assert "consult(effort='standard')" in action
-    assert "call_model" in action
+    # call_model is deprecated (2026-10-16): recovery points at consult only.
+    assert "call_model" not in action
+    assert "call_model" not in parsed["recovery"]["related_tools"]
 
 
 @pytest.mark.asyncio

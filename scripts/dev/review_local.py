@@ -310,9 +310,15 @@ def main(argv=None) -> int:
                 if not gate.cycle_grant(comments, args.review_cycle_grant, head, key, rounds, family, time.time()):
                     raise ValueError('Cycle grant is missing, expired, consumed, untrusted, or for different work')
                 grant_url = f'https://github.com/{slug}/pull/{args.pr}#issuecomment-{args.review_cycle_grant}'
-            if gate.ROUND_CAP_ENABLED and not grant_url and (
-                    rounds.unknown_history or rounds.count > gate.ROUND_CAP or
-                    (rounds.count == gate.ROUND_CAP and not rounds.can_join(head, key, family))):
+            joining = rounds.can_join(head, key, family)
+            if hasattr(rounds, 'exhausted'):
+                # The gate's own rule: cycles that found a serious problem do
+                # not spend the cap (operator 2026-10-15), with a backstop.
+                over = rounds.exhausted(joining, key, head)
+            else:  # an older gate checkout without the context-based budget
+                over = gate.ROUND_CAP_ENABLED and (
+                    rounds.count > gate.ROUND_CAP or (rounds.count == gate.ROUND_CAP and not joining))
+            if not grant_url and gate.ROUND_CAP_ENABLED and (rounds.unknown_history or over):
                 raise ValueError('Full-review budget exhausted or history unknown; use gate escalation')
             if gate.read_native(slug, args.pr, key, head, comments).running:
                 raise ValueError('Native review still running; join it before starting a local review')
@@ -372,9 +378,13 @@ def main(argv=None) -> int:
             (run / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
-if __name__ == '__main__':
+def cli(argv=None) -> int:
     try:
-        sys.exit(main())
+        return main(argv)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         print(f'UNREVIEWED: {exc}', file=sys.stderr)
-        sys.exit(2)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(cli())

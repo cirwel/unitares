@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
+import random
 import subprocess
 import sys
 
@@ -366,6 +368,13 @@ def test_read_receipt_is_atomic_parameterized_and_nonrepeatable(tmp_path):
     assert receipt["parameters"]["scopes"] == ["task"]
     assert receipt["parameters"]["leads"] == [0.0, 30.0]
     assert receipt["parameters"]["exclude_harness_lanes"] == ["beam"]
+    code_version = receipt["code_version"]
+    matrix_path = "scripts/analysis/eisv_ablation_matrix.py"
+    assert code_version["sha256"][matrix_path] == hashlib.sha256(
+        (matrix_module.REPO_ROOT / matrix_path).read_bytes()
+    ).hexdigest()
+    assert set(code_version["sha256"]) == set(matrix_module.CODE_VERSION_PATHS)
+    assert code_version["git_commit"] is None or len(code_version["git_commit"]) == 40
 
     with pytest.raises(matrix_module.ReadProtocolError, match="already has a receipt"):
         matrix_module.record_read_receipt(
@@ -831,6 +840,123 @@ def test_selective_null_needs_at_least_three_permutable_clusters():
     assert null is not None
     assert null.clusters == 2
     assert null.selective_p is None
+
+
+def test_code_version_never_refuses_a_read(monkeypatch, tmp_path):
+    """Missing git and missing files record nulls; they do not raise."""
+    monkeypatch.setattr(matrix_module, "_git_output", lambda *argv: None)
+
+    version = matrix_module.read_code_version(tmp_path)
+
+    assert version["git_commit"] is None
+    assert version["dirty_paths"] is None
+    assert version["sha256"] == {rel: None for rel in matrix_module.CODE_VERSION_PATHS}
+
+
+def test_code_version_lists_uncommitted_executed_modules(monkeypatch):
+    """Exercise the real git-output normalization, not a mock of it."""
+    outputs = {
+        "status": " M scripts/analysis/eisv_skeptic_report.py\nM  src/grounding/outcome_anchors.py\n",
+        "rev-parse": "a" * 40 + "\n",
+    }
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=outputs[cmd[3]], stderr="")
+
+    monkeypatch.setattr(matrix_module.subprocess, "run", fake_run)
+
+    version = matrix_module.read_code_version()
+
+    assert version["git_commit"] == "a" * 40
+    assert version["dirty_paths"] == [
+        "scripts/analysis/eisv_skeptic_report.py",
+        "src/grounding/outcome_anchors.py",
+    ]
+
+
+def _null_from_values(monkeypatch, null_values, observed):
+    """Run the shipped estimator over a constructed list of null maxima.
+
+    ``_best_delta_value`` is replaced by an iterator over ``null_values``, so
+    what is exercised is the estimator's own p95 and selective-p arithmetic,
+    not a copy of it.
+    """
+    values = iter(null_values)
+    monkeypatch.setattr(matrix_module, "_best_delta_value", lambda *a, **k: next(values))
+    rows = [_row(idx, bad=(idx == 0), risk=0.3, agent=f"agent-{idx}") for idx in range(3)]
+    return matrix_module.estimate_selective_null(
+        rows, observed_best_delta=observed, resamples=len(null_values)
+    )
+
+
+def test_pass_condition_1_entails_condition_2_under_the_shipped_estimator(monkeypatch):
+    """Pin the fact recorded as SETTLED in open-decisions-packet-v0.md, entry 3 (D5).
+
+    The 2026-12-01 stop rule's condition 1 (``selective p <= 0.05``) implies its
+    condition 2 (``AUC delta > Null max p95``): both are read from one null list
+    in ``estimate_selective_null``. The implication is a property of the current
+    linear-interpolation ``_percentile`` and the ``+1/+1`` p-value smoothing,
+    not of the two statistics as concepts. If this test fails, the estimator
+    changed under a registered read: find out whether the registered output was
+    meant to change before touching the test, and correct the D5 entry and the
+    EVALUATION_INDEX note in the same change. This test does not alter, and
+    must not be used to alter, any registered condition.
+    """
+    rng = random.Random(20261201)
+    levels = [round(-0.2 + 0.05 * step, 2) for step in range(10)]
+    checked = 0
+    for n in [19, 20, 21, 39, 40, 86, 199, 200, 201, 399, 400, 401]:
+        for _ in range(40):
+            observed = rng.choice(levels)
+            # Coarse levels force ties at the interpolation indices.
+            null_values = [rng.choice(levels) for _ in range(n)]
+            null = _null_from_values(monkeypatch, null_values, observed)
+            if null.selective_p <= 0.05:
+                checked += 1
+                assert observed > null.p95, (n, observed, sorted(null_values))
+
+    # The zero-slack boundary at the registered 400 resamples: 19 nulls at or
+    # above the observed value and ties just below it at indices 379 and 380.
+    observed = 0.1
+    boundary = [observed - 0.0001] * 381 + [observed] * 19
+    null = _null_from_values(monkeypatch, boundary, observed)
+    assert null.selective_p == 20 / 401
+    assert observed > null.p95
+    assert observed - null.p95 < 0.0005, "below the three-decimal print precision"
+    # The column a reader applies condition 1 from is computed unrounded.
+    assert matrix_module.classify_inference_with_selective_null(null) == "SIGNAL_CANDIDATE"
+    assert checked > 0
+
+
+def test_printed_selective_p_cannot_decide_condition_1(monkeypatch):
+    """With 398 successful resamples, p = 20/399 = 0.0501 prints as 0.050.
+
+    The printed column then reads as a pass; the unrounded inference class
+    does not. Condition 1 is applied from the inference class.
+    """
+    observed = 0.1
+    null_values = [0.0] * 379 + [observed] * 19
+    null = _null_from_values(monkeypatch, null_values, observed)
+
+    assert null.selective_p == 20 / 399
+    assert matrix_module._fmt_float(null.selective_p, 3) == "0.050"
+    assert matrix_module.classify_inference_with_selective_null(null) == "NON_DETECTION"
+
+
+def test_pass_condition_2_does_not_entail_condition_1(monkeypatch):
+    """The implication runs one way: condition 2 is strictly weaker.
+
+    At 400 resamples, 20 nulls at or above the observed value give selective
+    p = 21/401 = 0.0524 (condition 1 fails) while the observed value can still
+    exceed the null p95 (condition 2 passes).
+    """
+    observed = 0.1
+    null_values = [0.0] * 380 + [observed] * 20
+    null = _null_from_values(monkeypatch, null_values, observed)
+
+    assert null.selective_p == 21 / 401
+    assert null.selective_p > 0.05
+    assert observed > null.p95
 
 
 def test_validation_slices_keep_rows_whose_identity_self_declared_testing():
@@ -1432,3 +1558,188 @@ def test_candidate_pin_leaves_exploratory_reproduction_and_operator_reads_alone(
     matrix_module.validate_read_protocol(
         _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"), now=now
     )
+
+
+# ---- data boundary at the first instrument change (stop-rule amendment 2026-10-15) ----
+
+_WIRED_CUTOFF = "2026-12-01T16:00:00Z"
+_WIRED_CUTOFF_DT = datetime(2026, 12, 1, 16, 0, tzinfo=timezone.utc)
+
+
+def _wired_stop_rule_args(*extra):
+    """The fleet-ops wrapper's flags, byte-for-byte, plus test-only extras."""
+    return matrix_module.parse_args(
+        [
+            "--read-protocol", "registered",
+            "--read-id", STOP_RULE_READ_ID,
+            "--not-before", "2026-12-01T16:00:00Z",
+            "--acknowledge-contamination",
+            "--scopes", "task", "--windows", "365", "--leads", "0,30",
+            "--anchor-scope", "trusted",
+            "--exclude-harness-lanes", "beam",
+            "--fixture-rule", "registered",
+            "--as-of", _WIRED_CUTOFF,
+            "--uncertainty-resamples", "2000", "--selective-null-resamples", "400",
+            *extra,
+        ]
+    )
+
+
+def _with_instrument_change(monkeypatch, change_at):
+    entries = tuple(
+        dataclasses.replace(entry, instrument_change_at=change_at)
+        if entry.name == "eisv-outcome-grounding-stop-rule-v0"
+        else entry
+        for entry in matrix_module.REGISTERED_READ_MANIFEST
+    )
+    monkeypatch.setattr(matrix_module, "REGISTERED_READ_MANIFEST", entries)
+
+
+def test_stop_rule_entry_carries_the_boundary_rule():
+    # Deliberately silent on instrument_change_at: the amendment requires the
+    # first live-path change to record T in the real manifest, and that PR
+    # must pass this suite unmodified.
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    assert entry is not None
+    assert entry.data_boundary_rule == matrix_module.STOP_RULE_DATA_BOUNDARY_RULE
+    # The retry form shares the entry, and so the boundary rule.
+    assert matrix_module.registered_read_protocol(f"{STOP_RULE_READ_ID}-retry-1") is entry
+
+
+def test_no_instrument_change_leaves_the_wired_boundary_unchanged(monkeypatch):
+    _with_instrument_change(monkeypatch, None)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.registered == _WIRED_CUTOFF_DT
+    assert boundary.effective == _WIRED_CUTOFF_DT
+    assert boundary.clamped is False
+    assert boundary.instrument_change_at is None
+    assert boundary.rule == matrix_module.STOP_RULE_DATA_BOUNDARY_RULE
+
+
+def test_instrument_change_clamps_the_boundary_strictly_before_it(monkeypatch):
+    change_at = datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc)
+    _with_instrument_change(monkeypatch, change_at)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.registered == _WIRED_CUTOFF_DT
+    assert boundary.effective == change_at - timedelta(microseconds=1)
+    assert boundary.clamped is True
+    # fetch_rows admits `o.ts <= as_of`; at timestamptz's microsecond resolution
+    # that is `o.ts < T`. The equality case: an outcome AT T is excluded, one a
+    # microsecond earlier is admitted.
+    admits = lambda ts: ts <= boundary.effective  # noqa: E731 - mirrors the SQL predicate
+    assert not admits(change_at)
+    assert admits(change_at - timedelta(microseconds=1))
+    # The retry form is clamped the same way.
+    retry = matrix_module.effective_data_boundary(
+        matrix_module.parse_args(
+            ["--read-protocol", "registered", "--read-id", f"{STOP_RULE_READ_ID}-retry-1",
+             "--not-before", "2026-12-01T16:00:00Z", "--as-of", _WIRED_CUTOFF]
+        )
+    )
+    assert retry.effective == boundary.effective
+
+
+@pytest.mark.parametrize(
+    "change_at",
+    [
+        _WIRED_CUTOFF_DT + timedelta(days=3),
+        _WIRED_CUTOFF_DT + timedelta(microseconds=1),
+    ],
+)
+def test_instrument_change_after_the_registered_cutoff_is_a_no_op(monkeypatch, change_at):
+    _with_instrument_change(monkeypatch, change_at)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.effective == _WIRED_CUTOFF_DT
+    assert boundary.clamped is False
+    assert boundary.instrument_change_at == change_at
+
+
+def test_instrument_change_at_the_registered_cutoff_still_excludes_outcomes_at_it(monkeypatch):
+    _with_instrument_change(monkeypatch, _WIRED_CUTOFF_DT)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.effective == _WIRED_CUTOFF_DT - timedelta(microseconds=1)
+
+
+def test_instrument_change_reaches_no_other_protocol(monkeypatch):
+    _with_instrument_change(monkeypatch, datetime(2026, 3, 1, tzinfo=timezone.utc))
+    as_of = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    for args in (
+        _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"),
+        matrix_module.parse_args(
+            ["--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-sensitivity",
+             "--acknowledge-contamination", "--as-of", "2026-06-01T00:00:00Z"]
+        ),
+    ):
+        boundary = matrix_module.effective_data_boundary(args)
+        assert boundary.effective == as_of
+        assert boundary.rule is None
+
+
+def test_manifest_rejects_a_naive_or_unruled_instrument_change():
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        dataclasses.replace(entry, instrument_change_at=datetime(2026, 10, 20, 9, 30))
+    with pytest.raises(ValueError, match="data_boundary_rule"):
+        dataclasses.replace(
+            entry,
+            instrument_change_at=datetime(2026, 10, 20, tzinfo=timezone.utc),
+            data_boundary_rule=None,
+        )
+
+
+def test_instrument_change_does_not_trip_the_manifest_drift_refusal(monkeypatch, tmp_path):
+    """The candidate-tuple and dispersion pins compare only their own fields."""
+    _with_instrument_change(monkeypatch, datetime(2026, 10, 20, tzinfo=timezone.utc))
+    now = datetime(2026, 12, 1, 16, 5, tzinfo=timezone.utc)
+    matrix_module.validate_read_protocol(_wired_stop_rule_args(), now=now)
+
+
+@pytest.mark.parametrize("change_at", [None, datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc)])
+def test_receipt_and_report_show_both_boundaries(monkeypatch, tmp_path, change_at):
+    _with_instrument_change(monkeypatch, change_at)
+    seen: dict = {}
+
+    async def fake_build_matrix_from_db(_db_url, **kwargs):
+        seen["build"] = kwargs
+        return []
+
+    monkeypatch.setattr(matrix_module, "build_matrix_from_db", fake_build_matrix_from_db)
+    out = tmp_path / "out" / "matrix.md"
+    ledger = tmp_path / "ledger"
+    args = _wired_stop_rule_args(
+        "--db-url", "postgresql://unused", "--read-ledger-dir", str(ledger), "--output", str(out)
+    )
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 12, 1, 16, 5, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(matrix_module, "datetime", _Clock)
+    assert asyncio.run(matrix_module.main_async(args)) == 0
+
+    expected_effective = (
+        _WIRED_CUTOFF_DT if change_at is None else change_at - timedelta(microseconds=1)
+    )
+    assert seen["build"]["as_of"] == expected_effective
+
+    (receipt_path,) = list(ledger.glob("*.json"))
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["as_of"] == _WIRED_CUTOFF_DT.isoformat()
+    assert receipt["data_boundary"] == {
+        "registered_as_of": _WIRED_CUTOFF_DT.isoformat(),
+        "effective_as_of": expected_effective.isoformat(),
+        "instrument_change_at": change_at.isoformat() if change_at else None,
+        "rule": matrix_module.STOP_RULE_DATA_BOUNDARY_RULE,
+    }
+
+    report = out.read_text(encoding="utf-8")
+    assert f"Registered data boundary: `{_WIRED_CUTOFF_DT.isoformat()}` (--as-of)" in report
+    assert f"Effective data boundary: `{expected_effective.isoformat()}`" in report
+    assert f"Data boundary rule: `{matrix_module.STOP_RULE_DATA_BOUNDARY_RULE}`" in report
+    if change_at is None:
+        assert "Instrument change recorded: `none`" in report
+        assert "no instrument change is recorded" in report
+    else:
+        assert f"Instrument change recorded: `{change_at.isoformat()}`" in report
+        assert "strictly before the recorded instrument change" in report

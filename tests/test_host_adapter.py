@@ -222,6 +222,12 @@ class _FakeResp:
         return self._payload
 
 
+@pytest.fixture(autouse=True)
+def _codex_confinement_verified(monkeypatch):
+    """The real probe runs `codex sandbox`; tests use fake CLI paths."""
+    monkeypatch.setattr(ha, "codex_confinement_verified", lambda cli: True)
+
+
 def _patch_httpx(monkeypatch, responses):
     """Patch httpx.AsyncClient so successive .post() calls (spawn, then await)
     return `responses` in order, across the two AsyncClient instantiations."""
@@ -585,7 +591,7 @@ def test_registry_reflects_availability(monkeypatch):
     assert hosts["codex:host-adapter"]["available"] is True
 
     monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
-    hosts2 = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    hosts2 = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
     assert hosts2["codex:host-adapter"]["available"] is False
 
 
@@ -604,7 +610,7 @@ def test_every_host_adapter_is_agent_callable(monkeypatch):
             _enable(monkeypatch)
         else:
             monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
-        hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+        hosts = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
         for host_id in (
             "codex:host-adapter", "claude:host-adapter", "antigravity:host-adapter",
         ):
@@ -612,7 +618,7 @@ def test_every_host_adapter_is_agent_callable(monkeypatch):
             assert hosts[host_id]["implementation_status"] == "active"
 
     # The synchronous hosts are the ones call_model can actually serve.
-    hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    hosts = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
     assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model", "consult"]
     assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model", "consult"]
 
@@ -632,7 +638,10 @@ def test_codex_model_request_is_passed_to_the_cli(monkeypatch):
     assert shell_command.count("--ignore-user-config") == 2
     assert shell_command.count("--ephemeral") == 2
     assert shell_command.count("--json") == 2
-    assert shell_command.count('--sandbox "$HA_SANDBOX"') == 2
+    # The deny-read profile, not the legacy whole-disk-read sandbox.
+    assert "--sandbox" not in shell_command
+    for index in range(1, ha.CODEX_LANE_OVERRIDE_COUNT + 1):
+        assert shell_command.count(f'-c "$HA_CODEX_C{index}"') == 2
     assert shell_command.count("--skip-git-repo-check") == 2
     assert '"$HA_PYTHON" "$HA_CODEX_APP_SERVER_CLIENT"' in shell_command
     assert 'app_server_status" -ne 75' in shell_command
@@ -895,3 +904,61 @@ def test_a_provider_cooldown_makes_the_host_unavailable_and_is_listed(monkeypatc
     assert hosts["codex:host-adapter"]["available"] is False
     assert hosts["codex:host-adapter"]["cooldown"]["reason"] == "quota"
     assert hosts["claude:host-adapter"]["cooldown"] is None
+
+
+def test_codex_spawn_env_carries_the_lane_overrides(monkeypatch):
+    """The exec fallback's -c slots are filled from the same list the
+    app-server client uses, so both paths run under the deny-read profile."""
+    from src.mcp_handlers.support.codex_app_server_client import lane_config_overrides
+
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-codex-profile"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": ["done"]}}),
+    ])
+
+    _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+
+    env = state["calls"][0][1]["json"]["env"]
+    profile = env["HA_CODEX_C1"].split('"')[1]
+    expected = lane_config_overrides(env["HA_CLI"], profile)
+    assert [env[f"HA_CODEX_C{i}"] for i in range(1, len(expected) + 1)] == expected
+
+
+def test_a_sandbox_other_than_read_only_is_refused_before_spawn(monkeypatch):
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5, sandbox="workspace-write"))
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "preflight"
+    assert "read-only" in result["error"]
+    assert state["calls"] == []
+
+
+def test_codex_exec_fallback_runs_in_an_empty_directory_it_removes():
+    """No project .codex/config.toml or instructions can load from an empty
+    directory outside any repository."""
+    shell_command = ha._HOST_COMMANDS["codex:host-adapter"][1]
+    assert shell_command.count('mktemp -d "${TMPDIR:-/tmp}/unitares-codex-lane-XXXXXX"') == 2
+    assert shell_command.count('cd "$ha_dir" || exit 1') == 2
+    assert shell_command.count('rmdir "$ha_dir"') == 2
+
+
+def test_codex_refuses_when_administrator_config_exists(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(ha, "codex_admin_config_conflict", lambda: "/etc/codex/managed_config.toml")
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+    assert result["ok"] is False and result["dispatch_phase"] == "preflight"
+    assert "/etc/codex/managed_config.toml" in result["error"]
+    assert state["calls"] == []
+
+
+def test_codex_refuses_when_the_cli_does_not_enforce_the_profile(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(ha, "codex_confinement_verified", lambda cli: False)
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+    assert result["ok"] is False and result["dispatch_phase"] == "preflight"
+    assert "does not enforce" in result["error"]
+    assert state["calls"] == []

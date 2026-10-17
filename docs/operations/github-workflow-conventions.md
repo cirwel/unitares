@@ -66,19 +66,19 @@ veto by removing the label.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - Before readiness, the owner classifies the PR body as `fix` or `capability`.
-  Through 2026-10-22 the freeze blocks new tools, actions, instruments and model
-  channels; fixes, friction reduction, tooling, tests and docs proceed. KG
-  decision `2026-10-13T09:17:42.808916+00:00` records the operator-delegated
-  wording (not operator-reviewed); this dated freeze pointer expires after
-  2026-10-22. A disagreeing reviewer comments, rather than holding a fix on the
-  freeze alone. Reserved auth, identity, scientific and governance-sensitive
-  gates are unchanged.
+  A capability that adds a tool, action, instrument or model channel is
+  reserved to the operator and stays a draft until the operator rules; fixes,
+  friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
+  freeze was lifted by the operator on 2026-10-15 (KG decision
+  `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
+  than holding a fix. Reserved auth, identity, scientific and
+  governance-sensitive gates are unchanged.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
-  opened it.** End every PR body with the harness session link when available,
-  then `UNITARES agent: <uuid>`. Session links stay out of commit messages and
-  committed files; the scope guard is unchanged. This is the operator-delegated
-  wording in KG decision `2026-10-13T09:24:42.365405+00:00`, not an assertion
-  that the operator reviewed its text. Do not push commits to another session's PR branch, even to
+  opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
+  session's UNITARES identity: a later session finds the owner by it and can
+  check it against the server. A harness session link may sit beside it; the
+  guard that refused session links in bodies, commits and files was removed on
+  2026-10-14 at the operator's direction. Do not push commits to another session's PR branch, even to
   fix something small. The `claude/` prefix does not tell sessions apart, and
   neither does the commit author reliably: local sessions commit as the
   operator, web sessions as `Claude`, and two web sessions look identical.
@@ -163,6 +163,39 @@ veto by removing the label.
 
 ### Review workflow
 
+**One request path for local and cloud authors.** Add `review-requested` to
+an open PR using GitHub, its REST API, or a connector. No local model CLI or
+`review.sh` is needed on the author's machine. Keep unfinished work draft;
+the request does not mark it ready or authorize a merge. `no-auto-review`
+holds automatic review, even when a request is present.
+
+The opted-in shared host reviews a quiet PR and posts the existing diff-bound
+review record on that PR. One provider attempt runs per scheduled tick. For
+an explicitly requested sensitive diff, a later tick selects an eligible
+missing model family; the normal cycle budget, provider pauses and retry
+limits still apply. Findings require author action before another family is
+started. A request never authorizes extra cycles or an operator waiver.
+
+Read the PR's `review` check: **UNREVIEWED** means no completed coverage,
+**action_required** means findings or required coverage need attention, and
+**success** means review coverage passed. A request label does not prove a
+runner is online; a paused/offline host leaves the PR visibly unreviewed.
+Ordinary work may still proceed after validation with that fact in the body;
+sensitive paths retain their required coverage. `approved-to-merge` remains
+the owning author's separate readiness declaration.
+
+On this operator's host, `com.unitares.review-sweep` is the designated runner.
+`scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
+clean checkout of merged `origin/master`, reads PR heads separately, and uses
+`unitares-github` for this repository's fetches and review publication. It
+refuses a missing App runner instead of using the human login across `cirwel`
+repositories. Cloud agents use explicitly provisioned repository-scoped App
+credentials; a missing cloud integration must be reported, never replaced
+with the operator's login. Other installers opt in to their own host and
+credentials.
+Direct local `./scripts/dev/review.sh` remains available and shares the same
+per-PR lock and evidence, so it joins an in-flight host review.
+
 **Review publishers and operator authority.** In addition to the existing
 `OWNER`/`MEMBER`/`COLLABORATOR` accounts, ordinary review records accept the
 UNITARES agents App only when GitHub's comment metadata contains App ID
@@ -175,9 +208,8 @@ Bot comments cannot grant an operator waiver, even with a write association.
 The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
 user-authored approval; it never lets the App issue one. The `waive` and
 legacy `--authorize-full-review` CLI paths verify a user account via
-GitHub and refuse App credentials or an unreadable actor. Cloud agents using
-the operator's user credential still require explicit operator instruction;
-this check cannot distinguish them from the operator.
+GitHub and refuse App credentials or an unreadable actor. All agents use the
+shared App; the operator's user account is reserved for operator actions.
 
 > **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
 > longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
@@ -200,7 +232,7 @@ the test run one.
   a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
-  runs the same command without waiting for an operator prompt. If a review
+  requests the shared host or runs the same command locally. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
@@ -248,10 +280,12 @@ the test run one.
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own
   author is not a review.
-- Bot PRs (dependabot) get no exemption: the incident that motivated "no
+- Bot PRs use the same evidence rules: the incident that motivated "no
   mechanical exemption" was a dependency bump. Nobody has to remember them
   either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
-  from the owner's account or dependabot after 15 minutes without an update.
+  from the owner's account, Dependabot, or the already trusted UNITARES agents
+  App after 15 minutes without an update. Forks and unknown publishers wait
+  for explicit human handling.
   Drafts require the owner's explicit `review-requested` label; unfinished
   drafts are excluded by default. `no-auto-review` holds
   automatic review of intentionally unfinished work. Outside contributors'
@@ -339,7 +373,15 @@ fallback validation.
 #### Round cap
 
 Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
-gets three **full review cycles**. A cycle starts with its first completed
+gets three **full review cycles**. Operator direction, 2026-10-15, makes the
+budget context-based: a cycle that found a serious problem (a P0/P1 finding,
+or an unlabelled one) does not count toward the three, because the fix of a
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
+has stopped finding serious problems, not review that keeps finding them; a
+backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle. The second family can finish cycle three
@@ -361,6 +403,16 @@ full review, its interactions with the original work, and all prior findings.
 The reviewer also receives the original diff and review history. Small code
 fixes, documentation corrections and attestation updates can use this route;
 file type alone never exempts a change from scrutiny.
+
+After a base merge, follow-up material distinguishes subsequent PR edits from
+integrated upstream work. Git reconstructs the previously reviewed contribution
+on the base included in the new head; the remaining diff contains every later
+author edit, including resolutions and reversions. The complete base integration
+diff is supplied separately for checking interactions, alongside the original
+and current PR diffs. Upstream file count alone is not expanded PR scope, and an
+empty author delta does not prove that prior reasoning still applies. If Git
+cannot reconstruct the integration conflict-free, the reviewer receives the
+complete unseparated delta and must decline uncertain scope.
 
 A bounded follow-up preserves the original design and security assumptions.
 The reviewer explicitly confirms that scope and reviews every changed line.
@@ -508,10 +560,11 @@ load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
 that the reviewer cannot browse the rest of the repository. There is no size
 limit: the material used to be inlined as one command-line argument, capped
 at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
-default model is Gemini 3.8 Flash (High); `REVIEW_AGY_MODEL` overrides it
+default model is Gemini 4 Argon (High); `REVIEW_AGY_MODEL` overrides it
 (`default` leaves the choice to `agy`). The prior 3.1 Pro pin was no longer
-served on 2026-10-13; the replacement was verified with `agy models`. This
-restores availability, with no claim of equivalent review quality. A
+served on 2026-10-13. Argon replaced the interim 3.8 Flash pin after a replay
+of three past PRs with known defects (one run each): Argon found 5 of them,
+Flash 1 and 3.1 Pro 1. That is a small sample, not a quality guarantee. A
 shell command `agy` reaches for is denied and the conversation is resumed with
 a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths
@@ -562,7 +615,8 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles, stop requests and escalate unresolved findings. Ordinary minor
+   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
    cycle requires explicit operator authorization with a recorded reason.
@@ -715,8 +769,8 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Queue it instead of watching.** When your PR is ready (CI green, `review`
-check passing), mark it ready and apply `approved-to-merge` in the same step.
+**Queue it instead of watching.** When your PR is ready (CI green, known findings addressed, and required
+sensitive-path review coverage passing), mark it ready and apply `approved-to-merge` in the same step.
 The queue below arms it in turn, GitHub updates the branch when the base moves
 (the repo has "always suggest updating pull request branches" enabled), and it
 merges as soon as the required checks pass. Do not arm with `gh pr merge
@@ -836,20 +890,26 @@ the operator's machine is awake.
   has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
-**Drafts are the one case GitHub's updater never covers** — a draft cannot take
-`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
-open draft that is behind, conflict-free, and idle for 12h, every four hours.
-It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
-It is not a second updater racing the native one: it touches only what GitHub
-will not. Two rules carried over from the retired queue updater and from PR
-#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
-secret — a fine-grained token scoped to this repository with `Contents: read
-and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
-runs in the approval-required state: #2250's refreshed head sat `blocked` with
-eight parked workflows until a maintainer approved them by hand, less
-mergeable than the stale head it replaced. And a missing secret is loud rather
-than inert: the sweep withholds every push and fails the run, and after each
-real push it fails unless a `Tests` run is actually queued on the new head.
+**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
+fill with a scheduled updater: it is not yet a merge candidate. The former
+four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
+behind draft and started the full PR matrix each time. That recreated the
+N-wide CI cascade this section forbids without advancing any PR toward landing.
+PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
+validated `89888ed7b`, the schedule replaced it with base-only merge
+`a234075f3`, launched the matrix again, and produced a failing smoke head before
+any author change or readiness decision.
+
+`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
+for exactly one positive PR number. It has no schedule and rejects an empty
+all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
+exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
+remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
+head; when its work is complete, mark it ready and label it; the serial queue
+updates that one merge candidate against the then-current base. A later base
+commit does not invalidate review or tests for lines it did not change. Invoke
+the manual action only when preserving one long-lived draft justifies a
+deliberate pre-readiness merge.
 
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
@@ -931,12 +991,14 @@ this entirely).
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
+| Draft is green but behind | Leave its evidence-bound head pinned; the queue updates it once after readiness |
+| One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review cycle 3 done | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

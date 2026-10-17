@@ -299,7 +299,17 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.36.0 (2026-10-13): consult accepts an optional host_id for the five existing
 # advisory hosts, with pinned routing, matching effort, unchanged privacy and
 # authority gates, and no fallback. Omitted selection keeps automatic routing.
-INTERFACE_CONTRACT_VERSION = "1.36.0"
+# 1.37.0 (2026-10-14): Infer omitted consult effort from a selected host; full diagnostics explain aggregate tokens and retain bounded backend failure messages.
+# 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+# 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
+# 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
+# 1.41.0 (2026-10-15): consult and delegate_inference take host_id as a bounded string checked at runtime (every existing id still accepted); consult's thorough lane follows the consult.thorough job (default order unchanged); results report the served host's family and the hosts skipped before it, with reason codes.
+# 1.42.0 (2026-10-16): call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+# 1.43.0 (2026-10-16): call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+# 1.44.0 (2026-10-17): Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+# 1.45.0 (2026-10-17): search_shared_memory lean and compact tiers list further results under more_results when limit is unset (limit of 3 or less omits them), and add state_summary.relevance_note when shown digests carry more than one relevance_basis. Response hints that named knowledge(action=...) name use_tool(tool_name='knowledge', ...), which every advertised surface can call. store_finding field descriptions drop router vocabulary, the knowledge response_to description lists its response_type values, and search_shared_memory's include_details brief names the use_tool route; those description changes move the store_finding and search_shared_memory input digests. Nothing is added, removed, retyped or renamed.
+# 1.46.0 (2026-10-17): Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
+INTERFACE_CONTRACT_VERSION = "1.46.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

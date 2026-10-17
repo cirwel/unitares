@@ -26,6 +26,13 @@ defmodule LeaseTestHelpers do
 
   @doc "Cleanup hook — DELETEs rows for a given surface_id from lease/audit tables."
   def cleanup_surface(surface_id) when is_binary(surface_id) do
+    # Test writers have terminated before on_exit; clear only this fixture's pin.
+    Postgrex.query!(
+      DB,
+      "UPDATE lease_plane.surface_leases SET effect_fence = NULL WHERE surface_id = $1",
+      [surface_id]
+    )
+
     Postgrex.query!(
       DB,
       "DELETE FROM audit.tool_usage WHERE payload->>'surface_id' = $1",

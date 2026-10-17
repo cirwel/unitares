@@ -15,9 +15,9 @@ defmodule UnitaresLeasePlane.EffectRepo do
   require Logger
 
   @doc """
-  Insert the fresh effect-payload row (rollback_state NULL). Called at propose
-  time, before the custodian starts. ON CONFLICT DO NOTHING so a same-key retry
-  does not error.
+  Insert the fresh effect-payload row (rollback_state NULL). Dispatch passes
+  the custody transaction connection so payload and reservation commit together.
+  ON CONFLICT DO NOTHING so a same-key retry does not error.
 
   `required_leases` is pre-encoded and MUST bind through `($5::text)::jsonb`.
   A bare `$5::jsonb` makes Postgrex encode the already-encoded binary a second
@@ -27,7 +27,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
   never have needed. Same defect as `DialecticSaga`; see `encode_json/1` there.
   """
   @spec insert_effect_payload(map()) :: :ok | {:error, term()}
-  def insert_effect_payload(p) do
+  def insert_effect_payload(p, conn \\ DB) do
     sql = """
     INSERT INTO effects.payloads
       (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
@@ -47,7 +47,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
       p.idempotency_digest
     ]
 
-    case Postgrex.query(DB, sql, params) do
+    case Postgrex.query(conn, sql, params) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -62,7 +62,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
   and idempotency keys before any mutation occurs.
   """
   @spec claim_promotion_payload(map()) :: :inserted | :already | {:error, term()}
-  def claim_promotion_payload(p) do
+  def claim_promotion_payload(p, conn \\ DB) do
     sql = """
     INSERT INTO effects.payloads
       (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
@@ -83,7 +83,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
       p.idempotency_digest
     ]
 
-    case Postgrex.query(DB, sql, params) do
+    case Postgrex.query(conn, sql, params) do
       {:ok, %{num_rows: 1}} -> :inserted
       {:ok, %{num_rows: 0}} -> :already
       {:error, reason} -> {:error, reason}
@@ -106,7 +106,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
            pre_image_sha256 = $2,
            pre_image_bytes = $3,
            pre_image_existed = $4
-     WHERE effect_id = $1 AND rollback_state IS NULL
+     WHERE effect_id = $1 AND rollback_state IS NULL AND committed_at IS NULL
     RETURNING effect_id
     """
 
@@ -171,8 +171,10 @@ defmodule UnitaresLeasePlane.EffectRepo do
   end
 
   @doc """
-  Orphans for the boot recovery scanner: pre-image captured, never committed.
-  Backed by the partial index in migration 052.
+  Orphans for recovery: pre-image captured, never committed, no durable custody
+  reservation. A pending row with a reservation may still have a live writer;
+  neither a timeout nor a DB reconnect establishes that it cannot resume.
+  Backed by the partial indexes in migrations 052 and 076.
   """
   @spec orphaned_payloads() :: {:ok, [map()]} | {:error, term()}
   def orphaned_payloads do
@@ -181,6 +183,10 @@ defmodule UnitaresLeasePlane.EffectRepo do
            pre_image_existed, rollback_state, committed_at, required_leases
       FROM effects.payloads
      WHERE rollback_state = 'pending' AND committed_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM lease_plane.surface_leases l
+         WHERE l.effect_fence = effects.payloads.effect_id
+       )
     """
 
     case Postgrex.query(DB, sql, []) do

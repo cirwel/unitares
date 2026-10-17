@@ -4,6 +4,10 @@ defmodule UnitaresLeasePlane.EffectRecovery do
   orphaned `effects.payloads` rows (pre-image captured, never committed) left by
   a node crash, reconciling each by content hash via `EffectReconcile`.
 
+  Rows with a durable custody reservation are excluded, even after expiry.
+  A request crash or DB disconnect does not prove its filesystem I/O is over.
+  Reserved rows need operator recovery after all possible writers are stopped.
+
   Runs SYNCHRONOUSLY in `init/1` and is placed in the supervision tree BEFORE
   the HTTP listener. This orders the scan before request handling; it is not a
   boot gate requiring every orphan to be resolved. Periodic sweeps also cover

@@ -152,12 +152,53 @@ def test_a_denied_command_is_resumed_in_the_same_conversation(tmp_path):
     assert second["cwd"] == first["cwd"]
 
 
-def test_usage_is_summed_across_resumed_turns(tmp_path):
-    denied = {**DENIED, "stdout": {**DENIED["stdout"], "usage": {"total_tokens": 5,
-                                                                 "output_tokens": 2}}}
-    script, _ = _fake_agy(tmp_path, [denied, ANSWERED])
-    _, result = _run(script)
-    assert result["usage"] == {"total_tokens": 14, "output_tokens": 2}
+@pytest.mark.parametrize("stalled", [DENIED, TRUNCATED])
+def test_resumed_usage_keeps_cumulative_snapshot_without_double_counting(tmp_path, stalled):
+    first = {"input_tokens": 100, "output_tokens": 10, "thinking_tokens": 8,
+             "cache_read_tokens": 80, "total_tokens": 110}
+    final = {"input_tokens": 140, "output_tokens": 25, "thinking_tokens": 20,
+             "cache_read_tokens": 220, "total_tokens": 165}
+    script, log = _fake_agy(tmp_path, [
+        {**stalled, "stdout": {**stalled["stdout"], "usage": first}},
+        {**ANSWERED, "stdout": {**ANSWERED["stdout"], "usage": final}},
+    ])
+    code, result = _run(script)
+    assert code == 0 and len(_calls(log)) == 2
+    assert result["usage"] == final
+
+
+def test_multiple_resumes_do_not_retain_counters_absent_from_latest_snapshot(tmp_path):
+    script, log = _fake_agy(tmp_path, [
+        {**DENIED, "stdout": {**DENIED["stdout"], "usage": {"total_tokens": 5, "output_tokens": 2}}},
+        {**DENIED, "stdout": {**DENIED["stdout"], "usage": {"total_tokens": 7, "output_tokens": 3}}},
+        ANSWERED,
+    ])
+    code, result = _run(script)
+    assert code == 0 and len(_calls(log)) == 3
+    assert result["usage"] == {"total_tokens": 9}
+
+
+@pytest.mark.parametrize("missing", [None, {}, "unavailable", {"total_tokens": True, "output_tokens": -1}])
+def test_unusable_resume_usage_preserves_last_observed_receipt(tmp_path, missing):
+    script, _ = _fake_agy(tmp_path, [
+        {**DENIED, "stdout": {**DENIED["stdout"], "usage": {"total_tokens": 5}}},
+        {**ANSWERED, "stdout": {**ANSWERED["stdout"], "usage": missing}},
+    ])
+    code, result = _run(script)
+    assert code == 0 and result["usage"] == {"total_tokens": 5}
+
+
+def test_unreported_usage_stays_unknown(tmp_path):
+    script, _ = _fake_agy(tmp_path, [DENIED, {**ANSWERED, "stdout": {
+        key: value for key, value in ANSWERED["stdout"].items() if key != "usage"}}])
+    code, result = _run(script)
+    assert code == 0 and result["usage"] == {}
+
+
+def test_usage_helper_keeps_keyword_callers_and_filters_invalid_fields():
+    observed = {"total_tokens": 5, "output_tokens": 2}
+    client.add_usage(total=observed, usage={"total_tokens": 9, "output_tokens": "unknown"})
+    assert observed == {"total_tokens": 9}
 
 
 def test_denied_actions_in_the_json_also_count_as_a_denial(tmp_path):

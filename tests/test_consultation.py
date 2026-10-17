@@ -115,7 +115,8 @@ def _failure(
 
 class TestConsultSchema:
     def test_schema_is_bounded_and_forbids_route_controls(self):
-        """Keep the CI node id stable; only the documented host enum is public."""
+        """Keep the CI node id stable. host_id is a bounded string checked at
+        runtime against the registry (interface contract 1.41.0), not an enum."""
         fields = set(ConsultParams.model_fields)
         assert fields == {
             "agent_id",
@@ -139,11 +140,16 @@ class TestConsultSchema:
         )
         schema = get_tool_input_schema(tool)
         assert schema["additionalProperties"] is False
-        assert set(schema["properties"]["host_id"]["anyOf"][0]["enum"]) == set(co._SELECTABLE_HOST_ROUTES)
+        host_schema = schema["properties"]["host_id"]["anyOf"][0]
+        assert host_schema["type"] == "string" and host_schema["maxLength"] == 128
+        assert "enum" not in host_schema
         for hidden_control in ("provider", "model", "temperature", "timeout_s"):
             assert hidden_control not in schema["properties"]
         with pytest.raises(ValidationError):
-            ConsultParams(brief="help", host_id="unknown:host")
+            ConsultParams(brief="help", host_id="x" * 129)
+        # An unknown id passes the schema; the handler refuses it with the valid
+        # ids (test_unknown_host_id_lists_the_valid_ids).
+        assert ConsultParams(brief="help", host_id="unknown:host").host_id == "unknown:host"
 
     def test_schema_rejects_blank_and_overlong_briefs(self):
         with pytest.raises(ValidationError, match="non-whitespace"):
@@ -1813,8 +1819,9 @@ async def test_allow_degraded_treats_a_live_usage_limit_like_a_cooldown(monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_id", tuple(co._SELECTABLE_HOST_ROUTES))
+@pytest.mark.parametrize("omit_effort", [False, True])
 async def test_pinned_host_reaches_existing_service_and_is_recorded(
-    monkeypatch, audit_sinks, host_id
+    monkeypatch, audit_sinks, host_id, omit_effort
 ):
     route, _, _, privacy_class = co._SELECTABLE_HOST_ROUTES[host_id]
     completed = _completed(route=route, host_id=host_id, privacy_class=privacy_class)
@@ -1830,7 +1837,7 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
     parsed = _payload(await co.handle_consult({
         "brief": _BRIEF_SENTINEL,
         "host_id": host_id,
-        "effort": "standard" if is_standard else "thorough",
+        **({} if omit_effort else {"effort": "standard" if is_standard else "thorough"}),
         "privacy": "local" if host_id == "ollama:local" else "cloud_allowed",
     }))
     assert parsed["success"] is True
@@ -1839,6 +1846,7 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
     assert selected.await_args.args[0].host_id == host_id
     unused.assert_not_awaited()
     assert parsed["request"]["host_id"] == host_id
+    assert parsed["request"]["effort"] == ("standard" if is_standard else "thorough")
     assert parsed["authority"]["advisory"] is True
     assert parsed["authority"]["can_satisfy_peer_review"] is False
     assert "failover" not in parsed
@@ -1851,12 +1859,12 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", [
     {"host_id": "hf:router"},
-    {"host_id": "claude:host-adapter", "effort": "thorough"},
-    {"host_id": "codex:host-adapter", "effort": "thorough"},
-    {"host_id": "antigravity:host-adapter", "effort": "thorough"},
+    {"host_id": "claude:host-adapter"},
+    {"host_id": "codex:host-adapter"},
+    {"host_id": "antigravity:host-adapter"},
     {"host_id": "ollama:local", "effort": "thorough"},
     {"host_id": "hf:router", "effort": "thorough", "privacy": "cloud_allowed"},
-    {"host_id": "codex:host-adapter", "privacy": "cloud_allowed"},
+    {"host_id": "codex:host-adapter", "effort": "standard", "privacy": "cloud_allowed"},
     {"host_id": "ollama:local", "allow_degraded": True},
     {"host_id": "codex:host-adapter", "effort": "thorough",
      "privacy": "cloud_allowed", "allow_degraded": True},
@@ -2001,3 +2009,302 @@ def test_caller_family_falls_back_to_bound_agent_metadata_over_generic_http_ua(
     # Non-token substrings like "jargon" or "strategy" do not false-match google.
     assert co._family_of("jargon-model") is None
     assert co._family_of("strategy-runner") is None
+
+
+@pytest.mark.parametrize("host_id,expected", [
+    (None, "standard"),
+    ("ollama:local", "standard"),
+    ("hf:router", "standard"),
+    ("claude:host-adapter", "thorough"),
+    ("codex:host-adapter", "thorough"),
+    ("antigravity:host-adapter", "thorough"),
+])
+def test_schema_materializes_host_effort_only_when_omitted(host_id, expected):
+    parsed = ConsultParams(brief="q", host_id=host_id)
+    assert parsed.model_dump()["effort"] == expected
+    # Explicit contradictions survive schema validation to the router's
+    # existing policy refusal; no supplied choice is silently overwritten.
+    explicit = "standard" if expected == "thorough" else "thorough"
+    assert ConsultParams(brief="q", host_id=host_id, effort=explicit).effort == explicit
+    with pytest.raises(ValidationError):
+        ConsultParams(brief="q", host_id=host_id, effort=None)
+    # An unconditional advertised standard default would encourage callers
+    # to insert it and defeat inference for explicitly selected CLI hosts.
+    assert "default" not in ConsultParams.model_json_schema()["properties"]["effort"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", ["compact", "full"])
+@pytest.mark.parametrize("tokens", [0, 28044])
+async def test_usage_explanation_is_full_diagnostics_only_and_preserves_counts(
+    monkeypatch, audit_sinks, response_mode, tokens
+):
+    result = _completed()
+    result.inference["tokens_used"] = tokens
+    result.inference["tokens_used_note"] = "untrusted-provider-note"
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=result))
+    parsed = _payload(await co.handle_consult({"brief": "q", "response_mode": response_mode}))
+    assert parsed["success"] is True
+    if response_mode == "full":
+        assert parsed["diagnostics"]["tokens_used"] == tokens
+        assert "billed cost" in parsed["diagnostics"]["tokens_used_note"]
+        assert "not reported" in parsed["diagnostics"]["tokens_used_note"]
+    else:
+        assert "diagnostics" not in parsed
+    assert "untrusted-provider-note" not in json.dumps(parsed)
+    _, pg = await audit_sinks()
+    assert pg[0]["details"]["route"]["tokens_used"] == tokens
+    assert "tokens_used_note" not in json.dumps(pg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", ["compact", "full"])
+async def test_bounded_backend_failure_message_is_caller_only(
+    monkeypatch, audit_sinks, response_mode
+):
+    message = "FAILURE-MESSAGE-SENTINEL " + "private backend detail " * 80
+    result = InferenceOutcome.failed(
+        message, code="DELEGATED_INFERENCE_FAILED", category="system_error",
+        details={"adapter_status": "malformed", "exit_status": 0},
+        recovery={}, execution_started=True,
+    )
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=result))
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "host_id": "claude:host-adapter", "privacy": "cloud_allowed",
+        "response_mode": response_mode,
+    }))
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_FAILED"
+    assert "advice" not in parsed
+    if response_mode == "full":
+        assert parsed["diagnostics"]["upstream"]["message"] == message[:500]
+    else:
+        assert "FAILURE-MESSAGE-SENTINEL" not in json.dumps(parsed)
+    _, pg = await audit_sinks()
+    assert "FAILURE-MESSAGE-SENTINEL" not in json.dumps(pg)
+    assert "private backend detail" not in json.dumps(pg)
+
+
+# --- inference-hosts-config-v0 step 2: the consult.thorough job ------------------
+
+from src import inference_config as _ic
+
+# The per-family peer table this step replaced, kept here as the parity oracle.
+_OLD_THOROUGH_PEERS = {
+    "anthropic": ("codex:host-adapter", "antigravity:host-adapter"),
+    "openai": ("claude:host-adapter", "antigravity:host-adapter"),
+    "google": ("claude:host-adapter", "codex:host-adapter"),
+    None: ("claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"),
+}
+
+
+@pytest.fixture
+def hosts_file(monkeypatch, tmp_path):
+    _ic._cache.update(key=None, result=None)
+
+    def _write(text):
+        p = tmp_path / "inference.yaml"
+        p.write_text(text)
+        p.chmod(0o600)
+        monkeypatch.setenv(_ic.HOSTS_FILE_ENV, str(p))
+        _ic._cache.update(key=None, result=None)
+        return p
+
+    yield _write
+    _ic._cache.update(key=None, result=None)
+
+
+@pytest.mark.parametrize("family", list(_OLD_THOROUGH_PEERS))
+def test_default_job_order_matches_the_old_peer_table(monkeypatch, family):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    plan = co._thorough_plan(family)
+    assert plan.peers == _OLD_THOROUGH_PEERS[family]
+    assert plan.config_error is None and not plan.job_configured
+
+
+def test_file_job_order_is_followed_and_only_shortened(hosts_file):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [codex:host-adapter, claude:host-adapter] }\n")
+    assert co._thorough_plan(None).peers == ("codex:host-adapter", "claude:host-adapter")
+    plan = co._thorough_plan("openai")
+    assert plan.peers == ("claude:host-adapter",)
+    assert plan.skipped == ({"host_id": "codex:host-adapter", "reason": "excluded_family",
+                             "detail": "same family as the caller (openai)"},)
+
+
+def test_disabled_and_declared_hosts_are_skipped_with_reasons(hosts_file):
+    hosts_file(
+        "version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n"
+        "  external:acme/glm: { kind: cli, adapter: claude_code, model: glm-5.3, family: zhipu,"
+        " egress_class: public_only }\n"
+        "jobs:\n  consult.thorough: { prefer: [claude:host-adapter, external:acme/glm, codex:host-adapter] }\n")
+    plan = co._thorough_plan(None)
+    assert plan.peers == ("codex:host-adapter",)
+    reasons = {s["host_id"]: s["reason"] for s in plan.skipped}
+    assert reasons == {"claude:host-adapter": "disabled", "external:acme/glm": "unconfigured"}
+    assert set(reasons.values()) <= set(_ic.SKIP_REASONS)
+
+
+@pytest.mark.asyncio
+async def test_broken_hosts_file_refuses_thorough_but_not_standard(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    thorough = AsyncMock(side_effect=AssertionError("must not delegate"))
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "INFERENCE_CONFIG_INVALID" or "INFERENCE_CONFIG_INVALID" in json.dumps(parsed)
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    ok = _payload(await co.handle_consult({"brief": "q", "effort": "standard", "privacy": "local"}))
+    assert ok["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_every_host_skipped_refuses_with_the_skips(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [claude:host-adapter] }\n")
+    monkeypatch.setattr(co, "_caller_family", lambda: "anthropic")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is False
+    text = json.dumps(parsed)
+    assert "CONSULT_NO_ELIGIBLE_HOST" in text and "excluded_family" in text
+
+
+@pytest.mark.asyncio
+async def test_pinned_host_outside_the_job_or_disabled_is_refused(monkeypatch, hosts_file):
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [codex:host-adapter] }\n")
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "claude:host-adapter", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is False and "CONSULT_HOST_NOT_IN_JOB" in json.dumps(parsed)
+    hosts_file("version: 1\nhosts:\n  codex:host-adapter: { enabled: false }\n")
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "codex:host-adapter", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is False and "CONSULT_HOST_DISABLED" in json.dumps(parsed)
+
+
+@pytest.mark.asyncio
+async def test_unknown_host_id_lists_the_valid_ids(monkeypatch):
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "external:acme/glm", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is False
+    assert "claude:host-adapter" in json.dumps(parsed)
+
+
+@pytest.mark.asyncio
+async def test_skipped_and_family_reach_the_result(monkeypatch, hosts_file):
+    hosts_file("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n")
+    monkeypatch.setattr(co, "host_adapter_available", lambda host_id: True)
+    completed = _completed(route="agent_orchestrator", host_id="codex:host-adapter",
+                           privacy_class="operator_authorized_external")
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=completed))
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "response_mode": "full"}))
+    assert parsed["success"] is True, parsed
+    assert parsed["skipped"][0]["host_id"] == "claude:host-adapter"
+    assert parsed["skipped"][0]["reason"] == "disabled"
+    assert parsed["diagnostics"]["family"] == "openai"
+
+
+def test_peer_table_view_still_matches_the_old_table():
+    assert co._THOROUGH_PEERS == _OLD_THOROUGH_PEERS
+
+
+# Regression tests for the step-2 review (skipped semantics, privacy gating,
+# blocked jobs degrading without contacting a host, family in compact results).
+
+def _served_by(host_id):
+    return _completed(route="agent_orchestrator", host_id=host_id,
+                      privacy_class="operator_authorized_external")
+
+
+@pytest.mark.asyncio
+async def test_skipped_never_names_hosts_after_the_one_that_served(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    _thorough_as(monkeypatch, caller=SessionSignals(reported_harness_type="codex"),
+                 available=_ALL_HOSTS,
+                 results={"claude:host-adapter": _served_by("claude:host-adapter")})
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is True
+    # codex is excluded as the caller's family, but it sits after claude, which
+    # served first, so it was never passed over.
+    assert "skipped" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_failover_records_the_hosts_it_passes(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    calls = _thorough_as(
+        monkeypatch, caller=SessionSignals(), available={"claude:host-adapter", "antigravity:host-adapter"},
+        results={"claude:host-adapter": _quota_failure(),
+                 "antigravity:host-adapter": _served_by("antigravity:host-adapter")})
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert parsed["success"] is True
+    assert calls == ["claude:host-adapter", "antigravity:host-adapter"]
+    assert [s["host_id"] for s in parsed["skipped"]] == ["codex:host-adapter"]
+    assert parsed["skipped"][0]["reason"] in {"unconfigured", "cooldown"}
+
+
+@pytest.mark.asyncio
+async def test_privacy_local_ignores_a_broken_hosts_file(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "local", "allow_degraded": True}))
+    assert parsed["success"] is True
+    assert "INFERENCE_CONFIG_INVALID" not in json.dumps(parsed)
+    assert "skipped" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_blocked_job_degrades_without_contacting_any_host(monkeypatch, hosts_file, audit_sinks):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [claude:host-adapter] }\n")
+    monkeypatch.setattr(co, "_caller_family", lambda: "anthropic")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not contact a host")))
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "allow_degraded": True}))
+    assert parsed["success"] is True
+    assert parsed["degradation"]["reason_code"] == "CONSULT_NO_ELIGIBLE_HOST"
+    assert parsed["skipped"][0]["reason"] == "excluded_family"
+    _jsonl, pg = await audit_sinks()
+    assert pg and pg[-1]["details"].get("skipped")
+    assert "thorough_host_id" not in pg[-1]["details"].get("request", {})
+
+
+@pytest.mark.asyncio
+async def test_policy_refusals_are_recorded(monkeypatch, hosts_file, audit_sinks):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [codex:host-adapter] }\n")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "claude:host-adapter", "privacy": "cloud_allowed"}))
+    assert parsed["error_code"] == "CONSULT_HOST_NOT_IN_JOB"
+    _jsonl, pg = await audit_sinks()
+    assert pg, "a routed policy refusal leaves an audit record"
+
+
+@pytest.mark.asyncio
+async def test_family_reaches_the_compact_result(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    _thorough_as(monkeypatch, caller=SessionSignals(), available=_ALL_HOSTS,
+                 results={"claude:host-adapter": _served_by("claude:host-adapter")})
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert parsed["family"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_failover_with_no_next_host_records_nothing_after_the_last_tried(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    calls = _thorough_as(monkeypatch, caller=SessionSignals(), available={"claude:host-adapter"},
+                         results={"claude:host-adapter": _quota_failure()})
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert calls == ["claude:host-adapter"]
+    assert "skipped" not in parsed

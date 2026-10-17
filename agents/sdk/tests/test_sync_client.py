@@ -208,7 +208,8 @@ class TestSyncToolMapping:
             return {"success": True, "response": "hi"}
 
         client.call_tool = fake_call
-        client.call_model("test prompt")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            client.call_model("test prompt")
         assert "provider" not in captured_args[0]
         assert "model" not in captured_args[0]
 
@@ -234,11 +235,112 @@ class TestSyncToolMapping:
             }
 
         client.call_tool = fake_call
-        result = client.call_model("test prompt", host_id="ollama:local")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            result = client.call_model("test prompt", host_id="ollama:local")
         assert captured_args[0]["host_id"] == "ollama:local"
         assert result.model_used == "gemma4:latest"
         assert result.inference is not None
         assert result.inference.host_id == "ollama:local"
+
+    def test_consult_maps_tool_args_and_timeout(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured.update({
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "timeout": kwargs.get("timeout"),
+                "retry": kwargs.get("retry"),
+            })
+            return {"success": True, "advice": "search", "status": "completed"}
+
+        client.call_tool = fake_call
+        result = client.consult("classify this", effort="standard")
+        assert captured["tool_name"] == "consult"
+        assert captured["arguments"]["brief"] == "classify this"
+        assert captured["arguments"]["effort"] == "standard"
+        assert "host_id" not in captured["arguments"]
+        assert captured["timeout"] > 480
+        assert captured["retry"] is False
+        assert result.advice == "search"
+
+    def test_rest_consult_is_sent_once_on_503(self, monkeypatch):
+        """retry=False also stops the REST 503 retry: a proxy may have
+        forwarded the first request."""
+        import io
+        import urllib.error
+        import urllib.request
+
+        from unitares_sdk.errors import GovernanceUnavailableError
+
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req)
+            raise urllib.error.HTTPError(
+                req.full_url, 503, "Service Unavailable",
+                {"Retry-After": "0"}, io.BytesIO(b"{}"),
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        client = SyncGovernanceClient(transport="rest")
+        with pytest.raises(GovernanceUnavailableError):
+            client.consult("brief")
+        assert len(calls) == 1
+
+    def test_rest_refusal_raises_tool_refused(self, monkeypatch):
+        """Same exception type as the async client, through the real path."""
+        import io
+        import json as _json
+        import urllib.request
+
+        from unitares_sdk.errors import GovernanceConnectionError, GovernanceToolRefused
+
+        body = _json.dumps({
+            "success": True,
+            "result": {"success": False, "error": "privacy conflict"},
+        }).encode()
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", lambda req, timeout=None: _Resp(body),
+        )
+        client = SyncGovernanceClient(transport="rest")
+        with pytest.raises(GovernanceToolRefused, match="privacy conflict") as caught:
+            client.consult("brief")
+        # Still a GovernanceConnectionError for existing handlers.
+        assert isinstance(caught.value, GovernanceConnectionError)
+
+    def test_delegate_inference_passes_retry_false(self):
+        client = SyncGovernanceClient(transport="rest")
+        seen = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            seen.update({"tool_name": tool_name, "retry": kwargs.get("retry")})
+            return {"success": True, "response": "ok"}
+
+        client.call_tool = fake_call
+        client.delegate_inference("review this", timeout_s=60)
+        assert seen == {"tool_name": "delegate_inference", "retry": False}
+
+    def test_mcp_transport_forwards_retry_flag(self):
+        client = SyncGovernanceClient(transport="mcp")
+        seen = {}
+
+        def fake_mcp_call(tool_name, arguments, *, timeout=None, retry=True):
+            seen.update({"tool_name": tool_name, "retry": retry})
+            return {"success": True, "advice": "ok"}
+
+        client._mcp_call = fake_mcp_call
+        client.consult("brief")
+        assert seen == {"tool_name": "consult", "retry": False}
 
     def test_delegate_inference_maps_tool_and_timeout(self):
         client = SyncGovernanceClient(transport="rest")
@@ -275,7 +377,8 @@ class TestSyncToolMapping:
         assert captured["timeout"] == 135.0
         assert result.models_used == ["claude-opus-5"]
 
-    def test_list_inference_hosts_maps_tool(self):
+    @pytest.mark.parametrize("include_unconfigured", [None, False, True])
+    def test_list_inference_hosts_maps_tool(self, include_unconfigured):
         client = SyncGovernanceClient(transport="rest")
         calls = []
 
@@ -289,9 +392,11 @@ class TestSyncToolMapping:
             }
 
         client.call_tool = fake_call
-        result = client.list_inference_hosts(provider_kind="ollama")
+        supplied = {} if include_unconfigured is None else {"include_unconfigured": include_unconfigured}
+        result = client.list_inference_hosts(provider_kind="ollama", **supplied)
         assert calls[-1][0] == "list_inference_hosts"
         assert calls[-1][1]["provider_kind"] == "ollama"
+        assert calls[-1][1]["include_unconfigured"] is (include_unconfigured is True)
         assert result.hosts[0].host_id == "ollama:local"
 
     def test_describe_inference_host_maps_tool(self):

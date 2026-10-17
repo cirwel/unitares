@@ -211,3 +211,14 @@ def test_a_refused_url_is_named_without_its_credentials(monkeypatch):
         )
         assert plan.hosts == () and plan.error, external
         assert secret not in plan.error and "user" not in plan.error, plan.error
+
+
+def test_a_resolution_error_is_an_invalid_listed_plan():
+    from agents.dialectic_reviewer.host_list import reviewer_host_plan
+
+    plan = reviewer_host_plan({
+        "UNITARES_DIALECTIC_REVIEWER_HOSTS": "codex",
+        "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR": "the inference hosts file does not load",
+    }, local_base_url="http://127.0.0.1:11434/v1")
+    assert plan.listed is True and plan.hosts == ()
+    assert "could not be resolved" in plan.error

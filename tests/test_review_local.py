@@ -1,5 +1,6 @@
 """Failure modes must not create passing local review records."""
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import pytest
@@ -173,6 +174,38 @@ def test_incomplete_local_review_history_fails_closed(tmp_path, data):
         (run / 'manifest.json').write_text(data)
     with pytest.raises(ValueError, match='history incomplete'):
         local.local_completed_rounds(tmp_path, 123, set())
+
+
+@pytest.mark.parametrize('missing', ['head', 'base'])
+def test_cli_missing_local_objects_reports_unreviewed(repo, monkeypatch, capsys, missing):
+    path, head = repo
+    run = path / '.git/local-reviews/pr-123-missing'
+    run.mkdir(parents=True)
+    receipt = {'pr': 123, 'status': 'CLEAN', 'head': head, 'base': head,
+               'started_at': 100, 'architecture': 'gemma4'}
+    receipt[missing] = 'f' * 40
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+    gate = local.gate_module()
+    monkeypatch.setattr(gate, 'ROUND_CAP_ENABLED', True)
+    monkeypatch.setattr(gate, 'repo_slug', lambda: 'o/r')
+    monkeypatch.setattr(gate, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(gate, 'pr_rounds', lambda *a: gate.CodexRounds())
+    monkeypatch.setattr(local, 'gate_module', lambda: gate)
+    monkeypatch.setattr(local, 'pr_info', lambda *a: {
+        'state': 'OPEN', 'headRefOid': head, 'baseRefOid': head})
+    monkeypatch.setattr(local, 'api', lambda *a: {
+        'details': {'format': 'gguf'}, 'capabilities': ['tools'],
+        'model_info': {'general.architecture': 'gemma4', 'gemma4.context_length': 131072}})
+    monkeypatch.setattr(local, 'review', lambda *a, **kw: pytest.fail('spent budget with missing history'))
+    command = local.command
+    monkeypatch.setattr(local, 'command', lambda *a, **kw:
+                        '' if a[:2] == ('git', 'fetch') else command(*a, **kw))
+    monkeypatch.setattr(Path, 'home', lambda: path)
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    assert local.cli(['--repo', str(path), '--pr', '123', '--model', 'gemma4']) == 2
+    assert 'UNREVIEWED: Local review history incomplete' in capsys.readouterr().err
+    assert json.loads((run / 'manifest.json').read_text()) == receipt
+    assert list(run.parent.iterdir()) == [run]
 
 
 @pytest.mark.parametrize('model, metadata', [

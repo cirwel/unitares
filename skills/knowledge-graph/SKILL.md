@@ -3,13 +3,14 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-10-13"
+last_verified: "2026-10-16"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_notices.py
   - unitares/db/postgres/migrations/074_knowledge_change_notices.sql
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
+  - unitares/src/mcp_handlers/knowledge/read_metadata.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
   - unitares/src/mcp_handlers/schemas/knowledge.py
   - unitares/src/alias_schema.py
@@ -17,7 +18,12 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/tool_descriptions.json
   - unitares/src/mcp_handlers/support/param_normalization.py
-  - unitares/src/mcp_handlers/middleware/envelope_step.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_MEMORY_SUGGESTION_LIMIT
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_SEARCH_MORE_ROW_LIMIT
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_memory_suggestions
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_append_more_results
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_enforce_search_projection_budget
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_note_stale_digests
   - unitares/src/knowledge_graph.py
   - unitares/src/knowledge_graph_lifecycle.py
   - unitares/src/storage/knowledge_graph_age.py
@@ -51,11 +57,33 @@ router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
 The `lean` and `compact` tiers show three digests whatever `limit` asked for.
-Pass `limit` above 3 and the same response lists the results after those three
-under `more_results`, one row each (`discovery_id`, `type`, `status`, a short
-summary), up to 17 rows; `state_summary.more_results_shown` counts them. Open
-any row with `knowledge(action="details", discovery_id=...)`. Leave `limit`
-unset and the response is the three digests alone.
+The same response lists the results after those three under `more_results`,
+one row each (`discovery_id`, `type`, `status`, a short summary), up to 17
+rows; `state_summary.more_results_shown` counts them. Pass `limit` of 3 or
+less for the three digests alone. Open any row with
+`knowledge(action="details", discovery_id=...)`; on the progressive surface
+that router is reached as
+`use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": ...})`,
+which is the form the response hints name. When the digests carry scores on
+more than one `relevance_basis`, `state_summary.relevance_note` says they are
+not comparable; the list order is the ranking.
+
+Lean reads keep the result tier, an `open_one` route and any disclosure that an
+explicit `include_details=true` request was overridden. Repeated mode tutorials
+and serialization diagnostics live in `compact`; `full` retains the canonical
+payload. The response budget is a ceiling, so spare room need not be filled with
+coaching. Confidence/degradation caveats, author identity, imported-memory
+warnings, supersession and appended-note pointers retain their existing budget
+and omission-marker rules.
+
+For a small working context, search first, open the few relevant records by ID,
+and use their note offsets or pagination when needed. Keep the decision, its
+scope and caveats, and evidence IDs in the working summary; retrieve the original
+record when the evidence must be checked. A summary is not a replacement for
+its source. After processing delivered change notices, acknowledge their exact
+revision IDs through `knowledge(action="notices", acknowledge=[...])` so the
+same receipts stop repeating. Do not acknowledge unseen revisions or mute
+delivery merely to reduce context.
 
 You may omit `query` entirely when filtering by `tags`, `discovery_type`,
 `severity`, `status`, or `agent_id_filter` (author UUID). The explicit
@@ -101,9 +129,16 @@ Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
 relevance contests against native findings and evidence-linked governed claims.
 This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
-to preserve raw backend order, or filter by a source-memory tag to inspect that
+to preserve raw backend order, or filter by a `source-<provider>-memory` tag to inspect that
 lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
 window) apply no authority reorder: time order is what they asked for.
+
+A queryless listing (no `query`, for example a `status="open"` sweep) leaves
+unpromoted imported memory out by default, because with nothing to match there
+is no contest for the down-rank to decide and imports would fill the page. The
+response reports `imported_omitted` with a hint; the same two routes read them
+(`authority_mode="all"`, or a `source-<provider>-memory` tag filter). Check-in memory
+suggestions leave them out as well. A query search still returns them.
 
 ## Quick Contribution
 
@@ -156,12 +191,14 @@ For more control, use the `knowledge()` tool with an action parameter:
 
 ## Memory authority and promotion
 
-Imported memory is context, not policy. Source tags such as `memory-sync` and
-the harness-neutral `source-<provider>-memory` pattern classify a row as
-`imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
+Imported memory is context, not policy. The harness-neutral
+`source-<provider>-memory` tag pattern (for example `source-claude-memory`)
+classifies a row as `imported_context`. Topic words such as `memory-sync` or
+`imported-memory` do not: a finding about memory sync is not an import.
+Agent-to-agent channel messages (a `channel-<topic>` tag
 together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
 `channel_message` and get the same close-contest down-rank. A tag filter made
-only of source-memory tags reads that lane in its own order. A `channel-*` tag
+only of `source-<provider>-memory` tags reads that lane in its own order. A `channel-*` tag
 filter lifts the down-rank only from channel messages on that lane; every other
 row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.
 A row becomes
@@ -363,6 +400,27 @@ in full mode. A truncated row reports its original character/byte lengths and
 `details_retrieval` arguments; use `knowledge(action="details", discovery_id=...,
 offset=0, length=2000)` and the returned pagination to read the stored evidence.
 Native findings and governed promotions keep their existing behavior.
+
+### Appended notes on a retrieved record
+
+A summary can predate later evidence. Search, agent-scoped get and details reads
+carry `resolution_notes` when the full stored details contain recognizable dated
+`Resolution notes (...)` blocks. It reports `source="details_text"`, `count`,
+`first_offset` and `latest_offset`. These are character offsets, in the same units
+as details pagination, computed before previews or imported-memory truncation.
+
+Open the last block with `knowledge(action="details", discovery_id=...,
+offset=<latest_offset>)`; start at `first_offset` to inspect the note history.
+The last block may be administrative while an earlier one contains the correction.
+Use the returned pagination to continue through long notes. On a later read,
+compare its fresh note locations before reusing offsets: replacing details can
+move or remove them.
+
+These locations are parsed from authored text, not authenticated update receipts.
+“Latest” means last in text order, not most authoritative. A note can confirm the
+original claim, correct it, or append unrelated progress; neither `resolved` nor
+the presence of notes means the summary is false. Read the evidence before acting.
+Original content, authorship, lifecycle and ranking are unchanged.
 
 The imported digest's `imported_memory` marker says `trust="unreviewed"` and
 gives `age_days` since the KG row was created (`age_basis="created_at"`), or null

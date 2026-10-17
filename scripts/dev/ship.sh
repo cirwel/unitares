@@ -27,7 +27,8 @@
 #
 # Every PR push runs ./scripts/dev/review.sh and joins its result, so the
 # working agent can act on findings before leaving. SHIP_NO_REVIEW=1 explicitly
-# defers review; the author still owns starting/joining it before readiness.
+# defers review. Ordinary changes may proceed with an unreviewed note;
+# sensitive paths still require their review coverage before readiness.
 #
 # Requirements: staged changes (git add already done) unless --stage-all is
 # used, gh CLI authed.
@@ -488,7 +489,8 @@ case "$DELIVERY" in
                 fi
                 if [[ "$review_rc" == "2" ]]; then
                     echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
-                    echo "[ship] report the blocker and next action explicitly; keep the PR draft."
+                    echo "[ship] note this in the PR body; ordinary changes may proceed after validation."
+                    echo "[ship] request the shared host with review-requested; sensitive paths still require review coverage."
                     exit 2
                 fi
                 echo "[ship] branch pushed and PR opened; review needs author follow-up."
@@ -496,7 +498,8 @@ case "$DELIVERY" in
                 exit 1
             fi
         else
-            echo "[ship] review explicitly deferred; author must run ./scripts/dev/review.sh before marking ready."
+            echo "[ship] review deferred; note this in the PR body or add review-requested for the shared host."
+            echo "[ship] ordinary changes may proceed after validation; sensitive paths still require review coverage."
         fi
         ;;
     *)

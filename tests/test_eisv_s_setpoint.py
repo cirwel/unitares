@@ -94,24 +94,56 @@ def _manifold_at_rest(cls: str) -> float:
     return 1.0 - max(0.0, min(1.0, norm / get_delta_norm_max(cls).value))
 
 
-def test_manifold_at_ode_rest_only_clears_critical_for_default():
+def test_ode_rest_E_and_I_do_not_depend_on_the_setpoint():
+    """The E and I equations read S - σ, so σ moves the S rest and nothing else
+    (contract row 50). Before 2026-10-15 they read raw S and every σ > 0 lowered
+    the I rest by k·σ/γ_I and the E rest with it."""
+    off = _rest(0.0)
+    for cls in ("default", "embodied", "resident_persistent", "engaged_ephemeral", "ephemeral"):
+        r = _rest(get_healthy_operating_point(cls)[2] - S_SETPOINT_DRIVER_OFFSET)
+        assert r.E == pytest.approx(off.E, abs=1e-6), cls
+        assert r.I == pytest.approx(off.I, abs=1e-6), cls
+        assert r.V == pytest.approx(off.V, abs=1e-6), cls
+
+
+def test_saturation_diagnostic_forcing_reads_the_detrended_S():
+    """The agent-visible saturation diagnostic's forcing term carries the same
+    -k·(S - σ) as dI/dt, so its linear I fixed point does not drop by k·σ/γ_I
+    against the dynamics it describes."""
+    from governance_core.dynamics import compute_saturation_diagnostics
+
+    sigma = get_s_setpoint("engaged_ephemeral")
+    r = _rest(sigma)
+    on = compute_saturation_diagnostics(r, TH, P, s_setpoint=sigma)
+    off = compute_saturation_diagnostics(r, TH, P)
+    assert on["A"] - off["A"] == pytest.approx(P.k * sigma, abs=1e-12)
+    assert on["A"] == pytest.approx(
+        compute_saturation_diagnostics(_rest(0.0), TH, P)["A"], abs=1e-6)
+
+
+def test_manifold_at_ode_rest_characterization():
     """Characterizes a real, currently-open gap (NOT a passing Stage-B enabler).
 
     The S-setpoint lands S on each class's measured healthy S, but there is no
-    E/I setpoint — the ODE rests near a single universal point (E≈0.70, I≈0.73)
+    E/I setpoint — the ODE rests at one universal point (E≈0.805, I≈0.822)
     regardless of class. With the generic 2026-06-27 anchors (which reflect where
-    classes ACTUALLY operate), only `default` sits close enough to that ODE rest
-    for manifold-at-rest to clear the 0.40 critical line; `embodied` (low-E),
-    `resident_persistent`, and `engaged_ephemeral` do not. (The old April anchors
-    masked this — they were all clustered near the ODE rest.)
+    classes ACTUALLY operate), `default` and `engaged_ephemeral` (the widest
+    ‖Δ‖max) sit close enough to that rest for manifold-at-rest to clear the 0.40
+    critical line; `embodied` (low-E), `resident_persistent` and `ephemeral` do
+    not. (The old April anchors masked this — they were all clustered near the
+    ODE rest.) Until 2026-10-15 the E and I equations read raw S, which dragged
+    the rest to E≈0.70, I≈0.73 by class and decided a different pair of classes:
+    `ephemeral` cleared and `engaged_ephemeral` did not. Neither pair is evidence
+    the gap closed.
 
     Harmless live: manifold coherence is read on the *behavioral* EISV (which
     matches the anchor) and grounding APPLY is off. But it is the concrete
     precondition for GROUNDING_APPLY: low-/off-rest classes need an E/I setpoint
     or a behavioral-path manifold before the ODE rest reads coherent. When that
     lands, this test should flip — that's the signal to re-evaluate APPLY."""
-    assert _manifold_at_rest("default") >= GC.COHERENCE_CRITICAL_THRESHOLD
-    for cls in ("embodied", "resident_persistent", "engaged_ephemeral"):
+    for cls in ("default", "engaged_ephemeral"):
+        assert _manifold_at_rest(cls) >= GC.COHERENCE_CRITICAL_THRESHOLD, cls
+    for cls in ("embodied", "resident_persistent", "ephemeral"):
         assert _manifold_at_rest(cls) < GC.COHERENCE_CRITICAL_THRESHOLD, (
             f"{cls}: manifold@rest now clears critical — E/I-setpoint gap may be "
             f"closed; re-evaluate GROUNDING_APPLY and update this characterization"

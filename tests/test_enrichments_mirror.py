@@ -450,3 +450,30 @@ class TestDedupeSurfacedKg:
         with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
             out = await _dedupe_surfaced_kg(ctx, results)
         assert out == results
+
+
+@pytest.mark.asyncio
+async def test_kg_checkin_surfacing_skips_imported_memory(monkeypatch):
+    """A surfaced entry carries no authority marker, so an unpromoted import
+    would arrive unlabelled as something to build on. It stays in explicit
+    search."""
+    from src.knowledge_graph import DiscoveryNode
+
+    imported = DiscoveryNode(
+        id="memory-1", agent_id="sync", type="note",
+        summary="an imported harness memory", tags=["source-any-harness-memory"],
+    )
+    native = DiscoveryNode(
+        id="finding-1", agent_id="agent-a", type="insight",
+        summary="a native finding", tags=["kg-hygiene"],
+    )
+    graph = MagicMock()
+    graph.semantic_search = AsyncMock(return_value=[(imported, 0.9), (native, 0.8)])
+
+    import src.knowledge_graph as kg_mod
+    monkeypatch.setattr(kg_mod, "get_knowledge_graph", AsyncMock(return_value=graph))
+
+    ctx = _make_ctx(response_text="a real check-in long enough to pass the >=10 char gate")
+    result = await _search_kg_by_checkin_text(ctx)
+
+    assert [entry["discovery_id"] for entry in result] == ["finding-1"]

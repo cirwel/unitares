@@ -187,8 +187,8 @@ def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
 
 @mcp_tool("list_inference_hosts", timeout=5.0, requires_identity="pre_onboard")
 async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """List known inference hosts and adapter placeholders."""
-    include_unconfigured = arguments.get("include_unconfigured", True)
+    """List configured inference hosts, with explicit opt-in to the full inventory."""
+    include_unconfigured = arguments.get("include_unconfigured", False)
     if isinstance(include_unconfigured, str):
         include_unconfigured = include_unconfigured.strip().lower() not in (
             "0", "false", "no",
@@ -912,7 +912,17 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         )
 
 
-@mcp_tool("call_model", timeout=_call_model_timeout())
+# Deprecated 2026-10-16 in favour of consult(effort='standard'), which reaches
+# the same local host through run_model_inference. Only the public name is
+# deprecated: the gateway intent classifier (max_tokens=10, which consult
+# does not take) and the KG stale-entry check still call this handler, and
+# both must move before the name can be removed.
+@mcp_tool(
+    "call_model",
+    timeout=_call_model_timeout(),
+    deprecated=True,
+    superseded_by="consult",
+)
 async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Call a standard advisory model for reasoning, generation, or analysis."""
     prompt, error = require_argument(arguments, "prompt")
