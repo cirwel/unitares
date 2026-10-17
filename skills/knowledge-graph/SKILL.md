@@ -57,11 +57,16 @@ router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
 The `lean` and `compact` tiers show three digests whatever `limit` asked for.
-Pass `limit` above 3 and the same response lists the results after those three
-under `more_results`, one row each (`discovery_id`, `type`, `status`, a short
-summary), up to 17 rows; `state_summary.more_results_shown` counts them. Open
-any row with `knowledge(action="details", discovery_id=...)`. Leave `limit`
-unset and the response is the three digests alone.
+The same response lists the results after those three under `more_results`,
+one row each (`discovery_id`, `type`, `status`, a short summary), up to 17
+rows; `state_summary.more_results_shown` counts them. Pass `limit` of 3 or
+less for the three digests alone. Open any row with
+`knowledge(action="details", discovery_id=...)`; on the progressive surface
+that router is reached as
+`use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": ...})`,
+which is the form the response hints name. When the digests carry scores on
+more than one `relevance_basis`, `state_summary.relevance_note` says they are
+not comparable; the list order is the ranking.
 
 Lean reads keep the result tier, an `open_one` route and any disclosure that an
 explicit `include_details=true` request was overridden. Repeated mode tutorials
