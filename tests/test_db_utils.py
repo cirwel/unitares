@@ -212,6 +212,7 @@ async def ensure_test_database_schema() -> None:
 # fails if a new foreign key adds a child that is not named here.
 TRUNCATE_TABLES = [
     "coordination.session_resolution_sagas",
+    "coordination.dialectic_resolution_effects",
     "core.dialectic_messages",
     "core.dialectic_sessions",
     "core.agent_state",

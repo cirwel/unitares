@@ -29,6 +29,8 @@ Usage::
 
     python3 scripts/dev/apply_migrations.py             # dry run (report only)
     python3 scripts/dev/apply_migrations.py --apply      # apply pending migrations
+    python3 scripts/dev/apply_migrations.py --apply \
+      --dialectic-writers-quiesced                       # required for 077/078
     python3 scripts/dev/apply_migrations.py --db-url postgresql://...
 
 Exit status is non-zero on refusal (drift / missing file) or on any
@@ -57,6 +59,13 @@ from unitares_doctor import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "db" / "postgres" / "migrations"
+QUIESCENCE_REQUIRED_MIGRATIONS = frozenset({77, 78})
+_DIALECTIC_INFLIGHT_STATES = (
+    "reserved",
+    "paused_agent_applied",
+    "both_agents_applied",
+    "reverting",
+)
 
 
 def compute_plan(
@@ -91,6 +100,44 @@ def query_applied(db_url: str) -> dict[int, str]:
             f"{proc.stderr.strip()}"
         )
     return _parse_schema_migration_rows(proc.stdout)
+
+
+def query_dialectic_inflight_count(db_url: str) -> int:
+    """Count unresolved legacy terminal sagas before generation fencing lands.
+
+    Migration 078 can assign a meaningful claim generation only to *future*
+    sagas. A row already in one of the in-flight states would be backfilled to
+    generation zero; later-state rows are intentionally not reclaimed by the
+    reserved-saga reaper, so allowing one through can wedge its session
+    permanently. Writer quiescence prevents new rows but does not prove the
+    existing table is drained, hence this separate durable-state preflight.
+    """
+    states = ", ".join(_sql_literal(state) for state in _DIALECTIC_INFLIGHT_STATES)
+    proc = subprocess.run(
+        [
+            "psql",
+            db_url,
+            "-X",
+            "-Atqc",
+            "SELECT count(*) FROM coordination.session_resolution_sagas "
+            f"WHERE state IN ({states})",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            "error: could not verify that dialectic resolution sagas are "
+            f"drained at {_redact(db_url)}\n{proc.stderr.strip()}"
+        )
+    try:
+        return int(proc.stdout.strip())
+    except ValueError as exc:
+        raise SystemExit(
+            "error: unexpected in-flight saga count from PostgreSQL: "
+            f"{proc.stdout.strip()!r}"
+        ) from exc
 
 
 def file_for_version(version: int) -> Path | None:
@@ -177,6 +224,13 @@ def main(argv: list[str] | None = None) -> int:
         help="actually apply pending migrations (default: report only)",
     )
     parser.add_argument(
+        "--dialectic-writers-quiesced",
+        action="store_true",
+        help="attest that dialectic traffic is blocked and both old Python and "
+             "BEAM writer/liveness runtimes are stopped; required before "
+             "applying migration 077 or 078",
+    )
+    parser.add_argument(
         "--check", action="store_true",
         help="preflight gate: exit non-zero if the DB is not fully in sync with "
              "the source manifest (any pending migration or drift). Unlike the "
@@ -185,13 +239,21 @@ def main(argv: list[str] | None = None) -> int:
              "an unapplied schema.",
     )
     parser.add_argument(
+        "--print-db-version", action="store_true",
+        help="print only the highest applied schema version (0 if empty); "
+             "read-only deploy compatibility probe",
+    )
+    parser.add_argument(
         "--db-url", default=DEFAULT_DB_URL,
         help=f"Postgres DSN (default: {_redact(DEFAULT_DB_URL)})",
     )
     args = parser.parse_args(argv)
 
-    expected = _source_schema_migrations(REPO_ROOT)
     actual = query_applied(args.db_url)
+    if args.print_db_version:
+        print(max(actual) if actual else 0)
+        return 0
+    expected = _source_schema_migrations(REPO_ROOT)
     pending, mismatches, unexpected = compute_plan(
         expected, actual, KNOWN_SCHEMA_MIGRATION_EXCEPTIONS
     )
@@ -287,8 +349,36 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDry run. Re-run with --apply to execute the plan above.")
         return 0
 
+    quiescence_pending = sorted(
+        QUIESCENCE_REQUIRED_MIGRATIONS.intersection(pending)
+    )
+    if quiescence_pending and not args.dialectic_writers_quiesced:
+        print(
+            "\nRefusing to apply migration(s) "
+            f"{quiescence_pending}: they change the live dialectic writer "
+            "contract. Block submissions, stop/drain both Python and BEAM "
+            "writers and liveness sweepers, then use the coordinated "
+            "lease-plane schema-only command (or pass "
+            "--dialectic-writers-quiesced from that controlled window).",
+            file=sys.stderr,
+        )
+        return 1
+
     print("\nApplying...")
+    checked_dialectic_drain = False
     for v, path in plan:
+        if v in QUIESCENCE_REQUIRED_MIGRATIONS and not checked_dialectic_drain:
+            inflight = query_dialectic_inflight_count(args.db_url)
+            if inflight:
+                print(
+                    "Refusing dialectic frontier migration: "
+                    f"{inflight} resolution saga(s) remain in an in-flight "
+                    "state. Reconcile or explicitly revert those generations "
+                    "while both writers stay stopped, then retry.",
+                    file=sys.stderr,
+                )
+                return 1
+            checked_dialectic_drain = True
         print(f"-> {path.name}")
         if not apply_file(args.db_url, path):
             print(f"Aborted at version {v}; later migrations not applied.", file=sys.stderr)

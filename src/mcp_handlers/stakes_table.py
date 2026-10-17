@@ -96,9 +96,11 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("calibration", "rebuild"),
     # config — server configuration mutation
     ("config", "set"),
-    # dialectic — resolve / reassign a governance review
+    # dialectic — resolve / reassign a governance review, or close the
+    # operator-only recovery record for a possibly partial terminal effect
     ("dialectic", "synthesis"),
     ("dialectic", "reassign"),
+    ("dialectic", "reconcile_effect"),
     # admin — destructive / state-resetting maintenance. The legacy names
     # reset_monitor / cleanup_stale_locks are aliases that inject these
     # actions; they resolve here and carry no entry of their own (likewise

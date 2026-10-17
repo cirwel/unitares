@@ -117,15 +117,18 @@ def test_more_result_rows_keep_note_locations_inside_existing_budget(monkeypatch
 
 
 @pytest.mark.parametrize("mode", ["lean", "compact"])
-@pytest.mark.parametrize("explicit_limit", [False, True])
-def test_hint_describes_only_visible_notes(monkeypatch, mode, explicit_limit):
+@pytest.mark.parametrize("limit", [None, 3, 10])
+def test_hint_describes_only_visible_notes(monkeypatch, mode, limit):
+    # The noted row is the fourth result: visible as a more_results row unless
+    # the caller's limit is within the digest count.
     docs = [document("Original body.", id=f"d{i}") for i in range(3)]
     docs.append(document(note("Later evidence."), id="d3"))
-    args = {"response_mode": mode, **({"limit": 10} if explicit_limit else {})}
+    args = {"response_mode": mode, **({"limit": limit} if limit is not None else {})}
     env = build_experience_envelope("search_shared_memory", "knowledge", search_payload(monkeypatch, docs), args)
     assert len(env["memory_suggestions"]) == 3
-    assert ("resolution_notes_hint" in env) == explicit_limit
-    assert bool(env.get("more_results")) == explicit_limit
+    visible = limit != 3
+    assert ("resolution_notes_hint" in env) == visible
+    assert bool(env.get("more_results")) == visible
 
 
 def test_budget_drops_hint_when_its_last_note_row_is_removed(monkeypatch):

@@ -8,7 +8,6 @@
 #   ./scripts/dev/review.sh --fresh             # re-review even if recorded
 #   ./scripts/dev/review.sh --reviewer claude   # retry preferred provider despite cooldown
 #   ./scripts/dev/review.sh record FILE --reviewer-name NAME --independent
-#   ./scripts/dev/review.sh editorial --reason "Corrected a spelling error; meaning unchanged"
 #   ./scripts/dev/review.sh dispose FILE        # dispositions for a FINDINGS record
 #   ./scripts/dev/review.sh waive --reason TEXT --operator-approved  # operator only
 #
@@ -33,7 +32,7 @@ for a in "$@"; do
 done
 
 case "${ARGS[0]:-}" in
-    record|editorial|dispose|waive|key|sweep) CMD=("${ARGS[@]}") ;;
+    record|dispose|waive|key|sweep) CMD=("${ARGS[@]}") ;;
     *) CMD=(review "${ARGS[@]+"${ARGS[@]}"}") ;;
 esac
 

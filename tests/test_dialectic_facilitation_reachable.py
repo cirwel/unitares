@@ -36,6 +36,20 @@ from src.mcp_handlers.dialectic import auto_resolve
 AUTO = "src.mcp_handlers.dialectic.auto_resolve"
 
 
+def _persisting_append(calls=None):
+    """Model the guarded DB append, including its returned transcript frontier."""
+
+    async def _append(**kwargs):
+        if calls is not None:
+            calls.append(kwargs)
+        kwargs["detail"]["transcript_revision"] = (
+            kwargs["expected_transcript_revision"] + 1
+        )
+        return 1
+
+    return _append
+
+
 def _stuck_session(*, awaiting: bool, age_hours: float, phase: str = "thesis"):
     ts = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
     return {
@@ -54,12 +68,14 @@ async def _sweep(sessions):
     """Run the sweeper over `sessions`, capturing terminal writes."""
     failed: list[str] = []
 
-    async def _fake_status(session_id, status, winner=None):
+    async def _fake_status(
+        session_id, _resolution, _status, *, winner=None, **_guards
+    ):
         failed.append(session_id)
         return True
 
     with patch(f"{AUTO}.get_active_sessions_async", new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO}.update_session_status_async", new=_fake_status), \
+         patch(f"{AUTO}.resolve_session_async", new=_fake_status), \
          patch(f"{AUTO}.add_message_async", new_callable=AsyncMock), \
          patch(f"{AUTO}.has_inflight_saga_async", new_callable=AsyncMock, return_value=False), \
          patch(f"{AUTO}.probe_saga_since_async", new_callable=AsyncMock, return_value={}), \
@@ -97,6 +113,71 @@ async def test_ordinary_stuck_session_is_unaffected():
 
 
 @pytest.mark.asyncio
+async def test_equal_facilitation_state_still_verifies_the_durable_frontier():
+    """A cache hit is not proof that PostgreSQL still has the same state."""
+    from src.mcp_handlers.dialectic.handlers import _set_awaiting_facilitation
+
+    session = DialecticSession(
+        paused_agent_id="agent-paused",
+        reviewer_agent_id="agent-reviewer",
+    )
+    session.phase = DialecticPhase.ANTITHESIS
+    session.awaiting_facilitation = False
+    session.transcript_revision = 4
+    session.resolution_saga_revision = 2
+    update = AsyncMock(return_value=True)
+    mark = AsyncMock()
+    emit = AsyncMock()
+
+    D = "src.mcp_handlers.dialectic.handlers"
+    with patch(f"{D}.pg_update_awaiting_facilitation", new=update), patch(
+        f"{D}.pg_mark_awaiting_facilitation", new=mark
+    ), patch(f"{D}._emit_dialectic_event", new=emit):
+        assert await _set_awaiting_facilitation(session, False) is True
+
+    update.assert_awaited_once_with(
+        session.session_id,
+        False,
+        expected_phase="antithesis",
+        expected_reviewer="agent-reviewer",
+        expected_transcript_revision=4,
+        expected_awaiting_facilitation=False,
+        expected_resolution_saga_revision=2,
+        exclude_inflight_saga=True,
+        live_only=True,
+    )
+    mark.assert_not_awaited()
+    emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_equal_facilitation_state_refusal_evicts_the_stale_cache():
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        _set_awaiting_facilitation,
+    )
+
+    session = DialecticSession(
+        paused_agent_id="agent-paused",
+        reviewer_agent_id="agent-reviewer",
+    )
+    session.phase = DialecticPhase.ANTITHESIS
+    session.awaiting_facilitation = False
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    D = "src.mcp_handlers.dialectic.handlers"
+    with patch(
+        f"{D}.pg_update_awaiting_facilitation",
+        new=AsyncMock(return_value=False),
+    ):
+        with pytest.raises(RuntimeError):
+            await _set_awaiting_facilitation(session, False)
+
+    assert session.session_id not in ACTIVE_SESSIONS
+    assert session.awaiting_facilitation is False
+
+
+@pytest.mark.asyncio
 async def test_reassign_revives_a_swept_facilitation_session():
     """
     Assigning a reviewer to a swept session must reopen it. Otherwise the
@@ -117,18 +198,11 @@ async def test_reassign_revives_a_swept_facilitation_session():
         reasoning="my case", root_cause="rc",
     ))
 
-    reopened: list[tuple[str, str]] = []
-
-    async def _fake_reopen(session_id, phase):
-        reopened.append((session_id, phase))
-        return True
+    writes = []
 
     D = "src.mcp_handlers.dialectic.handlers"
-    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-         patch(f"{D}.pg_reopen_session", new=_fake_reopen), \
-         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+    with patch(f"{D}.pg_add_message", new=_persisting_append(writes)), \
+         patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
             "sess-revive", session, "new-reviewer", reason="operator facilitation",
         )
@@ -136,10 +210,13 @@ async def test_reassign_revives_a_swept_facilitation_session():
     # A thesis exists, so the session reopens where the reviewer can act.
     assert session.phase == DialecticPhase.ANTITHESIS
     assert session.awaiting_facilitation is False
-    assert reopened == [("sess-revive", "antithesis")], (
-        "the row must be reopened too — an in-memory phase change leaves "
-        "status='failed' and the sweeper re-terminates it"
-    )
+    assert session.transcript_revision == 1
+    assert len(writes) == 1
+    assert writes[0]["next_phase"] == "antithesis"
+    assert writes[0]["next_reviewer"] == "new-reviewer"
+    assert writes[0]["next_awaiting_facilitation"] is False
+    assert writes[0]["next_status"] == "active"
+    assert writes[0]["reopen_failed_facilitation"] is True
 
 
 @pytest.mark.asyncio
@@ -155,32 +232,25 @@ async def test_reassign_does_not_resurrect_an_ordinary_failed_session():
     session.phase = DialecticPhase.FAILED
     session.awaiting_facilitation = False
 
-    reopened = []
-
-    async def _fake_reopen(session_id, phase):
-        reopened.append(session_id)
-        return True
+    writes = []
 
     D = "src.mcp_handlers.dialectic.handlers"
-    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-         patch(f"{D}.pg_reopen_session", new=_fake_reopen), \
-         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+    with patch(f"{D}.pg_add_message", new=_persisting_append(writes)), \
+         patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
             "sess-plain", session, "new-reviewer", reason="routine",
         )
 
     assert session.phase == DialecticPhase.FAILED
-    assert reopened == []
+    assert len(writes) == 1
+    assert writes[0]["next_phase"] == "failed"
+    assert "next_status" not in writes[0]
+    assert "reopen_failed_facilitation" not in writes[0]
 
 
 @pytest.mark.asyncio
-async def test_revival_persistence_order_reopen_first():
-    """Council 2026-08-21: the revival writes must run reopen -> reviewer ->
-    clear-awaiting. The old order (reviewer, clear, reopen) both welded the
-    reopen shut (its SQL requires awaiting_facilitation=true, already
-    cleared) and hit the reviewer terminal-guard on the still-failed row."""
+async def test_revival_persistence_is_one_guarded_append():
+    """Revival, reassignment, flag clear, and audit message are one DB write."""
     from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
 
     session = DialecticSession(
@@ -196,33 +266,25 @@ async def test_revival_persistence_order_reopen_first():
         reasoning="my case", root_cause="rc",
     ))
 
-    calls: list[str] = []
-
-    async def _reopen(session_id, phase):
-        calls.append("reopen")
-        return True
-
-    async def _reviewer(session_id, reviewer_id):
-        calls.append("reviewer")
-        return True
-
-    async def _awaiting(session_id, awaiting):
-        calls.append("awaiting")
-        return True
+    calls = []
 
     D = "src.mcp_handlers.dialectic.handlers"
-    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{D}.pg_update_reviewer", new=_reviewer), \
-         patch(f"{D}.pg_update_awaiting_facilitation", new=_awaiting), \
-         patch(f"{D}.pg_reopen_session", new=_reopen), \
-         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+    with patch(f"{D}.pg_add_message", new=_persisting_append(calls)), \
+         patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
             "sess-order", session, "new-reviewer", reason="operator facilitation",
         )
 
-    assert calls == ["reopen", "reviewer", "awaiting"], (
-        f"revival persistence order regressed: {calls}"
-    )
+    assert len(calls) == 1
+    write = calls[0]
+    assert write["expected_phase"] == "failed"
+    assert write["expected_reviewer"] is None
+    assert write["expected_transcript_revision"] == 0
+    assert write["next_phase"] == "antithesis"
+    assert write["next_reviewer"] == "new-reviewer"
+    assert write["next_awaiting_facilitation"] is False
+    assert write["next_status"] == "active"
+    assert write["reopen_failed_facilitation"] is True
 
 
 @pytest.mark.asyncio
@@ -239,11 +301,8 @@ async def test_revival_refused_reviewer_write_raises_under_strict():
     )
 
     D = "src.mcp_handlers.dialectic.handlers"
-    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock, return_value=False), \
-         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-         patch(f"{D}.pg_reopen_session", new_callable=AsyncMock, return_value=True), \
-         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+    with patch(f"{D}.pg_add_message", new_callable=AsyncMock, return_value=0), \
+         patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         with pytest.raises(RuntimeError):
             await _apply_reviewer_reassignment(
                 "sess-refused", session, "new-reviewer",
@@ -338,11 +397,8 @@ async def test_reassignment_rewinds_a_refused_self_review_to_antithesis():
     ))
 
     D = "src.mcp_handlers.dialectic.handlers"
-    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
-         patch(f"{D}.pg_reopen_session", new_callable=AsyncMock, return_value=True), \
-         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+    with patch(f"{D}.pg_add_message", new=_persisting_append()), \
+         patch(f"{D}.emit_reviewer_reassigned", new_callable=AsyncMock):
         await _apply_reviewer_reassignment(
             "sess-self", session, "agent-b", reason="operator facilitation",
         )

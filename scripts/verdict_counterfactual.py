@@ -13,8 +13,14 @@ Reports per-class flip counts and direction (high↔boundary↔low).
 This is the result that converts the paper from methodology to
 paper-with-a-result, per the peer-review feedback.
 
+The window is ``[now - window-days, now)``. A window that crosses an EISV
+instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed
+(to stderr in --csv mode, so the CSV stays clean).
+
 Usage:
   python3 scripts/verdict_counterfactual.py --window-days 30
+  python3 scripts/verdict_counterfactual.py --window-days 60 --allow-cross-era "why"
   python3 scripts/verdict_counterfactual.py --output verdict_flips.csv --csv
 """
 from __future__ import annotations
@@ -24,6 +30,7 @@ import json
 import math
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -43,6 +50,8 @@ if str(_REPO_ROOT) not in sys.path:
 from src.grounding.class_indicator import (  # noqa: E402
     classify_by_label_and_tags as classify_from_db_row,
 )
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 
 # ── Mirror of config.governance_config.classify_basin ─────────────────
@@ -111,7 +120,7 @@ def compute_manifold_coherence(E: float, I: float, S: float, agent_class: str) -
     return 1.0 - max(0.0, min(1.0, ratio))
 
 
-def fetch_rows(conn, window_days: int):
+def fetch_rows(conn, start: datetime, end: datetime):
     sql = """
         SELECT
           i.metadata->>'label'                AS label,
@@ -123,11 +132,11 @@ def fetch_rows(conn, window_days: int):
           s.state_json
         FROM core.agent_state s
         JOIN core.identities  i  USING (identity_id)
-        WHERE s.recorded_at >= now() - (%s::int * INTERVAL '1 day')
+        WHERE s.recorded_at >= %s AND s.recorded_at < %s
     """
     rows = []
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, (window_days,))
+        cur.execute(sql, (start, end))
         for row in cur:
             tags_raw = row["tags"]
             if isinstance(tags_raw, str):
@@ -166,7 +175,7 @@ def fetch_rows(conn, window_days: int):
     return rows
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--db-url", type=str,
@@ -174,13 +183,37 @@ def main() -> int:
     parser.add_argument("--csv", action="store_true",
                         help="Output CSV of all flips for further analysis")
     parser.add_argument("--output", type=str, default=None)
-    args = parser.parse_args()
+    eisv_eras.add_cross_era_argument(parser)
+    args = parser.parse_args(argv)
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.window_days)
+    # Time check first, so a crossing window is refused before connecting.
+    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        return 2
 
     print(f"[counterfactual] Connecting to DB...", file=sys.stderr)
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
+
+    with conn.cursor() as cur:
+        cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s", include_synthetic=True), (start, end))
+        id_counts = {r[0]: int(r[1]) for r in cur.fetchall()}
+    era_lines = eisv_eras.check_window(
+        start, end, allow_cross=args.allow_cross_era, id_counts=id_counts
+    )
+    if era_lines is None:
+        conn.close()
+        return 2
+    if args.csv:
+        # Keep the CSV machine-readable: provenance goes to stderr.
+        for line in era_lines:
+            print(f"[counterfactual] {line}", file=sys.stderr)
 
     print(f"[counterfactual] Pulling agent_state rows from last {args.window_days} days...", file=sys.stderr)
-    rows = fetch_rows(conn, args.window_days)
+    rows = fetch_rows(conn, start, end)
     print(f"[counterfactual] {len(rows)} rows with computable E (state_json contains 'E')", file=sys.stderr)
 
     # Tally by class
@@ -232,6 +265,8 @@ def main() -> int:
     total_rows = sum(totals_by_class.values())
     overall_pct = 100.0 * total_flips / total_rows if total_rows else 0.0
     print(f"Window:        {args.window_days} days")
+    for line in era_lines:
+        print(line)
     print(f"Total rows:    {total_rows:>6}")
     print(f"Total flips:   {total_flips:>6}  ({overall_pct:.1f}%)")
     print()

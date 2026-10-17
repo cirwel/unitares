@@ -227,7 +227,6 @@ sequence of model invocations. Choose the review that helps the change:
 
 | Work | Appropriate scrutiny |
 |---|---|
-| Spelling, grammar or formatting with unchanged meaning | Author's editorial explanation; no new model review |
 | Substantive implementation | One completed independent review when available: human, fresh-context model, or council |
 | Bounded corrections after review | Independent review of the cumulative delta and interactions; retain prior full coverage |
 | Material scope or security-assumption change | Full review of the changed work |
@@ -393,11 +392,18 @@ fallback validation.
 #### Round cap
 
 Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
-gets three **full review cycles**. A cycle starts with its first completed
+gets three **full review cycles**. Operator direction, 2026-10-15, makes the
+budget context-based: a cycle that found a serious problem (a P0/P1 finding,
+or an unlabelled one) does not count toward the three, because the fix of a
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
+has stopped finding serious problems, not review that keeps finding them; a
+backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
-revision/diff starts another cycle, except for Git-verified editorial spans
-covered by an author attestation. The second family can finish cycle three
+revision/diff starts another cycle. The second family can finish cycle three
 without an extra approval. Unknown families cannot share a cycle. Native
 reviews group by their explicit reviewed commit; where both records carry
 diff keys those must match too. This spending ledger never establishes review
@@ -414,9 +420,8 @@ as evidence. After a clean review or minor findings, `review.sh` normally asks
 an independent reviewer to examine the complete cumulative delta from that
 full review, its interactions with the original work, and all prior findings.
 The reviewer also receives the original diff and review history. Small code
-fixes, documentation corrections and attestation updates can use this route.
-Meaning-preserving prose edits instead use the editorial exception below;
-file type alone never establishes that meaning is unchanged.
+fixes, documentation corrections and attestation updates can use this route;
+file type alone never exempts a change from scrutiny.
 
 After a base merge, follow-up material distinguishes subsequent PR edits from
 integrated upstream work. Git reconstructs the previously reviewed contribution
@@ -440,9 +445,8 @@ current endpoints. It is additional coverage, not a claim that the original
 reviewers saw later edits. For sensitive changes it preserves the families
 that actually performed the original full reviews; it cannot invent a missing
 second family. Git verifies the source and destination diff keys and ancestry.
-A substantively changed diff without independent coverage remains unreviewed.
-Open findings remain blockers even if another reviewer is clean or the author
-posts an editorial attestation.
+A changed diff without an independent follow-up remains unreviewed, and open
+findings on the current diff remain blockers even if another reviewer is clean.
 Subsequent edits use the cumulative delta from a full review rather than a
 chain of unchecked receipts. Follow-ups do not consume full-review cycles,
 including when the full-cycle budget is exhausted.
@@ -488,45 +492,6 @@ the **trusted base** policy enables it. Runtime, policy and auth changes cannot
 qualify. Findings remain visible for the proposal's author; design suggestions
 do not block merging a proposal. Merging it does not authorize implementation,
 which requires correctness review under the ordinary/security rules above.
-
-#### Editorial changes
-
-Operator direction, 2026-10-14: a typo does not warrant another model review.
-The author can attest a spelling, grammar or formatting correction that leaves
-meaning, commands, API contracts, requirements, security and agent instructions
-unchanged:
-
-```bash
-./scripts/dev/review.sh editorial --reason "Corrected a spelling error; meaning unchanged"
-```
-
-After a normal `git push`, run the command above. With `ship.sh`, set
-`SHIP_NO_REVIEW=1` for the editorial push, then record the attestation; otherwise
-shipping starts a model before the author has identified the editorial scope.
-
-This records the complete change from the previous commit to the pushed head.
-Use `--since <commit>` for a longer editorial span, after examining every change
-in it. The command calls no model. The record says **author attestation**,
-not independent review, and adds no model family or full-review cycle. Existing
-coverage carries forward, including a previously reviewed bounded fix; open
-findings still need dispositions. If the entire PR is covered by editorial
-attestations, it needs no independent review. An editorial receipt cannot supply
-missing review of earlier substantive work. An unfinished full-review pair can
-continue across a verified editorial span without starting another cycle.
-Repeated families still consume cycles, and operator grants remain bound to
-the exact head and key they authorize.
-
-Git verifies the endpoints and every intervening commit. Eligibility is limited
-to modifications of existing UTF-8 Markdown under `docs/`, or an existing
-`README.md` / `CHANGELOG.md` at any non-hidden location (including nested
-READMEs). Sensitive paths, agent instruction files and skills/commands/prompts
-directories are excluded. Added/deleted/renamed files, mode changes,
-symlinks, binary content, code and base merges do not qualify. These checks
-establish scope, not semantic equivalence: the author's explanation supplies
-that judgment. One word can change a requirement; “must” → “may”, a changed CLI
-example, a security claim or an agent instruction is substantive even in a
-README. If meaning or interactions are uncertain, use independent follow-up
-review. Tests and CI appropriate to the change still apply.
 
 #### Review provider availability
 
@@ -667,7 +632,8 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles, stop requests and escalate unresolved findings. Ordinary minor
+   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
    cycle requires explicit operator authorization with a recorded reason.
@@ -726,9 +692,7 @@ omit `--emit` to post directly. It is not an outage-only alternative.
    (`#pullrequestreview-…`) URL; a wrong one leaves the findings open. It does
    **not** verify `--reviewer` or any other `--cites`: it answers the latest
    open record with that count and displays the reviewer you passed. Copy both
-   from the open record exactly, or the record misattributes. When editorial
-   carry changed the key, model-family credit additionally needs the exact
-   cited review URL to recover the original review's provenance.
+   from the open record exactly, or the record misattributes.
 
 A fresh same-model context is valid independent coverage for ordinary code.
 Security-sensitive diffs require a distinct full model family as well. Name
@@ -943,20 +907,26 @@ the operator's machine is awake.
   has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
-**Drafts are the one case GitHub's updater never covers** — a draft cannot take
-`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
-open draft that is behind, conflict-free, and idle for 12h, every four hours.
-It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
-It is not a second updater racing the native one: it touches only what GitHub
-will not. Two rules carried over from the retired queue updater and from PR
-#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
-secret — a fine-grained token scoped to this repository with `Contents: read
-and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
-runs in the approval-required state: #2250's refreshed head sat `blocked` with
-eight parked workflows until a maintainer approved them by hand, less
-mergeable than the stale head it replaced. And a missing secret is loud rather
-than inert: the sweep withholds every push and fails the run, and after each
-real push it fails unless a `Tests` run is actually queued on the new head.
+**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
+fill with a scheduled updater: it is not yet a merge candidate. The former
+four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
+behind draft and started the full PR matrix each time. That recreated the
+N-wide CI cascade this section forbids without advancing any PR toward landing.
+PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
+validated `89888ed7b`, the schedule replaced it with base-only merge
+`a234075f3`, launched the matrix again, and produced a failing smoke head before
+any author change or readiness decision.
+
+`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
+for exactly one positive PR number. It has no schedule and rejects an empty
+all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
+exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
+remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
+head; when its work is complete, mark it ready and label it; the serial queue
+updates that one merge candidate against the then-current base. A later base
+commit does not invalidate review or tests for lines it did not change. Invoke
+the manual action only when preserving one long-lived draft justifies a
+deliberate pre-readiness merge.
 
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
@@ -1038,12 +1008,14 @@ this entirely).
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
+| Draft is green but behind | Leave its evidence-bound head pinned; the queue updates it once after readiness |
+| One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review cycle 3 done | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

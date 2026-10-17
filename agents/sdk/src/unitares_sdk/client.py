@@ -8,6 +8,7 @@ import anyio
 import json
 import logging
 import os
+import warnings
 from typing import Any
 
 from mcp.client.session import ClientSession
@@ -32,6 +33,7 @@ from unitares_sdk.models import (
     AuditResult,
     CheckinResult,
     CleanupResult,
+    ConsultResult,
     DelegatedInferenceResult,
     IdentityResult,
     InferenceHostResult,
@@ -45,6 +47,20 @@ from unitares_sdk.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Outer bound for consult, past the server's 480s CONSULT_TIMEOUT_S. It does
+# not raise the HTTP client's own timeout; see consult()'s docstring.
+_CONSULT_CLIENT_TIMEOUT_S = 495.0
+
+
+def _warn_call_model_deprecated() -> None:
+    warnings.warn(
+        "call_model() is deprecated since 2026-10-16; use consult(brief=..., "
+        "effort='standard'). call_model() remains for model, temperature or "
+        "max_tokens on an HTTP host.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 # Connect-handshake failures worth retrying: timeout (incl. the bounded
 # initialize()) and connection-level transients. Auth/protocol errors are NOT
@@ -349,12 +365,19 @@ class GovernanceClient:
     # --- Raw tool call ---
 
     async def call_tool(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """Call an MCP tool and return the parsed JSON response.
 
         Handles session injection, timeout, one retry on transient errors,
-        and MCP content block parsing.
+        and MCP content block parsing. ``retry=False`` makes exactly one
+        attempt, for calls that must not be sent twice: after a timeout or
+        transport error the first may still be running server-side.
         """
         if self._session is None:
             raise GovernanceConnectionError("Not connected — call connect() first")
@@ -370,7 +393,7 @@ class GovernanceClient:
             })
         last_error: Exception | None = None
 
-        for attempt in range(2):
+        for attempt in range(2 if retry else 1):
             try:
                 with anyio.fail_after(effective_timeout):
                     result = await self._session.call_tool(wire_name, wire_args)
@@ -386,7 +409,7 @@ class GovernanceClient:
                         f"(retry_after_seconds={retry_after})",
                         retry_after_seconds=retry_after,
                     )
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "%s unavailable (503-equivalent), retrying in %.1fs",
                             tool_name, retry_after,
@@ -406,7 +429,7 @@ class GovernanceClient:
                 last_error = GovernanceTimeoutError(
                     f"{tool_name} timed out after {effective_timeout}s"
                 )
-                if attempt == 0:
+                if attempt == 0 and retry:
                     logger.warning("Timeout on %s, retrying in %.1fs", tool_name, self.retry_delay)
                     await asyncio.sleep(self.retry_delay)
                     continue
@@ -428,7 +451,7 @@ class GovernanceClient:
                         f"(retry_after_seconds={retry_after})",
                         retry_after_seconds=retry_after,
                     )
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "HTTP 503 on %s, retrying in %.1fs", tool_name, retry_after
                         )
@@ -436,12 +459,12 @@ class GovernanceClient:
                         continue
                 else:
                     last_error = GovernanceConnectionError(str(e))
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         await asyncio.sleep(self.retry_delay)
                         continue
             except (_httpx.ConnectError, _httpx.TimeoutException, ConnectionError, OSError) as e:
                 last_error = GovernanceConnectionError(str(e))
-                if attempt == 0:
+                if attempt == 0 and retry:
                     logger.warning(
                         "Transient error on %s, retrying in %.1fs: %s",
                         tool_name, self.retry_delay, e,
@@ -834,6 +857,53 @@ class GovernanceClient:
         raw = await self.call_tool("describe_inference_host", args)
         return InferenceHostResult.model_validate(raw)
 
+    async def consult(
+        self,
+        brief: str,
+        purpose: str = "answer",
+        effort: str | None = None,
+        privacy: str = "local",
+        host_id: str | None = None,
+        allow_degraded: bool = False,
+        response_mode: str = "compact",
+        **kwargs: Any,
+    ) -> ConsultResult:
+        """Ask a model for advice. Maps to server tool: consult.
+
+        Advisory only, never an on-record verdict (use request_review for
+        that). ``effort`` left as None lets the server infer it from
+        ``host_id`` (standard when none is pinned). The server forbids
+        unknown arguments, so extra kwargs are passed through as given and
+        rejected by the server if it does not know them.
+
+        A refusal (``success`` false) raises GovernanceToolRefused, as for
+        every SDK call. The call is sent once and never retried. On the MCP
+        transport the HTTP client's own ``timeout`` (30s by default) still
+        bounds it, so construct the client with a larger ``timeout`` for a
+        long consultation (thorough effort can take minutes).
+        """
+        args: dict[str, Any] = {
+            "brief": brief,
+            "purpose": purpose,
+            "privacy": privacy,
+            "allow_degraded": allow_degraded,
+            "response_mode": response_mode,
+        }
+        if effort is not None:
+            args["effort"] = effort
+        if host_id is not None:
+            args["host_id"] = host_id
+        args.update(kwargs)
+        raw = await self.call_tool(
+            "consult",
+            args,
+            # Never retried: after a timeout the first consultation may still
+            # be running, and a second send spends inference twice.
+            retry=False,
+            timeout=_CONSULT_CLIENT_TIMEOUT_S,
+        )
+        return ConsultResult.model_validate(raw)
+
     async def call_model(
         self,
         prompt: str,
@@ -844,7 +914,13 @@ class GovernanceClient:
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> ModelResult:
-        """Call a model via governance. Maps to server tool: call_model."""
+        """Call a model via governance. Maps to server tool: call_model.
+
+        Deprecated since 2026-10-16, like the server tool: use consult().
+        Still the only way to set model, temperature or max_tokens on an
+        HTTP host.
+        """
+        _warn_call_model_deprecated()
         args: dict[str, Any] = {
             "prompt": prompt,
             "max_tokens": max_tokens,
@@ -869,7 +945,12 @@ class GovernanceClient:
         timeout_s: int = 240,
         **kwargs: Any,
     ) -> DelegatedInferenceResult:
-        """Delegate to a strong host model. Maps to delegate_inference."""
+        """Delegate to a strong host model. Maps to delegate_inference.
+
+        Sent once and never retried. On the MCP transport the HTTP client's
+        own ``timeout`` (30s by default) bounds the call, so construct the
+        client with a ``timeout`` above ``timeout_s`` for long delegations.
+        """
         args: dict[str, Any] = {
             "prompt": prompt,
             "host_id": host_id,
@@ -882,9 +963,12 @@ class GovernanceClient:
         raw = await self.call_tool(
             "delegate_inference",
             args,
-            # Stay outside the server's await + spawn/backstop budget so the
-            # SDK never retries an expensive delegation while its first call
-            # is still resolving.
+            # Never retried: after a timeout or transport error the delegated
+            # child may still be running, and a second send spawns another.
+            # The outer bound stays past the server's await + spawn/backstop
+            # budget; on the MCP transport the HTTP client's own timeout
+            # still applies (see consult()).
+            retry=False,
             timeout=float(timeout_s + 75),
         )
         return DelegatedInferenceResult.model_validate(raw)

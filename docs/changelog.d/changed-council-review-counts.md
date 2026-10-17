@@ -1,0 +1,1 @@
+- Review guidance now says a council, human or fresh-context review of the actual diff counts as the independent review once recorded with `review.sh record --independent`, so a duplicate CLI review is unnecessary. Sensitive paths still need two actual model families.

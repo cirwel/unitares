@@ -20,12 +20,18 @@ from uuid import uuid4
 
 from src.logging_utils import get_logger
 from src.agent_metadata_model import agent_metadata
+from src import eisv_instrument
 from src.agent_monitor_state import monitors, save_monitor_state, save_monitor_state_async
 from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
 from src.perf_monitor import record_ms as _perf_record_ms
 from src.loop_rules import LoopWindow, evaluate_loop_rules
 from src.mcp_handlers.lifecycle.recovery_policy import read_risk_authority, render_risk
+from src.cold_start_risk_confirmation import (
+    CIRCUIT_BREAKER_DURABLE_EFFECT,
+    CIRCUIT_BREAKER_IN_MEMORY_EFFECT,
+    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
+)
 
 logger = get_logger(__name__)
 
@@ -195,6 +201,9 @@ def process_update_authenticated(
     result = monitor.process_update(agent_state)
 
     if auto_save:
+        # Count this check-in under the current EISV instrument before the
+        # save, so the count persists with the state it describes.
+        eisv_instrument.advance(monitor)
         save_monitor_state(agent_id, monitor)
 
         meta = agent_metadata[agent_id]
@@ -251,8 +260,8 @@ async def process_update_authenticated_async(
     if meta is not None and getattr(meta, "status", None) == "archived":
         raise ValueError(
             f"Agent '{agent_id}' is archived and cannot be updated. "
-            f"Use self_recovery(action='quick') to restore, or "
-            f"onboard(force_new=true) for a new identity."
+            f"Reclaim it with start_session(resume=true) from the same live "
+            f"process, or start a new identity with start_session(force_new=true)."
         )
 
     # Check for loop pattern BEFORE processing
@@ -396,42 +405,94 @@ async def process_update_authenticated_async(
 
         # Enforce pause decisions (circuit breaker)
         if decision_action == 'pause' and meta is not None:
-            meta.status = "paused"
-            meta.paused_at = now
             decision_reason = result.get('decision', {}).get('reason', 'Circuit breaker triggered')
+            actuation_id = str(uuid4())
+            pause_event = {
+                "event": "paused",
+                "timestamp": now,
+                "reason": decision_reason,
+                "actuation_id": actuation_id,
+            }
+            durable_pause_applied = False
+            reused_pause_generation = False
+            cache_pause_token = now
+            pause_persistence_error = None
+            try:
+                from src import agent_storage
+                pause_result = await agent_storage.pause_agent_with_token(
+                    agent_id,
+                    pause_token=now,
+                    lifecycle_event=pause_event,
+                )
+                durable_pause_applied = bool(pause_result.get("applied"))
+                if not durable_pause_applied:
+                    pause_persistence_error = (
+                        pause_result.get("reason") or "pause_write_refused"
+                    )
+                    existing_token = pause_result.get("current_pause_token")
+                    if (
+                        pause_persistence_error
+                        == "already_paused_different_generation"
+                        and isinstance(existing_token, str)
+                        and existing_token.strip()
+                    ):
+                        # A stale cache reached the actuator after another
+                        # process already committed the pause. Reuse that
+                        # generation; publishing ``now`` would invent an
+                        # uncommitted token and make recovery fail closed.
+                        durable_pause_applied = True
+                        reused_pause_generation = True
+                        cache_pause_token = existing_token
+                        pause_persistence_error = None
+            except Exception as e:
+                pause_persistence_error = type(e).__name__
+                logger.warning(
+                    "pause_agent_with_token failed for %s...: %s",
+                    agent_id[:8],
+                    e,
+                )
+
+            # Preserve the historical fail-safe local circuit breaker if the
+            # database is unavailable, but never auto-resolve that degraded
+            # pause: no session may be bound to a generation that was not
+            # committed durably.  The request handler detects cache/durable
+            # disagreement and refuses rather than minting an active no-op.
+            meta_state = getattr(meta, "__dict__", {})
+            ttl_refusal = meta_state.get("_pause_ttl_recovery_refusal")
+            if (
+                not isinstance(ttl_refusal, dict)
+                or ttl_refusal.get("pause_token") != cache_pause_token
+            ):
+                meta_state.pop("_pause_ttl_recovery_refusal", None)
+            meta.status = "paused"
+            meta.paused_at = cache_pause_token
             actuation_id = mark_circuit_breaker_enforcement_applied(
                 result,
                 actor="agent_loop_detection",
-                effect="agent_metadata.status=paused",
+                effect=(
+                    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT
+                    if reused_pause_generation
+                    else CIRCUIT_BREAKER_DURABLE_EFFECT
+                    if durable_pause_applied
+                    else CIRCUIT_BREAKER_IN_MEMORY_EFFECT
+                ),
+                actuation_id=actuation_id,
                 applied_at=now,
             )
-            meta.add_lifecycle_event(
-                "paused",
-                decision_reason,
-                actuation_id=actuation_id,
-            )
+            result["enforcement"]["durable"] = durable_pause_applied
+            if reused_pause_generation:
+                result["enforcement"]["reused_pause_generation"] = True
+            if pause_persistence_error:
+                result["enforcement"]["persistence_error"] = (
+                    pause_persistence_error
+                )
+            if not reused_pause_generation:
+                meta.add_lifecycle_event(
+                    "paused",
+                    decision_reason,
+                    actuation_id=actuation_id,
+                )
             logger.warning(f"⚠️  Circuit breaker triggered for agent '{agent_id}': {decision_reason}")
-
-            # P011: persist paused_at + the lifecycle event so they survive
-            # the next load_metadata_async(force=True). Without this, the
-            # agent record shows paused_at=null and lifecycle_events=[]
-            # despite the pause having actually fired.
-            try:
-                from src import agent_storage
-                await agent_storage.persist_runtime_state(
-                    agent_id,
-                    paused_at=now,
-                    append_lifecycle_event={
-                        "event": "paused",
-                        "timestamp": now,
-                        "reason": decision_reason,
-                        "actuation_id": actuation_id,
-                    },
-                )
-            except Exception as e:
-                logger.warning(
-                    f"persist_runtime_state(paused) failed for {agent_id[:8]}...: {e}"
-                )
 
             # Telemetry: record governance pause timestamp
             _governance_pause_timestamps.append(datetime.now(timezone.utc))
@@ -454,12 +515,18 @@ async def process_update_authenticated_async(
 
             try:
                 auto_recovery = os.getenv("UNITARES_AUTO_DIALECTIC_RECOVERY", "1").strip().lower() not in ("0", "false", "no")
-                if auto_recovery:
+                if auto_recovery and durable_pause_applied:
                     task = loop.create_task(_auto_initiate_dialectic_recovery(agent_id, decision_reason))
                     _background_tasks.add(task)
                     task.add_done_callback(_background_tasks.discard)
                     result["auto_recovery_initiated"] = True
                     result["auto_recovery_note"] = "Dialectic recovery auto-initiated (self-governance mode)"
+                elif auto_recovery:
+                    result["auto_recovery_initiated"] = False
+                    result["auto_recovery_note"] = (
+                        "Dialectic recovery not started because the pause "
+                        "generation was not committed durably."
+                    )
             except Exception as e:
                 logger.warning(f"Could not auto-initiate dialectic recovery: {e}")
 
@@ -469,6 +536,7 @@ async def process_update_authenticated_async(
             if datetime.now() >= cooldown_until:
                 meta.loop_cooldown_until = None
 
+        eisv_instrument.advance(monitor)
         await save_monitor_state_async(agent_id, monitor)
 
     return result
@@ -550,41 +618,29 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
                 recommendation = content.get("recommendation", "").upper()
 
                 if recommendation == "RESUME":
-                    meta = agent_metadata.get(agent_id)
-                    if meta:
-                        meta.status = "active"
-                        meta.paused_at = None
-                        meta.loop_cooldown_until = None
-                        meta.loop_detected_at = None
-                        meta.recent_update_timestamps = []
-                        meta.recent_decisions = []
-                        resume_reason = (
-                            f"LLM dialectic recommended RESUME: "
-                            f"{content.get('message', '')[:100]}"
+                    # The dialectic handler owns the durable resolution effect,
+                    # including exact-pause-token resume. A recommendation is
+                    # never separate authority to mutate the cache: the effect
+                    # may be pending, refused, or a superseded-generation no-op.
+                    effect_completed = (
+                        content.get("resolved") is True
+                        and content.get("resolution_effect_state") == "applied"
+                        and not content.get("effect_pending")
+                        and not content.get("awaiting_facilitation")
+                    )
+                    if effect_completed:
+                        logger.info(
+                            "Agent '%s' dialectic completed authoritative "
+                            "RESUME handling",
+                            agent_id,
                         )
-                        meta.add_lifecycle_event("auto_resumed_dialectic", resume_reason)
-                        logger.info(f"Agent '{agent_id}' auto-resumed after LLM dialectic")
-
-                        # P011: persist the resume so paused_at=None survives
-                        # reload and the dialectic event is in the audit trail.
-                        try:
-                            from src import agent_storage
-                            await agent_storage.persist_runtime_state(
-                                agent_id,
-                                paused_at=None,
-                                loop_cooldown_until=None,
-                                loop_detected_at=None,
-                                append_lifecycle_event={
-                                    "event": "auto_resumed_dialectic",
-                                    "timestamp": datetime.now().isoformat(),
-                                    "reason": resume_reason,
-                                },
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"persist_runtime_state(auto_resumed_dialectic) failed "
-                                f"for {agent_id[:8]}...: {e}"
-                            )
+                    else:
+                        logger.warning(
+                            "Agent '%s' received a RESUME recommendation, but "
+                            "the dialectic effect is not authoritatively complete; "
+                            "leaving runtime state unchanged",
+                            agent_id,
+                        )
                 elif recommendation == "COOLDOWN":
                     logger.info(f"Agent '{agent_id}' in cooldown after LLM dialectic — stuck-detector will handle later")
                 else:
@@ -614,6 +670,17 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
         if not meta or meta.status != "paused":
             return
 
+        expected_pause_token = getattr(meta, "paused_at", None)
+        if (
+            not isinstance(expected_pause_token, str)
+            or not expected_pause_token.strip()
+        ):
+            logger.warning(
+                "Agent '%s' has no durable pause token; safety-net resume refused",
+                agent_id,
+            )
+            return
+
         monitor = monitors.get(agent_id)
         if not monitor or not hasattr(monitor, 'state'):
             return
@@ -631,47 +698,76 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
             risk is not None and risk < 0.60
         )
         if state_safe and not void_active:
-            meta.status = "active"
-            meta.paused_at = None
-            meta.loop_cooldown_until = None
-            meta.loop_detected_at = None
-            meta.recent_update_timestamps = []
-            meta.recent_decisions = []
             resume_reason = (
                 f"All dialectic paths failed ({reason}); state safe "
                 f"(risk={render_risk(risk, places=2)}, void_active={void_active}, "
                 f"coherence={coherence:.2f} diagnostic-only) — auto-resumed"
             )
-            meta.add_lifecycle_event("safety_net_resumed", resume_reason)
-            logger.info(
-                f"Agent '{agent_id}' safety-net resumed "
-                f"(risk={render_risk(risk, places=2)}, void_active={void_active}, "
-                f"coherence={coherence:.2f} diagnostic-only, dialectic failure: {reason})"
-            )
-
-            # P011: persist the resume so paused_at=None survives reload and
-            # the safety-net event is in the audit trail.
+            lifecycle_event = {
+                "event": "safety_net_resumed",
+                "timestamp": datetime.now().isoformat(),
+                "reason": resume_reason,
+            }
             try:
                 from src import agent_storage
-                await agent_storage.persist_runtime_state(
+
+                resume = await agent_storage.resume_agent_if_pause_token(
                     agent_id,
-                    paused_at=None,
-                    loop_cooldown_until=None,
-                    loop_detected_at=None,
-                    append_lifecycle_event={
-                        "event": "safety_net_resumed",
-                        "timestamp": datetime.now().isoformat(),
-                        "reason": resume_reason,
-                    },
+                    expected_pause_token=expected_pause_token,
+                    dialectic_condition_additions=[],
+                    lifecycle_event=lifecycle_event,
                 )
             except Exception as e:
                 logger.warning(
-                    f"persist_runtime_state(safety_net_resumed) failed for {agent_id[:8]}...: {e}"
+                    "Durable safety-net resume failed for %s...; keeping "
+                    "cache paused: %s",
+                    agent_id[:8],
+                    e,
+                )
+                return
+
+            if not resume.get("applied"):
+                logger.warning(
+                    "Durable safety-net resume refused for %s... (%s); "
+                    "keeping cache paused",
+                    agent_id[:8],
+                    resume.get("reason") or "unknown_reason",
+                )
+                return
+
+            # Publish the committed transition only if this process still
+            # holds the same pause generation. A newer local pause wins.
+            if (
+                getattr(meta, "status", None) == "paused"
+                and getattr(meta, "paused_at", None) == expected_pause_token
+            ):
+                meta.status = "active"
+                meta.paused_at = None
+                meta.loop_cooldown_until = None
+                meta.loop_detected_at = None
+                meta.recent_update_timestamps = []
+                meta.recent_decisions = []
+                meta.add_lifecycle_event("safety_net_resumed", resume_reason)
+                logger.info(
+                    "Agent '%s' safety-net resumed "
+                    "(risk=%s, void_active=%s, coherence=%.2f "
+                    "diagnostic-only, dialectic failure: %s)",
+                    agent_id,
+                    render_risk(risk, places=2),
+                    void_active,
+                    coherence,
+                    reason,
+                )
+            else:
+                logger.warning(
+                    "Safety-net resume committed for %s..., but the local pause "
+                    "generation changed; leaving the newer cache state untouched",
+                    agent_id[:8],
                 )
         else:
             logger.warning(
                 f"Agent '{agent_id}' NOT safe for safety-net resume "
-                f"(risk={risk:.2f}, void_active={void_active}, "
+                f"(risk={render_risk(risk, places=2)}, void_active={void_active}, "
                 f"coherence={coherence:.2f} diagnostic-only) — stays paused"
             )
     except Exception as e:

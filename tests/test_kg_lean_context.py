@@ -29,7 +29,12 @@ def test_lean_has_one_open_route_and_a_small_read_only_next_step(mode):
     assert len(json.dumps(env, ensure_ascii=False).encode()) < 1000
     assert "response_options" not in env
     assert env["discovery_retrieval_options"] == {
-        "current_tier": "digest", "open_one": "knowledge(action='details', discovery_id='...')"}
+        "current_tier": "digest",
+        "open_one": (
+            "use_tool(tool_name='knowledge', arguments="
+            '{"action": "details", "discovery_id": "..."})'
+        ),
+    }
     assert "response_mode='full'" in env["raw_governance_hint"]
     assert "store" not in env["next_action"] and "update" not in env["next_action"]
     assert len(env["next_action"]) < 90

@@ -24,9 +24,14 @@ source_files:
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
+  - unitares/src/dialectic_reviewed_work.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
+  - unitares/src/mcp_handlers/support/agent_auth.py
+  - unitares/src/mcp_handlers/support/pause_ttl.py
+  - unitares/src/agent_storage.py
+  - unitares/src/db/mixins/identity.py
   # The field guide names the negotiated contract version it was checked
   # against, so a contract change must re-verify these six rules.
   - unitares/src/interface_contract.py
@@ -46,12 +51,12 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-10-11
+**Last Updated:** 2026-10-17
 
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.41.0` on 2026-10-15.
+contract `1.48.0` on 2026-10-17.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -100,9 +105,14 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 
 Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
 
+For a proxy-filed review of another UNITARES agent's work, pass the known
+author UUIDs in `reviewed_work_author_agent_ids`; the server treats the list as
+an unverified conflict declaration and recuses those agents from independent
+review. Omit it when authorship is unknown rather than sending an empty list.
+
 ### Response shapes
 
-Read aliases, bounded `sync_state` modes, and the write aliases `store_finding`, `update_finding` and `record_result` omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere, except as below for the finding writes); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. Those three write acknowledgements keep the ids you need next (`discovery_id`, `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and `written_as` (the writer's `agent_id`, `display_name` and assurance tier), so check it when you bound without an explicit `client_session_id`; `record_result` names its writer only when its binding was not server-inferred, so pass `client_session_id` if you need to see it. Their `raw_governance_hint` names what is still reachable. `record_result` has no read by outcome id: for an outcome recorded with a `prediction_id`, repeating the identical call under the same identity (pass `client_session_id`) with `response_mode="full"` returns the stored outcome in full (`idempotent_replay: true`) and records no second outcome while the binding is retained (a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`); without a `prediction_id` a repeat records a second outcome, so the hint names `response_mode="full"` on a later `record_result`. For `store_finding` and `update_finding` it is a `knowledge(action="details", discovery_id=...)` read, which returns the stored record rather than the ack's payload. No read returns the omitted payload, so these acks do not set `raw_governance_available`. Write-time warnings and a bounded `related_discoveries` snapshot are kept in the ack itself because that read does not return the warnings or the snapshot's summary previews; the snapshot's ids are the stored record's `related_to`, so a `store_finding` ack carrying the snapshot does not repeat them as `state_summary.related_to`. Do not repeat a write just to see its payload: `store_finding` mints a new finding on every call. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+Read aliases, bounded `sync_state` modes, and the write aliases `store_finding`, `update_finding` and `record_result` omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere, except as below for the finding writes); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. Those three write acknowledgements keep the ids you need next (`discovery_id`, `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and `written_as` (the writer's `agent_id`, `display_name` and assurance tier), so check it when you bound without an explicit `client_session_id`; `record_result` names its writer only when its binding was not server-inferred, so pass `client_session_id` if you need to see it. Their `raw_governance_hint` names what is still reachable. `record_result` has no read by outcome id: for an outcome recorded with a `prediction_id`, repeating the identical call under the same identity (pass `client_session_id`) with `response_mode="full"` returns the stored outcome in full (`idempotent_replay: true`) and records no second outcome while the binding is retained (a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`); without a `prediction_id` a repeat records a second outcome, so the hint names `response_mode="full"` on a later `record_result`. For `store_finding` and `update_finding` it is a `knowledge(action="details", discovery_id=...)` read (the hint names it as `use_tool(tool_name="knowledge", ...)`, which the progressive surface can call), which returns the stored record rather than the ack's payload. No read returns the omitted payload, so these acks do not set `raw_governance_available`. Write-time warnings and a bounded `related_discoveries` snapshot are kept in the ack itself because that read does not return the warnings or the snapshot's summary previews; the snapshot's ids are the stored record's `related_to`, so a `store_finding` ack carrying the snapshot does not repeat them as `state_summary.related_to`. Do not repeat a write just to see its payload: `store_finding` mints a new finding on every call. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 ## Starting a Session
 
@@ -286,7 +296,7 @@ workflow is `commands/closeout.md`; shared-memory closure standards are in
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this); otherwise the dialectic review opened for the pause, an operator, or re-evaluation at expiry ends it (see Recovery) |
+| **pause / reject** | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -313,7 +323,18 @@ Strong ownership proof is better than implicit continuity. If a call in a proces
 When you are paused, stuck, or need intervention. A paused agent cannot write
 the check-in that would lower its risk, so quick and review succeed only when
 the reading that paused it is already under their gates; otherwise the dialectic
-review opened for the pause, an operator, or re-evaluation at expiry ends it.
+review opened for the pause or an operator ends it. At expiry, the next check-in
+awaits an exact-token durable resume and can then proceed. A synchronous
+shared-memory write starts that same resume but the current write stays refused;
+resubmit it after the pause lifts.
+
+A self-review may record useful reflection, but it cannot close a session bound
+to that identity's pause. An independent reviewer or operator must authorize
+the terminal decision; stale local status does not weaken that boundary.
+
+If a completed review reports `legacy_unbound_session`, it predates durable
+pause-generation binding and intentionally changed no current pause. Open a new
+review for the current pause instead of treating that result as a resume.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
@@ -373,12 +394,12 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`, `reconcile_effect`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. `reconcile_effect` is operator-only recovery for a durable terminal effect: inspect first, apply only untouched pending work, and never replay an applying or unknown-partial effect automatically. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
 - `export()` — Export session history
 
 ### Specialized
 
-- `call_model()` — Delegate to a configured secondary model for analysis
+- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable until its removal, no earlier than 2026-12-02; its `model`, `temperature` and `max_tokens` controls go with it (`consult` does not take them, by design)
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.

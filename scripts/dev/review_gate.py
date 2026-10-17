@@ -10,7 +10,6 @@ the same diff-bound records; an unavailable reviewer never counts as a pass.
     review         run a review of HEAD's diff and post the record on its PR
     record         post a review that already happened elsewhere (a council,
                    a human, another model) as the record for this diff
-    editorial      attest a meaning-preserving prose edit; keep prior evidence
     dispose        post dispositions for a FINDINGS record, clearing it
     key            print the diff key for HEAD
     sweep          review one quiet ready/requested PR without a current review
@@ -86,7 +85,7 @@ import unicodedata
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 
@@ -112,7 +111,18 @@ NATIVE_WAIT_S = 600
 # Full review cycles per PR. A cycle holds at most two distinct model families
 # on the same revision/diff; rerunning a family or changing the work starts
 # another cycle. Coverage remains separate from this spending budget.
+#
+# A cycle that found a serious problem (a P0/P1 or unlabelled finding) does
+# not count against ROUND_CAP, and the fix of a serious finding earns a full
+# review however many earlier cycles there were (CodexRounds.exhausted). The
+# cap exists to stop review that has stopped finding serious problems. A round
+# of lesser findings is answered by targeted fix verification either way
+# (capped_review in cmd_review).
+# Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
+# should be context based". ROUND_BACKSTOP bounds a review that never
+# converges.
 ROUND_CAP = 3
+ROUND_BACKSTOP = 10
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -124,11 +134,6 @@ REVIEWER_NAME_RE = re.compile(r"[A-Za-z0-9_.:@/+-]+")
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
     r"<!--\s*" + re.escape(MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->"
-)
-EDITORIAL_RE = re.compile(
-    r"\A<!-- unitares-editorial v1 head=(?P<head>[0-9a-f]{40}) "
-    r"key=(?P<key>[0-9a-f]{64}) from_head=(?P<from_head>[0-9a-f]{40}) "
-    r"from_key=(?P<from_key>[0-9a-f]{64}) -->\n"
 )
 
 REVIEW_PROMPT = """\
@@ -458,121 +463,12 @@ def carry_records(comments: list[dict], key: str,
     out, carried = [], {}
     for c in comments:
         rec = parse_record(c.get("body", ""))
-        source_key = c.get("_review_original_key", rec.key if rec else "")
-        if rec is not None and source_key in origin:
+        if rec is not None and rec.key in origin:
             c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1),
-                 "_review_original_key": source_key}
-            carried[c.get("html_url", "")] = origin[source_key]
+                 "_review_original_key": c.get("_review_original_key", rec.key)}
+            carried[c.get("html_url", "")] = origin[rec.key]
         out.append(c)
     return out, carried
-
-
-def editorial_path(path: str, sensitive: list[str]) -> bool:
-    """Eligibility only. The author, not a filename heuristic, attests meaning."""
-    parts = Path(path).parts
-    return (bool(parts) and not any(p.startswith('.') for p in parts)
-            and (parts[-1].lower() in {"readme.md", "changelog.md"}
-                 or (path.startswith("docs/") and path.endswith(".md")))
-            and parts[-1].upper() not in {"AGENTS.MD", "CLAUDE.MD", "GEMINI.MD", "SKILL.MD"}
-            and not any(p in {"skills", "commands", "prompts"} for p in parts)
-            and not sensitive_paths([path], sensitive))
-
-
-def editorial_span(base: str, previous: str, head: str) -> list[tuple[str, str]]:
-    """All prior keys in an attested prose-only span, or none if unprovable.
-
-    Check each commit, not only the net diff: code edited and reverted, a mode
-    change, a symlink, or a base merge is not an editorial continuation. Carry
-    EVERY intervening key so findings cannot disappear behind an attestation.
-    """
-    try:
-        if (previous == head or git("merge-base", previous, head).strip() != previous
-                or git("merge-base", base, previous) != git("merge-base", base, head)):
-            return []
-        sensitive = base_policy_paths(base)
-        out, cur = [], head
-        for _ in range(CARRY_MAX_BASE_MERGES):
-            parents = git("rev-list", "--parents", "-n", "1", cur).split()[1:]
-            if len(parents) != 1:
-                return []
-            parent = parents[0]
-            raw = subprocess.run(
-                ["git", "diff", "--raw", "--no-renames", "--no-abbrev", "-z", parent, cur],
-                capture_output=True, check=True).stdout.split(b"\0")
-            if raw == [b""]:
-                return []  # no prose was changed
-            for header, path in zip(raw[0::2], raw[1::2]):
-                fields = header.split()
-                if (len(fields) != 5 or fields[0:2] != [b":100644", b"100644"]
-                        or fields[4] != b"M"
-                        or not editorial_path(path.decode("utf-8", "surrogateescape"), sensitive)):
-                    return []
-                # Markdown can still contain binary data; do not attest it as prose.
-                for commit in (parent, cur):
-                    blob = subprocess.run(["git", "show", f"{commit}:{os.fsdecode(path)}"],
-                                          capture_output=True, check=True).stdout
-                    if b"\0" in blob:
-                        return []
-                    blob.decode("utf-8")
-            out.append((diff_key(base, parent), parent))
-            if parent == previous:
-                return out
-            cur = parent
-    except (SystemExit, subprocess.SubprocessError, UnicodeError):
-        pass
-    return []
-
-
-def editorial_carry(comments: list[dict], key: str, base: str,
-                    equivalents: list[tuple[str, str]] = (), *,
-                    head: str | None = None) -> tuple[list[tuple[str, str]], Record | None]:
-    """Walk proven editorial/base edges from the actual head, preserving evidence.
-
-    An attestation adds no review or family. Every reached key participates in
-    findings and scope resolution, even if approval is blocked. The two kinds
-    of edge compose in either order, without matching a receipt from another
-    commit merely because a revert brought its diff key back.
-    """
-    receipts = [(c, m.groupdict()) for c in comments if trusted_review_comment(c)
-                and (m := EDITORIAL_RE.match(c.get("body", "")))
-                and re.search(r"(?m)^Reason: \S", c.get("body", ""))]
-    if not base or not receipts:
-        return list(equivalents), None
-    try:
-        head = head or git("rev-parse", "HEAD").strip()
-        head_key = diff_key(base, head)
-        if head_key != key and (head_key, head) not in equivalents:
-            return list(equivalents), None
-    except (SystemExit, subprocess.SubprocessError):
-        return list(equivalents), None
-    # A handoff may project the fetched head back onto its caller's key.
-    # Preserve that proven bridge, but walk receipts from the actual head/key.
-    out, pending, visited, standalone = list(equivalents), [(head_key, head)], set(), None
-    while pending:
-        node_key, node = pending.pop()
-        if node in visited:
-            continue
-        visited.add(node)
-        if node != head:
-            out.append((node_key, node))
-        # This retains the existing sensitive-path and clean-merge checks.
-        pending.extend(base_merge_equivalents(base, node))
-        for comment, attrs in receipts:
-            if attrs["head"] != node or attrs["key"] != node_key:
-                continue
-            try:
-                if diff_key(base, attrs["from_head"]) != attrs["from_key"]:
-                    continue
-                span = editorial_span(base, attrs["from_head"], node)
-                if not span:
-                    continue
-                pending.extend(span)
-                if attrs["from_head"] == git("merge-base", base, node).strip():
-                    standalone = Record(key, "CLEAN", 0, False, "author", scope="editorial",
-                                        url=comment.get("html_url", ""), text=comment["body"])
-            except (SystemExit, subprocess.SubprocessError):
-                continue
-    return list(dict.fromkeys(out)), standalone
 
 
 def diff_text(base: str, head: str) -> str:
@@ -632,7 +528,7 @@ class Record:
     # Missing provenance stays legacy; never invent a reviewed commit/base.
     head: str = ""
     base: str = ""
-    scope: str = "legacy"  # full | fix | full-required | legacy; editorial is synthesized locally
+    scope: str = "legacy"  # full | fix | full-required | legacy
     review_id: str = ""
     from_head: str = ""
     from_key: str = ""
@@ -644,8 +540,6 @@ class Record:
                 and not self.reviewer.startswith("fix-verify:"))
 
     def status(self) -> tuple[str, str]:
-        if self.scope == "editorial" and self.verdict == "CLEAN":
-            return "success", "editorial-only: author attested unchanged meaning; no independent review"
         if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
             return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh"
         if self.verdict == "CLEAN":
@@ -850,18 +744,6 @@ def proposal_advisory(paths: list[str] | None, base: str) -> bool:
         return False
 
 
-def full_scope_covers(rec: Record, refusal: Record, native: list[Record] = ()) -> bool:
-    """A real full review must cover the refused diff or a later revision.
-
-    Receipt order is not review scope: a full pass already performed on that
-    revision still counts, but carrying an older key cannot supply one.
-    """
-    full = rec.full() or (any(rec is r for r in native) and rec.scope == "full" and bool(rec.head))
-    return (bool(full) and not rec.disposed and rec.verdict in {"CLEAN", "FINDINGS"}
-            and ((rec.original_key or rec.key) == (refusal.original_key or refusal.key)
-                 or (bool(refusal.head and rec.head) and _is_ancestor(refusal.head, rec.head))))
-
-
 def latest_matching(comments: list[dict], key: str,
                     native: list[Record] = ()) -> Record | None:
     """The record that decides `key`'s status. Comments arrive oldest first.
@@ -891,11 +773,12 @@ def latest_matching(comments: list[dict], key: str,
             rec.created_at = c.get("created_at", "")
             records.append(rec)
     records.extend(rec for rec in native if rec.key == key)
-    requirements = [r for r in records if r.scope == "full-required" and not r.disposed]
     found, completed, open_findings = None, None, []
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
         original = None
         found = rec
+        if rec.verdict != "FAILED" and rec.scope != "full-required":
+            completed = rec
         if rec.verdict == "FINDINGS":
             # A disposition answers ONE findings record, not every earlier one.
             cited = _cited_native_review(rec) if rec.disposed else None
@@ -930,16 +813,9 @@ def latest_matching(comments: list[dict], key: str,
             rec.verdict = "FAILED"  # findings answered, coverage still missing
             if completed is rec or completed is original:
                 completed = None
-        if rec.verdict != "FAILED" and rec.scope != "full-required":
-            completed = rec
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
-    if open_findings:
-        return open_findings[-1]
-    if requirements and not any(all(full_scope_covers(r, refusal, native) for refusal in requirements)
-                                for r in records):
-        return replace(requirements[-1], verdict="FAILED", findings=0)
-    return completed or found
+    return open_findings[-1] if open_findings else completed or found
 
 
 #: (repo, pr) -> (head key, base-merge equivalents). Set where a command has
@@ -948,17 +824,12 @@ def latest_matching(comments: list[dict], key: str,
 _CARRY: dict[tuple[str, int], tuple[str, list[tuple[str, str]]]] = {}
 # Captured trusted base objects prove key compatibility; never native reviewed-base metadata.
 _CARRY_BASES: dict[tuple[str, int], str] = {}
-_CARRY_HEADS: dict[tuple[str, int], str] = {}
 
 
 def pr_comments(repo: str, pr: int) -> list[dict]:
     comments = api_pages(f"repos/{repo}/issues/{pr}/comments")
     carry = _CARRY.get((repo, pr))
-    if carry:
-        equivalents, _ = editorial_carry(comments, carry[0], _CARRY_BASES.get((repo, pr), ""), carry[1],
-                                         head=_CARRY_HEADS.get((repo, pr)))
-        return carry_records(comments, carry[0], equivalents)[0]
-    return comments
+    return carry_records(comments, *carry)[0] if carry else comments
 
 
 def api_pages(endpoint: str) -> list[dict]:
@@ -998,6 +869,12 @@ class ReviewCycle:
     head: str
     key: str
     families: set[str | None] = field(default_factory=set)
+    findings: list[dict] = field(default_factory=list)
+
+    def productive(self) -> bool:
+        """It found a serious problem: a P0/P1 finding, or an unlabelled one
+        (a local review can report data loss in prose), as last_severe reads."""
+        return any(_title_is_serious(f) for f in self.findings)
 
     def accepts(self, head: str, key: str, family: str | None) -> bool:
         same_head = (len(self.head) >= 7 and len(head) >= 7
@@ -1007,47 +884,24 @@ class ReviewCycle:
                     and family not in self.families and len(self.families) < 2)
 
 
-def editorial_cycle_aliases(comments: list[dict], base: str) -> dict:
-    """Verified editorial endpoints denote the same work for spending only.
-
-    Keep the original run identities and finding history. This lets a second
-    family finish a pair after an attested typo without refunding repeated
-    families or treating substantive revisions as interchangeable.
-    """
-    aliases = {}
-    if not base:
-        return aliases
-    for c in comments:
-        match = EDITORIAL_RE.match(c.get("body", ""))
-        if (not trusted_review_comment(c) or not match
-                or not re.search(r"(?m)^Reason: \S", c.get("body", ""))):
-            continue
-        attrs = match.groupdict()
-        try:
-            head, prior = attrs["head"], attrs["from_head"]
-            key, prior_key = attrs["key"], attrs["from_key"]
-            if (diff_key(base, head) != key or diff_key(base, prior) != prior_key
-                    or not editorial_span(base, prior, head)):
-                continue
-            old = aliases.get((head, key))
-            if old and not _is_ancestor(prior, old[0]):
-                continue
-            aliases[(head, key)] = aliases[(head, "")] = (prior, prior_key)
-        except (SystemExit, subprocess.SubprocessError):
-            continue
-    return aliases
+def _title_is_serious(finding: dict) -> bool:
+    """A finding's severity is its title's: the first non-empty line. A P0/P1
+    there, or no label at all, is serious; a label in the explanation below
+    (e.g. "the earlier [P1] issue was fixed") is not."""
+    lines = [line for line in (finding.get("body") or "").splitlines() if line.strip()]
+    title = lines[0] if lines else ""
+    return bool(SEVERE_BADGE_RE.search(title)) or not SEVERITY_LABEL_RE.search(title)
 
 
-def cycle_revision(head: str, key: str, aliases: dict) -> tuple[str, str]:
-    if aliases and re.fullmatch(r"[0-9a-f]{7,39}", head):
-        # Native clean comments abbreviate their commit. Resolve it only when
-        # Git can identify one object; a prefix match alone is not proof.
-        head = git("rev-parse", "--verify", "--quiet", f"{head}^{{commit}}", check=False).strip() or head
-    visited = set()
-    while (head, key) in aliases and (head, key) not in visited:
-        visited.add((head, key))
-        head, key = aliases[(head, key)]
-    return head, key
+def _changed_work(cycle: "ReviewCycle", key: str, head: str) -> bool:
+    """Positive evidence that the work under review differs from `cycle`'s:
+    both diff keys known and different, or, where the cycle has no key (a
+    native review), a different head commit. No evidence, no exemption."""
+    if key and cycle.key:
+        return key != cycle.key
+    if head and cycle.head and not cycle.key:
+        return not (head.startswith(cycle.head) or cycle.head.startswith(head))
+    return False
 
 
 @dataclass
@@ -1061,11 +915,37 @@ class CodexRounds:
     cycles: list[ReviewCycle] = field(default_factory=list)
     # Spending evidence only, also used to include unposted local reviews.
     runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
-    revision_aliases: dict = field(default_factory=dict)
 
     def can_join(self, head: str, key: str, family: str | None) -> bool:
-        head, key = cycle_revision(head, key, self.revision_aliases)
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
+
+    @property
+    def spent(self) -> int:
+        """Cycles that count against ROUND_CAP: all but those that found a
+        serious problem. ``count`` stays the full ledger (grants key on it)."""
+        return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
+
+    def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
+        """No new full cycle without the operator: too many unproductive
+        cycles, or a review that has not converged by the backstop."""
+        if not ROUND_CAP_ENABLED:
+            return False
+        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
+            return True
+        if joining:
+            # Finishing a cycle (its second family) costs nothing when starting
+            # it did not need the operator: the cycle before it was serious, or
+            # fewer than ROUND_CAP unproductive cycles came before it.
+            current = 0 if (self.cycles and self.cycles[-1].productive()) else 1
+            prior_spent = self.spent - current
+            prior_serious = (len(self.cycles) >= 2 and self.cycles[-2].productive()
+                             and _changed_work(self.cycles[-2], self.cycles[-1].key, self.cycles[-1].head))
+            return not (prior_serious or prior_spent < ROUND_CAP)
+        if self.cycles and self.cycles[-1].productive() and _changed_work(self.cycles[-1], key, head):
+            # The fix of a serious finding earns a full review; re-reviewing
+            # the same unchanged diff does not.
+            return False
+        return self.spent >= ROUND_CAP
 
     @property
     def last_severe(self) -> bool:
@@ -1088,7 +968,7 @@ class CodexRounds:
 
 
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
-                 events: list[dict] = (), reactions: list[dict] = (), *, base: str = "") -> CodexRounds:
+                 events: list[dict] = (), reactions: list[dict] = ()) -> CodexRounds:
     """Count full review cycles across sources without resetting on retarget.
 
     Native artifacts deduplicate by their actual reviewed commit. Local and
@@ -1176,17 +1056,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        body = c.get("body", "")
-        titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
-        findings = []
-        for i, title in enumerate(titles):
-            finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
-            location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
-            if location:
-                finding.update(path=location[1], line=int(location[2]))
-            findings.append(finding)
-        if rec.verdict == "FINDINGS" and not findings:
-            findings = [{"body": "unlabelled finding; full review required"}]
+        findings = findings_from_review_text(c.get("body", ""), rec.verdict, rec.findings or 0)
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
                                    rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
@@ -1198,33 +1068,60 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if rec and (rec.disposed or rec.reviewer.startswith("fix-verify:")):
             answered_at = max(answered_at, timestamp(c.get("created_at", "")))
             continue  # an answer to a round, never a run of its own
-    return count_review_cycles(list(runs.values()), unknown_history, answered_at,
-                               revision_aliases=editorial_cycle_aliases(comments, base))
+    if not runs:
+        return CodexRounds(unknown_history=unknown_history)
+    return count_review_cycles(list(runs.values()), unknown_history, answered_at)
+
+
+# A finding's title leads with its label, after list or markup characters
+# ("[P1] ...", "- [P1] ...", "1. **[P1] ...", "**<sub><sub>![P1 Badge](...)").
+# A label later in a line is prose (e.g. "verified the prior [P1] fix").
+FINDING_TITLE_RE = re.compile(
+    r"(?m)^[ \t>#*\-]*(?:\d+\.[ \t]*)?[ \t*]*(?:<sub>[ \t]*)*"
+    r"(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$")
+
+
+def findings_from_review_text(body: str, verdict: str, declared: int = 0) -> list[dict]:
+    """The labelled findings in a review's text, one per title. A FINDINGS
+    verdict with no labelled title yields one unlabelled finding, which the
+    budget and the cap treat as serious, and so does each finding the
+    record declares (``declared``) beyond the labelled titles found. Any
+    other verdict has no findings, whatever its reasoning mentions."""
+    if verdict != "FINDINGS":
+        return []
+    titles = list(FINDING_TITLE_RE.finditer(body))
+    findings = []
+    for i, title in enumerate(titles):
+        finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
+        location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
+        if location:
+            finding.update(path=location[1], line=int(location[2]))
+        findings.append(finding)
+    missing = max(declared - len(findings), 0 if findings else 1)
+    findings += [{"body": "unlabelled finding; full review required"}] * missing
+    return findings
 
 
 def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
-                        unknown_history: bool = False, answered_at: float = 0, *,
-                        revision_aliases: dict | None = None) -> CodexRounds:
+                        unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
     """Share spending accounting with the local reviewer, never coverage."""
-    aliases = revision_aliases or {}
     if not runs:
-        return CodexRounds(unknown_history=unknown_history, revision_aliases=aliases)
+        return CodexRounds(unknown_history=unknown_history)
     cycles = []
     findings = []
     for last_at, last, run_findings, key, family in sorted(runs, key=lambda r: r[0]):
-        cycle_head, cycle_key = cycle_revision(last, key, aliases)
-        if not cycles or not cycles[-1].accepts(cycle_head, cycle_key, family):
-            cycles.append(ReviewCycle(cycle_head, cycle_key))
+        if not cycles or not cycles[-1].accepts(last, key, family):
+            cycles.append(ReviewCycle(last, key))
             findings = []
         cycle = cycles[-1]
         cycle.families.add(family)
-        cycle.key = cycle.key or cycle_key
-        if len(cycle_head) > len(cycle.head):
-            cycle.head = cycle_head
+        cycle.findings.extend(run_findings)
+        cycle.key = cycle.key or key
+        if len(last) > len(cycle.head):
+            cycle.head = last
         findings.extend(run_findings)
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
-                       answered_since=answered_at > last_at, cycles=cycles, runs=runs,
-                       revision_aliases=aliases)
+                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
 
 
 def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
@@ -1270,8 +1167,14 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
+        # No severity from unposted runs: only a posted record, with its
+        # provenance, can exempt a cycle from the cap, so these always spend.
         runs.append((when, receipt['head'], [], key, family))
-    return count_review_cycles(runs, rounds.unknown_history, revision_aliases=rounds.revision_aliases)
+    # Unposted runs change the spending ledger only. The round cmd_review
+    # answers (its head, findings and whether it was answered) stays the one
+    # the posted records describe.
+    recount = count_review_cycles(runs, rounds.unknown_history)
+    return dc_replace(rounds, count=recount.count, cycles=recount.cycles, runs=recount.runs)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
@@ -1439,13 +1342,8 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     # finding stays open across the merge until it is fixed or disposed.
     carry = _CARRY.get((repo, pr))
     if carry and carry[0] == key:
-        equivalents, _ = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""), carry[1],
-                                         head=_CARRY_HEADS.get((repo, pr), head))
-        carry = (key, equivalents)
-        for earlier_key, commit in equivalents:
+        for _earlier_key, commit in carry[1]:
             earlier = native_records(comments, reviews, inline, events, key, commit, reactions)
-            for rec in earlier.records:
-                rec.original_key = earlier_key
             snapshot.records.extend(earlier.records)
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
     for c in comments:
@@ -1464,7 +1362,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                 if diff_key(rec.base, source_head) != source_key:
                     continue
             elif source_head != head:
-                equivalents = carry or ("", [])
+                equivalents = _CARRY.get((repo, pr), ("", []))
                 validated = equivalents[0] == key and source_head in {h for _, h in equivalents[1]}
                 trusted_base = _CARRY_BASES.get((repo, pr))
                 if not validated and (not trusted_base or diff_key(trusted_base, source_head) != source_key):
@@ -1504,8 +1402,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             ancestor = _is_ancestor(commit, head)
             snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known
                                     and (ancestor or r.verdict == "FINDINGS"))
-    snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions,
-                                   base=_CARRY_BASES.get((repo, pr), ""))
+    snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
     return snapshot
 
 
@@ -1754,55 +1651,30 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     families = set()
     trusted = [(c, comment_record(c)) for c in comments
                if trusted_review_comment(c)]
-    # Full-review requirements survive carry and dispositions. Earlier full
-    # reviews count only if they actually cover the refused work; merely
-    # rewriting their keys must not resurrect an invalidated model family.
-    requirements = [r for _, r in trusted if r and r.key == key
-                    and r.scope == "full-required" and not r.disposed]
-    requirements.extend(r for r in native if r.key == key and r.scope == "full-required" and not r.disposed)
-
-    def allowed(rec: Record) -> bool:
-        source = original_for(rec) if rec.disposed else rec
-        return source is not None and all(full_scope_covers(source, refusal, native) for refusal in requirements)
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
-    originals = [(c, r) for c, r in trusted
+    # (reviewer, findings) -> the original review's model (for agy records).
+    originals = {(r.reviewer, r.findings): r for _, r in trusted
                  if r and (r.full() or r.scope in {"fix", "full-required"})
-                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed]
-
-    def original_for(rec: Record) -> Record | None:
-        # Carry changes the display key, never the identity of the review a
-        # disposition answers. A newer review with the same count cannot lend
-        # its scope, model or approval to an older disposition.
-        cited = re.search(rf"dispositions for FINDINGS\({rec.findings}\) — (\S+)", rec.text)
-        matches = [r for c, r in originals
-                   if (r.reviewer, r.findings) == (rec.reviewer, rec.findings)
-                   and ((r.original_key or r.key) == (rec.original_key or rec.key)
-                        or (rec.scope == "legacy" and not rec.original_key and cited
-                            and c.get("html_url") == cited[1]))
-                   and (rec.scope == "legacy" or all(getattr(r, name) == getattr(rec, name)
-                        for name in ("scope", "head", "base", "from_head", "from_key", "review_id")))]
-        return matches[-1] if matches else None
+                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
     # A native Codex review is a GitHub review, not a comment: its disposition
     # cites the review by URL (as latest_matching matches it), with its count.
     native_findings = {r.url: r.findings for r in native
                        if r.key == key and r.verdict == "FINDINGS" and r.url}
     for c, rec in trusted:
-        body = c.get("body", "")
-        if rec:
-            rec.text = body
         if rec and rec.disposed and rec.scope == "legacy":
-            original = original_for(rec)
+            original = originals.get((rec.reviewer, rec.findings))
             if original:
                 for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
                     setattr(rec, name, getattr(original, name))
+        body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
                 if (rec.key == key and followup_passes(rec, body, [r for _, r in trusted])
                         and followup_objects_valid(rec)):
                     families.update(record_family(source)
-                                    for source in followup_sources(rec, comments, native) if allowed(source))
+                                    for source in followup_sources(rec, comments, native))
                 continue
             rec.text = body
         native_source = next((r for r in native if rec and r.key == key and r.scope == "full" and r.head
@@ -1810,9 +1682,9 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
                               and ((rec.disposed and r.url == _cited_native_review(rec) and r.findings == rec.findings)
                                    or (rec.verdict == "CLEAN" and rec.scope == "full" and rec.head == r.head
                                        and r.verdict == "CLEAN"))), None)
-        if rec is None or rec.key != key or not (rec.full() or native_source) or not allowed(native_source or rec):
+        if rec is None or rec.key != key or not (rec.full() or native_source):
             continue
-        answers_a_review = original_for(rec) is not None
+        answers_a_review = (rec.reviewer, rec.findings) in originals
         if not answers_a_review and rec.reviewer == "codex-native":
             rec.text = body
             cited = _cited_native_review(rec)
@@ -1828,12 +1700,11 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
             if rec.disposed and not rec.model:
                 # A disposition written without the model (older, or --emit)
                 # counts by the model of the review it answers.
-                original = original_for(rec)
+                original = originals.get((rec.reviewer, rec.findings))
                 rec.model = original.model if original else ""
             families.add(record_family(rec))
     for rec in native:
-        if (rec.key == key and rec.scope == "full" and rec.head and allowed(rec)
-                and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed))):
+        if rec.key == key and rec.scope == "full" and rec.head and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
             families.add(record_family(rec))
     families.discard(None)
     return families
@@ -2067,14 +1938,7 @@ def native_activity_running(comments: list[dict]) -> bool:
 def current_record(repo: str, pr: int, key: str, head: str,
                    comments: list[dict]) -> Record | None:
     records = read_native(repo, pr, key, head, comments).records
-    rec = latest_matching(comments, key, records)
-    if rec is None or (rec.verdict == "FAILED" and rec.scope != "full-required"):
-        carry_key, equivalents = _CARRY.get((repo, pr), ("", []))
-        _, editorial = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""),
-                                      equivalents if carry_key == key else [],
-                                      head=_CARRY_HEADS.get((repo, pr), head))
-        rec = editorial or rec  # an outage does not create a new review requirement
-    return rec
+    return latest_matching(comments, key, records)
 
 
 def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
@@ -2718,8 +2582,7 @@ def _resolve(args) -> tuple[int, str, str, str]:
     # a base merge is this diff's, so `dispose` can answer it and `review` does
     # not start over as if it were absent.
     _CARRY_BASES[(repo, info["number"])] = git("rev-parse", args.base).strip()
-    _CARRY_HEADS[(repo, info["number"])] = pushed
-    _CARRY[(repo, info["number"])] = (key, base_merge_equivalents(args.base, pushed))
+    _CARRY[(repo, info["number"])] = (key, base_merge_equivalents(args.base, head))
     return info["number"], repo, key, info["headRefName"]
 
 
@@ -2818,7 +2681,6 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             equivalents = base_merge_equivalents(checked_base, head_ref)
             current = current or key in {k for k, _ in equivalents}
             if current:
-                _CARRY_HEADS[(repo, pr)] = fetched_head
                 _CARRY[(repo, pr)] = (fetched_key, equivalents)
                 try:
                     latest = current_record(repo, pr, fetched_key, fetched_head,
@@ -2839,7 +2701,6 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             # more). Register that set for the second-family pass, and read
             # the findings through it as CI does, since a larger carry can
             # bring in an open finding the review never saw.
-            _CARRY_HEADS[(repo, pr)] = head
             _CARRY[(repo, pr)] = (key, base_merge_equivalents(checked_base, head_ref))
             latest = current_record(repo, pr, key, head, pr_comments(repo, pr))
             if latest and latest.verdict == "FINDINGS" and not latest.disposed:
@@ -2861,7 +2722,6 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
 
 def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
                   comments: list[dict]) -> int:
-    editorial_head = _CARRY_HEADS.get((repo, pr), head)
     result = UNREVIEWED if rec.verdict == "FAILED" else 0 if rec.status()[0] == "success" else 1
     if result == 0 and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
         # Reactions have no workflow event. A durable comment both re-runs CI
@@ -2879,18 +2739,7 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
                         f"CLEAN — native review joined: {rec.url}", rec.text)
     # The receipt's network write can race a push too. Validate after it so
     # publishing evidence for an earlier diff cannot finish the current one.
-    result = completed_review_exit(repo, pr, key, head, result)
-    if (result == 0 and (rec.scope == "editorial" or rec.original_key)
-            and _CARRY_HEADS.get((repo, pr), head) != editorial_head):
-        try:
-            latest = current_record(repo, pr, key, _CARRY_HEADS[(repo, pr)], pr_comments(repo, pr))
-        except SystemExit as exc:
-            print(f"[review] UNREVIEWED: cannot confirm carried review after head change: {exc}")
-            return UNREVIEWED
-        if latest is None or latest.status()[0] != "success":
-            print("[review] UNREVIEWED: PR head moved during editorial handoff; rerun to join current evidence")
-            return UNREVIEWED
-    return result
+    return completed_review_exit(repo, pr, key, head, result)
 
 
 class review_lock:
@@ -3032,10 +2881,11 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (ROUND_CAP_ENABLED and (rounds.count > ROUND_CAP or
-                        (rounds.count == ROUND_CAP and not joining_cycle))
+                if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
-                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                    print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
+                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
@@ -3511,45 +3361,6 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     return UNREVIEWED if parsed is None else (0 if state == "success" else 1)
 
 
-def cmd_editorial(args) -> int:
-    """An author's explicit semantic judgment, never a fabricated review."""
-    reason = " ".join(args.reason.split())
-    if not reason:
-        raise SystemExit("review_gate: explain why the prose edit preserves meaning")
-    pr, repo, key, branch = _resolve(args)
-    head = git("rev-parse", "HEAD").strip()
-    if _CARRY_HEADS.get((repo, pr), head) != head:
-        raise SystemExit("review_gate: editorial attestations must describe the actual pushed PR head")
-    previous = git("rev-parse", f"{args.since}^{{commit}}").strip()
-    if not editorial_span(args.base, previous, head):
-        raise SystemExit("review_gate: editorial scope must contain only edits to existing prose files; "
-                         "code, policy-sensitive paths, agent instructions, file/mode changes and merges need review")
-    body = (f"<!-- unitares-editorial v1 head={head} key={key} from_head={previous} "
-            f"from_key={diff_key(args.base, previous)} -->\n"
-            "### Editorial attestation — author\n\n"
-            "I checked this complete span: only spelling, grammar or formatting changed. "
-            "Meaning, commands, API contracts, requirements, security and agent instructions are unchanged. "
-            "This is an author judgment, not an independent review or a model-family approval. "
-            "Prior findings and review requirements remain in force.\n\n"
-            f"Reason: {reason}\n")
-    with review_lock(f"pr-{pr}") as lock:
-        if not lock.held:
-            print("[review] review in progress; join it before recording the editorial attestation")
-            return UNREVIEWED
-        require_open(pr)
-        post_comment(pr, body)
-    print("[review] editorial attestation posted; no model invoked")
-    comments = pr_comments(repo, pr)
-    rec = current_record(repo, pr, key, head, comments)
-    if rec is None:
-        print("[review] prior review coverage is still missing; the attestation does not supply it")
-        return UNREVIEWED
-    print(f"[review] {rec.status()[1]}")
-    args.branch = branch
-    return second_family_pass(args, repo, pr, key, head,
-                              finish_record(repo, pr, key, head, rec, comments))
-
-
 def cmd_record(args) -> int:
     if not args.independent:
         raise SystemExit("review_gate: record requires --independent to attest that a "
@@ -3594,10 +3405,6 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
     """record and dispose finish like a review run: a passing result on a
     security-sensitive diff still needs a second model family (exit 3)."""
     if rec.scope == "full-required" and rec.disposed:
-        current = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
-        if current and current.status()[0] == "success":
-            args.branch = branch
-            return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0)
         return UNREVIEWED
     if rec.scope == "fix" and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: targeted receipt lacks a valid prior full review at the declared head/base")
@@ -3666,13 +3473,10 @@ def cmd_dispose(args) -> int:
     if not dispositions_complete(text, prior.findings):
         raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
                          f"{prior.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
-    rec = Record(prior.original_key or key, "FINDINGS", prior.findings, True, prior.reviewer, model=prior.model,
+    rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer, model=prior.model,
                  head=prior.head, base=prior.base, scope=prior.scope, review_id=prior.review_id,
                  from_head=prior.from_head, from_key=prior.from_key)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
-    # Persist the actual reviewed key. The next read derives the carry proof
-    # again; the immediate result can retain the already-proven original key.
-    rec.original_key, rec.key = prior.original_key, key
     print(f"[review] {rec.status()[1]}")
     return _after_manual_record(args, repo, pr, key, branch, rec)
 
@@ -3687,8 +3491,6 @@ def _dispose_emit(args) -> int:
     Any other cite, and the reviewer, are NOT verified: CI answers the latest
     open FINDINGS record with the same count, and the check shows whatever
     reviewer was passed. Copy both from the open record exactly.
-    Carried model-family credit additionally needs the exact cited review URL
-    when the emitted record lacks the original review's provenance.
     """
     missing = [f for f in ("findings", "reviewer", "cites") if getattr(args, f, None) in (None, "")]
     if missing:
@@ -3781,7 +3583,6 @@ def cmd_sweep(args) -> int:
         # The same records CI decides with, so the sweep does not re-review a
         # PR whose review carried across a base merge.
         _CARRY_BASES[(repo, n)] = git("rev-parse", f"origin/{base}").strip()
-        _CARRY_HEADS[(repo, n)] = head
         _CARRY[(repo, n)] = (key, base_merge_equivalents(f"origin/{base}", head))
         comments = pr_comments(repo, n)
         try:
@@ -3906,7 +3707,13 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not ROUND_CAP_ENABLED:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
-    return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
+    if rounds.spent != rounds.count:
+        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
+                f"backstop {ROUND_BACKSTOP})")
+    serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
+    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
+                                     or (rounds.spent >= ROUND_CAP and not serious_last))
+    return note + (" (cap reached)" if reached else "")
 
 
 def cmd_ci(args) -> int:
@@ -3922,17 +3729,12 @@ def cmd_ci(args) -> int:
         f"+refs/pull/{pr}/head:refs/review-gate/head")
     key = diff_key(f"origin/{base_ref}", head)
     equivalents = base_merge_equivalents(f"origin/{base_ref}", head)
+    comments, carried = carry_records(pr_comments(repo, pr), key, equivalents)
     _CARRY_BASES[(repo, pr)] = git("rev-parse", f"origin/{base_ref}").strip()
-    _CARRY_HEADS[(repo, pr)] = head
-    _CARRY[(repo, pr)] = (key, equivalents)
-    comments = pr_comments(repo, pr)
-    combined, editorial = editorial_carry(comments, key, f"origin/{base_ref}", equivalents, head=head)
-    comments, carried = carry_records(comments, key, combined)
+    _CARRY[(repo, pr)] = (key, equivalents)  # after the read: read_native carries native evidence
     try:
         snapshot = read_native(repo, pr, key, head, comments)
         rec = latest_matching(comments, key, snapshot.records)
-        if rec is None or (rec.verdict == "FAILED" and rec.scope != "full-required"):
-            rec = editorial or rec
     except SystemExit as exc:
         print(f"::warning::Review evidence incomplete: {exc}. Existing review check preserved; "
               "retry this workflow when GitHub evidence is readable.")
@@ -3964,8 +3766,7 @@ def cmd_ci(args) -> int:
     conclusion, desc = held
     carried = {**carried, **snapshot.carried}
     if rec is not None and rec.url in carried:
-        kind = "base merge" if combined == equivalents else "editorial edit/base merge"
-        desc += f" · carried across a {kind} from {carried[rec.url][:7]}"
+        desc += f" · carried across a base merge from {carried[rec.url][:7]}"
     if proposal_advisory(changed, f"origin/{base_ref}"):
         conclusion = "success"
         desc = "proposal-only advisory: " + desc + "; implementation requires correctness review"
@@ -4012,10 +3813,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the record body instead of posting it (no gh needed); "
                          "post it verbatim with any GitHub client")
 
-    ed = sub.add_parser("editorial", help="author: attest meaning-preserving prose edits without another model call")
-    ed.add_argument("--reason", required=True, help="why this edit changes no meaning, commands or requirements")
-    ed.add_argument("--since", default="HEAD^", help="start of the complete editorial span (default: previous commit)")
-
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")
     d.add_argument("--base", default=argparse.SUPPRESS,
@@ -4050,8 +3847,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     try:
-        return {"review": cmd_review, "record": cmd_record, "editorial": cmd_editorial,
-                "waive": cmd_waive, "dispose": cmd_dispose,
+        return {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
                 "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
