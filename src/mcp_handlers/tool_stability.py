@@ -293,13 +293,12 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
         migration_note=(
-            "Open a governed, on-record review session for this agent. "
-            "issue_description is reused as the thesis by default, so one call "
-            "can reach a verdict; pass use_brief_as_thesis=false for the two-call "
-            "form. Requires a session-owned registered identity, refuses with "
-            "SESSION_EXISTS while one is active, and returns skipped with no "
-            "session when the agent is waiting_input. dialectic advances an open "
-            "session; consult gives advisory evidence with no verdict."
+            "Open a governed, on-record review. issue_description is the thesis "
+            "by default; set use_brief_as_thesis=false for two calls. Proxy-filed "
+            "reviews should pass reviewed_work_author_agent_ids to recuse declared "
+            "authors. Requires a session-owned registered identity; refuses with "
+            "SESSION_EXISTS if one is active, and skips without a session while "
+            "waiting_input. dialectic advances the session; consult is advisory."
         ),
         inject_action="request", inject_defaults={"use_brief_as_thesis": True},
         experience=True),

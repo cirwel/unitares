@@ -309,7 +309,10 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.44.0 (2026-10-17): Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
 # 1.45.0 (2026-10-17): search_shared_memory lean and compact tiers list further results under more_results when limit is unset (limit of 3 or less omits them), and add state_summary.relevance_note when shown digests carry more than one relevance_basis. Response hints that named knowledge(action=...) name use_tool(tool_name='knowledge', ...), which every advertised surface can call. store_finding field descriptions drop router vocabulary, the knowledge response_to description lists its response_type values, and search_shared_memory's include_details brief names the use_tool route; those description changes move the store_finding and search_shared_memory input digests. Nothing is added, removed, retyped or renamed.
 # 1.46.0 (2026-10-17): Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
-INTERFACE_CONTRACT_VERSION = "1.46.0"
+# 1.47.0 (2026-10-17): Dialectic review requests recuse declared author-agent
+# UUIDs, and terminal decisions use a durable resolution-effect record with
+# operator-only, inspected-version-fenced reconciliation for interrupted effects.
+INTERFACE_CONTRACT_VERSION = "1.47.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

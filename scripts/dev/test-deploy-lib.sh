@@ -641,11 +641,13 @@ _rs_sha() { (command -v shasum >/dev/null 2>&1 && shasum -a 256 "$1" || sha256su
 
 # helper: run deploy_lib_restart_service under a scripted fake launchctl.
 #   $1 state_dir  $2 log  $3 bootout_rc  $4 bootstrap_fail_count (before
-#   success; 99 = never succeeds)  $5 print_rc  $6 kickstart_rc (default 0)
-# print_rc models the post-bootout loaded-state poll: nonzero = label gone
-# (reload proceeds to bootstrap), 0 = still loaded (refusal after the wait).
+#   success; 99 = never succeeds)  $5 post-bootout print_rc
+#   $6 kickstart_rc (default 0)  $7 initial print_rc (default 0 = loaded)
+# The two print results distinguish the initial registration check from the
+# post-bootout poll: nonzero means the label is absent from the launchd domain.
 _rs_run() {
   local state="$1" log="$2" bo_rc="$3" bs_fail="$4" pr_rc="$5" kick_rc="${6:-0}"
+  local initial_pr_rc="${7:-0}"
   (
     set -euo pipefail; . "$LIB"
     export UNITARES_DEPLOY_STATE_DIR="$state"
@@ -658,7 +660,10 @@ _rs_run() {
         bootstrap)
           local n; n="$(cat "$log.bs" 2>/dev/null || echo 0)"; n=$((n+1)); echo "$n" > "$log.bs"
           [ "$n" -gt "$bs_fail" ] && return 0 || return 1 ;;
-        print)     return "$pr_rc" ;;
+        print)
+          local p; p="$(cat "$log.print" 2>/dev/null || echo 0)"; p=$((p+1)); echo "$p" > "$log.print"
+          [[ "$p" == 1 ]] && return "$initial_pr_rc"
+          return "$pr_rc" ;;
       esac
     }
     deploy_lib_restart_service t gui/501 test.svc "$RS_PLIST"
@@ -677,6 +682,26 @@ if _rs_run "$SB/rs1" "$L" 0 0 1 >/dev/null 2>&1 \
   && grep -q 'launchctl kickstart' "$L" && ! grep -q 'launchctl bootout' "$L"; then
   ok "restart_service: sidecar matches -> kickstart, no reload"
 else bad "restart_service: unchanged-plist kickstart path"; fi
+
+# Schema-only migration cutover leaves both writer jobs booted out.  A normal
+# deploy must bootstrap that known-unloaded job regardless of sidecar state;
+# kickstart cannot register it with launchd.
+L="$SB/rs-unloaded-no-baseline.log"; : > "$L"
+if _rs_run "$SB/rs-unloaded-no-baseline" "$L" 0 0 1 0 1 >/dev/null 2>&1 \
+  && grep -q 'launchctl bootstrap' "$L" \
+  && ! grep -q 'launchctl kickstart' "$L" \
+  && ! grep -q 'launchctl bootout' "$L" \
+  && [[ "$(cat "$SB/rs-unloaded-no-baseline/test.svc.plist.sha256")" == "$(_rs_sha "$RS_PLIST")" ]]; then
+  ok "restart_service: unloaded + no baseline -> bootstrap and adopt hash"
+else bad "restart_service: unloaded no-baseline bootstrap path"; fi
+
+L="$SB/rs-unloaded-unchanged.log"; : > "$L"
+if _rs_run "$SB/rs1" "$L" 0 0 1 0 1 >/dev/null 2>&1 \
+  && grep -q 'launchctl bootstrap' "$L" \
+  && ! grep -q 'launchctl kickstart' "$L" \
+  && ! grep -q 'launchctl bootout' "$L"; then
+  ok "restart_service: unloaded + unchanged plist -> bootstrap"
+else bad "restart_service: unloaded unchanged-plist bootstrap path"; fi
 
 printf 'v2-edited\n' > "$RS_PLIST"
 L="$SB/rs3.log"; : > "$L"
@@ -735,6 +760,61 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
 ) && ok "[guard] deploy-mcp.sh routes its restart through deploy_lib_restart_service (conditional call)" \
   || bad "deploy-mcp.sh restart wiring guard"
 
+# A live migration-078 database makes the shared deploy worktree
+# forward-only. Exercise the recovery helper itself: no arbitrary PREV restore
+# and both dialectic writers are unloaded.
+(
+  set -euo pipefail
+  DM="$(dirname "$LIB")/deploy-mcp.sh"
+  eval "$(sed -n '/^recover_or_hold_forward()/,/^}/p' "$DM")"
+  L="$SB/mcp-frontier-recovery.log"; : > "$L"
+  UID_NUM=501; TAG=t; DEPLOY=/reviewed-forward; PREV=old-revision
+  DIALECTIC_FRONTIER_LIVE=1
+  launchctl() { printf 'launchctl %s\n' "$*" >> "$L"; }
+  deploy_lib_restore_reviewed_worktree() { printf 'restore\n' >> "$L"; }
+  set +e
+  recover_or_hold_forward "fixture failure" >/dev/null 2>&1
+  rc=$?
+  set -e
+  [[ "$rc" == 1 ]]
+  grep -q 'bootout gui/501/com.unitares.governance-mcp' "$L"
+  grep -q 'bootout gui/501/com.unitares.lease-plane' "$L"
+  ! grep -q '^restore$' "$L"
+) && ok "[guard] deploy-mcp holds both writers for forward recovery above schema 078" \
+  || bad "deploy-mcp schema-078 forward-recovery guard"
+
+(
+  set -euo pipefail
+  DM="$(dirname "$LIB")/deploy-mcp.sh"
+  eval "$(sed -n '/^recover_or_hold_forward()/,/^}/p' "$DM")"
+  L="$SB/mcp-pre-frontier-recovery.log"; : > "$L"
+  UID_NUM=501; TAG=t; DEPLOY=/reviewed-forward; PREV=old-revision
+  DIALECTIC_FRONTIER_LIVE=0
+  launchctl() { printf 'launchctl %s\n' "$*" >> "$L"; }
+  deploy_lib_restore_reviewed_worktree() { printf 'restore %s\n' "$*" >> "$L"; }
+  recover_or_hold_forward "fixture failure" >/dev/null 2>&1
+  grep -q '^restore t /reviewed-forward old-revision$' "$L"
+  ! grep -q '^launchctl ' "$L"
+) && ok "[guard] deploy-mcp retains ordinary rollback below schema 078" \
+  || bad "deploy-mcp pre-frontier rollback guard"
+
+# The migration probe must target the database persisted in the MCP plist, not
+# an operator-shell default or a convenient override.  A mismatched override is
+# refused, and a post-overlay database switch is detected before restart.
+(
+  set -euo pipefail
+  DM="$(dirname "$LIB")/deploy-mcp.sh"
+  grep -q "Print :EnvironmentVariables:DB_POSTGRES_URL" "$DM"
+  grep -q 'UNITARES_DEPLOY_DB_URL.*governance MCP runtime database' "$DM"
+  grep -q 'POST_OVERLAY_DB_URL' "$DM"
+  overlay_guard="$(sed -n '/if ! POST_OVERLAY_DB_URL=/,/^fi$/p' "$DM")"
+  printf '%s' "$overlay_guard" | grep -q 'DIALECTIC_FRONTIER_LIVE=1'
+  frontier_line="$(printf '%s\n' "$overlay_guard" | grep -n 'DIALECTIC_FRONTIER_LIVE=1' | cut -d: -f1)"
+  recovery_line="$(printf '%s\n' "$overlay_guard" | grep -n 'recover_or_hold_forward' | cut -d: -f1)"
+  [[ "$frontier_line" -lt "$recovery_line" ]]
+) && ok "[guard] deploy-mcp pins migration checks to the plist runtime database" \
+  || bad "deploy-mcp runtime-database parity guard"
+
 # ── [guard] deploy-lease-plane.sh routes its restart through the primitive ──
 # It used a bare `launchctl kickstart -k` until #1945. kickstart reuses
 # launchd's cached service definition, so a plist env edit never loaded while
@@ -747,6 +827,21 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   ! grep -q '^launchctl kickstart' "$DLP"
 ) && ok "[guard] deploy-lease-plane.sh routes its restart through deploy_lib_restart_service (conditional call)" \
   || bad "deploy-lease-plane.sh restart wiring guard"
+
+# The lease plane shares the governance schema. A green /health response does
+# not exercise dialectic SQL, so its migration check must happen before both
+# compile and restart, and a gap must restore the previously reviewed checkout.
+(
+  set -euo pipefail
+  DLP="$(dirname "$LIB")/deploy-lease-plane.sh"
+  check_line="$(grep -n 'python3 "\$MIGRATE" --check' "$DLP" | head -1 | cut -d: -f1)"
+  compile_line="$(grep -n 'mix deps.get && mix compile' "$DLP" | head -1 | cut -d: -f1)"
+  restart_line="$(grep -n 'if ! deploy_lib_restart_service "\$TAG"' "$DLP" | head -1 | cut -d: -f1)"
+  [[ "$check_line" -lt "$compile_line" && "$compile_line" -lt "$restart_line" ]]
+  grep -q -- '--apply-migrations' "$DLP"
+  grep -q 'deploy_lib_restore_reviewed_worktree' "$DLP"
+) && ok "[guard] deploy-lease-plane.sh gates compile/restart on schema sync" \
+  || bad "deploy-lease-plane.sh migration preflight guard"
 
 # ── [guard] deploy-orchestrator.sh gates on the migration manifest ──
 # It deploys from its OWN worktree, deliberately unpinned from unitares-deploy —

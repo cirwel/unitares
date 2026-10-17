@@ -24,9 +24,14 @@ source_files:
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
+  - unitares/src/dialectic_reviewed_work.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
+  - unitares/src/mcp_handlers/support/agent_auth.py
+  - unitares/src/mcp_handlers/support/pause_ttl.py
+  - unitares/src/agent_storage.py
+  - unitares/src/db/mixins/identity.py
   # The field guide names the negotiated contract version it was checked
   # against, so a contract change must re-verify these six rules.
   - unitares/src/interface_contract.py
@@ -46,12 +51,12 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-10-16
+**Last Updated:** 2026-10-17
 
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.45.0` on 2026-10-17.
+contract `1.47.0` on 2026-10-17.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -99,6 +104,11 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
 Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
+
+For a proxy-filed review of another UNITARES agent's work, pass the known
+author UUIDs in `reviewed_work_author_agent_ids`; the server treats the list as
+an unverified conflict declaration and recuses those agents from independent
+review. Omit it when authorship is unknown rather than sending an empty list.
 
 ### Response shapes
 
@@ -286,7 +296,7 @@ workflow is `commands/closeout.md`; shared-memory closure standards are in
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this); otherwise the dialectic review opened for the pause, an operator, or re-evaluation at expiry ends it (see Recovery) |
+| **pause / reject** | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -313,7 +323,18 @@ Strong ownership proof is better than implicit continuity. If a call in a proces
 When you are paused, stuck, or need intervention. A paused agent cannot write
 the check-in that would lower its risk, so quick and review succeed only when
 the reading that paused it is already under their gates; otherwise the dialectic
-review opened for the pause, an operator, or re-evaluation at expiry ends it.
+review opened for the pause or an operator ends it. At expiry, the next check-in
+awaits an exact-token durable resume and can then proceed. A synchronous
+shared-memory write starts that same resume but the current write stays refused;
+resubmit it after the pause lifts.
+
+A self-review may record useful reflection, but it cannot close a session bound
+to that identity's pause. An independent reviewer or operator must authorize
+the terminal decision; stale local status does not weaken that boundary.
+
+If a completed review reports `legacy_unbound_session`, it predates durable
+pause-generation binding and intentionally changed no current pause. Open a new
+review for the current pause instead of treating that result as a resume.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
@@ -373,7 +394,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`, `reconcile_effect`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. `reconcile_effect` is operator-only recovery for a durable terminal effect: inspect first, apply only untouched pending work, and never replay an applying or unknown-partial effect automatically. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
 - `export()` — Export session history
 
 ### Specialized

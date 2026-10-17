@@ -194,6 +194,26 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         return result
     
     meta = mcp_server.agent_metadata[agent_id]
+    return apply_condition_to_metadata(parsed, agent_id, meta)
+
+
+def apply_condition_to_metadata(
+    parsed: ParsedCondition, agent_id: str, meta: Any
+) -> Dict[str, Any]:
+    """Apply one parsed condition to an explicitly supplied metadata object.
+
+    The durable dialectic executor uses a private staging object here, then
+    commits only the staged additions under the authoritative pause-token row
+    lock.  Keeping this synchronous and explicit prevents an old resolution
+    from becoming observable in the shared cache while its pause-generation
+    compare-and-set is still outstanding.
+    """
+    result = {
+        "condition": parsed.original,
+        "parsed": parsed.to_dict(),
+        "status": "applied",
+        "changes": {},
+    }
 
     if parsed.target in {"coherence", "coherence_threshold"}:
         result["status"] = "retired"

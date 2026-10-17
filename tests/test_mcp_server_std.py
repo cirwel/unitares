@@ -1124,7 +1124,15 @@ class TestSafetyNetResume:
         agent_metadata[agent_id] = meta
         monitors[agent_id] = monitor
         try:
-            await _safety_net_resume(agent_id, reason="dialectic offline")
+            with patch(
+                "src.agent_storage.resume_agent_if_pause_token",
+                new=AsyncMock(return_value={
+                    "applied": True,
+                    "pause_token": now,
+                    "dialectic_conditions": [],
+                }),
+            ) as resume:
+                await _safety_net_resume(agent_id, reason="dialectic offline")
             assert meta.status == "active"
             assert meta.paused_at is None
             assert meta.loop_cooldown_until is None
@@ -1135,6 +1143,8 @@ class TestSafetyNetResume:
             args = meta.add_lifecycle_event.call_args.args
             assert args[0] == "safety_net_resumed"
             assert "dialectic offline" in args[1]
+            resume.assert_awaited_once()
+            assert resume.await_args.kwargs["expected_pause_token"] == now
         finally:
             agent_metadata.pop(agent_id, None)
             monitors.pop(agent_id, None)

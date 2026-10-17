@@ -64,6 +64,18 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  defp reviewed_work_authorship(author, declared_by) do
+    %{
+      "_dialectic_reviewed_work_authorship" => %{
+        "schema" => "unitares.dialectic-reviewed-work-authorship.v1",
+        "status" => "declared",
+        "reviewed_work_author_agent_ids" => [author],
+        "declared_by_agent_id" => declared_by,
+        "authorship_verified" => false
+      }
+    }
+  end
+
   describe "/v1/dialectic/phase" do
     test "advances a non-terminal phase (200)" do
       session_id = insert_dialectic_session(phase: "thesis", status: "active")
@@ -118,7 +130,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   describe "/v1/dialectic/presence" do
     test "lists live sessions; resolved ones drop off" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       live =
@@ -155,7 +167,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "resolves a synthesis session and commits row + saga" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       resp =
@@ -174,7 +186,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "second resolve of a resolved session is idempotent (200, already_terminal)" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       body = %{
@@ -191,7 +203,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "status=failed commits a failed terminal transition" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       resp =
@@ -205,6 +217,150 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert resp.status == 200
       assert parsed(resp)["status"] == "failed"
+    end
+
+    test "recused reviewer -> 409 reviewer_recused" do
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: proxy,
+          reviewer_agent_id: author
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(author, proxy))]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: proxy,
+          reviewer_agent_id: author,
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "reviewer_recused"
+    end
+
+    test "pause-bound self-review -> 409 self_review_not_authorizing" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "self-reviewer",
+          reviewer_agent_id: "self-reviewer"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-self"
+          })
+        ]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "self-reviewer",
+          reviewer_agent_id: "self-reviewer",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "self_review_not_authorizing"
+    end
+
+    test "caller participant mismatch -> 409 session_identity_mismatch" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "wrong",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_identity_mismatch"
+    end
+
+    test "resolved transition outside synthesis -> 409 session_phase_mismatch" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          phase: "antithesis"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_phase_mismatch"
+    end
+
+    test "stale transcript frontier -> 409 session_revision_mismatch" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "p",
+          reviewer_agent_id: "r"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET transcript_revision = 3 WHERE session_id = $1",
+        [session_id]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"},
+          expected_phase: "synthesis",
+          expected_transcript_revision: 2
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_revision_mismatch"
+    end
+
+    test "negative transcript frontier -> 422 schema_invalid" do
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: "x",
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{},
+          expected_transcript_revision: -1
+        })
+
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
     end
 
     test "invalid status → 422 schema_invalid" do
@@ -231,6 +387,234 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert resp.status == 404
       assert parsed(resp)["error"] == "session_not_found"
+    end
+  end
+
+  describe "/v1/dialectic/resolve-with-effect" do
+    test "commits terminal row and the matching v1 effect in one request" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-http-v1"
+          })
+        ]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: ["monitor"],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "resolved"
+
+      assert %{rows: [["pending", "pause-http-v1", true]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 """
+                 SELECT state, pause_token, effect_required
+                 FROM coordination.dialectic_resolution_effects
+                 WHERE session_id = $1
+                 """,
+                 [session_id]
+               )
+    end
+
+    test "malformed required binding rolls back both terminal row and effect" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(%{"pause_effect_required" => true})]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: [],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution
+        })
+
+      assert resp.status == 503
+      assert parsed(resp)["error"] == "service_unavailable"
+
+      assert %{rows: [["active"]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                 [session_id]
+               )
+
+      assert %{rows: [[false]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT EXISTS(SELECT 1 FROM coordination.dialectic_resolution_effects WHERE session_id = $1)",
+                 [session_id]
+               )
+    end
+  end
+
+  describe "/v2/dialectic/resolve-with-effect" do
+    test "requires a transcript frontier before invoking the saga" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v2/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
+
+      assert %{rows: [["active"]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                 [session_id]
+               )
+    end
+
+    test "commits only at the supplied transcript frontier" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-http-v2"
+          })
+        ]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: ["monitor"],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v2/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution,
+          expected_phase: "synthesis",
+          expected_transcript_revision: 0,
+          expected_awaiting_facilitation: false
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "resolved"
+
+      assert %{rows: [["pending", "pause-http-v2", true]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 """
+                 SELECT state, pause_token, effect_required
+                 FROM coordination.dialectic_resolution_effects
+                 WHERE session_id = $1
+                 """,
+                 [session_id]
+               )
+    end
+  end
+
+  describe "/v1/dialectic/reviewer" do
+    test "claim_if_unassigned refuses a later first responder" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      first =
+        post_json("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-first",
+          claim_if_unassigned: true
+        })
+
+      assert first.status == 200
+
+      late =
+        post_json("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-late",
+          claim_if_unassigned: true
+        })
+
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
+    end
+  end
+
+  describe "/v1/dialectic/reviewer/claim" do
+    test "versioned open-slot route refuses a later first responder" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      first =
+        post_json("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-first"
+        })
+
+      assert first.status == 200
+      assert parsed(first)["claim_if_unassigned"] == true
+
+      late =
+        post_json("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-late"
+        })
+
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
     end
   end
 

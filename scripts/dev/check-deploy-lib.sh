@@ -78,6 +78,8 @@ done
 # 5. functional sandbox tests (lock semantics, lock-key byte-stability,
 #    preflight policies, ff-worktree, poll) — throwaway fixtures only
 bash "$ROOT/scripts/dev/test-deploy-lib.sh" || err "functional sandbox tests failed (scripts/dev/test-deploy-lib.sh)"
+bash "$ROOT/scripts/dev/test-deploy-lease-plane.sh" \
+  || err "lease-plane migration deploy guards failed (scripts/dev/test-deploy-lease-plane.sh)"
 
 # 5b. deploy-gov-plugin.sh's refusal guards. It deploys by pulling a checkout
 #     the operator WORKS IN, so "refuses and leaves it untouched" is the whole

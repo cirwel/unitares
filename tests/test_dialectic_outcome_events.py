@@ -63,6 +63,50 @@ def _patch_targets(emit_mock):
 
 class TestExecuteResolutionEmitsOutcomeEvent:
     @pytest.mark.asyncio
+    async def test_deferred_outcome_waits_for_terminal_effect_owner(self):
+        emit = AsyncMock(return_value={"outcome_id": "evt-deferred"})
+        session = _session()
+        resolution = _resolution()
+
+        _, _, p_module, p_storage = _patch_targets(emit)
+        with p_module, p_storage:
+            from src.mcp_handlers.dialectic.resolution import (
+                execute_resolution,
+                record_resolution_outcome,
+            )
+
+            execution = await execute_resolution(
+                session, resolution, record_outcome=False
+            )
+            emit.assert_not_awaited()
+            await record_resolution_outcome(session, resolution, execution)
+
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_manual_outcome_uses_reconciliation_reason(self):
+        emit = AsyncMock(return_value={"outcome_id": "evt-manual"})
+        session = _session()
+        resolution = _resolution()
+        execution = {
+            "success": False,
+            "reason": "pause_generation_superseded",
+            "manually_reconciled": True,
+            "reconciliation_reason": "operator repaired live state",
+        }
+
+        _, _, p_module, p_storage = _patch_targets(emit)
+        with p_module, p_storage:
+            from src.mcp_handlers.dialectic.resolution import (
+                record_resolution_outcome,
+            )
+
+            await record_resolution_outcome(session, resolution, execution)
+
+        detail = emit.await_args.args[0]["detail"]
+        assert detail["reconciliation_reason"] == "operator repaired live state"
+
+    @pytest.mark.asyncio
     async def test_emits_dialectic_resolved_with_session_id_in_detail(self):
         emit = AsyncMock(return_value={"outcome_id": "evt-1"})
         session = _session(synthesis_round=2)
@@ -113,7 +157,7 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         storage.persist_runtime_state.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_conditions_applied_count_excludes_failed(self):
+    async def test_failed_condition_prevents_resume_and_outcome_event(self):
         emit = AsyncMock(return_value={"outcome_id": "evt-2"})
         session = _session()
         resolution = _resolution(conditions=["c1", "c2", "c3"])
@@ -128,11 +172,12 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         with p_module, p_storage, \
              patch.object(resolution_mod, "parse_condition", side_effect=lambda c: {"raw": c}), \
              patch.object(resolution_mod, "apply_condition", side_effect=fake_apply):
-            await resolution_mod.execute_resolution(session, resolution)
+            result = await resolution_mod.execute_resolution(session, resolution)
 
-        detail = emit.await_args.args[0]["detail"]
-        assert detail["conditions_total"] == 3
-        assert detail["conditions_applied"] == 2  # c2 failed
+        assert result["success"] is False
+        assert result["status_changed"] is False
+        assert result["applied_conditions"][1]["status"] == "failed"
+        emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_conditions_applied_count_excludes_retired(self):

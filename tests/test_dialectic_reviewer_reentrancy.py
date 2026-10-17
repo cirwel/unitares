@@ -110,7 +110,7 @@ async def test_direct_resolver_owns_guard_during_reviewer_selection():
          patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+             patch(f"{AUTO_RESOLVE}.resolve_session_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock), \
