@@ -117,7 +117,16 @@ git -C "$REPO" add .; git -C "$REPO" -c commit.gpgsign=false commit -qm unreview
 UNREVIEWED=$(git -C "$REPO" rev-parse HEAD)
 export TEST_DEPLOY="$DEP" TEST_NEW_SHA="$UNREVIEWED" TEST_TRACE="$SB/trace"
 export TEST_PLIST="$SB/service.plist"
-printf '<string>%s/src/mcp_server.py</string>\n' "$DEP" > "$TEST_PLIST"
+cat > "$TEST_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key><array><string>$DEP/src/mcp_server.py</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>DB_POSTGRES_URL</key><string>postgresql://fixture/runtime</string>
+  </dict>
+</dict></plist>
+EOF
 mkdir -p "$SB/mcp"
 # Substitute only the host-specific plist path; execute the real deploy flow.
 sed 's|^PLIST=.*|PLIST="$TEST_PLIST"|' "$ROOT/scripts/ops/deploy-mcp.sh" > "$SB/mcp/deploy-mcp.sh"
@@ -133,6 +142,7 @@ set +e
   python3() {
     printf 'python3 %s\n' "$*" >> "$TEST_TRACE"
     case " $* " in
+      *' --print-db-version '*) printf '76\n'; return 0 ;;
       *' --check '*)
         git -C "$TEST_DEPLOY" merge --ff-only -q "$TEST_NEW_SHA"
         printf 'preserve me\n' > "$TEST_DEPLOY/concurrent-note"

@@ -661,15 +661,31 @@ antithesis/synthesis verdict. A malformed stored declaration fails closed for
 independent assignment. Explicit self-review remains represented as self-review
 and never becomes independent merely because the marker is absent or malformed.
 
+Accepted thesis, antithesis, and synthesis messages advance a monotonic durable
+`transcript_revision`; the message, next phase and synthesis round commit in one
+transaction. Reviewer reassignment likewise binds the prior reviewer and
+revision while committing its audit message. A terminal decision
+compare-and-sets the exact phase, reviewer, and revision on which it was
+computed. If another worker appends a message or changes the reviewer first,
+the stale message or terminal decision is refused and the caller must reload. A
+BEAM `saga_in_flight` response is also an authoritative contention result; it
+never opens a concurrent Python terminal writer. A deterministic post-claim
+frontier refusal releases that request's reserved saga immediately. Ambiguous
+reviewer-claim responses fail closed rather than treating a same-identity
+readback as proof that this request won the claim.
+
 `dialectic(action="reconcile_effect")` is operator-only. Its default
 `effect_disposition="inspect"` is read-only. `apply_pending` may claim and apply
 an untouched pending effect. An `applying` effect is never replayed
 automatically: after confirming its worker stopped, the operator fences that
 exact owner token with `mark_uncertain`, inspects and repairs live state, then
-uses `mark_applied` with a reason. Repeating an already-applied acknowledgement
-is idempotent and emits no second downstream signal. The durable effect row is
-authoritative; outcome, calibration and lifecycle telemetry after application
-are best-effort and cannot make an applied effect replayable.
+uses `mark_applied` with a reason and the exact `effect_updated_at` returned by
+that inspect. The timestamp is a compare-and-set version: a changed record is
+refused even when its state is still `unknown_partial`. Repeating an
+already-applied acknowledgement is idempotent and emits no second downstream
+signal. The durable effect row is authoritative; outcome, calibration and
+lifecycle telemetry after application are best-effort and cannot make an
+applied effect replayable.
 
 Operators can enumerate every non-applied row without mutating it with
 `python3 scripts/ops/dialectic_resolution_effects.py`; the state-specific
@@ -689,22 +705,34 @@ reconciliation is required.
 Compatibility: additive for callers that omit the authorship field or never
 use the recovery action, and deliberately restrictive only when a requester
 declares a conflict. Existing dialectic calls retain their action and parameter
-meanings. Migration 075 is a hard deployment prerequisite for this server
-version: Python session reads and terminal writes use the durable-effect table,
-and the Python client selects the versioned BEAM route whenever BEAM resolution
-is enabled. NULL-to-reviewer claims likewise use a distinct guarded BEAM route,
-so an older service returns 404 before Python falls back to its own guarded
-writer. The BEAM service retains its legacy resolution endpoint only for an
-older application version during a schema-before-code rollout or rollback. The
+meanings. Migrations 075, 077, and 078 are hard deployment prerequisites for
+this server version: Python session reads and terminal writes use the
+durable-effect table, transcript frontier, and resolution-saga generation, and
+the Python client selects the distinct frontier-required
+`/v2/dialectic/resolve-with-effect` route whenever BEAM resolution is enabled.
+An older service returns 404 before Python falls back to its own guarded writer;
+it cannot accept and ignore the revision as an unknown JSON field.
+NULL-to-reviewer claims likewise use a distinct guarded BEAM route. The BEAM
+service retains its v1 resolution endpoints for protocol compatibility and
+offline diagnosis, not as an online old-Python rollback guarantee.
+Before applying the migrations, block dialectic traffic and stop/drain both old
+writer runtimes; then apply 075/077/078, start new Python and new BEAM, verify
+both revisions, and restore traffic. A pre-078 lease plane is below the
+rollback floor after migration 078 removes the permanent same-payload
+uniqueness constraint it assumes. Old Python is also below the online rollback
+floor because its maintenance writers do not bind the saga generation; any
+rollback keeps dialectic traffic and both liveness sweepers quiesced until the
+generation-aware Python/BEAM pair is restored. The
 `request_review` input digest moves from
 `4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3` to
 `aa753d6352bf9ca1e1aa41689f503fb7c3dea488410c20d109625c9703c2cf07`;
 the `dialectic` input digest moves from
 `246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50` to
-`6ef36851bcad8e8b37de0934bc4a8e80fb5f27f70c866f5a07cb2938a538bceb`.
+`84cd4f58a94ccaefe0acaf97c68042541c6602a6176de1f55754309631acd697`.
 The full-surface digest moves from
 `7f0ac6c61c9b5a94363b246ae965e440f41a0ffbe858b713b84f824d21a3931b` to
-`3c3c18acdde59a1469f307d77d87cd1d03ddb05019d9520da384cb4c97370ca3`.
+`4077e7c7f0c4b356cc9273b2b3346c8b329c568e5bf1159b838acd3c9a4b613b`.
 Client action: proxy requesters should pass every known UNITARES author UUID;
 ordinary self-filed review requests require no change. Operators should use
-`reconcile_effect` only after reading the returned state and recovery guidance.
+`reconcile_effect` only after reading the returned state and recovery guidance,
+and must echo the inspected `effect_updated_at` when using `mark_applied`.

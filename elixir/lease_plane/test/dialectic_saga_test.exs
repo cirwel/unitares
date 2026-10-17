@@ -117,6 +117,45 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  defp eventually(fun, attempts \\ 200)
+
+  defp eventually(_fun, 0), do: false
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
+    end
+  end
+
+  defp backend_waiting_on_lock?(backend_pid) do
+    case Postgrex.query!(
+           DB,
+           "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+           [backend_pid]
+         ).rows do
+      [["Lock"]] -> true
+      _ -> false
+    end
+  end
+
+  defp terminal_cleanup_waiting? do
+    Postgrex.query!(
+      DB,
+      """
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND query LIKE '%UPDATE coordination.session_resolution_sagas%'
+      )
+      """,
+      []
+    ).rows == [[true]]
+  end
+
   test "claim reserves a fresh saga for a non-terminal session" do
     session_id = insert_dialectic_session()
     on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -132,10 +171,43 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     session_id = insert_dialectic_session()
     on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
-    assert {:ok, %{saga_id: first, origin: :new}} = DialecticSaga.claim(claim_params(session_id))
-
-    assert {:ok, %{saga_id: ^first, origin: :idempotent}} =
+    assert {:ok, %{saga_id: first, origin: :new, claim_revision: revision}} =
              DialecticSaga.claim(claim_params(session_id))
+
+    assert {:ok, %{saga_id: ^first, origin: :idempotent, claim_revision: ^revision}} =
+             DialecticSaga.claim(claim_params(session_id))
+
+    assert session_saga_revision(session_id) == revision
+  end
+
+  test "same-snapshot retry replays the live claim instead of revoking it" do
+    session_id = insert_dialectic_session()
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+    # claim_params/1 assigns the reviewer and advances updated_at. Capture the
+    # caller frontier only after those fixture writes have completed.
+    params = claim_params(session_id)
+
+    %{rows: [[updated_at]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT updated_at FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    params = Map.put(params, :expected_updated_at, updated_at)
+
+    assert {:ok, %{saga_id: saga_id, origin: :new, claim_revision: revision}} =
+             DialecticSaga.claim(params)
+
+    # The first claim advances the session's updated_at through its row-update
+    # trigger. A retry carrying the same pre-claim timestamp must still replay
+    # that exact live generation; it must not reject and clean up its peer.
+    assert {:ok, %{saga_id: ^saga_id, origin: :idempotent, claim_revision: ^revision}} =
+             DialecticSaga.claim(params)
+
+    assert saga_state(saga_id) == "reserved"
+    assert session_saga_revision(session_id) == revision
   end
 
   test "a different payload while one is in flight is rejected (one-pending-per-session)" do
@@ -161,26 +233,47 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
              DialecticSaga.claim(claim_params("test_elixir_nonexistent_session"))
   end
 
-  test "commit marks the saga pg_committed and frees the in-flight slot" do
+  test "split commit cannot free a slot without terminalizing the session" do
     session_id = insert_dialectic_session()
     on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
     assert {:ok, %{saga_id: saga_id, origin: :new}} =
              DialecticSaga.claim(claim_params(session_id))
 
-    assert :ok = DialecticSaga.commit(saga_id)
-    # Slot freed: no in-flight saga remains.
-    assert {:ok, nil} = DialecticSaga.get_inflight(session_id)
-    # Idempotent re-commit.
-    assert :ok = DialecticSaga.commit(saga_id)
-    # A new, different resolution can now claim (the committed one no longer blocks).
-    assert {:ok, %{origin: :new}} =
+    assert {:error, :terminal_commit_requires_resolve} = DialecticSaga.commit(saga_id)
+    assert saga_state(saga_id) == "reserved"
+    assert session_status(session_id) == "active"
+    assert {:ok, ^saga_id} = DialecticSaga.get_inflight(session_id)
+
+    assert {:error, :saga_in_flight} =
              DialecticSaga.claim(claim_params(session_id, %{"verdict" => "retry"}))
   end
 
-  test "commit on an unknown saga_id returns :saga_not_found" do
-    assert {:error, :saga_not_found} =
+  test "split commit fails closed even for an unknown saga_id" do
+    assert {:error, :terminal_commit_requires_resolve} =
              DialecticSaga.commit("00000000-0000-0000-0000-000000000000")
+  end
+
+  test "same payload with a different terminal status does not join a live claim" do
+    session_id = insert_dialectic_session()
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    params = claim_params(session_id)
+
+    assert {:ok, %{origin: :new}} = DialecticSaga.claim(params)
+
+    assert {:error, :saga_in_flight} =
+             DialecticSaga.claim(Map.put(params, :status, "failed"))
+  end
+
+  test "same payload with a different effect protocol does not join a live claim" do
+    session_id = insert_dialectic_session()
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    params = claim_params(session_id)
+
+    assert {:ok, %{origin: :new}} = DialecticSaga.claim(params)
+
+    assert {:error, :saga_in_flight} =
+             DialecticSaga.claim(Map.put(params, :effect_protocol, "v1"))
   end
 
   test "payload_hash is stable regardless of map key order" do
@@ -371,6 +464,27 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                )
     end
 
+    test "refuses a terminal decision computed from a stale transcript revision" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET transcript_revision = 2 WHERE session_id = $1",
+        [session_id]
+      )
+
+      params =
+        session_id
+        |> claim_params()
+        |> Map.put(:expected_phase, "synthesis")
+        |> Map.put(:expected_transcript_revision, 1)
+
+      assert {:error, :session_revision_mismatch} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "active"
+      assert {:ok, nil} = DialecticSaga.get_inflight(session_id)
+    end
+
     test "is idempotent on an already-resolved session" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -381,6 +495,99 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                DialecticSaga.resolve(claim_params(session_id))
     end
 
+    test "terminal cleanup stays under the session lock across a sanctioned reopen" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      params = claim_params(session_id)
+
+      assert {:ok, %{saga_id: stale_saga}} = DialecticSaga.claim(params)
+
+      Postgrex.query!(
+        DB,
+        """
+        UPDATE core.dialectic_sessions
+        SET status = 'failed', phase = 'failed', awaiting_facilitation = true
+        WHERE session_id = $1
+        """,
+        [session_id]
+      )
+
+      parent = self()
+
+      saga_locker =
+        Task.async(fn ->
+          Postgrex.transaction(DB, fn conn ->
+            Postgrex.query!(
+              conn,
+              """
+              SELECT saga_id
+              FROM coordination.session_resolution_sagas
+              WHERE saga_id::text = $1
+              FOR UPDATE
+              """,
+              [stale_saga]
+            )
+
+            send(parent, :stale_saga_locked)
+
+            receive do
+              :release_stale_saga -> :ok
+            after
+              10_000 -> raise "timed out waiting to release stale saga"
+            end
+          end)
+        end)
+
+      assert_receive :stale_saga_locked, 1_000
+      resolver = Task.async(fn -> DialecticSaga.resolve(params) end)
+
+      # The terminal observer must now hold the session row while its cleanup
+      # waits for the stale saga row. This is the deterministic barrier that
+      # made the old read/release -> reopen -> broad-cleanup race reachable.
+      assert eventually(&terminal_cleanup_waiting?/0)
+
+      reopener =
+        Task.async(fn ->
+          Postgrex.transaction(DB, fn conn ->
+            %{rows: [[backend_pid]]} =
+              Postgrex.query!(conn, "SELECT pg_backend_pid()", [])
+
+            send(parent, {:reopener_backend, backend_pid})
+
+            Postgrex.query!(
+              conn,
+              """
+              UPDATE core.dialectic_sessions
+              SET status = 'active', phase = 'synthesis',
+                  awaiting_facilitation = false, updated_at = now()
+              WHERE session_id = $1 AND status = 'failed'
+                AND awaiting_facilitation = true
+              """,
+              [session_id]
+            )
+          end)
+        end)
+
+      assert_receive {:reopener_backend, reopener_backend}, 1_000
+      assert eventually(fn -> backend_waiting_on_lock?(reopener_backend) end)
+
+      send(saga_locker.pid, :release_stale_saga)
+      assert {:ok, _} = Task.await(saga_locker, 2_000)
+
+      assert {:ok, %{status: "failed", origin: :already_terminal}} =
+               Task.await(resolver, 2_000)
+
+      assert {:ok, %{num_rows: 1}} = Task.await(reopener, 2_000)
+      assert saga_state(stale_saga) == "reverted"
+
+      assert {:ok, %{saga_id: fresh_saga, origin: :new}} =
+               DialecticSaga.claim(params)
+
+      assert fresh_saga != stale_saga
+      assert saga_state(fresh_saga) == "reserved"
+      assert {:ok, ^fresh_saga} = DialecticSaga.get_inflight(session_id)
+    end
+
     test "reports the actual terminal winner when the row changes after claim" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -388,7 +595,9 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
 
       # Seed the idempotent claim. The resolver can repeat it without needing a
       # third database connection while the test holds the session row lock.
-      assert {:ok, %{origin: :new}} = DialecticSaga.claim(params)
+      assert {:ok, %{origin: :new, saga_id: claimed_saga_id}} =
+               DialecticSaga.claim(params)
+
       parent = self()
 
       locker =
@@ -427,73 +636,99 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       send(locker_pid, :terminalize)
       assert {:ok, _} = Task.await(locker, 2_000)
 
-      assert {:ok, %{status: "failed", saga_id: saga_id, origin: :already_terminal}} =
+      assert {:ok, %{status: "failed", saga_id: nil, origin: :already_terminal}} =
                Task.await(resolver, 2_000)
 
-      assert saga_state(saga_id) == "pg_committed"
+      assert saga_state(claimed_saga_id) == "reverted"
       assert session_status(session_id) == "failed"
     end
 
-    test "terminal write refuses a phase change after the saga claim" do
+    test "terminal write refuses a phase change without revoking an unowned claim" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
       params = claim_params(session_id)
-      parent = self()
 
-      # SHARE permits the claim's session SELECT but blocks the terminal
-      # UPDATE's ROW EXCLUSIVE table lock.  Once the newly committed saga is
-      # visible, this transaction moves the live row backward before releasing
-      # the resolver.  That deterministically exercises the commit-time phase
-      # predicate rather than only the earlier claim guard.
-      locker =
-        Task.async(fn ->
-          Postgrex.transaction(DB, fn conn ->
-            Postgrex.query!(conn, "LOCK TABLE core.dialectic_sessions IN SHARE MODE", [])
-            send(parent, {:session_table_locked, self()})
+      assert {:ok, %{saga_id: saga_id, origin: :new, claim_revision: revision}} =
+               DialecticSaga.claim(params)
 
-            saga_id =
-              Enum.reduce_while(1..200, nil, fn _, _ ->
-                case Postgrex.query!(
-                       conn,
-                       "SELECT saga_id::text FROM coordination.session_resolution_sagas WHERE session_id = $1 AND state = 'reserved'",
-                       [session_id]
-                     ).rows do
-                  [[id]] ->
-                    {:halt, id}
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET phase = 'antithesis' WHERE session_id = $1",
+        [session_id]
+      )
 
-                  [] ->
-                    Process.sleep(5)
-                    {:cont, nil}
-                end
-              end)
-
-            if is_nil(saga_id), do: raise("resolver did not commit its saga claim")
-
-            Postgrex.query!(
-              conn,
-              "UPDATE core.dialectic_sessions SET phase = 'antithesis' WHERE session_id = $1",
-              [session_id]
-            )
-
-            send(parent, {:phase_moved_after_claim, self(), saga_id})
-          end)
-        end)
-
-      assert_receive {:session_table_locked, locker_pid}, 1_000
-      resolver = Task.async(fn -> DialecticSaga.resolve(params) end)
-      assert_receive {:phase_moved_after_claim, ^locker_pid, saga_id}, 2_000
-      assert {:ok, _} = Task.await(locker, 2_000)
-
-      assert {:error, :session_phase_mismatch} = Task.await(resolver, 2_000)
+      assert {:error, :session_phase_mismatch} = DialecticSaga.resolve(params)
       assert session_status(session_id) == "active"
       assert session_phase(session_id) == "antithesis"
       assert saga_state(saga_id) == "reserved"
+      assert {:ok, ^saga_id} = DialecticSaga.get_inflight(session_id)
+      assert session_saga_revision(session_id) == revision
 
       assert %{rows: [[nil]]} =
                Postgrex.query!(
                  DB,
                  "SELECT resolution_json FROM core.dialectic_sessions WHERE session_id = $1",
                  [session_id]
+               )
+    end
+
+    test "preclaim refusal cannot revert a later identical generation" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      params = Map.put(claim_params(session_id), :expected_phase, "synthesis")
+
+      assert {:ok, %{saga_id: first_saga, origin: :new}} =
+               DialecticSaga.claim(params)
+
+      Postgrex.query!(
+        DB,
+        """
+        UPDATE coordination.session_resolution_sagas
+        SET state = 'reverted', reverted_at = now(), updated_at = now()
+        WHERE saga_id::text = $1
+        """,
+        [first_saga]
+      )
+
+      assert {:ok, %{saga_id: current_saga, origin: :new}} =
+               DialecticSaga.claim(params)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET phase = 'antithesis' WHERE session_id = $1",
+        [session_id]
+      )
+
+      assert {:error, :session_phase_mismatch} = DialecticSaga.resolve(params)
+      assert saga_state(current_saga) == "reserved"
+      assert {:ok, ^current_saga} = DialecticSaga.get_inflight(session_id)
+    end
+
+    test "revision refusal preserves the live claim when ownership is ambiguous" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      params =
+        session_id
+        |> claim_params()
+        |> Map.put(:expected_phase, "synthesis")
+        |> Map.put(:expected_transcript_revision, 0)
+
+      assert {:ok, %{saga_id: saga_id, origin: :new}} = DialecticSaga.claim(params)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET transcript_revision = 1 WHERE session_id = $1",
+        [session_id]
+      )
+
+      assert {:error, :session_revision_mismatch} = DialecticSaga.resolve(params)
+      assert saga_state(saga_id) == "reserved"
+      assert {:ok, ^saga_id} = DialecticSaga.get_inflight(session_id)
+
+      assert {:error, :saga_in_flight} =
+               DialecticSaga.claim(
+                 claim_params(session_id, %{"verdict" => "retry-after-revision"})
                )
     end
 
@@ -716,6 +951,52 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       insert_stale_reserved(session_id)
       assert {:ok, %{reclaimed: n}} = UnitaresLeasePlane.DialecticSagaReaper.perform(%{})
       assert n >= 1
+    end
+
+    test "reaper-first ordering creates a fresh generation before terminal commit" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      params = claim_params(session_id)
+
+      assert {:ok, %{saga_id: first_saga, origin: :new, claim_revision: first_revision}} =
+               DialecticSaga.claim(params)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE coordination.session_resolution_sagas SET last_attempt_at = now() - interval '10 minutes' WHERE saga_id::text = $1",
+        [first_saga]
+      )
+
+      assert {:ok, reclaimed} = DialecticSaga.reclaim_all_stale()
+      assert reclaimed >= 1
+      assert saga_state(first_saga) == "reverted"
+
+      assert {:ok, %{status: "resolved", saga_id: second_saga, origin: :new}} =
+               DialecticSaga.resolve(params)
+
+      refute second_saga == first_saga
+      assert saga_claim_revision(second_saga) == first_revision + 1
+      assert saga_state(first_saga) == "reverted"
+      assert saga_state(second_saga) == "pg_committed"
+      assert session_status(session_id) == "resolved"
+    end
+
+    test "terminal-first ordering cannot be reverted by the stale reaper" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{status: "resolved", saga_id: saga_id}} =
+               DialecticSaga.resolve(claim_params(session_id))
+
+      Postgrex.query!(
+        DB,
+        "UPDATE coordination.session_resolution_sagas SET last_attempt_at = now() - interval '10 minutes' WHERE saga_id::text = $1",
+        [saga_id]
+      )
+
+      assert {:ok, _} = DialecticSaga.reclaim_all_stale()
+      assert saga_state(saga_id) == "pg_committed"
+      assert session_status(session_id) == "resolved"
     end
   end
 
@@ -1119,6 +1400,17 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     rev
   end
 
+  defp session_saga_revision(session_id) do
+    %{rows: [[revision]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT resolution_saga_revision FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    revision
+  end
+
   # `jsonb_typeof` is the whole point of these assertions: a double-encoded
   # write still SELECTs fine as text, so only the type discriminates.
   defp jsonb_typeof(table, column, key_expr, key) do
@@ -1152,5 +1444,16 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       )
 
     state
+  end
+
+  defp saga_claim_revision(saga_id) do
+    %{rows: [[revision]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT claim_revision FROM coordination.session_resolution_sagas WHERE saga_id::text = $1",
+        [saga_id]
+      )
+
+    revision
   end
 end

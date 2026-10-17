@@ -31,6 +31,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.helpers import successful_dialectic_message_append
+
 from src.dialectic_protocol import (
     ATTESTATION_BILATERAL,
     ATTESTATION_LEGACY_V1,
@@ -295,10 +297,12 @@ async def test_peer_review_synthesis_path_mints_nothing():
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
          patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.pg_resolve_session", pg_resolve), \
-         patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
                return_value={"success": True}), \
@@ -368,7 +372,10 @@ async def test_synthetic_reviewer_path_mints_nothing():
             patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
                   new=AsyncMock(return_value=("agent-paused", None))),
             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
-            patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
+            patch(
+                f"{DIALECTIC}.pg_add_message",
+                new=AsyncMock(side_effect=successful_dialectic_message_append),
+            ),
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
@@ -422,7 +429,10 @@ async def test_llm_assisted_path_mints_nothing():
             patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
             patch(f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)),
             patch(f"{DIALECTIC}.pg_create_session", new=AsyncMock()),
-            patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
+            patch(
+                f"{DIALECTIC}.pg_add_message",
+                new=AsyncMock(side_effect=successful_dialectic_message_append),
+            ),
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
             patch(f"{DIALECTIC}.execute_resolution", new=AsyncMock(

@@ -76,12 +76,15 @@ manually. Only then close the record:
 ```text
 dialectic(action='reconcile_effect', session_id='SESSION_ID',
           effect_disposition='mark_applied',
+          effect_updated_at='EXACT_UPDATED_AT_FROM_INSPECT',
           reason='verified/repaired ...; evidence ...')
 ```
 
 `mark_applied` is an operator attestation supported by the required reason. It
 is not machine proof that all conditions ran, and it does not execute or replay
-the effect. If completion cannot be established, leave the row
+the effect. Copy `effect_updated_at` from the exact `unknown_partial` inspect
+response used for the repair; a newer row version is refused even if it is also
+`unknown_partial`. If completion cannot be established, leave the row
 `unknown_partial` and escalate rather than manufacturing certainty.
 
 ## Before closing any row

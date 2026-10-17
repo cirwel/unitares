@@ -120,6 +120,19 @@ def _make_session(paused_id="agent-paused", reviewer_id="agent-reviewer",
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
 
+async def _successful_message_append(
+    *_args,
+    detail=None,
+    expected_transcript_revision=0,
+    **_kwargs,
+):
+    """Model the DB append contract, including its returned frontier."""
+    if detail is not None:
+        detail["transcript_revision"] = expected_transcript_revision + 1
+        detail["written"] = True
+    return 1
+
+
 def _effect_resolution():
     return Resolution(
         action="resume",
@@ -182,7 +195,10 @@ def mock_pg_create():
 @pytest.fixture
 def mock_pg_add_message():
     """Mock pg_add_message."""
-    return patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock)
+    return patch(
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=_successful_message_append),
+    )
 
 
 @pytest.fixture
@@ -819,11 +835,11 @@ class TestHandleSubmitThesis:
         assert session.session_id in ACTIVE_SESSIONS
 
     @pytest.mark.asyncio
-    async def test_pg_add_message_failure_nonfatal(
+    async def test_pg_add_message_failure_is_not_acknowledged(
         self, mock_server, mock_pg_update_phase, mock_save_session,
         mock_context_agent,
     ):
-        """pg_add_message failure is non-fatal (logged as warning)."""
+        """A thesis is not acknowledged unless its durable append succeeds."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
 
         session = _make_session(phase=DialecticPhase.THESIS)
@@ -841,8 +857,46 @@ class TestHandleSubmitThesis:
             })
 
         data = parse_result(result)
-        # Still succeeds despite pg failure (non-fatal)
-        assert data["success"] is True
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_MESSAGE_WRITE_FAILED"
+        assert session.phase == DialecticPhase.THESIS
+        assert session.transcript == []
+
+    @pytest.mark.asyncio
+    async def test_stale_thesis_append_is_refused_and_local_state_is_restored(
+        self, mock_server, mock_pg_update_phase, mock_save_session,
+        mock_context_agent,
+    ):
+        """A lost transcript-frontier CAS is a refusal, not a DB outage."""
+        from src.mcp_handlers.dialectic.handlers import (
+            ACTIVE_SESSIONS,
+            handle_submit_thesis,
+        )
+
+        session = _make_session(phase=DialecticPhase.THESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+        stale_append = AsyncMock(return_value=0)
+
+        with patch(f"{DIALECTIC}.pg_add_message", new=stale_append), \
+             mock_pg_update_phase as update_phase, mock_save_session as save, \
+             mock_context_agent:
+            result = await handle_submit_thesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "root_cause": "Test root cause",
+                "proposed_conditions": ["Monitor closely"],
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
+        assert session.phase == DialecticPhase.THESIS
+        assert session.transcript_revision == 0
+        assert session.transcript == []
+        assert session.session_id not in ACTIVE_SESSIONS
+        update_phase.assert_not_awaited()
+        save.assert_not_awaited()
 
 
 # ============================================================================
@@ -1038,6 +1092,123 @@ class TestHandleSubmitAntithesis:
         assert data["reviewer_takeover"]["new_reviewer_id"] == "agent-active"
         assert data.get("reviewer_auto_assigned") is not True
         assert session.reviewer_agent_id == "agent-active"
+        assert session.transcript_revision == 2
+        assert add_message.await_count == 2
+        reassignment, antithesis = add_message.await_args_list
+        assert reassignment.kwargs["expected_reviewer"] == "agent-reviewer"
+        assert reassignment.kwargs["expected_transcript_revision"] == 0
+        assert reassignment.kwargs["next_reviewer"] == "agent-active"
+        assert reassignment.kwargs["next_phase"] == "antithesis"
+        assert antithesis.kwargs["expected_reviewer"] == "agent-active"
+        assert antithesis.kwargs["expected_transcript_revision"] == 1
+        assert antithesis.kwargs["next_phase"] == "synthesis"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "phase,reasoning",
+        [
+            (DialecticPhase.THESIS, "Independent reasoning"),
+            (DialecticPhase.ANTITHESIS, "   "),
+        ],
+    )
+    async def test_antithesis_takeover_prevalidates_before_reassignment(
+        self,
+        phase,
+        reasoning,
+        mock_server,
+        mock_pg_add_message,
+        mock_pg_update_phase,
+        mock_save_session,
+        mock_pg_update_reviewer,
+    ):
+        """Known-invalid antitheses must not leave a durable ownership change."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(phase=phase)
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new=AsyncMock(return_value=session),
+        ), patch(
+            "src.mcp_handlers.context.get_context_agent_id",
+            return_value="agent-active",
+        ), patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), mock_pg_add_message as add_message, mock_pg_update_phase, \
+             mock_save_session, mock_pg_update_reviewer:
+            response = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": reasoning,
+                "concerns": ["Independent concern"],
+                "take_over_if_requested": True,
+            })
+
+        data = parse_result(response)
+        assert data["success"] is False
+        assert session.reviewer_agent_id == "agent-reviewer"
+        add_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_antithesis_refusal_after_takeover_discloses_partial_mutation(
+        self,
+        mock_server,
+        mock_pg_update_phase,
+        mock_save_session,
+        mock_pg_update_reviewer,
+    ):
+        """A committed takeover followed by append loss is never mutation-free."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(phase=DialecticPhase.ANTITHESIS)
+        calls = 0
+
+        async def _reassign_then_refuse(
+            *_args,
+            detail=None,
+            expected_transcript_revision=0,
+            **_kwargs,
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                detail["transcript_revision"] = expected_transcript_revision + 1
+                detail["written"] = True
+                return 1
+            return 0
+
+        add_message = AsyncMock(side_effect=_reassign_then_refuse)
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new=AsyncMock(return_value=session),
+        ), patch(
+            "src.mcp_handlers.context.get_context_agent_id",
+            return_value="agent-active",
+        ), patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_add_message", new=add_message
+        ), mock_pg_update_phase, mock_save_session, mock_pg_update_reviewer:
+            response = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": "Independent reasoning",
+                "concerns": ["Independent concern"],
+                "take_over_if_requested": True,
+            })
+
+        data = parse_result(response)
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
+        assert data["reviewer_reassigned"] is True
+        assert data["reviewer_takeover"]["old_reviewer_id"] == "agent-reviewer"
+        assert data["reviewer_takeover"]["new_reviewer_id"] == "agent-active"
+        assert "reviewer authority changed" in data["recovery"]["action"]
+        assert session.reviewer_agent_id == "agent-active"
+        assert session.phase == DialecticPhase.ANTITHESIS
+        assert session.transcript_revision == 1
+        assert len(session.transcript) == 1
         assert add_message.await_count == 2
 
     @pytest.mark.asyncio
@@ -1127,19 +1298,21 @@ class TestHandleSubmitAntithesis:
 
         session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
         session.awaiting_facilitation = True  # set at thesis, never answered
-        persisted = AsyncMock()
-        claim = AsyncMock(return_value=True)
+        beam_claim = AsyncMock(return_value=None)
+        pg_claim = AsyncMock(return_value=True)
+        add_message = AsyncMock(side_effect=_successful_message_append)
 
         with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=claim), \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", persisted), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=beam_claim), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=pg_claim), \
+             patch(
+                 f"{DIALECTIC}.pg_add_message",
+                 new=add_message,
+             ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
              mock_context_agent:
@@ -1152,12 +1325,10 @@ class TestHandleSubmitAntithesis:
 
         assert session.reviewer_agent_id == "agent-active"
         assert session.awaiting_facilitation is False
-        claim.assert_awaited_once_with(
-            session.session_id,
-            "agent-active",
-            claim_if_unassigned=True,
-        )
-        persisted.assert_awaited_once_with(session.session_id, False)
+        beam_claim.assert_not_awaited()
+        pg_claim.assert_not_awaited()
+        assert add_message.await_args.kwargs["next_reviewer"] == "agent-active"
+        assert add_message.await_args.kwargs["next_awaiting_facilitation"] is False
 
     @pytest.mark.asyncio
     async def test_first_responder_losing_open_slot_cas_records_no_antithesis(
@@ -1167,16 +1338,17 @@ class TestHandleSubmitAntithesis:
         from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
         session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
-        add_message = AsyncMock()
-        claim = AsyncMock(return_value=False)
+        add_message = AsyncMock(return_value=0)
+        beam_claim = AsyncMock(return_value=None)
+        pg_claim = AsyncMock(return_value=False)
 
         with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=claim), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=beam_claim), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=pg_claim), \
              patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
              mock_context_agent:
             result = await handle_submit_antithesis({
@@ -1188,25 +1360,23 @@ class TestHandleSubmitAntithesis:
 
         data = parse_result(result)
         assert data["success"] is False
-        assert data["error_code"] == "REVIEWER_ASSIGNMENT_REFUSED"
-        claim.assert_awaited_once_with(
-            session.session_id,
-            "agent-active",
-            claim_if_unassigned=True,
-        )
-        add_message.assert_not_awaited()
+        assert data["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
+        beam_claim.assert_not_awaited()
+        pg_claim.assert_not_awaited()
+        add_message.assert_awaited_once()
+        assert add_message.await_args.kwargs["next_reviewer"] == "agent-active"
         assert session.reviewer_agent_id is None
         assert session.phase == DialecticPhase.ANTITHESIS
 
     @pytest.mark.asyncio
-    async def test_first_responder_recovers_its_lost_beam_claim_response(
+    async def test_first_responder_does_not_guess_after_lost_beam_claim_response(
         self, mock_server, mock_context_agent,
     ):
-        """A committed BEAM claim is not misread as a competing reviewer."""
+        """First-responder ownership has no separate ambiguous claim window."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
         session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
-        add_message = AsyncMock()
+        add_message = AsyncMock(return_value=0)
         fallback_claim = AsyncMock(return_value=False)
         readback = AsyncMock(return_value={
             "reviewer": "agent-active",
@@ -1227,7 +1397,6 @@ class TestHandleSubmitAntithesis:
              patch(f"{DIALECTIC}.pg_update_reviewer", new=fallback_claim), \
              patch(f"{DIALECTIC}.load_session_as_dict", new=readback), \
              patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
-             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
              mock_context_agent:
@@ -1239,19 +1408,21 @@ class TestHandleSubmitAntithesis:
             })
 
         data = parse_result(result)
-        assert data["success"] is True
-        assert data["reviewer_auto_assigned"] is True
-        fallback_claim.assert_awaited_once()
-        readback.assert_awaited_once_with(session.session_id)
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
+        # Reviewer ownership and the verdict share the message transaction;
+        # the retired standalone claim path is never consulted.
+        fallback_claim.assert_not_awaited()
+        readback.assert_not_awaited()
         add_message.assert_awaited_once()
-        assert session.reviewer_agent_id == "agent-active"
-        assert session.phase == DialecticPhase.SYNTHESIS
+        assert session.reviewer_agent_id is None
+        assert session.phase == DialecticPhase.ANTITHESIS
 
     @pytest.mark.asyncio
     async def test_ambiguous_claim_readback_rejects_same_agent_after_progress(
         self, mock_server, mock_context_agent,
     ):
-        """Same identity is insufficient once phase or transcript has moved."""
+        """A stale append is refused without guessing from a later readback."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
         session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
@@ -1260,6 +1431,13 @@ class TestHandleSubmitAntithesis:
             detail["commit_unknown"] = True
             return None
 
+        readback = AsyncMock(return_value={
+            "reviewer": "agent-active",
+            "phase": "synthesis",
+            "message_count": 1,
+        })
+        add_message = AsyncMock(return_value=0)
+
         with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
                    new=AsyncMock(return_value=False)), \
@@ -1267,12 +1445,8 @@ class TestHandleSubmitAntithesis:
                    new=AsyncMock(return_value=False)), \
              patch(f"{DIALECTIC}.beam_update_reviewer", new=ambiguous_beam_claim), \
              patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=False)), \
-             patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value={
-                 "reviewer": "agent-active",
-                 "phase": "synthesis",
-                 "message_count": 1,
-             })), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock) as add_message, \
+             patch(f"{DIALECTIC}.load_session_as_dict", new=readback), \
+             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
              mock_context_agent:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -1283,8 +1457,9 @@ class TestHandleSubmitAntithesis:
 
         data = parse_result(result)
         assert data["success"] is False
-        assert data["error_code"] == "REVIEWER_ASSIGNMENT_REFUSED"
-        add_message.assert_not_awaited()
+        assert data["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
+        add_message.assert_awaited_once()
+        readback.assert_not_awaited()
         assert session.reviewer_agent_id is None
         assert session.phase == DialecticPhase.ANTITHESIS
 
@@ -1299,8 +1474,10 @@ class TestHandleSubmitAntithesis:
         session.awaiting_facilitation = True
 
         with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
+             patch(
+                 f"{DIALECTIC}.pg_add_message",
+                 new=AsyncMock(side_effect=_successful_message_append),
+             ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
              mock_context_agent:
@@ -1559,9 +1736,9 @@ class TestHandleSubmitSynthesis:
     @pytest.mark.asyncio
     async def test_max_rounds_exceeded(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
-        mock_save_session, mock_context_agent,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
     ):
-        """Max synthesis rounds exceeded returns conservative default."""
+        """Max synthesis rounds durably commit the conservative default."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
         session = _make_session(phase=DialecticPhase.SYNTHESIS)
@@ -1570,8 +1747,10 @@ class TestHandleSubmitSynthesis:
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
+             patch(f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
-             mock_context_agent:
+             mock_pg_resolve_session as resolve_session, mock_context_agent:
+            resolve_session.return_value = True
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -1585,6 +1764,17 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is False
         assert data.get("autonomous_resolution") is True
         assert data.get("resolution_type") == "conservative_default"
+        assert data.get("phase") == "failed"
+        assert data.get("converged") is False
+        assert data.get("resolved") is False
+        assert data.get("terminal_committed") is True
+        assert session.phase == DialecticPhase.FAILED
+        resolve_session.assert_awaited_once()
+        assert resolve_session.await_args.kwargs["status"] == "failed"
+        assert resolve_session.await_args.kwargs["expected_phase"] == "synthesis"
+        assert resolve_session.await_args.kwargs[
+            "expected_transcript_revision"
+        ] == 0
 
     @pytest.mark.asyncio
     async def test_convergence_with_resolution(
@@ -1697,12 +1887,47 @@ class TestHandleSubmitSynthesis:
         assert data["error_code"] == "SESSION_RESOLUTION_WRITE_REFUSED"
         assert resolve_row.await_args.kwargs["expected_phase"] == "synthesis"
         assert resolve_row.await_args.kwargs["expected_reviewer"] == "agent-reviewer"
+        assert (
+            resolve_row.await_args.kwargs["expected_resolution_saga_revision"]
+            == 0
+        )
+        assert resolve_row.await_args.kwargs["exclude_inflight_saga"] is True
         assert resolve_row.await_args.kwargs["winner"] == {
             # The mock does not fill the real writer's winner record.
         }
         execute.assert_not_awaited()
         record_outcome.assert_not_awaited()
         assert "dialectic_resolved" not in emitted
+
+    @pytest.mark.asyncio
+    async def test_beam_saga_in_flight_never_opens_a_python_terminal_writer(self):
+        """An acknowledged BEAM owner is contention, not fallback availability."""
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticSagaInFlight,
+        )
+        from src.mcp_handlers.dialectic.handlers import (
+            _commit_converged_resolution,
+        )
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.transcript_revision = 5
+        resolution = _effect_resolution()
+        fallback = AsyncMock(return_value=True)
+
+        with patch(
+            f"{DIALECTIC}.beam_resolve",
+            new=AsyncMock(side_effect=BeamDialecticSagaInFlight("busy")),
+        ), patch(f"{DIALECTIC}.pg_resolve_session", new=fallback):
+            result = await _commit_converged_resolution(
+                session,
+                resolution,
+                expected_transcript_revision=5,
+            )
+
+        assert result.terminal_committed is False
+        assert result.commit_unknown is False
+        assert result.origin == "beam_saga_in_flight"
+        fallback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_convergence_commits_before_applying_runtime_effects(
@@ -1766,11 +1991,11 @@ class TestHandleSubmitSynthesis:
         assert order == ["terminal_commit", "runtime_effect"]
 
     @pytest.mark.asyncio
-    async def test_ambiguous_exact_beam_commit_routes_effect_reconciliation(
+    async def test_ambiguous_beam_commit_stops_before_any_python_writer(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_context_agent,
     ):
-        """Exact readback confirms the decision, never duplicate effect ownership."""
+        """A lost BEAM response never opens a competing Python write path."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
         session = _make_session(phase=DialecticPhase.SYNTHESIS)
@@ -1795,35 +2020,8 @@ class TestHandleSubmitSynthesis:
             detail["commit_unknown"] = True
             return None
 
-        async def _exact_readback(*, resolution, winner, **_kwargs):
-            winner.update(
-                winner_status="resolved",
-                winner_phase="resolved",
-                winner_paused_agent_id=session.paused_agent_id,
-                winner_reviewer_agent_id=session.reviewer_agent_id,
-                winner_resolution=resolution,
-            )
-            return False
-
-        async def _already_applying(
-            _session_id,
-            _owner_token,
-            *,
-            paused_agent_id,
-            reviewer_agent_id,
-            effect_required,
-            pause_token,
-            resolution,
-        ):
-            return {
-                "paused_agent_id": paused_agent_id,
-                "reviewer_agent_id": reviewer_agent_id,
-                "effect_required": effect_required,
-                "pause_token": pause_token,
-                "resolution_payload_json": resolution,
-                "state": "applying",
-                "claimed": False,
-            }
+        exact_readback = AsyncMock()
+        claim_effect = AsyncMock()
 
         async def _emit(event_type, _session, **_kwargs):
             emitted.append(event_type)
@@ -1841,13 +2039,13 @@ class TestHandleSubmitSynthesis:
         ), patch(
             f"{DIALECTIC}.beam_resolve", new=_unknown_beam
         ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=_exact_readback
+            f"{DIALECTIC}.pg_resolve_session", new=exact_readback
         ), patch(
             f"{DIALECTIC}.execute_resolution", new=execute
         ), patch(
             f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
         ), patch(
-            f"{DIALECTIC}.pg_claim_resolution_effect", new=_already_applying
+            f"{DIALECTIC}.pg_claim_resolution_effect", new=claim_effect
         ), patch(
             f"{DIALECTIC}.discard_receipt_unless_written", new=discard
         ), patch(
@@ -1864,16 +2062,15 @@ class TestHandleSubmitSynthesis:
 
         data = parse_result(response)
         assert data["success"] is False
-        assert data["error_code"] == (
-            "SESSION_RESOLUTION_EFFECT_RECONCILIATION_REQUIRED"
-        )
-        assert data["terminal_committed"] is True
-        assert data["effect_pending"] is True
-        assert data["commit_origin"] == "beam_exact_commit_unknown"
-        assert session.phase == DialecticPhase.RESOLVED
-        assert session.awaiting_facilitation is False
+        assert data["error_code"] == "SESSION_RESOLUTION_COMMIT_UNKNOWN"
+        assert data["terminal_committed"] is None
+        assert data["effect_state"] == "unknown"
+        assert data["commit_origin"] == "beam_commit_unknown_unconfirmed"
+        assert session.phase == DialecticPhase.SYNTHESIS
+        exact_readback.assert_not_awaited()
+        claim_effect.assert_not_awaited()
         discard.assert_called_once_with(
-            resolution, written=True, had_receipt=False
+            resolution, written=False, had_receipt=False
         )
         facilitation.assert_not_awaited()
         execute.assert_not_awaited()
@@ -1882,19 +2079,7 @@ class TestHandleSubmitSynthesis:
         assert "dialectic_facilitation_needed" not in emitted
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "mismatch,value",
-        [
-            ("winner_status", "failed"),
-            ("winner_phase", "synthesis"),
-            ("winner_paused_agent_id", "other-paused"),
-            ("winner_reviewer_agent_id", "other-reviewer"),
-            ("winner_resolution", {"action": "different"}),
-        ],
-    )
-    async def test_ambiguous_terminal_mismatch_remains_a_refusal(
-        self, mismatch, value
-    ):
+    async def test_ambiguous_beam_commit_never_calls_python_resolution_writer(self):
         from src.mcp_handlers.dialectic.handlers import (
             _commit_converged_resolution,
         )
@@ -1915,27 +2100,23 @@ class TestHandleSubmitSynthesis:
             detail["commit_unknown"] = True
             return None
 
-        async def _mismatched_readback(*, resolution, winner, **_kwargs):
-            winner.update(
-                winner_status="resolved",
-                winner_phase="resolved",
-                winner_paused_agent_id=session.paused_agent_id,
-                winner_reviewer_agent_id=session.reviewer_agent_id,
-                winner_resolution=resolution,
-            )
-            winner[mismatch] = value
-            return False
+        python_writer = AsyncMock()
 
         with patch(
             f"{DIALECTIC}.beam_resolve", new=_unknown_beam
         ), patch(
-            f"{DIALECTIC}.pg_resolve_session", new=_mismatched_readback
+            f"{DIALECTIC}.pg_resolve_session", new=python_writer
         ):
-            commit = await _commit_converged_resolution(session, resolution)
+            commit = await _commit_converged_resolution(
+                session,
+                resolution,
+                expected_transcript_revision=0,
+            )
 
         assert commit.terminal_committed is False
-        assert commit.commit_unknown is False
-        assert commit.origin == "terminal_conflict"
+        assert commit.commit_unknown is True
+        assert commit.origin == "beam_commit_unknown_unconfirmed"
+        python_writer.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_beam_already_terminal_is_not_this_calls_resolution(
@@ -2033,7 +2214,7 @@ class TestHandleSubmitSynthesis:
         mock_resolution = MagicMock()
         mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
         execute = AsyncMock(return_value={"success": True})
-        facilitation = AsyncMock()
+        facilitation = AsyncMock(return_value=True)
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
@@ -2042,8 +2223,8 @@ class TestHandleSubmitSynthesis:
              patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
                    return_value=False), \
              patch(f"{DIALECTIC}.execute_resolution", execute), \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", facilitation), \
-             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             patch(f"{DIALECTIC}.pg_mark_awaiting_facilitation", facilitation), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
              mock_pg_resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
@@ -2063,7 +2244,15 @@ class TestHandleSubmitSynthesis:
         # session does not resolve it and an operator can see it is waiting.
         assert session.phase == DialecticPhase.SYNTHESIS
         assert session.awaiting_facilitation is True
-        facilitation.assert_awaited_once_with(session.session_id, True)
+        facilitation.assert_awaited_once_with(
+            session.session_id,
+            expected_phase="synthesis",
+            expected_reviewer="agent-paused",
+            expected_transcript_revision=1,
+            expected_resolution_saga_revision=0,
+            exclude_inflight_saga=True,
+            touch_updated_at=True,
+        )
 
     @pytest.mark.asyncio
     async def test_toctou_active_then_paused_is_caught_at_the_transition(
@@ -2389,10 +2578,8 @@ class TestHandleSubmitSynthesis:
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
              patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True, "resumed": True}), \
-             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
-                   new_callable=AsyncMock) as mock_clear, \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
-             mock_pg_resolve_session, mock_context_agent:
+             mock_pg_resolve_session as resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -2404,7 +2591,9 @@ class TestHandleSubmitSynthesis:
         data = parse_result(result)
         assert data.get("converged") is True
         assert session.awaiting_facilitation is False  # in-memory flag cleared
-        mock_clear.assert_awaited_with(session.session_id, False)  # and persisted
+        assert resolve_session.await_args.kwargs[
+            "expected_awaiting_facilitation"
+        ] is True
 
     @pytest.mark.asyncio
     async def test_convergence_safety_violation(
@@ -2419,17 +2608,26 @@ class TestHandleSubmitSynthesis:
 
         mock_result = {"success": True, "converged": True, "phase": "resolved"}
         mock_resolution = MagicMock()
-        mock_resolution.to_dict.return_value = {"action": "block"}
+        mock_resolution.to_dict.return_value = {"action": "resume"}
+        # Real finalize_resolution() installs its provisional proposal on the
+        # session before the hard-limit gate evaluates it.
+        session.resolution = mock_resolution
         calibration = AsyncMock()
+        emitted = []
+
+        async def _emit(event_type, _session, **_kwargs):
+            emitted.append(event_type)
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(False, "Bypass safety check")), \
+             patch(f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)), \
              patch(f"{DIALECTIC}.update_calibration_from_dialectic_disagreement",
                    new=calibration), \
-             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
-             mock_pg_resolve_session, mock_context_agent:
+             patch(f"{DIALECTIC}._emit_dialectic_event", new=_emit), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
+             mock_pg_resolve_session as resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -2440,8 +2638,85 @@ class TestHandleSubmitSynthesis:
 
         data = parse_result(result)
         assert data.get("action") == "block"
+        assert data.get("success") is False
+        assert data.get("phase") == "failed"
+        assert data.get("converged") is False
+        assert data.get("agreement_reached") is True
+        assert data.get("resolved") is False
+        assert data.get("hard_limit_blocked") is True
         assert "safety" in data.get("reason", "").lower()
+        assert session.phase == DialecticPhase.FAILED
+        assert session.resolution is None
         calibration.assert_awaited_once_with(session)
+        assert emitted == ["dialectic_resolved"]
+        assert resolve_session.await_args.kwargs[
+            "expected_transcript_revision"
+        ] == 1
+        save.assert_awaited_once_with(session, defer_terminal=True)
+
+    @pytest.mark.asyncio
+    async def test_hard_limit_block_does_not_claim_beam_saga_or_emit_success(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """A hard-limit result is owned only after its terminal CAS succeeds."""
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticSagaInFlight,
+        )
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "block"}
+        fallback = AsyncMock(return_value=True)
+        calibration = AsyncMock()
+        emitted = []
+
+        async def _emit(event_type, _session, **_kwargs):
+            emitted.append(event_type)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=mock_resolution
+        ), patch.object(
+            session,
+            "check_hard_limits",
+            return_value=(False, "Bypass safety check"),
+        ), patch(
+            f"{DIALECTIC}.beam_resolve",
+            new=AsyncMock(side_effect=BeamDialecticSagaInFlight("busy")),
+        ), patch(
+            f"{DIALECTIC}.pg_resolve_session", new=fallback
+        ), patch(
+            f"{DIALECTIC}.update_calibration_from_dialectic_disagreement",
+            new=calibration,
+        ), patch(
+            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session as save, \
+             mock_context_agent:
+            response = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Disable monitoring"],
+                "agrees": True,
+            })
+
+        data = parse_result(response)
+        assert data["success"] is False
+        assert data["error_code"] == "SESSION_RESOLUTION_IN_PROGRESS"
+        assert session.phase == DialecticPhase.SYNTHESIS
+        fallback.assert_not_awaited()
+        calibration.assert_not_awaited()
+        save.assert_not_awaited()
+        assert emitted == []
 
     # ------------------------------------------------------------------
     # Participant-set eligibility gate (security)
@@ -2521,7 +2796,10 @@ class TestHandleSubmitSynthesis:
 
         async def capture_add(**kwargs):
             captured.update(kwargs)
-            return None
+            kwargs["detail"]["transcript_revision"] = (
+                kwargs["expected_transcript_revision"] + 1
+            )
+            return 1
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
@@ -2563,7 +2841,10 @@ class TestHandleSubmitSynthesis:
 
         async def capture_add(**kwargs):
             captured.update(kwargs)
-            return None
+            kwargs["detail"]["transcript_revision"] = (
+                kwargs["expected_transcript_revision"] + 1
+            )
+            return 1
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
@@ -4105,15 +4386,17 @@ class TestDurableResolutionEffect:
 
 
 class TestReconcileResolutionEffect:
-    @staticmethod
-    def _effect(state, **overrides):
+    UPDATED_AT = datetime(2026, 10, 16, tzinfo=timezone.utc)
+
+    @classmethod
+    def _effect(cls, state, **overrides):
         effect = {
             "session_id": "s1",
             "state": state,
             "owner_token": "owner-1",
             "attempt_count": 1,
             "resolution_payload_json": _effect_resolution().to_dict(),
-            "updated_at": datetime(2026, 10, 16, tzinfo=timezone.utc),
+            "updated_at": cls.UPDATED_AT,
         }
         effect.update(overrides)
         return effect
@@ -4351,6 +4634,7 @@ class TestReconcileResolutionEffect:
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
+                "effect_updated_at": self.UPDATED_AT.isoformat(),
                 "reason": "live state repaired",
             }))
         assert data["success"] is True
@@ -4359,7 +4643,7 @@ class TestReconcileResolutionEffect:
         ack.assert_awaited_once_with(
             "s1",
             "live state repaired",
-            expected_updated_at=datetime(2026, 10, 16, tzinfo=timezone.utc),
+            expected_updated_at=self.UPDATED_AT,
         )
         outcome.assert_awaited_once()
         calibration.assert_awaited_once_with(session, session.resolution)
@@ -4415,6 +4699,7 @@ class TestReconcileResolutionEffect:
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
+                "effect_updated_at": self.UPDATED_AT.isoformat(),
                 "reason": "operator verified live state",
             }))
 
@@ -4458,19 +4743,74 @@ class TestReconcileResolutionEffect:
         acknowledge.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_mark_applied_refuses_changed_unknown_partial_record(self):
+    async def test_mark_applied_requires_inspected_record_version(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_reconcile_resolution_effect,
+        )
+
+        acknowledge = AsyncMock(return_value=True)
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(return_value=self._effect("unknown_partial")),
+        ), patch(
+            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+            new=acknowledge,
+        ):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "mark_applied",
+                "reason": "live state repaired",
+            }))
+
+        assert data["success"] is False
+        assert data["error_code"] == "MISSING_PARAM"
+        assert "effect_updated_at" in data["error"]
+        acknowledge.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_applied_rejects_invalid_inspected_record_version(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_reconcile_resolution_effect,
+        )
+
+        acknowledge = AsyncMock(return_value=True)
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(return_value=self._effect("unknown_partial")),
+        ), patch(
+            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+            new=acknowledge,
+        ):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "mark_applied",
+                "effect_updated_at": "2026-10-16T00:00:00",
+                "reason": "live state repaired",
+            }))
+
+        assert data["success"] is False
+        assert data["error_code"] == "INVALID_EFFECT_UPDATED_AT"
+        assert "timezone offset" in data["error"]
+        acknowledge.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_applied_refuses_version_before_unknown_transition(self):
         from src.mcp_handlers.dialectic.handlers import (
             handle_reconcile_resolution_effect,
         )
 
         inspected_at = datetime(2026, 10, 16, tzinfo=timezone.utc)
+        current_at = inspected_at + timedelta(seconds=1)
         acknowledge = AsyncMock(return_value=False)
         get_effect = AsyncMock(side_effect=[
-            self._effect("unknown_partial", updated_at=inspected_at),
-            self._effect(
-                "unknown_partial",
-                updated_at=inspected_at + timedelta(seconds=1),
-            ),
+            self._effect("unknown_partial", updated_at=current_at),
+            self._effect("unknown_partial", updated_at=current_at),
         ])
         with patch(
             "src.mcp_handlers.identity.operator.is_operator_caller",
@@ -4485,6 +4825,10 @@ class TestReconcileResolutionEffect:
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
+                # Copied while the row was still applying. The handler's fresh
+                # read sees unknown_partial, but the database CAS must bind the
+                # acknowledgement to this older operator-inspected version.
+                "effect_updated_at": inspected_at.isoformat(),
                 "reason": "live state repaired",
             }))
 
@@ -4529,6 +4873,7 @@ class TestReconcileResolutionEffect:
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
+                "effect_updated_at": self.UPDATED_AT.isoformat(),
                 "reason": "live state repaired",
             }))
 
@@ -4561,6 +4906,7 @@ class TestReconcileResolutionEffect:
             data = parse_result(await handle_reconcile_resolution_effect({
                 "session_id": "s1",
                 "effect_disposition": "mark_applied",
+                "effect_updated_at": self.UPDATED_AT.isoformat(),
                 "reason": "live state repaired",
             }))
 

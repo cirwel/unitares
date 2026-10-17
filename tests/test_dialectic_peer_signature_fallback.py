@@ -33,6 +33,8 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from tests.helpers import successful_dialectic_message_append  # noqa: E402
+
 from src.dialectic_protocol import (
     ATTESTATION_UNSIGNED,
     SIGNATURE_VERSION_PARTY_HMAC_RETIRED,
@@ -103,10 +105,12 @@ async def _reviewer_converges(paused_key, reviewer_key):
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
              patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(
+                 f"{DIALECTIC}.pg_add_message",
+                 new=AsyncMock(side_effect=successful_dialectic_message_append),
+             ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.pg_resolve_session", pg_resolve), \
-             patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
              patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
              patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True}), \

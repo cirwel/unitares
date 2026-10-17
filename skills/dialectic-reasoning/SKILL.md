@@ -11,6 +11,8 @@ source_files:
   - unitares/src/dialectic_db.py
   - unitares/src/dialectic_reviewed_work.py
   - unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql
+  - unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql
+  - unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql
   - unitares/src/mcp_handlers/dialectic/handlers.py
   # Added 2026-09-14: participant resolution and the same-bound-caller gate
   # for thesis, antithesis, and synthesis live here.
@@ -374,6 +376,12 @@ like any ordinary failed session.
 produces them; they survive only as recommendation labels in the model-assisted
 tool.
 
+Each accepted thesis, antithesis, or synthesis advances a durable transcript
+revision. If a submission reports `DIALECTIC_TRANSCRIPT_CHANGED`, or a terminal
+attempt reports `SESSION_RESOLUTION_IN_PROGRESS`, reload the session before
+acting. Do not assume that a retry owns the same reviewer slot or transcript;
+these refusals mean another durable writer moved or currently owns the state.
+
 ### Interrupted resolution effects (operators)
 
 A terminal decision and its runtime mutation are joined by a durable
@@ -386,10 +394,11 @@ The operator inspects with
 claim an untouched pending effect. An `applying` effect is never replayed
 automatically: first confirm its worker stopped, then fence the exact
 `effect_owner_token` with `mark_uncertain`. After inspecting and repairing live
-state, use `mark_applied` with a reason. An already-applied retry is idempotent.
-`mark_applied` is compare-and-set against the exact `unknown_partial` record
-just inspected. If that record changed, inspect again; the acknowledgement does
-not erase the original execution result or uncertainty evidence.
+state, use `mark_applied` with a reason and the exact `effect_updated_at` copied
+from that `unknown_partial` inspect response. An already-applied retry is
+idempotent. `mark_applied` compare-and-sets that caller-supplied row version; if
+the record changed, inspect again. The acknowledgement does not erase the
+original execution result or uncertainty evidence.
 The durable effect row is authoritative; outcome, calibration and lifecycle
 signals are best-effort, and their attempted delivery never makes an applied
 effect replayable.

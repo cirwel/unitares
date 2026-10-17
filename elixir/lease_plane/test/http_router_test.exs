@@ -320,6 +320,49 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(resp)["error"] == "session_phase_mismatch"
     end
 
+    test "stale transcript frontier -> 409 session_revision_mismatch" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "p",
+          reviewer_agent_id: "r"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET transcript_revision = 3 WHERE session_id = $1",
+        [session_id]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"},
+          expected_phase: "synthesis",
+          expected_transcript_revision: 2
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_revision_mismatch"
+    end
+
+    test "negative transcript frontier -> 422 schema_invalid" do
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: "x",
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{},
+          expected_transcript_revision: -1
+        })
+
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
+    end
+
     test "invalid status → 422 schema_invalid" do
       resp =
         post_json("/v1/dialectic/resolve", %{
@@ -441,6 +484,84 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                Postgrex.query!(
                  UnitaresLeasePlane.DB,
                  "SELECT EXISTS(SELECT 1 FROM coordination.dialectic_resolution_effects WHERE session_id = $1)",
+                 [session_id]
+               )
+    end
+  end
+
+  describe "/v2/dialectic/resolve-with-effect" do
+    test "requires a transcript frontier before invoking the saga" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v2/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
+
+      assert %{rows: [["active"]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                 [session_id]
+               )
+    end
+
+    test "commits only at the supplied transcript frontier" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-http-v2"
+          })
+        ]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: ["monitor"],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v2/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution,
+          expected_phase: "synthesis",
+          expected_transcript_revision: 0,
+          expected_awaiting_facilitation: false
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "resolved"
+
+      assert %{rows: [["pending", "pause-http-v2", true]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 """
+                 SELECT state, pause_token, effect_required
+                 FROM coordination.dialectic_resolution_effects
+                 WHERE session_id = $1
+                 """,
                  [session_id]
                )
     end

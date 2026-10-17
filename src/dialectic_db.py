@@ -398,6 +398,14 @@ class DialecticDB:
         reviewer_agent_id: str,
         *,
         claim_if_unassigned: bool = False,
+        expected_phase: Any = _UNSET,
+        expected_updated_at: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
+        expected_transcript_revision: Any = _UNSET,
+        expected_awaiting_facilitation: Any = _UNSET,
+        expected_resolution_saga_revision: Any = _UNSET,
+        exclude_inflight_saga: bool = False,
+        clear_facilitation: bool = False,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -411,18 +419,62 @@ class DialecticDB:
         ``claim_if_unassigned`` is true, the assignment is a NULL-to-reviewer
         compare-and-set; this is the first-responder boundary that prevents two
         reviewers that both read an open slot from overwriting one another.
+        Sweeper reassignment also binds the phase, old reviewer, read timestamp,
+        and transcript frontier so it cannot overwrite newer participant or
+        operator work selected after the sweep read.
         """
         await self._ensure_pool()
         open_slot_guard = (
             " AND reviewer_agent_id IS NULL" if claim_if_unassigned else ""
         )
+        args: List[Any] = [
+            reviewer_agent_id,
+            session_id,
+            REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+            CANONICAL_AGENT_UUID_PATTERN,
+            MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS,
+        ]
+        cas = ""
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_updated_at is not _UNSET:
+            args.append(expected_updated_at)
+            cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        if expected_transcript_revision is not _UNSET:
+            args.append(expected_transcript_revision)
+            cas += f" AND transcript_revision = ${len(args)}"
+        if expected_awaiting_facilitation is not _UNSET:
+            args.append(expected_awaiting_facilitation)
+            cas += (
+                " AND awaiting_facilitation IS NOT DISTINCT FROM "
+                f"${len(args)}"
+            )
+        if expected_resolution_saga_revision is not _UNSET:
+            args.append(expected_resolution_saga_revision)
+            cas += f" AND resolution_saga_revision = ${len(args)}"
+        saga_guard = """
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM coordination.session_resolution_sagas saga
+                    WHERE saga.session_id = core.dialectic_sessions.session_id
+                      AND saga.state IN ('reserved', 'paused_agent_applied',
+                                         'both_agents_applied', 'reverting')
+                  )
+        """ if exclude_inflight_saga else ""
+        clear = ", awaiting_facilitation = false" if clear_facilitation else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
-                SET reviewer_agent_id = $1, updated_at = now()
+                SET reviewer_agent_id = $1, updated_at = now(){clear}
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
                   {open_slot_guard}
+                  {cas}
+                  {saga_guard}
                   AND (
                     paused_agent_state_json IS NULL
                     OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
@@ -459,8 +511,7 @@ class DialecticDB:
                     )
                   )
                 RETURNING {self._EFFECT_TS}
-            """, reviewer_agent_id, session_id, REVIEWED_WORK_AUTHORSHIP_SCHEMA,
-                CANONICAL_AGENT_UUID_PATTERN, MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS)
+            """, *args)
             self._record_effect(detail, row)
             if row is not None:
                 return True
@@ -552,17 +603,21 @@ class DialecticDB:
         expected_phase: Any = _UNSET,
         expected_updated_at: Any = _UNSET,
         expected_reviewer: Any = _UNSET,
+        expected_transcript_revision: Any = _UNSET,
+        expected_resolution_saga_revision: Any = _UNSET,
+        exclude_inflight_saga: bool = False,
+        touch_updated_at: bool = False,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Record a standing facilitation request on a LIVE session.
 
         Deliberately separate from `update_session_awaiting_facilitation`,
-        which is unguarded because its callers include the clear-on-resolve
-        path — a write that by definition lands as the row goes terminal.
-        SETTING the flag is the opposite case: it only means anything while
-        the session can still be answered, and stamping it onto a row another
-        writer has just failed would make an ordinary failure revivable —
+        whose interactive callers advance the staleness clock and can clear a
+        live request. SETTING the flag from the sweeper is the opposite case:
+        it only means anything while the session can still be answered, and
+        stamping it onto a row another writer has just failed would make an
+        ordinary failure revivable —
         `reopen_session` reopens exactly `status='failed' AND
         awaiting_facilitation=true`.
 
@@ -587,8 +642,9 @@ class DialecticDB:
         values the caller read), the write lands only if the row still matches
         them, so a participant message, phase move, or reviewer replacement
         refuses it instead of flagging a session that is no longer stalled.
-        The CAS only READS `updated_at`; the SET clause still never writes it.
-        Omitted arguments add no predicate.
+        The sweeper's CAS only READS `updated_at`; the SET clause does not
+        write it unless ``touch_updated_at`` is explicitly requested by an
+        interactive handler. Omitted observations add no predicate.
 
         Pass ``winner={}`` to learn who refused the write (see
         `_record_winner`); the return value is unchanged.
@@ -605,12 +661,30 @@ class DialecticDB:
         if expected_reviewer is not _UNSET:
             args.append(expected_reviewer)
             cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        if expected_transcript_revision is not _UNSET:
+            args.append(expected_transcript_revision)
+            cas += f" AND transcript_revision = ${len(args)}"
+        if expected_resolution_saga_revision is not _UNSET:
+            args.append(expected_resolution_saga_revision)
+            cas += f" AND resolution_saga_revision = ${len(args)}"
+        saga_guard = """
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM coordination.session_resolution_sagas saga
+                    WHERE saga.session_id = core.dialectic_sessions.session_id
+                      AND saga.state IN ('reserved', 'paused_agent_applied',
+                                         'both_agents_applied', 'reverting')
+                  )
+        """ if exclude_inflight_saga else ""
+        touch = ", updated_at = now()" if touch_updated_at else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
-                SET awaiting_facilitation = true
+                SET awaiting_facilitation = true{touch}
                 WHERE session_id = $1
-                  AND status NOT IN ('resolved', 'failed'){cas}
+                  AND status NOT IN ('resolved', 'failed')
+                  AND awaiting_facilitation IS DISTINCT FROM true{cas}
+                  {saga_guard}
                 RETURNING {self._EFFECT_TS}
             """, *args)
             self._record_effect(detail, row)
@@ -634,7 +708,18 @@ class DialecticDB:
             return False
 
     async def update_session_awaiting_facilitation(
-        self, session_id: str, awaiting: bool, *, detail: Optional[Dict[str, Any]] = None,
+        self,
+        session_id: str,
+        awaiting: bool,
+        *,
+        expected_phase: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
+        expected_transcript_revision: Any = _UNSET,
+        expected_awaiting_facilitation: Any = _UNSET,
+        expected_resolution_saga_revision: Any = _UNSET,
+        exclude_inflight_saga: bool = False,
+        live_only: bool = False,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Persist the awaiting_facilitation flag (#1167 Ask 2).
 
@@ -642,13 +727,45 @@ class DialecticDB:
         dialectic(list) can surface stuck sessions (and they survive restarts).
         """
         await self._ensure_pool()
+        args: List[Any] = [awaiting, session_id]
+        guards = ""
+        if live_only:
+            guards += " AND status NOT IN ('resolved', 'failed')"
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            guards += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            guards += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        if expected_transcript_revision is not _UNSET:
+            args.append(expected_transcript_revision)
+            guards += f" AND transcript_revision = ${len(args)}"
+        if expected_awaiting_facilitation is not _UNSET:
+            args.append(expected_awaiting_facilitation)
+            guards += (
+                " AND awaiting_facilitation IS NOT DISTINCT FROM "
+                f"${len(args)}"
+            )
+        if expected_resolution_saga_revision is not _UNSET:
+            args.append(expected_resolution_saga_revision)
+            guards += f" AND resolution_saga_revision = ${len(args)}"
+        saga_guard = """
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM coordination.session_resolution_sagas saga
+                    WHERE saga.session_id = core.dialectic_sessions.session_id
+                      AND saga.state IN ('reserved', 'paused_agent_applied',
+                                         'both_agents_applied', 'reverting')
+                  )
+        """ if exclude_inflight_saga else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET awaiting_facilitation = $1, updated_at = now()
-                WHERE session_id = $2
+                WHERE session_id = $2{guards}
+                  {saga_guard}
                 RETURNING {self._EFFECT_TS}
-            """, awaiting, session_id)
+            """, *args)
             self._record_effect(detail, row)
             return row is not None
 
@@ -661,6 +778,10 @@ class DialecticDB:
         expected_phase: Any = _UNSET,
         expected_updated_at: Any = _UNSET,
         expected_reviewer: Any = _UNSET,
+        expected_transcript_revision: Any = _UNSET,
+        expected_awaiting_facilitation: Any = _UNSET,
+        expected_resolution_saga_revision: Any = _UNSET,
+        exclude_inflight_saga: bool = False,
         clear_facilitation: bool = False,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -688,11 +809,13 @@ class DialecticDB:
         winner without a second racy query. The return value is unchanged.
 
         Compare-and-set, as on `mark_awaiting_facilitation`: when
-        ``expected_phase``, ``expected_updated_at`` and/or ``expected_reviewer``
-        are passed (the values a caller decided on), the write lands only if
-        the live row still matches them. A message, phase move or reassignment
-        since that read then refuses the write (False) instead of terminating
-        the session on stale state. Omitted arguments add no predicate.
+        ``expected_phase``, ``expected_updated_at``, ``expected_reviewer`` and/or
+        ``expected_transcript_revision`` and/or
+        ``expected_awaiting_facilitation`` are passed (the values a caller
+        decided on), the write lands only if the live row still matches them.
+        A message, phase move, reassignment, or newly raised human request since
+        that read then refuses the write (False) instead of terminating the
+        session on stale state. Omitted arguments add no predicate.
 
         ``clear_facilitation`` also sets ``awaiting_facilitation = false`` in
         the same statement. It is retained for call compatibility; every
@@ -714,6 +837,27 @@ class DialecticDB:
         if expected_reviewer is not _UNSET:
             args.append(expected_reviewer)
             cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        if expected_transcript_revision is not _UNSET:
+            args.append(expected_transcript_revision)
+            cas += f" AND transcript_revision = ${len(args)}"
+        if expected_awaiting_facilitation is not _UNSET:
+            args.append(expected_awaiting_facilitation)
+            cas += (
+                " AND awaiting_facilitation IS NOT DISTINCT FROM "
+                f"${len(args)}"
+            )
+        if expected_resolution_saga_revision is not _UNSET:
+            args.append(expected_resolution_saga_revision)
+            cas += f" AND resolution_saga_revision = ${len(args)}"
+        saga_guard = """
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM coordination.session_resolution_sagas saga
+                        WHERE saga.session_id = core.dialectic_sessions.session_id
+                          AND saga.state IN ('reserved', 'paused_agent_applied',
+                                             'both_agents_applied', 'reverting')
+                      )
+        """ if exclude_inflight_saga else ""
         authority_guard = ""
         if status == "resolved":
             args.extend([
@@ -773,7 +917,7 @@ class DialecticDB:
                     SET status = $1, phase = $2, resolution_json = $3,
                         updated_at = now(){clear}
                     WHERE session_id = $4
-                      AND status NOT IN ('resolved', 'failed'){cas}{authority_guard}
+                      AND status NOT IN ('resolved', 'failed'){cas}{saga_guard}{authority_guard}
                     RETURNING session_id, paused_agent_id, reviewer_agent_id,
                               paused_agent_state_json, resolution_json,
                               {self._EFFECT_TS}
@@ -833,7 +977,8 @@ class DialecticDB:
             # No row written: inspect why (idempotent replay vs conflict vs missing).
             existing = await conn.fetchrow(
                 """SELECT status, phase, paused_agent_id, reviewer_agent_id,
-                          paused_agent_state_json, resolution_json
+                          paused_agent_state_json, resolution_json,
+                          transcript_revision
                    FROM core.dialectic_sessions WHERE session_id = $1""",
                 session_id,
             )
@@ -858,6 +1003,9 @@ class DialecticDB:
                             "reviewer_agent_id"
                         ),
                         existing_resolution=stored_resolution,
+                        existing_transcript_revision=existing.get(
+                            "transcript_revision"
+                        ),
                     )
                 logger.info(
                     f"resolve_session: {session_id[:16]}... already {status} "
@@ -868,6 +1016,11 @@ class DialecticDB:
                 "resolved", "failed"
             ):
                 paused_state = existing.get("paused_agent_state_json")
+                if isinstance(paused_state, str):
+                    try:
+                        paused_state = json.loads(paused_state)
+                    except (TypeError, json.JSONDecodeError):
+                        paused_state = None
                 if (
                     isinstance(paused_state, dict)
                     and paused_state.get("pause_effect_required") is True
@@ -1256,14 +1409,28 @@ class DialecticDB:
         agrees: bool = None,
         signature: str = None,
         *,
+        expected_phase: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
+        expected_transcript_revision: Any = _UNSET,
+        expected_awaiting_facilitation: Any = _UNSET,
+        next_phase: Any = _UNSET,
+        next_synthesis_round: Any = _UNSET,
+        next_reviewer: Any = _UNSET,
+        next_awaiting_facilitation: Any = _UNSET,
+        next_status: Any = _UNSET,
+        reopen_failed_facilitation: bool = False,
         detail: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Add a message to a session.
 
-        Two statements in ONE transaction: the session's ``updated_at`` bump
-        (the sweeper's staleness clock), then the message INSERT. Atomic so the
-        sweeper's compare-and-set on ``updated_at`` (#2367) can never see a
-        committed message whose bump has not landed yet.
+        Two statements in ONE transaction: a guarded session-row revision/state
+        advance, then the message INSERT. The advance refuses terminal rows and
+        can compare the phase, reviewer, and transcript revision the caller
+        loaded. Protocol callers pass the next phase/round (and, for an atomic
+        reviewer handoff, the next reviewer) so another process can never load
+        a newly committed message with the old protocol phase. Its row lock
+        serializes concurrent appends and terminal writes; only the winner
+        inserts, and a terminal writer can bind the returned revision.
 
         The bump runs FIRST so this transaction holds the session row's update
         lock before the message exists. The INSERT alone would take only the
@@ -1274,16 +1441,116 @@ class DialecticDB:
         against the new ``updated_at``, which refuses it.
 
         ``detail``, when given, receives ``message_ts`` (the message row's own
-        timestamp) and ``effect_ts`` (the database clock at the ``updated_at``
-        bump -- the write that changes the session's sweep eligibility).
+        timestamp), ``effect_ts`` (the database clock at the session-row bump),
+        and ``transcript_revision`` (the new durable frontier).
         """
         await self._ensure_pool()
+        args: List[Any] = [session_id]
+        cas = ""
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        if expected_transcript_revision is not _UNSET:
+            args.append(expected_transcript_revision)
+            cas += f" AND transcript_revision = ${len(args)}"
+        if expected_awaiting_facilitation is not _UNSET:
+            args.append(expected_awaiting_facilitation)
+            cas += (
+                " AND awaiting_facilitation IS NOT DISTINCT FROM "
+                f"${len(args)}"
+            )
+        updates = []
+        if next_phase is not _UNSET:
+            args.append(next_phase)
+            updates.append(f"phase = ${len(args)}")
+        if next_synthesis_round is not _UNSET:
+            args.append(next_synthesis_round)
+            updates.append(f"synthesis_round = ${len(args)}")
+        reviewer_authority_guard = ""
+        if next_reviewer is not _UNSET:
+            args.append(next_reviewer)
+            reviewer_arg = len(args)
+            updates.append(f"reviewer_agent_id = ${reviewer_arg}")
+            args.extend(
+                [
+                    REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+                    CANONICAL_AGENT_UUID_PATTERN,
+                    MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS,
+                ]
+            )
+            schema_arg, uuid_arg, max_arg = range(len(args) - 2, len(args) + 1)
+            reviewer_authority_guard = f"""
+                      AND (
+                        paused_agent_state_json IS NULL
+                        OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
+                        OR (
+                          jsonb_typeof(paused_agent_state_json -> '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}') = 'object'
+                          AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},schema}}' = ${schema_arg}
+                          AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},status}}' = 'declared'
+                          AND paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},authorship_verified}}' = 'false'::jsonb
+                          AND jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}') = 'string'
+                          AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' ~ ${uuid_arg}
+                          AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' = paused_agent_id
+                          AND CASE
+                            WHEN jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = 'array'
+                            THEN
+                              jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') BETWEEN 1 AND ${max_arg}
+                              AND NOT EXISTS (
+                                SELECT 1
+                                FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                                WHERE jsonb_typeof(author.value) <> 'string'
+                                   OR (author.value #>> '{{}}') !~ ${uuid_arg}
+                              )
+                              AND jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = (
+                                SELECT count(DISTINCT author.value #>> '{{}}')
+                                FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                              )
+                              AND (
+                                ${reviewer_arg} = paused_agent_id
+                                OR NOT (
+                                  paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}' ? ${reviewer_arg}
+                                )
+                              )
+                            ELSE FALSE
+                          END
+                        )
+                      )
+            """
+        if next_awaiting_facilitation is not _UNSET:
+            args.append(next_awaiting_facilitation)
+            updates.append(f"awaiting_facilitation = ${len(args)}")
+        if next_status is not _UNSET:
+            args.append(next_status)
+            updates.append(f"status = ${len(args)}")
+        optional_update_sql = "".join(
+            f",\n                        {update}" for update in updates
+        )
+        status_guard = (
+            "status = 'failed' AND awaiting_facilitation = true"
+            if reopen_failed_facilitation
+            else "status NOT IN ('resolved', 'failed', 'escalated')"
+        )
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 bump = await conn.fetchrow(f"""
-                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-                    RETURNING {self._EFFECT_TS}
-                """, session_id)
+                    UPDATE core.dialectic_sessions
+                    SET updated_at = now(),
+                        transcript_revision = transcript_revision + 1
+                        {optional_update_sql}
+                    WHERE session_id = $1
+                      AND {status_guard}
+                      {cas}
+                      {reviewer_authority_guard}
+                    RETURNING transcript_revision, {self._EFFECT_TS}
+                """, *args)
+
+                if bump is None:
+                    if detail is not None:
+                        detail["written"] = False
+                    return 0
 
                 row = await conn.fetchrow("""
                     INSERT INTO core.dialectic_messages (
@@ -1309,6 +1576,10 @@ class DialecticDB:
                     try:
                         detail["message_ts"] = row["timestamp"] if row else None
                         detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
+                        detail["transcript_revision"] = (
+                            bump["transcript_revision"]
+                            if bump is not None else None
+                        )
                         detail["written"] = row is not None
                     except Exception:  # pragma: no cover
                         pass
@@ -1755,7 +2026,8 @@ async def add_message_async(**kwargs) -> int:
         requested=kwargs.get("message_type"),
     ) as rec:
         db = await get_dialectic_db()
-        detail: Dict[str, Any] = {}
+        caller_detail = kwargs.pop("detail", None)
+        detail: Dict[str, Any] = caller_detail if caller_detail is not None else {}
         result = await db.add_message(**kwargs, detail=detail)
         rec.respond(outcome="written" if result else "not_written",
                     effect_ts=detail.get("effect_ts"), message_ts=detail.get("message_ts"))
@@ -1811,16 +2083,40 @@ async def update_session_reviewer_async(
     reviewer_agent_id: str,
     *,
     claim_if_unassigned: bool = False,
+    expected_phase: Any = _UNSET,
+    expected_updated_at: Any = _UNSET,
+    expected_reviewer: Any = _UNSET,
+    expected_transcript_revision: Any = _UNSET,
+    expected_awaiting_facilitation: Any = _UNSET,
+    expected_resolution_saga_revision: Any = _UNSET,
+    exclude_inflight_saga: bool = False,
+    clear_facilitation: bool = False,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
         kind=KIND_REVIEWER, session_id=session_id, requested=reviewer_agent_id,
     ) as rec:
         db = await get_dialectic_db()
+        guards: Dict[str, Any] = {}
+        for name, value in (
+            ("expected_phase", expected_phase),
+            ("expected_updated_at", expected_updated_at),
+            ("expected_reviewer", expected_reviewer),
+            ("expected_transcript_revision", expected_transcript_revision),
+            ("expected_awaiting_facilitation", expected_awaiting_facilitation),
+            (
+                "expected_resolution_saga_revision",
+                expected_resolution_saga_revision,
+            ),
+        ):
+            if value is not _UNSET:
+                guards[name] = value
         return await _recorded_write(rec, lambda d: db.update_session_reviewer(
             session_id, reviewer_agent_id,
             claim_if_unassigned=claim_if_unassigned,
-            winner=winner, detail=d), winner=winner)
+            exclude_inflight_saga=exclude_inflight_saga,
+            clear_facilitation=clear_facilitation,
+            winner=winner, detail=d, **guards), winner=winner)
 
 
 async def update_session_status_async(
@@ -1843,6 +2139,10 @@ async def mark_awaiting_facilitation_async(
     expected_phase: Any = _UNSET,
     expected_updated_at: Any = _UNSET,
     expected_reviewer: Any = _UNSET,
+    expected_transcript_revision: Any = _UNSET,
+    expected_resolution_saga_revision: Any = _UNSET,
+    exclude_inflight_saga: bool = False,
+    touch_updated_at: bool = False,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
@@ -1853,16 +2153,43 @@ async def mark_awaiting_facilitation_async(
             session_id, expected_phase=expected_phase,
             expected_updated_at=expected_updated_at,
             expected_reviewer=expected_reviewer,
+            expected_transcript_revision=expected_transcript_revision,
+            expected_resolution_saga_revision=(
+                expected_resolution_saga_revision
+            ),
+            exclude_inflight_saga=exclude_inflight_saga,
+            touch_updated_at=touch_updated_at,
             winner=winner, detail=d), winner=winner)
 
 
-async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:
+async def update_session_awaiting_facilitation_async(
+    session_id: str,
+    awaiting: bool,
+    *,
+    expected_phase: Any = _UNSET,
+    expected_reviewer: Any = _UNSET,
+    expected_transcript_revision: Any = _UNSET,
+    expected_awaiting_facilitation: Any = _UNSET,
+    expected_resolution_saga_revision: Any = _UNSET,
+    exclude_inflight_saga: bool = False,
+    live_only: bool = False,
+) -> bool:
     async with record_session_write(
         kind=KIND_FACILITATION, session_id=session_id, requested=bool(awaiting),
     ) as rec:
         db = await get_dialectic_db()
         return await _recorded_write(rec, lambda d: db.update_session_awaiting_facilitation(
-            session_id, awaiting, detail=d))
+            session_id, awaiting,
+            expected_phase=expected_phase,
+            expected_reviewer=expected_reviewer,
+            expected_transcript_revision=expected_transcript_revision,
+            expected_awaiting_facilitation=expected_awaiting_facilitation,
+            expected_resolution_saga_revision=(
+                expected_resolution_saga_revision
+            ),
+            exclude_inflight_saga=exclude_inflight_saga,
+            live_only=live_only,
+            detail=d))
 
 
 async def resolve_session_async(
@@ -1909,6 +2236,9 @@ async def resolve_session_async(
                     "winner_paused_agent_id": "existing_paused_agent_id",
                     "winner_reviewer_agent_id": "existing_reviewer_agent_id",
                     "winner_resolution": "existing_resolution",
+                    "winner_transcript_revision": (
+                        "existing_transcript_revision"
+                    ),
                 }
                 for winner_key, detail_key in terminal_snapshot_fields.items():
                     if detail_key in detail:

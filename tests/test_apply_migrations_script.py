@@ -116,6 +116,17 @@ def test_check_passes_when_in_sync(mod, monkeypatch):
     assert _run_check(mod, monkeypatch, {1: "a", 2: "b"}, {1: "a", 2: "b"}) == 0
 
 
+def test_print_db_version_is_a_read_only_numeric_probe(mod, monkeypatch, capsys):
+    monkeypatch.setattr(mod, "query_applied", lambda _url: {77: "x", 78: "y"})
+    monkeypatch.setattr(
+        mod,
+        "_source_schema_migrations",
+        lambda _root: (_ for _ in ()).throw(AssertionError("source scan not needed")),
+    )
+    assert mod.main(["--print-db-version", "--db-url", "postgresql://x/y"]) == 0
+    assert capsys.readouterr().out.strip() == "78"
+
+
 def test_check_fails_on_pending(mod, monkeypatch):
     # The default dry-run returns 0 here; --check must block instead.
     assert _run_check(mod, monkeypatch, {1: "a", 2: "b"}, {1: "a"}) == 1
@@ -145,6 +156,77 @@ def test_check_fails_on_content_drift(mod, monkeypatch):
 
 def test_check_passes_when_content_anchored(mod, monkeypatch):
     assert _run_check(mod, monkeypatch, {1: "a"}, {1: "a"}, content_drift=[]) == 0
+
+
+def _run_apply(
+    mod, monkeypatch, tmp_path, pending, *, quiesced=False, inflight=0
+):
+    expected = {version: f"m{version}" for version in pending}
+    actual = {}
+    applied = []
+    paths = {}
+    for version in pending:
+        path = tmp_path / f"{version:03d}_m{version}.sql"
+        path.write_text("SELECT 1;\n")
+        paths[version] = path
+
+    monkeypatch.setattr(mod, "_source_schema_migrations", lambda _root: expected)
+    monkeypatch.setattr(mod, "query_applied", lambda _url: dict(actual))
+    monkeypatch.setattr(mod, "KNOWN_SCHEMA_MIGRATION_EXCEPTIONS", {})
+    monkeypatch.setattr(mod, "checksum_refusals", lambda _url: [])
+    monkeypatch.setattr(mod, "file_for_version", paths.get)
+    monkeypatch.setattr(
+        mod, "query_dialectic_inflight_count", lambda _url: inflight
+    )
+
+    def _apply(_url, path):
+        version = int(path.name[:3])
+        applied.append(version)
+        actual[version] = expected[version]
+        return True
+
+    monkeypatch.setattr(mod, "apply_file", _apply)
+    monkeypatch.setattr(mod, "record_checksum", lambda *_args: True)
+    args = ["--apply", "--db-url", "postgresql://x/y"]
+    if quiesced:
+        args.append("--dialectic-writers-quiesced")
+    return mod.main(args), applied
+
+
+def test_dialectic_frontier_migrations_refuse_without_quiescence_attestation(
+    mod, monkeypatch, tmp_path
+):
+    rc, applied = _run_apply(mod, monkeypatch, tmp_path, [77, 78])
+    assert rc == 1
+    assert applied == []
+
+
+def test_dialectic_frontier_migrations_apply_from_quiesced_window(
+    mod, monkeypatch, tmp_path
+):
+    rc, applied = _run_apply(
+        mod, monkeypatch, tmp_path, [77, 78], quiesced=True
+    )
+    assert rc == 0
+    assert applied == [77, 78]
+
+
+def test_dialectic_frontier_migrations_refuse_legacy_inflight_saga(
+    mod, monkeypatch, tmp_path
+):
+    rc, applied = _run_apply(
+        mod, monkeypatch, tmp_path, [77, 78], quiesced=True, inflight=1
+    )
+    assert rc == 1
+    assert applied == []
+
+
+def test_unrelated_migration_does_not_require_dialectic_attestation(
+    mod, monkeypatch, tmp_path
+):
+    rc, applied = _run_apply(mod, monkeypatch, tmp_path, [76])
+    assert rc == 0
+    assert applied == [76]
 
 
 def test_sql_literal_escapes_quotes(mod):

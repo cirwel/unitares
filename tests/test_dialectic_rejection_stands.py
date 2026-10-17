@@ -27,6 +27,8 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from tests.helpers import successful_dialectic_message_append  # noqa: E402
+
 from src.dialectic_outcomes import (  # noqa: E402
     FAILED,
     RESOLVED,
@@ -386,9 +388,11 @@ async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=Tru
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(
+             f"{DIALECTIC}.pg_add_message",
+             new=AsyncMock(side_effect=successful_dialectic_message_append),
+         ), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", flag), \
          patch(f"{DIALECTIC}.pg_resolve_session", pg_resolve), \
@@ -579,15 +583,11 @@ class TestSweeper:
         from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
 
         write = AsyncMock(return_value=True)
-        clear = AsyncMock(return_value=True)
-        reap = AsyncMock(return_value=True)
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
                    return_value=_session_row(_messages())), \
-             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
-             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", clear), \
-             patch(f"{AUTO_RESOLVE}.update_session_status_async", reap):
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
             result = await _auto_resolve_stuck_sessions()
 
         write.assert_awaited_once()
@@ -600,8 +600,6 @@ class TestSweeper:
         assert payload["reason"] == REJECTION_STANDS
         assert payload["closed_by"] == "python_sweeper"
         assert payload["verdict_acceptance"] == ACCEPTED
-        clear.assert_not_awaited()  # cleared inside the terminal statement
-        reap.assert_not_awaited()
         assert result["resolved_count"] == 1
         assert result["write_attempt_count"] == result["write_succeeded_count"] == 1
         assert any(d.get("reason") == REJECTION_STANDS for d in result["details"])
@@ -617,10 +615,7 @@ class TestSweeper:
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
                    return_value=_session_row(_messages(), awaiting=False)), \
-             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
-             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
-                   new_callable=AsyncMock), \
-             patch(f"{AUTO_RESOLVE}.update_session_status_async", new_callable=AsyncMock):
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
             await _auto_resolve_stuck_sessions()
 
         assert not any(
@@ -640,9 +635,7 @@ class TestSweeper:
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
                    return_value=_session_row(late)), \
-             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
-             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
-                   new_callable=AsyncMock):
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
             result = await _auto_resolve_stuck_sessions()
 
         assert write.await_args.args[2] == "failed"
@@ -662,9 +655,7 @@ class TestSweeper:
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
                    return_value=_session_row(msgs)), \
-             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
-             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
-                   new_callable=AsyncMock):
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
             await _auto_resolve_stuck_sessions()
 
         assert write.await_args.args[1]["last_word_basis"] == BASIS_REVIEWER_ANSWERED
@@ -707,19 +698,16 @@ class TestSweeper:
             winner.update(winner_status="failed", winner_reason=None, row_missing=False)
             return False
 
-        clear = AsyncMock()
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
                    return_value=_session_row(_messages())), \
              patch(f"{AUTO_RESOLVE}.resolve_session_async", refused), \
-             patch(f"{AUTO_RESOLVE}.emit_write_refused", new_callable=AsyncMock), \
-             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", clear):
+             patch(f"{AUTO_RESOLVE}.emit_write_refused", new_callable=AsyncMock):
             result = await _auto_resolve_stuck_sessions()
 
         assert result["resolved_count"] == 0
         assert result["skipped_count"] == 1
-        clear.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

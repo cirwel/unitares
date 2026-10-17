@@ -8,12 +8,13 @@ preservation (a real reviewer is never pre-empted), and the env opt-out.
 """
 
 import asyncio
+import json
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.dialectic_protocol import DialecticSession, DialecticPhase
-from tests.helpers import parse_result
+from tests.helpers import parse_result, successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 LLM = "src.mcp_handlers.support.llm_delegation"
@@ -93,7 +94,10 @@ def _common_patches():
         patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
               new=AsyncMock(return_value=("agent-paused", None))),
         patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
-        patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
+        patch(
+            f"{DIALECTIC}.pg_add_message",
+            new=AsyncMock(side_effect=successful_dialectic_message_append),
+        ),
         patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
         patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)),
         patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)),
@@ -157,7 +161,7 @@ async def test_thesis_with_open_slot_resolves_via_synthetic_reviewer(server_patc
 
 
 @pytest.mark.asyncio
-async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
+async def test_synthetic_reviewer_claims_open_slot_with_antithesis_append():
     """The DB authority guard must see the same reviewer as the protocol."""
     from src.mcp_handlers.dialectic.handlers import _run_synthetic_review
 
@@ -180,7 +184,9 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
         },
     )
     session.phase = DialecticPhase.ANTITHESIS
+    beam_update_reviewer = AsyncMock(return_value=None)
     update_reviewer = AsyncMock(return_value=True)
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
     resolve_row = AsyncMock(return_value=True)
 
     with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
@@ -192,11 +198,11 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
         f"{LLM}.generate_synthesis",
         new=AsyncMock(return_value=_synthesis("RESUME")),
     ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
+        f"{DIALECTIC}.beam_update_reviewer", new=beam_update_reviewer
     ), patch(
         f"{DIALECTIC}.pg_update_reviewer", new=update_reviewer
     ), patch(
-        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+        f"{DIALECTIC}.pg_add_message", new=add_message,
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
@@ -217,11 +223,11 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
             proxy,
         )
 
-    update_reviewer.assert_awaited_once_with(
-        session.session_id,
-        "llm-synthetic-reviewer",
-        claim_if_unassigned=True,
-    )
+    beam_update_reviewer.assert_not_awaited()
+    update_reviewer.assert_not_awaited()
+    antithesis_call = add_message.await_args_list[0]
+    assert antithesis_call.kwargs["next_reviewer"] == "llm-synthetic-reviewer"
+    assert antithesis_call.kwargs["expected_reviewer"] is None
     assert resolve_row.await_args.kwargs["expected_phase"] == "synthesis"
     assert (
         resolve_row.await_args.kwargs["expected_reviewer"]
@@ -240,8 +246,9 @@ async def test_synthetic_reviewer_aborts_when_open_slot_cas_loses():
         "pause_effect_required": True,
         "pause_token": "pause-1",
     }
+    beam_claim = AsyncMock(return_value=None)
     claim = AsyncMock(return_value=False)
-    add_message = AsyncMock()
+    add_message = AsyncMock(return_value=0)
     generate_synthesis = AsyncMock(return_value=_synthesis("RESUME"))
 
     with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
@@ -252,7 +259,7 @@ async def test_synthetic_reviewer_aborts_when_open_slot_cas_loses():
     ), patch(
         f"{LLM}.generate_synthesis", new=generate_synthesis
     ), patch(
-        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
+        f"{DIALECTIC}.beam_update_reviewer", new=beam_claim
     ), patch(
         f"{DIALECTIC}.pg_update_reviewer", new=claim
     ), patch(
@@ -265,12 +272,12 @@ async def test_synthetic_reviewer_aborts_when_open_slot_cas_loses():
         )
 
     assert result is None
-    claim.assert_awaited_once_with(
-        session.session_id,
-        "llm-synthetic-reviewer",
-        claim_if_unassigned=True,
+    beam_claim.assert_not_awaited()
+    claim.assert_not_awaited()
+    add_message.assert_awaited_once()
+    assert add_message.await_args.kwargs["next_reviewer"] == (
+        "llm-synthetic-reviewer"
     )
-    add_message.assert_not_awaited()
     generate_synthesis.assert_not_awaited()
     assert session.reviewer_agent_id is None
     assert session.phase == DialecticPhase.ANTITHESIS
@@ -299,7 +306,7 @@ async def test_aborted_synthetic_claim_is_routed_to_facilitation(server_patch):
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                f"{DIALECTIC}.pg_update_awaiting_facilitation",
+                f"{DIALECTIC}.pg_mark_awaiting_facilitation",
                 new=facilitation,
             )
         )
@@ -320,7 +327,15 @@ async def test_aborted_synthetic_claim_is_routed_to_facilitation(server_patch):
     assert data["awaiting_facilitation"] is True
     assert "claimed the session but did not finish" in data["note"]
     assert session.awaiting_facilitation is True
-    facilitation.assert_awaited_once_with(session.session_id, True)
+    facilitation.assert_awaited_once_with(
+        session.session_id,
+        expected_phase="antithesis",
+        expected_reviewer="llm-synthetic-reviewer",
+        expected_transcript_revision=1,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        touch_updated_at=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -378,6 +393,10 @@ async def test_timed_out_synthetic_claim_is_guarded_into_facilitation(server_pat
         session.session_id,
         expected_phase="antithesis",
         expected_reviewer=SYNTHETIC_REVIEWER_ID,
+        expected_updated_at=None,
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
     )
     assert session.awaiting_facilitation is True
     assert any(
@@ -431,11 +450,167 @@ async def test_timed_out_synthetic_terminal_readback_is_not_flagged(server_patch
         })
 
     data = parse_result(response)
+    assert data["success"] is False
     assert data["terminal_committed"] is True
     assert data["effect_pending"] is True
     assert data["resolution_effect_state"] == "pending"
     assert data["awaiting_facilitation"] is False
     mark.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_synthetic_failed_readback_surfaces_terminal_block(server_patch):
+    """A late hard-limit commit must not return the stale successful thesis."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    mark = AsyncMock()
+
+    async def _timeout_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise asyncio.TimeoutError
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+        )
+        stack.enter_context(patch(
+            f"{DIALECTIC}.load_session_as_dict",
+            new=AsyncMock(return_value={
+                "status": "failed",
+                "phase": "failed",
+                "reviewer": SYNTHETIC_REVIEWER_ID,
+                "resolution": {
+                    "action": "block",
+                    "reason": "Safety threshold exceeded",
+                },
+                "resolution_effect_state": None,
+            }),
+        ))
+        stack.enter_context(patch(
+            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        ))
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is False
+    assert data["phase"] == "failed"
+    assert data["terminal_status"] == "failed"
+    assert data["terminal_committed"] is True
+    assert data["hard_limit_blocked"] is True
+    assert data["hard_limit_violation"] == "Safety threshold exceeded"
+    assert data["terminal_state_unknown"] is False
+    assert data["awaiting_facilitation"] is False
+    mark.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_synthetic_unknown_readback_is_not_success(server_patch):
+    """No readback and no guarded facilitation write is an unknown outcome."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    mark = AsyncMock()
+
+    async def _timeout_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise asyncio.TimeoutError
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for item in _common_patches():
+            stack.enter_context(item)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+        )
+        stack.enter_context(patch(
+            f"{DIALECTIC}.load_session_as_dict",
+            new=AsyncMock(return_value=None),
+        ))
+        stack.enter_context(patch(
+            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        ))
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is False
+    assert data["terminal_state_unknown"] is True
+    assert data["terminal_committed"] is None
+    assert data["awaiting_facilitation"] is False
+    assert "Reload this session" in data["next_step"]
+    mark.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_resolved_without_effect_record_is_not_success(server_patch):
+    """A resolved row without an applied outbox is not a confirmed outcome."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    async def _timeout_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise asyncio.TimeoutError
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for item in _common_patches():
+            stack.enter_context(item)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+        )
+        stack.enter_context(patch(
+            f"{DIALECTIC}.load_session_as_dict",
+            new=AsyncMock(return_value={
+                "status": "resolved",
+                "phase": "resolved",
+                "reviewer": SYNTHETIC_REVIEWER_ID,
+                "resolution_effect_state": None,
+            }),
+        ))
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is False
+    assert data["terminal_committed"] is True
+    assert data["terminal_status"] == "resolved"
+    assert data["effect_pending"] is True
 
 
 @pytest.mark.asyncio
@@ -459,7 +634,8 @@ async def test_synthetic_terminal_write_refusal_is_not_reported_as_resolved():
     ), patch(
         f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)
     ), patch(
-        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=successful_dialectic_message_append),
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
@@ -482,8 +658,8 @@ async def test_synthetic_terminal_write_refusal_is_not_reported_as_resolved():
 
 
 @pytest.mark.asyncio
-async def test_synthetic_ambiguous_exact_commit_stays_terminal_and_routes_effect():
-    """Lost BEAM ack must not rewrite a committed resolution back to synthesis."""
+async def test_synthetic_ambiguous_commit_stops_before_python_writer_and_effect():
+    """A lost BEAM ack leaves ownership unknown and opens no second writer."""
     from src.mcp_handlers.dialectic.handlers import _run_synthetic_review
 
     session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
@@ -494,35 +670,8 @@ async def test_synthetic_ambiguous_exact_commit_stays_terminal_and_routes_effect
         detail["commit_unknown"] = True
         return None
 
-    async def _exact_readback(*, resolution, winner, **_kwargs):
-        winner.update(
-            winner_status="resolved",
-            winner_phase="resolved",
-            winner_paused_agent_id=session.paused_agent_id,
-            winner_reviewer_agent_id=session.reviewer_agent_id,
-            winner_resolution=resolution,
-        )
-        return False
-
-    async def _already_applying(
-        _session_id,
-        _owner_token,
-        *,
-        paused_agent_id,
-        reviewer_agent_id,
-        effect_required,
-        pause_token,
-        resolution,
-    ):
-        return {
-            "paused_agent_id": paused_agent_id,
-            "reviewer_agent_id": reviewer_agent_id,
-            "effect_required": effect_required,
-            "pause_token": pause_token,
-            "resolution_payload_json": resolution,
-            "state": "applying",
-            "claimed": False,
-        }
+    python_writer = AsyncMock()
+    claim_effect = AsyncMock()
 
     with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
         f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
@@ -537,15 +686,16 @@ async def test_synthetic_ambiguous_exact_commit_stays_terminal_and_routes_effect
     ), patch(
         f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)
     ), patch(
-        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=successful_dialectic_message_append),
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
         f"{DIALECTIC}.beam_resolve", new=_unknown_beam
     ), patch(
-        f"{DIALECTIC}.pg_resolve_session", new=_exact_readback
+        f"{DIALECTIC}.pg_resolve_session", new=python_writer
     ), patch(
-        f"{DIALECTIC}.pg_claim_resolution_effect", new=_already_applying
+        f"{DIALECTIC}.pg_claim_resolution_effect", new=claim_effect
     ), patch(
         f"{DIALECTIC}.pg_update_awaiting_facilitation", new=facilitation
     ), patch(
@@ -558,15 +708,70 @@ async def test_synthetic_ambiguous_exact_commit_stays_terminal_and_routes_effect
         )
 
     assert result["resolved"] is False
-    assert result["terminal_committed"] is True
+    assert result["terminal_committed"] is False
+    assert result["commit_unknown"] is True
     assert result["effect_pending"] is True
-    assert session.phase == DialecticPhase.RESOLVED
-    assert session.resolution is not None
+    assert session.phase == DialecticPhase.SYNTHESIS
+    assert session.resolution is None
     assert session.awaiting_facilitation is False
+    python_writer.assert_not_awaited()
+    claim_effect.assert_not_awaited()
     facilitation.assert_not_awaited()
     event_types = [call.args[0] for call in emit.await_args_list]
     assert "dialectic_resolved" not in event_types
     assert "dialectic_facilitation_needed" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_submit_thesis_reports_ambiguous_synthetic_commit_as_unsuccessful(
+    server_patch,
+):
+    """The public envelope cannot turn unknown terminal ownership into success."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    async def _ambiguous_review(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        session.phase = DialecticPhase.SYNTHESIS
+        return {
+            "antithesis": _antithesis("refine"),
+            "synthesis": _synthesis("RESUME"),
+            "recommendation": "RESUME",
+            "resolved": False,
+            "terminal_committed": False,
+            "commit_unknown": True,
+            "effect_pending": True,
+            "hard_limit_blocked": False,
+            "hard_limit_violation": None,
+        }
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for item in _common_patches():
+            stack.enter_context(item)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_ambiguous_review)
+        )
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is False
+    assert data["commit_unknown"] is True
+    assert data["effect_pending"] is True
+    assert data["resolved"] is False
+    assert "reconcile_effect" in data["next_step"]
 
 
 @pytest.mark.asyncio
@@ -578,7 +783,7 @@ async def test_llm_assisted_terminal_write_refusal_requires_facilitation():
     server.agent_metadata = {"agent-paused": MagicMock(status="active")}
     server.monitors = {}
     emit = AsyncMock()
-    update_facilitation = AsyncMock()
+    update_facilitation = AsyncMock(return_value=True)
     graph = MagicMock()
     graph.add_discovery = AsyncMock()
     full_dialectic = {
@@ -602,11 +807,12 @@ async def test_llm_assisted_terminal_write_refusal_requires_facilitation():
     ), patch(
         f"{DIALECTIC}.pg_create_session", new=AsyncMock()
     ), patch(
-        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=successful_dialectic_message_append),
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
-        f"{DIALECTIC}.pg_update_awaiting_facilitation",
+        f"{DIALECTIC}.pg_mark_awaiting_facilitation",
         new=update_facilitation,
     ), patch(
         f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=False)
@@ -623,8 +829,9 @@ async def test_llm_assisted_terminal_write_refusal_requires_facilitation():
         })
 
     data = parse_result(response)
-    assert data["resolved"] is False
-    assert data["awaiting_facilitation"] is True
+    assert data["success"] is False
+    assert data["error_code"] == "SESSION_RESOLUTION_WRITE_REFUSED"
+    assert data["terminal_committed"] is False
     update_facilitation.assert_awaited_once()
     event_types = [call.args[0] for call in emit.await_args_list]
     assert "dialectic_resolved" not in event_types
@@ -678,7 +885,8 @@ async def test_llm_assisted_consumes_durable_effect_before_reporting_resolution(
     ), patch(
         f"{DIALECTIC}.pg_create_session", new=AsyncMock()
     ), patch(
-        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=successful_dialectic_message_append),
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
@@ -709,11 +917,119 @@ async def test_llm_assisted_consumes_durable_effect_before_reporting_resolution(
     assert data["resolved"] is expected_resolved
     assert data["success"] is expected_success
     assert data["resolution_effect_state"] == state
+    if state == "unknown_partial":
+        assert "runtime effect is not confirmed" in data["message"]
+        assert all(
+            "you can resume" not in step.lower() for step in data["next_steps"]
+        )
+        discovery = graph.add_discovery.await_args.args[0]
+        assert "effect-pending" in discovery.tags
+        assert "resume" not in discovery.tags
     apply_effect.assert_awaited_once()
     resolved_events = [
         call for call in emit.await_args_list if call.args[0] == "dialectic_resolved"
     ]
     assert len(resolved_events) == (1 if state == "applied" else 0)
+
+
+async def _run_llm_assisted_truthfulness_case(*, hard_limits, commit):
+    from src.mcp_handlers.dialectic.handlers import handle_llm_assisted_dialectic
+
+    server = MagicMock()
+    server.agent_metadata = {
+        "agent-paused": MagicMock(status="paused", paused_at="pause-1")
+    }
+    server.monitors = {}
+    graph = MagicMock()
+    graph.add_discovery = AsyncMock()
+    full_dialectic = {
+        "success": True,
+        "recommendation": "RESUME",
+        "antithesis": _antithesis("refine"),
+        "synthesis": _synthesis("RESUME"),
+    }
+    apply_effect = AsyncMock()
+
+    with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        f"{DIALECTIC}.require_registered_agent",
+        return_value=("agent-paused", None),
+    ), patch(
+        f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"
+    ), patch(
+        f"{LLM}.local_endpoint_refusal", return_value=None
+    ), patch(
+        f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)
+    ), patch(
+        f"{DIALECTIC}.pg_create_session", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_add_message",
+        new=AsyncMock(side_effect=successful_dialectic_message_append),
+    ), patch(
+        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
+    ), patch.object(
+        DialecticSession, "check_hard_limits", return_value=hard_limits
+    ), patch(
+        f"{DIALECTIC}._commit_converged_resolution",
+        new=AsyncMock(return_value=commit),
+    ), patch(
+        f"{DIALECTIC}._commit_terminal_resolution",
+        new=AsyncMock(return_value=commit),
+    ), patch(
+        f"{DIALECTIC}._apply_durable_resolution_effect", new=apply_effect
+    ), patch(
+        "src.knowledge_graph.get_knowledge_graph",
+        new=AsyncMock(return_value=graph),
+    ):
+        response = await handle_llm_assisted_dialectic({
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before retrying"],
+        })
+
+    return parse_result(response), graph, apply_effect
+
+
+@pytest.mark.asyncio
+async def test_llm_assisted_hard_limit_guidance_never_authorizes_resume():
+    from src.mcp_handlers.dialectic.handlers import _ResolutionCommitResult
+
+    data, graph, apply_effect = await _run_llm_assisted_truthfulness_case(
+        hard_limits=(False, "Safety threshold exceeded"),
+        commit=_ResolutionCommitResult(True, False, "test"),
+    )
+
+    assert data["success"] is False
+    assert data["hard_limit_blocked"] is True
+    assert "terminally blocked" in data["message"]
+    assert all("you can resume" not in step.lower() for step in data["next_steps"])
+    apply_effect.assert_not_awaited()
+    discovery = graph.add_discovery.await_args.args[0]
+    assert "hard-limit-blocked" in discovery.tags
+    assert "resume" not in discovery.tags
+    assert json.loads(discovery.details)["hard_limit_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_llm_assisted_commit_unknown_guidance_requires_reconciliation():
+    from src.mcp_handlers.dialectic.handlers import _ResolutionCommitResult
+
+    data, graph, apply_effect = await _run_llm_assisted_truthfulness_case(
+        hard_limits=(True, None),
+        commit=_ResolutionCommitResult(False, True, "beam_commit_unknown"),
+    )
+
+    assert data["success"] is False
+    assert data["commit_unknown"] is True
+    assert "ownership is unknown" in data["message"]
+    assert any("reconcile" in step.lower() for step in data["next_steps"])
+    assert all("you can resume" not in step.lower() for step in data["next_steps"])
+    apply_effect.assert_not_awaited()
+    discovery = graph.add_discovery.await_args.args[0]
+    assert "terminal-commit-unknown" in discovery.tags
+    assert "resume" not in discovery.tags
+    assert json.loads(discovery.details)["commit_unknown"] is True
 
 
 @pytest.mark.asyncio

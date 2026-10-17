@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.types import TextContent
+from tests.helpers import successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
@@ -242,12 +243,10 @@ class TestOneCallReview:
                 new_callable=AsyncMock,
                 return_value=session,
             ),
-            patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock) as add_message,
             patch(
-                f"{DIALECTIC}.beam_update_phase",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
+                f"{DIALECTIC}.pg_add_message",
+                new=AsyncMock(side_effect=successful_dialectic_message_append),
+            ) as add_message,
             patch(f"{DIALECTIC}._emit_phase_changed", new_callable=AsyncMock),
             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock),
         ):

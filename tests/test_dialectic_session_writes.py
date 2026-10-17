@@ -204,6 +204,7 @@ class TestPythonChokepoints:
 # --- the BEAM client -------------------------------------------------------
 
 READ = "src.dialectic_db.get_session_terminal_state_async"
+FRONTIER = {"expected_phase": "synthesis", "expected_transcript_revision": 0}
 
 
 class TestBeamClient:
@@ -215,7 +216,9 @@ class TestBeamClient:
                 "origin": "already_terminal", "protocol_version": "1"}
         read = AsyncMock(return_value={"status": "failed", "reason": None})
         with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}), patch(READ, read):
-            out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+            out = await brc.beam_resolve(
+                "s1", "p", "r", {"verdict": "resume"}, **FRONTIER
+            )
 
         assert out == body, "the resolve's answer is unchanged"
         attempt, response = _pair(captured)
@@ -234,7 +237,7 @@ class TestBeamClient:
         body = {"ok": True, "status": "failed", "saga_id": None, "origin": "already_terminal"}
         with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}), \
              patch(READ, AsyncMock(side_effect=RuntimeError("pool gone"))):
-            assert await brc.beam_resolve("s1", "p", "r", {}) == body
+            assert await brc.beam_resolve("s1", "p", "r", {}, **FRONTIER) == body
         _attempt, response = _pair(captured)
         assert response["terminal_reason_read"] is False
 
@@ -244,7 +247,7 @@ class TestBeamClient:
         _enable(monkeypatch)
         body = {"ok": True, "status": "resolved", "saga_id": "sg-1", "origin": origin}
         with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}):
-            await brc.beam_resolve("s1", "p", "r", {})
+            await brc.beam_resolve("s1", "p", "r", {}, **FRONTIER)
         _attempt, response = _pair(captured)
         assert (response["outcome"], response["origin"], response["saga_id"]) == (
             "written", origin, "sg-1")
@@ -254,11 +257,14 @@ class TestBeamClient:
         _enable(monkeypatch)
         with patch.dict(sys.modules, {"httpx": _fake_httpx(409, {"ok": False,
                                                                   "error": "saga_in_flight"})}):
-            assert await brc.beam_resolve("s1", "p", "r", {}, status="failed") is None
+            with pytest.raises(brc.BeamDialecticSagaInFlight):
+                await brc.beam_resolve(
+                    "s1", "p", "r", {}, status="failed", **FRONTIER
+                )
         attempt, response = _pair(captured)
         assert attempt["requested"] == "failed"
         assert (response["outcome"], response["http_status"], response["error"]) == (
-            "not_written", 409, "saga_in_flight")
+            "error", 409, "BeamDialecticSagaInFlight")
 
     @pytest.mark.asyncio
     async def test_an_exception_produces_the_response_record(self, monkeypatch, captured):
@@ -266,7 +272,7 @@ class TestBeamClient:
         fake = MagicMock()
         fake.Client.side_effect = ConnectionError("refused")
         with patch.dict(sys.modules, {"httpx": fake}):
-            assert await brc.beam_resolve("s1", "p", "r", {}) is None
+            assert await brc.beam_resolve("s1", "p", "r", {}, **FRONTIER) is None
         _attempt, response = _pair(captured)
         assert (response["outcome"], response["error"]) == ("no_response", "ConnectionError")
 
@@ -304,7 +310,7 @@ class TestBeamClient:
         with patch.dict(sys.modules, {"httpx": fake}), \
              patch("src.audit_db.append_audit_event_async",
                    AsyncMock(side_effect=RuntimeError("audit down"))):
-            out = await brc.beam_resolve("s1", "p", "r", {})
+            out = await brc.beam_resolve("s1", "p", "r", {}, **FRONTIER)
         assert out["origin"] == "new"
         fake.Client.return_value.__enter__.return_value.post.assert_called_once()
 
@@ -325,7 +331,7 @@ def test_every_beam_fallback_python_write_is_attributed():
     from pathlib import Path
 
     pkg = Path(brc.__file__).parent
-    for name, expected in (("handlers.py", 8), ("session.py", 2)):
+    for name, expected in (("handlers.py", 1), ("session.py", 2)):
         text = (pkg / name).read_text(encoding="utf-8")
         attributed = re.findall(
             r"session_write_via\s*\(\s*[\"']python_fallback[\"']", text

@@ -104,10 +104,13 @@ BEAM_WRITERS = ("beam_create_session", "beam_update_phase", "beam_update_reviewe
 # observed through the helpers' own records; the entry says who the writer is.
 CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     (AUTO_RESOLVE, "_auto_resolve_stuck_sessions"): {
-        "calls": ("add_message_async", "update_session_status_async",
-                  "update_session_reviewer_async", "mark_awaiting_facilitation_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": "sweeper (via=sweeper; plus its own dialectic_guarded_write per guarded write)",
+        "calls": ("add_message_async", "mark_awaiting_facilitation_async",
+                  "resolve_session_async", "update_session_reviewer_async"),
+        "writer": (
+            "sweeper: reviewer reassignment, guarded transcript append, facilitation "
+            "request, and hard-limit terminal close (via=sweeper; plus its own "
+            "dialectic_guarded_write per guarded write)"
+        ),
     },
     (AUTO_RESOLVE, "_close_standing_rejections"): {
         "calls": ("resolve_session_async",),
@@ -117,68 +120,41 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
             "(via=sweeper; a reap_failed guarded write)"
         ),
     },
-    (HANDLERS, "_apply_reviewer_reassignment"): {
-        "calls": ("add_message_async", "reopen_session_async", "beam_update_reviewer",
-                  "update_session_reviewer_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": "request reassignment: reopen, BEAM update_reviewer, Python fallback",
-    },
-    (HANDLERS, "handle_submit_thesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
-                  "mark_awaiting_facilitation_async"),
+    (HANDLERS, "_append_protocol_message"): {
+        "calls": ("add_message_async",),
         "writer": (
-            "thesis: message, phase advance (BEAM, Python fallback), and a guarded "
-            "facilitation request after a timed-out synthetic reviewer"
+            "shared interactive transcript append: message and phase/round/reviewer/"
+            "status frontier advance in one guarded transaction"
         ),
     },
-    (HANDLERS, "handle_submit_antithesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
-                  "beam_update_reviewer", "update_session_reviewer_async"),
-        "writer": "antithesis: message, phase advance, first-responder reviewer",
-    },
-    (HANDLERS, "handle_submit_synthesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
-                  "beam_resolve", "resolve_session_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": (
-            "synthesis: message, phase, hard-limit terminal write, facilitation flag; "
-            "converged resolution delegates to the commit helper"
-        ),
-    },
-    (HANDLERS, "_commit_converged_resolution"): {
+    (HANDLERS, "_commit_terminal_resolution"): {
         "calls": ("beam_resolve", "resolve_session_async"),
         "writer": (
-            "synthesis terminal effect owner: BEAM resolution or reviewer/phase-CAS "
-            "Python fallback, before any runtime effect"
+            "shared terminal effect owner: BEAM resolution or exact "
+            "phase/reviewer/transcript-CAS Python fallback, before any runtime effect"
         ),
     },
     (HANDLERS, "_set_awaiting_facilitation"): {
-        "calls": ("update_session_awaiting_facilitation_async",),
-        "writer": "facilitation flag (request path)",
-    },
-    (HANDLERS, "handle_get_dialectic_session"): {
-        "calls": ("add_message_async", "update_session_phase_async",
+        "calls": ("mark_awaiting_facilitation_async",
                   "update_session_awaiting_facilitation_async"),
-        "writer": "timeout / stuck-reviewer handling on read",
+        "writer": "shared guarded facilitation set/clear at the loaded transcript frontier",
     },
     (HANDLERS, "handle_request_dialectic_review"): {
         "calls": ("beam_create_session", "create_session_async"),
         "writer": "session creation",
     },
     (HANDLERS, "handle_llm_assisted_dialectic"): {
-        "calls": ("add_message_async", "create_session_async", "update_session_phase_async"),
+        "calls": ("create_session_async",),
         "writer": (
-            "one-call LLM-assisted dialectic; terminal resolution delegates to "
-            "the reviewer/phase-CAS commit helper"
+            "one-call LLM-assisted session creation; later writes delegate to the "
+            "shared transcript and terminal helpers"
         ),
     },
-    (HANDLERS, "_run_synthetic_review"): {
-        "calls": ("add_message_async", "beam_update_reviewer",
-                  "update_session_reviewer_async", "update_session_phase_async"),
+    (HANDLERS, "handle_submit_thesis"): {
+        "calls": ("mark_awaiting_facilitation_async",),
         "writer": (
-            "synthetic review: persist the selected reviewer before transcript "
-            "messages, then phase writes; terminal resolution delegates to the "
-            "reviewer/phase-CAS commit helper"
+            "guarded facilitation request after a timed-out synthetic reviewer; "
+            "the thesis append itself delegates to the shared transcript helper"
         ),
     },
     (SESSION, "save_session"): {

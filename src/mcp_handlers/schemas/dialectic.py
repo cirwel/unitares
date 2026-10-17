@@ -223,7 +223,8 @@ class DialecticParams(AgentIdentityMixin):
                 "session_id", "new_reviewer_id", "reason",
         ),
         "reconcile_effect": (
-                "session_id", "effect_disposition", "effect_owner_token", "reason",
+                "session_id", "effect_disposition", "effect_owner_token",
+                "effect_updated_at", "reason",
         ),
     }
     # Parameters an action's handler refuses to run without, which the flat
@@ -327,6 +328,14 @@ class DialecticParams(AgentIdentityMixin):
         description=(
             "Exact operator-only claim token returned by reconcile_effect inspect; "
             "required to fence an abandoned applying effect with mark_uncertain"
+        ),
+    )
+    effect_updated_at: Optional[str] = Field(
+        None,
+        description=(
+            "Exact updated_at timestamp returned by a prior "
+            "action=reconcile_effect inspect; required with mark_applied to "
+            "bind the acknowledgement to the record the operator inspected"
         ),
     )
     reason: Optional[str] = Field(None, description="Reason (for action=request/reassign, or required when reconcile_effect marks an effect uncertain/applied)")

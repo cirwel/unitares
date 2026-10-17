@@ -453,6 +453,12 @@ async def test_recused_reviewer_is_immediately_stuck_and_cannot_hand_off():
         assert await check_reviewer_stuck(session) is True
         assert _reviewer_reassignment_actor(session) is None
 
+    # Legacy rows can already be in SYNTHESIS without the facilitation flag.
+    # Authorship conflict itself makes the assignment immediately repairable.
+    session.phase = DialecticPhase.SYNTHESIS
+    session.awaiting_facilitation = False
+    assert await check_reviewer_stuck(session) is True
+
     session.phase = DialecticPhase.FAILED
     session.awaiting_facilitation = True
     with patch(
@@ -506,7 +512,7 @@ async def test_first_responder_author_is_rejected_before_any_write():
 
 
 @pytest.mark.asyncio
-async def test_first_responder_effect_owner_refusal_aborts_all_later_writes():
+async def test_first_responder_atomic_append_refusal_aborts_all_later_writes():
     from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
 
     session = DialecticSession(
@@ -536,7 +542,7 @@ async def test_first_responder_effect_owner_refusal_aborts_all_later_writes():
         new=AsyncMock(return_value=False),
     ), patch(
         "src.mcp_handlers.dialectic.handlers.pg_add_message",
-        new=AsyncMock(),
+        new=AsyncMock(return_value=0),
     ) as add_message, patch(
         "src.mcp_handlers.dialectic.handlers.pg_update_phase",
         new=AsyncMock(),
@@ -552,11 +558,12 @@ async def test_first_responder_effect_owner_refusal_aborts_all_later_writes():
 
     payload = json.loads(response[0].text)
     assert payload["success"] is False
-    assert payload["error_code"] == "REVIEWER_ASSIGNMENT_REFUSED"
+    assert payload["error_code"] == "DIALECTIC_TRANSCRIPT_CHANGED"
     assert session.reviewer_agent_id is None
     assert session.phase == DialecticPhase.ANTITHESIS
     assert session.transcript == []
-    add_message.assert_not_awaited()
+    add_message.assert_awaited_once()
+    assert add_message.await_args.kwargs["next_reviewer"] == PEER
     update_phase.assert_not_awaited()
     save_session.assert_not_awaited()
 
@@ -574,6 +581,8 @@ async def test_recused_reviewer_cannot_submit_or_abstain_in_synthesis(
         paused_agent_state=_state(AUTHOR),
     )
     session.phase = DialecticPhase.SYNTHESIS
+    mark_facilitation = AsyncMock(return_value=True)
+    emit = AsyncMock()
 
     with patch(
         "src.mcp_handlers.dialectic.handlers._resolve_dialectic_agent_id",
@@ -581,6 +590,12 @@ async def test_recused_reviewer_cannot_submit_or_abstain_in_synthesis(
     ), patch(
         "src.mcp_handlers.dialectic.handlers.load_session",
         new=AsyncMock(return_value=session),
+    ), patch(
+        "src.mcp_handlers.dialectic.handlers.pg_mark_awaiting_facilitation",
+        new=mark_facilitation,
+    ), patch(
+        "src.mcp_handlers.dialectic.handlers._emit_dialectic_event",
+        new=emit,
     ), patch(
         "src.mcp_handlers.dialectic.handlers.emit_reviewer_abstained",
         new=AsyncMock(),
@@ -603,10 +618,67 @@ async def test_recused_reviewer_cannot_submit_or_abstain_in_synthesis(
     payload = json.loads(response[0].text)
     assert payload["success"] is False
     assert payload["error_code"] == "REVIEWER_AUTHOR_CONFLICT"
+    assert payload["awaiting_facilitation"] is True
+    assert session.awaiting_facilitation is True
     assert session.transcript == []
+    mark_facilitation.assert_awaited_once_with(
+        session.session_id,
+        expected_phase="synthesis",
+        expected_reviewer=AUTHOR,
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        touch_updated_at=True,
+    )
+    assert emit.await_args.args[0] == "dialectic_facilitation_needed"
     abstained.assert_not_awaited()
     add_message.assert_not_awaited()
     save_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reassigning_declared_author_rewinds_synthesis_for_new_peer():
+    from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+
+    session = DialecticSession(
+        paused_agent_id=PROXY,
+        reviewer_agent_id=AUTHOR,
+        paused_agent_state=_state(AUTHOR),
+    )
+    session.phase = DialecticPhase.SYNTHESIS
+    session.awaiting_facilitation = False
+    writes = []
+
+    async def _append(**kwargs):
+        writes.append(kwargs)
+        kwargs["detail"]["transcript_revision"] = (
+            kwargs["expected_transcript_revision"] + 1
+        )
+        return 1
+
+    with patch(
+        "src.mcp_handlers.dialectic.handlers.pg_add_message", new=_append
+    ), patch(
+        "src.mcp_handlers.dialectic.handlers.emit_reviewer_reassigned",
+        new=AsyncMock(),
+    ):
+        await _apply_reviewer_reassignment(
+            session.session_id,
+            session,
+            PEER,
+            reason="replace declared author",
+        )
+
+    assert session.phase == DialecticPhase.ANTITHESIS
+    assert session.reviewer_agent_id == PEER
+    assert session.awaiting_facilitation is False
+    assert len(writes) == 1
+    assert writes[0]["expected_phase"] == "synthesis"
+    assert writes[0]["expected_reviewer"] == AUTHOR
+    assert writes[0]["expected_awaiting_facilitation"] is False
+    assert writes[0]["next_phase"] == "antithesis"
+    assert writes[0]["next_reviewer"] == PEER
+    assert "reopen_failed_facilitation" not in writes[0]
 
 
 @pytest.mark.asyncio
@@ -637,7 +709,7 @@ async def test_resume_transition_owner_refuses_declared_author():
 
 
 @pytest.mark.asyncio
-async def test_beam_reassignment_policy_refusal_rolls_back_memory():
+async def test_reassignment_policy_refusal_rolls_back_memory():
     from src.mcp_handlers.dialectic.beam_resolve_client import (
         BeamDialecticPolicyRefusal,
     )
@@ -653,10 +725,10 @@ async def test_beam_reassignment_policy_refusal_rolls_back_memory():
     session.phase = DialecticPhase.ANTITHESIS
 
     with patch(
-        "src.mcp_handlers.dialectic.handlers.beam_update_reviewer",
+        "src.mcp_handlers.dialectic.handlers.pg_add_message",
         new=AsyncMock(
             side_effect=BeamDialecticPolicyRefusal(
-                "session_identity_mismatch", operation="update_reviewer"
+                "session_identity_mismatch", operation="append_protocol_message"
             )
         ),
     ):

@@ -57,13 +57,68 @@ Two paths now exist: full-restart (always correct) and hot-code-reload (no resta
 scripts/ops/deploy-lease-plane.sh
 ```
 
+The deploy script checks the live migration manifest before compiling or
+restarting. It refuses a schema gap by default; an operator may deliberately
+run its schema-only apply mode with:
+
+```bash
+scripts/ops/deploy-lease-plane.sh --apply-migrations --dialectic-writers-quiesced
+```
+
+That invocation applies and verifies the schema, then exits without compiling
+or restarting the lease plane. The second flag is an explicit operator
+attestation and the wrapper also refuses while either writer LaunchAgent is
+still loaded. Run the script again without either flag only when the rollout
+order below reaches the BEAM restart step.
+
+For the dialectic resolution-effect/frontier rollout, the safe order is:
+
+1. Quiesce dialectic writers: block new dialectic submissions and stop/drain
+   the old Python governance MCP workers and the old lease-plane process. Do
+   not run either liveness sweeper during the maintenance window.
+2. With both writer runtimes stopped, apply migrations 075, 077, and 078 with
+   the schema-only command above. It also refuses until every legacy
+   resolution saga is out of all in-flight states.
+3. Restart the Python governance MCP on the new revision.
+4. Restart the lease plane on the same revision, verify both revisions, then
+   restore dialectic traffic.
+
+The normal deploy commands in steps 3 and 4 detect that quiescence booted the
+LaunchAgents out and bootstrap their installed plists. Do not substitute a
+bare `launchctl kickstart`: kickstart cannot register an unloaded job.
+
+The quiescence is required, not advisory. Old Python does not compare the saga
+generation and old BEAM does not increment it, so either mixed-version order
+reopens the maintenance-write/terminal-claim race. New Python calls the distinct
+`/v2/dialectic/resolve-with-effect` route; an old BEAM returns 404 without a
+write, allowing the guarded Python fallback. The v1 route is retained for
+protocol compatibility and offline diagnosis, not as an online rollback claim.
+After migration 078 there is no traffic-bearing rollback to old Python: its
+maintenance writers do not bind the saga generation, even with the new lease
+plane beside it. Migration 078 also removes the permanent same-payload
+uniqueness constraint that a pre-078 lease plane assumes, so older BEAM code is
+below the rollback floor. Any code rollback must keep dialectic submissions and
+both liveness sweepers quiesced until this generation-aware pair is restored;
+leave the additive migrations in place. New code with old schema is refused by
+both deploy gates. Do not hot-reload a change that depends on a new database
+migration.
+
 To deploy a stateless-module change (router, plugs, pure logic) *without* a restart, `git pull` in the deploy worktree then:
 
 ```bash
-scripts/ops/hot-reload.sh --changed     # or name modules explicitly
+elixir/lease_plane/scripts/ops/hot-reload.sh --changed
+# or name modules explicitly
+elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
 ```
 
-It fast-forwards `$HOME/projects/unitares-deploy` to `origin/master`, recompiles, restarts the LaunchAgent (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`), and verifies `/v1/health`. Idempotent; creates the deploy worktree if missing. Because the service runs from this dedicated worktree, "is the merged fix actually live?" has a clean answer: `git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
+The full deploy command above fast-forwards
+`$HOME/projects/unitares-deploy` to `origin/master`, verifies the schema,
+recompiles, restarts the LaunchAgent, and verifies `/v1/health`. The hot-reload
+helper does only the in-place compile/module swap: it neither applies or checks
+migrations nor restarts the service, so never use it for schema-dependent or
+supervision-tree changes. Because the service runs from the dedicated
+worktree, "is the merged fix actually live?" has a clean answer:
+`git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
 
 > Incident 2026-06-02: a merged fix (#568) was **not** live because the service ran from the dev checkout, which sat on a feature branch with uncommitted edits to the same file. The dedicated worktree exists to make running-code == `origin/master` by construction. This is the running-process-vs-master-commit drift class (`feedback_running-process-vs-master-commit.md`).
 
@@ -479,7 +534,8 @@ Reload after pulling new code into the deploy worktree:
 ```bash
 cd "$HOME/projects/unitares-deploy" && git pull --ff-only
 elixir/lease_plane/scripts/ops/hot-reload.sh --changed
-# or name modules: scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
+# or name modules:
+elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
 ```
 
 The helper recompiles in the worktree and `:code.purge` + `:code.load_file`s

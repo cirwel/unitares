@@ -2,15 +2,15 @@
 
 dialectic-on-BEAM Slice 1.2. When ``UNITARES_DIALECTIC_BEAM_RESOLUTION`` is on,
 the Python convergence path hands the finished resolution payload to the BEAM
-lease plane (`POST /v1/dialectic/resolve-with-effect`), which owns the cross-runtime saga
+lease plane (`POST /v2/dialectic/resolve-with-effect`), which owns the cross-runtime saga
 slot and is the sole writer of the terminal `core.dialectic_sessions` row.
 
 Fail-safe by construction: this returns ``None`` — telling the caller to use the
 Python persistence path — whenever the flag is off, the lease plane is not
 configured, a required field is missing, or BEAM is unreachable / returns an
-ordinary non-OK response.  A typed policy refusal is authoritative and raises
-``BeamDialecticPolicyRefusal`` instead of falling through to a second writer.
-The Python B-4 guards protect every ordinary fallback path.
+ordinary non-OK response. Typed policy, in-flight-saga, and transcript-frontier
+refusals are authoritative and raise instead of falling through to a second
+writer. The Python B-4 guards protect every ordinary fallback path.
 """
 
 import asyncio
@@ -37,6 +37,8 @@ _TRUTHY = {"1", "true", "yes", "on"}
 # encodes the atom as this string: body `{"ok": true, "status": "<existing>",
 # "saga_id": null, "origin": "already_terminal", ...}`.
 ALREADY_TERMINAL_ORIGIN = "already_terminal"
+_WRITE_ORIGINS = {"new", "idempotent"}
+_TERMINAL_STATUSES = {"resolved", "failed"}
 _GOVERNANCE_POLICY_REFUSALS = {
     "self_review_not_authorizing",
     "reviewer_recused",
@@ -54,12 +56,38 @@ class BeamDialecticPolicyRefusal(RuntimeError):
         super().__init__(f"{operation} refused by BEAM policy: {error_code}")
 
 
+class BeamDialecticSagaInFlight(RuntimeError):
+    """A different terminal payload owns BEAM's durable saga slot."""
+
+
+class BeamDialecticTranscriptConflict(RuntimeError):
+    """BEAM refused a terminal write from stale protocol state."""
+
+
 def _raise_governance_policy_refusal(
     status: int, body: Any, *, operation: str
 ) -> None:
     error_code = body.get("error") if isinstance(body, dict) else None
     if status == 409 and error_code in _GOVERNANCE_POLICY_REFUSALS:
         raise BeamDialecticPolicyRefusal(error_code, operation=operation)
+
+
+def _valid_resolve_ack(body: Dict[str, Any], requested_status: str) -> bool:
+    """Whether a positive BEAM response proves the claimed terminal outcome."""
+    if body.get("ok") is not True:
+        return False
+    origin = body.get("origin")
+    reported_status = body.get("status")
+    saga_id = body.get("saga_id")
+    if origin in _WRITE_ORIGINS:
+        return (
+            reported_status == requested_status
+            and isinstance(saga_id, str)
+            and bool(saga_id.strip())
+        )
+    if origin == ALREADY_TERMINAL_ORIGIN:
+        return reported_status in _TERMINAL_STATUSES and saga_id is None
+    return False
 
 
 async def _already_terminal_reason(session_id: str) -> Dict[str, Any]:
@@ -318,6 +346,10 @@ async def beam_resolve(
     resolution: Dict[str, Any],
     status: str = "resolved",
     *,
+    expected_phase: Optional[str] = None,
+    expected_transcript_revision: Optional[int] = None,
+    expected_awaiting_facilitation: Optional[bool] = False,
+    expected_updated_at: Any = None,
     detail: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Commit a terminal dialectic transition via BEAM.
@@ -332,6 +364,14 @@ async def beam_resolve(
     if not beam_resolution_enabled():
         return None
     if status not in ("resolved", "failed"):
+        return None
+    # Only the distinct v2 route attests that BEAM understands the transcript
+    # frontier. Calling the pre-frontier v1 route with an extra JSON key is not
+    # safe during a rolling deploy: an old BEAM accepts and ignores that key,
+    # then returns 200 for an unfenced terminal write. A caller without a
+    # frontier uses the Python CAS path; old Python retains the v1 route for
+    # rollback compatibility.
+    if expected_transcript_revision is None:
         return None
 
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
@@ -350,6 +390,20 @@ async def beam_resolve(
         "resolution": resolution,
         "status": status,
     }
+    if expected_transcript_revision is not None:
+        payload["expected_transcript_revision"] = expected_transcript_revision
+    if expected_phase is not None:
+        payload["expected_phase"] = expected_phase
+    if expected_awaiting_facilitation is not None:
+        payload["expected_awaiting_facilitation"] = (
+            expected_awaiting_facilitation
+        )
+    if expected_updated_at is not None:
+        payload["expected_updated_at"] = (
+            expected_updated_at.isoformat()
+            if hasattr(expected_updated_at, "isoformat")
+            else str(expected_updated_at)
+        )
 
     try:
         import httpx
@@ -363,7 +417,7 @@ async def beam_resolve(
         with httpx.Client(timeout=5.0) as client:
             post_started = True
             resp = client.post(
-                f"{base_url}/v1/dialectic/resolve-with-effect",
+                f"{base_url}/v2/dialectic/resolve-with-effect",
                 headers={
                     "Authorization": f"Bearer {bearer}",
                     "Content-Type": "application/json",
@@ -394,7 +448,11 @@ async def beam_resolve(
                 detail["commit_unknown"] = True
             return None
 
-        if status == 200 and isinstance(body, dict) and body.get("ok"):
+        if (
+            status == 200
+            and isinstance(body, dict)
+            and _valid_resolve_ack(body, requested_status)
+        ):
             logger.info(
                 f"[BEAM_RESOLVE] session {session_id[:16]} resolved on BEAM "
                 f"(origin={body.get('origin')})"
@@ -411,10 +469,44 @@ async def beam_resolve(
             rec.respond(**fields)
             return body
 
+        if status == 200 and isinstance(body, dict) and body.get("ok"):
+            # A positive but malformed/mismatched response cannot prove which
+            # transition, if any, committed. Never turn it into success or open
+            # the Python terminal writer beneath it.
+            rec.respond(
+                outcome="commit_unknown",
+                http_status=status,
+                error="invalid_resolve_ack",
+            )
+            if detail is not None:
+                detail["commit_unknown"] = True
+                detail["http_status"] = status
+                detail["invalid_ack"] = True
+            logger.warning(
+                f"[BEAM_RESOLVE] invalid positive acknowledgement for "
+                f"{session_id[:16]}: {body}"
+            )
+            return None
+
         commit_unknown = status >= 500 or 200 <= status < 300
         rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
                     http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
+        error_code = body.get("error") if isinstance(body, dict) else None
+        if status == 409 and error_code == "saga_in_flight":
+            raise BeamDialecticSagaInFlight(
+                "a different resolution saga is already in flight"
+            )
+        if status == 409 and error_code in {
+            "session_phase_mismatch",
+            "session_revision_mismatch",
+            "session_facilitation_mismatch",
+            "session_activity_mismatch",
+            "saga_claim_lost",
+        }:
+            raise BeamDialecticTranscriptConflict(
+                "the dialectic protocol state changed before terminal commit"
+            )
         _raise_governance_policy_refusal(status, body, operation="resolve_session")
         if commit_unknown and detail is not None:
             # A 5xx can be returned after commit_session_row succeeded but saga

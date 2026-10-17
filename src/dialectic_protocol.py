@@ -682,6 +682,12 @@ class DialecticSession:
         self.max_synthesis_rounds = max_synthesis_rounds if session_type != "exploration" else max(max_synthesis_rounds, 10)
 
         self.transcript: List[DialecticMessage] = []
+        # Durable protocol-message frontier. PostgreSQL increments this only
+        # when a phase/reviewer/revision-guarded append wins.
+        self.transcript_revision = 0
+        # Durable terminal-claim frontier. BEAM increments this while holding
+        # the session row; other writers bind the value they observed.
+        self.resolution_saga_revision = 0
         self.phase = DialecticPhase.THESIS
         self.synthesis_round = 0
         self.resolution: Optional[Resolution] = None
@@ -1535,6 +1541,7 @@ class DialecticSession:
             "reviewer_agent_id": self.reviewer_agent_id,
             "phase": self.phase.value,
             "synthesis_round": self.synthesis_round,
+            "transcript_revision": self.transcript_revision,
             "max_synthesis_rounds": self.max_synthesis_rounds,
             "transcript": [msg.to_dict() for msg in self.transcript],
             "resolution": self.resolution.to_dict() if self.resolution else None,

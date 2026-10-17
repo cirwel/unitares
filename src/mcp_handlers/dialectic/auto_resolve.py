@@ -40,13 +40,11 @@ from .session import ACTIVE_SESSIONS
 from .sweep_context import AUTO_RESOLVE_IN_PROGRESS
 from src.dialectic_db import (
     get_active_sessions_async,
-    update_session_status_async,
     update_session_reviewer_async,
-    update_session_awaiting_facilitation_async,
     mark_awaiting_facilitation_async,
     add_message_async,
     get_session_async,
-    has_inflight_saga_async,
+    probe_inflight_saga_async as has_inflight_saga_async,
     resolve_session_async,
     probe_saga_since_async,
 )
@@ -566,7 +564,8 @@ async def _close_standing_rejections(
         reviewer_agent_id = session.get("reviewer_agent_id")
         try:
             early_check_ts = datetime.now(timezone.utc)
-            if await has_inflight_saga_async(session_id):
+            saga_probe = await has_inflight_saga_async(session_id)
+            if saga_probe is not False:
                 continue  # BEAM owns this transition right now
             # Function-local, as in `_synthesis_reviewer_owes_reply`: handlers
             # is heavy and imports this module.
@@ -620,6 +619,16 @@ async def _close_standing_rejections(
                     expected_phase=row.get("phase"),
                     expected_updated_at=row.get("updated_at"),
                     expected_reviewer=fresh_reviewer_agent_id,
+                    expected_transcript_revision=row.get(
+                        "transcript_revision", 0
+                    ),
+                    expected_awaiting_facilitation=bool(
+                        row.get("awaiting_facilitation")
+                    ),
+                    expected_resolution_saga_revision=row.get(
+                        "resolution_saga_revision", 0
+                    ),
+                    exclude_inflight_saga=True,
                     # Answering the request and ending the session are one
                     # statement, so the terminal row cannot keep asking for a
                     # human.
@@ -745,18 +754,25 @@ async def _auto_resolve_stuck_sessions(
             # Saga-inflight guard (C1, council 2026-06-28): if a BEAM session
             # owner is mid-resolution for this session, skip it entirely this
             # cycle. Marking it failed / reassigning its reviewer here would race
-            # the saga and corrupt the outcome. Fail-open (no saga infra -> no
-            # skip), so this is a no-op until BEAM begins writing sagas.
+            # the saga and corrupt the outcome. The probe is tri-state and fails
+            # closed: both a live saga and an unavailable ownership read skip.
+            # The guarded write also binds migration 078's generation and
+            # excludes an in-flight saga, closing the check-to-write gap.
             #
             # `early_check_ts` is taken BEFORE the check so the post-write
             # probe's "created at or after the early check" window cannot miss
             # a saga that started while this query ran.
             early_check_ts = datetime.now(timezone.utc)
-            if await has_inflight_saga_async(session_id):
+            saga_probe = await has_inflight_saga_async(session_id)
+            if saga_probe is not False:
                 c.saga_inflight_skip_count += 1
                 logger.info(
                     f"Skipping stuck-session sweep for {session_id[:16]}...: "
-                    "resolution saga in flight (BEAM owns this transition)"
+                    + (
+                        "resolution saga in flight (BEAM owns this transition)"
+                        if saga_probe is True
+                        else "resolution saga ownership could not be checked"
+                    )
                 )
                 continue
 
@@ -815,7 +831,25 @@ async def _auto_resolve_stuck_sessions(
                                 attempted=ATTEMPT_REVIEWER_REASSIGNMENT,
                                 session=session,
                                 write=lambda winner: update_session_reviewer_async(
-                                    session_id, new_reviewer, winner=winner
+                                    session_id,
+                                    new_reviewer,
+                                    expected_phase=phase,
+                                    expected_updated_at=session.get("updated_at"),
+                                    expected_reviewer=reviewer_agent_id,
+                                    expected_transcript_revision=session.get(
+                                        "transcript_revision", 0
+                                    ),
+                                    expected_awaiting_facilitation=bool(
+                                        awaiting_facilitation
+                                    ),
+                                    expected_resolution_saga_revision=session.get(
+                                        "resolution_saga_revision", 0
+                                    ),
+                                    exclude_inflight_saga=True,
+                                    clear_facilitation=bool(
+                                        awaiting_facilitation
+                                    ),
+                                    winner=winner,
                                 ),
                                 decision_read_ts=decision_read_ts,
                                 early_check_ts=early_check_ts,
@@ -859,12 +893,23 @@ async def _auto_resolve_stuck_sessions(
                                 source="sweeper",
                             )
                             try:
-                                await add_message_async(
+                                message_detail: Dict[str, Any] = {}
+                                message_id = await add_message_async(
                                     session_id=session_id,
                                     agent_id="system",
                                     message_type="system",
                                     reasoning=f"Reviewer auto-reassigned: {reviewer_agent_id} -> {new_reviewer} (previous reviewer unresponsive)",
+                                    expected_phase=phase,
+                                    expected_reviewer=new_reviewer,
+                                    expected_transcript_revision=session.get(
+                                        "transcript_revision", 0
+                                    ),
+                                    detail=message_detail,
                                 )
+                                if not message_id:
+                                    raise RuntimeError(
+                                        "reassignment narration lost the transcript frontier"
+                                    )
                             except Exception as msg_exc:
                                 # Narration only. The reassignment is committed
                                 # and recorded; do not unwind it.
@@ -872,29 +917,28 @@ async def _auto_resolve_stuck_sessions(
                                     f"Reassignment transcript append failed for "
                                     f"{session_id[:16]}: {msg_exc}"
                                 )
-                            # A reassignment ANSWERS a standing request, so
-                            # the request must not outlive it. The handler
-                            # path clears the flag deliberately (#1167); this
-                            # one never did, which was harmless only while the
-                            # sweeper could not raise the flag itself. A stale
-                            # `awaiting_facilitation` makes a later ordinary
-                            # failure revivable by `reassign` — exactly the
-                            # hazard `mark_awaiting_facilitation` is guarded
-                            # against creating.
-                            if awaiting_facilitation:
-                                try:
-                                    await update_session_awaiting_facilitation_async(
-                                        session_id, False
-                                    )
-                                except Exception as clear_exc:
-                                    logger.warning(
-                                        f"Could not clear awaiting_facilitation for "
-                                        f"{session_id[:16]}: {clear_exc}"
-                                    )
+                                ACTIVE_SESSIONS.pop(session_id, None)
+                            # The guarded reviewer UPDATE above clears a
+                            # standing request in the same statement. Never
+                            # issue a later unfenced clear: it could erase a
+                            # newer human request raised after reassignment.
                             _sync_cached_session(
                                 session_id,
                                 reviewer_agent_id=new_reviewer,
                                 awaiting_facilitation=False,
+                                **(
+                                    {
+                                        "transcript_revision": message_detail[
+                                            "transcript_revision"
+                                        ]
+                                    }
+                                    if message_detail.get("written")
+                                    and isinstance(
+                                        message_detail.get("transcript_revision"),
+                                        int,
+                                    )
+                                    else {}
+                                ),
                             )
                             c.reassigned_count += 1
                             details.append({
@@ -1055,6 +1099,14 @@ async def _auto_resolve_stuck_sessions(
                             session_id,
                             expected_phase=session.get("phase"),
                             expected_updated_at=session.get("updated_at"),
+                            expected_reviewer=reviewer_agent_id,
+                            expected_transcript_revision=session.get(
+                                "transcript_revision", 0
+                            ),
+                            expected_resolution_saga_revision=session.get(
+                                "resolution_saga_revision", 0
+                            ),
+                            exclude_inflight_saga=True,
                             winner=winner,
                         ),
                         decision_read_ts=decision_read_ts,
@@ -1091,12 +1143,31 @@ async def _auto_resolve_stuck_sessions(
                     reason=facilitation_reason,
                 )
                 try:
-                    await add_message_async(
+                    message_detail = {}
+                    message_id = await add_message_async(
                         session_id=session_id,
                         agent_id="system",
                         message_type="system",
                         reasoning=facilitation_note,
+                        expected_phase=phase,
+                        expected_reviewer=reviewer_agent_id,
+                        expected_transcript_revision=session.get(
+                            "transcript_revision", 0
+                        ),
+                        expected_awaiting_facilitation=bool(
+                            True
+                        ),
+                        detail=message_detail,
                     )
+                    if not message_id:
+                        raise RuntimeError(
+                            "facilitation narration lost the transcript frontier"
+                        )
+                    revision = message_detail.get("transcript_revision")
+                    if isinstance(revision, int):
+                        _sync_cached_session(
+                            session_id, transcript_revision=revision
+                        )
                 except Exception as e:
                     # Narration only. The request is committed; do not
                     # unwind it, and do not fall through to the reap.
@@ -1139,14 +1210,40 @@ async def _auto_resolve_stuck_sessions(
                 continue
 
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
+            failure_reason = _describe_reap(
+                phase=phase,
+                awaiting_facilitation=awaiting_facilitation,
+                idle_seconds=(now - check_time).total_seconds()
+                if check_time
+                else None,
+            )
+            failure_payload = {
+                "reason": failure_reason,
+                "closed_by": "python_sweeper",
+            }
             try:
                 if not await _attempt_guarded_write(
                     c,
                     details,
                     attempted=ATTEMPT_REAP_FAILED,
                     session=session,
-                    write=lambda winner: update_session_status_async(
-                        session_id, "failed", winner=winner
+                    write=lambda winner: resolve_session_async(
+                        session_id,
+                        failure_payload,
+                        "failed",
+                        expected_phase=phase,
+                        expected_updated_at=session.get("updated_at"),
+                        expected_reviewer=reviewer_agent_id,
+                        expected_transcript_revision=session.get(
+                            "transcript_revision", 0
+                        ),
+                        expected_resolution_saga_revision=session.get(
+                            "resolution_saga_revision", 0
+                        ),
+                        exclude_inflight_saga=True,
+                        expected_awaiting_facilitation=awaiting_facilitation,
+                        clear_facilitation=True,
+                        winner=winner,
                     ),
                     decision_read_ts=decision_read_ts,
                     early_check_ts=early_check_ts,
@@ -1168,21 +1265,11 @@ async def _auto_resolve_stuck_sessions(
                 # sees a non-terminal phase, skips `reopen_session`, and the
                 # guarded reviewer write is then refused by the row it never
                 # reopened — the standing request answered in memory only.
-                _sync_cached_session(session_id, phase="failed")
-                failure_reason = _describe_reap(
-                    phase=phase,
-                    awaiting_facilitation=awaiting_facilitation,
-                    idle_seconds=(now - check_time).total_seconds() if check_time else None,
+                _sync_cached_session(
+                    session_id,
+                    phase="failed",
+                    awaiting_facilitation=False,
                 )
-                try:
-                    await add_message_async(
-                        session_id=session_id,
-                        agent_id="system",
-                        message_type="failed",
-                        reasoning=failure_reason,
-                    )
-                except Exception as msg_error:
-                    logger.warning(f"Could not add failure message: {msg_error}")
 
                 c.resolved_count += 1
                 details.append({
