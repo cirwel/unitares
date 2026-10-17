@@ -97,6 +97,26 @@ first deployed change to the live EISV update path
 (`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
 2026-12-01; the read is described as amended after interim exposure.
 
+*Reading note, 2026-10-16. Non-normative; it changes no condition, threshold,
+cutoff, cohort, kill criterion or reopening rule, and the registered file is
+untouched.* Under the shipped estimator, PASS condition 1 (`selective p ≤
+0.05`) implies condition 2 (`AUC delta > Null max p95`). Both are read from
+one null list, so a report should not present them as two independent tests.
+This is a property of the current linear `_percentile` and the `+1/+1`
+p-value smoothing, and
+`test_pass_condition_1_entails_condition_2_under_the_shipped_estimator` in
+`tests/test_eisv_ablation_matrix.py` pins it. The matrix prints `Selective p`,
+`AUC delta` and `Null max p95` at three decimals, which hides the boundary:
+the `AUC delta` to `Null max p95` gap can be under 0.0005, and a p of 0.0501
+prints as `0.050`. Apply condition 1 from the inference-class column, which is
+computed from the unrounded p (`SIGNAL_CANDIDATE` means `p ≤ 0.05`). Where it
+reads `SIGNAL_CANDIDATE`, condition 2 holds by the implication even when the
+two printed columns look equal. The
+condition-2 option record is
+[`open-decisions-packet-v0.md`](proposals/active/open-decisions-packet-v0.md),
+entry 3 (D5); whether to add a note inside the stop rule itself is still open
+there.
+
 The initial five-claim correction is recorded in
 [`ontology/falsification-inference-containment-2026-08-22.md`](ontology/falsification-inference-containment-2026-08-22.md).
 The systemic audit of all 45 tested-claim rows and the recurring-read protocol
@@ -148,6 +168,7 @@ Compact run provenance and all 12 overall rows are preserved in
 | [#2410](https://github.com/cirwel/unitares/issues/2410) (resource-grounded E) | Proposed shadow test of whether harness resource telemetry improves runtime decisions beyond current E and beyond raw resource thresholds; one of the two named falsification paths in the contract's [*Named validation and falsification paths*](ontology/eisv-proprioception-contract.md#named-validation-and-falsification-paths-2026-10-16) | Not run. Parked 2026-09-24 after adversarial review; nothing was merged | revisit after the 2026-12-01 read reports, only as an arm inside the incremental-value ablation |
 | Trajectory-quality shadow evaluation on an external agentic-RL harness (MiMo-V2.6 / Uni-Agent), protocol v0.1 in knowledge-graph notes of 2026-09-22 | Whether prefix UNITARES observations predict independent quality or reward-hacking labels among verifier-passing sibling rollouts, beyond task, harness, length and tool-count baselines; the other named path in the same contract section | Not filed, not started; needs external labelled rollouts this deployment does not have | not before the 2026-12-01 report |
 | `docs/evaluations/eisv-s-faithfulness/result-v0.md` + `scripts/analysis/eisv_s_faithfulness.py` | Label-free S validation the contract assigns to that axis: offline test-retest reliability and faithfulness under injected interventions, run through `UNITARESMonitor.process_update` in the preservation driver's hermetic harness (no database, no registered-series rows), plus a counterfactual that holds the regime-instability term constant | Exploratory, synthetic, not pre-registered. S rises with the predicted sign and dose for overclaimed complexity, confidence collapse and thrash; an honestly reported work shift moves it +0.007 (se 0.020), and a vocabulary-only change -0.038 (se 0.016), a shift the regime term accounts for. Identical inputs replay identically. Holding the regime term constant cuts resting S step SD by 94% (0.0273 to 0.0016); paired response differences are reported as exploratory estimates (ledger row 46): the term mostly reads S's own jitter through `detect_regime`. No outcome claim; no S change authorized before the 2026-12-01 read | current (2026-10-12, build `19fcf68db`) |
+| `docs/evaluations/eisv-i-rest-live-read/rule-v0.md` | Decision rule, declared before the read, for the live check of the 2026-10-15 basin and I-rest repairs: behavioral `safe` → `approve`, the RK1 era read against the pre-repair ID era, never pooled, and an identity-level p50 with stated floors, compared with contract row 50's 44.1–84.5% estimate. Telemetry only; no outcome labels | Rule declared 2026-10-16; read due on or after 2026-10-23, not yet run |
 | `docs/evaluations/eisv-ei-referent/result-v0.md` + `docs/proposals/active/eisv-per-agent-i-calibration-v0.md` + `scripts/analysis/eisv_i_calibration_shadow_read.py` | E/I source decomposition and #2818 fleet/default-input audit, pooled calibration design and verified-pair comparison protocol | Historical rows 47–48 describe the frozen fleet signal. Row 49 records exploratory level/spread arithmetic on legacy temporal pairs; grades and nearby confidence do not establish verified forecast/outcome binding. Raw-I threshold exposure is not live basin reclassification. Verified-pair comparison remains unrun; source, predictor and supply gates unchanged | source audit / proposed protocol (2026-10-15); historical measurements retained |
 | `docs/proposals/registered/self-improvement-loop-evaluation-v0.md` | Three-arm preregistration separating operational closure, fixed automation, and adaptive learning; adaptive-versus-fixed held-out performance is the primary estimand | Registered at #1806 (`c68d6997`, 2026-08-22); original DRAFT header preserved. No cohort enrolled and no experiment scheduled | awaiting enrollment |
 | `docs/proposals/registered/independent-operator-cohort-preregistration-v0.md` | Protocol for an external-operator deployment: usability lane (primary), predictive-validity lane via the shipped harness on the operator's own labels (gated), causal lane explicitly out of scope | DRAFT — registers at its PR merge; per-operator freeze at dated enrollment (#1607) | awaiting recruitment |
