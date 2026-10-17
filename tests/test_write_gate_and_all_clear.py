@@ -110,6 +110,24 @@ async def test_check_in_phase_refuses_what_the_description_holds(status):
     )
     result = await phases.handle_onboarding_and_resume(ctx)
     assert result is not None and status in result[0].text
+    if status == "archived":
+        # The refusal offers the route the read path names, never
+        # self_recovery, which rejects archived identities.
+        assert "start_session(resume=true)" in result[0].text
+        assert "self_recovery" not in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_in_process_archived_gate_names_the_way_back():
+    """The in-process gate in agent_loop_detection gives the same route."""
+    import inspect
+
+    from src import agent_loop_detection
+
+    source = inspect.getsource(agent_loop_detection)
+    gate = source[source.index("is archived and cannot be updated"):][:400]
+    assert "start_session(resume=true)" in gate
+    assert "self_recovery" not in gate
 
 
 @pytest.mark.parametrize(
