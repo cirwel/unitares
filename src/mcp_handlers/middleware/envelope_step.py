@@ -159,12 +159,15 @@ _SEARCH_LEAN_BUDGET_BYTES = 3_000
 _SEARCH_FULL_MODE_ROUTE = "search_shared_memory(response_mode='full')"
 _SEARCH_FULL_MODE_HINT = f"Re-call {_SEARCH_FULL_MODE_ROUTE} for the complete result set."
 # A lean search shows three digests whatever `limit` asked for, so a caller
-# who asked for twenty rows had one route to row four: the full tier, which
-# serializes every record. An explicit `limit` above the digest count is a
-# request for more rows, and the bounded read answers it with one line per
-# further result (id, type, status, short summary) under `more_results`.
-# The rows have their own budget on top of the digest's, so a search that
-# passes no `limit` is byte-identical to before and still fits 3 KB.
+# who wanted row four had one route to it: the full tier, which serializes
+# every record. The bounded read therefore lists one line per further result
+# (id, type, status, short summary) under `more_results`. Until 2026-10-17
+# that needed an explicit `limit` above the digest count, and a search that
+# passed none showed "3 of 20" with nothing about the other 17: the 2026-10-16
+# dogfood read (docs/evaluations/ax-dogfood/read-2026-10-16.md, item 1) paid a
+# 32 KB full read to learn they held nothing. Now an unset `limit` lists them
+# too, and an explicit `limit` of 3 or less is the way to omit them. The rows
+# have their own budget on top of the digest's 3 KB.
 _SEARCH_MORE_ROW_LIMIT = 17
 _SEARCH_MORE_BUDGET_BYTES = 2_000
 _SEARCH_MORE_SUMMARY_CHARS = 100
@@ -1217,15 +1220,16 @@ def _append_more_results(
     source_payload: Dict[str, Any],
     arguments: Optional[Dict[str, Any]],
 ) -> None:
-    """List the results after the digests, one line each, on an explicit limit.
+    """List the results after the digests, one line each.
 
     Runs after the digest budget has settled. It adds nothing when the caller
-    passed no `limit`, when the limit is within the digest count, or when the
-    budget steps had to drop a digest: a response that could not afford its
-    third digest has no room to promise a fourth result.
+    passed a `limit` within the digest count, or when the budget steps had to
+    drop a digest: a response that could not afford its third digest has no
+    room to promise a fourth result. An unset `limit` lists whatever further
+    results the search returned.
     """
     limit = _explicit_search_limit(arguments)
-    if limit is None or limit <= _MEMORY_SUGGESTION_LIMIT:
+    if limit is not None and limit <= _MEMORY_SUGGESTION_LIMIT:
         return
     suggestions = envelope.get("memory_suggestions")
     if not isinstance(suggestions, list) or len(suggestions) != _MEMORY_SUGGESTION_LIMIT:
@@ -2328,11 +2332,42 @@ def _enforce_search_projection_budget(
     # The staleness note is written before the budget steps so they measure
     # it, and re-checked after them: it goes if no stale digest survived.
     _note_stale_digests(envelope)
+    _note_mixed_relevance(envelope)
     _prune_resolution_notes_hint(envelope, notes_in_more)
     if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
         _truncate_search_projection(envelope, wire_bytes, notes_in_more=notes_in_more)
         _note_stale_digests(envelope)
+        _note_mixed_relevance(envelope)
     _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+_MIXED_RELEVANCE_NOTE = (
+    "relevance values on different relevance_basis are not comparable; "
+    "list order is the ranking."
+)
+
+
+def _note_mixed_relevance(envelope: Dict[str, Any]) -> None:
+    """Say once that scores on different bases do not compare.
+
+    A hybrid search can show a lexical-rank-only score (around 0.016) next to
+    a semantic similarity (around 0.5) in one list; read as one scale, the
+    first looks like a non-match. Written only while the shown digests carry
+    two or more bases (2026-10-16 dogfood read, item 2).
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    suggestions = envelope.get("memory_suggestions")
+    bases = {
+        item.get("relevance_basis")
+        for item in suggestions or []
+        if isinstance(item, dict) and item.get("relevance_basis")
+    } if isinstance(suggestions, list) else set()
+    if len(bases) > 1:
+        state["relevance_note"] = _MIXED_RELEVANCE_NOTE
+    else:
+        state.pop("relevance_note", None)
 
 
 _STALENESS_NOTE = (
@@ -2935,10 +2970,12 @@ def build_experience_envelope(
             # "updated"/"stored" line would misreport it. The other action may
             # itself write (store, update, supersede, note...), so the line
             # names what ran and makes no claim about whether it wrote. Its
-            # payload stays inline (#2457).
+            # payload stays inline (#2457). It reports what ran, so it is not
+            # written as a call: the hint rewrite would turn a call into a
+            # use_tool route the caller never took.
             ran = str(call_arguments.get("action")).strip().lower()
             next_action = (
-                f"{friendly_name} ran knowledge(action='{ran}') because an "
+                f"{friendly_name} ran the knowledge router's '{ran}' action because an "
                 "explicit action was passed, not this alias's own action. "
                 "That action's full response is under raw_governance; read "
                 "it there before repeating the call, since a writing action "
@@ -3216,7 +3253,10 @@ def build_experience_envelope(
     ):
         value = source_payload.get(key)
         if value is not None:
-            envelope[key] = value
+            # Server-written hints, not caller text: route any tool call they
+            # name the way next_action is routed (a knowledge(...) read is
+            # reachable on the progressive surface only through use_tool).
+            envelope[key] = _friendly_action_hint(value) if isinstance(value, str) else value
 
     hint = _recovery_hint(source_payload, coherence, risk)
     if hint:
@@ -3276,7 +3316,9 @@ def build_experience_envelope(
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:
-            envelope["raw_governance_hint"] = raw_hint
+            # A finding write's hint names a knowledge(action='details') read;
+            # route it like next_action so it names a reachable call.
+            envelope["raw_governance_hint"] = _friendly_action_hint(raw_hint)
     if routine_sync and _is_routine_proceed(envelope):
         _drop_routine_proceed_duplicates(envelope)
     if canonical_name == "process_agent_update":

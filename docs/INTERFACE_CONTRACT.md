@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.45.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.46.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -707,6 +707,46 @@ moves. Client action: none required; read `imported_omitted` where useful.
 
 ## 1.45.0 (2026-10-17)
 
+Output and description changes from the 2026-10-16 agent-experience dogfood
+read (`docs/evaluations/ax-dogfood/read-2026-10-16.md`). Nothing is added,
+removed, retyped or renamed.
+
+- **`search_shared_memory` output.** The `lean` and `compact` tiers now list
+  the results after the three digests under `more_results` when `limit` is
+  unset, with the same rows, 17-row cap and 2,000-byte budget as before. A
+  `limit` of 3 or less omits them; an explicit `limit` above 3 behaves as in
+  1.33.0. When the shown digests carry more than one `relevance_basis`,
+  `state_summary.relevance_note` says the scores are not comparable and that
+  list order is the ranking.
+- **Response hints.** A server-written hint that named
+  `knowledge(action=..., ...)` (`next_action`,
+  `discovery_retrieval_options.open_one`, `raw_governance_hint`,
+  `resolution_notes_hint` and the other lifted search notes) now names
+  `use_tool(tool_name='knowledge', arguments={...})`. The router is not on the
+  progressive surface, and `use_tool` is reachable on every surface, as
+  `update_finding` hints have been since they moved to `use_tool`. The
+  `next_action` of a finding alias called with an explicit other action
+  reports what ran as "the knowledge router's '<action>' action" rather than
+  as a call, so the rewrite cannot present a route the caller never took.
+- **Descriptions.** `store_finding`'s field descriptions drop router wording
+  ("for action=store or promote", "action=search", "S22 H5 provenance") and
+  `discovery_type` lists every value in its brief. The knowledge router's
+  `response_to` description lists the valid `response_type` values.
+  `search_shared_memory`'s `include_details` brief names the `use_tool`
+  route.
+
+**Compatibility.** A client that relied on a no-`limit` lean search returning
+exactly three digests should pass `limit=3`. A client that parses hint text
+for `knowledge(` should read the `use_tool` form; the call it names is the same
+read.
+
+**Schema digests.** `search_shared_memory`, `store_finding` and `knowledge`
+move (descriptions only); `surface_sha256` moves with them.
+
+**Client action.** None required beyond the compatibility notes above.
+
+## 1.46.0 (2026-10-17)
+
 Dialectic review requests accept requester-declared author-agent UUIDs and
 recuse those authors from independent reviewer selection, assignment, and
 verdict paths. Terminal decisions also bind their runtime mutation to a
@@ -792,8 +832,8 @@ the `dialectic` input digest moves from
 `246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50` to
 `958b4c233a91937c83e555761aff659b71f04c0ffc6f9f5daba488ffddfc9e28`.
 The full-surface digest moves from
-`8c96d2e7953b55568438be5223852929dcd1fd806041e89d5cdd9009145e7c3e` to
-`bc3ce6990a52d897956eab27c0291ee4586868177e109cd843f3a76b2a0a342e`.
+`b4e12f036620def817aa7e7cc5f28918b4987e80a5f12c8d2a8edc8e401e4b88` to
+`56ffafc140a6f92d248be154354f1467b17684d92a0419257f78b80ac82316f6`.
 Client action: proxy requesters should pass every known UNITARES author UUID;
 ordinary self-filed review requests require no change. Operators should use
 `reconcile_effect` only after reading the returned state and recovery guidance,

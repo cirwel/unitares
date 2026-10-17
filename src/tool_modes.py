@@ -63,34 +63,56 @@ OPERATOR_RECOVERY_MODE_TOOLS = set(TOOL_META_BY_NAME)
 
 _REVISION_CALL = re.compile(r"\bupdate_finding\(([^()]*)\)")
 _REVISION_KWARG = re.compile(r"""(\w+)\s*=\s*('[^']*'|"[^"]*"|true|false|\d+)""")
+# knowledge(action=...) hints: the router is not in PROGRESSIVE_MODE_TOOLS
+# either. Its hints also carry placeholders (`discovery_id=...`,
+# `offset=latest_offset`), which the revision pattern does not accept.
+_KNOWLEDGE_CALL = re.compile(r"\bknowledge\(([^()]*)\)")
+_KNOWLEDGE_KWARG = re.compile(
+    r"""(\w+)\s*=\s*('[^']*'|"[^"]*"|\.\.\.|true|false|\d+|[A-Za-z_]\w*)"""
+)
+
+
+def _use_tool_args(pairs) -> str:
+    rendered = []
+    for key, value in pairs:
+        if value[0] in "'\"":
+            rendered.append('"%s": "%s"' % (key, value[1:-1]))
+        elif value == "...":
+            rendered.append('"%s": "..."' % key)
+        else:
+            rendered.append('"%s": %s' % (key, value))
+    return ", ".join(rendered)
 
 
 def progressive_aware_hint(text: str, mode: str = None) -> str:
-    """Rewrite bare update_finding(...) hints to the use_tool route.
+    """Rewrite bare update_finding(...) and knowledge(...) hints to use_tool.
 
-    update_finding is deliberately not in PROGRESSIVE_MODE_TOOLS (advertising
-    it costs ~3.4 KB of tools/list against a down-only byte ratchet), so a
-    progressive caller reaches it through use_tool. The advertised mode is
-    per request (/v1/tools?mode=...), but an envelope is built without it, and
-    TOOL_MODE is only the process default. use_tool(tool_name='update_finding')
-    is valid on both surfaces, so the rewrite is unconditional; ``mode`` is
-    accepted for compatibility and ignored.
+    Neither update_finding nor the knowledge router is in
+    PROGRESSIVE_MODE_TOOLS (advertising update_finding alone costs ~3.4 KB of
+    tools/list against a down-only byte ratchet), so a progressive caller
+    reaches them through use_tool. The advertised mode is per request
+    (/v1/tools?mode=...), but an envelope is built without it, and TOOL_MODE
+    is only the process default. use_tool(tool_name=...) is valid on both
+    surfaces, so the rewrite is unconditional; ``mode`` is accepted for
+    compatibility and ignored. A call whose arguments do not parse is left as
+    written.
     """
-    if "update_finding(" not in text:
+    if "update_finding(" not in text and "knowledge(" not in text:
         return text
 
-    def _rewrite(match):
-        body = match.group(1)
-        pairs = _REVISION_KWARG.findall(body)
-        if not pairs or _REVISION_KWARG.sub("", body).strip(" ,"):
-            return match.group(0)
-        args = ", ".join(
-            '"%s": "%s"' % (k, v[1:-1]) if v[0] in "'\"" else '"%s": %s' % (k, v)
-            for k, v in pairs
-        )
-        return "use_tool(tool_name='update_finding', arguments={%s})" % args
+    def _rewrite(tool_name, kwarg):
+        def _apply(match):
+            body = match.group(1)
+            pairs = kwarg.findall(body)
+            if not pairs or kwarg.sub("", body).strip(" ,"):
+                return match.group(0)
+            return "use_tool(tool_name='%s', arguments={%s})" % (
+                tool_name, _use_tool_args(pairs)
+            )
+        return _apply
 
-    return _REVISION_CALL.sub(_rewrite, text)
+    text = _REVISION_CALL.sub(_rewrite("update_finding", _REVISION_KWARG), text)
+    return _KNOWLEDGE_CALL.sub(_rewrite("knowledge", _KNOWLEDGE_KWARG), text)
 
 
 def advertised_tool_names_full() -> Set[str]:
