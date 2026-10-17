@@ -17,6 +17,7 @@ from unitares_sdk._metrics_fields import resolve_metrics_fields
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
+    GovernanceToolRefused,
     GovernanceUnavailableError,
     IdentityDriftError,
     extract_retry_after_seconds,
@@ -126,14 +127,16 @@ class SyncGovernanceClient:
     ) -> dict:
         """Call a governance tool synchronously.
 
-        ``retry=False`` reaches the MCP transport's async client. The REST
-        transport never retries a timeout or connection error anyway; it
-        retries only a 503, which the server did not take.
+        ``retry=False`` makes exactly one attempt on either transport: no
+        retry after a timeout or transport error (MCP), and none after a 503
+        (REST), since a proxy may have forwarded the first request.
         """
         injected_args = self._inject_session(tool_name, arguments)
 
         if self.transport == "rest":
-            result = self._rest_call(tool_name, injected_args, timeout=timeout)
+            result = self._rest_call(
+                tool_name, injected_args, timeout=timeout, retry=retry,
+            )
         else:
             result = self._mcp_call(
                 tool_name, injected_args, timeout=timeout, retry=retry,
@@ -508,7 +511,12 @@ class SyncGovernanceClient:
     # --- REST transport ---
 
     def _rest_call(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """POST to /v1/tools/call and parse the response envelope.
 
@@ -547,7 +555,7 @@ class SyncGovernanceClient:
             except urllib.error.HTTPError as e:
                 if e.code == 503:
                     retry_after = self._extract_503_retry_after(e)
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "%s unavailable (HTTP 503), retrying in %.1fs",
                             tool_name, retry_after,
@@ -693,7 +701,9 @@ class SyncGovernanceClient:
     def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:
         if raw.get("success") is False:
             error = raw.get("error", "Unknown error")
-            raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")
+            # Same type as the async client. A GovernanceConnectionError
+            # subclass, so existing handlers still catch it.
+            raise GovernanceToolRefused(f"Tool {tool_name} failed: {error}")
 
     @staticmethod
     def _extract_503_retry_after(e: urllib.error.HTTPError) -> float:

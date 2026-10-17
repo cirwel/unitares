@@ -265,6 +265,59 @@ class TestSyncToolMapping:
         assert captured["retry"] is False
         assert result.advice == "search"
 
+    def test_rest_consult_is_sent_once_on_503(self, monkeypatch):
+        """retry=False also stops the REST 503 retry: a proxy may have
+        forwarded the first request."""
+        import io
+        import urllib.error
+        import urllib.request
+
+        from unitares_sdk.errors import GovernanceUnavailableError
+
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req)
+            raise urllib.error.HTTPError(
+                req.full_url, 503, "Service Unavailable",
+                {"Retry-After": "0"}, io.BytesIO(b"{}"),
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        client = SyncGovernanceClient(transport="rest")
+        with pytest.raises(GovernanceUnavailableError):
+            client.consult("brief")
+        assert len(calls) == 1
+
+    def test_rest_refusal_raises_tool_refused(self, monkeypatch):
+        """Same exception type as the async client, through the real path."""
+        import io
+        import json as _json
+        import urllib.request
+
+        from unitares_sdk.errors import GovernanceConnectionError, GovernanceToolRefused
+
+        body = _json.dumps({
+            "success": True,
+            "result": {"success": False, "error": "privacy conflict"},
+        }).encode()
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", lambda req, timeout=None: _Resp(body),
+        )
+        client = SyncGovernanceClient(transport="rest")
+        with pytest.raises(GovernanceToolRefused, match="privacy conflict") as caught:
+            client.consult("brief")
+        # Still a GovernanceConnectionError for existing handlers.
+        assert isinstance(caught.value, GovernanceConnectionError)
+
     def test_mcp_transport_forwards_retry_flag(self):
         client = SyncGovernanceClient(transport="mcp")
         seen = {}
