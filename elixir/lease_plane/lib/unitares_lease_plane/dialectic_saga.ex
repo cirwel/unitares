@@ -177,7 +177,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   it. Steps: claim saga -> guarded write of `core.dialectic_sessions` -> commit
   saga. Idempotent throughout.
 
-    * `{:ok, %{status: "resolved", saga_id: id, origin: :new | :idempotent}}`
+    * `{:ok, %{status: terminal_status, saga_id: id, origin: :new | :idempotent}}`
     * `{:ok, %{status: terminal_status, saga_id: nil, origin: :already_terminal}}`
     * `{:error, :saga_in_flight}` — a live resolve already holds the session
     * `{:error, :session_not_found}` / other `{:error, term}`
