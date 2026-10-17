@@ -264,6 +264,47 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert resolution_effect_reason(session_id) == "active_at_session_open"
     end
 
+    test "pause-bound self-review cannot commit a terminal decision" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "self-reviewer",
+          reviewer_agent_id: "self-reviewer"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, "pause-self")
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:error, :self_review_not_authorizing} =
+               DialecticSaga.resolve(params)
+
+      assert session_status(session_id) == "active"
+      assert resolution_effect(session_id) == nil
+    end
+
+    test "self-review remains valid for an active-at-open reflection" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "self-reflection",
+          reviewer_agent_id: "self-reflection"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, false, nil)
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(params)
+      assert resolution_effect(session_id) == [false, nil, "applied", true, "resume"]
+    end
+
     test "v1 protocol safely closes a pre-binding session without resuming a later pause" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -537,6 +578,25 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       )
 
       params = Map.put(claim_params(session_id), :status, "failed")
+      assert {:ok, %{status: "failed"}} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "failed"
+    end
+
+    test "failed safety close remains available for a pause-bound self-review" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "self-safety",
+          reviewer_agent_id: "self-safety"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, "pause-safety")
+
+      params =
+        session_id
+        |> claim_params(%{"reason" => "safety"})
+        |> Map.put(:status, "failed")
+
       assert {:ok, %{status: "failed"}} = DialecticSaga.resolve(params)
       assert session_status(session_id) == "failed"
     end

@@ -328,6 +328,10 @@ awaits an exact-token durable resume and can then proceed. A synchronous
 shared-memory write starts that same resume but the current write stays refused;
 resubmit it after the pause lifts.
 
+A self-review may record useful reflection, but it cannot close a session bound
+to that identity's pause. An independent reviewer or operator must authorize
+the terminal decision; stale local status does not weaken that boundary.
+
 If a completed review reports `legacy_unbound_session`, it predates durable
 pause-generation binding and intentionally changed no current pause. Open a new
 review for the current pause instead of treating that result as a resume.

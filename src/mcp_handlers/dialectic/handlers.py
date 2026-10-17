@@ -174,6 +174,7 @@ from .reviewer import select_reviewer, is_agent_in_active_session
 
 def _beam_policy_error_code(exc: BeamDialecticPolicyRefusal) -> str:
     return {
+        "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
         "reviewer_recused": "REVIEWER_AUTHOR_CONFLICT",
         "invalid_review_authorship": "REVIEW_AUTHORSHIP_METADATA_INVALID",
         "session_identity_mismatch": "DIALECTIC_SESSION_IDENTITY_MISMATCH",
@@ -682,11 +683,7 @@ async def _precommit_resolution_authority_refusal(
     cross-process boundary.
     """
     agent_id = session.paused_agent_id
-    if (
-        session.reviewer_agent_id
-        and session.reviewer_agent_id == agent_id
-        and await agent_pause_is_live(agent_id)
-    ):
+    if await _self_review_requires_independent_authority(session):
         return "self_review_not_authorizing"
 
     authorship = read_reviewed_work_authorship(
@@ -700,6 +697,27 @@ async def _precommit_resolution_authority_refusal(
     ):
         return "reviewer_author_conflict"
     return None
+
+
+async def _self_review_requires_independent_authority(
+    session: DialecticSession,
+) -> bool:
+    """True when this verdict would let one identity authorize its own pause.
+
+    The frozen pause-generation binding is authoritative even when this
+    process's metadata cache still says ``active``. The live check remains for
+    the narrower active-at-open race covered by the existing TOCTOU guard.
+    """
+    agent_id = session.paused_agent_id
+    if not session.reviewer_agent_id or session.reviewer_agent_id != agent_id:
+        return False
+    paused_state = getattr(session, "paused_agent_state", {})
+    if (
+        isinstance(paused_state, dict)
+        and paused_state.get("pause_effect_required") is True
+    ):
+        return True
+    return await agent_pause_is_live(agent_id)
 
 
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
@@ -5002,10 +5020,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
-                elif (
-                    session.reviewer_agent_id == session.paused_agent_id
-                    and await agent_pause_is_live(session.paused_agent_id)
-                ):
+                elif await _self_review_requires_independent_authority(session):
                     # A self-review may not release a live pause (#1585 item 1).
                     #
                     # `reviewer_mode="self"` collapses both roles into one
@@ -5870,7 +5885,31 @@ async def handle_reconcile_resolution_effect(
         })
 
     if disposition == "mark_applied":
-        acknowledged = await pg_acknowledge_resolution_effect(session_id, reason)
+        if state != "unknown_partial":
+            return [error_response(
+                "The effect must be inspected in unknown_partial state before "
+                "it can be marked applied. Inspect it again after fencing any "
+                "live applying claim.",
+                error_code="RESOLUTION_EFFECT_ACK_REFUSED",
+                error_category="governance_refusal",
+                details={"resolution_effect": _resolution_effect_view(effect)},
+                arguments=arguments,
+            )]
+        inspected_updated_at = effect.get("updated_at")
+        if inspected_updated_at is None:
+            return [error_response(
+                "The inspected effect has no durable version timestamp; no "
+                "acknowledgement was recorded. Inspect it again.",
+                error_code="RESOLUTION_EFFECT_ACK_VERSION_MISSING",
+                error_category="system_error",
+                details={"resolution_effect": _resolution_effect_view(effect)},
+                arguments=arguments,
+            )]
+        acknowledged = await pg_acknowledge_resolution_effect(
+            session_id,
+            reason,
+            expected_updated_at=inspected_updated_at,
+        )
         if not acknowledged:
             current = await pg_get_resolution_effect(session_id)
             return [error_response(

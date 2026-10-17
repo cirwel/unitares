@@ -84,6 +84,29 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         emit.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_manual_outcome_uses_reconciliation_reason(self):
+        emit = AsyncMock(return_value={"outcome_id": "evt-manual"})
+        session = _session()
+        resolution = _resolution()
+        execution = {
+            "success": False,
+            "reason": "pause_generation_superseded",
+            "manually_reconciled": True,
+            "reconciliation_reason": "operator repaired live state",
+        }
+
+        _, _, p_module, p_storage = _patch_targets(emit)
+        with p_module, p_storage:
+            from src.mcp_handlers.dialectic.resolution import (
+                record_resolution_outcome,
+            )
+
+            await record_resolution_outcome(session, resolution, execution)
+
+        detail = emit.await_args.args[0]["detail"]
+        assert detail["reconciliation_reason"] == "operator repaired live state"
+
+    @pytest.mark.asyncio
     async def test_emits_dialectic_resolved_with_session_id_in_detail(self):
         emit = AsyncMock(return_value={"outcome_id": "evt-1"})
         session = _session(synthesis_round=2)

@@ -494,6 +494,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :session_identity_mismatch} ->
             json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
 
+          {:error, :self_review_not_authorizing} ->
+            json(conn, 409, %{ok: false, error: "self_review_not_authorizing"})
+
           {:error, reason}
           when reason in [:session_phase_mismatch, :session_write_refused] ->
             json(conn, 409, %{ok: false, error: Atom.to_string(reason)})

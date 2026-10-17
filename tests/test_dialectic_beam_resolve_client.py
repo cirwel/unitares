@@ -103,6 +103,17 @@ async def test_saga_in_flight_falls_back_to_none(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pause_bound_self_review_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "self_review_not_authorizing"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_resolve("s1", "p", "p", {"verdict": "resume"})
+    assert exc.value.error_code == "self_review_not_authorizing"
+
+
+@pytest.mark.asyncio
 async def test_postcommit_503_marks_commit_unknown(monkeypatch):
     """The row can commit before saga finalization returns a 5xx."""
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")

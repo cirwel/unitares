@@ -62,6 +62,11 @@ async def record_resolution_outcome(
     already-terminal answer cannot manufacture a successful outcome event.
     """
     applied_conditions = execution_result.get("applied_conditions") or []
+    reconciliation_reason = None
+    if execution_result.get("manually_reconciled"):
+        reconciliation_reason = execution_result.get(
+            "reconciliation_reason"
+        ) or execution_result.get("reason")
     try:
         applied_count = sum(
             1
@@ -99,9 +104,7 @@ async def record_resolution_outcome(
                 "manually_reconciled": bool(
                     execution_result.get("manually_reconciled")
                 ),
-                "reconciliation_reason": execution_result.get("reason")
-                if execution_result.get("manually_reconciled")
-                else None,
+                "reconciliation_reason": reconciliation_reason,
             },
         })
     except Exception as exc:

@@ -97,7 +97,9 @@ an explicit empty list is refused. The session response reports
 `reviewed_work_authorship.status` as `declared`, `not_supplied`, or `invalid`.
 A malformed stored marker fails closed for independent assignment. Explicit
 self-review remains visibly self-review and never counts as an independent
-seat.
+seat. It may support reflection on an active agent, but a session bound to a
+pause cannot be closed by that same identity; it routes to facilitation for an
+independent reviewer or operator instead.
 
 For a session already waiting in the thesis phase, reuse what the server saved
 instead of copying it back:
@@ -385,6 +387,9 @@ claim an untouched pending effect. An `applying` effect is never replayed
 automatically: first confirm its worker stopped, then fence the exact
 `effect_owner_token` with `mark_uncertain`. After inspecting and repairing live
 state, use `mark_applied` with a reason. An already-applied retry is idempotent.
+`mark_applied` is compare-and-set against the exact `unknown_partial` record
+just inspected. If that record changed, inspect again; the acknowledgement does
+not erase the original execution result or uncertainty evidence.
 The durable effect row is authoritative; outcome, calibration and lifecycle
 signals are best-effort, and their attempted delivery never makes an applied
 effect replayable.

@@ -725,6 +725,12 @@ class DialecticDB:
             authority_guard = f"""
               AND (
                 paused_agent_state_json IS NULL
+                OR paused_agent_state_json->'pause_effect_required'
+                     IS DISTINCT FROM 'true'::jsonb
+                OR reviewer_agent_id IS DISTINCT FROM paused_agent_id
+              )
+              AND (
+                paused_agent_state_json IS NULL
                 OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
                 OR (
                   jsonb_typeof(paused_agent_state_json -> '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}') = 'object'
@@ -861,6 +867,20 @@ class DialecticDB:
             if status == "resolved" and existing["status"] not in (
                 "resolved", "failed"
             ):
+                paused_state = existing.get("paused_agent_state_json")
+                if (
+                    isinstance(paused_state, dict)
+                    and paused_state.get("pause_effect_required") is True
+                    and existing.get("reviewer_agent_id")
+                    == existing.get("paused_agent_id")
+                ):
+                    if detail is not None:
+                        detail["refused"] = "self_review_not_authorizing"
+                    logger.warning(
+                        "resolve_session: %s pause-bound self-review refused",
+                        session_id[:16],
+                    )
+                    return False
                 authorship = read_reviewed_work_authorship(existing)
                 if authorship.is_invalid or authorship.recuses(
                     existing.get("reviewer_agent_id"),
@@ -1046,29 +1066,39 @@ class DialecticDB:
         self,
         session_id: str,
         reason: str,
+        *,
+        expected_updated_at: Any,
     ) -> bool:
         """Close an ambiguous effect after an operator reconciles it manually.
 
         This never executes the effect. It is deliberately limited to states
         where automatic replay is unsafe because one or more sub-effects may
-        already have landed.
+        already have landed. ``expected_updated_at`` binds the acknowledgement
+        to the exact unknown-partial record the operator inspected. Original
+        execution evidence is retained; reconciliation metadata is additive.
         """
         await self._ensure_pool()
         result = {
-            "success": True,
             "manually_reconciled": True,
-            "reason": reason,
+            "reconciliation_reason": reason,
+            "operator_reconciliation": {
+                "success": True,
+                "reason": reason,
+            },
         }
         async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 UPDATE coordination.dialectic_resolution_effects
                 SET state = 'applied',
-                    execution_result_json = ($2::text)::jsonb,
+                    execution_result_json =
+                        COALESCE(execution_result_json, '{}'::jsonb)
+                        || ($2::text)::jsonb,
                     applied_at = clock_timestamp(), updated_at = clock_timestamp()
                 WHERE session_id = $1
                   AND state = 'unknown_partial'
+                  AND updated_at IS NOT DISTINCT FROM $3
                 RETURNING session_id
-            """, session_id, json.dumps(result))
+            """, session_id, json.dumps(result), expected_updated_at)
         return row is not None
 
     async def quarantine_resolution_effect(
@@ -1951,9 +1981,15 @@ async def fail_resolution_effect_async(
 async def acknowledge_resolution_effect_async(
     session_id: str,
     reason: str,
+    *,
+    expected_updated_at: Any,
 ) -> bool:
     db = await get_dialectic_db()
-    return await db.acknowledge_resolution_effect(session_id, reason)
+    return await db.acknowledge_resolution_effect(
+        session_id,
+        reason,
+        expected_updated_at=expected_updated_at,
+    )
 
 
 async def quarantine_resolution_effect_async(

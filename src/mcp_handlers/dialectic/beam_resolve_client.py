@@ -37,7 +37,8 @@ _TRUTHY = {"1", "true", "yes", "on"}
 # encodes the atom as this string: body `{"ok": true, "status": "<existing>",
 # "saga_id": null, "origin": "already_terminal", ...}`.
 ALREADY_TERMINAL_ORIGIN = "already_terminal"
-_AUTHORSHIP_POLICY_REFUSALS = {
+_GOVERNANCE_POLICY_REFUSALS = {
+    "self_review_not_authorizing",
     "reviewer_recused",
     "invalid_review_authorship",
     "session_identity_mismatch",
@@ -53,11 +54,11 @@ class BeamDialecticPolicyRefusal(RuntimeError):
         super().__init__(f"{operation} refused by BEAM policy: {error_code}")
 
 
-def _raise_authorship_policy_refusal(
+def _raise_governance_policy_refusal(
     status: int, body: Any, *, operation: str
 ) -> None:
     error_code = body.get("error") if isinstance(body, dict) else None
-    if status == 409 and error_code in _AUTHORSHIP_POLICY_REFUSALS:
+    if status == 409 and error_code in _GOVERNANCE_POLICY_REFUSALS:
         raise BeamDialecticPolicyRefusal(error_code, operation=operation)
 
 
@@ -100,7 +101,7 @@ async def beam_create_session(
     Returns the BEAM result on success, or ``None`` to fall back to the Python
     `create_session_async` path (flag off / no bearer / missing ids / BEAM
     unreachable / ordinary non-OK). Raises ``BeamDialecticPolicyRefusal`` for
-    an authoritative authorship-policy refusal. Gated by the same
+    an authoritative governance-policy refusal. Gated by the same
     UNITARES_DIALECTIC_BEAM_RESOLUTION flag as the resolve routing.
     """
     if not beam_resolution_enabled():
@@ -150,7 +151,7 @@ async def beam_create_session(
 
         rec.respond(outcome="not_written", http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
-        _raise_authorship_policy_refusal(status, body, operation="create_session")
+        _raise_governance_policy_refusal(status, body, operation="create_session")
         logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
         return None
 
@@ -302,7 +303,7 @@ async def beam_update_reviewer(
         rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
                     http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
-        _raise_authorship_policy_refusal(status, body, operation="update_reviewer")
+        _raise_governance_policy_refusal(status, body, operation="update_reviewer")
         if commit_unknown and detail is not None:
             detail["commit_unknown"] = True
             detail["http_status"] = status
@@ -414,7 +415,7 @@ async def beam_resolve(
         rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
                     http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
-        _raise_authorship_policy_refusal(status, body, operation="resolve_session")
+        _raise_governance_policy_refusal(status, body, operation="resolve_session")
         if commit_unknown and detail is not None:
             # A 5xx can be returned after commit_session_row succeeded but saga
             # finalization failed. A malformed/negative 2xx is equally

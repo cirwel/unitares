@@ -1120,6 +1120,32 @@ class TestResolveSession:
         assert "declared_by_agent_id" in sql
 
     @pytest.mark.asyncio
+    async def test_resolve_session_refuses_pause_bound_self_review(self, db):
+        """The terminal effect owner enforces independent pause authority."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            _AsyncpgRecordLike({
+                "status": "active",
+                "paused_agent_id": "agent-a",
+                "reviewer_agent_id": "agent-a",
+                "paused_agent_state_json": {
+                    "pause_effect_required": True,
+                    "pause_token": "pause-1",
+                },
+            }),
+        ])
+        detail = {}
+
+        assert await instance.resolve_session(
+            "sess-self", {"action": "resume"}, detail=detail
+        ) is False
+        assert detail["refused"] == "self_review_not_authorizing"
+        sql = conn.fetchrow.await_args_list[0].args[0]
+        assert "pause_effect_required" in sql
+        assert "reviewer_agent_id IS DISTINCT FROM paused_agent_id" in sql
+
+    @pytest.mark.asyncio
     async def test_compare_and_set_predicates_are_added_only_when_passed(self, db):
         """The facilitation exit closes on the row it assessed, nothing newer."""
         instance, pool, conn = db
@@ -2496,12 +2522,30 @@ class TestResolutionEffectOutbox:
     async def test_acknowledge_only_closes_unknown_partial(self, db):
         instance, _pool, conn = db
         conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        inspected_at = datetime(2026, 10, 16, tzinfo=timezone.utc)
         assert await instance.acknowledge_resolution_effect(
-            "s1", "operator repaired live state"
+            "s1",
+            "operator repaired live state",
+            expected_updated_at=inspected_at,
         ) is True
-        sql = conn.fetchrow.call_args.args[0]
+        sql, *params = conn.fetchrow.call_args.args
         assert "state = 'unknown_partial'" in sql
         assert "state IN ('applying'" not in sql
+        assert "COALESCE(execution_result_json" in sql
+        assert "updated_at IS NOT DISTINCT FROM $3" in sql
+        assert params[0] == "s1"
+        metadata = json.loads(params[1])
+        assert metadata == {
+            "manually_reconciled": True,
+            "reconciliation_reason": "operator repaired live state",
+            "operator_reconciliation": {
+                "success": True,
+                "reason": "operator repaired live state",
+            },
+        }
+        assert params[2] == inspected_at
+        assert "success" not in metadata
+        assert "reason" not in metadata
 
     @pytest.mark.asyncio
     async def test_quarantine_fences_exact_applying_owner(self, db):

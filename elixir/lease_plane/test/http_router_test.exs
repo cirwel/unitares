@@ -249,6 +249,39 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(resp)["error"] == "reviewer_recused"
     end
 
+    test "pause-bound self-review -> 409 self_review_not_authorizing" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "self-reviewer",
+          reviewer_agent_id: "self-reviewer"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-self"
+          })
+        ]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "self-reviewer",
+          reviewer_agent_id: "self-reviewer",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "self_review_not_authorizing"
+    end
+
     test "caller participant mismatch -> 409 session_identity_mismatch" do
       session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)

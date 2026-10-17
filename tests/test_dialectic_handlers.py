@@ -2040,7 +2040,7 @@ class TestHandleSubmitSynthesis:
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
              patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
-                   return_value=True), \
+                   return_value=False), \
              patch(f"{DIALECTIC}.execute_resolution", execute), \
              patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", facilitation), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
@@ -2083,6 +2083,10 @@ class TestHandleSubmitSynthesis:
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
         session = _make_session(reviewer_id="agent-paused", phase=DialecticPhase.SYNTHESIS)
+        session.paused_agent_state = {
+            "pause_effect_required": False,
+            "pause_token": None,
+        }
         session.synthesis_round = 1
 
         mock_result = {"success": True, "converged": True, "phase": "resolved"}
@@ -4109,6 +4113,7 @@ class TestReconcileResolutionEffect:
             "owner_token": "owner-1",
             "attempt_count": 1,
             "resolution_payload_json": _effect_resolution().to_dict(),
+            "updated_at": datetime(2026, 10, 16, tzinfo=timezone.utc),
         }
         effect.update(overrides)
         return effect
@@ -4351,7 +4356,11 @@ class TestReconcileResolutionEffect:
         assert data["success"] is True
         assert data["telemetry_attempted"] is True
         assert "does not attest" in data["telemetry_note"]
-        ack.assert_awaited_once_with("s1", "live state repaired")
+        ack.assert_awaited_once_with(
+            "s1",
+            "live state repaired",
+            expected_updated_at=datetime(2026, 10, 16, tzinfo=timezone.utc),
+        )
         outcome.assert_awaited_once()
         calibration.assert_awaited_once_with(session, session.resolution)
         emit.assert_awaited_once()
@@ -4372,8 +4381,17 @@ class TestReconcileResolutionEffect:
         unknown = self._effect(
             "unknown_partial", execution_result_json=prior_execution
         )
+        reconciled_execution = {
+            **prior_execution,
+            "manually_reconciled": True,
+            "reconciliation_reason": "operator verified live state",
+            "operator_reconciliation": {
+                "success": True,
+                "reason": "operator verified live state",
+            },
+        }
         applied = self._effect(
-            "applied", execution_result_json=prior_execution
+            "applied", execution_result_json=reconciled_execution
         )
         outcome = AsyncMock()
         calibration = AsyncMock(return_value=True)
@@ -4411,6 +4429,73 @@ class TestReconcileResolutionEffect:
         )
         calibration.assert_not_awaited()
         emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mark_applied_refuses_applying_state_seen_by_operator(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_reconcile_resolution_effect,
+        )
+
+        acknowledge = AsyncMock(return_value=True)
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(return_value=self._effect("applying")),
+        ), patch(
+            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+            new=acknowledge,
+        ):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "mark_applied",
+                "reason": "live state repaired",
+            }))
+
+        assert data["success"] is False
+        assert data["error_code"] == "RESOLUTION_EFFECT_ACK_REFUSED"
+        acknowledge.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_applied_refuses_changed_unknown_partial_record(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_reconcile_resolution_effect,
+        )
+
+        inspected_at = datetime(2026, 10, 16, tzinfo=timezone.utc)
+        acknowledge = AsyncMock(return_value=False)
+        get_effect = AsyncMock(side_effect=[
+            self._effect("unknown_partial", updated_at=inspected_at),
+            self._effect(
+                "unknown_partial",
+                updated_at=inspected_at + timedelta(seconds=1),
+            ),
+        ])
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=get_effect,
+        ), patch(
+            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+            new=acknowledge,
+        ):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "mark_applied",
+                "reason": "live state repaired",
+            }))
+
+        assert data["success"] is False
+        assert data["error_code"] == "RESOLUTION_EFFECT_ACK_REFUSED"
+        acknowledge.assert_awaited_once_with(
+            "s1",
+            "live state repaired",
+            expected_updated_at=inspected_at,
+        )
+        assert data["resolution_effect"]["updated_at"].endswith("+00:00")
 
     @pytest.mark.asyncio
     async def test_mark_applied_telemetry_failure_does_not_skip_other_signals(self):

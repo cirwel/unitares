@@ -51,6 +51,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           | {:error, {:session_terminal, String.t()}}
           | {:error, :session_identity_mismatch}
           | {:error, :session_phase_mismatch}
+          | {:error, :self_review_not_authorizing}
           | {:error, :invalid_review_authorship}
           | {:error, :reviewer_recused}
           | {:error, :saga_in_flight}
@@ -603,6 +604,13 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       AND (
         $2 <> 'resolved'
         OR paused_agent_state_json IS NULL
+        OR paused_agent_state_json->'pause_effect_required'
+             IS DISTINCT FROM 'true'::jsonb
+        OR reviewer_agent_id IS DISTINCT FROM paused_agent_id
+      )
+      AND (
+        $2 <> 'resolved'
+        OR paused_agent_state_json IS NULL
         OR NOT (paused_agent_state_json ? '#{@reviewed_work_authorship_key}')
         OR (
           jsonb_typeof(paused_agent_state_json -> '#{@reviewed_work_authorship_key}') = 'object'
@@ -970,6 +978,10 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     cond do
       stored_paused != paused_agent_id or stored_reviewer != reviewer_agent_id ->
         {:error, :session_identity_mismatch}
+
+      requested_status == "resolved" and stored_paused == stored_reviewer and
+        is_map(state) and Map.get(state, "pause_effect_required") == true ->
+        {:error, :self_review_not_authorizing}
 
       requested_status == "resolved" ->
         validate_reviewer_authorship_state(state, stored_paused, stored_reviewer)
