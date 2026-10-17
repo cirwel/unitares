@@ -51,7 +51,7 @@ source_files:
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.42.0` on 2026-10-16.
+contract `1.43.0` on 2026-10-17.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -378,7 +378,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 
 ### Specialized
 
-- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable, and still the only way to set `model`, `temperature` or `max_tokens` on an HTTP host (`delegate_inference` takes `model` for a CLI host)
+- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable until its removal, no earlier than 2026-12-02; its `model`, `temperature` and `max_tokens` controls go with it (`consult` does not take them, by design)
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.

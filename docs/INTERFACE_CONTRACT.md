@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.42.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.43.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -667,3 +667,21 @@ sampling controls or a further operator decision. Client action: use
 `temperature` or `max_tokens` on an HTTP host keeps calling `call_model` and
 should say so with `leave_note`. Model selection on a CLI host stays on
 `delegate_inference`.
+
+## 1.43.0 (2026-10-16)
+
+call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: the `migration` text of `describe_tool(tool_name='call_model')`
+and the descriptions of `call_model` and `consult` now state the removal
+window and that the raw controls retire with the tool. The decision, delegated
+by the operator, keeps `consult` bounded as the advisory facade designs it
+(`docs/proposals/active/consult-advisory-facade-v1.md`, amended 2026-10-16).
+
+Compatibility: every `call_model` call still works until the removal. No input
+schema changes, so no input digest or the surface digest moves. The removal
+itself will be a breaking change taken under this deprecation window, no
+earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
+action: move to `consult(brief=..., effort='standard')` before then. A client
+that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
+say so with `leave_note` before that date.

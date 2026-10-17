@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import random
 import subprocess
 import sys
 
@@ -871,6 +872,91 @@ def test_code_version_lists_uncommitted_executed_modules(monkeypatch):
         "scripts/analysis/eisv_skeptic_report.py",
         "src/grounding/outcome_anchors.py",
     ]
+
+
+def _null_from_values(monkeypatch, null_values, observed):
+    """Run the shipped estimator over a constructed list of null maxima.
+
+    ``_best_delta_value`` is replaced by an iterator over ``null_values``, so
+    what is exercised is the estimator's own p95 and selective-p arithmetic,
+    not a copy of it.
+    """
+    values = iter(null_values)
+    monkeypatch.setattr(matrix_module, "_best_delta_value", lambda *a, **k: next(values))
+    rows = [_row(idx, bad=(idx == 0), risk=0.3, agent=f"agent-{idx}") for idx in range(3)]
+    return matrix_module.estimate_selective_null(
+        rows, observed_best_delta=observed, resamples=len(null_values)
+    )
+
+
+def test_pass_condition_1_entails_condition_2_under_the_shipped_estimator(monkeypatch):
+    """Pin the fact recorded as SETTLED in open-decisions-packet-v0.md, entry 3 (D5).
+
+    The 2026-12-01 stop rule's condition 1 (``selective p <= 0.05``) implies its
+    condition 2 (``AUC delta > Null max p95``): both are read from one null list
+    in ``estimate_selective_null``. The implication is a property of the current
+    linear-interpolation ``_percentile`` and the ``+1/+1`` p-value smoothing,
+    not of the two statistics as concepts. If this test fails, the estimator
+    changed under a registered read: find out whether the registered output was
+    meant to change before touching the test, and correct the D5 entry and the
+    EVALUATION_INDEX note in the same change. This test does not alter, and
+    must not be used to alter, any registered condition.
+    """
+    rng = random.Random(20261201)
+    levels = [round(-0.2 + 0.05 * step, 2) for step in range(10)]
+    checked = 0
+    for n in [19, 20, 21, 39, 40, 86, 199, 200, 201, 399, 400, 401]:
+        for _ in range(40):
+            observed = rng.choice(levels)
+            # Coarse levels force ties at the interpolation indices.
+            null_values = [rng.choice(levels) for _ in range(n)]
+            null = _null_from_values(monkeypatch, null_values, observed)
+            if null.selective_p <= 0.05:
+                checked += 1
+                assert observed > null.p95, (n, observed, sorted(null_values))
+
+    # The zero-slack boundary at the registered 400 resamples: 19 nulls at or
+    # above the observed value and ties just below it at indices 379 and 380.
+    observed = 0.1
+    boundary = [observed - 0.0001] * 381 + [observed] * 19
+    null = _null_from_values(monkeypatch, boundary, observed)
+    assert null.selective_p == 20 / 401
+    assert observed > null.p95
+    assert observed - null.p95 < 0.0005, "below the three-decimal print precision"
+    # The column a reader applies condition 1 from is computed unrounded.
+    assert matrix_module.classify_inference_with_selective_null(null) == "SIGNAL_CANDIDATE"
+    assert checked > 0
+
+
+def test_printed_selective_p_cannot_decide_condition_1(monkeypatch):
+    """With 398 successful resamples, p = 20/399 = 0.0501 prints as 0.050.
+
+    The printed column then reads as a pass; the unrounded inference class
+    does not. Condition 1 is applied from the inference class.
+    """
+    observed = 0.1
+    null_values = [0.0] * 379 + [observed] * 19
+    null = _null_from_values(monkeypatch, null_values, observed)
+
+    assert null.selective_p == 20 / 399
+    assert matrix_module._fmt_float(null.selective_p, 3) == "0.050"
+    assert matrix_module.classify_inference_with_selective_null(null) == "NON_DETECTION"
+
+
+def test_pass_condition_2_does_not_entail_condition_1(monkeypatch):
+    """The implication runs one way: condition 2 is strictly weaker.
+
+    At 400 resamples, 20 nulls at or above the observed value give selective
+    p = 21/401 = 0.0524 (condition 1 fails) while the observed value can still
+    exceed the null p95 (condition 2 passes).
+    """
+    observed = 0.1
+    null_values = [0.0] * 380 + [observed] * 20
+    null = _null_from_values(monkeypatch, null_values, observed)
+
+    assert null.selective_p == 21 / 401
+    assert null.selective_p > 0.05
+    assert observed > null.p95
 
 
 def test_validation_slices_keep_rows_whose_identity_self_declared_testing():
