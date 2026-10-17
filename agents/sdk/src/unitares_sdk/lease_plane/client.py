@@ -31,6 +31,7 @@ from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 from .models import (
+    AcquireEffectInProgress,
     AcquireHeldByOther,
     AcquireOk,
     AcquirePermissionDenied,
@@ -307,6 +308,7 @@ class LeasePlaneClient:
 
         Terminal results (no retry):
           - AcquireOk
+          - AcquireEffectInProgress (reserved until completion or operator recovery)
           - AcquireServiceUnavailable (advisory escape valve)
           - AcquirePermissionDenied / AcquireSchemaInvalid (caller bug)
         Only `held_by_other` triggers retry. After max_attempts, the final
@@ -1002,6 +1004,7 @@ def _check_protocol_version(payload: Mapping[str, Any], path: str) -> None:
 # silently degrades errors in production.
 _ACQUIRE_ERROR_PARSERS: dict[str, type] = {
     "held_by_other": AcquireHeldByOther,
+    "effect_in_progress": AcquireEffectInProgress,
     "permission_denied": AcquirePermissionDenied,
     "schema_invalid": AcquireSchemaInvalid,
     "service_unavailable": AcquireServiceUnavailable,
@@ -1024,6 +1027,7 @@ _SIMPLE_ACCEPTED_ERRORS: frozenset[str] = frozenset({
     "expired",
     "not_holder",
     "already_released",
+    "effect_in_progress",
     "permission_denied",
     "schema_invalid",
     "service_unavailable",
@@ -1033,6 +1037,7 @@ _SIMPLE_ACCEPTED_ERRORS: frozenset[str] = frozenset({
 # `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` discriminants
 # and the `http_auth.ex` 401 paths. Synced by the contract tests.
 BEAM_EMITTED_ACQUIRE_ERRORS: frozenset[str] = frozenset({
+    "effect_in_progress",
     "held_by_other",
     "permission_denied",
     "schema_invalid",
@@ -1048,6 +1053,7 @@ BEAM_EMITTED_STATUS_ERRORS: frozenset[str] = frozenset({
 })
 
 BEAM_EMITTED_SIMPLE_ERRORS: frozenset[str] = frozenset({
+    "effect_in_progress",
     # renew / heartbeat / release / handoff_offer / handoff_accept /
     # force_release. `expired` is renew-specific (409); `not_found` is the
     # 404 across all simple-shaped endpoints; `permission_denied` covers
