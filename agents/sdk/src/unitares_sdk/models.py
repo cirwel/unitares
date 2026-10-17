@@ -229,10 +229,9 @@ class ModelResult(_GovModel):
 
 
 class ConsultResult(_GovModel):
-    """consult's response. ``advice`` is the model's text; never a governed verdict.
-
-    The server returns ``success`` false with ``error``/``message`` (and an
-    ``error_code``) when the request is refused or the lane is unavailable.
+    """consult's successful response. ``advice`` is the model's text, never a
+    governed verdict. A refusal raises GovernanceToolRefused in call_tool and
+    never reaches this model.
     """
 
     success: bool
@@ -241,8 +240,6 @@ class ConsultResult(_GovModel):
     consultation_id: str | None = None
     family: str | None = None
     message: str | None = None
-    error: str | None = None
-    error_code: str | None = None
     authority: dict | None = None
     delivery: dict | None = None
     completion: dict | None = None

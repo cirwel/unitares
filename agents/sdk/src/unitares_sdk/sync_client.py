@@ -42,7 +42,8 @@ from unitares_sdk.models import (
 
 logger = logging.getLogger(__name__)
 
-# consult's server-side budget is 480s (CONSULT_TIMEOUT_S); stay outside it.
+# Outer bound for consult, past the server's 480s CONSULT_TIMEOUT_S. It does
+# not raise the HTTP client's own timeout; see consult()'s docstring.
 _CONSULT_CLIENT_TIMEOUT_S = 495.0
 
 
@@ -116,15 +117,27 @@ class SyncGovernanceClient:
     # --- Raw tool call ---
 
     def call_tool(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
-        """Call a governance tool synchronously."""
+        """Call a governance tool synchronously.
+
+        ``retry=False`` reaches the MCP transport's async client. The REST
+        transport never retries a timeout or connection error anyway; it
+        retries only a 503, which the server did not take.
+        """
         injected_args = self._inject_session(tool_name, arguments)
 
         if self.transport == "rest":
             result = self._rest_call(tool_name, injected_args, timeout=timeout)
         else:
-            result = self._mcp_call(tool_name, injected_args, timeout=timeout)
+            result = self._mcp_call(
+                tool_name, injected_args, timeout=timeout, retry=retry,
+            )
         self._raise_for_tool_failure(tool_name, result)
         return result
 
@@ -402,6 +415,12 @@ class SyncGovernanceClient:
         ``host_id`` (standard when none is pinned). The server forbids
         unknown arguments, so extra kwargs are passed through as given and
         rejected by the server if it does not know them.
+
+        A refusal (``success`` false) raises GovernanceToolRefused, as for
+        every SDK call. The call is sent once and never retried. On the MCP
+        transport the HTTP client's own ``timeout`` (30s by default) still
+        bounds it, so construct the client with a larger ``timeout`` for a
+        long consultation (thorough effort can take minutes).
         """
         args: dict[str, Any] = {
             "brief": brief,
@@ -418,8 +437,9 @@ class SyncGovernanceClient:
         raw = self.call_tool(
             "consult",
             args,
-            # Outside the server's 480s consult budget, so the SDK's one
-            # transient retry never re-sends a consultation still resolving.
+            # Never retried: after a timeout the first consultation may still
+            # be running, and a second send spends inference twice.
+            retry=False,
             timeout=_CONSULT_CLIENT_TIMEOUT_S,
         )
         return ConsultResult.model_validate(raw)
@@ -621,13 +641,20 @@ class SyncGovernanceClient:
             asyncio.run(self._async_client.connect())
 
     def _mcp_call(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """Route through async client via asyncio.run()."""
         self._ensure_async_client()
         assert self._async_client is not None
         return asyncio.run(
-            self._async_client.call_tool(tool_name, arguments, timeout=timeout)
+            self._async_client.call_tool(
+                tool_name, arguments, timeout=timeout, retry=retry,
+            )
         )
 
     # --- Session helpers (shared with async client) ---

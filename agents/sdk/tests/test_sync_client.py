@@ -251,6 +251,7 @@ class TestSyncToolMapping:
                 "tool_name": tool_name,
                 "arguments": arguments,
                 "timeout": kwargs.get("timeout"),
+                "retry": kwargs.get("retry"),
             })
             return {"success": True, "advice": "search", "status": "completed"}
 
@@ -261,7 +262,20 @@ class TestSyncToolMapping:
         assert captured["arguments"]["effort"] == "standard"
         assert "host_id" not in captured["arguments"]
         assert captured["timeout"] > 480
+        assert captured["retry"] is False
         assert result.advice == "search"
+
+    def test_mcp_transport_forwards_retry_flag(self):
+        client = SyncGovernanceClient(transport="mcp")
+        seen = {}
+
+        def fake_mcp_call(tool_name, arguments, *, timeout=None, retry=True):
+            seen.update({"tool_name": tool_name, "retry": retry})
+            return {"success": True, "advice": "ok"}
+
+        client._mcp_call = fake_mcp_call
+        client.consult("brief")
+        assert seen == {"tool_name": "consult", "retry": False}
 
     def test_delegate_inference_maps_tool_and_timeout(self):
         client = SyncGovernanceClient(transport="rest")

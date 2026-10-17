@@ -417,15 +417,11 @@ class TestToolMapping:
         assert result.consultation_id == "c-1"
 
     @pytest.mark.asyncio
-    async def test_consult_passes_effort_and_host_and_parses_refusal(self):
+    async def test_consult_passes_effort_and_host(self):
         client = make_client_with_session(AsyncMock())
-        client.call_tool = AsyncMock(return_value={
-            "success": False,
-            "error": "host unavailable",
-            "error_code": "INFERENCE_HOST_UNAVAILABLE",
-        })
+        client.call_tool = AsyncMock(return_value={"success": True, "advice": "ok"})
 
-        result = await client.consult(
+        await client.consult(
             "review", effort="thorough", privacy="cloud_allowed",
             host_id="codex:host-adapter",
         )
@@ -434,9 +430,46 @@ class TestToolMapping:
         assert args["effort"] == "thorough"
         assert args["host_id"] == "codex:host-adapter"
         assert args["privacy"] == "cloud_allowed"
-        assert result.success is False
-        assert result.error_code == "INFERENCE_HOST_UNAVAILABLE"
-        assert result.advice is None
+        assert client.call_tool.call_args.kwargs["retry"] is False
+
+    @pytest.mark.asyncio
+    async def test_consult_refusal_raises_through_real_call_tool(self):
+        """success:false raises in call_tool, as for every SDK call."""
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": False,
+            "error": "host unavailable",
+            "error_code": "INFERENCE_HOST_UNAVAILABLE",
+        }))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceToolRefused, match="host unavailable"):
+            await client.consult("review")
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exc", [TimeoutError(), ConnectionError("reset")])
+    async def test_consult_is_sent_once_on_timeout_or_transport_error(self, exc):
+        """A consultation may still be running after a timeout; never re-send it."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=exc)
+        client = make_client_with_session(session)
+
+        with pytest.raises((GovernanceTimeoutError, GovernanceConnectionError)):
+            await client.consult("classify this")
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_default_call_tool_still_retries_once(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=ConnectionError("reset"))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceConnectionError):
+            await client.call_tool("health_check", {})
+        assert session.call_tool.call_count == 2
 
     @pytest.mark.asyncio
     async def test_delegate_inference_maps_tool_and_timeout(self):

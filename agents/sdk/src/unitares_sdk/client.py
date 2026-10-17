@@ -48,7 +48,8 @@ from unitares_sdk.models import (
 
 logger = logging.getLogger(__name__)
 
-# consult's server-side budget is 480s (CONSULT_TIMEOUT_S); stay outside it.
+# Outer bound for consult, past the server's 480s CONSULT_TIMEOUT_S. It does
+# not raise the HTTP client's own timeout; see consult()'s docstring.
 _CONSULT_CLIENT_TIMEOUT_S = 495.0
 
 
@@ -364,12 +365,19 @@ class GovernanceClient:
     # --- Raw tool call ---
 
     async def call_tool(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """Call an MCP tool and return the parsed JSON response.
 
         Handles session injection, timeout, one retry on transient errors,
-        and MCP content block parsing.
+        and MCP content block parsing. ``retry=False`` makes exactly one
+        attempt, for calls that must not be sent twice: after a timeout or
+        transport error the first may still be running server-side.
         """
         if self._session is None:
             raise GovernanceConnectionError("Not connected — call connect() first")
@@ -385,7 +393,7 @@ class GovernanceClient:
             })
         last_error: Exception | None = None
 
-        for attempt in range(2):
+        for attempt in range(2 if retry else 1):
             try:
                 with anyio.fail_after(effective_timeout):
                     result = await self._session.call_tool(wire_name, wire_args)
@@ -401,7 +409,7 @@ class GovernanceClient:
                         f"(retry_after_seconds={retry_after})",
                         retry_after_seconds=retry_after,
                     )
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "%s unavailable (503-equivalent), retrying in %.1fs",
                             tool_name, retry_after,
@@ -421,7 +429,7 @@ class GovernanceClient:
                 last_error = GovernanceTimeoutError(
                     f"{tool_name} timed out after {effective_timeout}s"
                 )
-                if attempt == 0:
+                if attempt == 0 and retry:
                     logger.warning("Timeout on %s, retrying in %.1fs", tool_name, self.retry_delay)
                     await asyncio.sleep(self.retry_delay)
                     continue
@@ -443,7 +451,7 @@ class GovernanceClient:
                         f"(retry_after_seconds={retry_after})",
                         retry_after_seconds=retry_after,
                     )
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "HTTP 503 on %s, retrying in %.1fs", tool_name, retry_after
                         )
@@ -451,12 +459,12 @@ class GovernanceClient:
                         continue
                 else:
                     last_error = GovernanceConnectionError(str(e))
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         await asyncio.sleep(self.retry_delay)
                         continue
             except (_httpx.ConnectError, _httpx.TimeoutException, ConnectionError, OSError) as e:
                 last_error = GovernanceConnectionError(str(e))
-                if attempt == 0:
+                if attempt == 0 and retry:
                     logger.warning(
                         "Transient error on %s, retrying in %.1fs: %s",
                         tool_name, self.retry_delay, e,
@@ -867,6 +875,12 @@ class GovernanceClient:
         ``host_id`` (standard when none is pinned). The server forbids
         unknown arguments, so extra kwargs are passed through as given and
         rejected by the server if it does not know them.
+
+        A refusal (``success`` false) raises GovernanceToolRefused, as for
+        every SDK call. The call is sent once and never retried. On the MCP
+        transport the HTTP client's own ``timeout`` (30s by default) still
+        bounds it, so construct the client with a larger ``timeout`` for a
+        long consultation (thorough effort can take minutes).
         """
         args: dict[str, Any] = {
             "brief": brief,
@@ -883,8 +897,9 @@ class GovernanceClient:
         raw = await self.call_tool(
             "consult",
             args,
-            # Outside the server's 480s consult budget, so the SDK's one
-            # transient retry never re-sends a consultation still resolving.
+            # Never retried: after a timeout the first consultation may still
+            # be running, and a second send spends inference twice.
+            retry=False,
             timeout=_CONSULT_CLIENT_TIMEOUT_S,
         )
         return ConsultResult.model_validate(raw)
