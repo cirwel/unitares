@@ -6,6 +6,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SOURCE="$ROOT/scripts/ops/deploy-lease-plane.sh"
+PLIST_BUDDY_FIXTURE="$ROOT/scripts/dev/plistbuddy-fixture.py"
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 pass=0
@@ -135,6 +136,7 @@ run_case() {
     UNITARES_REPO="$CASE/repo" \
     UNITARES_LEASE_PLANE_DEPLOY="$CASE/deploy" \
     UNITARES_LEASE_PLANE_PLIST="$CASE/fixture.plist" \
+    UNITARES_PLIST_BUDDY="$PLIST_BUDDY_FIXTURE" \
     "$@" \
     bash "$CASE/ops/deploy-lease-plane.sh" $apply_flag \
     >"$CASE/out" 2>&1
@@ -284,10 +286,10 @@ cat > "$CASE/plist-secrets.env" <<'SH'
 export UNITARES_LEASE_PLANE_DATABASE_URL='postgresql://plist/secrets-db'
 export LEASE_PLANE_BEARER_TOKEN='fixture-token'
 SH
-/usr/libexec/PlistBuddy -c \
+"$PLIST_BUDDY_FIXTURE" -c \
   "Add :EnvironmentVariables:UNITARES_SECRETS_ENV string $CASE/plist-secrets.env" \
   "$CASE/fixture.plist"
-/usr/libexec/PlistBuddy -c \
+"$PLIST_BUDDY_FIXTURE" -c \
   'Add :EnvironmentVariables:UNITARES_LEASE_PLANE_DATABASE_URL string postgresql://plist/pre-source-db' \
   "$CASE/fixture.plist"
 run_case "" UNITARES_DEPLOY_DB_URL=postgresql://plist/secrets-db
@@ -304,7 +306,7 @@ setup_case plist-direct-db
 cat > "$CASE/home/.config/unitares/secrets.env" <<'SH'
 export LEASE_PLANE_BEARER_TOKEN='fixture-token'
 SH
-/usr/libexec/PlistBuddy -c \
+"$PLIST_BUDDY_FIXTURE" -c \
   'Add :EnvironmentVariables:UNITARES_LEASE_PLANE_DATABASE_URL string postgresql://plist/direct-db' \
   "$CASE/fixture.plist"
 run_case "" UNITARES_DEPLOY_DB_URL=postgresql://plist/direct-db
@@ -323,7 +325,7 @@ cat > "$CASE/runtime-home/.config/unitares/secrets.env" <<'SH'
 export UNITARES_LEASE_PLANE_DATABASE_URL="postgresql://plist/home-db?runtime_home=$HOME"
 export LEASE_PLANE_BEARER_TOKEN='fixture-token'
 SH
-/usr/libexec/PlistBuddy -c \
+"$PLIST_BUDDY_FIXTURE" -c \
   "Set :EnvironmentVariables:HOME $CASE/runtime-home" \
   "$CASE/fixture.plist"
 run_case "" \
@@ -339,7 +341,7 @@ fi
 
 setup_case plist-missing-home
 : > "$CASE/deploy/scripts/dev/apply_migrations.py"
-/usr/libexec/PlistBuddy -c 'Delete :EnvironmentVariables:HOME' \
+"$PLIST_BUDDY_FIXTURE" -c 'Delete :EnvironmentVariables:HOME' \
   "$CASE/fixture.plist"
 run_case ""
 if [[ "$LAST_RC" != 0 ]] && grep -q '^restore$' "$CASE/log" \
@@ -352,7 +354,7 @@ fi
 
 setup_case plist-empty-direct-db
 : > "$CASE/deploy/scripts/dev/apply_migrations.py"
-/usr/libexec/PlistBuddy -c \
+"$PLIST_BUDDY_FIXTURE" -c \
   'Add :EnvironmentVariables:UNITARES_LEASE_PLANE_DATABASE_URL string ""' \
   "$CASE/fixture.plist"
 run_case ""

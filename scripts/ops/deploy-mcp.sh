@@ -51,6 +51,7 @@ REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
 DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.governance-mcp"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 UID_NUM="$(id -u)"
 PORT="${UNITARES_MCP_PORT:-8767}"
 TAG="deploy-mcp"
@@ -124,7 +125,7 @@ read_mcp_runtime_db_url() {
   # PlistBuddy rather than text parsing so XML escaping cannot redirect the
   # schema probe.  deploy-mcp is a macOS LaunchAgent operator script, so this
   # system utility is part of its runtime contract.
-  /usr/libexec/PlistBuddy \
+  "$PLIST_BUDDY" \
     -c 'Print :EnvironmentVariables:DB_POSTGRES_URL' "$PLIST" 2>/dev/null
 }
 

@@ -50,6 +50,7 @@ REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
 DEPLOY="${UNITARES_LEASE_PLANE_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.lease-plane"
 PLIST="${UNITARES_LEASE_PLANE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 UID_NUM="$(id -u)"
 TAG="deploy"
 
@@ -120,12 +121,12 @@ DEPLOY_OPERATOR_HOME="$HOME"
 unset UNITARES_SECRETS_ENV UNITARES_LEASE_PLANE_DATABASE_URL
 
 read_lease_plist_env() {
-  /usr/libexec/PlistBuddy \
+  "$PLIST_BUDDY" \
     -c "Print :EnvironmentVariables:$1" "$PLIST" 2>/dev/null
 }
 
 if [[ ! -r "$PLIST" ]] \
-   || ! /usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables' \
+   || ! "$PLIST_BUDDY" -c 'Print :EnvironmentVariables' \
         "$PLIST" >/dev/null 2>&1; then
   echo "[deploy] REFUSING: $PLIST has no readable EnvironmentVariables dictionary." >&2
   echo "[deploy] The migration preflight cannot prove which environment the restarted lease plane will use." >&2

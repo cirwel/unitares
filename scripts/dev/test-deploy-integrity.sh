@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 LIB="$ROOT/scripts/ops/deploy-lib.sh"
+export UNITARES_PLIST_BUDDY="$ROOT/scripts/dev/plistbuddy-fixture.py"
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 export UNITARES_DEPLOY_LOCK="$SB/deploy.lock"
