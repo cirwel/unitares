@@ -54,7 +54,8 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # model, temperature and max_tokens controls retire WITH call_model.
     # consult stays bounded, as docs/proposals/active/consult-advisory-facade-v1.md
     # designs it (it rejects raw controls), and local model choice is
-    # operator configuration (the inference-hosts jobs), not a per-call knob.
+    # operator configuration (UNITARES_MODEL_ID, which consult's standard lane
+    # resolves through default_local_model()), not a per-call knob.
     # Removal is not before 2026-12-02: the pre-registered 2026-12-01 read
     # must not see call_model's route change mid-window, and #2484 rewrites
     # that route on the same date. The internal callers already moved
