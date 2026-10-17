@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.47.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.48.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -863,3 +863,25 @@ Client action: proxy requesters should pass every known UNITARES author UUID;
 ordinary self-filed review requests require no change. Operators should use
 `reconcile_effect` only after reading the returned state and recovery guidance,
 and must echo the inspected `effect_updated_at` when using `mark_applied`.
+
+## 1.48.0 (2026-10-17)
+
+`store_finding` accepts an optional `response_to`
+(`{discovery_id, response_type}`), the typed link `knowledge(action='store')`
+already takes, with the same validation: a malformed link or an unknown
+`response_type` is refused rather than stored unthreaded. Its description
+lists the nine `response_type` values. The `store_finding` and
+`update_finding` acknowledgements lift the record's link as
+`state_summary.response_to`; a record without one carries no such field.
+Item 5 of the 2026-10-16 agent-experience dogfood read: a linked finding no
+longer needs `describe_tool` plus `use_tool(tool_name='knowledge', ...)`.
+
+**Compatibility.** Additive: an optional parameter on an existing alias.
+Calls without it are unchanged.
+
+**Schema digests.** `store_finding` moves (one added optional property);
+`surface_sha256` moves with it.
+
+**Client action.** None. A client that links findings through
+`use_tool(tool_name='knowledge', arguments={'action': 'store', ...})` may call
+`store_finding(..., response_to=...)` instead.

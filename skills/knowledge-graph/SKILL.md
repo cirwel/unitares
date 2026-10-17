@@ -64,7 +64,9 @@ less for the three digests alone. Open any row with
 `knowledge(action="details", discovery_id=...)`; on the progressive surface
 that router is reached as
 `use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": ...})`,
-which is the form the response hints name. When the digests carry scores on
+which is the form the response hints name. To record a finding as a reply
+to another, pass `response_to={"discovery_id": ..., "response_type": ...}` to
+`store_finding`; the ack's `state_summary.response_to` confirms the link. When the digests carry scores on
 more than one `relevance_basis`, `state_summary.relevance_note` says they are
 not comparable; the list order is the ranking.
 

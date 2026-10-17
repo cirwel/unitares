@@ -1428,6 +1428,9 @@ def _knowledge_write_summary(
         "updated_at",
         "resolved_at",
         "related_to",
+        # The typed link the record carries, so a linked store_finding
+        # confirms it in the ack. Absent when the record has none.
+        "response_to",
     )
     if not summary.get("related_to"):
         # The record's links: on store_finding, the similar findings this
