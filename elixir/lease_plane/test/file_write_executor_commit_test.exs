@@ -11,7 +11,7 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
   """
   use ExUnit.Case, async: false
 
-  alias UnitaresLeasePlane.{Canonicalize, FileWriteExecutor}
+  alias UnitaresLeasePlane.{Canonicalize, FileWriteExecutor, Repo}
 
   # --- injected fakes --------------------------------------------------------
 
@@ -29,7 +29,7 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
       end
     end
 
-    defp rec(call, result), do: (send(self(), {:fileop, call}) && result)
+    defp rec(call, result), do: send(self(), {:fileop, call}) && result
   end
 
   # NOTE: this fake is deliberately lenient — it exercises the EXECUTOR's commit
@@ -45,7 +45,7 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
     def mark_committed(_id), do: rec(:mark_committed, Process.get(:mark_result, :ok))
     def tombstone(id), do: rec({:tombstone, id}, :ok)
     def quarantine(id), do: rec({:quarantine, id}, :ok)
-    defp rec(tag, result), do: (send(self(), {:repo, tag}) && result)
+    defp rec(tag, result), do: send(self(), {:repo, tag}) && result
   end
 
   setup %{tmp_dir: dir} do
@@ -66,7 +66,17 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
 
     path = Path.join(dir, "note.txt")
     {:ok, surface} = Canonicalize.canonicalize("file://" <> path)
-    leases = [%{"surface" => surface}]
+
+    {:ok, lease, :new} =
+      Repo.acquire(%{
+        surface_id: surface,
+        holder_agent_uuid: LeaseTestHelpers.random_uuid(),
+        holder_kind: "remote_heartbeat",
+        ttl_s: 300
+      })
+
+    on_exit(fn -> LeaseTestHelpers.cleanup_surface(surface) end)
+    leases = [lease]
     payload = %{"path" => path, "content" => "the new content\n"}
     %{leases: leases, payload: payload}
   end
@@ -94,6 +104,7 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
 
     assert {:rejected, {:committed_failed_rolled_back, :eio}} =
              FileWriteExecutor.apply_effect("eC2", p, l)
+
     # the restore wrote the pre-image bytes back
     assert_received {:fileop, {:write, _, "the original\n"}}
     assert_received {:repo, {:tombstone, "eC2"}}
@@ -111,13 +122,17 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
   end
 
   @tag :tmp_dir
-  test "STEP write fails + target did NOT exist + rm succeeds -> TOMBSTONE", %{payload: p, leases: l} do
+  test "STEP write fails + target did NOT exist + rm succeeds -> TOMBSTONE", %{
+    payload: p,
+    leases: l
+  } do
     Process.put(:read_result, {:error, :enoent})
     Process.put(:write_results, [{:error, :eio}])
     Process.put(:rm_result, :ok)
 
     assert {:rejected, {:committed_failed_rolled_back, :eio}} =
              FileWriteExecutor.apply_effect("eC4", p, l)
+
     assert_received {:fileop, {:rm}}
     assert_received {:repo, {:tombstone, "eC4"}}
   end

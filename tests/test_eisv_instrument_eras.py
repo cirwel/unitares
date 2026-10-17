@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from scripts.analysis import eisv_era_sql
 from src import eisv_eras, eisv_instrument
 from tests import eisv_preservation_driver as driver
 
@@ -216,12 +217,83 @@ def test_era_windows_inside_one_era(registry):
     ]
 
 
+def test_check_window_returns_provenance_lines_inside_one_era(registry, capsys):
+    lines = eisv_eras.check_window(_t("2026-01-11"), _t("2026-01-19"), path=registry)
+    assert lines[0].startswith("EISV instrument window: 2026-01-11")
+    assert lines[-1] == "Stamped instrument ids were not checked by this read."
+    assert capsys.readouterr().err == ""
+
+
+def test_check_window_refuses_a_crossing_and_prints_why(registry, capsys):
+    assert eisv_eras.check_window(_t("2026-01-18"), _t("2026-01-22"), path=registry) is None
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "X2" in err
+
+
+def test_check_window_with_a_reason_names_the_pooled_changes(registry):
+    lines = eisv_eras.check_window(
+        _t("2026-01-18"), _t("2026-01-22"), allow_cross="volume only", path=registry)
+    assert any("X2 (allowed: volume only)" in line for line in lines)
+
+
+def test_check_window_refuses_mixed_stamped_ids(registry, capsys):
+    counts = {None: 4, "X1:aaa": 3, "X1:bbb": 2}
+    assert eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts=counts, path=registry) is None
+    assert "2 different EISV instrument ids" in capsys.readouterr().err
+    lines = eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts=counts, allow_cross="why", path=registry)
+    assert "unstamped rows: 4." in lines[1]
+    assert lines[2] == "**Pooled across stamped instrument ids** (allowed: why)."
+
+
+def test_check_window_reports_a_single_stamped_id(registry):
+    lines = eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts={"X1:aaa": 5}, path=registry)
+    assert lines[1] == "Instrument ids: `X1:aaa` (5 rows); unstamped rows: 0."
+
+
+def test_cross_era_argument_and_id_sql():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    eisv_eras.add_cross_era_argument(parser)
+    assert parser.parse_args(["--allow-cross-era", "why"]).allow_cross_era == "why"
+    assert parser.parse_args([]).allow_cross_era is None
+    sql = eisv_era_sql.instrument_id_counts_sql("%s", "%s")
+    assert "recorded_at >= %s AND recorded_at < %s" in sql
+    assert "synthetic = false" in sql
+    assert "synthetic" not in eisv_era_sql.instrument_id_counts_sql("%s", "%s", include_synthetic=True)
+
+
+def test_crossing_report_lists_changes_without_refusing(registry):
+    report = eisv_eras.crossing_report(_t("2026-01-18"), _t("2026-01-22"), path=registry)
+    assert report["schema"] == eisv_eras.CROSSING_REPORT_SCHEMA
+    assert report["pooled_across_changes"] is True
+    assert report["current_era"] == "P"
+    assert [c["id"] for c in report["crossed"]] == ["X2"]
+    assert report["crossed"][0]["effective_at"] == "2026-01-20T12:00:00+00:00"
+    assert "X2" in eisv_eras.crossing_note(report)
+
+
+def test_crossing_report_inside_one_era_is_quiet(registry):
+    report = eisv_eras.crossing_report(_t("2026-01-11"), _t("2026-01-19"), path=registry)
+    assert report["pooled_across_changes"] is False and report["crossed"] == []
+    assert eisv_eras.crossing_note(report) == ""
+
+
 def test_live_registry_splits_the_2026_10_15_changes():
-    crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-17"))
+    crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-16T02:00"))
     assert [b.id for b in crossed if b.effective_at is not None] == ["A1", "I1"]
     # The stop-rule T opens A1's ambiguous interval.
     a1 = next(b for b in crossed if b.id == "A1")
     assert a1.interval == (_t("2026-10-15T13:45"), _t("2026-10-15T14:14:53"))
+
+
+def test_live_registry_times_rk1_from_its_deploy_restart():
+    crossed = eisv_eras.boundaries_crossed(_t("2026-10-16T02:00"), _t("2026-10-17"))
+    assert [b.id for b in crossed] == ["RK1"]
+    assert crossed[0].interval == (_t("2026-10-16T02:59:50"), _t("2026-10-16T02:59:50"))
 
 
 # ---------------------------------------------------------------------------

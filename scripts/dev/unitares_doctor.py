@@ -2890,6 +2890,29 @@ DEGENERACY_SD = 0.01        # measured margin: nearest healthy metric is 4x abov
 DEGENERACY_FIELDS_PER_METRIC = 5  # sd, distinct, n, min, max
 
 
+def _eisv_era_note(days: int) -> str:
+    """Sentence naming the EISV instrument changes inside the last ``days`` days.
+
+    Hourly checks keep running across a maths change, so instead of refusing
+    the window they say its statistics pool instruments. Empty inside one era,
+    or when the registry cannot be read (provenance must not fail a check).
+    """
+    try:
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from datetime import datetime, timedelta, timezone
+
+        from src import eisv_eras
+
+        end = datetime.now(timezone.utc)
+        return eisv_eras.crossing_note(
+            eisv_eras.crossing_report(end - timedelta(days=days), end)
+        )
+    except Exception:
+        return ""
+
+
 def check_signal_degeneracy(db_url: str) -> CheckResult:
     """WARN when a live metric needs a producer/consumer dynamic-range review.
 
@@ -2991,6 +3014,9 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
     if not review and not healthy:
         return CheckResult(name, mode, Status.SKIP,
                            f"insufficient state rows in 7d ({', '.join(thin) or 'none'})")
+    # In the detail, not the message: the message is what an operator compares
+    # run to run, and a maths change does not make the dispersion verdict new.
+    era_note = _eisv_era_note(7)
     if review:
         return CheckResult(
             name, mode, Status.WARN,
@@ -3003,10 +3029,12 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
                 "outcome association. Retire or repair a field only from that full "
                 "contract review, and do not recalibrate merely to force crossings. "
                 + (f"Other metrics: {', '.join(healthy)}." if healthy else "")
+                + (f" {era_note}" if era_note else "")
             ),
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"all {len(healthy)} metrics vary: {', '.join(healthy)}")
+                       f"all {len(healthy)} metrics vary: {', '.join(healthy)}",
+                       detail=era_note)
 
 
 # An adjudication family must produce BOTH verdicts. The retired operator queue

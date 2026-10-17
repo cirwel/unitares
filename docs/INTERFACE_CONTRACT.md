@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.42.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.45.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -643,7 +643,69 @@ still send valid ids. Schema digests move for `consult` and
 `delegate_inference` (the `host_id` property lost its enum); no other digest
 moves. Client action: none required; read `skipped` and `family` where useful.
 
-## 1.42.0 (2026-10-15)
+## 1.42.0 (2026-10-16)
+
+call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: `describe_tool(tool_name='call_model')` gains a `deprecation`
+block (`deprecated_since` 2026-10-16, `superseded_by` consult, `migration`);
+`list_tools` keeps listing `call_model`, now with `deprecated: true` and
+`superseded_by: consult`, because a deprecated name the deployment still exposes
+stays in the negotiation index. The descriptions of `call_model`, `consult`,
+`delegate_inference`, `list_inference_hosts`, `describe_inference_host` and
+`dialectic`, and the recovery hints of `delegate_inference`'s missing-extension
+refusal and the dialectic LLM failure, now point at `consult`. Each server call
+of the old name logs `deprecated_tool_called`.
+
+Compatibility: every existing `call_model` call works unchanged, and
+`accepts_host_id_from` still lists it for the HTTP hosts. No input schema
+changes, so no input digest or the surface digest moves. Removal is not
+scheduled: it waits on the gateway intent classifier and the knowledge-graph
+stale-entry check moving off the handler, and on `consult` taking model and
+sampling controls or a further operator decision. Client action: use
+`consult(brief=..., effort='standard')`; a client that needs `model`,
+`temperature` or `max_tokens` on an HTTP host keeps calling `call_model` and
+should say so with `leave_note`. Model selection on a CLI host stays on
+`delegate_inference`.
+
+## 1.43.0 (2026-10-16)
+
+call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: the `migration` text of `describe_tool(tool_name='call_model')`
+and the descriptions of `call_model` and `consult` now state the removal
+window and that the raw controls retire with the tool. The decision, delegated
+by the operator, keeps `consult` bounded as the advisory facade designs it
+(`docs/proposals/active/consult-advisory-facade-v1.md`, amended 2026-10-16).
+
+Compatibility: every `call_model` call still works until the removal. No input
+schema changes, so no input digest or the surface digest moves. The removal
+itself will be a breaking change taken under this deprecation window, no
+earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
+action: move to `consult(brief=..., effort='standard')` before then. A client
+that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
+say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+
+Affected outputs: a `knowledge(action=search)` / `search_shared_memory` call
+with no `query` may now return fewer rows. When it left imported memory out it
+adds `imported_omitted` (a count of rows skipped while filling the page) and
+`imported_omitted_hint`, both lifted into the lean digest's `state_summary`.
+Check-in `relevant_discoveries` and `_mirror_kg_results` no longer include
+unpromoted imported memory. Promoted governed claims and channel messages are
+unaffected; query search is unchanged.
+
+Compatibility: no parameter name, type, default or requiredness changes. A
+client that listed imported rows by sweeping open work sees them omitted and
+gets them back with `authority_mode="all"` or an imported-memory tag filter.
+Schema digests move for `knowledge`, `search_knowledge_graph` and
+`search_shared_memory` (the `authority_mode` description); no other digest
+moves. Client action: none required; read `imported_omitted` where useful.
+
+## 1.45.0 (2026-10-17)
 
 Dialectic review requests accept requester-declared author-agent UUIDs and
 recuse those authors from independent reviewer selection, assignment, and
@@ -725,13 +787,13 @@ rollback keeps dialectic traffic and both liveness sweepers quiesced until the
 generation-aware Python/BEAM pair is restored. The
 `request_review` input digest moves from
 `4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3` to
-`aa753d6352bf9ca1e1aa41689f503fb7c3dea488410c20d109625c9703c2cf07`;
+`df7154d376086bb0af83bfcaee7e0e48d5821f347d9efce60d9487bfd7ba8e84`;
 the `dialectic` input digest moves from
 `246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50` to
-`84cd4f58a94ccaefe0acaf97c68042541c6602a6176de1f55754309631acd697`.
+`958b4c233a91937c83e555761aff659b71f04c0ffc6f9f5daba488ffddfc9e28`.
 The full-surface digest moves from
-`7f0ac6c61c9b5a94363b246ae965e440f41a0ffbe858b713b84f824d21a3931b` to
-`4077e7c7f0c4b356cc9273b2b3346c8b329c568e5bf1159b838acd3c9a4b613b`.
+`8c96d2e7953b55568438be5223852929dcd1fd806041e89d5cdd9009145e7c3e` to
+`bc3ce6990a52d897956eab27c0291ee4586868177e109cd843f3a76b2a0a342e`.
 Client action: proxy requesters should pass every known UNITARES author UUID;
 ordinary self-filed review requests require no change. Operators should use
 `reconcile_effect` only after reading the returned state and recovery guidance,

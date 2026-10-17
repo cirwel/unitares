@@ -259,7 +259,7 @@ class DialecticParams(AgentIdentityMixin):
         ),
         json_schema_extra={
             "brief": (
-                "Author-agent UUIDs recused from independent review; requester-declared."
+                "Requester-declared author UUIDs to recuse"
             )
         },
     )

@@ -235,10 +235,11 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         "authority_mode": {
             "description": (
                 "Search authority policy. Default prefer_governed down-ranks "
-                "imported memory in close relevance contests; all preserves raw "
-                "relevance order."
+                "imported memory in close relevance contests and leaves it out "
+                "of queryless listings; all preserves raw relevance order and "
+                "lists it."
             ),
-            "brief": "prefer_governed (default) down-ranks imported memory; all keeps raw order.",
+            "brief": "prefer_governed (default) down-ranks imported memory and omits it from queryless listings; all keeps raw order.",
         },
         "search_mode": {
             "description": (

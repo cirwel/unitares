@@ -67,8 +67,8 @@ note for why the raw rendering is not.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:e98aac66989d2ec35f3967d026e28574c41b03ac1362e8095849da9b2a034870` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 10 | — | `sha256:0b8f5ae221db3c9914e7e54bec4f869e6340b738a10f9725c34de50f4526fb34` |
-| `search_shared_memory` | `knowledge` | 25 | — | `sha256:0b537446dd868ee22d710cc03ad8519c0e9d5529c516e2e9e89ca18684ccd882` |
+| `request_review` | `dialectic` | 10 | — | `sha256:b88e3593adb25ece4f6f03cb867f19adcdddfcc02ebf8dfd6366f216096ee6cb` |
+| `search_shared_memory` | `knowledge` | 25 | — | `sha256:eeb2fd30576ee3a40ac8da97f7936f20ffdc8127316744d479eb23ed2cf01e39` |
 | `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
@@ -99,7 +99,7 @@ edits that changed no edge.
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py handle_bind_session` | `src/mcp_handlers/schemas/identity.py BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/calibration.py CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py handle_call_model` | `src/mcp_handlers/schemas/core.py CallModelParams` | 240s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py handle_call_model` | `src/mcp_handlers/schemas/core.py CallModelParams` | 240s | deprecated→`consult` |
 | `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py CirsProtocolParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/admin.py ConfigParams` | 15s | — |
 | `consult` | `src/mcp_handlers/support/consultation.py handle_consult` | `src/mcp_handlers/schemas/core.py ConsultParams` | 480s | — |

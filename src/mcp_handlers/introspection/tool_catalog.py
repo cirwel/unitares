@@ -40,6 +40,38 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # request_dialectic_review, the last entry, went with its alias on
     # 2026-09-28: the name no longer dispatches, so there is nothing callable
     # to describe as deprecated. Use dialectic(action='request').
+    #
+    # call_model (2026-10-16, operator decision): deprecated because it is a
+    # second public name for a lane consult already owns, not on a usage count.
+    # Both run run_model_inference against the same HTTP hosts; consult
+    # (effort='standard') adds the purpose/privacy policy and the
+    # consultation audit row. Telemetry, not the reason: 49 public calls from
+    # 16 agents between 2026-08-01 and 2026-10-16, all probes, pilots or lane
+    # diagnosis. That count does not show the controls are unwanted, since
+    # nothing advertised call_model in the progressive surface.
+    #
+    # Removal window (2026-10-16, decision delegated by the operator): the
+    # model, temperature and max_tokens controls retire WITH call_model.
+    # consult stays bounded, as docs/proposals/active/consult-advisory-facade-v1.md
+    # designs it (it rejects raw controls), and local model choice is
+    # operator configuration (UNITARES_MODEL_ID, which consult's standard lane
+    # resolves through default_local_model()), not a per-call knob.
+    # Removal is not before 2026-12-02: the pre-registered 2026-12-01 read
+    # must not see call_model's route change mid-window, and #2484 rewrites
+    # that route on the same date. The internal callers already moved
+    # (#2849, #2851). Until then the handler stays callable.
+    "call_model": {
+        "deprecated_since": "2026-10-16",
+        "superseded_by": "consult",
+        "migration": (
+            "Use consult(brief=..., effort='standard') for a local completion; "
+            "it reaches the same ollama:local host. call_model is scheduled for "
+            "removal no earlier than 2026-12-02, and its model, temperature and "
+            "max_tokens controls go with it: consult does not take them, by "
+            "design. If you depend on one, say so with leave_note(...) before "
+            "then."
+        ),
+    },
 }
 
 

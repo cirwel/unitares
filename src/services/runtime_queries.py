@@ -317,6 +317,13 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     # An uninitialized monitor (no state, or a lost state file the DB could
     # not hydrate) has no decision to report, whatever meta's history says.
     last_decision_action = None if is_uninitialized else _last_decision_action(meta)
+    # "Am I paused, and would my writes be refused?" answered from the lifecycle
+    # state the write gates read, on every tier and for a fresh identity too: a
+    # read-only call should not need a write to find out (AX dogfood 2026-10-16,
+    # item 4). It describes the gate; it never expires a pause.
+    from src.mcp_handlers.support.pause_ttl import describe_write_gate
+    write_gate = describe_write_gate(meta)
+    standardized_metrics["write_gate"] = write_gate
     # `agent_id` carries the public structured handle, never the claimed label.
     # A label is caller-asserted and has no uniqueness constraint, so feeding it
     # back as a target selector resolves through find_agent_by_label(), which
@@ -506,6 +513,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 if is_uninitialized
                 else state.get("guidance")
             ),
+            "write_gate": write_gate,
         })
         # basin/mode are assessments — withheld for uninitialized agents
         # (the pending state dict has no basin/mode keys; explain_*(None)
@@ -622,6 +630,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "threshold": GovernanceConfig.RISK_APPROVE_THRESHOLD,
                 "status": risk_status,
             },
+            "write_gate": write_gate,
         })
         if public_agent_id != agent_id:
             lite_metrics["agent_uuid"] = agent_id
