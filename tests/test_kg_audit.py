@@ -279,27 +279,48 @@ class TestRunKgAudit:
         assert all(v == 0 for v in result["buckets"].values())
 
     @pytest.mark.asyncio
-    async def test_audit_use_model_calls_call_model(self):
-        """When use_model=True and stale entries exist, call_model is invoked."""
+    async def test_audit_use_model_calls_local_llm(self):
+        """When use_model=True and stale entries exist, the internal local lane is used.
+
+        Not the deprecated call_model handler: an audit about the graph is
+        housekeeping, so it must not bill the caller's Energy.
+        """
         graph = _make_mock_graph({
             "open": [_make_discovery(id="stale1", age_days=25)],
         })
 
-        mock_response = MagicMock()
-        mock_response.text = json.dumps({"success": True, "response": "ARCHIVE: stale entry"})
-
         with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph), \
+             patch("src.mcp_handlers.support.llm_delegation.call_local_llm",
+                   new_callable=AsyncMock, return_value="ARCHIVE: stale entry") as mock_llm, \
              patch("src.mcp_handlers.support.model_inference.handle_call_model",
-                   new_callable=AsyncMock, return_value=[mock_response]) as mock_model:
+                   new_callable=AsyncMock) as mock_call_model:
             from src.knowledge_graph_lifecycle import run_kg_audit
             result = await run_kg_audit(use_model=True)
 
-        mock_model.assert_called_once()
-        assert result["model_assessment"] is not None
+        mock_llm.assert_called_once()
+        mock_call_model.assert_not_called()
+        # Under audit_knowledge_graph's 60s handler timeout, with executor slack.
+        assert mock_llm.call_args.kwargs["timeout"] + 5 < 60
+        assert result["model_assessment"] == "ARCHIVE: stale entry"
+
+    @pytest.mark.asyncio
+    async def test_audit_local_llm_unavailable_leaves_assessment_none(self):
+        graph = _make_mock_graph({
+            "open": [_make_discovery(id="stale1", age_days=25)],
+        })
+
+        with patch("src.knowledge_graph.get_knowledge_graph", new_callable=AsyncMock, return_value=graph), \
+             patch("src.mcp_handlers.support.llm_delegation.call_local_llm",
+                   new_callable=AsyncMock, return_value=None):
+            from src.knowledge_graph_lifecycle import run_kg_audit
+            result = await run_kg_audit(use_model=True)
+
+        assert result["model_assessment"] is None
+        assert result["total_audited"] == 1
 
     @pytest.mark.asyncio
     async def test_audit_use_model_false_skips_model(self):
-        """When use_model=False, call_model is not invoked."""
+        """When use_model=False, no model is invoked."""
         graph = _make_mock_graph({
             "open": [_make_discovery(id="stale1", age_days=25)],
         })
