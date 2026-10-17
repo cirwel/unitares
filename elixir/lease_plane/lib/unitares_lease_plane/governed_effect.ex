@@ -887,42 +887,29 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # call as still current without checking its exact durable row afterwards.
   # The executor then atomically reserves this exact lease before filesystem I/O.
   defp apply_with_checked_custody(env, effect_id, digest, acquired) do
-    # Insert the durable effects.payloads row BEFORE the commit so the
-    # executor's record_pre_image UPDATE (and crash recovery) have a row
-    # to act on. record_pre_image is UPDATE-only; without this the file
-    # would commit with no rollback/pre-image record.
-    case ensure_payload_row(effect_id, env, digest) do
-      :ok ->
-        result =
-          FileWriteExecutor.apply_effect(effect_id, env.payload, acquired)
+    # The payload (including a single-consumer promotion claim) commits in the
+    # SAME transaction as custody admission. A refusal cannot strand a consumed
+    # promotion, and a successful admission always has its durable payload row.
+    result =
+      FileWriteExecutor.apply_effect(effect_id, env.payload, acquired, fn conn ->
+        case ensure_payload_row(effect_id, env, digest, conn) do
+          :ok -> :ok
+          {:error, :promotion_already_consumed} = error -> error
+          {:error, _} -> {:error, :persist_failed}
+        end
+      end)
 
-        {status, extra} = result_audit(result)
-        extra = Map.put(extra, "lease_ids", Enum.map(acquired, & &1.lease_id))
-
-        _ =
-          persist_execute(
-            env,
-            execute_audit_payload(effect_id, env, digest, status, extra)
-          )
-
-        {result_to_reply(result, effect_id, env), custody_after(result)}
-
-      {:error, :promotion_already_consumed} ->
-        # The deterministic predecessor-derived effect id already
-        # owns a payload row. This caller lost the atomic claim;
-        # refuse before FileWriteExecutor can observe or mutate.
+    case result do
+      {:rejected, :promotion_already_consumed} ->
+        # Preserve the prior terminal record for this deterministic effect ID.
+        # The failed admission transaction has already rolled back its fence.
         {{:error, :promotion_already_consumed}, :release}
 
-      {:error, reason} ->
-        _ =
-          persist_execute(
-            env,
-            execute_audit_payload(effect_id, env, digest, "persist_failed", %{
-              "error" => inspect(reason)
-            })
-          )
-
-        {{:error, :persist_failed}, :release}
+      _ ->
+        {status, extra} = result_audit(result)
+        extra = Map.put(extra, "lease_ids", Enum.map(acquired, & &1.lease_id))
+        _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
+        {result_to_reply(result, effect_id, env), custody_after(result)}
     end
   end
 
@@ -935,7 +922,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   # Durable row for the commit path only — a dry-run writes nothing and needs no
   # rollback row, so it would otherwise leave an orphan for recovery to reconcile.
-  defp ensure_payload_row(effect_id, env, digest) do
+  defp ensure_payload_row(effect_id, env, digest, conn) do
     if file_write_commit_enabled?() do
       case FileWriteExecutor.resolved_payload(env.payload) do
         {:ok, bytes, sha} ->
@@ -952,14 +939,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
           case Map.get(env, :promotion_receipt) do
             %{} ->
-              case EffectRepo.claim_promotion_payload(params) do
+              case EffectRepo.claim_promotion_payload(params, conn) do
                 :inserted -> :ok
                 :already -> {:error, :promotion_already_consumed}
                 {:error, _} = error -> error
               end
 
             _ ->
-              EffectRepo.insert_effect_payload(params)
+              EffectRepo.insert_effect_payload(params, conn)
           end
 
         {:error, reason} ->
@@ -1052,6 +1039,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp result_audit({:rejected, reason})
        when reason in [:revoked, :custody_expired, :custody_unavailable, :effect_in_progress],
        do: {Atom.to_string(reason), %{"custody_check" => "durable_admission"}}
+
+  defp result_audit({:rejected, :persist_failed}), do: {"persist_failed", %{}}
 
   defp result_audit({:rejected, reason}),
     do: {"rejected", %{"error" => inspect(reason)}}

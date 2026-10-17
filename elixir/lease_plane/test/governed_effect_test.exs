@@ -22,6 +22,77 @@ defmodule UnitaresLeasePlane.CustodyChangeGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.LockAdmissionGovernanceVeto do
+  @moduledoc false
+  def verify_identity_tier(_env), do: {:ok, "strong"}
+
+  def check(env) do
+    {:ok, surface} = UnitaresLeasePlane.Canonicalize.canonicalize(env.surface)
+    {:ok, lease} = UnitaresLeasePlane.Repo.status(surface)
+    caller = self()
+    observer = Process.get(:admission_observer)
+
+    locker =
+      spawn_link(fn ->
+        parsed =
+          UnitaresLeasePlane.Application.parse_database_url(
+            Application.fetch_env!(:lease_plane, :database_url)
+          )
+
+        {:ok, conn} =
+          Postgrex.start_link(
+            hostname: parsed.host,
+            port: parsed.port,
+            username: parsed.username,
+            password: parsed.password,
+            database: parsed.database
+          )
+
+        try do
+          Postgrex.transaction(conn, fn conn ->
+            Postgrex.query!(
+              conn,
+              "SELECT lease_id FROM lease_plane.surface_leases WHERE lease_id::text = $1 FOR UPDATE",
+              [lease.lease_id]
+            )
+
+            %{rows: [[backend]]} = Postgrex.query!(conn, "SELECT pg_backend_pid()", [])
+            send(caller, {:admission_locked, self(), backend})
+
+            receive do
+              :revoke ->
+                Postgrex.query!(
+                  conn,
+                  "UPDATE lease_plane.surface_leases SET released_at = clock_timestamp(), release_reason = 'forced' WHERE lease_id::text = $1",
+                  [lease.lease_id]
+                )
+
+              :expire ->
+                Postgrex.query!(
+                  conn,
+                  "UPDATE lease_plane.surface_leases SET expires_at = clock_timestamp() - interval '1 second' WHERE lease_id::text = $1",
+                  [lease.lease_id]
+                )
+            after
+              5_000 -> raise "test did not release admission lock"
+            end
+          end)
+        after
+          GenServer.stop(conn)
+        end
+      end)
+
+    receive do
+      {:admission_locked, ^locker, backend} ->
+        send(observer, {:admission_locked, locker, backend})
+    after
+      2_000 -> raise "test did not acquire admission lock"
+    end
+
+    :allow
+  end
+end
+
 defmodule UnitaresLeasePlane.FailingEffectFileOps do
   @moduledoc false
   # The commit write fails, and so does the restore: the effect quarantines.
@@ -413,6 +484,104 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:ok, stored} = UnitaresLeasePlane.EffectRepo.get_payload(executed.effect_id)
       assert stored.payload_sha256 == sha256(content)
       assert stored.committed_at
+    end
+
+    for action <- [:revoke, :expire], retry_key <- [:same, :new] do
+      @tag :tmp_dir
+      @tag :promotion_custody
+      test "#{action} after veto leaves promotion retryable with #{retry_key} key", %{
+        tmp_dir: dir
+      } do
+        set_file_write_flags(true)
+        path = Path.join(dir, "promotion.txt")
+        surface = canonical("file://" <> path)
+        path = String.replace_prefix(surface, "file://", "")
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, "original")
+
+        on_exit(fn ->
+          LeaseTestHelpers.cleanup_surface(surface)
+          File.rm(path)
+        end)
+
+        content = "promoted once"
+        proposer = LeaseTestHelpers.random_uuid()
+        shadow_key = tracked_key()
+        execute_key = tracked_key()
+        replacement_key = tracked_key()
+
+        common = %{
+          "surface" => surface,
+          "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+          "proposer" => %{"agent_uuid" => proposer, "continuity_token" => "strong-test-proof"}
+        }
+
+        assert {:ok, shadow} =
+                 GovernedEffect.handle(
+                   base(
+                     Map.merge(common, %{
+                       "idempotency_key" => shadow_key,
+                       "payload" => %{"sha256" => sha256(content), "summary" => "promotion retry"}
+                     })
+                   )
+                 )
+
+        envelope =
+          base(
+            Map.merge(common, %{
+              "idempotency_key" => execute_key,
+              "custody_mode" => "execute",
+              "payload" => %{"path" => path, "content" => content},
+              "promotion" => promotion(shadow.effect_id)
+            })
+          )
+
+        Application.put_env(
+          :lease_plane,
+          :governance_veto_client,
+          UnitaresLeasePlane.LockAdmissionGovernanceVeto
+        )
+
+        parent = self()
+
+        request =
+          Task.async(fn ->
+            Process.put(:admission_observer, parent)
+            GovernedEffect.handle(envelope)
+          end)
+
+        assert_receive {:admission_locked, locker, backend}, 2_000
+        # The post-veto read is lock-free. Wait until execution actually reaches
+        # durable admission's FOR UPDATE before changing custody in the locker.
+        wait_for_admission(backend)
+        send(locker, unquote(action))
+        expected = if unquote(action) == :revoke, do: :revoked, else: :custody_expired
+        assert {:error, ^expected} = Task.await(request)
+        assert File.read!(path) == "original"
+        assert [refusal] = execute_rows(execute_key)
+        assert refusal["custody_check"] == "durable_admission"
+        assert {:ok, nil} = UnitaresLeasePlane.EffectRepo.get_payload(refusal["effect_id"])
+
+        Application.put_env(
+          :lease_plane,
+          :governance_veto_client,
+          UnitaresLeasePlane.AllowGovernanceVeto
+        )
+
+        retry =
+          if unquote(retry_key) == :same,
+            do: envelope,
+            else: Map.put(envelope, "idempotency_key", replacement_key)
+
+        assert {:ok, result} = GovernedEffect.handle(retry)
+        assert result.effect_id == refusal["effect_id"]
+        assert File.read!(path) == content
+
+        assert {:ok, %{committed_at: committed}} =
+                 UnitaresLeasePlane.EffectRepo.get_payload(result.effect_id)
+
+        assert committed
+      end
     end
 
     test "hash mismatch fails before lease, veto, or file mutation" do
@@ -1335,6 +1504,23 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
         })
 
       refute Map.has_key?(body, "proposer_effect_grant")
+    end
+  end
+
+  defp wait_for_admission(backend, attempts \\ 200)
+  defp wait_for_admission(_backend, 0), do: flunk("admission did not wait on the lease lock")
+
+  defp wait_for_admission(backend, attempts) do
+    %{rows: [[waiting]]} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))",
+        [backend]
+      )
+
+    unless waiting do
+      Process.sleep(10)
+      wait_for_admission(backend, attempts - 1)
     end
   end
 

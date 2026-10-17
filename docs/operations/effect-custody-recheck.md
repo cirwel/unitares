@@ -13,8 +13,11 @@ surface and holder must still match, be unreleased and have an unexpired TTL.
 The clock is checked **after** acquiring the lease-row lock, so waiting behind
 another transaction cannot spend the remaining TTL unnoticed.
 
-Admission commits `surface_leases.effect_fence = effect_id` before reading the
-pre-image or calling any mutating filesystem operation. This is a durable
+Admission commits `surface_leases.effect_fence = effect_id` and the payload row
+(including a promotion's single-consumer claim) in one transaction. A custody
+refusal leaves neither reservation nor consumed promotion, so fresh-custody
+retries work with either the same or a new idempotency key. The commit occurs
+before reading the pre-image or calling any mutating filesystem operation. This is a durable
 reservation, not a connection-scoped database lock. Its commit serializes with
 release on the same lease row:
 
@@ -69,7 +72,9 @@ the veto. The additional tests pause immediately before the OS write and
 before compensation, attempt release/handoff/reaping/replacement, and resume
 the writer. They also cover request death, a disconnected database session,
 expiry during lock contention, HTTP busy responses, and missing/replayed
-pre-images. They use real PostgreSQL rows and temporary test files with an
+pre-images. Four promotion regressions use a real row lock to revoke or expire
+custody after the veto check, then verify successful retry with the same or a
+new key. They use real PostgreSQL rows and temporary test files with an
 injected filesystem barrier. No live external target is involved.
 
 The filesystem-barrier test fails with the previous executor at `6f6dd0d98`:

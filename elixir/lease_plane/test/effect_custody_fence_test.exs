@@ -93,6 +93,34 @@ defmodule UnitaresLeasePlane.EffectCustodyFenceTest do
     {pid, ref}
   end
 
+  test "failed payload preparation rolls back both claim and reservation", ctx do
+    id = "aborted-" <> ctx.id
+    on_exit(fn -> LeaseTestHelpers.cleanup_governed_effect(id) end)
+
+    assert {:error, :persist_failed} =
+             Repo.begin_effect_custody(id, [ctx.lease], fn conn ->
+               assert :inserted =
+                        EffectRepo.claim_promotion_payload(
+                          %{
+                            effect_id: id,
+                            effect_type: "file_write",
+                            payload_bytes: "replacement",
+                            payload_sha256: sha("replacement"),
+                            idempotency_key: id,
+                            idempotency_digest: id
+                          },
+                          conn
+                        )
+
+               {:error, :persist_failed}
+             end)
+
+    assert {:ok, nil} = EffectRepo.get_payload(id)
+    assert {:ok, %{effect_fence: nil}} = Repo.status(ctx.surface)
+    assert File.read!(ctx.path) == "original"
+    assert :ok = Repo.release(ctx.lease.lease_id, "normal")
+  end
+
   test "release before admission wins; stale executor cannot touch successor bytes", ctx do
     assert :ok = Repo.release(ctx.lease.lease_id, "forced")
     assert {:ok, next, :new} = Repo.acquire(ctx.params)

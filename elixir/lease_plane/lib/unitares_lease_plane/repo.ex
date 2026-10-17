@@ -386,16 +386,25 @@ defmodule UnitaresLeasePlane.Repo do
   defp check_effect_lease(_), do: {:error, :custody_unavailable}
 
   @doc """
-  Commit a durable, exclusive reservation before any filesystem observation or
-  mutation. This UPDATE is the admission point: it serializes with release on
+  Commit a durable, exclusive reservation before pre-image capture or mutation.
+  An optional prepare callback runs on the same transaction connection after
+  custody validation. Its payload/promotion claim commits with the reservation,
+  or both roll back. It must not perform filesystem I/O.
+  This transaction is the admission point: it serializes with release on
   the exact lease row. Expiry is checked here; admitted operations retain
   custody until all their filesystem calls have returned, even after expiry.
   A connection/process loss does NOT release this reservation.
   """
-  def begin_effect_custody(effect_id, [
-        %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
-      ])
-      when is_binary(effect_id) do
+  def begin_effect_custody(effect_id, leases, prepare \\ fn _conn -> :ok end)
+
+  def begin_effect_custody(
+        effect_id,
+        [
+          %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
+        ],
+        prepare
+      )
+      when is_binary(effect_id) and is_function(prepare, 1) do
     sql = """
     UPDATE lease_plane.surface_leases SET effect_fence = $4
     WHERE lease_id = $1 AND surface_id = $2 AND holder_agent_uuid = $3
@@ -416,7 +425,10 @@ defmodule UnitaresLeasePlane.Repo do
                  uuid_to_binary(holder),
                  effect_id
                ]) do
-          :ok
+          case prepare.(conn) do
+            :ok -> :ok
+            {:error, reason} -> Postgrex.rollback(conn, {:prepare_failed, reason})
+          end
         else
           {:ok, %{num_rows: 0}} -> Postgrex.rollback(conn, :not_admitted)
           {:error, reason} -> Postgrex.rollback(conn, reason)
@@ -438,12 +450,15 @@ defmodule UnitaresLeasePlane.Repo do
           error -> error
         end
 
+      {:error, {:prepare_failed, reason}} ->
+        {:error, reason}
+
       {:error, _} ->
         {:error, :custody_unavailable}
     end
   end
 
-  def begin_effect_custody(_, _), do: {:error, :custody_unavailable}
+  def begin_effect_custody(_, _, _), do: {:error, :custody_unavailable}
 
   @doc """
   Retire only this execution's reservation after its last possible filesystem

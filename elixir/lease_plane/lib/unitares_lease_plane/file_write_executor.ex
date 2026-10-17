@@ -46,12 +46,16 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   end
 
   @impl true
-  def apply_effect(effect_id, payload, leases) do
+  def apply_effect(effect_id, payload, leases),
+    do: apply_effect(effect_id, payload, leases, fn _conn -> :ok end)
+
+  @doc "Prepare the payload in the custody-admission transaction, before any file mutation."
+  def apply_effect(effect_id, payload, leases, prepare) when is_function(prepare, 1) do
     with {:ok, path} <- resolve_path(payload, leases),
          {:ok, content} <- resolve_content(payload),
          :ok <- check_ceiling(content) do
       if commit_enabled?() do
-        with :ok <- Repo.begin_effect_custody(effect_id, leases) do
+        with :ok <- Repo.begin_effect_custody(effect_id, leases, prepare) do
           {pre_sha, pre_bytes, existed?} = read_pre_image(path)
           result = commit(effect_id, path, content, pre_sha, pre_bytes, existed?)
           finish_custody(effect_id, leases, result)

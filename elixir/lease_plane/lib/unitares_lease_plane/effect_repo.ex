@@ -15,9 +15,9 @@ defmodule UnitaresLeasePlane.EffectRepo do
   require Logger
 
   @doc """
-  Insert the fresh effect-payload row (rollback_state NULL). Called at propose
-  time, before the custodian starts. ON CONFLICT DO NOTHING so a same-key retry
-  does not error.
+  Insert the fresh effect-payload row (rollback_state NULL). Dispatch passes
+  the custody transaction connection so payload and reservation commit together.
+  ON CONFLICT DO NOTHING so a same-key retry does not error.
 
   `required_leases` is pre-encoded and MUST bind through `($5::text)::jsonb`.
   A bare `$5::jsonb` makes Postgrex encode the already-encoded binary a second
@@ -27,7 +27,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
   never have needed. Same defect as `DialecticSaga`; see `encode_json/1` there.
   """
   @spec insert_effect_payload(map()) :: :ok | {:error, term()}
-  def insert_effect_payload(p) do
+  def insert_effect_payload(p, conn \\ DB) do
     sql = """
     INSERT INTO effects.payloads
       (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
@@ -47,7 +47,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
       p.idempotency_digest
     ]
 
-    case Postgrex.query(DB, sql, params) do
+    case Postgrex.query(conn, sql, params) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -62,7 +62,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
   and idempotency keys before any mutation occurs.
   """
   @spec claim_promotion_payload(map()) :: :inserted | :already | {:error, term()}
-  def claim_promotion_payload(p) do
+  def claim_promotion_payload(p, conn \\ DB) do
     sql = """
     INSERT INTO effects.payloads
       (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
@@ -83,7 +83,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
       p.idempotency_digest
     ]
 
-    case Postgrex.query(DB, sql, params) do
+    case Postgrex.query(conn, sql, params) do
       {:ok, %{num_rows: 1}} -> :inserted
       {:ok, %{num_rows: 0}} -> :already
       {:error, reason} -> {:error, reason}
