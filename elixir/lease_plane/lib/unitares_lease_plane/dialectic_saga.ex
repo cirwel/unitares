@@ -560,7 +560,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
               {:ok,
                %{
                  status: existing_status,
-                 saga_id: saga_id,
+                 saga_id: nil,
                  origin: :already_terminal
                }}
             end

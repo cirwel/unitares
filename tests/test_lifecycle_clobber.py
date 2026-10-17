@@ -305,6 +305,107 @@ class TestExecuteResolutionPersistsRuntimeState:
         assert all(item in meta.dialectic_conditions for item in new_conditions)
 
     @pytest.mark.asyncio
+    async def test_token_resume_clears_legacy_tokenless_paused_cache(self):
+        pause_token = "2026-04-16T10:00:00+00:00"
+        meta = make_agent_meta(status="paused", paused_at=None)
+        meta.add_lifecycle_event = MagicMock()
+
+        session = MagicMock()
+        session.paused_agent_id = AGENT_ID
+        session.reviewer_agent_id = "independent-reviewer"
+        session.paused_agent_state = {}
+        session.discovery_id = None
+        session.session_id = "sess-tokenless-cache"
+
+        resolution = MagicMock()
+        resolution.action = "resume"
+        resolution.conditions = []
+        resolution.root_cause = "reviewed correction"
+        resolution.hash.return_value = "resolution-hash"
+
+        mock_server = make_mock_server()
+        mock_server.agent_metadata = {AGENT_ID: meta}
+        mock_server.load_metadata_async = AsyncMock(return_value=None)
+
+        with patch(
+            "src.mcp_handlers.dialectic.resolution.mcp_server", mock_server
+        ), patch(
+            "src.agent_storage.resume_agent_if_pause_token",
+            new=AsyncMock(return_value={
+                "applied": True,
+                "pause_token": pause_token,
+                "dialectic_conditions": [],
+            }),
+        ):
+            from src.mcp_handlers.dialectic.resolution import execute_resolution
+
+            result = await execute_resolution(
+                session,
+                resolution,
+                record_outcome=False,
+                expected_pause_token=pause_token,
+                enforce_pause_token=True,
+            )
+
+        assert result["success"] is True
+        assert result["status_changed"] is True
+        assert meta.status == "active"
+        assert meta.paused_at is None
+        meta.add_lifecycle_event.assert_called_once_with(
+            "resumed", "Resumed via dialectic synthesis: reviewed correction"
+        )
+
+    @pytest.mark.asyncio
+    async def test_token_resume_preserves_newer_cached_pause_generation(self):
+        consumed_token = "2026-04-16T10:00:00+00:00"
+        newer_token = "2026-04-16T10:05:00+00:00"
+        meta = make_agent_meta(status="paused", paused_at=newer_token)
+        meta.add_lifecycle_event = MagicMock()
+
+        session = MagicMock()
+        session.paused_agent_id = AGENT_ID
+        session.reviewer_agent_id = "independent-reviewer"
+        session.paused_agent_state = {}
+        session.discovery_id = None
+        session.session_id = "sess-newer-cache-generation"
+
+        resolution = MagicMock()
+        resolution.action = "resume"
+        resolution.conditions = []
+        resolution.root_cause = "reviewed correction"
+        resolution.hash.return_value = "resolution-hash"
+
+        mock_server = make_mock_server()
+        mock_server.agent_metadata = {AGENT_ID: meta}
+        mock_server.load_metadata_async = AsyncMock(return_value=None)
+
+        with patch(
+            "src.mcp_handlers.dialectic.resolution.mcp_server", mock_server
+        ), patch(
+            "src.agent_storage.resume_agent_if_pause_token",
+            new=AsyncMock(return_value={
+                "applied": True,
+                "pause_token": consumed_token,
+                "dialectic_conditions": [],
+            }),
+        ):
+            from src.mcp_handlers.dialectic.resolution import execute_resolution
+
+            result = await execute_resolution(
+                session,
+                resolution,
+                record_outcome=False,
+                expected_pause_token=consumed_token,
+                enforce_pause_token=True,
+            )
+
+        assert result["success"] is True
+        assert result["status_changed"] is True
+        assert meta.status == "paused"
+        assert meta.paused_at == newer_token
+        meta.add_lifecycle_event.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_token_resume_refusal_leaves_condition_cache_unchanged(self):
         pause_token = "2026-04-16T10:00:00+00:00"
         original_conditions = [{"condition": "still authoritative"}]
