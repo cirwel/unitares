@@ -50,20 +50,25 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # diagnosis. That count does not show the controls are unwanted, since
     # nothing advertised call_model in the progressive surface.
     #
-    # One capability is NOT covered: consult takes no model, temperature or
-    # max_tokens. The handler therefore stays callable, and removing the
-    # name needs either those controls on consult or a further operator
-    # decision. Two internal callers must move first as well: the gateway
-    # intent classifier (max_tokens=10) and the KG stale-entry check.
+    # Removal window (2026-10-16, decision delegated by the operator): the
+    # model, temperature and max_tokens controls retire WITH call_model.
+    # consult stays bounded, as docs/proposals/active/consult-advisory-facade-v1.md
+    # designs it (it rejects raw controls), and local model choice is
+    # operator configuration (the inference-hosts jobs), not a per-call knob.
+    # Removal is not before 2026-12-02: the pre-registered 2026-12-01 read
+    # must not see call_model's route change mid-window, and #2484 rewrites
+    # that route on the same date. The internal callers already moved
+    # (#2849, #2851). Until then the handler stays callable.
     "call_model": {
         "deprecated_since": "2026-10-16",
         "superseded_by": "consult",
         "migration": (
             "Use consult(brief=..., effort='standard') for a local completion; "
-            "it reaches the same ollama:local host. consult takes no model, "
-            "temperature or max_tokens: if you need one of those, keep calling "
-            "call_model and say so with leave_note(...) so the removal accounts "
-            "for it."
+            "it reaches the same ollama:local host. call_model is scheduled for "
+            "removal no earlier than 2026-12-02, and its model, temperature and "
+            "max_tokens controls go with it: consult does not take them, by "
+            "design. If you depend on one, say so with leave_note(...) before "
+            "then."
         ),
     },
 }
