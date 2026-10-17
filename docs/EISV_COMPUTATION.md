@@ -30,7 +30,8 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) is
+The dynamical-systems model (`governance_core/`, the ODE; "thermodynamic model"
+in older docs is a historical name, not a claim about physical quantities) is
 **not the direct verdict owner** by default: behavioral assessment owns the
 post-warmup assessment. The final decision also uses ODE state for structural
 basin, void and coherence checks (`src/monitor_decision.py`). The behavioral sensor

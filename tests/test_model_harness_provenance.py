@@ -242,3 +242,24 @@ def test_exact_cohort_requires_observed_harness_source():
 
 def test_harness_version_parser_refuses_generic_http_library_version():
     assert infer_harness_version("python-httpx/0.28.1", "codex-cli") is None
+
+
+def test_antigravity_and_argon_user_agent_and_harness_version_inference():
+    from src.mcp_handlers.context import detect_client_from_user_agent
+
+    assert detect_client_from_user_agent("antigravity/1.2.11") == "antigravity"
+    assert detect_client_from_user_agent("agy/1.2.11") == "antigravity"
+    assert infer_harness_version("antigravity/1.2.11 (macOS)", "antigravity") == "1.2.11"
+    assert infer_harness_version("agy/1.2.11", "agy") == "1.2.11"
+
+    signals = SessionSignals(
+        user_agent="antigravity/1.2.11 (argon)",
+        client_hint="antigravity",
+        transport="mcp",
+    )
+    envelope = build_runtime_provenance({}, signals=signals)
+    assert envelope["model"]["identifier"] == "gemini-family"
+    assert envelope["model"]["source"] == "transport_inferred"
+    assert envelope["harness"]["type"] == "antigravity"
+    assert envelope["harness"]["version"] == "1.2.11"
+    assert envelope["harness"]["version_source"] == "transport_user_agent"

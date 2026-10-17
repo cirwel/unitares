@@ -53,6 +53,7 @@ from typing import Dict, Optional
 
 # The terminal outcomes a reader should actually distinguish.
 RESOLVED = "resolved"
+RESOLVED_EFFECT_PENDING = "resolved_effect_pending"
 UNRESOLVED_AWAITING_FACILITATION = "unresolved_awaiting_facilitation"
 FAILED = "failed"
 CANARY = "canary"
@@ -92,6 +93,7 @@ def classify_outcome(
     awaiting_facilitation: Optional[bool],
     paused_agent_label: Optional[str] = None,
     standing_rejection: Optional[bool] = None,
+    resolution_effect_state: Optional[str] = None,
 ) -> str:
     """Classify one session into the outcome a reader should key on.
 
@@ -139,6 +141,10 @@ def classify_outcome(
         return CANARY
     if status not in TERMINAL_STATUSES:
         return OPEN
+    if status == "resolved" and resolution_effect_state in {
+        "pending", "applying", "unknown_partial"
+    }:
+        return RESOLVED_EFFECT_PENDING
     if status == "resolved":
         return RESOLVED
     if standing_rejection:

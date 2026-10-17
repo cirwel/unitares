@@ -102,6 +102,12 @@ starts, so on a default install those calls fail and say the extension is not
 configured. `list_inference_hosts` reports it under
 `extensions.agent_orchestrator`. Nothing in this manual needs it.
 
+The orchestrator is not a model and is not an inference host. It is a separate
+BEAM service that starts each CLI as a supervised child, enforces its timeout,
+scrubs its environment and stops it. The hosts are the models it runs. It lives
+outside the governance server so a long or stuck CLI cannot hold memory or a
+request in that process.
+
 The model is reached through one OpenAI-compatible endpoint, named by two
 settings:
 

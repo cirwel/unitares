@@ -468,8 +468,10 @@ def build_onboard_response_data(
         _assurance["baseline"] = "fresh_identity"
         _assurance["baseline_note"] = (
             "Expected baseline for a just-minted identity — not a deficiency. "
-            "Use the returned client_session_id on the next call; adapters may "
-            "inject it automatically."
+            "The tier describes this minting call only. Use the returned "
+            "client_session_id on the next call; adapters may inject it "
+            "automatically. check_working_state(client_session_id=...) "
+            "returning your uuid as agent_uuid confirms the threading."
         )
         _assurance["how_to_strengthen"] = _how_to_strengthen(
             _assurance.get("tier", "weak"),

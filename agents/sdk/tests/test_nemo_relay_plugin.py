@@ -24,6 +24,7 @@ from unitares_sdk.integrations.nemo_relay import (
     RelayGovernanceExporter,
     RelayPluginConfig,
     UnitaresRelayPlugin,
+    otel_ids,
     substrate_summary,
 )
 from unitares_sdk.models import CheckinResult, OnboardResult
@@ -217,6 +218,31 @@ def test_tool_error_records_a_task_failed_outcome_with_honest_provenance():
     assert args["detail"]["exception_type"] == "ValueError"
     assert "verification_source" not in args  # in-process evidence keeps the server default
     assert exporter.run_for_scope("run-1").tool_failures == 1
+
+
+def test_outcomes_carry_the_relay_trace_and_span_ids():
+    log: list = []
+    exporter = RelayGovernanceExporter(factory_for(log), RelayPluginConfig(subagent_identities=True))
+    run_id, turn_id, tool_id = (str(uuid_mod.uuid4()) for _ in range(3))
+    start_run(exporter, run_id, turn_id)
+    exporter.ingest(scope_start(tool_id, turn_id, "flaky", "tool"))
+    exporter.ingest(scope_end(tool_id, turn_id, "flaky", "tool", status="ERROR", error="ValueError"))
+    (_, _, args), = calls(log, "outcome_event")
+    # A nested run shares its root's trace; the span is the tool's own scope.
+    assert args["detail"]["otel_trace_id"] == uuid_mod.UUID(run_id).hex
+    assert args["detail"]["otel_span_id"] == uuid_mod.UUID(tool_id).hex[16:]
+
+
+def test_otel_ids_are_omitted_for_non_uuid_scopes():
+    assert otel_ids("run-1", "tool-1") == {}
+    assert otel_ids(None, str(uuid_mod.uuid4())) == {}
+    log: list = []
+    exporter = RelayGovernanceExporter(factory_for(log))
+    start_run(exporter)
+    for ev in tool_pair("turn-1", "flaky", status="ERROR", error="ValueError"):
+        exporter.ingest(ev)
+    (_, _, args), = calls(log, "outcome_event")
+    assert "otel_trace_id" not in args["detail"] and "otel_span_id" not in args["detail"]
 
 
 def test_pause_verdict_blocks_tools_and_the_message_names_the_review_path():
@@ -438,3 +464,52 @@ def test_relay_runtime_end_to_end_exports_and_enforces():
     assert "run end" in checkins[-1][1]
     # Our own gate's rejection was counted but not filed as an outcome.
     assert calls(log, "outcome_event") == []
+
+
+def test_outcome_ids_match_the_spans_relay_exports_over_otlp():
+    """The join holds against Relay's own exporter, not only its id helpers."""
+    pytest.importorskip("nemo_relay")
+    import http.server
+    import threading
+
+    from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber, ScopeType, scope, subscribers
+
+    bodies: list[bytes] = []
+
+    class Collector(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            bodies.append(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-protobuf")
+            self.end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Collector)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    otel = OpenTelemetrySubscriber(OpenTelemetryConfig("gen_ai", f"http://127.0.0.1:{server.server_port}/v1/traces"))
+    otel_name = f"otel-test-{uuid_mod.uuid4().hex[:8]}"
+    otel.register(otel_name)
+
+    log: list = []
+    exporter = RelayGovernanceExporter(factory_for(log))
+    sub_name = f"capture-{uuid_mod.uuid4().hex[:8]}"
+    subscribers.register(sub_name, lambda e: exporter.ingest(e.to_dict()))
+    try:
+        with scope.scope("otlp-run", ScopeType.Agent):
+            with pytest.raises(ValueError):
+                with scope.scope("flaky", ScopeType.Tool):
+                    raise ValueError("boom")
+        subscribers.flush()
+        otel.force_flush()
+    finally:
+        subscribers.deregister(sub_name)
+        otel.deregister(otel_name)
+        otel.shutdown()
+        server.shutdown()
+
+    (_, _, args), = calls(log, "outcome_event")
+    exported = b"".join(bodies)
+    assert bytes.fromhex(args["detail"]["otel_trace_id"]) in exported
+    assert bytes.fromhex(args["detail"]["otel_span_id"]) in exported

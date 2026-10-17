@@ -25,6 +25,7 @@ error; it never raises into a handler.
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import json
 import os
@@ -37,18 +38,46 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from . import host_availability
+from .codex_app_server_client import (
+    LANE_CONFIG_OVERRIDE_COUNT as CODEX_LANE_OVERRIDE_COUNT,
+    admin_config_conflict as codex_admin_config_conflict,
+    confinement_verified as codex_confinement_verified,
+    lane_config_overrides as codex_lane_config_overrides,
+    lane_workdir as codex_lane_workdir,  # noqa: F401 - for the dialectic reviewer
+    mcp_disable_overrides as codex_mcp_disable_overrides,  # noqa: F401 - for the dialectic reviewer
+)
 
 logger = logging.getLogger(__name__)
 
 
+# No ``--sandbox``: it selects codex's legacy read-only sandbox, which reads the
+# whole disk. The ``-c`` overrides select a deny-read permission profile and
+# switch off tools a read-only lane has no use for
+# (codex_app_server_client.lane_config_overrides). The run happens in a fresh
+# empty directory outside any repository, so no project configuration or
+# instructions load, and codex runs as a child so the directory can be removed.
+_CODEX_PERMISSION_ARGS = "".join(
+    f'-c "$HA_CODEX_C{index}" ' for index in range(1, CODEX_LANE_OVERRIDE_COUNT + 1)
+)
+
+
+def _codex_exec_in_empty_dir(model_args: str) -> str:
+    return (
+        'ha_dir=$(mktemp -d "${TMPDIR:-/tmp}/unitares-codex-lane-XXXXXX") || exit 1; '
+        'cd "$ha_dir" || exit 1; '
+        '"$HA_CLI" exec --ignore-user-config --ephemeral --json '
+        f"{_CODEX_PERMISSION_ARGS}--skip-git-repo-check "
+        f'{model_args}"$HA_PROMPT" </dev/null; '
+        'ha_status=$?; cd /; rmdir "$ha_dir"; exit "$ha_status"'
+    )
+
+
 _CODEX_EXEC_COMMAND = (
     'if [ -n "$HA_MODEL" ]; then '
-    'exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
-    '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
-    'else exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
-    '"$HA_PROMPT" </dev/null; fi'
+    + _codex_exec_in_empty_dir('-m "$HA_MODEL" ')
+    + "; else "
+    + _codex_exec_in_empty_dir("")
+    + "; fi"
 )
 
 _CODEX_INSTRUMENTED_COMMAND = (
@@ -685,6 +714,27 @@ async def invoke_host_adapter(
     # is the classic distributed-systems lost-ack case: the orchestrator may
     # have accepted the child even when this client never receives its id.
     dispatch_phase = "preflight"
+    if sandbox != "read-only":
+        # Every host lane runs read-only; codex's permission profile implements
+        # nothing else, so refuse rather than widen.
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": f"host adapters run read-only only, not sandbox={sandbox!r}",
+        }
+    if host_id == "codex:host-adapter":
+        conflict = codex_admin_config_conflict()
+        if conflict:
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": (
+                    f"{conflict} is administrator codex configuration that can override "
+                    "the lane's permission profile; the codex lane refuses to run"
+                ),
+            }
     spec_def = _HOST_COMMANDS.get(host_id)
     if spec_def is None:
         return {
@@ -717,6 +767,18 @@ async def invoke_host_adapter(
             "host_id": host_id,
             "dispatch_phase": dispatch_phase,
             "error": f"CLI '{cli}' not found or not executable; set {override}",
+        }
+    if host_id == "codex:host-adapter" and not await asyncio.to_thread(
+        codex_confinement_verified, cli_path
+    ):
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": (
+                "this codex does not enforce the lane's permission profile "
+                "(codex sandbox probe); the codex lane refuses to run"
+            ),
         }
     bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
     if not bearer:
@@ -795,6 +857,11 @@ async def invoke_host_adapter(
         "lease": False,  # read-only advisor lane, no presence/lineage
         "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
     }
+    if host_id == "codex:host-adapter":
+        # The exec fallback's -c overrides; the app-server client computes the
+        # same list itself from HA_CLI.
+        for index, override in enumerate(codex_lane_config_overrides(cli_path), start=1):
+            spec["env"][f"HA_CODEX_C{index}"] = override
     if cd:
         spec["cd"] = cd
 

@@ -276,8 +276,8 @@ def _static_hosts() -> list[InferenceHost]:
                 if local_route_is_local
                 else "The configured model endpoint classifies external, so "
                 "host_id='ollama:local' (which requests local privacy) is refused. "
-                "Reach it with call_model(provider='ollama', privacy='auto' or "
-                "'cloud') or consult(privacy='cloud_allowed'), or reclassify it "
+                "Reach it with consult(privacy='cloud_allowed') or the deprecated "
+                "call_model(provider='ollama', privacy='auto' or 'cloud'), or reclassify it "
                 "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
             ),
         ),

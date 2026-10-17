@@ -97,6 +97,39 @@ first deployed change to the live EISV update path
 (`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
 2026-12-01; the read is described as amended after interim exposure.
 
+*Reading note, 2026-10-16. Non-normative; it changes no condition, threshold,
+cutoff, cohort, kill criterion or reopening rule, and the registered file is
+untouched.* Under the shipped estimator, PASS condition 1 (`selective p ≤
+0.05`) implies condition 2 (`AUC delta > Null max p95`). Both are read from
+one null list, so a report should not present them as two independent tests.
+This is a property of the current linear `_percentile` and the `+1/+1`
+p-value smoothing, and
+`test_pass_condition_1_entails_condition_2_under_the_shipped_estimator` in
+`tests/test_eisv_ablation_matrix.py` pins it. The matrix prints `Selective p`,
+`AUC delta` and `Null max p95` at three decimals, which hides the boundary:
+the `AUC delta` to `Null max p95` gap can be under 0.0005, and a p of 0.0501
+prints as `0.050`. Apply condition 1 from the inference-class column, which is
+computed from the unrounded p (`SIGNAL_CANDIDATE` means `p ≤ 0.05`). Where it
+reads `SIGNAL_CANDIDATE`, condition 2 holds by the implication even when the
+two printed columns look equal. The
+condition-2 option record is
+[`open-decisions-packet-v0.md`](proposals/active/open-decisions-packet-v0.md),
+entry 3 (D5). D5 was disposed on 2026-10-16 under the operator's delegation:
+no note goes inside the stop rule.
+
+*Limitation, 2026-10-16. Non-normative, in the same sense.* The registered
+selective null permutes `(agent, prior-state snapshot)` blocks across agents.
+Between-agent heterogeneity alone can therefore clear conditions 1 and 2. The
+existence proof is in
+[`open-decisions-packet-v0.md`](proposals/active/open-decisions-packet-v0.md)
+entry 2 (D6), and the unit-of-resampling problem is the 2026-08-23 Unit check.
+D6 was disposed as option A, so no stratified null is added.
+
+- A FAIL is unaffected.
+- A PASS must be reported with this limitation named. It must not be described
+  as robust to between-agent differences.
+- Any within-agent analysis run after the read is post-hoc, and is labelled so.
+
 The initial five-claim correction is recorded in
 [`ontology/falsification-inference-containment-2026-08-22.md`](ontology/falsification-inference-containment-2026-08-22.md).
 The systemic audit of all 45 tested-claim rows and the recurring-read protocol
@@ -145,7 +178,10 @@ Compact run provenance and all 12 overall rows are preserved in
 | `docs/evaluations/orientation-constraint-set/result-v1.md` + `docs/evaluations/orientation-constraint-set/result-v0.md` + `docs/proposals/orientation-constraint-set-preregistration-v0.md` | Paired, information-matched protocol for testing whether a read-only diagnostic constraint set improves source-justified next-action selection without becoming an authority or actuator | Cohort v0 is a published pre-scoring plumbing abort; cohort v1 completed 240 scored calls and returned `SAFETY_STOP` (`theta=-0.0333`; eight explicit treatment unsafe actions independently preserve the stop) | current (2026-08-24) |
 | `docs/evaluations/relational-calibration-instrument-supply/result-v1.md` + `docs/proposals/registered/relational-calibration-maturity-capacity-v1.md` | One-time frozen read of whether at least 200 recently active process identities carry temporally established, same-instrument, internally consistent EISV telemetry (instrument supply, not participant capacity) | `instrument_supply_not_ready`: `strict_supply = 0` (953 recent, 38 behaviorally mature, 0 temporally established); the stop rule closes the attempt; a disclosed pre-read row count was ruled harmless by the operator | current (2026-09-23) |
 | `docs/proposals/eisv-incremental-value-ablation-v1.md` + `docs/evaluations/eisv-incremental-value/` + `scripts/analysis/eisv_incremental_value_{contract,pilot,federation,power}.py` | Prospective, paired 12-arm test of EISV's incremental predictive and compression value over direct-evidence, behavioral, base-rate, and persistence baselines; includes an isolated dataset namespace, independent-label whitelist, temporal/group split contract, fail-closed read receipts, a disabled-by-default immutable pilot store, signed score-free federation packages with cross-site independence linkage, and a planning-only power estimate | DRAFT — local and federated pilot infrastructure exists but checked-in collection is disabled; federation output has no arm scores or decision authority; no cohort enrolled, no experiment scheduled, no production outcome read authorized, and no confirmatory freeze claimed | awaiting pilot enablement and paired-power access review |
+| [#2410](https://github.com/cirwel/unitares/issues/2410) (resource-grounded E) | Proposed shadow test of whether harness resource telemetry improves runtime decisions beyond current E and beyond raw resource thresholds; one of the two named falsification paths in the contract's [*Named validation and falsification paths*](ontology/eisv-proprioception-contract.md#named-validation-and-falsification-paths-2026-10-16) | Not run. Parked 2026-09-24 after adversarial review; nothing was merged | revisit after the 2026-12-01 read reports, only as an arm inside the incremental-value ablation |
+| Trajectory-quality shadow evaluation on an external agentic-RL harness (MiMo-V2.6 / Uni-Agent), protocol v0.1 in knowledge-graph notes of 2026-09-22 | Whether prefix UNITARES observations predict independent quality or reward-hacking labels among verifier-passing sibling rollouts, beyond task, harness, length and tool-count baselines; the other named path in the same contract section | Not filed, not started; needs external labelled rollouts this deployment does not have | not before the 2026-12-01 report |
 | `docs/evaluations/eisv-s-faithfulness/result-v0.md` + `scripts/analysis/eisv_s_faithfulness.py` | Label-free S validation the contract assigns to that axis: offline test-retest reliability and faithfulness under injected interventions, run through `UNITARESMonitor.process_update` in the preservation driver's hermetic harness (no database, no registered-series rows), plus a counterfactual that holds the regime-instability term constant | Exploratory, synthetic, not pre-registered. S rises with the predicted sign and dose for overclaimed complexity, confidence collapse and thrash; an honestly reported work shift moves it +0.007 (se 0.020), and a vocabulary-only change -0.038 (se 0.016), a shift the regime term accounts for. Identical inputs replay identically. Holding the regime term constant cuts resting S step SD by 94% (0.0273 to 0.0016); paired response differences are reported as exploratory estimates (ledger row 46): the term mostly reads S's own jitter through `detect_regime`. No outcome claim; no S change authorized before the 2026-12-01 read | current (2026-10-12, build `19fcf68db`) |
+| `docs/evaluations/eisv-i-rest-live-read/rule-v0.md` | Decision rule, declared before the read, for the live check of the 2026-10-15 basin and I-rest repairs: behavioral `safe` → `approve`, the RK1 era read against the pre-repair ID era, never pooled, and a pooled share per verdict-driver and identity-class stratum with stated floors, compared with contract row 50's 44.1–84.5% estimate. Telemetry only; no outcome labels | Rule declared 2026-10-16; read due on or after 2026-10-23, not yet run |
 | `docs/evaluations/eisv-ei-referent/result-v0.md` + `docs/proposals/active/eisv-per-agent-i-calibration-v0.md` + `scripts/analysis/eisv_i_calibration_shadow_read.py` | E/I source decomposition and #2818 fleet/default-input audit, pooled calibration design and verified-pair comparison protocol | Historical rows 47–48 describe the frozen fleet signal. Row 49 records exploratory level/spread arithmetic on legacy temporal pairs; grades and nearby confidence do not establish verified forecast/outcome binding. Raw-I threshold exposure is not live basin reclassification. Verified-pair comparison remains unrun; source, predictor and supply gates unchanged | source audit / proposed protocol (2026-10-15); historical measurements retained |
 | `docs/proposals/registered/self-improvement-loop-evaluation-v0.md` | Three-arm preregistration separating operational closure, fixed automation, and adaptive learning; adaptive-versus-fixed held-out performance is the primary estimand | Registered at #1806 (`c68d6997`, 2026-08-22); original DRAFT header preserved. No cohort enrolled and no experiment scheduled | awaiting enrollment |
 | `docs/proposals/registered/independent-operator-cohort-preregistration-v0.md` | Protocol for an external-operator deployment: usability lane (primary), predictive-validity lane via the shipped harness on the operator's own labels (gated), causal lane explicitly out of scope | DRAFT — registers at its PR merge; per-operator freeze at dated enrollment (#1607) | awaiting recruitment |
@@ -229,6 +265,7 @@ form.
 | `agents/common/dogfood_friction.py` ✓ | Normalizes friction observations into `/api/findings` events | Library; event dict + deterministic fingerprint | current |
 | `tests/test_r6_dogfood.py` ~ | R6 dogfood test | — | unread |
 | `docs/operations/self-report-verdict-dependence-2026-06-28.md` ✓ | Worked example: identical `proceed/safe` verdict for a clean refactor vs a confessed-sabotage check-in carrying identical `[0,0,0]` drift | **pre-warmup** verdict runs on the Φ cold-start prior (mostly server-derived `complexity_divergence`); the `[0,0,0]` self-report is *ignored*, not trusted; behavioral text-risk registered the sabotage but is unweighted until warm. Post-warmup (default `UNITARES_PHI_TELEMETRY_ONLY=1`) the verdict IS the behavioral assessment. The legacy `primary_driver: self_reported` label was hardcoded/stale — see correction note in the doc | logged (interpretation corrected 2026-06-28) |
+| [`evaluations/ax-dogfood/read-2026-10-16.md`](evaluations/ax-dogfood/read-2026-10-16.md) ✓ | Exploratory agent-experience read (#2342 step 6): three ordinary tasks (prior-work check, where do I stand, record and confirm) run once through a raw MCP client on the advertised tool surface, with protocol and labelling rubric committed before the run; per-call bytes, latency, task-used fields, UNITARES-specific concepts met, and a burden_reduced / burden_justified / burden_accidental label | 3 calls per task, 9 in all; 24,521 bytes returned, about 26% used by the tasks; 3 reduced, 3 justified, 3 accidental; ten candidate fixes (search digest hides the remainder, no hold field on a fresh identity, `store_finding` cannot link, schema router vocabulary). One agent, one run, single rater: not a usability result | current (2026-10-17, server 3.3.0) |
 
 ## Resident validation
 

@@ -11,7 +11,11 @@ import pytest
 from governance_core.adaptive_governor import AdaptiveGovernor
 from src.cirs import OscillationState
 from src.cold_start_risk_confirmation import (
+    CIRCUIT_BREAKER_DURABLE_EFFECT,
+    CIRCUIT_BREAKER_IN_MEMORY_EFFECT,
+    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
     COLD_START_CONFIRMATION_ACTUATION_SCOPE,
+    LEGACY_CIRCUIT_BREAKER_EFFECT,
     NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS,
     NON_AUTHORED_COLD_START_RECOVERY_BASIS,
     apply_non_authored_cold_start_guard,
@@ -217,6 +221,7 @@ def _legacy_trap_record(
     *,
     epistemic_class="substrate_interpretation",
     enforcement_basis="phi_cold_start_unconfirmed_shadow",
+    enforcement_effect=LEGACY_CIRCUIT_BREAKER_EFFECT,
     maturity_gate=None,
 ):
     maturity_gate = maturity_gate or _evaluate()
@@ -246,7 +251,7 @@ def _legacy_trap_record(
                     "basis": enforcement_basis,
                     "scope": "runtime_circuit_breaker",
                     "actor": "agent_loop_detection",
-                    "effect": "agent_metadata.status=paused",
+                    "effect": enforcement_effect,
                     "actuation_id": "actuation-123",
                     "applied_at": "2026-08-11T23:47:55+00:00",
                 },
@@ -1101,6 +1106,36 @@ def test_reviewed_recovery_recognizes_only_exact_persisted_legacy_trap():
     assert wrong_basis["observed_enforcement"]["circuit_breaker_applied"] is True
     assert missing["eligible"] is False
     assert "state_record_present" in missing["failed_requirements"]
+
+
+@pytest.mark.parametrize(
+    "effect",
+    [
+        LEGACY_CIRCUIT_BREAKER_EFFECT,
+        CIRCUIT_BREAKER_DURABLE_EFFECT,
+        CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
+    ],
+)
+def test_reviewed_recovery_accepts_durable_pause_effect_contract(effect):
+    observed = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(enforcement_effect=effect),
+        enabled=True,
+    )
+
+    assert observed["eligible"] is True
+    assert observed["requirements"]["circuit_breaker_applied"] is True
+
+
+def test_reviewed_recovery_rejects_in_memory_only_pause_effect():
+    observed = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(
+            enforcement_effect=CIRCUIT_BREAKER_IN_MEMORY_EFFECT
+        ),
+        enabled=True,
+    )
+
+    assert observed["eligible"] is False
+    assert observed["requirements"]["circuit_breaker_applied"] is False
 
 
 def test_reviewed_recovery_does_not_reconstruct_missing_historical_inputs():

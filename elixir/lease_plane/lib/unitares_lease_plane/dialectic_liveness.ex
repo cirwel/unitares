@@ -127,8 +127,18 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
 
     cond do
       stuck? and acting_enabled?() and is_binary(info.reviewer_agent_id) ->
-        fail_stuck(state, info)
-        {:stop, :normal, state}
+        case fail_stuck(state, info) do
+          {:ok, %{status: status}}
+          when status in ["resolved", "failed", "escalated"] ->
+            {:stop, :normal, state}
+
+          _refused_or_unknown ->
+            # The state used for the decision may have moved before the saga
+            # acquired its row lock. A guarded refusal leaves the session live,
+            # so keep its watcher alive and re-read on the next tick.
+            reschedule(state)
+            {:noreply, state}
+        end
 
       stuck? ->
         # Detected stuck but not acting (flag off, or no reviewer to attribute).
@@ -229,13 +239,19 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
         paused_agent_id: info.paused_agent_id,
         reviewer_agent_id: info.reviewer_agent_id,
         resolution_payload: payload,
-        status: "failed"
+        status: "failed",
+        expected_phase: info.phase,
+        expected_transcript_revision: info.transcript_revision,
+        expected_awaiting_facilitation: info.awaiting_facilitation,
+        expected_updated_at: info.updated_at
       })
 
     Logger.warning(
       "dialectic_liveness: failed stuck session #{String.slice(state.session_id, 0, 16)} " <>
         "(inactive #{info.inactive_seconds}s) -> #{inspect(result)}"
     )
+
+    result
   end
 
   defp reschedule(state),

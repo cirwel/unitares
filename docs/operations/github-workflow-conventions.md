@@ -393,7 +393,15 @@ fallback validation.
 #### Round cap
 
 Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
-gets three **full review cycles**. A cycle starts with its first completed
+gets three **full review cycles**. Operator direction, 2026-10-15, makes the
+budget context-based: a cycle that found a serious problem (a P0/P1 finding,
+or an unlabelled one) does not count toward the three, because the fix of a
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
+has stopped finding serious problems, not review that keeps finding them; a
+backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle, except for Git-verified editorial spans
@@ -667,7 +675,8 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles, stop requests and escalate unresolved findings. Ordinary minor
+   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
    cycle requires explicit operator authorization with a recorded reason.
@@ -943,20 +952,26 @@ the operator's machine is awake.
   has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
-**Drafts are the one case GitHub's updater never covers** — a draft cannot take
-`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
-open draft that is behind, conflict-free, and idle for 12h, every four hours.
-It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
-It is not a second updater racing the native one: it touches only what GitHub
-will not. Two rules carried over from the retired queue updater and from PR
-#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
-secret — a fine-grained token scoped to this repository with `Contents: read
-and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
-runs in the approval-required state: #2250's refreshed head sat `blocked` with
-eight parked workflows until a maintainer approved them by hand, less
-mergeable than the stale head it replaced. And a missing secret is loud rather
-than inert: the sweep withholds every push and fails the run, and after each
-real push it fails unless a `Tests` run is actually queued on the new head.
+**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
+fill with a scheduled updater: it is not yet a merge candidate. The former
+four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
+behind draft and started the full PR matrix each time. That recreated the
+N-wide CI cascade this section forbids without advancing any PR toward landing.
+PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
+validated `89888ed7b`, the schedule replaced it with base-only merge
+`a234075f3`, launched the matrix again, and produced a failing smoke head before
+any author change or readiness decision.
+
+`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
+for exactly one positive PR number. It has no schedule and rejects an empty
+all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
+exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
+remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
+head; when its work is complete, mark it ready and label it; the serial queue
+updates that one merge candidate against the then-current base. A later base
+commit does not invalidate review or tests for lines it did not change. Invoke
+the manual action only when preserving one long-lived draft justifies a
+deliberate pre-readiness merge.
 
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
@@ -1038,12 +1053,14 @@ this entirely).
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
+| Draft is green but behind | Leave its evidence-bound head pinned; the queue updates it once after readiness |
+| One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review cycle 3 done | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

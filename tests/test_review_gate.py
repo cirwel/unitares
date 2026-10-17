@@ -43,7 +43,6 @@ def full_record(*args, **kwargs):
 def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
     monkeypatch.setattr(rg, "_CARRY_BASES", {})
-    monkeypatch.setattr(rg, "_CARRY_HEADS", {})
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
@@ -4538,7 +4537,6 @@ def test_scope_refusal_preserves_concrete_findings(repo, reviewed_followup, monk
     history = comments + [original, disposition]
     assert rg.latest_matching(history, fix.key).verdict == 'FAILED'
     assert rg.passing_families(history, fix.key) == set()
-    monkeypatch.setattr(rg, 'pr_comments', lambda *a: history)
     assert rg._after_manual_record(args, 'o/r', 1, fix.key, 'feature', posted[0]) == rg.UNREVIEWED
 
 
@@ -5005,744 +5003,147 @@ def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, dis
     assert emitted.original_key == ''
 
 
-# ---- explicit editorial attestations: preserve evidence without a model ----
-
-@pytest.fixture
-def editorial_repo(tmp_path, monkeypatch):
-    repo = tmp_path / 'editorial'
-    repo.mkdir()
-    _git(repo, 'init', '-q', '-b', 'master')
-    _git(repo, 'config', 'user.email', 't@example.invalid')
-    _git(repo, 'config', 'user.name', 't')
-    (repo / 'README.md').write_text('A smal example.\n')
-    (repo / 'AGENTS.md').write_text('Require review.\n')
-    (repo / 'main.py').write_text('value = 1\n')
-    _git(repo, 'add', '.')
-    _git(repo, 'commit', '-qm', 'base')
-    _git(repo, 'checkout', '-qb', 'feature')
-    (repo / 'main.py').write_text('value = 2\n')
-    _git(repo, 'commit', '-qam', 'code change')
-    monkeypatch.chdir(repo)
-    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['main.py'])
-    return repo
+def _cycles_with(*severities):
+    """One full cycle per entry: a list of severity labels ([] means clean)."""
+    runs = []
+    for i, labels in enumerate(severities):
+        findings = [{"body": f"[{label}] finding {i}.{j}"} for j, label in enumerate(labels)]
+        runs.append((1000.0 + i, f"{i:x}" * 40, findings, f"key{i}", "openai"))
+    return rg.count_review_cycles(runs)
 
 
-def _typo(repo, text='A small example.\n'):
-    (repo / 'README.md').write_text(text)
-    _git(repo, 'commit', '-qam', 'editorial correction')
-    return _git(repo, 'rev-parse', 'HEAD')
+def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
+    """Operator 2026-10-15: the cap stops review that has stopped finding
+    things, not review that keeps finding real defects."""
+    rounds = _cycles_with(["P1"], ["P0", "P2"], ["P1"])
+    assert rounds.count == 3 and rounds.spent == 0
+    assert not rounds.exhausted(joining=False, key="fix-key")
 
 
-def _editorial_comment(previous, head='HEAD', association='OWNER'):
-    head = rg.git('rev-parse', head).strip()
-    return {'author_association': association, 'html_url': 'editorial', 'body':
-            f'<!-- unitares-editorial v1 head={head} key={rg.diff_key("master", head)} '
-            f'from_head={previous} from_key={rg.diff_key("master", previous)} -->\n'
-            'Author attests unchanged meaning.\n\nReason: Spelling correction.\n'}
+def test_clean_and_lesser_cycles_still_spend_the_cap():
+    rounds = _cycles_with(["P1"], [], ["P2"], ["P3", "P2"])
+    assert rounds.count == 4 and rounds.spent == 3
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)  # the second family may finish a cycle
 
 
-def _editorial_sources(repo):
+def test_an_unlabelled_finding_counts_as_serious():
+    rounds = _cycles_with(["P2"], ["P2"])
+    rounds.cycles[0].findings.append({"body": "data loss described in prose"})
+    assert rounds.spent == 1
+
+
+def test_the_backstop_bounds_a_review_that_never_converges():
+    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+    assert rounds.spent == 0
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)
+
+
+def test_the_round_note_says_when_serious_cycles_were_not_counted():
+    rounds = _cycles_with(["P1"], [], ["P1"])
+    assert rg.round_note(rounds) == (
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+
+
+def test_review_text_findings_keep_their_severity():
+    text = "Intro\n[P1] Broken thing — a.py:3\nDetails\n[P3] Nit — b.py:9\n"
+    found = rg.findings_from_review_text(text, "FINDINGS")
+    assert [f.get("path") for f in found] == ["a.py", "b.py"]
+    assert rg.findings_from_review_text("prose only", "FINDINGS") == [
+        {"body": "unlabelled finding; full review required"}]
+    assert rg.findings_from_review_text("VERDICT: CLEAN", "CLEAN") == []
+
+
+def test_unposted_local_runs_always_spend_their_cycle(repo):
+    """Only a posted record, with its provenance, can exempt a cycle: an
+    unposted local run spends whatever its review said."""
     head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    key = rg.diff_key(base, head)
-    return [_comment(full_record(key, 'CLEAN', 0, False, who, head=head, base=base), url=who)
-            for who in ('codex', 'gemini-council')]
+    for i, status in enumerate(['FINDINGS', 'CLEAN']):
+        run = repo / f'.git/local-reviews/pr-1-local{i}'
+        run.mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps({
+            'pr': 1, 'status': status, 'head': head, 'base': base,
+            'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 300 + i * 100}))
+        (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
+    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 2 and rounds.spent == 2
+
+def test_a_clean_review_mentioning_labels_has_no_findings():
+    text = "Verified the prior [P1] fix in a.py:3; no [P2] issues remain.\nVERDICT: CLEAN"
+    assert rg.findings_from_review_text(text, "CLEAN") == []
 
 
-def _editorial_decide(comments):
-    key = rg.diff_key('master', 'HEAD')
-    equivalents, standalone = rg.editorial_carry(comments, key, 'master')
-    carried, _ = rg.carry_records(comments, key, equivalents)
-    return rg.latest_matching(carried, key) or standalone, rg.passing_families(carried, key)
+def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
+    """Three unproductive cycles, then one that found a P1: its fix gets a
+    full review without a grant (up to the backstop)."""
+    rounds = _cycles_with([], ["P2"], [], ["P1"])
+    assert rounds.spent == 3
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    after_fix = _cycles_with([], ["P2"], [], ["P1"], [])
+    assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
 
 
-def test_editorial_keeps_both_actual_families_without_spending_a_cycle(editorial_repo):
-    comments = _editorial_sources(editorial_repo)
-    previous = _git(editorial_repo, 'rev-parse', 'HEAD')
-    _typo(editorial_repo)
-    assert _editorial_decide(comments) == (None, set())
-    comments.append(_editorial_comment(previous))
-    rec, families = _editorial_decide(comments)
-    assert rec.status()[0] == 'success'
-    assert families == {'openai', 'google'}
-    assert rg.codex_rounds(comments, [], []).count == 1
-    # The author's receipt is not a review and supplies no new model family.
-    assert rg.parse_record(comments[-1]['body']) is None
-    assert _editorial_decide(comments[-1:]) == (None, set())
-
-
-@pytest.mark.parametrize('bad', ['untrusted', 'quoted', 'missing_reason', 'wrong_key', 'wrong_head'])
-def test_editorial_receipt_requires_trust_and_exact_objects(editorial_repo, bad):
-    comments = _editorial_sources(editorial_repo)
-    previous = _git(editorial_repo, 'rev-parse', 'HEAD')
-    _typo(editorial_repo)
-    receipt = _editorial_comment(previous)
-    if bad == 'untrusted':
-        receipt['author_association'] = 'NONE'
-    elif bad == 'quoted':
-        receipt['body'] = '> ' + receipt['body']
-    elif bad == 'missing_reason':
-        receipt['body'] = receipt['body'].split('Reason:')[0]
-    elif bad == 'wrong_key':
-        receipt['body'] = receipt['body'].replace('from_key=', 'from_key=0')
-    else:
-        receipt['body'] = receipt['body'].replace(previous, 'f' * 40)
-    assert _editorial_decide(comments + [receipt]) == (None, set())
-
-
-@pytest.mark.parametrize('kind', ['code', 'instructions', 'new', 'delete', 'rename', 'mode',
-                                 'symlink', 'binary', 'invalid_utf8', 'sensitive_docs', 'reverted_code', 'merge'])
-def test_editorial_scope_cannot_hide_non_prose_work(editorial_repo, monkeypatch, kind):
-    repo = editorial_repo
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    if kind == 'code':
-        (repo / 'main.py').write_text('value = 3\n')
-    elif kind == 'instructions':
-        (repo / 'AGENTS.md').write_text('Skip review.\n')
-    elif kind == 'new':
-        (repo / 'NEW.md').write_text('new prose\n')
-    elif kind == 'delete':
-        (repo / 'README.md').unlink()
-    elif kind == 'rename':
-        (repo / 'README.md').rename(repo / 'CHANGELOG.md')
-    elif kind == 'mode':
-        (repo / 'README.md').chmod(0o755)
-    elif kind == 'symlink':
-        (repo / 'README.md').unlink()
-        (repo / 'README.md').symlink_to('main.py')
-    elif kind in {'binary', 'invalid_utf8'}:
-        (repo / 'README.md').write_bytes(b'bad\0' if kind == 'binary' else b'bad\xff')
-    elif kind == 'sensitive_docs':
-        monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['README.md'])
-        _typo(repo)
-    elif kind == 'reverted_code':
-        (repo / 'main.py').write_text('value = 3\n')
-        _git(repo, 'commit', '-qam', 'changed code')
-        (repo / 'main.py').write_text('value = 2\n')
-    else:
-        _git(repo, 'checkout', '-q', 'master')
-        (repo / 'README.md').write_text('An upstream edit.\n')
-        _git(repo, 'commit', '-qam', 'base changed')
-        _git(repo, 'checkout', '-q', 'feature')
-        _git(repo, 'merge', '-q', '--no-edit', 'master')
-    _git(repo, 'add', '-A')
-    _git(repo, 'commit', '-q', '--allow-empty', '-m', 'candidate')
-    assert rg.editorial_span('master', previous, 'HEAD') == []
-
-
-def test_standalone_editorial_pr_has_no_fake_review_or_family(editorial_repo, monkeypatch):
-    repo = editorial_repo
-    _git(repo, 'checkout', '-qb', 'typo', 'master')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    comments = [_editorial_comment(previous)]
-    rec, families = _editorial_decide(comments)
-    assert rec.scope == 'editorial' and not rec.full() and not families
-    assert 'no independent review' in rec.status()[1]
-    assert rg.codex_rounds(comments, [], []).count == 0
-    key = rg.diff_key('master', head)
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    assert rg.current_record('o/r', 1, key, head, comments).scope == 'editorial'
-    # A later code change cannot reuse the editorial exception.
-    (repo / 'main.py').write_text('value = 3\n')
-    _git(repo, 'commit', '-qam', 'new behavior')
-    assert _editorial_decide(comments) == (None, set())
-
-
-def test_editorial_carries_intermediate_findings_and_their_dispositions(editorial_repo):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    middle = _typo(repo)
-    midkey = rg.diff_key('master', middle)
-    finding = full_record(midkey, 'FINDINGS', 1, False, 'codex', head=middle,
-                          base=_git(repo, 'rev-parse', 'master'))
-    comments.append(_comment(finding, text='[P1] existing defect'))
-    _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(previous))
-    assert _editorial_decide(comments)[0].verdict == 'FINDINGS'
-    finding.disposed = True
-    comments.append(_comment(finding, text='1. rebutted: existing behavior checked'))
-    assert _editorial_decide(comments)[0].status()[0] == 'success'
-
-
-def test_editorial_chain_covers_whole_pr_and_cannot_survive_receipt_removal(editorial_repo, monkeypatch):
-    repo = editorial_repo
-    _git(repo, 'checkout', '-qb', 'typo', 'master')
-    base = _git(repo, 'rev-parse', 'HEAD')
-    first = _typo(repo)
-    comments = [_editorial_comment(base)]
-    head = _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(first))
-    assert _editorial_decide(comments)[0].scope == 'editorial'
-    assert _editorial_decide(comments[1:]) == (None, set())
-    key = rg.diff_key('master', head)
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)).scope == 'editorial'
-    comments.clear()
-    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)) is None
-
-
-def test_editorial_after_independently_reviewed_code_fix_keeps_source_families(editorial_repo):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    oldkey = rg.diff_key('master', previous)
-    (repo / 'main.py').write_text('value = 3\n')
-    _git(repo, 'commit', '-qam', 'bounded fix')
-    fixed = _git(repo, 'rev-parse', 'HEAD')
-    fix = rg.Record(rg.diff_key('master', fixed), 'CLEAN', 0, False, 'codex', scope='fix',
-                    head=fixed, base=_git(repo, 'rev-parse', 'master'), from_head=previous, from_key=oldkey)
-    comments.append(_comment(fix))
-    _typo(repo)
-    comments.append(_editorial_comment(fixed))
-    rec, families = _editorial_decide(comments)
-    assert rec.scope == 'fix' and rec.status()[0] == 'success'
-    assert families == {'openai', 'google'}
-
-
-def test_editorial_cannot_override_a_declined_followup_scope(editorial_repo):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    middle = _typo(repo)
-    refused = full_record(rg.diff_key('master', middle), 'FAILED', 0, False, 'codex',
-                          scope='full-required', head=middle, base=_git(repo, 'rev-parse', 'master'))
-    comments.append(_comment(refused))
-    _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(previous))
-    rec, families = _editorial_decide(comments)
-    assert rec is None or rec.status()[0] != 'success'
-    assert not families
-
-
-@pytest.mark.parametrize('finding', [False, True])
-def test_native_evidence_survives_editorial_edits(editorial_repo, monkeypatch, finding):
-    repo = editorial_repo
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    comments = [_editorial_comment(previous)]
-    review = {'id': 9, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': previous,
-              'state': 'COMMENTED' if finding else 'APPROVED', 'submitted_at': '2026-10-14T00:00:00Z',
-              'body': '', 'html_url': 'native-9'}
-    inline = {'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'pull_request_review_id': 9,
-              'path': 'main.py', 'line': 1, 'body': '[P1] Defect on input zero.', 'html_url': 'inline-9'}
-    pages = {'reviews': [review], 'comments': [inline] if finding else [], 'events': []}
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
-    snapshot = _REAL_READ_NATIVE('o/r', 1, key, head, comments)
-    rec = rg.latest_matching(comments, key, snapshot.records)
-    assert rec.verdict == ('FINDINGS' if finding else 'CLEAN')
-    assert rg.passing_families(comments, key, snapshot.records) == (set() if finding else {'openai'})
-
-
-def test_editorial_cli_posts_author_attestation_and_never_starts_a_model(editorial_repo, monkeypatch, capsys):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
-        {'author_association': 'OWNER', 'body': body, 'html_url': 'editorial'}))
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('editorial invoked a model'))
-    assert rg.cmd_editorial(SimpleNamespace(base='master', since=previous, reason='Corrected spelling.')) == 0
-    assert 'no model invoked' in capsys.readouterr().out
-    assert rg.parse_record(comments[-1]['body']) is None
-    workflow = (SCRIPT.parents[2] / '.github/workflows/review-gate.yml').read_text()
-    triggers = re.findall(r"contains\(github.event.comment.body, '([^']+)'\)", workflow)
-    assert any(marker in comments[-1]['body'] for marker in triggers), 'posted evidence must wake CI'
-    # Re-running review or the host's current-record check reuses the evidence.
-    assert rg.cmd_review(SimpleNamespace(base='master', reviewer=None, fresh=False, budget=10)) == 0
-
-
-def test_editorial_ci_and_cli_agree_on_sensitive_coverage(editorial_repo, monkeypatch, capsys):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    comments.append(_editorial_comment(previous))
-    _git(repo, 'remote', 'add', 'origin', str(repo))
-    _git(repo, 'update-ref', 'refs/pull/1/head', head)
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': head}, 'base': {'ref': 'master'}})
-    posted = []
-    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
-    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
-    assert posted[0][3] == 'success'
-    assert 'editorial' in capsys.readouterr().out
-
-
-def test_editorial_only_base_merge_is_reused_by_cli_and_host(editorial_repo, monkeypatch):
-    repo = editorial_repo
-    _git(repo, 'checkout', '-q', 'master')
-    (repo / 'README.md').write_text('one\ntwo\nthree\nfour\nfive\n')
-    _git(repo, 'commit', '-qam', 'prose baseline')
-    _git(repo, 'checkout', '-qb', 'typo')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    (repo / 'README.md').write_text('one\ntwo\nTHREE\nfour\nfive\n')
-    _git(repo, 'commit', '-qam', 'capitalization')
-    receipt = _editorial_comment(previous)
-    _git(repo, 'checkout', '-q', 'master')
-    (repo / 'README.md').write_text('ONE\ntwo\nthree\nfour\nfive\n')
-    _git(repo, 'commit', '-qam', 'upstream prose')
-    _git(repo, 'checkout', '-q', 'typo')
-    _git(repo, 'merge', '-q', '--no-edit', 'master')
-    head = _git(repo, 'rev-parse', 'HEAD')
-    key = rg.diff_key('master', head)
-    equivalents = rg.base_merge_equivalents('master', head)
-    assert equivalents and equivalents[0][0] != key
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, equivalents)})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: [receipt])
-    comments = rg.pr_comments('o/r', 1)
-    assert rg.editorial_carry(comments, key, 'master', equivalents)[1].scope == 'editorial'
-    assert rg.current_record('o/r', 1, key, head, comments).scope == 'editorial'
-    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'typo'))
-    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('needless model review'))
-    assert rg.cmd_review(SimpleNamespace(base='master', reviewer=None, fresh=False, budget=10)) == 0
-
-
-@pytest.mark.parametrize('path,allowed', [
-    ('agents/sdk/README.md', True), ('docs/guide.md', True), ('docs/AGENTS.md', False),
-    ('skills/foo/README.md', False), ('.github/README.md', False), ('agents/policy.md', False),
-])
-def test_editorial_document_scope_includes_nested_readmes_but_not_instruction_dirs(path, allowed):
-    assert rg.editorial_path(path, []) is allowed
-
-
-@pytest.mark.parametrize('verdict,scope,editorial_allowed', [
-    ('FAILED', 'full', True), ('FINDINGS', 'full', False), ('FAILED', 'full-required', False),
-])
-def test_editorial_only_receipt_overrides_outage_but_not_findings_or_scope_refusal(
-        editorial_repo, monkeypatch, verdict, scope, editorial_allowed):
-    repo = editorial_repo
-    _git(repo, 'checkout', '-qb', 'typo', 'master')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    attempt = full_record(key, verdict, 1 if verdict == 'FINDINGS' else 0, False,
-                          'codex', head=head, base=previous, scope=scope)
-    comments = [_comment(attempt), _editorial_comment(previous)]
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    rec = rg.current_record('o/r', 1, key, head, comments)
-    assert (rec.scope == 'editorial') is editorial_allowed
-    _git(repo, 'remote', 'add', 'origin', str(repo))
-    _git(repo, 'update-ref', 'refs/pull/1/head', head)
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': head}, 'base': {'ref': 'master'}})
-    posted = []
-    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
-    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
-    assert (posted[0][3] == 'success') is editorial_allowed
-
-
-@pytest.mark.parametrize('refusal_has_findings', [False, True])
-def test_editorial_keeps_refused_scope_and_open_findings_until_fresh_review_and_disposal(
-        editorial_repo, monkeypatch, refusal_has_findings):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    base = _git(repo, 'rev-parse', 'master')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    middle = _typo(repo)
-    midkey = rg.diff_key(base, middle)
-    refused = full_record(midkey, 'FINDINGS' if refusal_has_findings else 'FAILED',
-                          1 if refusal_has_findings else 0, False, 'codex',
-                          scope='full-required', head=middle, base=base, review_id='refused')
-    comments.append(_comment(refused, text='[P1] Concrete defect'))
-    if not refusal_has_findings:
-        comments.append(_comment(full_record(midkey, 'FINDINGS', 1, False, 'google',
-                                             head=middle, base=base), text='[P1] Separate defect'))
-    head = _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(previous))
-    key = rg.diff_key(base, head)
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    current = rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1))
-    assert current.verdict == 'FINDINGS'
-    assert rg.review_check(current)[0] == 'action_required'
-    # A new full CLEAN cannot hide a carried finding.
-    comments.append(_comment(full_record(key, 'CLEAN', 0, False, 'gemini', head=head,
-                                         base=base, review_id='fresh-google')))
-    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)).verdict == 'FINDINGS'
-    disposed = Path('dispositions.txt')
-    disposed.write_text('1. fixed: verified the concrete failure is addressed\n')
-    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
-    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
-        {'author_association': 'OWNER', 'html_url': 'disposal', 'body': body}))
-    # Only the new full Google review can supply coverage after the refusal;
-    # neither old family approval is resurrected by disposing the finding.
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    assert rg.cmd_dispose(SimpleNamespace(file=str(disposed), base=base)) == rg.NEEDS_SECOND_FAMILY
-    current = rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1))
-    assert current.status()[0] == 'success'
-    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'google'}
-    comments.append(_comment(full_record(key, 'CLEAN', 0, False, 'codex', head=head,
-                                         base=base, review_id='fresh-openai')))
-    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'google', 'openai'}
-
-
-def test_dispose_editorial_carried_followup_preserves_real_review_key_and_families(editorial_repo, monkeypatch):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    base = _git(repo, 'rev-parse', 'master')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    oldkey = rg.diff_key(base, previous)
-    (repo / 'main.py').write_text('value = 3\n')
-    _git(repo, 'commit', '-qam', 'bounded fix')
-    fixed = _git(repo, 'rev-parse', 'HEAD')
-    fixkey = rg.diff_key(base, fixed)
-    fix = rg.Record(fixkey, 'FINDINGS', 1, False, 'codex', scope='fix', head=fixed, base=base,
-                    from_head=previous, from_key=oldkey, review_id='fix-review')
-    comments.append(_comment(fix, text='[P2] Clarify documented output'))
-    head = _typo(repo)
-    key = rg.diff_key(base, head)
-    comments.append(_editorial_comment(fixed))
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
-    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
-        {'author_association': 'OWNER', 'html_url': 'disposal', 'body': body}))
-    disposition = Path('disposition.txt')
-    disposition.write_text('1. rebutted: the documented output matches the CLI\n')
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    assert rg.cmd_dispose(SimpleNamespace(file=str(disposition), base=base)) == 0
-    assert rg.parse_record(comments[-1]['body']).key == fixkey
-    carried = rg.pr_comments('o/r', 1)
-    assert rg.current_record('o/r', 1, key, head, carried).status()[0] == 'success'
-    assert rg.passing_families(carried, key) == {'openai', 'google'}
-
-
-@pytest.mark.parametrize('finding', [False, True])
-def test_editorial_after_base_merge_retains_premerge_reviews_and_findings(editorial_repo, monkeypatch, finding):
-    repo = editorial_repo
-    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: [])
-    _git(repo, 'checkout', '-q', 'master')
-    (repo / 'README.md').write_text('one\ntwo\nthree\nfour\nfive\n')
-    _git(repo, 'commit', '-qam', 'prose baseline')
-    _git(repo, 'checkout', '-qb', 'typo')
-    base = _git(repo, 'rev-parse', 'HEAD')
-    _typo(repo, 'one\ntwo\nTHREE\nfour\nfive\n')
-    reviewed = _git(repo, 'rev-parse', 'HEAD')
-    oldkey = rg.diff_key('master', reviewed)
-    review = full_record(oldkey, 'FINDINGS' if finding else 'CLEAN', 1 if finding else 0,
-                         False, 'codex', head=reviewed, base=base)
-    comments = [_comment(review, text='[P1] Existing defect')]
-    _git(repo, 'checkout', '-q', 'master')
-    (repo / 'README.md').write_text('ONE\ntwo\nthree\nfour\nfive\n')
-    _git(repo, 'commit', '-qam', 'upstream prose')
-    _git(repo, 'checkout', '-q', 'typo')
-    _git(repo, 'merge', '-q', '--no-edit', 'master')
-    merged = _git(repo, 'rev-parse', 'HEAD')
-    assert rg.base_merge_equivalents('master', merged)
-    comments.append(_comment(full_record(rg.diff_key('master', merged), 'CLEAN', 0, False,
-                                         'gemini', head=merged, base=_git(repo, 'rev-parse', 'master'))))
-    _typo(repo, 'ONE\ntwo\nTHREE\nfour\nfive.\n')
-    comments.append(_editorial_comment(merged))
-    rec, families = _editorial_decide(comments)
-    assert rec.verdict == ('FINDINGS' if finding else 'CLEAN')
-    if not finding:
-        assert families == {'openai', 'google'}
-    # Editorial -> base merge -> editorial also composes without full reviews.
-    standalone = [_editorial_comment(base, reviewed), comments[-1]]
-    assert _editorial_decide(standalone)[0].scope == 'editorial'
-
-
-def test_editorial_receipt_is_bound_to_head_not_reappearing_key(editorial_repo):
-    repo = editorial_repo
-    _git(repo, 'checkout', '-qb', 'typo', 'master')
-    base = _git(repo, 'rev-parse', 'HEAD')
-    _typo(repo)
-    key = rg.diff_key('master', 'HEAD')
-    comments = [_editorial_comment(base)]
-    (repo / 'main.py').write_text('value = 7\n')
-    _git(repo, 'commit', '-qam', 'substantive change')
-    bad = _git(repo, 'rev-parse', 'HEAD')
-    comments.append(_comment(full_record(rg.diff_key('master', bad), 'FINDINGS', 1, False,
-                                         'codex', head=bad, base=base), text='[P1] Defect'))
-    (repo / 'main.py').write_text('value = 1\n')
-    _git(repo, 'commit', '-qam', 'revert substantive change')
-    assert rg.diff_key('master', 'HEAD') == key
-    assert _editorial_decide(comments) == (None, set())
-
-
-def test_editorial_requires_actual_prose_changes(editorial_repo):
-    repo = editorial_repo
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    _git(repo, 'commit', '-q', '--allow-empty', '-m', 'empty')
-    assert rg.editorial_span('master', previous, 'HEAD') == []
-
-
-def test_editorial_host_uses_pr_head_when_its_checkout_is_elsewhere(editorial_repo, monkeypatch):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    comments.append(_editorial_comment(previous))
-    _git(repo, 'checkout', '-q', 'master')
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, '_CARRY_HEADS', {('o/r', 1): head})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    carried = rg.pr_comments('o/r', 1)
-    assert rg.current_record('o/r', 1, key, head, carried).status()[0] == 'success'
-    assert rg.passing_families(carried, key) == {'openai', 'google'}
-
-
-def test_editorial_does_not_invalidate_full_review_already_covering_refused_revision(editorial_repo):
-    repo = editorial_repo
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    base = _git(repo, 'rev-parse', 'master')
-    reviewed = full_record(key, 'FINDINGS', 1, False, 'codex', head=head, base=base, review_id='full')
-    refusal = full_record(key, 'FAILED', 0, False, 'gemini', scope='full-required', head=head, base=base)
-    comments = [_comment(reviewed, text='[P2] Documentation concern'), _comment(refusal)]
-    comments.append(_comment(rg.replace(reviewed, disposed=True), text='1. rebutted: checked the actual behavior'))
-    assert rg.latest_matching(comments, key).status()[0] == 'success'
-    assert rg.passing_families(comments, key) == {'openai'}
-    _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(head))
-    rec, families = _editorial_decide(comments)
-    assert rec.status()[0] == 'success' and families == {'openai'}
-    assert previous != head
-
-
-def test_editorial_after_sensitive_base_merge_cannot_restore_premerge_family(carry_repo, monkeypatch):
-    repo = carry_repo
-    _git(repo, 'checkout', '-q', 'master')
-    (repo / 'README.md').write_text('A smal example.\n')
-    _git(repo, 'add', 'README.md')
-    _git(repo, 'commit', '-qm', 'prose baseline')
-    _git(repo, 'checkout', '-q', 'feature')
-    _git(repo, 'merge', '-q', '--no-edit', 'master')
-    previous = _git(repo, 'rev-parse', 'HEAD')
-    base = _git(repo, 'rev-parse', 'master')
-    comments = [_comment(full_record(rg.diff_key(base, previous), 'CLEAN', 0, False,
-                                     'codex', head=previous, base=base))]
-    _master_edits_next_to_the_pr(repo)
-    _git(repo, 'merge', '-q', '--no-edit', 'master')
-    merged = _git(repo, 'rev-parse', 'HEAD')
-    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
-    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['f.txt'])
-    assert rg.base_merge_equivalents('master', merged) == []
-    comments.append(_comment(full_record(rg.diff_key('master', merged), 'CLEAN', 0, False,
-                                         'gemini', head=merged, base=_git(repo, 'rev-parse', 'master'))))
-    _typo(repo)
-    comments.append(_editorial_comment(merged))
-    assert _editorial_decide(comments)[1] == {'google'}
-
-
-@pytest.mark.parametrize('coverage', ['standalone', 'full', 'fix'])
-def test_editorial_handoff_rejects_head_race_even_when_revert_restores_diff_key(
-        editorial_repo, monkeypatch, coverage):
-    repo = editorial_repo
-    base = _git(repo, 'rev-parse', 'master')
-    comments = []
-    if coverage == 'standalone':
-        _git(repo, 'checkout', '-qb', 'typo', 'master')
-    else:
-        comments = _editorial_sources(repo)
-        if coverage == 'fix':
-            source = _git(repo, 'rev-parse', 'HEAD')
-            (repo / 'main.py').write_text('value = 3\n')
-            _git(repo, 'commit', '-qam', 'bounded correction')
-            comments.append(_comment(rg.Record(
-                rg.diff_key(base, 'HEAD'), 'CLEAN', 0, False, 'codex', scope='fix',
-                head=_git(repo, 'rev-parse', 'HEAD'), base=base,
-                from_head=source, from_key=rg.diff_key(base, source))))
-    before = _git(repo, 'rev-parse', 'HEAD')
-    original = (repo / 'main.py').read_text()
-    old = _typo(repo)
-    key = rg.diff_key(base, old)
-    comments.append(_editorial_comment(before))
-    rec, _ = _editorial_decide(comments)
-    assert rec.scope == ('editorial' if coverage == 'standalone' else coverage)
-    (repo / 'main.py').write_text('value = 9\n')
-    _git(repo, 'commit', '-qam', 'substantive work during publication')
-    (repo / 'main.py').write_text(original)
-    _git(repo, 'commit', '-qam', 'revert restores key')
-    new = _git(repo, 'rev-parse', 'HEAD')
-    assert rg.diff_key(base, new) == key
-    _git(repo, 'remote', 'add', 'origin', str(repo))
-    _git(repo, 'update-ref', 'refs/pull/1/head', new)
-    _git(repo, 'checkout', '-q', '--detach', old)
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
-    monkeypatch.setattr(rg, '_CARRY_HEADS', {('o/r', 1): old})
-    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
-    monkeypatch.setattr(rg, 'pr_view', lambda *a: {'state': 'OPEN', 'headRefOid': new, 'baseRefName': 'master'})
-    monkeypatch.setattr(rg, 'completed_review_exit', completed_review_exit)
-    assert rg.finish_record('o/r', 1, key, old, rec, comments) == rg.UNREVIEWED
-
-
-def test_editorial_handoff_keeps_coverage_when_base_merge_moves_key(carry_repo, monkeypatch):
-    repo = carry_repo
-    (repo / 'README.md').write_text('A smal example.\n')
-    _git(repo, 'add', 'README.md')
-    _git(repo, 'commit', '-qm', 'document reviewed code')
-    comments = _editorial_sources(repo)
-    source = _git(repo, 'rev-parse', 'HEAD')
-    old = _typo(repo)
-    key = rg.diff_key('master', old)
-    comments.append(_editorial_comment(source))
-    _git(repo, 'remote', 'add', 'origin', str(repo))
-
-    def pr_info(*args):
-        _master_edits_next_to_the_pr(repo)
-        _git(repo, 'merge', '-q', '--no-edit', 'master')
-        _git(repo, 'update-ref', 'refs/pull/1/head', 'HEAD')
-        return {'baseRefName': 'master', 'state': 'OPEN'}
-
-    monkeypatch.setattr(rg, 'pr_view', pr_info)
-    monkeypatch.setattr(rg, 'api_pages', lambda *args: comments)
-    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
-    assert completed_review_exit('o/r', 1, key, old, 0) == 0
-    assert rg.diff_key('master', 'HEAD') != key
-    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'openai', 'google'}
-
-
-@pytest.mark.parametrize('count', [1, 3])
-def test_editorial_second_family_finishes_the_same_cycle(editorial_repo, monkeypatch, count):
-    repo = editorial_repo
-    source = rg.parse_record(_editorial_sources(repo)[0]['body'])
-    comments = [_comment(rg.replace(source, review_id=f'run-{i}')) for i in range(count)]
-    before = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    key = rg.diff_key('master', head)
-    comments.append(_editorial_comment(before))
-    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
-    monkeypatch.setattr(rg, '_CARRY', {})
-    monkeypatch.setattr(rg, 'api_pages', lambda *args: [])
-    rounds = read_native_api('o/r', 1, key, head, comments).rounds
-    assert rounds.count == count
-    assert rounds.can_join(head, key, 'google')
-    # Exercise the real cap decision, including an unfinished third cycle.
-    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'codex/x'))
-    monkeypatch.setattr(rg, 'pr_comments', lambda *args: comments)
-    monkeypatch.setattr(rg, 'read_native', read_native_api)
-    ran = []
-    monkeypatch.setattr(rg, 'review_with_fallback', lambda *args: ran.append(True) or 0)
-    monkeypatch.setattr(rg, 'second_family_pass', lambda *args: 0)
-    assert rg.cmd_review(SimpleNamespace(base='master', budget=30, fresh=True, reviewer='antigravity')) == 0
-    assert ran == [True]
-    # Unposted completions use the same equivalence without adding coverage.
-    cache = repo / 'local-cache'
-    run = cache / 'pr-1-unposted'
+def test_a_recount_keeps_the_posted_round_cmd_review_answers(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    run = repo / '.git/local-reviews/pr-1-local-late'
     run.mkdir(parents=True)
     (run / 'manifest.json').write_text(json.dumps({
-        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': _git(repo, 'rev-parse', 'master'),
-        'review_id': 'local-google', 'started_at': rg.time.time() - 1, 'model': 'gemini'}))
-    assert rg.local_budget_rounds(rounds, cache, 1, set()).count == count
-    # An editorial receipt never widens an operator's exact revision grant.
-    grant = _cycle_grant_comment(before, source.key)
-    assert not rg.cycle_grant([grant], 42, head, key, rounds, 'google', GRANT_NOW)
-    comments.append(_editorial_sources(repo)[1])
-    assert read_native_api('o/r', 1, key, head, comments).rounds.count == count
-    repeated = rg.parse_record(comments[-1]['body'])
-    comments.append(_comment(rg.replace(repeated, review_id='repeated-google')))
-    assert read_native_api('o/r', 1, key, head, comments).rounds.count == count + 1
-
-
-@pytest.mark.parametrize('bad', ['untrusted', 'missing_reason', 'wrong_key', 'code', 'reverted_code'])
-def test_unproven_editorial_work_cannot_share_a_review_cycle(editorial_repo, monkeypatch, bad):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)[:1]
-    before = _git(repo, 'rev-parse', 'HEAD')
-    _typo(repo)
-    if bad in {'code', 'reverted_code'}:
-        (repo / 'main.py').write_text('value = 8\n')
-        _git(repo, 'commit', '-qam', 'substantive edit')
-        if bad == 'reverted_code':
-            (repo / 'main.py').write_text('value = 2\n')
-            _git(repo, 'commit', '-qam', 'revert')
-    receipt = _editorial_comment(before)
-    if bad == 'untrusted':
-        receipt['author_association'] = 'NONE'
-    elif bad == 'missing_reason':
-        receipt['body'] = receipt['body'].split('Reason:')[0]
-    elif bad == 'wrong_key':
-        receipt['body'] = receipt['body'].replace('from_key=', 'from_key=0')
-    comments.append(receipt)
-    comments.append(_editorial_sources(repo)[1])
-    rounds = rg.codex_rounds(comments, [], [], base='master')
-    assert rounds.count == 2 and not rounds.revision_aliases
-
-
-def test_native_abbreviated_review_can_finish_an_editorial_cycle(editorial_repo):
-    repo = editorial_repo
-    comments = _editorial_sources(repo)[1:]
-    before = _git(repo, 'rev-parse', 'HEAD')
-    head = _typo(repo)
-    comments.append(_editorial_comment(before))
-    comments.append({'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'created_at': '2026-10-14T04:00:00Z',
-                     'body': "Codex Review: Didn't find any major issues.\n"
-                             f'**Reviewed commit:** `{head[:10]}`'})
-    rounds = rg.codex_rounds(comments, [], [], base='master')
+        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 10}))
+    posted = [{"body": "[P2] posted finding — b.py:2"}]
+    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted, answered_since=True)
+    rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
     assert rounds.count == 1
-    assert rounds.cycles[0].families == {'google', 'openai'}
+    assert rounds.last_findings == posted and rounds.last_head == "a" * 40 and rounds.answered_since
+
+def test_the_second_family_finishes_a_cycle_the_exemption_opened():
+    """A serious cycle (here past the cap) earns its fix review; that review
+    coming back clean must not stop the second family finishing the cycle."""
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    assert rounds.spent == 4
+    assert not rounds.exhausted(joining=True)
+    assert rounds.exhausted(joining=False)
 
 
-def test_editorial_disposition_cannot_borrow_later_review_identity(editorial_repo):
-    repo = editorial_repo
-    base = _git(repo, 'rev-parse', 'master')
-    before = _git(repo, 'rev-parse', 'HEAD')
-    old = full_record(rg.diff_key(base, before), 'FINDINGS', 1, False, 'codex',
-                      head=before, base=base, review_id='old-full')
-    comments = [_comment(old), _comment(rg.replace(old, disposed=True))]
-    middle = _typo(repo)
-    comments.append(_comment(full_record(rg.diff_key(base, middle), 'FAILED', 0, False,
-                                         'gemini', head=middle, base=base, scope='full-required')))
-    head = _typo(repo, 'A small example.\n\n')
-    comments.append(_editorial_comment(before))
-    fresh = full_record(rg.diff_key(base, head), 'FINDINGS', 1, False, 'codex',
-                        head=head, base=base, review_id='fresh-full')
-    comments.append(_comment(fresh))
-    rec, families = _editorial_decide(comments)
-    assert rec.verdict == 'FINDINGS' and not rec.disposed
-    assert families == set()
-    comments.append(_comment(rg.replace(fresh, disposed=True)))
-    assert _editorial_decide(comments)[1] == {'openai'}
+def test_the_exemption_is_for_the_fix_not_the_same_diff():
+    rounds = _cycles_with([], [], [], ["P1"])
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    assert rounds.exhausted(joining=False, key=rounds.cycles[-1].key)
 
 
-def test_scope_refusal_cannot_shadow_disposed_full_review(editorial_repo):
-    repo = editorial_repo
-    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    key = rg.diff_key(base, head)
-    full = full_record(key, 'FINDINGS', 1, False, 'codex', head=head, base=base, review_id='full')
-    refusal = rg.replace(full, scope='full-required', review_id='refusal')
-    comments = [_comment(full), _comment(rg.replace(full, disposed=True)),
-                _comment(refusal), _comment(rg.replace(refusal, disposed=True))]
-    assert rg.passing_families(comments, key) == {'openai'}
+def test_a_keyless_native_cycle_needs_a_different_head_for_the_exemption():
+    rounds = _cycles_with([], [], [], ["P1"])
+    last = rounds.cycles[-1]
+    last.key = ""  # native reviews enter the ledger without a diff key
+    assert rounds.exhausted(joining=False, key="any-key", head=last.head)
+    assert not rounds.exhausted(joining=False, key="any-key", head="f" * 40)
+    assert rounds.exhausted(joining=False)  # no evidence of changed work
 
 
-@pytest.mark.parametrize('correct_cite', [True, False])
-def test_emitted_disposition_preserves_carried_full_review_family(editorial_repo, correct_cite):
-    repo = editorial_repo
-    before, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    original = full_record(rg.diff_key(base, before), 'FINDINGS', 1, False, 'codex',
-                           head=before, base=base, review_id='original')
-    url = 'https://github.com/o/r/pull/1#issuecomment-1'
-    comments = [_comment(original, url=url)]
-    head = _typo(repo)
-    comments.append(_editorial_comment(before))
-    disposition = rg.Record(rg.diff_key(base, head), 'FINDINGS', 1, True, 'codex')
-    cited = url if correct_cite else url + '0'
-    comments.append({'author_association': 'OWNER', 'body': rg.render_body(
-        disposition, f'dispositions for FINDINGS(1) — {cited}', '1. rebutted: verified behavior')})
-    rec, families = _editorial_decide(comments)
-    assert rec.status()[0] == 'success'
-    assert families == ({'openai'} if correct_cite else set())
+def test_only_leading_labels_are_titles_and_declared_findings_count():
+    prose = "Verified the prior [P1] fix in a.py:3.\n[P2] Minor thing — b.py:4\n"
+    found = rg.findings_from_review_text(prose, "FINDINGS")
+    assert len(found) == 1 and found[0]["body"].startswith("[P2]")
+    for title in ("- [P1] x — a.py:1", "1. **[P1] x — a.py:1**",
+                  "**<sub><sub>![P1 Badge](u)</sub></sub>  x**"):
+        assert len(rg.findings_from_review_text(title, "FINDINGS")) == 1
+    # Two declared, one labelled: the other counts as unlabelled (serious).
+    two = rg.findings_from_review_text("[P3] nit — c.py:1\n", "FINDINGS", declared=2)
+    assert len(two) == 2 and "unlabelled" in two[1]["body"]
+
+
+def test_joining_after_a_serious_cycle_needs_changed_work_too():
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    rounds.cycles[-1].key = rounds.cycles[-2].key  # same diff as the serious cycle
+    rounds.cycles[-1].head = rounds.cycles[-2].head
+    assert rounds.exhausted(joining=True)
+
+
+def test_severity_comes_from_the_title_not_the_explanation():
+    """A [P2] whose explanation mentions an earlier [P1] is not serious."""
+    runs = [(1000.0 + i, f"{i:x}" * 40,
+             [{"body": "[P2] Minor — a.py:1\nThe earlier [P1] issue was fixed."}], f"k{i}", "openai")
+            for i in range(3)]
+    rounds = rg.count_review_cycles(runs)
+    assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")

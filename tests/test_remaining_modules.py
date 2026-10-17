@@ -1414,7 +1414,8 @@ class TestExecuteResolution:
         with patch("src.mcp_handlers.dialectic.resolution.mcp_server", mock_server), \
              patch("src.mcp_handlers.dialectic.resolution.parse_condition") as mock_parse, \
              patch("src.mcp_handlers.dialectic.resolution.apply_condition", new_callable=AsyncMock, return_value={"status": "applied"}), \
-             patch("src.agent_storage.update_agent", new_callable=AsyncMock, return_value=None):
+             patch("src.agent_storage.persist_runtime_state", new_callable=AsyncMock, return_value=True), \
+             patch("src.agent_storage.update_agent", new_callable=AsyncMock, return_value=True):
             mock_parse.return_value = ParsedCondition("set", "complexity", 0.3)
             result = await execute_resolution(session, resolution)
             assert result["success"] is True
@@ -1441,9 +1442,12 @@ class TestExecuteResolution:
         session, resolution, mock_server = self._make_session_and_resolution()
         with patch("src.mcp_handlers.dialectic.resolution.mcp_server", mock_server), \
              patch("src.mcp_handlers.dialectic.resolution.parse_condition", side_effect=RuntimeError("parse error")), \
-             patch("src.agent_storage.update_agent", new_callable=AsyncMock, return_value=None):
+             patch("src.agent_storage.persist_runtime_state", new_callable=AsyncMock, return_value=True), \
+             patch("src.agent_storage.update_agent", new_callable=AsyncMock, return_value=True):
             result = await execute_resolution(session, resolution)
-            assert result["success"] is True
+            assert result["success"] is False
+            assert result["status_changed"] is False
+            assert mock_server.agent_metadata["agent-1"].status == "paused"
             assert any(c.get("status") == "failed" for c in result["applied_conditions"])
 
 

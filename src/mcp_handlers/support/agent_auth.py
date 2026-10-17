@@ -176,17 +176,14 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
     meta = mcp_server.agent_metadata[agent_uuid]
 
     if meta.status == "paused":
-        # Pause TTL: stale pauses auto-expire (in-memory flip is
-        # synchronous; persistence is fire-and-forget). Sleep-wake
-        # artifacts that produced the 2026-05-09 → 2026-05-18 Watcher/
-        # Sentinel/Lumen silence are categorizer-driven pauses; once
-        # the TTL elapses, the next gate-traversal here clears the
-        # in-memory status, and the agent's next check-in flows through
-        # the categorizer which re-pauses if state is genuinely
-        # degraded. See src/mcp_handlers/support/pause_ttl.py.
+        # Pause TTL: this synchronous gate schedules a token-fenced durable
+        # resume but keeps the current traversal blocked. The task publishes
+        # cache status only after both durable copies commit; a retry then flows
+        # through the categorizer, which re-pauses genuinely degraded state.
+        # See src/mcp_handlers/support/pause_ttl.py.
         from .pause_ttl import maybe_auto_expire_pause_sync, paused_refusal_recovery
         if maybe_auto_expire_pause_sync(agent_uuid, meta):
-            return None  # status now active; let caller proceed
+            return None
         return error_response(
             "Agent is paused - check-ins and new shared-memory entries are refused",
             error_code="AGENT_PAUSED",

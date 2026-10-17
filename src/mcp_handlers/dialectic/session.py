@@ -18,6 +18,7 @@ from src.dialectic_protocol import (
     coerce_signature_version,
     describe_attestation,
 )
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
 
@@ -288,6 +289,12 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         session.session_id = session_id
         session.phase = phase
         session.transcript = transcript
+        session.transcript_revision = int(
+            session_data.get("transcript_revision", 0) or 0
+        )
+        session.resolution_saga_revision = int(
+            session_data.get("resolution_saga_revision", 0) or 0
+        )
         session.resolution = resolution
         session.synthesis_round = int(session_data.get("synthesis_round", 0) or 0)
         # Restore awaiting_facilitation (#1259). The DialecticSession ctor defaults
@@ -319,7 +326,12 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         logger.error(f"Error reconstructing session {session_id}: {e}", exc_info=True)
         return None
 
-async def save_session(session: DialecticSession, *, defer_terminal: bool = False) -> None:
+async def save_session(
+    session: DialecticSession,
+    *,
+    defer_terminal: bool = False,
+    primary_already_synced: bool = False,
+) -> None:
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
@@ -346,15 +358,24 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
     emptied ``resolution_json`` on every session resolved between 2026-06-28 and
     2026-08-10. Mirrors the same deferral already applied to the phase write in
     ``handle_submit_synthesis``.
+
+    ``primary_already_synced`` is for a caller whose guarded message append
+    already advanced the durable phase, synthesis round, and transcript
+    frontier in one transaction. In that mode this function only refreshes the
+    optional JSON snapshot. Replaying a separate, unfenced phase write here can
+    regress a newer concurrent append after the guarded transaction commits.
     """
     # Primary: update phase + resolution in PostgreSQL
     terminal_minted = False
+    terminal_sync_confirmed = True
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
         from .beam_resolve_client import beam_resolve, beam_update_phase
         from src.dialectic_session_writes import session_write_via
-        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and defer_terminal:
+        if primary_already_synced:
+            pass
+        elif session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and defer_terminal:
             # Caller owns the terminal write once it has a resolution; skip the
             # PG sync entirely (not even a phase write — the phase IS terminal
             # here, and update_session_phase refuses terminal values).
@@ -380,21 +401,72 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
             # sole-writer invariant holds for that flow too; fail-safe fallback to
             # Python keeps it flag-off-safe. (Re-land of #1189, accidentally
             # reverted by #1190's stale-base "docs sweep" merge.)
+            beam_detail: Dict[str, Any] = {}
             beam_done = await beam_resolve(
                 session_id=session.session_id,
                 paused_agent_id=getattr(session, "paused_agent_id", None),
                 reviewer_agent_id=getattr(session, "reviewer_agent_id", None),
                 resolution=resolution_dict or {},
                 status=status,
+                expected_phase=(
+                    DialecticPhase.SYNTHESIS.value
+                    if status == "resolved"
+                    else None
+                ),
+                expected_transcript_revision=int(
+                    getattr(session, "transcript_revision", 0)
+                ),
+                expected_awaiting_facilitation=bool(
+                    getattr(session, "awaiting_facilitation", False)
+                ),
+                detail=beam_detail,
             )
-            written = beam_done is not None
-            if beam_done is None:
+            written = bool(
+                beam_done is not None
+                and beam_done.get("origin") != "already_terminal"
+            )
+            if beam_done is None and not beam_detail.get("commit_unknown"):
+                # BEAM's resolved transition is guarded by the persisted
+                # SYNTHESIS phase and reviewer identity.  Preserve those same
+                # compare-and-set predicates on the flag-off/unreachable
+                # Python path; otherwise a BEAM policy refusal could be
+                # followed by an unguarded fallback that closes a row which
+                # moved backward or changed reviewer.  FAILED remains
+                # phase-agnostic so liveness can terminate a stalled session.
+                terminal_expectations = {
+                    "expected_reviewer": getattr(
+                        session, "reviewer_agent_id", None
+                    ),
+                    "expected_transcript_revision": int(
+                        getattr(session, "transcript_revision", 0)
+                    ),
+                    "expected_awaiting_facilitation": bool(
+                        getattr(session, "awaiting_facilitation", False)
+                    ),
+                    "expected_resolution_saga_revision": int(
+                        getattr(session, "resolution_saga_revision", 0)
+                    ),
+                    "exclude_inflight_saga": True,
+                }
+                if status == "resolved":
+                    terminal_expectations["expected_phase"] = (
+                        DialecticPhase.SYNTHESIS.value
+                    )
+                winner: Dict[str, Any] = {}
                 with session_write_via("python_fallback", site="save_session_terminal"):
                     written = bool(await pg_resolve_session(
                         session_id=session.session_id,
                         resolution=resolution_dict,
                         status=status,
+                        winner=winner,
+                        **terminal_expectations,
                     ))
+            elif beam_done is None:
+                # A request left this process but its response was lost or
+                # ambiguous. It may have committed, or a different reserved
+                # saga may own the session; never open a second writer here.
+                written = False
+            terminal_sync_confirmed = written
             discard_receipt_unless_written(session.resolution, written=written, had_receipt=had_receipt)
         else:
             round_ = getattr(session, "synthesis_round", None)
@@ -409,6 +481,14 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
         if terminal_minted and session.resolution is not None:
             discard_receipt_unless_written(session.resolution, written=False, had_receipt=False)
         logger.error(f"PostgreSQL sync failed for session {session.session_id}: {e}")
+        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and not defer_terminal:
+            terminal_sync_confirmed = False
+
+    # A terminal JSON snapshot is an assertion about the winner. If this call
+    # neither performed the terminal CAS nor was explicitly told that the
+    # caller already owns it, do not publish a stale local terminal narrative.
+    if not terminal_sync_confirmed:
+        return
 
     # Secondary: JSON snapshot (for offline access / debugging)
     try:
@@ -498,12 +578,22 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
         await db._ensure_pool()
         async with compatible_acquire(db._pool) as conn:
             row = await conn.fetchrow("""
-                SELECT session_id, phase, status, session_type,
-                       paused_agent_id, reviewer_agent_id, topic,
-                       created_at, resolution_json, reason, trigger_source,
-                       awaiting_facilitation, synthesis_round,
-                       max_synthesis_rounds
-                FROM core.dialectic_sessions WHERE session_id = $1
+                SELECT s.session_id, s.phase, s.status, s.session_type,
+                       s.paused_agent_id, s.reviewer_agent_id, s.topic,
+                       s.created_at, s.resolution_json, s.reason, s.trigger_source,
+                       s.awaiting_facilitation, s.synthesis_round,
+                       s.max_synthesis_rounds, s.paused_agent_state_json,
+                       s.updated_at, s.transcript_revision,
+                       s.resolution_saga_revision,
+                       e.state AS resolution_effect_state,
+                       e.attempt_count AS resolution_effect_attempt_count,
+                       e.claimed_at AS resolution_effect_claimed_at,
+                       e.applied_at AS resolution_effect_applied_at,
+                       e.uncertain_at AS resolution_effect_uncertain_at
+                FROM core.dialectic_sessions s
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = s.session_id
+                WHERE s.session_id = $1
             """, session_id)
             if not row:
                 return None
@@ -520,6 +610,7 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
             result = {
                 "session_id": row["session_id"],
                 "phase": row["phase"] or row["status"] or "unknown",
+                "status": row["status"] or "unknown",
                 "session_type": row["session_type"] or "unknown",
                 "paused_agent": row["paused_agent_id"] or "unknown",
                 "reviewer": row["reviewer_agent_id"],
@@ -535,8 +626,32 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                     row.get("max_synthesis_rounds") or 5
                 ),
                 "message_count": len(msg_rows),
+                "updated_at": row.get("updated_at"),
+                "transcript_revision": int(
+                    row.get("transcript_revision") or 0
+                ),
+                "resolution_saga_revision": int(
+                    row.get("resolution_saga_revision") or 0
+                ),
                 "transcript": [],
+                "reviewed_work_authorship": read_reviewed_work_authorship(
+                    row.get("paused_agent_state_json"),
+                    expected_declared_by_agent_id=row["paused_agent_id"],
+                ).as_dict(),
+                "resolution_effect_state": row.get("resolution_effect_state"),
+                "resolution_effect_attempt_count": int(
+                    row.get("resolution_effect_attempt_count") or 0
+                ),
             }
+            for field in (
+                "resolution_effect_claimed_at",
+                "resolution_effect_applied_at",
+                "resolution_effect_uncertain_at",
+            ):
+                value = row.get(field)
+                result[field] = (
+                    value.isoformat() if hasattr(value, "isoformat") else value
+                )
 
             res = row["resolution_json"]
             if res:
@@ -650,6 +765,9 @@ async def list_all_sessions(
                     ds.awaiting_facilitation,
                     ds.synthesis_round,
                     ds.max_synthesis_rounds,
+                    ds.paused_agent_state_json,
+                    e.state AS resolution_effect_state,
+                    e.attempt_count AS resolution_effect_attempt_count,
                     -- The paused agent's LABEL, not just its uuid. The
                     -- test_/demo_ filter below keys on paused_agent_id, which
                     -- is a uuid, so the scheduled probe families
@@ -671,6 +789,8 @@ async def list_all_sessions(
                      LIMIT 1) as synthesizer
                 FROM core.dialectic_sessions ds
                 LEFT JOIN core.agents pa ON pa.id = ds.paused_agent_id
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = ds.session_id
                 LEFT JOIN (
                     SELECT session_id, COUNT(*) as cnt
                     FROM core.dialectic_messages
@@ -717,6 +837,14 @@ async def list_all_sessions(
                     "synthesis_round": int(row.get("synthesis_round") or 0),
                     "max_synthesis_rounds": int(
                         row.get("max_synthesis_rounds") or 5
+                    ),
+                    "reviewed_work_authorship": read_reviewed_work_authorship(
+                        row.get("paused_agent_state_json"),
+                        expected_declared_by_agent_id=row["paused_agent_id"],
+                    ).as_dict(),
+                    "resolution_effect_state": row.get("resolution_effect_state"),
+                    "resolution_effect_attempt_count": int(
+                        row.get("resolution_effect_attempt_count") or 0
                     ),
                 }
 

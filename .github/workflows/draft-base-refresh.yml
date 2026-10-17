@@ -1,13 +1,25 @@
 name: Draft Base Refresh
 
-# Drafts here do not merely wait — they ROT. PR #2184 was authored mergeable,
-# sat while its stacked base (#2176) merged, and is now `dirty`; #2187 the same.
-# Waiting converted finished work into conflict work, which is a cost the delay
-# itself created rather than deferred.
+# Drafts are intentionally pinned. A schedule used to merge every new base into
+# every idle, behind draft. That kept drafts mechanically current, but each push
+# launched the complete PR CI matrix even though a draft was not eligible to
+# land. With several drafts and a busy base this recreated the N-wide cascade
+# that the serial merge queue avoids for ready PRs.
 #
-# This merges the base branch into any open draft that is BEHIND but still
-# CONFLICT-FREE, so a PR that was mergeable stays mergeable. It is deliberately
-# the narrowest useful action:
+# PR #2836 supplied the bounded counterexample on 2026-10-17: after its owner
+# froze and validated head 89888ed7b, the schedule pushed a234075f3 solely
+# because master advanced, launched the full matrix again, and immediately
+# replaced the evidence-bound head with a failing smoke head. No author change
+# or readiness decision had occurred.
+#
+# This workflow is retained as a MANUAL recovery action for one named draft. It
+# has no schedule and cannot sweep all drafts. Normal flow is: leave a draft on
+# its reviewed head, mark it ready when its own work is complete, and let the
+# serial queue update that one merge candidate once. Invoke this workflow only
+# when preserving a particular long-lived draft is worth a deliberate base
+# merge before readiness.
+#
+# The manual action remains deliberately narrow:
 #
 #   * Only DRAFT PRs, and only ones whose mergeable state is `behind`. A PR
 #     already `dirty` needs a human decision about which side wins; this never
@@ -20,7 +32,9 @@ name: Draft Base Refresh
 #     workflow doing either would be the "silent green button" the delivery
 #     contract forbids.
 #
-#   * Only drafts idle longer than QUIET_HOURS. This workflow cannot see
+#   * Exactly one positive PR number is required; an empty all-draft sweep is
+#     rejected before any repository operation.
+#   * Only a draft idle longer than QUIET_HOURS. This workflow cannot see
 #     whether an agent is mid-session on a branch, so it treats recent activity
 #     as evidence that someone may be, and declines to push into it. The signal
 #     is the PR's `updatedAt`, the same one `stuck_draft_audit.py` uses for its
@@ -30,13 +44,13 @@ name: Draft Base Refresh
 #     just pushes, so it over-skips rather than under-skips; that is the safe
 #     direction for a job that writes to someone else's branch.
 #
-#   * Only a PR whose live state still matches the idleness verdict. The listing
-#     snapshots `headRefOid` beside `updatedAt`; immediately before pushing, the
-#     job re-reads OPEN/draft status, activity, labels, and the head OID. The push
-#     then names that OID in an explicit force-with-lease compare-and-swap, with
-#     force-if-includes as the second history-loss guard. An owner push or opt-out
-#     inside either race window therefore rejects this refresh instead of losing
-#     their work.
+#   * Only a PR whose live state still matches the idleness verdict. The direct
+#     requested-PR read snapshots `headRefOid` beside `updatedAt`; immediately
+#     before pushing, the job re-reads OPEN/draft status, activity, labels, and
+#     the head OID. The push then names that OID in an explicit force-with-lease
+#     compare-and-swap, with force-if-includes as the second history-loss guard.
+#     An owner push or opt-out inside either race window therefore rejects this
+#     refresh instead of losing their work.
 #
 # Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
 # older base, or one stacked on another PR's branch where a base merge would
@@ -70,26 +84,24 @@ name: Draft Base Refresh
 #
 #   gh secret set DRAFT_BASE_REFRESH_TOKEN --repo <owner>/<repo>
 #
-# Without the secret the sweep still lists, merges, and reports, but WITHHOLDS
-# every push and fails the run when it withheld one. A green run that
-# refreshed nothing would be instrumentation failing toward "healthy" — the
-# retired pr-queue-autoupdate.yml did exactly that for weeks behind a PAT
-# nobody created (docs/operations/github-workflow-conventions.md §4). If
-# report-only is the intent, disable the workflow or label the drafts.
+# Without the secret the targeted run still lists, merges, and reports, but
+# WITHHOLDS its push and fails when it would have refreshed the requested PR. A
+# green run that silently refreshed nothing would be instrumentation failing
+# toward "healthy" — the retired pr-queue-autoupdate.yml did exactly that for
+# weeks behind a PAT nobody created
+# (docs/operations/github-workflow-conventions.md §4).
 # GITHUB_TOKEN itself carries `contents: read`, so a gate bug cannot push.
 #
 # After each push the job polls the Tests workflow (CI_WORKFLOW) for a
 # `pull_request` run on the new head, up to CI_WAIT_SECONDS. A run parked in
-# approval-required, or no run at all, fails the job and stops the sweep from
-# pushing further heads. The merge already pushed stays where it is: undoing
+# approval-required, or no run at all, fails the job. The merge already pushed
+# stays where it is: undoing
 # it would be the history rewrite this workflow promises never to do.
 #
 # No metered APIs (execution-cost policy); a repository-scoped token is not one.
 # https://docs.github.com/en/actions/concepts/security/github_token
 
 on:
-  schedule:
-    - cron: "23 */4 * * *"   # every 4h; conflict-rot latency tolerance is hours
   workflow_dispatch:
     inputs:
       dry_run:
@@ -101,9 +113,9 @@ on:
         type: string
         default: ""
       pr_number:
-        description: "Refresh only this PR number; empty sweeps every eligible draft"
+        description: "Draft PR number to refresh (one PR per run)"
         type: string
-        default: ""
+        required: true
 
 permissions:
   contents: read         # reads only; the push credential is the secret above
@@ -111,7 +123,7 @@ permissions:
   actions: read          # confirm the pushed head's CI run exists
 
 concurrency:
-  # Scheduled and manual runs must not race each other into the same branch.
+  # Manual runs must not race each other into the same branch.
   group: draft-base-refresh
   cancel-in-progress: false
 
@@ -125,10 +137,10 @@ jobs:
           fetch-depth: 0
           # Persisted into the checkout's git config, so the push below is
           # authenticated as the token's owner (header). The fallback only
-          # serves a read-only sweep: the script never pushes without the secret.
+          # serves a read-only run: the script never pushes without the secret.
           token: ${{ secrets.DRAFT_BASE_REFRESH_TOKEN || github.token }}
 
-      - name: Merge base into behind-but-clean drafts
+      - name: Merge base into one behind-but-clean draft
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -166,10 +178,12 @@ jobs:
             echo "::error::QUIET_HOURS must be at most 8760 (one year); got '$QUIET_HOURS'."
             exit 1
           fi
-          # Empty sweeps everything; anything else must be a bare PR number.
-          case "$PR_NUMBER" in
-            *[!0-9]*) echo "::error::pr_number must be a PR number or empty (got '$PR_NUMBER')."; exit 1 ;;
-          esac
+          # A canonical positive PR number is mandatory. The old empty value
+          # selected every eligible draft and caused the recurring CI cascade.
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || [ "${#PR_NUMBER}" -gt 10 ]; then
+            echo "::error::pr_number must be one positive PR number (got '$PR_NUMBER')."
+            exit 1
+          fi
           case "$CI_WAIT_SECONDS" in
             ''|*[!0-9]*) echo "::error::CI_WAIT_SECONDS must be a nonnegative integer (got '$CI_WAIT_SECONDS')."; exit 1 ;;
           esac
@@ -178,16 +192,17 @@ jobs:
             exit 1
           fi
 
-          # What this run may do to a branch. `push` is the only mode that
-          # writes; the other two go through the same listing, fetch, and merge
-          # so their report is the one a push would have acted on.
+          # What this run may do to the requested branch. `push` is the only
+          # mode that writes; the other two go through the same requested-PR
+          # read, fetch, and merge so their report is the one a push would have
+          # acted on.
           if [ "${DRY_RUN:-false}" = "true" ]; then
             mode=dry-run
           elif [ "$PUSH_TOKEN_CONFIGURED" = "true" ]; then
             mode=push
           else
             mode=no-token
-            echo "::warning::DRAFT_BASE_REFRESH_TOKEN is not configured: this sweep reports and withholds every push. A GITHUB_TOKEN push strands the head in approval-required CI (workflow header)."
+            echo "::warning::DRAFT_BASE_REFRESH_TOKEN is not configured: this targeted run reports and withholds its push. A GITHUB_TOKEN push strands the head in approval-required CI (workflow header)."
           fi
 
           git config user.name  "github-actions[bot]"
@@ -229,13 +244,56 @@ jobs:
             done
           }
 
+          # Read the requested PR directly. `gh pr list --limit N` can silently
+          # miss an older named PR beyond N open items; that turns an explicit
+          # recovery request into a green no-op. A missing or ineligible target
+          # is an error, not an empty work list.
+          if ! gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json number,state,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
+              > requested-pr.json; then
+            echo "::error::PR #$PR_NUMBER could not be read. Confirm that it exists and is visible to this workflow."
+            exit 1
+          fi
+          if ! jq -e --arg requested "$PR_NUMBER" '
+              (type == "object")
+              and ((.number | type) == "number")
+              and ((.number | tostring) == $requested)
+              and ((.state | type) == "string")
+              and ((.isDraft | type) == "boolean")
+              and ((.headRefName | type) == "string")
+              and ((.headRepositoryOwner == null)
+                   or (((.headRepositoryOwner | type) == "object")
+                       and ((.headRepositoryOwner.login | type) == "string")))
+              and ((.baseRefName | type) == "string")
+              and ((.mergeStateStatus | type) == "string")
+              and ((.labels | type) == "array")
+              and (all(.labels[]; (.name | type) == "string"))
+              and ((.updatedAt | type) == "string")
+              and ((.headRefOid | type) == "string")
+            ' requested-pr.json >/dev/null; then
+            echo "::error::PR #$PR_NUMBER returned incomplete or mismatched state; refusing to guess."
+            exit 1
+          fi
+          requested_state=$(jq -r .state requested-pr.json)
+          requested_draft=$(jq -r .isDraft requested-pr.json)
+          if [ "$requested_state" != "OPEN" ]; then
+            echo "::error::PR #$PR_NUMBER is $requested_state, not OPEN; it is not eligible for draft base refresh."
+            exit 1
+          fi
+          if [ "$requested_draft" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER is not a draft; the serial merge queue owns ready PR updates."
+            exit 1
+          fi
+          if jq -e '[.labels[].name] | index("no-base-refresh") != null' \
+              requested-pr.json >/dev/null; then
+            echo "::error::PR #$PR_NUMBER has no-base-refresh; remove the opt-out before requesting this recovery."
+            exit 1
+          fi
+
           # mergeable/mergeStateStatus are computed lazily by GitHub; a fresh
           # query can return UNKNOWN. Ask once, and treat UNKNOWN as "skip" —
           # acting on an unknown merge state is how a clean branch gets a
           # conflicted merge commit pushed into it.
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
-            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
-            > prs.json
 
           refreshed=0; withheld=0; skipped=0; held=0; ci_failed=0
           now_s=$(date -u +%s)
@@ -279,22 +337,15 @@ jobs:
               held=$((held+1)); echo "::endgroup::"; continue
             fi
 
-            # A head this sweep already pushed could not be checked. Whatever
-            # broke — the credential, the API, GitHub — would break the next
-            # push the same way, and one stranded head is enough to diagnose.
-            if [ "$ci_failed" = 1 ]; then
-              echo "hold: an earlier push in this sweep did not establish CI; no further heads are pushed"
-              held=$((held+1)); echo "::endgroup::"; continue
-            fi
-
-            # One unfetchable ref must not abort the sweep for every later PR.
+            # An unfetchable requested ref is a bounded skip, not a reason to
+            # guess at another branch.
             if ! git fetch origin "$head" "$base" --quiet; then
               echo "skip: could not fetch $head or $base"
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
 
             # The idleness verdict above describes $oid. If the branch moved
-            # since the listing, that verdict is about a commit that is no
+            # since the requested-PR read, that verdict is about a commit that is no
             # longer the head — and an owner push inside that window is exactly
             # what the quiet period is for. Re-read it on the next run.
             fetched=$(git rev-parse --verify --quiet "origin/$head^{commit}" || echo "")
@@ -317,10 +368,10 @@ jobs:
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
 
-            # The original listing is now stale by construction: fetch and merge
-            # both took time. Re-read every mutable condition that authorizes a
-            # write. Missing or malformed data is not evidence that the PR is
-            # still an idle, open draft.
+            # The initial requested-PR read is now stale by construction: fetch
+            # and merge both took time. Re-read every mutable condition that
+            # authorizes a write. Missing or malformed data is not evidence that
+            # the PR is still an idle, open draft.
             if ! live=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" \
                 --json state,isDraft,updatedAt,labels,headRefOid 2>/dev/null); then
               echo "hold: live PR state could not be read before push"
@@ -349,7 +400,7 @@ jobs:
             fi
             if jq -e '[.labels[].name] | index("no-base-refresh") != null' \
                 >/dev/null <<<"$live"; then
-              echo "skip: no-base-refresh was added after the listing"
+              echo "skip: no-base-refresh was added after the initial read"
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
             if [ "$live_updated" != "$updated" ]; then
@@ -398,11 +449,11 @@ jobs:
                       echo "::notice::PR #$num: refreshed to ${new_oid:0:7}; its $CI_WORKFLOW run already finished ($ci) — read the head's checks before trusting it."
                       ;;
                     action_required)
-                      echo "::error::PR #$num: the refreshed head ${new_oid:0:7} is parked in approval-required CI. The push credential does not establish CI (workflow header); approve the head's runs by hand. No further heads are pushed in this sweep."
+                      echo "::error::PR #$num: the refreshed head ${new_oid:0:7} is parked in approval-required CI. The push credential does not establish CI (workflow header); approve the head's runs by hand."
                       ci_failed=1
                       ;;
                     *)
-                      echo "::error::PR #$num: no $CI_WORKFLOW pull_request run could be confirmed on the refreshed head ${new_oid:0:7} within ${CI_WAIT_SECONDS}s ($ci). Check the head by hand. No further heads are pushed in this sweep."
+                      echo "::error::PR #$num: no $CI_WORKFLOW pull_request run could be confirmed on the refreshed head ${new_oid:0:7} within ${CI_WAIT_SECONDS}s ($ci). Check the head by hand."
                       ci_failed=1
                       ;;
                   esac
@@ -410,10 +461,7 @@ jobs:
                 ;;
             esac
             echo "::endgroup::"
-          done < <(jq -c --arg only "$PR_NUMBER" '
-                     .[] | select(.isDraft)
-                         | select([.labels[].name] | index("no-base-refresh") | not)
-                         | select($only == "" or (.number | tostring) == $only)' prs.json)
+          done < <(jq -c '.' requested-pr.json)
 
           {
             echo "## Draft base refresh ($mode)"
@@ -423,21 +471,21 @@ jobs:
               push)     echo "- refreshed: $refreshed" ;;
             esac
             echo "- skipped:   $skipped"
-            echo "- held (active within ${QUIET_HOURS}h, idleness unreadable, or after a CI failure): $held"
+            echo "- held (active within ${QUIET_HOURS}h or state unreadable): $held"
             echo
             echo "Readiness and merge are untouched by this job by design."
             if [ "$ci_failed" = 1 ]; then
               echo "**A refreshed head did not get a $CI_WORKFLOW run; see the annotations.**"
             elif [ "$mode" = "push" ] && [ "$refreshed" -gt 0 ]; then
-              echo "Each refreshed head has a $CI_WORKFLOW pull_request run, or the notice above says why not."
+              echo "The refreshed head has a $CI_WORKFLOW pull_request run, or the notice above says why not."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$ci_failed" = 1 ]; then
-            echo "::error::A refreshed head could not be checked; the sweep stopped pushing. See the annotations above."
+            echo "::error::The refreshed head could not be checked. See the annotations above."
             exit 1
           fi
           if [ "$withheld" -gt 0 ]; then
-            echo "::error::$withheld draft(s) are behind and idle but were not refreshed: DRAFT_BASE_REFRESH_TOKEN is not configured, and a GITHUB_TOKEN push would strand each head in approval-required CI (PR #2250, 2026-09-16). Provision the secret (workflow header), label the drafts no-base-refresh, or disable this workflow."
+            echo "::error::The requested draft is behind and idle but was not refreshed: DRAFT_BASE_REFRESH_TOKEN is not configured, and a GITHUB_TOKEN push would strand the head in approval-required CI (PR #2250, 2026-09-16). Provision the secret (workflow header) or leave the draft pinned."
             exit 1
           fi

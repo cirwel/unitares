@@ -1,1 +1,0 @@
-- Review accepts explicit author attestations for meaning-preserving prose edits without another model call, retaining prior coverage and findings. Council review of the actual change counts directly; duplicate CLI review is unnecessary.

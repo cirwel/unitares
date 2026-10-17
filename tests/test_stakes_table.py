@@ -130,7 +130,8 @@ def test_destructive_and_fleet_ops_are_high():
     for key in (("agent", "delete"), ("agent", "archive"),
                 ("knowledge", "cleanup"), ("knowledge", "supersede"),
                 ("calibration", "rebuild"), ("config", "set"),
-                ("dialectic", "synthesis")):
+                ("dialectic", "synthesis"),
+                ("dialectic", "reconcile_effect")):
         assert key in _HIGH, key
         assert get_action_stakes(*key) == "high", key
     # cirs_protocol is no longer here: it is classified per action rather than
