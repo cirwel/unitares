@@ -63,7 +63,9 @@ def test_draft_refresh_is_manual_and_requires_exactly_one_pr():
     assert "\n  schedule:" not in text
     assert "  workflow_dispatch:" in text
     assert re.search(r"(?ms)^      pr_number:\n.*?^        required: true$", text)
-    assert 'select((.number | tostring) == $only)' in script
+    assert 'gh pr view "$PR_NUMBER"' in script
+    assert re.search(r"(?m)^\s*gh pr list ", script) is None
+    assert "--limit 200" not in script
     assert '$only == ""' not in script
 
 
@@ -173,10 +175,21 @@ def _refresh_step() -> dict:
     )
 
 
-def _draft(number, head, *, oid, idle_hours=48, state="BEHIND", labels=(), base="master"):
+def _draft(
+    number,
+    head,
+    *,
+    oid,
+    idle_hours=48,
+    state="BEHIND",
+    labels=(),
+    base="master",
+    pr_state="OPEN",
+):
     touched = datetime.now(timezone.utc) - timedelta(hours=idle_hours)
     return {
         "number": number,
+        "state": pr_state,
         "isDraft": True,
         "headRefName": head,
         "headRepositoryOwner": {"login": "cirwel"},
@@ -199,10 +212,8 @@ def _run_refresh(tmp_path, *, prs, runs=(), env=None, push_exit=0, api_exit=0, d
         tool.chmod(0o755)
     fake_dir = tmp_path / "fake"
     fake_dir.mkdir()
-    (fake_dir / "prs.json").write_text(json.dumps(prs), encoding="utf-8")
     for pr in prs:
-        live = {key: pr[key] for key in ("isDraft", "updatedAt", "labels", "headRefOid")}
-        live["state"] = "OPEN"
+        live = dict(pr)
         (fake_dir / f"pr-{pr['number']}.json").write_text(json.dumps(live), encoding="utf-8")
         (fake_dir / f"oid-{pr['headRefName'].replace('/', '_')}").write_text(pr["headRefOid"], encoding="utf-8")
     (fake_dir / "runs.json").write_text(json.dumps({"workflow_runs": list(runs)}), encoding="utf-8")
@@ -360,6 +371,46 @@ def test_draft_refresh_pr_number_input_limits_the_run_to_that_pr(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert pushes == [_push_line("claude/two", "b" * 40)]
     assert "PR #1" not in proc.stdout
+
+
+def test_draft_refresh_fails_explicitly_when_requested_pr_is_missing(tmp_path):
+    proc, pushes, _ = _run_refresh(
+        tmp_path,
+        prs=[_draft(1, "codex/one", oid="a" * 40)],
+        env={"PR_NUMBER": "99"},
+    )
+    assert proc.returncode == 1
+    assert pushes == []
+    assert "::error::PR #99 could not be read" in proc.stdout
+
+
+def test_draft_refresh_fails_explicitly_when_requested_pr_is_not_a_draft(tmp_path):
+    pr = _draft(1, "codex/one", oid="a" * 40)
+    pr["isDraft"] = False
+    proc, pushes, _ = _run_refresh(tmp_path, prs=[pr])
+    assert proc.returncode == 1
+    assert pushes == []
+    assert "::error::PR #1 is not a draft" in proc.stdout
+
+
+def test_draft_refresh_fails_explicitly_when_requested_pr_is_closed(tmp_path):
+    proc, pushes, _ = _run_refresh(
+        tmp_path,
+        prs=[_draft(1, "codex/one", oid="a" * 40, pr_state="CLOSED")],
+    )
+    assert proc.returncode == 1
+    assert pushes == []
+    assert "::error::PR #1 is CLOSED, not OPEN" in proc.stdout
+
+
+def test_draft_refresh_fails_explicitly_when_requested_pr_opted_out(tmp_path):
+    proc, pushes, _ = _run_refresh(
+        tmp_path,
+        prs=[_draft(1, "codex/one", oid="a" * 40, labels=("no-base-refresh",))],
+    )
+    assert proc.returncode == 1
+    assert pushes == []
+    assert "::error::PR #1 has no-base-refresh" in proc.stdout
 
 
 def test_draft_refresh_rejects_a_malformed_pr_number_before_touching_anything(tmp_path):

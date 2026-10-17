@@ -44,13 +44,13 @@ name: Draft Base Refresh
 #     just pushes, so it over-skips rather than under-skips; that is the safe
 #     direction for a job that writes to someone else's branch.
 #
-#   * Only a PR whose live state still matches the idleness verdict. The listing
-#     snapshots `headRefOid` beside `updatedAt`; immediately before pushing, the
-#     job re-reads OPEN/draft status, activity, labels, and the head OID. The push
-#     then names that OID in an explicit force-with-lease compare-and-swap, with
-#     force-if-includes as the second history-loss guard. An owner push or opt-out
-#     inside either race window therefore rejects this refresh instead of losing
-#     their work.
+#   * Only a PR whose live state still matches the idleness verdict. The direct
+#     requested-PR read snapshots `headRefOid` beside `updatedAt`; immediately
+#     before pushing, the job re-reads OPEN/draft status, activity, labels, and
+#     the head OID. The push then names that OID in an explicit force-with-lease
+#     compare-and-swap, with force-if-includes as the second history-loss guard.
+#     An owner push or opt-out inside either race window therefore rejects this
+#     refresh instead of losing their work.
 #
 # Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
 # older base, or one stacked on another PR's branch where a base merge would
@@ -193,8 +193,9 @@ jobs:
           fi
 
           # What this run may do to the requested branch. `push` is the only
-          # mode that writes; the other two go through the same listing, fetch,
-          # and merge so their report is the one a push would have acted on.
+          # mode that writes; the other two go through the same requested-PR
+          # read, fetch, and merge so their report is the one a push would have
+          # acted on.
           if [ "${DRY_RUN:-false}" = "true" ]; then
             mode=dry-run
           elif [ "$PUSH_TOKEN_CONFIGURED" = "true" ]; then
@@ -243,14 +244,56 @@ jobs:
             done
           }
 
+          # Read the requested PR directly. `gh pr list --limit N` can silently
+          # miss an older named PR beyond N open items; that turns an explicit
+          # recovery request into a green no-op. A missing or ineligible target
+          # is an error, not an empty work list.
+          if ! gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json number,state,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
+              > requested-pr.json; then
+            echo "::error::PR #$PR_NUMBER could not be read. Confirm that it exists and is visible to this workflow."
+            exit 1
+          fi
+          if ! jq -e --arg requested "$PR_NUMBER" '
+              (type == "object")
+              and ((.number | type) == "number")
+              and ((.number | tostring) == $requested)
+              and ((.state | type) == "string")
+              and ((.isDraft | type) == "boolean")
+              and ((.headRefName | type) == "string")
+              and ((.headRepositoryOwner == null)
+                   or (((.headRepositoryOwner | type) == "object")
+                       and ((.headRepositoryOwner.login | type) == "string")))
+              and ((.baseRefName | type) == "string")
+              and ((.mergeStateStatus | type) == "string")
+              and ((.labels | type) == "array")
+              and (all(.labels[]; (.name | type) == "string"))
+              and ((.updatedAt | type) == "string")
+              and ((.headRefOid | type) == "string")
+            ' requested-pr.json >/dev/null; then
+            echo "::error::PR #$PR_NUMBER returned incomplete or mismatched state; refusing to guess."
+            exit 1
+          fi
+          requested_state=$(jq -r .state requested-pr.json)
+          requested_draft=$(jq -r .isDraft requested-pr.json)
+          if [ "$requested_state" != "OPEN" ]; then
+            echo "::error::PR #$PR_NUMBER is $requested_state, not OPEN; it is not eligible for draft base refresh."
+            exit 1
+          fi
+          if [ "$requested_draft" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER is not a draft; the serial merge queue owns ready PR updates."
+            exit 1
+          fi
+          if jq -e '[.labels[].name] | index("no-base-refresh") != null' \
+              requested-pr.json >/dev/null; then
+            echo "::error::PR #$PR_NUMBER has no-base-refresh; remove the opt-out before requesting this recovery."
+            exit 1
+          fi
+
           # mergeable/mergeStateStatus are computed lazily by GitHub; a fresh
           # query can return UNKNOWN. Ask once, and treat UNKNOWN as "skip" —
           # acting on an unknown merge state is how a clean branch gets a
-          # conflicted merge commit pushed into it. The list is filtered to the
-          # required PR number below; it can never become an all-draft sweep.
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
-            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
-            > prs.json
+          # conflicted merge commit pushed into it.
 
           refreshed=0; withheld=0; skipped=0; held=0; ci_failed=0
           now_s=$(date -u +%s)
@@ -302,7 +345,7 @@ jobs:
             fi
 
             # The idleness verdict above describes $oid. If the branch moved
-            # since the listing, that verdict is about a commit that is no
+            # since the requested-PR read, that verdict is about a commit that is no
             # longer the head — and an owner push inside that window is exactly
             # what the quiet period is for. Re-read it on the next run.
             fetched=$(git rev-parse --verify --quiet "origin/$head^{commit}" || echo "")
@@ -325,10 +368,10 @@ jobs:
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
 
-            # The original listing is now stale by construction: fetch and merge
-            # both took time. Re-read every mutable condition that authorizes a
-            # write. Missing or malformed data is not evidence that the PR is
-            # still an idle, open draft.
+            # The initial requested-PR read is now stale by construction: fetch
+            # and merge both took time. Re-read every mutable condition that
+            # authorizes a write. Missing or malformed data is not evidence that
+            # the PR is still an idle, open draft.
             if ! live=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" \
                 --json state,isDraft,updatedAt,labels,headRefOid 2>/dev/null); then
               echo "hold: live PR state could not be read before push"
@@ -357,7 +400,7 @@ jobs:
             fi
             if jq -e '[.labels[].name] | index("no-base-refresh") != null' \
                 >/dev/null <<<"$live"; then
-              echo "skip: no-base-refresh was added after the listing"
+              echo "skip: no-base-refresh was added after the initial read"
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
             if [ "$live_updated" != "$updated" ]; then
@@ -418,10 +461,7 @@ jobs:
                 ;;
             esac
             echo "::endgroup::"
-          done < <(jq -c --arg only "$PR_NUMBER" '
-                     .[] | select(.isDraft)
-                         | select([.labels[].name] | index("no-base-refresh") | not)
-                         | select((.number | tostring) == $only)' prs.json)
+          done < <(jq -c '.' requested-pr.json)
 
           {
             echo "## Draft base refresh ($mode)"
