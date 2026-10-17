@@ -195,23 +195,23 @@ for users; keep it consistent with this entry.
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is "like Helmholtz free energy", a signed integrator |
+| `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is a damped, signed integrator of the E−I imbalance |
 | `free energy (variational −F)` | What is `E` as negative variational free energy under a generative model? | `src/grounding/free_energy.py` — Tier-1 FEP, **explicitly stubbed** (`NotImplementedError`, "Phase 2") |
 
 The first ships and does not own the post-warmup verdict, but it is not inert:
 through coherence it feeds part of behavioral `E` and `I` (see the `coherence`
 entry below). The second is the *target* `E` semantics and is honestly
 not-yet-implemented. Don't let "free energy" stand unqualified across the two.
-The `dynamics.py` docstring's comparison of `V` to Helmholtz free energy is an
-analogy (the hypothetical/analogy level), not a thermodynamic quantity: `V` is
-a dimensionless signed integrator, clamped to `[-1, 1]`.
+The `dynamics.py` docstring used to compare `V` to Helmholtz free energy; it now
+labels that comparison an analogy (the hypothetical/analogy level), not a
+physical quantity: `V` is a dimensionless signed integrator, clamped to `[-1, 1]`.
 
 ### V — three quantities share one letter (code level)
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `V (behavioral)` | Which side of the E−I imbalance is leading right now, smoothed? EMA of E−I, `[-1, 1]` (same range as the ODE V, so range cannot tell them apart); the value in `metrics['V']` once the agent is warm. | `src/behavioral_state.py`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
-| `V (ODE)` | What is the damped running integral of the E−I imbalance? "Like Helmholtz free energy"; clamped to `[-1, 1]` by default. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
+| `V (ODE)` | What is the damped running integral of the E−I imbalance? Clamped to `[-1, 1]` by default; the old Helmholtz comparison is an analogy only. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
 | `V (embodied, instantaneous)` | What is the undamped E−I imbalance of a sensor-driven agent this tick? | *external:* `anima-mcp` `eisv_mapper.py` — "V is Valence — the signed E-I imbalance shared with governance" (separate repo; not checked by the drift gate) |
 
 ⛔ **`metrics['V']` and the V that coherence is computed from can be different

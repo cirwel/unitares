@@ -1,28 +1,19 @@
 defmodule UnitaresLeasePlane.FileWriteExecutor do
   @moduledoc """
-  Executor for the `file_write` governed effect — the first REVERSIBLE execute
-  surface (§5a/§10). This slice is DRY-RUN ONLY: it proves the full validation
-  path (canonicalize the surface, confirm it matches a held lease, check the
-  payload ceiling, read the would-be rollback pre-image) and returns a dry-run
-  result WITHOUT writing a byte and WITHOUT any durable side effect.
+  File-write executor with durable custody admission. Live writes reserve the
+  exact acquired lease before reading the pre-image. The reservation covers
+  commit and compensation and survives DB disconnects and process crashes.
+  Release, handoff and expiry cannot admit a successor until it is retired.
+  Unknown outcomes retain custody for operator recovery; see
+  `docs/operations/effect-custody-recheck.md`.
 
-  Governed by the dialectic review of slice 2 (resolved 2026-06-28, action
-  `resume` with conditions): "dry-run-first — the FileWriteExecutor lands first
-  in a mode that captures the pre-image and returns a dry-run result WITHOUT
-  File.write, proving the lease+veto+pre-image path before any real byte is
-  committed." The live write + the in-process compensation path (with
-  fault-injection at every step of the live rollback) are the NEXT slice and are
-  a hard pre-flag-on gate per that resolution.
-
-  Two-flag fail-safe (defense in depth): `:execute_file_write_enabled` gates the
-  dispatch; `:execute_file_write_commit_enabled` (default false) gates whether a
-  real `File.write` is allowed. With commit disabled, `apply_effect/3` is a pure
-  validating dry-run even if the dispatch flag is on.
+  Both dispatch and commit flags default off. Commit-off is a validating
+  dry-run with no reservation or filesystem mutation.
   """
 
   @behaviour UnitaresLeasePlane.EffectExecutor
 
-  alias UnitaresLeasePlane.Canonicalize
+  alias UnitaresLeasePlane.{Canonicalize, Repo}
 
   # Per-class payload ceiling for file_write; global hard backstop applied above.
   @default_max_bytes 1_048_576
@@ -55,15 +46,25 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   end
 
   @impl true
-  def apply_effect(effect_id, payload, leases) do
+  def apply_effect(effect_id, payload, leases),
+    do: apply_effect(effect_id, payload, leases, fn _conn -> :ok end)
+
+  @doc "Prepare the payload in the custody-admission transaction, before any file mutation."
+  def apply_effect(effect_id, payload, leases, prepare) when is_function(prepare, 1) do
     with {:ok, path} <- resolve_path(payload, leases),
          {:ok, content} <- resolve_content(payload),
          :ok <- check_ceiling(content) do
-      {pre_sha, pre_bytes, existed?} = read_pre_image(path)
-
       if commit_enabled?() do
-        commit(effect_id, path, content, pre_sha, pre_bytes, existed?)
+        with :ok <- Repo.begin_effect_custody(effect_id, leases, prepare) do
+          {pre_sha, pre_bytes, existed?} = read_pre_image(path)
+          result = commit(effect_id, path, content, pre_sha, pre_bytes, existed?)
+          finish_custody(effect_id, leases, result)
+        else
+          {:error, reason} -> {:rejected, reason}
+        end
       else
+        {pre_sha, _pre_bytes, existed?} = read_pre_image(path)
+
         {:committed,
          %{
            dry_run: true,
@@ -79,6 +80,25 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
     end
   end
 
+  # Deliberately no rescue/after: a crash or interrupted filesystem call leaves
+  # a durable fence. A completed compensation is safe to release; a dirty
+  # surface or unacknowledged commit stays fenced for operator reconciliation.
+  defp finish_custody(_id, _leases, {:rejected, :rollback_failed} = result), do: result
+  defp finish_custody(_id, _leases, {:committed, %{mark_deferred: true}} = result), do: result
+
+  defp finish_custody(id, leases, result) do
+    case Repo.finish_effect_custody(id, leases) do
+      :ok ->
+        result
+
+      {:error, _} ->
+        case result do
+          {:committed, meta} -> {:committed, Map.put(meta, :custody_retained, true)}
+          _ -> result
+        end
+    end
+  end
+
   # --- live commit + in-process compensation (§5b) ---------------------------
   # Order: persist the pre-image FIRST (so crash recovery can reconcile), then
   # write, then mark committed. On a write failure, restore the pre-image while
@@ -87,7 +107,8 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
 
   defp commit(effect_id, path, content, pre_sha, pre_bytes, existed?) do
     case repo().record_pre_image(effect_id, pre_sha, pre_bytes, existed?) do
-      res when res in [:ok, :already] -> do_write(effect_id, path, content, pre_bytes, existed?)
+      :ok -> do_write(effect_id, path, content, pre_bytes, existed?)
+      :already -> {:rejected, {:persist_failed, :pre_image_not_fresh}}
       {:error, reason} -> {:rejected, {:persist_failed, reason}}
     end
   end
@@ -148,6 +169,7 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
 
   defp surface_of(%{"surface" => s}), do: s
   defp surface_of(%{surface: s}), do: s
+  defp surface_of(%{surface_id: s}), do: s
   defp surface_of(_), do: nil
 
   defp resolve_content(%{"content" => c} = payload) when is_binary(c) do

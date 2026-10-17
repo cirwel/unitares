@@ -37,9 +37,11 @@ def test_describe_tool_carries_the_migration():
     assert block["deprecated_since"] == "2026-10-16"
     assert block["superseded_by"] == "consult"
     assert "consult(brief=..., effort='standard')" in block["migration"]
-    # The migration must not pretend consult covers the sampling controls.
+    # The migration names the controls that retire with the tool rather than
+    # pretending consult covers them, and states the deprecation window.
     for knob in ("model", "temperature", "max_tokens"):
         assert knob in block["migration"]
+    assert "no earlier than 2026-12-02" in block["migration"]
 
 
 def test_consult_is_not_deprecated():
