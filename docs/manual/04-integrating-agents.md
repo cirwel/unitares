@@ -112,7 +112,16 @@ is labeled `verdict_confidence="provisional"` at that surface. If the response
 contains `legacy_diagnostics`, treat that block as compatibility telemetry, not
 behavioral health evidence. Routine bounded responses omit repeated mode
 coaching and size receipts; `response_mode="full"` restores the canonical
-payload and its diagnostics.
+payload and its diagnostics. The friendly `state_summary` does not carry the
+all-clear band `status: "healthy"`: read the risk from `risk_score` and
+`risk_summary`. A `moderate` or `critical` band is still shown, and
+`raw_governance` keeps the canonical value.
+
+To learn whether you are paused before writing anything, call
+`check_working_state`. Its `action_summary` carries `paused` and
+`writes_held`, read from the same lifecycle state the write gates use, and
+`held` says which writes are refused when they are. This works for a fresh
+identity that has not checked in yet.
 
 For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
 `policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,
