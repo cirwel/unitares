@@ -9,6 +9,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import warnings
 from typing import Any
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields
@@ -16,6 +17,7 @@ from unitares_sdk._metrics_fields import resolve_metrics_fields
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
+    GovernanceToolRefused,
     GovernanceUnavailableError,
     IdentityDriftError,
     extract_retry_after_seconds,
@@ -26,6 +28,7 @@ from unitares_sdk.models import (
     AuditResult,
     CheckinResult,
     CleanupResult,
+    ConsultResult,
     DelegatedInferenceResult,
     IdentityResult,
     InferenceHostResult,
@@ -39,6 +42,20 @@ from unitares_sdk.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Outer bound for consult, past the server's 480s CONSULT_TIMEOUT_S. It does
+# not raise the HTTP client's own timeout; see consult()'s docstring.
+_CONSULT_CLIENT_TIMEOUT_S = 495.0
+
+
+def _warn_call_model_deprecated() -> None:
+    warnings.warn(
+        "call_model() is deprecated since 2026-10-16; use consult(brief=..., "
+        "effort='standard'). call_model() remains for model, temperature or "
+        "max_tokens on an HTTP host.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 # Tools that must NOT get automatic session injection
 _IDENTITY_TOOLS = frozenset({"onboard", "identity"})
@@ -101,15 +118,29 @@ class SyncGovernanceClient:
     # --- Raw tool call ---
 
     def call_tool(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
-        """Call a governance tool synchronously."""
+        """Call a governance tool synchronously.
+
+        ``retry=False`` makes exactly one attempt on either transport: no
+        retry after a timeout or transport error (MCP), and none after a 503
+        (REST), since a proxy may have forwarded the first request.
+        """
         injected_args = self._inject_session(tool_name, arguments)
 
         if self.transport == "rest":
-            result = self._rest_call(tool_name, injected_args, timeout=timeout)
+            result = self._rest_call(
+                tool_name, injected_args, timeout=timeout, retry=retry,
+            )
         else:
-            result = self._mcp_call(tool_name, injected_args, timeout=timeout)
+            result = self._mcp_call(
+                tool_name, injected_args, timeout=timeout, retry=retry,
+            )
         self._raise_for_tool_failure(tool_name, result)
         return result
 
@@ -369,6 +400,53 @@ class SyncGovernanceClient:
         raw = self.call_tool("describe_inference_host", args)
         return InferenceHostResult.model_validate(raw)
 
+    def consult(
+        self,
+        brief: str,
+        purpose: str = "answer",
+        effort: str | None = None,
+        privacy: str = "local",
+        host_id: str | None = None,
+        allow_degraded: bool = False,
+        response_mode: str = "compact",
+        **kwargs: Any,
+    ) -> ConsultResult:
+        """Ask a model for advice. Maps to server tool: consult.
+
+        Advisory only, never an on-record verdict (use request_review for
+        that). ``effort`` left as None lets the server infer it from
+        ``host_id`` (standard when none is pinned). The server forbids
+        unknown arguments, so extra kwargs are passed through as given and
+        rejected by the server if it does not know them.
+
+        A refusal (``success`` false) raises GovernanceToolRefused, as for
+        every SDK call. The call is sent once and never retried. On the MCP
+        transport the HTTP client's own ``timeout`` (30s by default) still
+        bounds it, so construct the client with a larger ``timeout`` for a
+        long consultation (thorough effort can take minutes).
+        """
+        args: dict[str, Any] = {
+            "brief": brief,
+            "purpose": purpose,
+            "privacy": privacy,
+            "allow_degraded": allow_degraded,
+            "response_mode": response_mode,
+        }
+        if effort is not None:
+            args["effort"] = effort
+        if host_id is not None:
+            args["host_id"] = host_id
+        args.update(kwargs)
+        raw = self.call_tool(
+            "consult",
+            args,
+            # Never retried: after a timeout the first consultation may still
+            # be running, and a second send spends inference twice.
+            retry=False,
+            timeout=_CONSULT_CLIENT_TIMEOUT_S,
+        )
+        return ConsultResult.model_validate(raw)
+
     def call_model(
         self,
         prompt: str,
@@ -379,6 +457,13 @@ class SyncGovernanceClient:
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> ModelResult:
+        """Call a model via governance. Maps to server tool: call_model.
+
+        Deprecated since 2026-10-16, like the server tool: use consult().
+        Still the only way to set model, temperature or max_tokens on an
+        HTTP host.
+        """
+        _warn_call_model_deprecated()
         args: dict[str, Any] = {
             "prompt": prompt,
             "max_tokens": max_tokens,
@@ -426,7 +511,12 @@ class SyncGovernanceClient:
     # --- REST transport ---
 
     def _rest_call(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """POST to /v1/tools/call and parse the response envelope.
 
@@ -465,7 +555,7 @@ class SyncGovernanceClient:
             except urllib.error.HTTPError as e:
                 if e.code == 503:
                     retry_after = self._extract_503_retry_after(e)
-                    if attempt == 0:
+                    if attempt == 0 and retry:
                         logger.warning(
                             "%s unavailable (HTTP 503), retrying in %.1fs",
                             tool_name, retry_after,
@@ -559,13 +649,20 @@ class SyncGovernanceClient:
             asyncio.run(self._async_client.connect())
 
     def _mcp_call(
-        self, tool_name: str, arguments: dict, *, timeout: float | None = None
+        self,
+        tool_name: str,
+        arguments: dict,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> dict:
         """Route through async client via asyncio.run()."""
         self._ensure_async_client()
         assert self._async_client is not None
         return asyncio.run(
-            self._async_client.call_tool(tool_name, arguments, timeout=timeout)
+            self._async_client.call_tool(
+                tool_name, arguments, timeout=timeout, retry=retry,
+            )
         )
 
     # --- Session helpers (shared with async client) ---
@@ -604,7 +701,9 @@ class SyncGovernanceClient:
     def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:
         if raw.get("success") is False:
             error = raw.get("error", "Unknown error")
-            raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")
+            # Same type as the async client. A GovernanceConnectionError
+            # subclass, so existing handlers still catch it.
+            raise GovernanceToolRefused(f"Tool {tool_name} failed: {error}")
 
     @staticmethod
     def _extract_503_retry_after(e: urllib.error.HTTPError) -> float:

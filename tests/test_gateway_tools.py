@@ -146,10 +146,10 @@ class TestHandleNote:
 class TestHandleQuery:
     @pytest.mark.asyncio
     async def test_routes_to_status(self, mock_client):
-        # Mock both call_model (for intent) and get_governance_metrics (for status)
+        # Mock both consult (for intent) and get_governance_metrics (for status)
         async def side_effect(tool, args=None):
-            if tool == "call_model":
-                return {"response": "status"}
+            if tool == "consult":
+                return {"advice": "status"}
             return {"action": "proceed", "coherence": 0.5}
 
         mock_client.call_tool.side_effect = side_effect
@@ -159,7 +159,7 @@ class TestHandleQuery:
     @pytest.mark.asyncio
     async def test_routes_to_search_on_unknown(self, mock_client):
         async def side_effect(tool, args=None):
-            if tool == "call_model":
+            if tool == "consult":
                 raise Exception("unavailable")
             return {"results": []}
 
@@ -260,9 +260,9 @@ class TestClientSessionIdPassthrough:
 class TestQueryBindsClassifier:
     @pytest.mark.asyncio
     async def test_handle_query_binds_the_classification_call(self, mock_client):
-        """The session id must reach the call_model classification, not only the routed tool."""
-        mock_client.call_tool.return_value = {"success": True, "response": "note"}
+        """The session id must reach the consult classification, not only the routed tool."""
+        mock_client.call_tool.return_value = {"success": True, "advice": "note"}
         await handle_query(mock_client, question="keep this observation", client_session_id="agent-abc")
         first_name, first_args = mock_client.call_tool.call_args_list[0][0]
-        assert first_name == "call_model"
+        assert first_name == "consult"
         assert first_args["client_session_id"] == "agent-abc"
