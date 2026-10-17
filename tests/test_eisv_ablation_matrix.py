@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -366,6 +367,13 @@ def test_read_receipt_is_atomic_parameterized_and_nonrepeatable(tmp_path):
     assert receipt["parameters"]["scopes"] == ["task"]
     assert receipt["parameters"]["leads"] == [0.0, 30.0]
     assert receipt["parameters"]["exclude_harness_lanes"] == ["beam"]
+    code_version = receipt["code_version"]
+    matrix_path = "scripts/analysis/eisv_ablation_matrix.py"
+    assert code_version["sha256"][matrix_path] == hashlib.sha256(
+        (matrix_module.REPO_ROOT / matrix_path).read_bytes()
+    ).hexdigest()
+    assert set(code_version["sha256"]) == set(matrix_module.CODE_VERSION_PATHS)
+    assert code_version["git_commit"] is None or len(code_version["git_commit"]) == 40
 
     with pytest.raises(matrix_module.ReadProtocolError, match="already has a receipt"):
         matrix_module.record_read_receipt(
@@ -831,6 +839,31 @@ def test_selective_null_needs_at_least_three_permutable_clusters():
     assert null is not None
     assert null.clusters == 2
     assert null.selective_p is None
+
+
+def test_code_version_never_refuses_a_read(monkeypatch, tmp_path):
+    """Missing git and missing files record nulls; they do not raise."""
+    monkeypatch.setattr(matrix_module, "_git_output", lambda *argv: None)
+
+    version = matrix_module.read_code_version(tmp_path)
+
+    assert version["git_commit"] is None
+    assert version["dirty_paths"] is None
+    assert version["sha256"] == {rel: None for rel in matrix_module.CODE_VERSION_PATHS}
+
+
+def test_code_version_lists_uncommitted_executed_modules(monkeypatch):
+    porcelain = " M scripts/analysis/eisv_skeptic_report.py\n"
+    monkeypatch.setattr(
+        matrix_module,
+        "_git_output",
+        lambda *argv: porcelain.strip("\n") if argv[0] == "status" else "a" * 40,
+    )
+
+    version = matrix_module.read_code_version()
+
+    assert version["git_commit"] == "a" * 40
+    assert version["dirty_paths"] == ["scripts/analysis/eisv_skeptic_report.py"]
 
 
 def test_validation_slices_keep_rows_whose_identity_self_declared_testing():

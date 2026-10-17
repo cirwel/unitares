@@ -39,6 +39,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -1299,6 +1300,59 @@ def effective_fixture_rule(args: argparse.Namespace) -> str:
     return DEFAULT_FIXTURE_RULE
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The modules a read executes. Their bytes are what the receipt pins.
+CODE_VERSION_PATHS = (
+    "scripts/analysis/eisv_ablation_matrix.py",
+    "scripts/analysis/eisv_skeptic_report.py",
+    "scripts/analysis/outcome_inventory.py",
+    "src/grounding/outcome_anchors.py",
+)
+
+
+def _git_output(*argv: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *argv],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def read_code_version(root: Path = REPO_ROOT) -> dict[str, Any]:
+    """Describe the code a read ran, for its receipt.
+
+    Recorded, never checked: a value that cannot be determined is null and
+    does not refuse the read. ``sha256`` hashes each executed module's bytes,
+    so it holds outside a git checkout; ``dirty_paths`` lists those modules
+    with uncommitted changes, which the commit alone would not show.
+    """
+    sha256: dict[str, str | None] = {}
+    for rel in CODE_VERSION_PATHS:
+        try:
+            sha256[rel] = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        except OSError:
+            sha256[rel] = None
+    status = _git_output("status", "--porcelain", "--", *CODE_VERSION_PATHS)
+    return {
+        "git_commit": _git_output("rev-parse", "HEAD"),
+        "dirty_paths": (
+            None
+            if status is None
+            else sorted(line[3:] for line in status.splitlines() if line)
+        ),
+        "sha256": sha256,
+    }
+
+
 def record_read_receipt(
     args: argparse.Namespace,
     *,
@@ -1340,6 +1394,7 @@ def record_read_receipt(
             "rule": boundary.rule,
         },
         "contamination_acknowledged": bool(args.acknowledge_contamination),
+        "code_version": read_code_version(),
         "registered_protocol": (
             entry.name
             if args.read_protocol == "registered"
