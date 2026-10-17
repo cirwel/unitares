@@ -73,10 +73,13 @@ def test_archived_holds_writes_and_names_the_way_back():
     gate = describe_write_gate(SimpleNamespace(status="archived", paused_at=None))
     assert gate["paused"] is False
     assert gate["writes_held"] is True
-    # The check-in phase refuses archived and points to these two routes
-    # (updates/phases.py); a check-in does not reactivate it.
-    assert "self_recovery(action='quick')" in gate["held"]
+    # The check-in phase refuses archived, so a check-in does not reactivate
+    # it, and self_recovery rejects archived identities
+    # (require_registered_agent). A proof-carrying resume unarchives the same
+    # UUID; otherwise a new session.
+    assert "start_session(resume=true)" in gate["held"]
     assert "start_session(force_new=true)" in gate["held"]
+    assert "self_recovery" not in gate["held"]
 
 
 def test_deleted_holds_check_ins():

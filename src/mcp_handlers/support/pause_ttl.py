@@ -303,8 +303,10 @@ def describe_write_gate(meta: Any) -> dict:
     entries, and the check-in phases in updates/phases.py. Both refuse while
     ``status == "paused"`` and the pause is not past
     PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``). Both also refuse an
-    archived identity (the check-in phase points to self_recovery or a new
-    session). The check-in phase refuses a deleted identity too, which
+    archived identity. Its way back is a proof-carrying
+    start_session(resume=true), which unarchives the same UUID
+    (require_registered_agent routes there); self_recovery rejects archived
+    identities. The check-in phase refuses a deleted identity too, which
     check_agent_can_operate does not check. Any other status, and an
     identity the server holds no record for yet, passes both gates.
 
@@ -342,8 +344,10 @@ def describe_write_gate(meta: Any) -> dict:
             "writes_held": True,
             "held": (
                 "Check-ins and new shared-memory entries are refused while "
-                "archived. self_recovery(action='quick') restores this "
-                "identity; start_session(force_new=true) starts a new one."
+                "archived. The same live process reclaims this identity with "
+                "start_session(resume=true) and its client_session_id or "
+                "continuity_token, which unarchives it; otherwise "
+                "start_session(force_new=true) starts a new one."
             ),
         }
     if status == "deleted":
