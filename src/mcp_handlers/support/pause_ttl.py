@@ -345,9 +345,9 @@ def describe_write_gate(meta: Any) -> dict:
             "held": (
                 "Check-ins and new shared-memory entries are refused while "
                 "archived. The same live process reclaims this identity with "
-                "start_session(resume=true) and its client_session_id or "
-                "continuity_token, which unarchives it; otherwise "
-                "start_session(force_new=true) starts a new one."
+                "start_session(resume=true) and its client_session_id, which "
+                "unarchives it; otherwise start_session(force_new=true) "
+                "starts a new one."
             ),
         }
     if status == "deleted":

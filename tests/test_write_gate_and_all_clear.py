@@ -80,6 +80,9 @@ def test_archived_holds_writes_and_names_the_way_back():
     assert "start_session(resume=true)" in gate["held"]
     assert "start_session(force_new=true)" in gate["held"]
     assert "self_recovery" not in gate["held"]
+    # onboard refuses a continuity_token without force_new
+    # (identity/handlers.py, continuity_token_resume_rejected).
+    assert "continuity_token" not in gate["held"]
 
 
 def test_deleted_holds_check_ins():
