@@ -131,7 +131,7 @@ Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
 relevance contests against native findings and evidence-linked governed claims.
 This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
-to preserve raw backend order, or filter by a source-memory tag to inspect that
+to preserve raw backend order, or filter by a `source-<provider>-memory` tag to inspect that
 lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
 window) apply no authority reorder: time order is what they asked for.
 
@@ -139,7 +139,7 @@ A queryless listing (no `query`, for example a `status="open"` sweep) leaves
 unpromoted imported memory out by default, because with nothing to match there
 is no contest for the down-rank to decide and imports would fill the page. The
 response reports `imported_omitted` with a hint; the same two routes read them
-(`authority_mode="all"`, or a source-memory tag filter). Check-in memory
+(`authority_mode="all"`, or a `source-<provider>-memory` tag filter). Check-in memory
 suggestions leave them out as well. A query search still returns them.
 
 ## Quick Contribution
@@ -193,12 +193,14 @@ For more control, use the `knowledge()` tool with an action parameter:
 
 ## Memory authority and promotion
 
-Imported memory is context, not policy. Source tags such as `memory-sync` and
-the harness-neutral `source-<provider>-memory` pattern classify a row as
-`imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
+Imported memory is context, not policy. The harness-neutral
+`source-<provider>-memory` tag pattern (for example `source-claude-memory`)
+classifies a row as `imported_context`. Topic words such as `memory-sync` or
+`imported-memory` do not: a finding about memory sync is not an import.
+Agent-to-agent channel messages (a `channel-<topic>` tag
 together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
 `channel_message` and get the same close-contest down-rank. A tag filter made
-only of source-memory tags reads that lane in its own order. A `channel-*` tag
+only of `source-<provider>-memory` tags reads that lane in its own order. A `channel-*` tag
 filter lifts the down-rank only from channel messages on that lane; every other
 row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.
 A row becomes

@@ -112,6 +112,7 @@ ALIAS_SCHEMA_KEEP = {
         "reasoning",
         "root_cause",
         "proposed_conditions",
+        "reviewed_work_author_agent_ids",
         "use_brief_as_thesis",
     }),
 }

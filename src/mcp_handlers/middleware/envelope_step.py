@@ -2895,7 +2895,8 @@ def build_experience_envelope(
             # to find out.
             gate_summary = envelope.setdefault("action_summary", {})
             gate_summary.update(_lift(
-                write_gate, "paused", "writes_held", "held", "expires_at", "note"
+                write_gate, "paused", "writes_held", "expiry_eligible",
+                "held", "expires_at", "note"
             ))
         next_action = _metrics_next_action(payload)
         if next_action is not None:

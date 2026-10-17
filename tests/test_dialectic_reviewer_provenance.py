@@ -17,7 +17,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.dialectic_protocol import DialecticSession, DialecticPhase
-from tests.helpers import parse_result
+from tests.helpers import parse_result, successful_dialectic_message_append
 
 DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 LLM = "src.mcp_handlers.support.llm_delegation"
@@ -108,7 +108,7 @@ async def test_synthetic_verdict_rows_carry_reviewer_backend(server_patch, monke
     session = _make_session(reviewer_id=None)
     ACTIVE_SESSIONS[session.session_id] = session
 
-    add_message = AsyncMock()
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
     with contextlib.ExitStack() as stack:
         for p in _common_patches(add_message):
             stack.enter_context(p)
@@ -143,7 +143,7 @@ async def test_degraded_synthetic_antithesis_is_stamped_degraded(server_patch):
     session = _make_session(reviewer_id=None)
     ACTIVE_SESSIONS[session.session_id] = session
 
-    add_message = AsyncMock()
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
     with contextlib.ExitStack() as stack:
         for p in _common_patches(add_message):
             stack.enter_context(p)
@@ -175,7 +175,7 @@ async def test_external_consult_provenance_lands_on_antithesis_row(server_patch)
     session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
     ACTIVE_SESSIONS[session.session_id] = session
 
-    add_message = AsyncMock()
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
     with contextlib.ExitStack() as stack:
         for p in _common_patches(add_message):
             stack.enter_context(p)
@@ -184,7 +184,6 @@ async def test_external_consult_provenance_lands_on_antithesis_row(server_patch)
             new=AsyncMock(return_value=("agent-consulting", None))))
         stack.enter_context(patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)))
         stack.enter_context(patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock()))
-        stack.enter_context(patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)))
         result = await handle_submit_antithesis({
             "session_id": session.session_id,
             "agent_id": "agent-consulting",
@@ -221,14 +220,13 @@ async def test_synthesis_row_persists_consult_provenance(server_patch):
     session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.SYNTHESIS)
     ACTIVE_SESSIONS[session.session_id] = session
 
-    add_message = AsyncMock()
+    add_message = AsyncMock(side_effect=successful_dialectic_message_append)
     with contextlib.ExitStack() as stack:
         for p in _common_patches(add_message):
             stack.enter_context(p)
         stack.enter_context(patch(
             f"{DIALECTIC}._resolve_dialectic_agent_id",
             new=AsyncMock(return_value=("agent-reviewer", None))))
-        stack.enter_context(patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)))
         result = await handle_submit_synthesis({
             "session_id": session.session_id,
             "agent_id": "agent-reviewer",

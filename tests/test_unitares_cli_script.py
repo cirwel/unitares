@@ -1439,6 +1439,116 @@ _migration_db_url
     assert out.stdout.strip() == "postgresql://gov%20user:p%40ss%2Fw%23rd%25@localhost:5432/governance"
 
 
+def test_migration_wrapper_forwards_quiescence_attestation():
+    script = f'''
+eval "$(sed -n '/^_migrations()/,/^}}/p' "{CLI}")"
+_repo_root() {{ printf '/reviewed'; }}
+_write_psql_shim() {{ :; }}
+_migration_db_url() {{ printf 'postgresql://fixture/db'; }}
+python3() {{ printf '%s\\n' "$*"; }}
+_migrations --apply --dialectic-writers-quiesced
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().endswith(
+        "--db-url postgresql://fixture/db --apply --dialectic-writers-quiesced"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "attempted"),
+    [("76", "77", "1"), ("77", "78", "1"), ("76", "", "1")],
+)
+def test_update_refuses_code_rollback_after_frontier_may_advance(
+    tmp_path, before, after, attempted
+):
+    log = tmp_path / "rollback.log"
+    script = f'''
+eval "$(sed -n '/^_backup_hint()/,/^}}/p;/^_dialectic_frontier_advanced()/,/^}}/p;/^_rollback_code()/,/^}}/p' "{CLI}")"
+_compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; }}
+git() {{ printf 'git %s\\n' "$*" >> "{log}"; return 0; }}
+MIGRATION_SCHEMA_BEFORE="{before}"
+MIGRATION_SCHEMA_AFTER="{after}"
+MIGRATION_APPLY_ATTEMPTED="{attempted}"
+_rollback_code /install v1 current-sha v2
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 1
+    calls = log.read_text()
+    assert "compose stop governance-mcp lease-plane" in calls
+    assert "git " not in calls
+    assert "REFUSING automatic code rollback" in out.stderr
+
+
+def test_update_can_rollback_when_no_protected_frontier_advanced(tmp_path):
+    log = tmp_path / "rollback.log"
+    script = f'''
+eval "$(sed -n '/^_backup_hint()/,/^}}/p;/^_dialectic_frontier_advanced()/,/^}}/p;/^_rollback_code()/,/^}}/p' "{CLI}")"
+_compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
+git() {{ printf 'git %s\\n' "$*" >> "{log}"; return 0; }}
+MIGRATION_SCHEMA_BEFORE=76
+MIGRATION_SCHEMA_AFTER=76
+MIGRATION_APPLY_ATTEMPTED=1
+_rollback_code /install v1 current-sha v2
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    calls = log.read_text()
+    assert "git -C /install checkout --quiet --detach current-sha" in calls
+    assert "compose up -d --build --wait" in calls
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("76", "77"), ("77", "78"), ("76", "")],
+)
+def test_same_target_migration_failure_keeps_writers_stopped_after_frontier(
+    tmp_path, before, after
+):
+    log = tmp_path / "same-target.log"
+    script = f'''
+eval "$(sed -n '/^_backup_hint()/,/^}}/p;/^_dialectic_frontier_advanced()/,/^}}/p;/^_recover_same_target_migration_failure()/,/^}}/p' "{CLI}")"
+_compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
+MIGRATION_SCHEMA_BEFORE="{before}"
+MIGRATION_SCHEMA_AFTER="{after}"
+MIGRATION_APPLY_ATTEMPTED=1
+_recover_same_target_migration_failure v2
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 1
+    calls = log.read_text()
+    assert "compose stop governance-mcp lease-plane" in calls
+    assert "compose up " not in calls
+    assert "REFUSING to restart existing images" in out.stderr
+
+
+def test_same_target_migration_failure_can_restart_below_frontier(tmp_path):
+    log = tmp_path / "same-target.log"
+    script = f'''
+eval "$(sed -n '/^_backup_hint()/,/^}}/p;/^_dialectic_frontier_advanced()/,/^}}/p;/^_recover_same_target_migration_failure()/,/^}}/p' "{CLI}")"
+_compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
+MIGRATION_SCHEMA_BEFORE=76
+MIGRATION_SCHEMA_AFTER=76
+MIGRATION_APPLY_ATTEMPTED=1
+_recover_same_target_migration_failure v2
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 1
+    calls = log.read_text()
+    assert "compose up -d --wait" in calls
+    assert "compose stop " not in calls
+
+
 
 @pytest.mark.parametrize(
     ("status", "code", "marker"),

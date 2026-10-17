@@ -56,6 +56,19 @@ NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
     "non_authored_phi_cold_start_trap"
 )
 COLD_START_CONFIRMATION_ACTUATION_SCOPE = "fallback_risk_pause_deferral"
+LEGACY_CIRCUIT_BREAKER_EFFECT = "agent_metadata.status=paused"
+CIRCUIT_BREAKER_DURABLE_EFFECT = (
+    "durable_agent_status_and_pause_generation"
+)
+CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT = (
+    "durable_pause_generation_already_present"
+)
+CIRCUIT_BREAKER_IN_MEMORY_EFFECT = "in_memory_pause_only"
+COLD_START_RECOVERY_PAUSE_EFFECTS = frozenset({
+    LEGACY_CIRCUIT_BREAKER_EFFECT,
+    CIRCUIT_BREAKER_DURABLE_EFFECT,
+    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
+})
 
 
 def _is_risk_routed_pause(decision: Mapping[str, Any]) -> bool:
@@ -876,7 +889,7 @@ def evaluate_non_authored_cold_start_trap(
         and enforcement.get("applied") is True
         and enforcement.get("mode") == "circuit_breaker"
         and enforcement.get("actor") == "agent_loop_detection"
-        and enforcement.get("effect") == "agent_metadata.status=paused"
+        and enforcement.get("effect") in COLD_START_RECOVERY_PAUSE_EFFECTS
     )
     legacy_enforcement_basis_exact = (
         enforcement.get("basis") == "phi_cold_start_unconfirmed_shadow"

@@ -9,6 +9,10 @@ class RequestDialecticReviewParams(AgentIdentityMixin):
     issue_description: str = Field(
         ..., description="Description of the issue or current state"
     )
+    reviewed_work_author_agent_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Declared author UUIDs to recuse from independent review; not verified",
+    )
 
 class GetDialecticSessionParams(AgentIdentityMixin):
     """
@@ -192,6 +196,7 @@ class DialecticParams(AgentIdentityMixin):
         "request": (
                 "issue_description", "reason", "use_brief_as_thesis",
                 "reasoning", "root_cause", "proposed_conditions",
+                "reviewed_work_author_agent_ids",
         ),
         "thesis": (
                 "session_id", "position", "reasoning", "root_cause",
@@ -217,6 +222,10 @@ class DialecticParams(AgentIdentityMixin):
         "reassign": (
                 "session_id", "new_reviewer_id", "reason",
         ),
+        "reconcile_effect": (
+                "session_id", "effect_disposition", "effect_owner_token",
+                "effect_updated_at", "reason",
+        ),
     }
     # Parameters an action's handler refuses to run without, which the flat
     # wire schema cannot mark required for one action (see
@@ -225,12 +234,13 @@ class DialecticParams(AgentIdentityMixin):
     ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "quick": ("issue_description",),
         "consult": ("session_id", "reasoning", "reviewer_provenance"),
+        "reconcile_effect": ("session_id",),
     }
     # default mirrors action_router's default_action="list" — the schema
     # validated BEFORE the router and a required field here made
     # dialectic({}) error despite the router's fallback (PR #611 council
     # live battery, probe 3g).
-    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "consult", "reassign"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, consult (file an outside verdict as a record with no authority; needs no reviewer slot), reassign")
+    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "consult", "reassign", "reconcile_effect"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, consult (file an outside verdict as a record with no authority; needs no reviewer slot), reassign, reconcile_effect (operator-only durable effect recovery)")
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")
@@ -239,6 +249,20 @@ class DialecticParams(AgentIdentityMixin):
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
     # Write action fields
     issue_description: Optional[str] = Field(None, description="Issue description (action=request/quick)")
+    reviewed_work_author_agent_ids: Optional[List[str]] = Field(
+        None,
+        description=(
+            "For action=request, canonical registered-agent UUIDs whose authored "
+            "work is being reviewed. This requester declaration is not proof of "
+            "authorship; it only recuses those agents from independent review. "
+            "Omit when unspecified (an explicit empty list is refused)."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Requester-declared author UUIDs to recuse"
+            )
+        },
+    )
     position: Optional[str] = Field(None, description="Current position or proposed decision (for action=quick)")
     decision: Optional[Literal["proceed", "defer", "escalate", "block", "unknown"]] = Field(None, description="Decision label (for action=quick)")
     root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis/consult)")
@@ -288,7 +312,33 @@ class DialecticParams(AgentIdentityMixin):
     # parameter's actions and says so.
     conditions: Optional[List[str]] = Field(None, description="Resumption conditions; alias for proposed_conditions (for action=thesis/synthesis/consult)")
     new_reviewer_id: Optional[str] = Field(None, description="New reviewer agent ID (for action=reassign)")
-    reason: Optional[str] = Field(None, description="Reason (for action=request/reassign)")
+    effect_disposition: Optional[
+        Literal["inspect", "apply_pending", "mark_uncertain", "mark_applied"]
+    ] = Field(
+        None,
+        description=(
+            "For action=reconcile_effect: inspect without mutation (default), "
+            "apply_pending for an unclaimed effect, mark_uncertain after "
+            "confirming an applying worker stopped, or "
+            "mark_applied after manually repairing an unknown partial effect"
+        ),
+    )
+    effect_owner_token: Optional[str] = Field(
+        None,
+        description=(
+            "Exact operator-only claim token returned by reconcile_effect inspect; "
+            "required to fence an abandoned applying effect with mark_uncertain"
+        ),
+    )
+    effect_updated_at: Optional[str] = Field(
+        None,
+        description=(
+            "Exact updated_at timestamp returned by a prior "
+            "action=reconcile_effect inspect; required with mark_applied to "
+            "bind the acknowledgement to the record the operator inspected"
+        ),
+    )
+    reason: Optional[str] = Field(None, description="Reason (for action=request/reassign, or required when reconcile_effect marks an effect uncertain/applied)")
 
     @model_validator(mode="before")
     @classmethod

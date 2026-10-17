@@ -1064,14 +1064,15 @@ print("postgresql://" + user + ":" + password + "@localhost:5432/" + db)
 }
 
 _migrations() {
-    # $1: --apply or empty (dry run). Runs the canonical migration executor
-    # against the stack's database through the container.
+    # Forward executor flags verbatim. In particular, the coordinated update
+    # path passes both --apply and the separately established dialectic-writer
+    # quiescence attestation.
     local root shim db_url
     root="$(_repo_root)"
     shim=$(mktemp -d)
     _write_psql_shim "$shim"
     db_url=$(_migration_db_url)
-    PATH="$shim:$PATH" python3 "$root/scripts/dev/apply_migrations.py" --db-url "$db_url" ${1:+"$1"}
+    PATH="$shim:$PATH" python3 "$root/scripts/dev/apply_migrations.py" --db-url "$db_url" "$@"
     local rc=$?
     rm -rf "$shim"
     return $rc
@@ -1192,8 +1193,10 @@ _migrate_quiesced() {
     # Apply this checkout's pending migrations with nothing else writing: stop
     # the services that write to the database, start the database on this
     # release's image, back it up when migrations are pending, then apply.
-    # The caller brings the stack back up, on success or failure.
-    local target="$1" plan
+    # The caller brings the stack back up on success. On failure it restarts
+    # only when the protected dialectic frontier is proven unchanged; otherwise
+    # both writers stay stopped for forward repair.
+    local target="$1" plan apply_rc
     echo "… Stopping the server so nothing writes during migrations"
     # Fail closed: migrate only when the stop succeeded AND a status query that
     # itself succeeded shows neither writer running.
@@ -1206,6 +1209,8 @@ _migrate_quiesced() {
     fi
     echo "… Starting the database"
     _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
+    MIGRATION_SCHEMA_BEFORE=$(_db_schema_version)
+    MIGRATION_SCHEMA_AFTER="$MIGRATION_SCHEMA_BEFORE"
     plan=$(_migrations) || { printf '%s\n' "$plan"; return 1; }
     case "$plan" in
         *"No pending migrations"*) echo "  No pending migrations."; return 0 ;;
@@ -1213,20 +1218,70 @@ _migrate_quiesced() {
     printf '%s\n' "$plan"
     _backup_db "$target" || return 1
     echo "… Applying database migrations"
-    _migrations --apply
+    MIGRATION_APPLY_ATTEMPTED=1
+    apply_rc=0
+    _migrations --apply --dialectic-writers-quiesced || apply_rc=$?
+    MIGRATION_SCHEMA_AFTER=$(_db_schema_version)
+    return "$apply_rc"
+}
+
+_dialectic_frontier_advanced() {
+    # True only when this update crossed a protected schema frontier. The
+    # previous release was not running against that contract, so automatic
+    # code rollback would put pre-frontier Python/BEAM writers over the new DB.
+    local before="${MIGRATION_SCHEMA_BEFORE:-}" after="${MIGRATION_SCHEMA_AFTER:-}" frontier
+    if ! [[ "$before" =~ ^[0-9]+$ && "$after" =~ ^[0-9]+$ ]]; then
+        # After an apply attempt, an unreadable post-state is not evidence that
+        # the protected frontier stayed put. Refuse rollback under uncertainty.
+        [ "${MIGRATION_APPLY_ATTEMPTED:-0}" = "1" ] && return 0
+        return 1
+    fi
+    for frontier in 77 78; do
+        if [ "$((10#$before))" -lt "$frontier" ] && [ "$((10#$after))" -ge "$frontier" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+_recover_same_target_migration_failure() {
+    # No checkout move is needed when the install was already on the requested
+    # revision, but the database may still have crossed a protected frontier
+    # before apply failed.  In that case `up` without a forward rebuild can
+    # restart stale images over the new contract.  Unknown post-apply state is
+    # handled as frontier advancement by _dialectic_frontier_advanced.
+    local target="$1"
+    if _dialectic_frontier_advanced; then
+        echo "error: migrations did not complete on $target." >&2
+        echo "       REFUSING to restart existing images: the protected dialectic schema frontier advanced or cannot be proven unchanged." >&2
+        echo "       Keeping governance-mcp and lease-plane stopped; repair forward and rebuild on $target." >&2
+        _compose stop governance-mcp lease-plane >/dev/null 2>&1 || :
+    else
+        echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
+        _compose up -d --wait >/dev/null 2>&1 \
+            || echo "       The stack did not restart either; see: unitares logs" >&2
+    fi
+    _backup_hint
+    return 1
 }
 
 _rollback_code() {
-    # The new release's stack did not come up after its migrations applied.
-    # Put the code back to the previous release and rebuild it, leaving the
-    # database migrated: migrations are forward-only and additive, so the
-    # previous release runs on the newer schema (the same rule as
-    # scripts/ops/deploy-mcp.sh), while code left ahead of the running
-    # containers would surface at the next restart.
+    # Roll code back only when this update did not cross the protected
+    # dialectic writer frontier. Once 077 or 078 lands, recovery is
+    # forward-only: old Python sweepers are not generation-fenced and pre-078
+    # BEAM assumes a uniqueness constraint that 078 removes.
     local root="$1" current="$2" current_sha="$3" target="$4"
+    if _dialectic_frontier_advanced; then
+        echo "       REFUSING automatic code rollback: the protected schema advanced or could not be proven unchanged (before=${MIGRATION_SCHEMA_BEFORE:-unknown}, after=${MIGRATION_SCHEMA_AFTER:-unknown})." >&2
+        echo "       Leaving $target checked out and both dialectic writers stopped; pre-frontier code must not run on this schema." >&2
+        _compose stop governance-mcp lease-plane >/dev/null 2>&1 || :
+        echo "       Repair forward on $target, then re-run 'unitares update --to $target'." >&2
+        _backup_hint
+        return 1
+    fi
     echo "       Rolling the code back to ${current}…" >&2
     if git -C "$root" checkout --quiet --detach "$current_sha" && _compose up -d --build --wait >/dev/null 2>&1; then
-        echo "       Back on $current and running. The database keeps the migrations that applied; they only add, so $current runs on them." >&2
+        echo "       Back on $current and running; no protected dialectic schema frontier advanced in this attempt." >&2
     else
         echo "       The rollback did not come up either. The code is at $current, the database at $target's schema." >&2
     fi
@@ -1312,14 +1367,15 @@ cmd_update() {
     fi
 
     BACKUP_FILE=""
+    MIGRATION_SCHEMA_BEFORE=""
+    MIGRATION_SCHEMA_AFTER=""
+    MIGRATION_APPLY_ATTEMPTED=0
     if [ "$current_sha" = "$target_sha" ]; then
         echo "✓ Already on $target."
         _confirm "Apply any pending migrations, then rebuild and restart the stack on $target?"
         case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
         if ! _migrate_quiesced "$target"; then
-            echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
-            _compose up -d --wait >/dev/null 2>&1 || echo "       The stack did not restart either; see: unitares logs" >&2
-            _backup_hint
+            _recover_same_target_migration_failure "$target"
             return 1
         fi
         echo "… Rebuilding and starting the stack"

@@ -40,6 +40,7 @@ from src.dialectic_receipt import (  # noqa: E402
     record_sha256,
     verify_resolution_receipt,
 )
+from tests.helpers import successful_dialectic_message_append  # noqa: E402
 from src.identity.agent_identity_credential import (  # noqa: E402
     _b64u_decode,
     _b64u_encode,
@@ -179,8 +180,8 @@ def test_no_key_changes_nothing(no_key):
     assert res.receipt == ""
     assert "receipt" not in record
     assert record == res.to_dict()
-    # stored conditions untouched, and hash() is the pre-receipt formula
-    assert "  padded  " in res.conditions and "" in res.conditions
+    # Finalization stores the same canonical conditions that JSONB reloads.
+    assert res.conditions == ["agreed", "padded"]
     assert res.hash() == _legacy_hash(res)
     assert res.verify_signatures("key-a", "key-b") is True
 
@@ -202,8 +203,7 @@ def test_finalize_never_mints_even_with_a_key(configured_key):
     res = _finalize(s)
     assert res.receipt == ""
     assert "receipt" not in res.to_dict()
-    # the gates that run between finalize and the terminal write see the raw candidate
-    assert "  padded  " in res.conditions
+    assert res.conditions == ["agreed", "padded"]
     assert s.check_hard_limits(res)[0] is True
 
 
@@ -212,15 +212,15 @@ def test_failed_terminal_write_never_mints(configured_key):
     res = _finalize(s)
     record = seal_resolution_for_persistence(s, res, status="failed")
     assert res.receipt == "" and "receipt" not in record
-    assert "  padded  " in res.conditions
+    assert res.conditions == ["agreed", "padded"]
 
 
 def test_resolved_terminal_write_mints_a_bound_receipt(configured_key):
     s, res, record = _sealed()
     assert res.receipt.startswith(RECEIPT_PREFIX)
     assert record["receipt"] == res.receipt
-    # sealing never touches the record: the padded candidate is stored as-is
-    assert "  padded  " in res.conditions and "" in res.conditions
+    # Finalization already matches the canonical persisted/reloaded shape.
+    assert res.conditions == ["agreed", "padded"]
     assert record["conditions"] == res.conditions
     assert res.verify_signatures("key-a", "key-b") is True
 
@@ -262,7 +262,7 @@ def test_invalid_seed_degrades_with_warning_and_touches_nothing(monkeypatch, cap
     with caplog.at_level(logging.WARNING, logger="src.dialectic_receipt"):
         record = seal_resolution_for_persistence(s, res, status="resolved")
     assert res.receipt == "" and "receipt" not in record
-    assert "  padded  " in res.conditions
+    assert res.conditions == ["agreed", "padded"]
     assert any("configured but unusable" in r.getMessage() for r in caplog.records)
 
 
@@ -627,8 +627,15 @@ def _handler_session_and_server():
     server.load_metadata = MagicMock()
     server.load_metadata_async = AsyncMock()
     server.project_root = str(project_root)
-    session = DialecticSession(paused_agent_id="agent-paused", reviewer_agent_id="agent-reviewer",
-                               dispute_type="verification")
+    session = DialecticSession(
+        paused_agent_id="agent-paused",
+        reviewer_agent_id="agent-reviewer",
+        dispute_type="verification",
+        paused_agent_state={
+            "pause_effect_required": True,
+            "pause_token": "pause-test",
+        },
+    )
     session.phase = DialecticPhase.SYNTHESIS
     session.synthesis_round = 1
     return session, server
@@ -648,10 +655,12 @@ async def _drive_synthesis_to_terminal_write(pg_mock, beam_mock):
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
              patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(
+                 f"{DIALECTIC}.pg_add_message",
+                 new=AsyncMock(side_effect=successful_dialectic_message_append),
+             ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.pg_resolve_session", pg_mock), \
-             patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
              patch(f"{DIALECTIC}.beam_resolve", beam_mock), \
              patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock, return_value={"success": True}), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-paused"):
@@ -718,7 +727,7 @@ async def test_save_session_with_no_key_persists_the_legacy_shape(no_key, monkey
         await save_session(s)
         written = pg.await_args.kwargs["resolution"]
         assert "receipt" not in written
-        assert written["conditions"] == res.conditions and "  padded  " in written["conditions"]
+        assert written["conditions"] == res.conditions == ["agreed", "padded"]
 
 
 # ── offline CLI ────────────────────────────────────────────────────────────
