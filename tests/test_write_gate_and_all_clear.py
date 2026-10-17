@@ -69,11 +69,41 @@ def test_stale_pause_is_reported_but_not_held_and_not_expired_by_the_read():
     assert meta.status == "paused" and meta.paused_at == stale
 
 
-def test_archived_holds_shared_memory_writes_only():
+def test_archived_holds_writes_and_names_the_way_back():
     gate = describe_write_gate(SimpleNamespace(status="archived", paused_at=None))
     assert gate["paused"] is False
     assert gate["writes_held"] is True
-    assert "check-in reactivates" in gate["held"]
+    # The check-in phase refuses archived and points to these two routes
+    # (updates/phases.py); a check-in does not reactivate it.
+    assert "self_recovery(action='quick')" in gate["held"]
+    assert "start_session(force_new=true)" in gate["held"]
+
+
+def test_deleted_holds_check_ins():
+    gate = describe_write_gate(SimpleNamespace(status="deleted", paused_at=None))
+    assert gate["paused"] is False
+    assert gate["writes_held"] is True
+    assert "cannot be recovered" in gate["held"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["archived", "deleted"])
+async def test_check_in_phase_refuses_what_the_description_holds(status):
+    """The check-in phase that refuses archived and deleted identities."""
+    from src.mcp_handlers.updates import phases
+
+    meta = SimpleNamespace(status=status, paused_at=None, archived_at=None)
+    assert describe_write_gate(meta)["writes_held"] is True
+    server = SimpleNamespace(agent_metadata={"agent-1": meta})
+    ctx = SimpleNamespace(
+        mcp_server=server,
+        agent_id="agent-1",
+        agent_uuid="agent-1",
+        is_new_agent=False,
+        meta=None,
+    )
+    result = await phases.handle_onboarding_and_resume(ctx)
+    assert result is not None and status in result[0].text
 
 
 @pytest.mark.parametrize(

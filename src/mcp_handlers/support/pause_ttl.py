@@ -298,14 +298,15 @@ def _pause_expires_at(paused_raw: Any) -> Optional[str]:
 def describe_write_gate(meta: Any) -> dict:
     """Whether this agent's governed writes would be refused right now.
 
-    Read from the same predicate the two write gates apply:
+    Read from the predicates the write gates apply:
     check_agent_can_operate (support/agent_auth.py) for new shared-memory
-    entries, and the check-in gate in updates/phases.py. Both refuse while
+    entries, and the check-in phases in updates/phases.py. Both refuse while
     ``status == "paused"`` and the pause is not past
-    PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``). check_agent_can_operate
-    also refuses new shared-memory entries from an archived identity, while a
-    check-in reactivates one. Any other status, and an identity the server
-    holds no record for yet, passes both gates.
+    PAUSE_AUTO_EXPIRE_SECONDS (``_pause_is_stale``). Both also refuse an
+    archived identity (the check-in phase points to self_recovery or a new
+    session). The check-in phase refuses a deleted identity too, which
+    check_agent_can_operate does not check. Any other status, and an
+    identity the server holds no record for yet, passes both gates.
 
     Read-only: unlike the gates it never expires a pause, so a stale pause is
     reported as paused with writes not held, because the next gated write
@@ -340,8 +341,18 @@ def describe_write_gate(meta: Any) -> dict:
             "paused": False,
             "writes_held": True,
             "held": (
-                "New shared-memory entries are refused while archived; a "
-                "check-in reactivates this identity."
+                "Check-ins and new shared-memory entries are refused while "
+                "archived. self_recovery(action='quick') restores this "
+                "identity; start_session(force_new=true) starts a new one."
+            ),
+        }
+    if status == "deleted":
+        return {
+            "paused": False,
+            "writes_held": True,
+            "held": (
+                "Check-ins are refused: this identity is deleted and cannot "
+                "be recovered. start_session(force_new=true) starts a new one."
             ),
         }
     return {"paused": False, "writes_held": False}
