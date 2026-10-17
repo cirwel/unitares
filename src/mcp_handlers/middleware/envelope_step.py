@@ -2987,6 +2987,10 @@ def build_experience_envelope(
             "low_confidence",
             "search_degraded",
             "tag_filter_dropped",
+            # Present only when a queryless listing left imported memory out;
+            # the hint names the two ways to read that lane.
+            "imported_omitted",
+            "imported_omitted_hint",
             # How the list was ordered and windowed. Present only when the
             # caller changed the default, so the default digest is unchanged;
             # without them the friendly alias silently dropped the echo.
