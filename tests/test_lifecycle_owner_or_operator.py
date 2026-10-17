@@ -117,10 +117,41 @@ async def test_token_not_on_the_allowlist_is_refused(action, server, monkeypatch
 @pytest.mark.asyncio
 async def test_the_agent_itself_may_proceed(action, server):
     name, call, meta, status, success_marker = action
+    if name == "resume":
+        # A paused agent may not lift its own pause (next test); the agent
+        # itself still resumes from waiting_input.
+        meta.status = "waiting_input"
     with bound_caller(TARGET), no_operator():
         body = _body(await call(server))
     assert body.get("success") is True, body
     assert success_marker in json.dumps(body).lower()
+
+
+@pytest.mark.asyncio
+async def test_a_paused_agent_cannot_resume_itself(server):
+    """resume skipped self_recovery's risk gate: a paused agent could call it
+    on itself and lift its own pause at any risk. Only an operator may resume
+    a paused agent through this action; the agent itself goes through
+    self_recovery, dialectic, a safety net or expiry."""
+    meta = make_agent_meta(status="paused", tags=[], paused_at="2026-01-01T00:00:00+00:00")
+    server.agent_metadata = {TARGET: meta}
+    with patch_lifecycle_server(server, require_registered=(TARGET, None)), \
+         patch_agent_storage() as storage:
+        storage.update_agent = AsyncMock(return_value=True)
+        storage.persist_runtime_state = AsyncMock(return_value=True)
+        with bound_caller(TARGET), no_operator():
+            refused = _body(await _resume(server))
+        assert refused.get("success") is False, refused
+        assert refused.get("error_code") == "PAUSE_SELF_RESUME_REFUSED", refused
+        assert "recovery" in refused, refused
+        assert meta.status == "paused"
+        meta.add_lifecycle_event.assert_not_called()
+        storage.update_agent.assert_not_called()
+
+        with bound_caller(TARGET), operator_caller():
+            allowed = _body(await _resume(server))
+        assert allowed.get("success") is True, allowed
+        assert meta.status == "active"
 
 
 @pytest.mark.asyncio

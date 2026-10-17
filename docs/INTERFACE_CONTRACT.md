@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.48.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.49.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -885,3 +885,15 @@ Calls without it are unchanged.
 **Client action.** None. A client that links findings through
 `use_tool(tool_name='knowledge', arguments={'action': 'store', ...})` may call
 `store_finding(..., response_to=...)` instead.
+
+## 1.49.0 (2026-10-17)
+
+Authorization only. `agent(action="resume")` on a paused agent now needs a
+valid `X-Unitares-Operator` token; the agent itself gets
+`PAUSE_SELF_RESUME_REFUSED`, with the paused-write `recovery` block, where it
+used to succeed. Resuming from `waiting_input`, unsticking an active agent and
+every operator-token call are unchanged. Nothing is added, removed, retyped or
+renamed, and the description that says the rule is outside every input schema,
+so no input digest moves. Client action: a paused agent follows the refusal's
+`recovery` block (`self_recovery(action='check')`, its dialectic review, an
+operator, or the pause's expiry) instead of calling `resume` on itself.
