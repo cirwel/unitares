@@ -48,12 +48,8 @@ AUTHORITY_MULTIPLIERS = {
     GOVERNED_CLAIM: 1.15,
 }
 
-_IMPORTED_TAGS = frozenset({
-    "imported-memory",
-    "memory-import",
-    "memory-sync",
-    "source-memory",
-})
+_IMPORTED_TAG_PREFIX = "source-"
+_IMPORTED_TAG_SUFFIX = "-memory"
 
 
 @dataclass(frozen=True)
@@ -83,11 +79,18 @@ def is_imported_memory_tag(tag: object) -> bool:
     """Return whether a normalized tag denotes an imported memory lane.
 
     The pattern is harness-neutral: ``source-<provider>-memory`` works without
-    hard-coding Claude, Codex, or any resident name.
+    hard-coding Claude, Codex, or any resident name, and the provider part must
+    be non-empty. Bare words such as ``memory-sync`` or ``imported-memory`` are
+    not markers: agents use them as topics, and a native finding that names
+    the subject must not be down-ranked as an import of it. No importer wrote
+    them alone; the one live row that carried one also carried a source tag.
     """
     value = str(tag or "").strip().lower()
-    return value in _IMPORTED_TAGS or (
-        value.startswith("source-") and value.endswith("-memory")
+    provider = value[len(_IMPORTED_TAG_PREFIX):-len(_IMPORTED_TAG_SUFFIX)]
+    return (
+        value.startswith(_IMPORTED_TAG_PREFIX)
+        and value.endswith(_IMPORTED_TAG_SUFFIX)
+        and bool(provider.strip("-"))
     )
 
 

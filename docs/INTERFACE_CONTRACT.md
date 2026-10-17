@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.46.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.47.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -746,6 +746,25 @@ move (descriptions only); `surface_sha256` moves with them.
 **Client action.** None required beyond the compatibility notes above.
 
 ## 1.46.0 (2026-10-17)
+
+Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
+
+Affected outputs: the `authority` block on knowledge search, get and details
+rows (`tier`, `trust`, `ranking_multiplier`), the `imported_memory` marker,
+and everything keyed on that tier: the close-contest down-rank, queryless
+listing omission (1.44.0), check-in suggestion filtering, and the lane-filter
+test. A row whose only memory-related tag is one of those four words now
+classifies as `native_finding`. Rows tagged `source-<provider>-memory` are
+unchanged. In the live graph on 2026-10-17, four rows carried a bare word:
+three native writes that were misclassified, and one import that also carried
+`source-claude-memory`.
+
+Compatibility: no parameter or schema change, so no digest moves. A writer
+that marked imports with a bare word alone must use `source-<provider>-memory`.
+None is known; the repository's own writers and the memory sync use the
+source pattern. Client action: none.
+
+## 1.47.0 (2026-10-17)
 
 Dialectic review requests accept requester-declared author-agent UUIDs and
 recuse those authors from independent reviewer selection, assignment, and
