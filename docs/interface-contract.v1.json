@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.43.0",
+  "version": "1.44.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "7f0ac6c61c9b5a94363b246ae965e440f41a0ffbe858b713b84f824d21a3931b",
+  "surface_sha256": "8c96d2e7953b55568438be5223852929dcd1fd806041e89d5cdd9009145e7c3e",
   "capabilities": [
     {
       "name": "start_session",
@@ -59,7 +59,7 @@
       "name": "search_shared_memory",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "5d04f7ff69c68cf6951690b06ef984e53377e01135e0037929c17d1ab94d4600",
+      "input_schema_sha256": "8007b7f32764b93ab67f14b1b8df81eca7808b0fbdaa5c7bdc51bcce840ffcc4",
       "transport_names": {
         "mcp_streamable_http": "search_shared_memory",
         "rest_v1_tools": "search_shared_memory",
@@ -290,7 +290,7 @@
       "name": "search_knowledge_graph",
       "implementation": "search_knowledge_graph",
       "kind": "canonical_tool",
-      "input_schema_sha256": "373e6e6fed90f1f9b1af7acf0d1fefc90164bb0b00deae9b93462b3960e272ca",
+      "input_schema_sha256": "9850fc7be7e1814b3d282aebc7dd9074ae930398a6f54cf3427ccbf0778f2fbb",
       "transport_names": {
         "mcp_streamable_http": "search_knowledge_graph",
         "rest_v1_tools": "search_knowledge_graph",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "1979ad398136eb27d846a116f61ca31c217061f61d3a0efec17c7362afd8a859",
+      "input_schema_sha256": "cd48d7763609f7f9e5cbf02e23a25d72cb25f176b465921ef68127b0a61644a5",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",

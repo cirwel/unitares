@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.43.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.44.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -685,3 +685,22 @@ earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
 action: move to `consult(brief=..., effort='standard')` before then. A client
 that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
 say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Queryless KG listings and check-in memory suggestions omit unpromoted imported memory by default; listings report imported_omitted with a hint, authority_mode='all' or an imported-memory tag filter still reads the lane, and query search is unchanged.
+
+Affected outputs: a `knowledge(action=search)` / `search_shared_memory` call
+with no `query` may now return fewer rows. When it left imported memory out it
+adds `imported_omitted` (a count of rows skipped while filling the page) and
+`imported_omitted_hint`, both lifted into the lean digest's `state_summary`.
+Check-in `relevant_discoveries` and `_mirror_kg_results` no longer include
+unpromoted imported memory. Promoted governed claims and channel messages are
+unaffected; query search is unchanged.
+
+Compatibility: no parameter name, type, default or requiredness changes. A
+client that listed imported rows by sweeping open work sees them omitted and
+gets them back with `authority_mode="all"` or an imported-memory tag filter.
+Schema digests move for `knowledge`, `search_knowledge_graph` and
+`search_shared_memory` (the `authority_mode` description); no other digest
+moves. Client action: none required; read `imported_omitted` where useful.
