@@ -15,6 +15,15 @@ Several primary URLs returned HTTP 403 to direct fetch; those quotes were
 corroborated via search-engine retrieval of source text, not byte-verified
 (flagged inline).
 
+> **Claim status (2026-10-16): research interpretation.** The correspondence
+> language below ("formalizes exactly what EISV names", "direct counterparts",
+> "position itself as an engineering instance") records this audit's
+> *novelty* verdict. It is not evidence that EISV implements those theories.
+> The canonical posture is the contract's
+> [§Prior art](eisv-proprioception-contract.md#prior-art--positioning): EISV
+> is informed by, and structurally adjacent to, interoceptive inference, and
+> is not presented as a formal implementation of it.
+
 ---
 
 ## TL;DR

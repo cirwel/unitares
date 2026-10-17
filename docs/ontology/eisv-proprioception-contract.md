@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** October 11, 2026
+**Last Updated:** October 16, 2026
 **Status:** Active
 
 ---
@@ -729,8 +729,24 @@ runtime read of state, history, baselines and calibration filters on
   window for per-era reporting, `require_single_instrument` refuses stamped rows
   that carry more than one instrument id (a threshold, flag or overlay change
   inside one era), and `is_settled` drops the restore transient.
-  `scripts/analysis/basin_conjunct_binding_read.py` is the first reader wired
-  to it; the others are not yet.
+  `check_window` wraps both checks for a script and returns the provenance
+  lines to print beside its result.
+- Wired readers (each refuses a crossing window unless given
+  `--allow-cross-era REASON`, and prints the crossed changes and stamped ids):
+  `basin_conjunct_binding_read.py`, `eisv_history_structure_read.py`,
+  `coherence_gate_shadow_read.py`, `outcome_validation.py`,
+  `eisv_phi_telemetry_redteam.py`, `eisv_residual_autocorr.py` and
+  `eisv_stage_b_safety_floor.py` under `scripts/analysis/`, plus
+  `scripts/verdict_counterfactual.py` and `scripts/dev/grounding_flip_analysis.py`.
+  The registered-read path (`eisv_skeptic_report.fetch_rows`, the ablation
+  matrix, the input snapshot, the prospective cohort) is deliberately not wired:
+  it has its own boundary at T and changing it would change the 12-01 read.
+  Readers that run on a schedule or serve live traffic annotate instead of
+  refusing (`crossing_report`, `crossing_note`): the doctor's
+  `signal_degeneracy` check names the crossed changes in its detail, and
+  `/v1` telemetry-health returns them under `eisv_instrument_eras`. Both are
+  time-based only. Not yet wired: the class-anchor regeneration and all-time
+  trajectory reads.
 
 There is no per-field exemption. A change that only touches the basin or the
 action still moves behavioral E, I and V on later check-ins, because the action
@@ -740,6 +756,25 @@ change to the golden trajectories without one fails
 `tests/test_eisv_instrument_eras.py`. Report each era separately with n,
 identity count and p50. A recomputation of older rows under current maths is a
 labelled estimate, not extra sample.
+
+### Named validation and falsification paths (2026-10-16)
+
+The canonical doctrine above makes comparative decision value against simpler
+representations the burden of proof. Two proposed experiments, both written up
+on 2026-09-22 alongside the doctrine (#2342 step 5), are the named external
+tests of that burden. Neither has run, and neither is evidence for or against
+EISV. Both treat a null result as a valid outcome.
+
+| Path | What it would test | What would count against EISV | Status |
+|---|---|---|---|
+| Resource-grounded E ([#2410](https://github.com/cirwel/unitares/issues/2410)) | Whether resource telemetry seen at the harness (context headroom, tool failures, compaction) makes runtime decisions better than current E, **and** better than raw resource thresholds that need no EISV | Raw thresholds do as well. E should then not absorb them, and using thresholds directly in policy is a legitimate result | **Parked 2026-09-24** after adversarial review (see the [disposition comment](https://github.com/cirwel/unitares/issues/2410#issuecomment-5812730348)). Its compaction outcome is decided by the resource signal itself, its tool-failure outcome would amount to an EISV discrimination read inside the pre-read window, and no decision consumes the result. It may be revisited after the 12-01 read reports, and only as a resource-signal arm inside the incremental-value ablation (`docs/proposals/eisv-incremental-value-ablation-v1.md`) |
+| Trajectory-quality shadow evaluation on an external agentic-RL harness (Xiaomi MiMo-V2.6 / Uni-Agent) | Among sibling rollouts of the same task that **all pass** the terminal verifier, whether prefix UNITARES observations predict a later, independently assigned quality or reward-hacking label better than task, harness, length and tool-count baselines. Telemetry is observation-only and causal; nothing reaches generation, reward, routing or stopping | No out-of-sample information beyond those baselines (H0), or no transfer across at least two harness strata | **Proposed, not filed, not started.** It exists as a protocol (v0.1), an adapter boundary and an issue draft in UNITARES knowledge-graph notes of 2026-09-22. It needs access to sibling rollouts with independent groupwise quality labels, which this deployment does not have. An outcome read from it in the pre-read window would raise the same objection that parked #2410, so it waits for the 12-01 report. Its independent label channel would make it a candidate new premise under the stop rule's reopening clause |
+
+Phrase them as candidate falsification and validation paths, not as
+supporting work. "MiMo" names the external system whose evaluation path would
+supply the labels; it does not imply that system validates EISV or UNITARES.
+Either path that later produces a result enters the ledger below like any
+other claim, at its measured level.
 
 ## Tested claims — ledger
 

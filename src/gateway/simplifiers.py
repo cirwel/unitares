@@ -149,12 +149,12 @@ def simplify_note(raw: dict) -> dict:
 
 
 def simplify_query(raw: dict) -> dict:
-    """Simplify call_model / routed tool response."""
+    """Simplify consult / routed tool response."""
     if not isinstance(raw, dict):
         return ok(str(raw)[:200], {"response": raw})
 
-    # call_model returns {"response": "..."} or the tool result
-    response = raw.get("response") or raw.get("result") or raw.get("text")
+    # consult returns {"advice": "..."}; other routed tools return their result
+    response = raw.get("advice") or raw.get("response") or raw.get("result") or raw.get("text")
     if response:
         summary = str(response)[:200]
         return ok(summary, {"response": response})

@@ -23,9 +23,21 @@ character is judgeable) OR >= --min-near near-threshold check-ins with zero flip
 0/300 bounds the harmful rate below ~1%). Per-class, never fleet-aggregate (the basin-shadow
 lesson: an aggregate hides bifurcation).
 
+V and risk come from the event's own agent's nearest ``core.agent_state`` row
+within 3 s, and that row's ``sensor_eisv_source`` gives the sensor class.
+Classes are (sensor class, label) and the physical and behavioral instruments
+are never pooled. Before 2026-10-16 the lookup took the nearest row from any
+agent, so V and risk could belong to a different agent.
+
+The window is the last ``--hours`` hours up to now, or all history when it is
+not given. A window that crosses an EISV instrument change (src/eisv_eras.py)
+is refused unless ``--allow-cross-era REASON`` is given, and the crossed changes
+are printed; the all-history default crosses them.
+
 Usage:
-    python3 scripts/dev/grounding_flip_analysis.py            # full history
+    python3 scripts/dev/grounding_flip_analysis.py            # full history: refused, it crosses eras
     python3 scripts/dev/grounding_flip_analysis.py --hours 48 --window-hours 24
+    python3 scripts/dev/grounding_flip_analysis.py --allow-cross-era "why"
 """
 from __future__ import annotations
 
@@ -35,11 +47,14 @@ import os
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from config.governance_config import classify_basin, config  # noqa: E402
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 COH_CRIT = float(getattr(config, "COHERENCE_CRITICAL_THRESHOLD", 0.40))
 _ORDER = {"low": 0, "boundary": 1, "high": 2}
@@ -53,8 +68,44 @@ def _psql() -> str:
     return "psql"
 
 
-def fetch(db_url: str, hours: int | None) -> list[dict]:
-    window = f"AND e.ts > now() - interval '{int(hours)} hours'" if hours else ""
+def _ts(t: datetime) -> str:
+    """A timezone-aware datetime as a quoted SQL timestamptz literal."""
+    if t.tzinfo is None:
+        raise ValueError("window bounds must be timezone-aware")
+    return f"'{t.isoformat()}'::timestamptz"
+
+
+def _query(db_url: str, sql: str) -> list[dict]:
+    """Run ``sql`` (one JSON object per row) through psql and parse the rows."""
+    env = dict(os.environ, PGPASSWORD=os.environ.get("PGPASSWORD", "postgres"))
+    out = subprocess.run([_psql(), db_url, "-At", "-c", sql] if db_url.startswith("postgres")
+                         else [_psql(), "-h", "localhost", "-U", "postgres", "-d", "governance",
+                               "-At", "-c", sql],
+                         capture_output=True, text=True, env=env)
+    if out.returncode != 0:
+        sys.exit(f"query failed: {out.stderr.strip()}")
+    return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+
+
+# fetch() matches each event to its agent's nearest state row within this distance.
+JOIN_SLACK = timedelta(seconds=3)
+# Sensor class of a matched state row that carries no sensor_eisv_source.
+UNRECORDED = "unrecorded"
+# Sensor class of an event with no matching state row.
+UNMATCHED = "no_state_row"
+
+
+def fetch_instrument_ids(db_url: str, start: datetime, end: datetime) -> dict:
+    """Rows per stamped EISV instrument id in ``[start, end)`` (None = unstamped)."""
+    # The state lookups in fetch() do not exclude synthetic rows, so neither does this.
+    counts_sql = eisv_era_sql.instrument_id_counts_sql(_ts(start), _ts(end), include_synthetic=True)
+    rows = _query(db_url, f"SELECT row_to_json(t) FROM ({counts_sql}) t;")
+    return {r["instrument_id"]: int(r["n"]) for r in rows}
+
+
+def fetch(db_url: str, start: datetime, end: datetime) -> list[dict]:
+    slack = int(JOIN_SLACK.total_seconds())
+    window = f"AND e.ts > {_ts(start)} AND e.ts < {_ts(end)}"
     sql = f"""
     WITH gs AS (
       SELECT e.agent_id, e.ts,
@@ -68,25 +119,23 @@ def fetch(db_url: str, hours: int | None) -> list[dict]:
       FROM audit.events e WHERE e.event_type='grounding_shadow' {window}
     )
     SELECT row_to_json(t) FROM (
-      SELECT gs.*, a.label,
-        (SELECT st.volatility FROM core.agent_state st
-           WHERE st.recorded_at BETWEEN gs.ts - interval '3s' AND gs.ts + interval '3s'
-           ORDER BY abs(extract(epoch from st.recorded_at - gs.ts)) LIMIT 1) AS v,
-        (SELECT COALESCE(st.risk_score,0) FROM core.agent_state st
-           WHERE st.recorded_at BETWEEN gs.ts - interval '3s' AND gs.ts + interval '3s'
-           ORDER BY abs(extract(epoch from st.recorded_at - gs.ts)) LIMIT 1) AS risk,
+      SELECT gs.*, a.label, st.v, st.risk, st.sensor_class,
         extract(epoch from (now() - gs.ts))/3600.0 AS age_h
       FROM gs LEFT JOIN core.agents a ON a.id::text = gs.agent_id
+      LEFT JOIN core.identities ident ON ident.agent_id = gs.agent_id
+      -- The event's own agent's nearest state row: V and risk come from it,
+      -- and its sensor source says which instrument produced the event.
+      LEFT JOIN LATERAL (
+        SELECT sr.volatility AS v, COALESCE(sr.risk_score, 0) AS risk,
+          COALESCE(sr.state_json->>'sensor_eisv_source', '{UNRECORDED}') AS sensor_class
+        FROM core.agent_state sr
+        WHERE sr.identity_id = ident.identity_id
+          AND sr.recorded_at BETWEEN gs.ts - interval '{slack}s' AND gs.ts + interval '{slack}s'
+        ORDER BY abs(extract(epoch from sr.recorded_at - gs.ts)) LIMIT 1
+      ) st ON true
     ) t;
     """
-    env = dict(os.environ, PGPASSWORD=os.environ.get("PGPASSWORD", "postgres"))
-    out = subprocess.run([_psql(), db_url, "-At", "-c", sql] if db_url.startswith("postgres")
-                         else [_psql(), "-h", "localhost", "-U", "postgres", "-d", "governance",
-                               "-At", "-c", sql],
-                         capture_output=True, text=True, env=env)
-    if out.returncode != 0:
-        sys.exit(f"query failed: {out.stderr.strip()}")
-    return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+    return _query(db_url, sql)
 
 
 def flip_of(r: dict) -> tuple[bool, str | None, bool]:
@@ -109,7 +158,10 @@ def analyze(rows: list[dict], window_h: float, min_near: int, min_flips: int) ->
     # split into two consecutive windows for the convergence test (recent vs prior)
     recent, prior = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0])  # [flips, near]
     for r in rows:
-        lbl = r.get("label") or "(unlabeled)"
+        # Never pool sensor classes: the physical and behavioral instruments
+        # write the same fields at different levels, so a class is
+        # (sensor, label).
+        lbl = (r.get("sensor_class") or UNMATCHED, r.get("label") or "(unlabeled)")
         p = per[lbl]
         p["n"] += 1
         near, direction, joined = flip_of(r)
@@ -128,11 +180,12 @@ def analyze(rows: list[dict], window_h: float, min_near: int, min_flips: int) ->
     print(f"grounding_shadow flip analysis — COH_CRIT={COH_CRIT}, "
           f"rule: ready when stable AND (>={min_flips} flips characterized OR "
           f">={min_near} near / 0 flips)\n")
-    hdr = f"{'class':20} {'n':>4} {'join':>4} {'near':>4} {'flip':>4} {'tght':>4} {'rlx':>4}  {'stable?':>7}  verdict"
+    hdr = f"{'sensor':12} {'class':20} {'n':>4} {'join':>4} {'near':>4} {'flip':>4} {'tght':>4} {'rlx':>4}  {'stable?':>7}  verdict"
     print(hdr)
     print("-" * len(hdr))
     ready, waiting = [], []
-    for lbl, p in sorted(per.items(), key=lambda x: -x[1]["n"]):
+    for lbl, p in sorted(per.items(), key=lambda x: (x[0][0], -x[1]["n"])):
+        name = f"{lbl[0]}/{lbl[1]}"
         # convergence: recent vs prior flip-rate (per near-threshold event)
         rf, rn = recent[lbl]
         pf, pn = prior[lbl]
@@ -143,19 +196,19 @@ def analyze(rows: list[dict], window_h: float, min_near: int, min_flips: int) ->
             stable = "—"  # not enough in both windows yet
         if p["joined"] < 30:
             verdict = "INSUFFICIENT (warm volume)"
-            waiting.append(lbl)
+            waiting.append(name)
         elif p["flip"] >= min_flips:
             verdict = (f"FLIPS: {p['tighten']} tighten / {p['relax']} relax — "
                        f"judge harm{' [STABLE]' if stable == 'yes' else ''}")
-            (ready if stable == "yes" else waiting).append(lbl)
+            (ready if stable == "yes" else waiting).append(name)
         elif p["near"] >= min_near and p["flip"] == 0:
             verdict = f"CONVERGED-SAFE (0 flips / {p['near']} near)"
-            ready.append(lbl)
+            ready.append(name)
         else:
             need = max(min_near - p["near"], 0)
             verdict = f"need ~{need} more near-threshold (or {min_flips - p['flip']} more flips)"
-            waiting.append(lbl)
-        print(f"{lbl[:20]:20} {p['n']:>4} {p['joined']:>4} {p['near']:>4} {p['flip']:>4} "
+            waiting.append(name)
+        print(f"{lbl[0][:12]:12} {lbl[1][:20]:20} {p['n']:>4} {p['joined']:>4} {p['near']:>4} {p['flip']:>4} "
               f"{p['tighten']:>4} {p['relax']:>4}  {stable:>7}  {verdict}")
 
     print(f"\nAPPLY readiness (per-class, NOT fleet-wide):")
@@ -165,15 +218,36 @@ def analyze(rows: list[dict], window_h: float, min_near: int, min_flips: int) ->
           "Leave thin/ephemeral classes ungrounded until covered.")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db-url", default=os.environ.get("DB_POSTGRES_URL", ""))
     ap.add_argument("--hours", type=int, default=None, help="lookback window (default: all)")
     ap.add_argument("--window-hours", type=float, default=24.0, help="convergence sub-window")
     ap.add_argument("--min-near", type=int, default=300)
     ap.add_argument("--min-flips", type=int, default=10)
-    args = ap.parse_args()
-    rows = fetch(args.db_url, args.hours)
+    eisv_eras.add_cross_era_argument(ap)
+    args = ap.parse_args(argv)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=args.hours) if args.hours else eisv_eras.ALL_TIME_START
+    # The read matches each event to state rows up to JOIN_SLACK away, so the
+    # state rows it can use span the event window widened by that much.
+    # BETWEEN is inclusive, the guard's window is [start, end): add 1 µs.
+    state_start = start - JOIN_SLACK
+    state_end = end + JOIN_SLACK + timedelta(microseconds=1)
+    if eisv_eras.check_window(state_start, state_end, allow_cross=args.allow_cross_era) is None:
+        return 2
+    rows = fetch(args.db_url, start, end)
+    # Each psql call is its own snapshot, so count instrument ids AFTER the
+    # read: every row the read saw had committed by then, so a mix it pooled
+    # is in this count.
+    id_counts = fetch_instrument_ids(args.db_url, state_start, state_end)
+    provenance = eisv_eras.check_window(
+        state_start, state_end, allow_cross=args.allow_cross_era, id_counts=id_counts)
+    if provenance is None:
+        return 2
+    for line in provenance:
+        print(line)
+    print()
     if not rows:
         print("No grounding_shadow events. Is UNITARES_GROUNDING_SHADOW=1 on the live server?")
         return 0
