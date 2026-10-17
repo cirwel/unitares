@@ -70,7 +70,7 @@ note for why the raw rendering is not.
 | `request_review` | `dialectic` | 9 | — | `sha256:c92d4a95a1c30fe39616cd66bd4f3d0caad871ae20fc861549bf058cd99b3820` |
 | `search_shared_memory` | `knowledge` | 25 | — | `sha256:dc157ccf4a395b292fe2a22c53edc8b1e13d0aca350023c2b71d1f9309a09e68` |
 | `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:51afe7dcf4e78ca9388431bab2ccd4128bf13ac33bba7be20ce6007edf2945fb` |
+| `store_finding` | `knowledge` | 14 | — | `sha256:bf3867980e14da5530de34e4a7d85aa9ad2338bd5be2c87aeda3ffea34d20607` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
 | `update_finding` | `knowledge` | 15 | — | `sha256:13943cd11bc42ecca28ab3ff275901481c8190c966e5928103d50302e62bdd26` |
 
