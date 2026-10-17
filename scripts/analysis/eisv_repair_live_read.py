@@ -343,7 +343,8 @@ def build_report(
     return {
         "schema": SCHEMA,
         "rule": RULE_PATH,
-        "range_only": not endpoints,
+        # True when any stratum fell back to the pooled range.
+        "range_only": any(s["endpoint_source"] == "range_only" for s in strata),
         "eras": {
             era.window.era: {
                 "start": era.window.start.isoformat(),
@@ -366,8 +367,8 @@ def render(report: Mapping[str, Any]) -> str:
     lines = [
         "# EISV repair live read",
         "",
-        f"Rule: `{report['rule']}`. Endpoints: "
-        + ("contract row 50's pooled range (range-only)." if report["range_only"] else "per stratum."),
+        f"Rule: `{report['rule']}`. Endpoints: per stratum where supplied, otherwise contract "
+        "row 50's pooled range (range-only); the Endpoints column says which.",
         "",
     ]
     for era, info in report["eras"].items():
@@ -378,10 +379,14 @@ def render(report: Mapping[str, Any]) -> str:
     lines.extend(f"- {line}" for line in report["era_lines"])
     lines += [
         "",
-        "| Stratum | Outcome | Shift |",
-        "|---|---|---|",
+        "| Stratum | Outcome | Endpoints | Shift |",
+        "|---|---|---|---|",
     ]
-    lines += [f"| `{s['stratum']}` | {s['outcome']} | {_pct(s['shift'])} |" for s in report["strata"]]
+    lines += [
+        f"| `{s['stratum']}` | {s['outcome']} | "
+        f"{s['endpoint_source']} [{_pct(s['endpoints'][0])}, {_pct(s['endpoints'][1])}] | {_pct(s['shift'])} |"
+        for s in report["strata"]
+    ]
     lines += [
         "",
         "Per era (P = post-repair, B = baseline). Pooled share decides; the identity p50 is reported beside it.",
@@ -404,10 +409,12 @@ def render(report: Mapping[str, Any]) -> str:
     if reasons:
         lines += ["", "Inconclusive because:"]
         lines += [f"- `{name}`: " + "; ".join(why) for name, why in reasons]
-    if report["range_only"]:
+    fallback = [s["stratum"] for s in report["strata"] if s["endpoint_source"] == "range_only"]
+    if fallback:
         lines += [
             "",
-            "Range-only: BELOW or ABOVE means outside the fleet-mix estimate, not off this stratum's estimate.",
+            "Range-only for " + ", ".join(f"`{name}`" for name in fallback)
+            + ": BELOW or ABOVE there means outside the fleet-mix estimate, not off that stratum's estimate.",
         ]
     return "\n".join(lines) + "\n"
 

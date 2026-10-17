@@ -205,6 +205,33 @@ def test_markdown_reports_both_eras_statistics():
     assert "| 60.0% | 125 | 5 | 5 | 25 | 20.0% | 60.0% |" in post_line
 
 
+def test_partial_endpoints_keep_the_range_only_warning_where_they_fall_back():
+    post, baseline = _windows()
+    post_rows = [r for i in range(5) for r in _identity_rows(f"p{i}", 25, 5)]
+    post_rows += [r for i in range(5) for r in _identity_rows(f"q{i}", 25, 5, driver="phi_cold_start")]
+    base_rows = [
+        r
+        for i in range(5)
+        for drv in ("behavioral_assessment", "phi_cold_start")
+        for r in _identity_rows(f"b{i}{drv}", 25, 5, start=BASE_START, stamp=None, driver=drv)
+    ]
+    report = read.build_report(
+        read.read_era(post_rows, post, ROSTER),
+        read.read_era(base_rows, baseline, ROSTER),
+        endpoints={"behavioral_assessment/ephemeral": [0.1, 0.3]},
+        instrument_ids=[read.POST_INSTRUMENT_ID],
+    )
+    sources = {s["stratum"]: (s["endpoint_source"], s["outcome"]) for s in report["strata"]}
+    assert sources == {
+        "behavioral_assessment/ephemeral": ("per_stratum", "CONSISTENT"),
+        "other/ephemeral": ("range_only", "BELOW"),
+    }
+    assert report["range_only"] is True
+    text = read.render(report)
+    assert "Range-only for `other/ephemeral`" in text
+    assert "behavioral_assessment/ephemeral`:" not in text.split("Range-only for")[1]
+
+
 def test_empty_baseline_stratum_is_inconclusive():
     outcome, reasons = read.stratum_outcome(_passing(15), None)
     assert outcome == "INCONCLUSIVE"
