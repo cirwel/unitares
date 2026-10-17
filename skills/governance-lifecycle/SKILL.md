@@ -378,7 +378,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 
 ### Specialized
 
-- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable, and still the only inference tool that takes `model`, `temperature` or `max_tokens`
+- `call_model()` — Deprecated since 2026-10-16: use `consult(effort='standard')`, which reaches the same local host. Still callable, and still the only way to set `model`, `temperature` or `max_tokens` on an HTTP host (`delegate_inference` takes `model` for a CLI host)
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.

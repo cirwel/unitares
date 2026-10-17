@@ -135,9 +135,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     "call_model": (
         "Deprecated since 2026-10-16: use consult(effort='standard'), which "
         "reaches the same local host.\n\n"
-        "Still callable during the deprecation window, and still the only "
-        "inference tool that takes model, temperature or max_tokens; if you "
-        "depend on one of those, say so with leave_note. "
+        "Still callable during the deprecation window, and still the only way "
+        "to set model, temperature or max_tokens on an HTTP host "
+        "(delegate_inference takes model for a CLI host); if you depend on "
+        "one of those, say so with leave_note. "
         "One synchronous advisory completion on the local Ollama lane or the "
         "Hugging Face router, returning tool evidence, never a governed review "
         "record. provider='hf' also needs privacy='cloud' or 'auto', "
@@ -190,9 +191,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "thorough for CLI); an explicit effort must match. External hosts require "
         "cloud_allowed and pinned calls require "
         "allow_degraded=false. No host fallback or same-family exclusion applies "
-        "to explicit selection. Use delegate_inference for timeout control on "
-        "a CLI host; model and sampling control exist only on the deprecated "
-        "call_model. Full diagnostics explain tokens_used: backend "
+        "to explicit selection. Use delegate_inference for model or timeout "
+        "control on a CLI host; model and sampling control on an HTTP host "
+        "exist only on the deprecated call_model. Full diagnostics explain "
+        "tokens_used: backend "
         "aggregate usage, not answer length or comparable billed cost."
     ),
     "request_review": (
