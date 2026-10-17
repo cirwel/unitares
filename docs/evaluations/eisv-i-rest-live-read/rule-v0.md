@@ -60,8 +60,8 @@ owns the verdict. So the live figure is expected between the two endpoints.
   - An identity with rows before the era start is settled after its first
     `DEFAULT_SETTLED_UPDATES` (50) rows in the era. That mirrors `carried_from`
     and `updates_since_change` for stamped rows.
-  - A row in this era that does carry a stamp fails the read as `INCONCLUSIVE`,
-    since stamping did not exist in this era.
+  - A row in this era that does carry a stamp, of any sensor class, fails the
+    read as `INCONCLUSIVE`, since stamping did not exist in this era.
 - **Read the two eras separately, never pooled.** The comparison is between
   two separate reads, one per era.
 
@@ -106,8 +106,9 @@ owns the verdict. So the live figure is expected between the two endpoints.
 
 ## Floors
 
-A stratum below any floor is `INCONCLUSIVE` for that stratum. Each floor
-carries its referent.
+A stratum below any floor in either era is `INCONCLUSIVE` for that stratum.
+The baseline needs the floors too, because it decides the `composition`
+qualifier and the reported shift. Each floor carries its referent.
 
 | Floor | Value | Referent |
 |---|---|---|

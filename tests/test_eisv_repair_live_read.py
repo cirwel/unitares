@@ -175,6 +175,36 @@ def test_one_identity_above_a_majority_is_inconclusive():
     assert any("one identity holds" in r for r in reasons)
 
 
+def test_floors_bind_in_the_baseline_era_too():
+    """Review case: a strong post era over a one-row baseline is not ABOVE, composition."""
+    thin_baseline = read.stratum_stats([_row("b", 0, start=BASE_START, stamp=None)])
+    outcome, reasons = read.stratum_outcome(_passing(25), thin_baseline)
+    assert outcome == "INCONCLUSIVE"
+    assert reasons and all(r.startswith("baseline era:") for r in reasons)
+
+
+def test_a_stamped_baseline_row_of_any_sensor_fails_the_read():
+    _, baseline = _windows()
+    rows = [_row("lumen", 0, start=BASE_START, sensor="physical")]
+    rows += [_row(f"b{i}", j, start=BASE_START, stamp=None) for i in range(5) for j in range(25)]
+    assert read.read_era(rows, baseline, ROSTER).stamped_rows == 1
+
+
+def test_markdown_reports_both_eras_statistics():
+    post, baseline = _windows()
+    post_era = read.read_era([r for i in range(5) for r in _identity_rows(f"p{i}", 25, 15)], post, ROSTER)
+    base_era = read.read_era(
+        [r for i in range(6) for r in _identity_rows(f"b{i}", 30, 6, start=BASE_START, stamp=None)],
+        baseline,
+        ROSTER,
+    )
+    text = read.render(read.build_report(post_era, base_era, instrument_ids=[read.POST_INSTRUMENT_ID]))
+    base_line = next(line for line in text.splitlines() if "| B |" in line)
+    assert "| 20.0% | 180 | 6 | 6 | 30 | 16.7% | 20.0% |" in base_line
+    post_line = next(line for line in text.splitlines() if "| P |" in line)
+    assert "| 60.0% | 125 | 5 | 5 | 25 | 20.0% | 60.0% |" in post_line
+
+
 def test_empty_baseline_stratum_is_inconclusive():
     outcome, reasons = read.stratum_outcome(_passing(15), None)
     assert outcome == "INCONCLUSIVE"

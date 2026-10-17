@@ -222,6 +222,9 @@ def stratum_stats(rows: Sequence[Row]) -> StratumStats:
 
 def read_era(rows: Sequence[Row], window: Window, roster: frozenset[str]) -> EraResult:
     result = EraResult(window=window)
+    # Any stamped row counts, whatever its sensor: in the unstamped baseline
+    # era one is an integrity failure for the whole read.
+    stamped_any = sum(1 for r in rows if isinstance(r.stamp, Mapping))
     behavioral: list[Row] = []
     for row in rows:
         if row.sensor == BEHAVIORAL:
@@ -229,7 +232,8 @@ def read_era(rows: Sequence[Row], window: Window, roster: frozenset[str]) -> Era
         else:
             key = row.sensor or "unrecorded"
             result.other_sensor_rows[key] = result.other_sensor_rows.get(key, 0) + 1
-    kept, result.excluded_unsettled, result.stamped_rows = settled_rows(behavioral, window)
+    kept, result.excluded_unsettled, _ = settled_rows(behavioral, window)
+    result.stamped_rows = stamped_any
     grouped: dict[tuple[str, str], list[Row]] = defaultdict(list)
     for row in kept:
         if row.verdict == "safe":
@@ -270,8 +274,12 @@ def stratum_outcome(
         reasons.append("stratum empty in the post-repair era")
     if not baseline or not baseline.safe_rows:
         reasons.append("stratum empty in the baseline era")
+    # The floors bind in both eras: the baseline decides the composition
+    # qualifier and the reported shift.
     if post and post.safe_rows:
-        reasons.extend(floor_failures(post))
+        reasons.extend(f"post-repair era: {why}" for why in floor_failures(post))
+    if baseline and baseline.safe_rows:
+        reasons.extend(f"baseline era: {why}" for why in floor_failures(baseline))
     if reasons:
         return "INCONCLUSIVE", reasons
     lo, hi = endpoints or PREDICTED_RANGE
@@ -370,17 +378,28 @@ def render(report: Mapping[str, Any]) -> str:
     lines.extend(f"- {line}" for line in report["era_lines"])
     lines += [
         "",
-        "| Stratum | Outcome | Post pooled | Base pooled | Shift | Post safe rows | Counted ids | Max id share | Id p50 (n) |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Stratum | Outcome | Shift |",
+        "|---|---|---|",
+    ]
+    lines += [f"| `{s['stratum']}` | {s['outcome']} | {_pct(s['shift'])} |" for s in report["strata"]]
+    lines += [
+        "",
+        "Per era (P = post-repair, B = baseline). Pooled share decides; the identity p50 is reported beside it.",
+        "",
+        "| Stratum | Era | Pooled share | Safe rows | Identities | Counted ids | p50 rows/id | Max id share | Id p50 share | E trend p50 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for s in report["strata"]:
-        p, b = s["post"] or {}, s["baseline"] or {}
-        lines.append(
-            f"| `{s['stratum']}` | {s['outcome']} | {_pct(p.get('pooled_share'))} | "
-            f"{_pct(b.get('pooled_share'))} | {_pct(s['shift'])} | {p.get('safe_rows', 0)} | "
-            f"{p.get('counted_identities', 0)} | {_pct(p.get('max_identity_share'))} | "
-            f"{_pct(p.get('identity_p50_share'))} ({p.get('counted_identities', 0)}) |"
-        )
+        for era, stats in (("P", s["post"]), ("B", s["baseline"])):
+            st = stats or {}
+            p50_rows = st.get("p50_rows_per_identity")
+            trend = st.get("e_trend_p50")
+            lines.append(
+                f"| `{s['stratum']}` | {era} | {_pct(st.get('pooled_share'))} | {st.get('safe_rows', 0)} | "
+                f"{st.get('identities', 0)} | {st.get('counted_identities', 0)} | "
+                f"{'-' if p50_rows is None else f'{p50_rows:g}'} | {_pct(st.get('max_identity_share'))} | "
+                f"{_pct(st.get('identity_p50_share'))} | {'-' if trend is None else f'{trend:+.4f}'} |"
+            )
     reasons = [(s["stratum"], s["reasons"]) for s in report["strata"] if s["reasons"]]
     if reasons:
         lines += ["", "Inconclusive because:"]
