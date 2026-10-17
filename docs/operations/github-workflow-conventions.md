@@ -890,20 +890,26 @@ the operator's machine is awake.
   has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
-**Drafts are the one case GitHub's updater never covers** — a draft cannot take
-`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
-open draft that is behind, conflict-free, and idle for 12h, every four hours.
-It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
-It is not a second updater racing the native one: it touches only what GitHub
-will not. Two rules carried over from the retired queue updater and from PR
-#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
-secret — a fine-grained token scoped to this repository with `Contents: read
-and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
-runs in the approval-required state: #2250's refreshed head sat `blocked` with
-eight parked workflows until a maintainer approved them by hand, less
-mergeable than the stale head it replaced. And a missing secret is loud rather
-than inert: the sweep withholds every push and fails the run, and after each
-real push it fails unless a `Tests` run is actually queued on the new head.
+**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
+fill with a scheduled updater: it is not yet a merge candidate. The former
+four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
+behind draft and started the full PR matrix each time. That recreated the
+N-wide CI cascade this section forbids without advancing any PR toward landing.
+PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
+validated `89888ed7b`, the schedule replaced it with base-only merge
+`a234075f3`, launched the matrix again, and produced a failing smoke head before
+any author change or readiness decision.
+
+`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
+for exactly one positive PR number. It has no schedule and rejects an empty
+all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
+exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
+remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
+head; when its work is complete, mark it ready and label it; the serial queue
+updates that one merge candidate against the then-current base. A later base
+commit does not invalidate review or tests for lines it did not change. Invoke
+the manual action only when preserving one long-lived draft justifies a
+deliberate pre-readiness merge.
 
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
@@ -985,6 +991,8 @@ this entirely).
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
+| Draft is green but behind | Leave its evidence-bound head pinned; the queue updates it once after readiness |
+| One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
