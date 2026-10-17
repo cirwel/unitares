@@ -1,7 +1,9 @@
 """
 UNITARES Governance Core - Dynamics Engine
 
-Canonical implementation of UNITARES v5 thermodynamic dynamics.
+Canonical implementation of the UNITARES v5 dynamics: a hand-set ODE
+controller. Earlier docs called it a "thermodynamic" model; that name is
+historical and the quantities are not physical.
 
 This module contains the differential equations that govern the evolution
 of the UNITARES state (E, I, S, V). This is the single source of truth
@@ -17,8 +19,10 @@ Mathematical Framework:
 where:
     E: Energy (exploration/productive capacity) [0,1]
     I: Information integrity [0,1]
-    S: Semantic uncertainty [0.001,1] (bounds: parameters.DynamicsParams)
-    V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-1,1]
+    S: Entropy coordinate; here a decaying accumulator driven by drift and
+        complexity (see dS/dt), not a measured entropy [0.001,1] (bounds: parameters.DynamicsParams)
+    V: E-I imbalance integral (damped accumulator) [-1,1]. An earlier comparison
+        to Helmholtz free energy is an analogy only.
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
         Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
         An embodied agent's sensor layer submits a signed E-I imbalance in the
