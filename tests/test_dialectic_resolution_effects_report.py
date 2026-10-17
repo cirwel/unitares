@@ -75,6 +75,37 @@ def test_database_connection_is_server_enforced_read_only(monkeypatch):
     assert cursor.execute.call_count == 2
 
 
+def test_default_dsn_uses_server_configuration_first(monkeypatch):
+    monkeypatch.setenv("DB_POSTGRES_URL", "postgresql://server")
+    monkeypatch.setenv("GOVERNANCE_DATABASE_URL", "postgresql://legacy")
+
+    assert report.default_dsn() == "postgresql://server"
+
+
+def test_default_dsn_preserves_legacy_and_local_fallbacks(monkeypatch):
+    monkeypatch.delenv("DB_POSTGRES_URL", raising=False)
+    monkeypatch.setenv("GOVERNANCE_DATABASE_URL", "postgresql://legacy")
+    assert report.default_dsn() == "postgresql://legacy"
+
+    monkeypatch.delenv("GOVERNANCE_DATABASE_URL", raising=False)
+    assert report.default_dsn() == report.FALLBACK_DSN
+
+
+def test_explicit_dsn_overrides_environment(monkeypatch, capsys):
+    captured = {}
+
+    def fake_fetch(dsn, _states):
+        captured["dsn"] = dsn
+        return []
+
+    monkeypatch.setenv("DB_POSTGRES_URL", "postgresql://server")
+    monkeypatch.setattr(report, "fetch", fake_fetch)
+
+    assert report.main(["--dsn", "postgresql://explicit"]) == 0
+    assert captured["dsn"] == "postgresql://explicit"
+    assert "No non-applied" in capsys.readouterr().out
+
+
 def test_render_exposes_exact_fence_token_and_live_state():
     rendered = report.render([_row()])
     assert "owner_token=owner-exact-123" in rendered

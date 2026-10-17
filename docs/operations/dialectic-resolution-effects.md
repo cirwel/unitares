@@ -14,6 +14,10 @@ python3 scripts/ops/dialectic_resolution_effects.py
 python3 scripts/ops/dialectic_resolution_effects.py --json
 ```
 
+By default, the command uses the same `DB_POSTGRES_URL` setting as the server,
+then the legacy `GOVERNANCE_DATABASE_URL`, then the local development DSN. Use
+`--dsn` only for an explicit target.
+
 Use `--state pending`, `--state applying`, or `--state unknown_partial` to
 filter. The command opens a server-enforced read-only transaction and reports:
 

@@ -18,10 +18,16 @@ CONNECT_TIMEOUT_S = 5
 STATEMENT_TIMEOUT_MS = 5000
 ACTIONABLE_STATES = ("pending", "applying", "unknown_partial")
 
-DEFAULT_DSN = os.environ.get(
-    "GOVERNANCE_DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/governance",
-)
+FALLBACK_DSN = "postgresql://postgres:postgres@localhost:5432/governance"
+
+
+def default_dsn() -> str:
+    """Use the server's database configuration, with the legacy name as fallback."""
+    return (
+        os.environ.get("DB_POSTGRES_URL")
+        or os.environ.get("GOVERNANCE_DATABASE_URL")
+        or FALLBACK_DSN
+    )
 
 QUERY = """
 SELECT e.session_id,
@@ -167,7 +173,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "dialectic resolution effects."
         )
     )
-    parser.add_argument("--dsn", default=DEFAULT_DSN)
+    parser.add_argument(
+        "--dsn",
+        default=None,
+        help=(
+            "Database DSN (default: DB_POSTGRES_URL, then legacy "
+            "GOVERNANCE_DATABASE_URL, then localhost)."
+        ),
+    )
     parser.add_argument(
         "--state",
         action="append",
@@ -180,7 +193,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     states = tuple(dict.fromkeys(args.states or ACTIONABLE_STATES))
 
     try:
-        rows = fetch(args.dsn, states)
+        rows = fetch(args.dsn or default_dsn(), states)
     except Exception as exc:  # noqa: BLE001 - operator CLI reports bounded DB failures
         print(
             f"dialectic_resolution_effects: inventory failed: {exc}",
