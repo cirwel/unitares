@@ -522,7 +522,15 @@ class KnowledgeParams(AgentIdentityMixin):
             "brief": "action=store; one of " + ", ".join(get_args(DiscoveryType)) + ".",
         },
     )
-    response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
+    response_to: Optional[dict] = Field(
+        None,
+        description=(
+            "Typed response link {discovery_id, response_type} for threaded "
+            "store/note writes. response_type is one of extend, question, "
+            "disagree, support, answer, follow_up, correction, elaboration, "
+            "supersedes"
+        ),
+    )
     tags: Optional[List[str]] = Field(
         None,
         description=(

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.43.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.44.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -685,3 +685,40 @@ earlier than 2026-12-02, after the pre-registered 2026-12-01 read. Client
 action: move to `consult(brief=..., effort='standard')` before then. A client
 that depends on `model`, `temperature` or `max_tokens` on an HTTP host should
 say so with `leave_note` before that date.
+
+## 1.44.0 (2026-10-17)
+
+Output and description changes from the 2026-10-16 agent-experience dogfood
+read (`docs/evaluations/ax-dogfood/read-2026-10-16.md`). Nothing is added,
+removed, retyped or renamed.
+
+- **`search_shared_memory` output.** The `lean` and `compact` tiers now list
+  the results after the three digests under `more_results` when `limit` is
+  unset, with the same rows, 17-row cap and 2,000-byte budget as before. A
+  `limit` of 3 or less omits them; an explicit `limit` above 3 behaves as in
+  1.33.0. When the shown digests carry more than one `relevance_basis`,
+  `state_summary.relevance_note` says the scores are not comparable and that
+  list order is the ranking.
+- **Response hints.** A server-written hint that named
+  `knowledge(action=..., ...)` (`next_action`,
+  `discovery_retrieval_options.open_one`, `resolution_notes_hint` and the
+  other lifted search notes) now names
+  `use_tool(tool_name='knowledge', arguments={...})`. The router is not on the
+  progressive surface, and `use_tool` is reachable on every surface, as
+  `update_finding` hints have been since they moved to `use_tool`.
+- **Descriptions.** `store_finding`'s field descriptions drop router wording
+  ("for action=store or promote", "action=search", "S22 H5 provenance") and
+  `discovery_type` lists every value in its brief. The knowledge router's
+  `response_to` description lists the valid `response_type` values.
+  `search_shared_memory`'s `include_details` brief names the `use_tool`
+  route.
+
+**Compatibility.** A client that relied on a no-`limit` lean search returning
+exactly three digests should pass `limit=3`. A client that parses hint text
+for `knowledge(` should read the `use_tool` form; the call it names is the same
+read.
+
+**Schema digests.** `search_shared_memory`, `store_finding` and `knowledge`
+move (descriptions only); `surface_sha256` moves with them.
+
+**Client action.** None required beyond the compatibility notes above.

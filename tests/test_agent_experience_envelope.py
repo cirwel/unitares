@@ -1578,7 +1578,12 @@ def test_search_lean_projection_worst_case_attribution_holds_wire_budget(id_len)
         "search_shared_memory", "knowledge", payload, {"response_mode": "lean"}
     )
 
-    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    # more_results rows carry their own 2 KB budget on top of the digest's.
+    digest_only = {k: v for k, v in env.items() if k != "more_results"}
+    digest_only["state_summary"] = {
+        k: v for k, v in env["state_summary"].items() if k != "more_results_shown"
+    }
+    assert len(json.dumps(digest_only, ensure_ascii=False).encode("utf-8")) <= 3_000
     suggestions = env["memory_suggestions"]
     assert suggestions
     for i, digest in enumerate(suggestions):
@@ -1926,7 +1931,9 @@ def test_update_finding_envelope_reports_terminal_status_and_id():
     assert env["state_summary"]["status"] == "resolved"
     assert env["state_summary"]["resolved_at"] == "2026-08-23T01:00:00+00:00"
     assert "is now 'resolved'" in env["next_action"]
-    assert "knowledge(action='details'" in env["next_action"]
+    # The router is not on the progressive surface; the hint names use_tool.
+    assert "use_tool(tool_name='knowledge'" in env["next_action"]
+    assert '"action": "details"' in env["next_action"]
     assert "No prior discoveries matched" not in env["next_action"]
     assert "raw_governance" not in env
     assert "discovery_id='d-existing'" in env["raw_governance_hint"]
@@ -2476,15 +2483,25 @@ def _many_search_results(n, summary="a finding about the digest budget"):
     }
 
 
-def test_search_without_limit_is_unchanged_by_more_results():
+def test_search_without_limit_lists_further_results():
+    """An unset limit lists the rest (2026-10-16 dogfood read, item 1): a
+    lean "3 of 12" with nothing about the other nine forced a full read."""
     payload = _many_search_results(12)
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert env["state_summary"]["results_shown_in_digest"] == 3
+    assert [row["discovery_id"] for row in env["more_results"]] == [
+        item["id"] for item in payload["results"][3:12]
+    ]
+    assert env["state_summary"]["more_results_shown"] == 9
+
+
+def test_search_limit_at_digest_count_omits_further_results():
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", _many_search_results(12), {"limit": 3}
+    )
     assert "more_results" not in env
     assert "more_results_shown" not in env["state_summary"]
     assert env["state_summary"]["results_shown_in_digest"] == 3
-    assert env == build_experience_envelope(
-        "search_shared_memory", "knowledge", _many_search_results(12), {"limit": 3}
-    )
 
 
 def test_search_explicit_limit_lists_further_results_one_line_each():
