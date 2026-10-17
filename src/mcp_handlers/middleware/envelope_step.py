@@ -2181,13 +2181,25 @@ def _response_options(
             "all_inline_details": "response_mode='full' + include_details=true",
         }
     if friendly_name == "check_working_state":
-        return {
-            "current": resolve_metrics_verbosity(arguments),
+        current = resolve_metrics_verbosity(arguments)
+        options = {
+            "current": current,
             "routine": "verbosity='minimal' (default)",
             "interpreted_state": "verbosity='standard'",
             "complete_diagnostics": "verbosity='full'",
             "compatibility_aliases": "lite=true is minimal; lite=false is full",
         }
+        verdict = payload.get("verdict")
+        verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
+        if current == "full" and verdict_value == "unbound":
+            # An unbound full read returns what 'standard' does, so pointing
+            # complete_diagnostics back at verbosity='full' sends the caller
+            # round the same call. Say why full had nothing more instead.
+            del options["complete_diagnostics"]
+            options["full_unavailable_reason"] = (
+                "unbound: call start_session(force_new=true) first"
+            )
+        return options
     return None
 
 

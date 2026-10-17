@@ -2337,6 +2337,40 @@ def test_metrics_response_options_report_the_tier_actually_served(arguments, cur
         assert "raw_governance_hint" not in env
 
 
+def test_unbound_full_metrics_say_why_full_has_nothing_more():
+    # An unbound full read serves what 'standard' does; pointing
+    # complete_diagnostics back at verbosity='full' was a loop (dogfood
+    # finding 41a4b752dda41fb2).
+    payload = {"success": True, "verdict": {"value": "unbound"}}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {"verbosity": "full"}
+    )
+    options = env["response_options"]
+    assert options["current"] == "full"
+    assert options["full_unavailable_reason"] == (
+        "unbound: call start_session(force_new=true) first"
+    )
+    assert "complete_diagnostics" not in options
+    assert "verbosity='full'" not in options.values()
+
+
+@pytest.mark.parametrize(
+    "payload, arguments",
+    [
+        ({"success": True}, {"verbosity": "full"}),
+        ({"success": True, "verdict": {"value": "proceed"}}, {"verbosity": "full"}),
+        ({"success": True, "verdict": {"value": "unbound"}}, {"verbosity": "standard"}),
+    ],
+)
+def test_bound_full_and_unbound_standard_keep_the_full_pointer(payload, arguments):
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, arguments
+    )
+    options = env["response_options"]
+    assert options["complete_diagnostics"] == "verbosity='full'"
+    assert "full_unavailable_reason" not in options
+
+
 def test_oversized_full_metrics_point_at_the_standard_tier():
     payload = {"success": True, "padding": "x" * 6_000}
     env = build_experience_envelope(
