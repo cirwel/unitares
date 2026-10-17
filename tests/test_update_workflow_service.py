@@ -445,7 +445,7 @@ async def test_run_process_update_workflow_real_spine_refuses_archived_agent():
     existed to rescue residents falsely orphan-archived. Now residents
     self-tag 'persistent' (PR #39), so the rescue is unnecessary and
     resurrection would mask real bugs. Archived agents must call
-    self_recovery(action='quick') or onboard(force_new=true) explicitly.
+    start_session(resume=true) or start_session(force_new=true) explicitly.
     """
     harness = _make_real_spine_harness(
         response_text="Attempt to check in after archive — should be refused.",
@@ -467,7 +467,8 @@ async def test_run_process_update_workflow_real_spine_refuses_archived_agent():
 
     assert data["success"] is False
     assert "archived" in data["error"].lower()
-    assert "self_recovery" in data["recovery"]["action"]
+    assert "start_session(resume=true)" in data["recovery"]["action"]
+    assert "self_recovery" not in data["recovery"]["action"]
     # Status was NOT flipped back to active; no persistence side effects.
     assert harness.meta.status == "archived"
     harness.storage.update_agent.assert_not_called()
