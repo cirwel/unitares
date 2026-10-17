@@ -208,7 +208,8 @@ class TestSyncToolMapping:
             return {"success": True, "response": "hi"}
 
         client.call_tool = fake_call
-        client.call_model("test prompt")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            client.call_model("test prompt")
         assert "provider" not in captured_args[0]
         assert "model" not in captured_args[0]
 
@@ -234,11 +235,33 @@ class TestSyncToolMapping:
             }
 
         client.call_tool = fake_call
-        result = client.call_model("test prompt", host_id="ollama:local")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            result = client.call_model("test prompt", host_id="ollama:local")
         assert captured_args[0]["host_id"] == "ollama:local"
         assert result.model_used == "gemma4:latest"
         assert result.inference is not None
         assert result.inference.host_id == "ollama:local"
+
+    def test_consult_maps_tool_args_and_timeout(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured.update({
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "timeout": kwargs.get("timeout"),
+            })
+            return {"success": True, "advice": "search", "status": "completed"}
+
+        client.call_tool = fake_call
+        result = client.consult("classify this", effort="standard")
+        assert captured["tool_name"] == "consult"
+        assert captured["arguments"]["brief"] == "classify this"
+        assert captured["arguments"]["effort"] == "standard"
+        assert "host_id" not in captured["arguments"]
+        assert captured["timeout"] > 480
+        assert result.advice == "search"
 
     def test_delegate_inference_maps_tool_and_timeout(self):
         client = SyncGovernanceClient(transport="rest")

@@ -9,6 +9,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import warnings
 from typing import Any
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields
@@ -26,6 +27,7 @@ from unitares_sdk.models import (
     AuditResult,
     CheckinResult,
     CleanupResult,
+    ConsultResult,
     DelegatedInferenceResult,
     IdentityResult,
     InferenceHostResult,
@@ -39,6 +41,19 @@ from unitares_sdk.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# consult's server-side budget is 480s (CONSULT_TIMEOUT_S); stay outside it.
+_CONSULT_CLIENT_TIMEOUT_S = 495.0
+
+
+def _warn_call_model_deprecated() -> None:
+    warnings.warn(
+        "call_model() is deprecated since 2026-10-16; use consult(brief=..., "
+        "effort='standard'). call_model() remains for model, temperature or "
+        "max_tokens on an HTTP host.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 # Tools that must NOT get automatic session injection
 _IDENTITY_TOOLS = frozenset({"onboard", "identity"})
@@ -369,6 +384,46 @@ class SyncGovernanceClient:
         raw = self.call_tool("describe_inference_host", args)
         return InferenceHostResult.model_validate(raw)
 
+    def consult(
+        self,
+        brief: str,
+        purpose: str = "answer",
+        effort: str | None = None,
+        privacy: str = "local",
+        host_id: str | None = None,
+        allow_degraded: bool = False,
+        response_mode: str = "compact",
+        **kwargs: Any,
+    ) -> ConsultResult:
+        """Ask a model for advice. Maps to server tool: consult.
+
+        Advisory only, never an on-record verdict (use request_review for
+        that). ``effort`` left as None lets the server infer it from
+        ``host_id`` (standard when none is pinned). The server forbids
+        unknown arguments, so extra kwargs are passed through as given and
+        rejected by the server if it does not know them.
+        """
+        args: dict[str, Any] = {
+            "brief": brief,
+            "purpose": purpose,
+            "privacy": privacy,
+            "allow_degraded": allow_degraded,
+            "response_mode": response_mode,
+        }
+        if effort is not None:
+            args["effort"] = effort
+        if host_id is not None:
+            args["host_id"] = host_id
+        args.update(kwargs)
+        raw = self.call_tool(
+            "consult",
+            args,
+            # Outside the server's 480s consult budget, so the SDK's one
+            # transient retry never re-sends a consultation still resolving.
+            timeout=_CONSULT_CLIENT_TIMEOUT_S,
+        )
+        return ConsultResult.model_validate(raw)
+
     def call_model(
         self,
         prompt: str,
@@ -379,6 +434,13 @@ class SyncGovernanceClient:
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> ModelResult:
+        """Call a model via governance. Maps to server tool: call_model.
+
+        Deprecated since 2026-10-16, like the server tool: use consult().
+        Still the only way to set model, temperature or max_tokens on an
+        HTTP host.
+        """
+        _warn_call_model_deprecated()
         args: dict[str, Any] = {
             "prompt": prompt,
             "max_tokens": max_tokens,

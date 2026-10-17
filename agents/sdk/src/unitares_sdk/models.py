@@ -228,6 +228,28 @@ class ModelResult(_GovModel):
     inference: InferenceProvenance | None = None
 
 
+class ConsultResult(_GovModel):
+    """consult's response. ``advice`` is the model's text; never a governed verdict.
+
+    The server returns ``success`` false with ``error``/``message`` (and an
+    ``error_code``) when the request is refused or the lane is unavailable.
+    """
+
+    success: bool
+    advice: str | None = None
+    status: str | None = None
+    consultation_id: str | None = None
+    family: str | None = None
+    message: str | None = None
+    error: str | None = None
+    error_code: str | None = None
+    authority: dict | None = None
+    delivery: dict | None = None
+    completion: dict | None = None
+    record: dict | None = None
+    diagnostics: dict | None = None
+
+
 class DelegatedInferenceResult(_GovModel):
     success: bool
     response: str | None = None
