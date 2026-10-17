@@ -304,7 +304,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
 # 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
 # 1.41.0 (2026-10-15): consult and delegate_inference take host_id as a bounded string checked at runtime (every existing id still accepted); consult's thorough lane follows the consult.thorough job (default order unchanged); results report the served host's family and the hosts skipped before it, with reason codes.
-INTERFACE_CONTRACT_VERSION = "1.41.0"
+# 1.42.0 (2026-10-16): call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+INTERFACE_CONTRACT_VERSION = "1.42.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

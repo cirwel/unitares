@@ -99,7 +99,7 @@ edits that changed no edge.
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py handle_bind_session` | `src/mcp_handlers/schemas/identity.py BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/calibration.py CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py handle_call_model` | `src/mcp_handlers/schemas/core.py CallModelParams` | 240s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py handle_call_model` | `src/mcp_handlers/schemas/core.py CallModelParams` | 240s | deprecated→`consult` |
 | `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py CirsProtocolParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/admin.py ConfigParams` | 15s | — |
 | `consult` | `src/mcp_handlers/support/consultation.py handle_consult` | `src/mcp_handlers/schemas/core.py ConsultParams` | 480s | — |

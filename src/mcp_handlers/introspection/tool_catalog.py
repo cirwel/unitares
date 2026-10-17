@@ -40,6 +40,32 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # request_dialectic_review, the last entry, went with its alias on
     # 2026-09-28: the name no longer dispatches, so there is nothing callable
     # to describe as deprecated. Use dialectic(action='request').
+    #
+    # call_model (2026-10-16, operator decision): deprecated because it is a
+    # second public name for a lane consult already owns, not on a usage count.
+    # Both run run_model_inference against the same HTTP hosts; consult
+    # (effort='standard') adds the purpose/privacy policy and the
+    # consultation audit row. Telemetry, not the reason: 49 public calls from
+    # 16 agents between 2026-08-01 and 2026-10-16, all probes, pilots or lane
+    # diagnosis. That count does not show the controls are unwanted, since
+    # nothing advertised call_model in the progressive surface.
+    #
+    # One capability is NOT covered: consult takes no model, temperature or
+    # max_tokens. The handler therefore stays callable, and removing the
+    # name needs either those controls on consult or a further operator
+    # decision. Two internal callers must move first as well: the gateway
+    # intent classifier (max_tokens=10) and the KG stale-entry check.
+    "call_model": {
+        "deprecated_since": "2026-10-16",
+        "superseded_by": "consult",
+        "migration": (
+            "Use consult(brief=..., effort='standard') for a local completion; "
+            "it reaches the same ollama:local host. consult takes no model, "
+            "temperature or max_tokens: if you need one of those, keep calling "
+            "call_model and say so with leave_note(...) so the removal accounts "
+            "for it."
+        ),
+    },
 }
 
 
