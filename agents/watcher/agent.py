@@ -2593,6 +2593,25 @@ def _normalize_surface_audience(audience: str | None) -> str | None:
     return normalized
 
 
+def _governance_agent_uuid(value: str) -> str:
+    """Validate ``--agent-id`` as a UUID before anything is attributed to it.
+
+    ``resolved_by`` is the audit trail for a resolution, and confirmed rows
+    feed pattern-floor calibration. A free-form string used to be stored
+    verbatim: on 2026-10-14 a dogfood probe confirmed a live finding as
+    ``cron-unitares-dogfood-test``. Omitting ``--agent-id`` stays allowed
+    and records an honest ``None``; a malformed value is refused.
+    """
+    from uuid import UUID
+
+    try:
+        return str(UUID(value.strip()))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"must be a governance agent UUID, got {value!r}"
+        ) from None
+
+
 def _surface_receipts(finding: dict[str, Any]) -> dict[str, str]:
     receipts = finding.get("surface_receipts")
     if not isinstance(receipts, dict):
@@ -4092,7 +4111,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent-id",
         metavar="UUID",
-        help="governance UUID of the agent resolving/dismissing (for audit trail)",
+        type=_governance_agent_uuid,
+        help="governance UUID of the agent resolving/dismissing (for audit trail); "
+             "a non-UUID value is refused before any state changes",
     )
     parser.add_argument(
         "--reason",
