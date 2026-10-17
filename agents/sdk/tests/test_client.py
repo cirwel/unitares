@@ -462,6 +462,18 @@ class TestToolMapping:
         session.call_tool.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("exc", [TimeoutError(), ConnectionError("reset")])
+    async def test_delegate_inference_is_sent_once_on_timeout_or_transport_error(self, exc):
+        """A timed-out delegation's child may still be running; never spawn a second."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=exc)
+        client = make_client_with_session(session)
+
+        with pytest.raises((GovernanceTimeoutError, GovernanceConnectionError)):
+            await client.delegate_inference("review this", timeout_s=60)
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_default_call_tool_still_retries_once(self):
         session = AsyncMock()
         session.call_tool = AsyncMock(side_effect=ConnectionError("reset"))

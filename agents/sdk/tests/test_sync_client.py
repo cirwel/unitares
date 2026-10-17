@@ -318,6 +318,18 @@ class TestSyncToolMapping:
         # Still a GovernanceConnectionError for existing handlers.
         assert isinstance(caught.value, GovernanceConnectionError)
 
+    def test_delegate_inference_passes_retry_false(self):
+        client = SyncGovernanceClient(transport="rest")
+        seen = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            seen.update({"tool_name": tool_name, "retry": kwargs.get("retry")})
+            return {"success": True, "response": "ok"}
+
+        client.call_tool = fake_call
+        client.delegate_inference("review this", timeout_s=60)
+        assert seen == {"tool_name": "delegate_inference", "retry": False}
+
     def test_mcp_transport_forwards_retry_flag(self):
         client = SyncGovernanceClient(transport="mcp")
         seen = {}

@@ -945,7 +945,12 @@ class GovernanceClient:
         timeout_s: int = 240,
         **kwargs: Any,
     ) -> DelegatedInferenceResult:
-        """Delegate to a strong host model. Maps to delegate_inference."""
+        """Delegate to a strong host model. Maps to delegate_inference.
+
+        Sent once and never retried. On the MCP transport the HTTP client's
+        own ``timeout`` (30s by default) bounds the call, so construct the
+        client with a ``timeout`` above ``timeout_s`` for long delegations.
+        """
         args: dict[str, Any] = {
             "prompt": prompt,
             "host_id": host_id,
@@ -958,9 +963,12 @@ class GovernanceClient:
         raw = await self.call_tool(
             "delegate_inference",
             args,
-            # Stay outside the server's await + spawn/backstop budget so the
-            # SDK never retries an expensive delegation while its first call
-            # is still resolving.
+            # Never retried: after a timeout or transport error the delegated
+            # child may still be running, and a second send spawns another.
+            # The outer bound stays past the server's await + spawn/backstop
+            # budget; on the MCP transport the HTTP client's own timeout
+            # still applies (see consult()).
+            retry=False,
             timeout=float(timeout_s + 75),
         )
         return DelegatedInferenceResult.model_validate(raw)
