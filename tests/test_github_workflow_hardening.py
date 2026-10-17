@@ -56,6 +56,17 @@ def _draft_refresh_script() -> str:
     return next(step["run"] for step in steps if step["name"].startswith("Merge base"))
 
 
+def test_draft_refresh_is_manual_and_requires_exactly_one_pr():
+    text = DRAFT_BASE_REFRESH.read_text(encoding="utf-8")
+    script = _draft_refresh_script()
+
+    assert "\n  schedule:" not in text
+    assert "  workflow_dispatch:" in text
+    assert re.search(r"(?ms)^      pr_number:\n.*?^        required: true$", text)
+    assert 'select((.number | tostring) == $only)' in script
+    assert '$only == ""' not in script
+
+
 def test_draft_refresh_revalidates_every_live_write_condition_before_push():
     script = _draft_refresh_script()
     live_query = 'gh pr view "$num" --repo "$GITHUB_REPOSITORY"'
@@ -73,10 +84,10 @@ def test_draft_refresh_revalidates_every_live_write_condition_before_push():
         assert guard in script, f"draft refresh does not revalidate {guard}"
 
 
-def test_draft_refresh_push_is_exact_oid_cas_and_failure_continues_sweep():
+def test_draft_refresh_push_is_exact_oid_cas_and_failure_is_bounded():
     script = _draft_refresh_script()
     guarded_push = re.search(r"if ! git push \\\n(?P<command>.*?); then(?P<failure>.*?)\n\s*fi", script, re.DOTALL)
-    assert guarded_push, "refresh push must be guarded rather than aborting the sweep"
+    assert guarded_push, "refresh push must be guarded rather than aborting the run"
     command = guarded_push.group("command")
     assert '--force-with-lease="refs/heads/$head:$oid"' in command
     assert "--force-if-includes" in command
@@ -201,13 +212,14 @@ def _run_refresh(tmp_path, *, prs, runs=(), env=None, push_exit=0, api_exit=0, d
     summary = tmp_path / "summary.md"
     summary.touch()
     push_log = tmp_path / "push.log"
+    requested_pr = str(prs[0]["number"]) if prs else ""
     full_env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "GITHUB_REPOSITORY": "cirwel/unitares",
         "GH_TOKEN": "fake",
         "DRY_RUN": "false",
-        "PR_NUMBER": "",
+        "PR_NUMBER": requested_pr,
         "QUIET_HOURS": "12",
         "PUSH_TOKEN_CONFIGURED": "true",
         "CI_WORKFLOW": "tests.yml",
@@ -273,7 +285,7 @@ def test_draft_refresh_withholds_every_push_without_the_secret_and_fails(tmp_pat
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert pushes == []
     assert "withheld: would push" in proc.stdout
-    assert "::error::1 draft(s) are behind and idle but were not refreshed: DRAFT_BASE_REFRESH_TOKEN" in proc.stdout
+    assert "::error::The requested draft is behind and idle but was not refreshed: DRAFT_BASE_REFRESH_TOKEN" in proc.stdout
     assert "withheld (DRAFT_BASE_REFRESH_TOKEN not configured): 1" in summary
 
 
@@ -310,17 +322,14 @@ def test_draft_refresh_pushes_with_the_cas_and_confirms_a_queued_ci_run(tmp_path
     assert "refreshed: 1" in summary
 
 
-def test_draft_refresh_fails_and_stops_pushing_when_the_head_is_parked_awaiting_approval(tmp_path):
+def test_draft_refresh_fails_when_the_target_head_is_parked_awaiting_approval(tmp_path):
     proc, pushes, summary = _run_refresh(
-        tmp_path,
-        prs=[_draft(1, "codex/one", oid="a" * 40), _draft(2, "claude/two", oid="b" * 40)],
-        runs=PARKED,
+        tmp_path, prs=[_draft(1, "codex/one", oid="a" * 40)], runs=PARKED
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert pushes == [_push_line("codex/one", "a" * 40)], "the second head must not be pushed"
+    assert pushes == [_push_line("codex/one", "a" * 40)]
     assert "::error::PR #1: the refreshed head" in proc.stdout
     assert "parked in approval-required CI" in proc.stdout
-    assert "hold: an earlier push in this sweep did not establish CI" in proc.stdout
     assert "did not get a tests.yml run" in summary
 
 
@@ -341,7 +350,7 @@ def test_draft_refresh_fails_closed_when_the_actions_api_cannot_be_read(tmp_path
     assert "(unreadable)" in proc.stdout
 
 
-def test_draft_refresh_pr_number_input_limits_the_sweep_to_that_pr(tmp_path):
+def test_draft_refresh_pr_number_input_limits_the_run_to_that_pr(tmp_path):
     proc, pushes, _ = _run_refresh(
         tmp_path,
         prs=[_draft(1, "codex/one", oid="a" * 40), _draft(2, "claude/two", oid="b" * 40)],
@@ -359,7 +368,19 @@ def test_draft_refresh_rejects_a_malformed_pr_number_before_touching_anything(tm
     )
     assert proc.returncode == 1
     assert pushes == []
-    assert "::error::pr_number must be a PR number or empty" in proc.stdout
+    assert "::error::pr_number must be one positive PR number" in proc.stdout
+
+
+def test_draft_refresh_rejects_an_empty_all_draft_sweep_before_touching_anything(tmp_path):
+    proc, pushes, _ = _run_refresh(
+        tmp_path,
+        prs=[_draft(1, "codex/one", oid="a" * 40)],
+        runs=QUEUED,
+        env={"PR_NUMBER": ""},
+    )
+    assert proc.returncode == 1
+    assert pushes == []
+    assert "::error::pr_number must be one positive PR number" in proc.stdout
 
 
 def test_draft_refresh_names_a_non_default_base_as_unverified_instead_of_failing(tmp_path):
@@ -373,12 +394,10 @@ def test_draft_refresh_names_a_non_default_base_as_unverified_instead_of_failing
 
 def test_draft_refresh_push_lease_rejection_still_holds_rather_than_aborting(tmp_path):
     proc, pushes, summary = _run_refresh(
-        tmp_path,
-        prs=[_draft(1, "codex/one", oid="a" * 40), _draft(2, "claude/two", oid="b" * 40)],
-        runs=QUEUED,
+        tmp_path, prs=[_draft(1, "codex/one", oid="a" * 40)], runs=QUEUED,
         push_exit=1,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert len(pushes) == 2, "a rejected lease on one head must not stop the sweep"
-    assert proc.stdout.count("hold: push lease rejected") == 2
+    assert pushes == [_push_line("codex/one", "a" * 40)]
+    assert proc.stdout.count("hold: push lease rejected") == 1
     assert "refreshed: 0" in summary
