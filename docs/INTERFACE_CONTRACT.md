@@ -866,7 +866,22 @@ and must echo the inspected `effect_updated_at` when using `mark_applied`.
 
 ## 1.48.0 (2026-10-17)
 
-store_finding accepts an optional response_to {discovery_id, response_type}, the same typed link knowledge(action='store') already takes, so a linked finding is one call; its ack lifts the recorded link as state_summary.response_to.
+`store_finding` accepts an optional `response_to`
+(`{discovery_id, response_type}`), the typed link `knowledge(action='store')`
+already takes, with the same validation: a malformed link or an unknown
+`response_type` is refused rather than stored unthreaded. Its description
+lists the nine `response_type` values. The `store_finding` and
+`update_finding` acknowledgements lift the record's link as
+`state_summary.response_to`; a record without one carries no such field.
+Item 5 of the 2026-10-16 agent-experience dogfood read: a linked finding no
+longer needs `describe_tool` plus `use_tool(tool_name='knowledge', ...)`.
 
-<!-- Complete before readiness: affected outputs/descriptions, compatibility,
-     changed schema digests (or why none move), and client action. -->
+**Compatibility.** Additive: an optional parameter on an existing alias.
+Calls without it are unchanged.
+
+**Schema digests.** `store_finding` moves (one added optional property);
+`surface_sha256` moves with it.
+
+**Client action.** None. A client that links findings through
+`use_tool(tool_name='knowledge', arguments={'action': 'store', ...})` may call
+`store_finding(..., response_to=...)` instead.
