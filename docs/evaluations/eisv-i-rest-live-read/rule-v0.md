@@ -85,6 +85,12 @@ owns the verdict. So the live figure is expected between the two endpoints.
   composition. The replay covered 209 identities over 14 days, while a short
   live window is dominated by a few residents. A fleet-wide rate across
   different mixes is a mixture, not a level.
+  - The class fold reads the resident roster from `UNITARES_RESIDENTS`. If
+    that is unset, residents fold into generic classes, so the read refuses.
+  - Other classes the fold can return (`embodied`, `resident_persistent`,
+    `default`) are their own strata too.
+- **The two splits are crossed.** Each stratum is one pair (verdict driver,
+  identity class), so neither split pools across the other.
 
 ## Statistics reported, per era and per stratum
 
@@ -134,6 +140,11 @@ as one identity's figure, not as a fleet-level reading.
   - `loop-consistent`, when behavioral E rose across the window for the
     identities counted. This is the `decision_e` path: in contract row 45,
     `approve` scores 1.0 against `guide`'s 0.7.
+    - For each counted identity, take its safe rows in time order. Its change
+      is the median `state_json.E` of the last quarter minus that of the first
+      quarter.
+    - "Rose" means the p50 of those changes, across counted identities, is
+      above zero.
   - `unattributed`, otherwise.
 
 The range is checked against the post-era level. The pre → post shift is
@@ -149,6 +160,28 @@ read, each stratum is checked against its own endpoints instead of the pooled
 range, and the report says which was used. If not, the read is labelled
 **range-only**, and a `BELOW` or `ABOVE` from it means "outside the fleet-mix
 estimate", not "off this stratum's estimate".
+
+## Implementation
+
+`scripts/analysis/eisv_repair_live_read.py` implements this rule, and
+`tests/test_eisv_repair_live_read.py` pins it on synthetic rows. The script
+refuses before 2026-10-23T00:00Z. It also refuses when `UNITARES_RESIDENTS`
+is unset and when a window crosses an instrument change.
+
+It reads both eras in one read-only `REPEATABLE READ` snapshot. Any stamped id
+other than `RK1:a2579740d3bea62a` makes every stratum `INCONCLUSIVE`; more than
+one stamped id is refused outright.
+
+Per-stratum endpoints are not available. The code behind contract row 50's
+equilibrium-shift estimate was not committed with #2834. Neither its PR nor
+`~/.unitares/analysis/basin-replay-2026-10-15/` (the A1 one-step replay)
+holds it. Recomputing endpoints would need a reimplementation first validated
+by reproducing the pooled 44.1% and 84.5% exactly. Until one exists, the read
+is range-only.
+
+*Amended 2026-10-16, before the read, with the implementation:* the crossed
+strata, the roster refusal, and the measure of a rise in behavioral E above.
+The script was written and tested without any database access.
 
 ## What this read does not decide
 
