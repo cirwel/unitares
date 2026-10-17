@@ -571,3 +571,129 @@ def test_read_lanes_neutralize_only_messages_on_that_lane():
     )
     # m1 keeps 0.80; m2 is down-ranked to ~0.43; the native row sits between.
     assert [row.id for row in ranked] == ["m1", "finding-1", "m2"]
+
+
+def _paged_graph(rows):
+    """A graph whose newest-first query returns the first `limit` rows."""
+    graph = AsyncMock()
+
+    async def _query(**kwargs):
+        return list(rows[: kwargs["limit"]])
+
+    graph.query = AsyncMock(side_effect=_query)
+    return graph
+
+
+def _listing_rows():
+    return [
+        _discovery("memory-1", tags=["source-any-harness-memory"]),
+        _discovery("memory-2", tags=["memory-sync"]),
+        _discovery("finding-1"),
+        _discovery(
+            "claim-1",
+            tags=[PROMOTION_TAG, "source-any-harness-memory"],
+            provenance=_promotion_receipt(),
+        ),
+        _discovery("finding-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_queryless_listing_omits_imported_memory_and_fills_the_page():
+    # With no query there is no relevance contest to decide, so imports that
+    # sat on top of a newest-first page read as open work to every sweep.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_indexed_filter_search,
+    )
+
+    request = _parse_knowledge_search_request({"limit": 3, "status": "open"})
+    state = _KnowledgeSearchState(request=request, graph=_paged_graph(_listing_rows()))
+
+    await _run_indexed_filter_search(state)
+
+    # The page fills from rows below the omitted imports, and a promoted claim
+    # keeps its place even though it still carries the source tag.
+    assert [row.id for row in state.results] == ["finding-1", "claim-1", "finding-2"]
+    assert state.imported_omitted == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"limit": 5, "authority_mode": "all"},
+        {"limit": 5, "tags": ["source-any-harness-memory"]},
+    ],
+    ids=["authority_mode_all", "imported_lane_filter"],
+)
+async def test_queryless_listing_returns_imported_memory_when_asked(arguments):
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_indexed_filter_search,
+    )
+
+    request = _parse_knowledge_search_request(arguments)
+    state = _KnowledgeSearchState(request=request, graph=_paged_graph(_listing_rows()))
+
+    await _run_indexed_filter_search(state)
+
+    assert "memory-1" in [row.id for row in state.results]
+    assert state.imported_omitted == 0
+
+
+@pytest.mark.asyncio
+async def test_queryless_listing_reports_what_it_left_out():
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _attach_search_diagnostics,
+        _parse_knowledge_search_request,
+        _run_indexed_filter_search,
+    )
+
+    request = _parse_knowledge_search_request({"limit": 3})
+    state = _KnowledgeSearchState(request=request, graph=_paged_graph(_listing_rows()))
+    await _run_indexed_filter_search(state)
+
+    response: dict = {}
+    _attach_search_diagnostics(response, state)
+
+    assert response["imported_omitted"] == 2
+    assert "authority_mode='all'" in response["imported_omitted_hint"]
+
+
+def test_imported_context_reads_serialized_rows_too():
+    from src.knowledge_authority import is_imported_context
+
+    assert is_imported_context({"tags": ["source-any-harness-memory"]})
+    assert not is_imported_context({"tags": ["kg-hygiene"]})
+    assert not is_imported_context(
+        {
+            "tags": [PROMOTION_TAG, "source-any-harness-memory"],
+            "provenance": _promotion_receipt(),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_queryless_listing_without_imports_reads_one_page():
+    # Omission must not cost every listing a widened read: with no imports on
+    # the page, one read at the page size is the whole cost.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_indexed_filter_search,
+    )
+
+    rows = [_discovery(f"finding-{index}") for index in range(10)]
+    graph = _paged_graph(rows)
+    request = _parse_knowledge_search_request({"limit": 3})
+    state = _KnowledgeSearchState(request=request, graph=graph)
+
+    await _run_indexed_filter_search(state)
+
+    assert [row.id for row in state.results] == ["finding-0", "finding-1", "finding-2"]
+    assert graph.query.await_count == 1
+    assert graph.query.call_args.kwargs["limit"] == 3

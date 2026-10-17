@@ -8,7 +8,12 @@ letting the search handler combine them deliberately.
 
 An imported memory remains searchable and may still rank first when it is the
 only strong match.  Its default multiplier merely prevents it from winning a
-close relevance contest against native knowledge.  A governed claim is not a
+close relevance contest against native knowledge.  Two reads are different.
+A queryless listing has no relevance contest, so a multiplier only reorders
+a page the imports have already filled; it omits unpromoted imported memory
+by default and reports how many rows it left out.  Check-in surfacing hands
+back entries with no authority marker, so it omits them too.  A governed
+claim is not a
 truth oracle: it means the server recorded a promotion receipt with a source
 memory and non-memory evidence references.
 
@@ -187,6 +192,28 @@ def assess_authority(document: Any) -> AuthorityAssessment:
         basis="native knowledge-graph write",
         multiplier=AUTHORITY_MULTIPLIERS[NATIVE_FINDING],
     )
+
+
+def is_imported_context(document: Any) -> bool:
+    """Whether a discovery classifies as unpromoted imported memory.
+
+    Accepts a discovery object or its serialized dict, so callers holding
+    either shape (search rows, check-in surfacing entries) share one rule.
+    A promoted governed claim is not imported context even when it still
+    carries the source tag.
+    """
+    if isinstance(document, Mapping):
+        document = _MappingView(document)
+    return assess_authority(document).tier == IMPORTED_CONTEXT
+
+
+class _MappingView:
+    """Attribute view over a serialized discovery for ``assess_authority``."""
+
+    def __init__(self, data: Mapping[str, Any]) -> None:
+        self.tags = data.get("tags")
+        self.provenance = data.get("provenance")
+        self.summary = data.get("summary")
 
 
 def rank_by_authority(
