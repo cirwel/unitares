@@ -558,6 +558,8 @@ def detect_client_from_user_agent(user_agent: str) -> Optional[str]:
     # Anthropic-family client, we don't know which one.
     if "claude" in ua or "anthropic" in ua:
         return "claude"
+    if "antigravity" in ua or ua.startswith("agy/"):
+        return "antigravity"
     if "vscode" in ua or "visual studio code" in ua:
         return "vscode"
 

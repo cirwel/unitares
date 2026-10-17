@@ -132,13 +132,29 @@ async def test_resolves_stuck_thesis_session():
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
     assert result["resolved_count"] == 1
-    mock_update.assert_called_once_with("stuck-1", "failed", winner=ANY)
+    mock_update.assert_awaited_once_with(
+        "stuck-1",
+        {
+            "reason": ANY,
+            "closed_by": "python_sweeper",
+        },
+        "failed",
+        expected_phase="thesis",
+        expected_updated_at=sessions[0]["updated_at"],
+        expected_reviewer=None,
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        expected_awaiting_facilitation=False,
+        clear_facilitation=True,
+        winner={},
+    )
 
 
 @pytest.mark.asyncio
@@ -172,7 +188,11 @@ async def test_antithesis_reassigns_reviewer_when_gone():
 
     assert result["reassigned_count"] == 1
     assert result["resolved_count"] == 0  # Not failed
-    mock_update_reviewer.assert_called_once_with("s1", "new-reviewer", winner=ANY)
+    mock_update_reviewer.assert_awaited_once()
+    assert mock_update_reviewer.await_args.args == ("s1", "new-reviewer")
+    assert mock_update_reviewer.await_args.kwargs["expected_phase"] == "antithesis"
+    assert mock_update_reviewer.await_args.kwargs["expected_reviewer"] == "gone-reviewer"
+    assert mock_update_reviewer.await_args.kwargs["expected_transcript_revision"] == 0
 
     # ⛔The (F) reassignment-rate baseline is computed from this event. The
     # sweeper emitted NOTHING until 2026-08-22 while handlers.py called the
@@ -257,7 +277,7 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
@@ -269,7 +289,15 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     assert result["resolved_count"] == 0  # NOT failed yet
     mock_update_status.assert_not_called()  # Should not mark as failed
     mock_mark.assert_awaited_once_with(
-        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
+        "s1",
+        expected_phase=ANY,
+        expected_updated_at=ANY,
+        expected_reviewer="gone-reviewer",
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        winner=ANY,
+    )
     # Every other writer of this flag announces it; a request nobody is told
     # about is one the operator has to go looking for.
     assert mock_emit.await_args.kwargs["session_id"] == "s1"
@@ -301,7 +329,7 @@ async def test_facilitation_request_is_recorded_once_not_once_per_cycle():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
@@ -347,7 +375,7 @@ async def test_refused_facilitation_write_is_not_narrated():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", AsyncMock()), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.emit_write_refused", mock_emit_refused), \
@@ -402,7 +430,7 @@ async def test_antithesis_fails_after_facilitation_timeout():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", AsyncMock()), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
@@ -410,7 +438,10 @@ async def test_antithesis_fails_after_facilitation_timeout():
         result = await auto_resolve_stuck_sessions()
 
     assert result["resolved_count"] == 1  # Should be FAILED now
-    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
+    mock_update_status.assert_awaited_once()
+    assert mock_update_status.await_args.args[0] == "s1"
+    assert mock_update_status.await_args.args[2] == "failed"
+    assert mock_update_status.await_args.kwargs["winner"] is not None
 
 
 @pytest.mark.asyncio
@@ -432,14 +463,17 @@ async def test_antithesis_with_active_reviewer_not_reassigned():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
     # Reviewer is present — this is a normal timeout, not a missing reviewer
     assert result["resolved_count"] == 1
-    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
+    mock_update_status.assert_awaited_once()
+    assert mock_update_status.await_args.args[0] == "s1"
+    assert mock_update_status.await_args.args[2] == "failed"
+    assert mock_update_status.await_args.kwargs["winner"] is not None
 
 
 # --- SYNTHESIS stall (#2202) ---
@@ -479,7 +513,7 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", mock_update_reviewer), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
@@ -498,7 +532,15 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
     assert result["reassigned_count"] == 0
     mock_update_status.assert_not_called()
     mock_mark.assert_awaited_once_with(
-        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
+        "s1",
+        expected_phase=ANY,
+        expected_updated_at=ANY,
+        expected_reviewer="silent-reviewer",
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        winner=ANY,
+    )
     # Authority stays with the reviewer that formed the objection.
     mock_select.assert_not_awaited()
     mock_update_reviewer.assert_not_called()
@@ -558,7 +600,7 @@ async def _sweep_synthesis_row(*, paused, reviewer, transcript):
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mocks["update_status"]), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mocks["update_status"]), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mocks["mark"]), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mocks["emit"]), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mocks["add_msg"]), \
@@ -583,7 +625,20 @@ async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
     m["emit"].assert_not_awaited()
-    m["update_status"].assert_awaited_once_with("s1", "failed", winner=ANY)
+    m["update_status"].assert_awaited_once_with(
+        "s1",
+        {"reason": ANY, "closed_by": "python_sweeper"},
+        "failed",
+        expected_phase="synthesis",
+        expected_updated_at=ANY,
+        expected_reviewer="r1",
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        expected_awaiting_facilitation=False,
+        clear_facilitation=True,
+        winner={},
+    )
 
 
 @pytest.mark.asyncio
@@ -597,7 +652,15 @@ async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag()
         transcript=_transcript(("a1", "thesis"), ("r1", "antithesis")))
     assert result["facilitation_count"] == 1
     m["mark"].assert_awaited_once_with(
-        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
+        "s1",
+        expected_phase=ANY,
+        expected_updated_at=ANY,
+        expected_reviewer="r1",
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        winner=ANY,
+    )
     m["update_status"].assert_not_called()
 
 
@@ -643,7 +706,20 @@ async def test_synthesis_transcript_read_failure_raises_no_flag():
         paused="a1", reviewer="r1", transcript=RuntimeError("db down"))
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
-    m["update_status"].assert_awaited_once_with("s1", "failed", winner=ANY)
+    m["update_status"].assert_awaited_once_with(
+        "s1",
+        {"reason": ANY, "closed_by": "python_sweeper"},
+        "failed",
+        expected_phase="synthesis",
+        expected_updated_at=ANY,
+        expected_reviewer="r1",
+        expected_transcript_revision=0,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        expected_awaiting_facilitation=False,
+        clear_facilitation=True,
+        winner={},
+    )
 
 
 @pytest.mark.asyncio
@@ -661,7 +737,7 @@ async def test_synthesis_standing_request_is_held_not_rerecorded():
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
@@ -688,7 +764,7 @@ async def test_synthesis_stall_still_fails_after_facilitation_timeout():
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.add_message_async", AsyncMock()):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
@@ -697,7 +773,10 @@ async def test_synthesis_stall_still_fails_after_facilitation_timeout():
     assert result["resolved_count"] == 1
     assert result["facilitation_count"] == 0
     mock_mark.assert_not_awaited()
-    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
+    mock_update_status.assert_awaited_once()
+    assert mock_update_status.await_args.args[0] == "s1"
+    assert mock_update_status.await_args.args[2] == "failed"
+    assert mock_update_status.await_args.kwargs["winner"] is not None
 
 
 @pytest.mark.asyncio
@@ -711,7 +790,7 @@ async def test_handles_session_without_id():
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.add_message_async", AsyncMock()):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
@@ -732,7 +811,7 @@ async def test_handles_z_suffix_timestamps():
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.add_message_async", AsyncMock()):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
@@ -778,7 +857,7 @@ async def test_late_cycle_error_preserves_earlier_committed_counts():
          patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock,
                side_effect=[False, RuntimeError("saga backend down")]), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+         patch(f"{AUTO_RESOLVE}.resolve_session_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", emitted):
@@ -881,7 +960,7 @@ async def test_facilitation_request_reaches_the_in_process_cache(clean_active_se
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", AsyncMock()), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
@@ -910,7 +989,7 @@ async def test_reap_reaches_the_in_process_cache(clean_active_sessions):
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+         patch(f"{AUTO_RESOLVE}.resolve_session_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
@@ -937,16 +1016,14 @@ async def test_reassignment_clears_a_standing_request(clean_active_sessions):
         "a1": _make_agent_meta(status="paused"),
         "a2": _make_agent_meta(status="active"),
     })
-    mock_clear = AsyncMock(return_value=True)
+    mock_reassign = AsyncMock(return_value=True)
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_reviewer_async",
-               new_callable=AsyncMock, return_value=True), \
-         patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", mock_clear), \
+         patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", mock_reassign), \
          patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", new_callable=AsyncMock), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", AsyncMock()), \
          patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
                new_callable=AsyncMock, return_value="a2"):
@@ -954,7 +1031,19 @@ async def test_reassignment_clears_a_standing_request(clean_active_sessions):
         result = await auto_resolve_stuck_sessions()
 
     assert result["reassigned_count"] == 1
-    mock_clear.assert_awaited_once_with("s1", False)
+    mock_reassign.assert_awaited_once_with(
+        "s1",
+        "a2",
+        expected_phase="antithesis",
+        expected_updated_at=sessions[0]["updated_at"],
+        expected_reviewer="gone-reviewer",
+        expected_transcript_revision=0,
+        expected_awaiting_facilitation=True,
+        expected_resolution_saga_revision=0,
+        exclude_inflight_saga=True,
+        clear_facilitation=True,
+        winner=ANY,
+    )
     assert cached.awaiting_facilitation is False
     assert cached.reviewer_agent_id == "a2"
 
@@ -982,7 +1071,7 @@ async def test_a_failed_flag_write_does_not_discard_the_cycle():
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+         patch(f"{AUTO_RESOLVE}.resolve_session_async",
                new_callable=AsyncMock, return_value=True), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async",
                new_callable=AsyncMock, side_effect=RuntimeError("connection lost")), \
@@ -1141,7 +1230,9 @@ async def test_facilitation_cas_refuses_when_row_moved_after_read(phase, moved):
     live_row = {"phase": phase, "updated_at": observed_ts}
     live_row.update(moved)  # the concurrent change, already landed at write time
 
-    async def _cas_mark(session_id, *, expected_phase, expected_updated_at, winner=None):
+    async def _cas_mark(
+        session_id, *, expected_phase, expected_updated_at, winner=None, **_guards
+    ):
         if (live_row["phase"] != expected_phase
                 or live_row["updated_at"] != expected_updated_at):
             winner.update(winner_status="active", winner_reason=None, row_missing=False)
@@ -1158,7 +1249,7 @@ async def test_facilitation_cas_refuses_when_row_moved_after_read(phase, moved):
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update_status), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
          patch(f"{AUTO_RESOLVE}.emit_write_refused", mock_emit_refused), \

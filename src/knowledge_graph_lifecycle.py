@@ -783,12 +783,14 @@ async def run_kg_audit(
     Audit the knowledge graph for staleness.
 
     Read-only: scores entries by age/activity, groups into health buckets.
-    Optionally uses call_model for relevance assessment of stale entries.
+    Optionally asks the local model (call_local_llm) to assess stale entries.
 
     Args:
         scope: "open" (default), "all", "by_agent"
         top_n: Number of stale entries to return in detail
-        use_model: If True, feed stale entries to call_model for relevance check
+        use_model: If True, feed stale entries to the local model for a
+            relevance check. Housekeeping about the graph, so it bills no
+            Energy to the caller (see llm_delegation's module docstring).
         agent_id: Filter by agent (used when scope="by_agent")
 
     Returns:
@@ -829,8 +831,7 @@ async def run_kg_audit(
     model_assessment = None
     if use_model and top_stale:
         try:
-            from src.mcp_handlers.support.model_inference import handle_call_model
-            import json as _json
+            from src.mcp_handlers.support.llm_delegation import call_local_llm
 
             prompt_lines = ["Given these knowledge graph entries, which are still relevant and which should be archived?\n"]
             for entry in top_stale:
@@ -841,17 +842,15 @@ async def run_kg_audit(
                 )
             prompt_lines.append("\nFor each, reply: KEEP or ARCHIVE with a brief reason.")
 
-            result = await handle_call_model({
-                "prompt": "\n".join(prompt_lines),
-                "model": "auto",
-                "task_type": "analysis",
-                "max_tokens": 1000,
-            })
-            # Parse response
-            if isinstance(result, list) and hasattr(result[0], "text"):
-                data = _json.loads(result[0].text)
-                if data.get("success"):
-                    model_assessment = data.get("response")
+            # None when the local model is unavailable, refused (the endpoint
+            # does not classify local) or slow. 45s (+5s executor slack inside
+            # call_local_llm) stays under audit_knowledge_graph's 60s handler
+            # timeout, so a slow model costs the assessment, not the audit.
+            model_assessment = await call_local_llm(
+                prompt="\n".join(prompt_lines),
+                max_tokens=1000,
+                timeout=45.0,
+            )
         except Exception as e:
             logger.warning(f"Model assessment failed during audit: {e}")
             model_assessment = f"(model unavailable: {e})"

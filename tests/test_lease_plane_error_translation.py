@@ -29,6 +29,7 @@ from __future__ import annotations
 import pytest
 
 from src.lease_plane import (
+    AcquireEffectInProgress,
     AcquireHeldByOther,
     AcquireOk,
     AcquirePermissionDenied,
@@ -246,6 +247,7 @@ def test_beam_emitted_acquire_errors_constant_is_nonempty_and_ascii():
     on the other side."""
     assert BEAM_EMITTED_ACQUIRE_ERRORS == frozenset({
         "held_by_other",
+        "effect_in_progress",
         "permission_denied",
         "schema_invalid",
         "service_unavailable",
@@ -263,7 +265,34 @@ def test_beam_emitted_simple_errors_constant_is_documented_set():
     assert BEAM_EMITTED_SIMPLE_ERRORS == frozenset({
         "not_found",
         "expired",
+        "effect_in_progress",
         "permission_denied",
         "schema_invalid",
         "service_unavailable",
     })
+
+
+def test_reserved_effect_remains_a_typed_refusal():
+    payload = {"ok": False, "error": "effect_in_progress"}
+    assert isinstance(_parse_acquire(payload), AcquireEffectInProgress)
+    released = _parse_simple(payload)
+    assert isinstance(released, SimpleError)
+    assert released.error == "effect_in_progress"
+    assert released.ok is False
+
+
+def test_reserved_effect_is_not_treated_as_service_unavailability():
+    from uuid import uuid4
+
+    from src.lease_plane import AcquireRequest
+    from src.lease_plane.advisory import _classify_acquire
+
+    request = AcquireRequest(
+        surface_id="file:///tmp/reserved.txt",
+        holder_agent_uuid=uuid4(),
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=300,
+    )
+    result = AcquireEffectInProgress(ok=False, error="effect_in_progress")
+    assert _classify_acquire(result, request) == ("effect_in_progress", None)

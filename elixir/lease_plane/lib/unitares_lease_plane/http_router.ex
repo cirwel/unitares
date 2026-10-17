@@ -132,6 +132,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           retry_after_hint_ms: retry_after_hint_ms
         })
 
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
+
       {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
         # RFC §7.13.5 typed-error contract. Map any CHECK violation to
         # HTTP 422 schema_invalid with the constraint name as detail (one
@@ -258,7 +261,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "a required surface is currently leased by another holder"
         })
 
-      {:error, reason} when reason in [:lease_acquire_failed, :idempotency_lookup_failed] ->
+      {:error, reason} when reason in [:revoked, :custody_expired, :effect_in_progress] ->
+        json(conn, 409, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason: "the effect lost its acquired lease before dispatch; nothing was written"
+        })
+
+      {:error, reason}
+      when reason in [:lease_acquire_failed, :idempotency_lookup_failed, :custody_unavailable] ->
         json(conn, 503, %{
           ok: false,
           error: Atom.to_string(reason),
@@ -332,6 +343,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:ok, :exists} ->
             json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
 
+          {:error, :reviewer_recused} ->
+            json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+          {:error, :invalid_review_authorship} ->
+            json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
           {:error, _} ->
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
@@ -381,11 +398,33 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # ---------- /v1/dialectic/reviewer ----------
   # BEAM-owned reviewer assignment/reassignment — the last session-row column.
   post "/v1/dialectic/reviewer" do
+    claim_if_unassigned = Map.get(conn.body_params, "claim_if_unassigned", false)
+    update_dialectic_reviewer(conn, claim_if_unassigned)
+  end
+
+  # New Python uses this distinct route for NULL-to-reviewer claims. An old
+  # BEAM returns 404 before touching the row, allowing a safe Python CAS
+  # fallback during a schema-before-code rollout.
+  post "/v1/dialectic/reviewer/claim" do
+    update_dialectic_reviewer(conn, true)
+  end
+
+  defp update_dialectic_reviewer(conn, claim_if_unassigned) do
     with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
-         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0 do
-      case UnitaresLeasePlane.DialecticSaga.update_reviewer(sid, rev) do
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0,
+         true <- is_boolean(claim_if_unassigned) do
+      case UnitaresLeasePlane.DialecticSaga.update_reviewer(
+             sid,
+             rev,
+             claim_if_unassigned
+           ) do
         :ok ->
-          json(conn, 200, %{ok: true, session_id: sid, reviewer_agent_id: rev})
+          json(conn, 200, %{
+            ok: true,
+            session_id: sid,
+            reviewer_agent_id: rev,
+            claim_if_unassigned: claim_if_unassigned
+          })
 
         {:error, :session_not_found} ->
           json(conn, 404, %{ok: false, error: "session_not_found"})
@@ -395,6 +434,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         # reassignment that never occurred (2026-08-22).
         {:error, :session_terminal} ->
           json(conn, 409, %{ok: false, error: "session_terminal"})
+
+        {:error, :reviewer_recused} ->
+          json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+        {:error, :invalid_review_authorship} ->
+          json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
+        {:error, :reviewer_write_refused} ->
+          json(conn, 409, %{ok: false, error: "reviewer_write_refused"})
 
         {:error, _} ->
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
@@ -417,24 +465,87 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # the Python side by UNITARES_DIALECTIC_BEAM_RESOLUTION (default off), so this
   # endpoint is dormant until an operator flips the flag.
   post "/v1/dialectic/resolve" do
+    resolve_dialectic(conn, nil, false)
+  end
+
+  # Versioned opt-in for the durable runtime-effect protocol.  New Python calls
+  # only this path; an old BEAM returns 404 before touching the session, so the
+  # caller can safely use its own atomic PostgreSQL writer.  The legacy path
+  # above intentionally stays terminal-only for old Python, which still owns
+  # and directly applies the effect after the response.
+  post "/v1/dialectic/resolve-with-effect" do
+    resolve_dialectic(conn, "v1", false)
+  end
+
+  # Frontier-aware terminal protocol. New Python calls only this distinct path:
+  # a BEAM version predating transcript_revision returns 404 instead of
+  # accepting and silently ignoring an unknown JSON field on the v1 route.
+  # v1 remains for compatibility and diagnosis only; after migration 078 there
+  # is no traffic-bearing rollback to old Python. v2 requires a concrete
+  # transcript/facilitation frontier.
+  post "/v2/dialectic/resolve-with-effect" do
+    resolve_dialectic(conn, "v1", true)
+  end
+
+  defp resolve_dialectic(conn, effect_protocol, require_frontier) do
     case extract_resolve_params(conn.body_params) do
       {:ok, params} ->
-        case UnitaresLeasePlane.DialecticSaga.resolve(params) do
-          {:ok, result} ->
-            json(conn, 200, Map.put(result, :ok, true))
+        if require_frontier and
+             (is_nil(Map.get(params, :expected_transcript_revision)) or
+                is_nil(Map.get(params, :expected_awaiting_facilitation))) do
+          json(conn, 422, %{
+            ok: false,
+            error: "schema_invalid",
+            detail:
+              "expected_transcript_revision and expected_awaiting_facilitation are required on the v2 route"
+          })
+        else
+          params = Map.put(params, :effect_protocol, effect_protocol)
 
-          {:error, :saga_in_flight} ->
-            json(conn, 409, %{
-              ok: false,
-              error: "saga_in_flight",
-              reason: "a resolution is already in progress for this session"
-            })
+          case UnitaresLeasePlane.DialecticSaga.resolve(params) do
+            {:ok, result} ->
+              json(conn, 200, Map.put(result, :ok, true))
 
-          {:error, :session_not_found} ->
-            json(conn, 404, %{ok: false, error: "session_not_found"})
+            {:error, :saga_in_flight} ->
+              json(conn, 409, %{
+                ok: false,
+                error: "saga_in_flight",
+                reason: "a resolution is already in progress for this session"
+              })
 
-          {:error, _other} ->
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            {:error, :session_not_found} ->
+              json(conn, 404, %{ok: false, error: "session_not_found"})
+
+            {:error, :reviewer_recused} ->
+              json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+            {:error, :invalid_review_authorship} ->
+              json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
+            {:error, :session_identity_mismatch} ->
+              json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
+
+            {:error, :self_review_not_authorizing} ->
+              json(conn, 409, %{ok: false, error: "self_review_not_authorizing"})
+
+            {:error, reason}
+            when reason in [
+                   :session_phase_mismatch,
+                   :session_revision_mismatch,
+                   :session_facilitation_mismatch,
+                   :session_activity_mismatch,
+                   :saga_claim_lost,
+                   :session_write_refused
+                 ] ->
+              json(conn, 409, %{ok: false, error: Atom.to_string(reason)})
+
+            {:error, _other} ->
+              json(conn, 503, %{
+                ok: false,
+                error: "service_unavailable",
+                reason: "internal error"
+              })
+          end
         end
 
       {:error, detail} ->
@@ -573,6 +684,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
+          {:error, :effect_in_progress} ->
+            json(conn, 409, %{ok: false, error: "effect_in_progress"})
+
           {:error, reason_atom} ->
             Logger.error("lease plane force-release failed: #{safe_reason(reason_atom)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
@@ -648,6 +762,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, :expired} ->
         json(conn, 409, %{ok: false, error: "expired"})
+
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
 
       {:error, reason} ->
         Logger.error("lease plane handoff accept failed: #{safe_reason(reason)}")
@@ -855,6 +972,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, :not_found} ->
         json(conn, 404, %{ok: false, error: "not_found"})
+
+      {:error, :effect_in_progress} ->
+        json(conn, 409, %{ok: false, error: "effect_in_progress"})
 
       {:error, reason_atom} ->
         Logger.error("lease plane release failed: #{safe_reason(reason_atom)}")
@@ -1118,21 +1238,60 @@ defmodule UnitaresLeasePlane.HTTPRouter do
        when is_binary(session_id) and byte_size(session_id) > 0 and
               is_binary(paused) and byte_size(paused) > 0 and
               is_binary(reviewer) and byte_size(reviewer) > 0 and is_map(resolution) do
-    # status is optional, defaults to "resolved"; only the two terminal states
-    # are valid (BEAM owns both the resolved and failed terminal writes).
-    case Map.get(body, "status", "resolved") do
-      status when status in ["resolved", "failed"] ->
+    # status is optional, defaults to "resolved"; the phase/revision fields are
+    # optional for old clients but, when supplied, fence the exact protocol
+    # frontier on which the terminal decision was computed.
+    status = Map.get(body, "status", "resolved")
+    expected_phase = Map.get(body, "expected_phase")
+    expected_revision = Map.get(body, "expected_transcript_revision")
+    expected_awaiting = Map.get(body, "expected_awaiting_facilitation")
+
+    expected_updated_at =
+      case Map.get(body, "expected_updated_at") do
+        nil ->
+          nil
+
+        iso when is_binary(iso) ->
+          case DateTime.from_iso8601(iso) do
+            {:ok, value, _offset} -> value
+            _ -> :invalid
+          end
+
+        _ ->
+          :invalid
+      end
+
+    cond do
+      status not in ["resolved", "failed"] ->
+        {:error, "status must be 'resolved' or 'failed'"}
+
+      not is_nil(expected_phase) and
+          (not is_binary(expected_phase) or byte_size(expected_phase) == 0) ->
+        {:error, "expected_phase must be a non-empty string or null"}
+
+      not is_nil(expected_revision) and
+          (not is_integer(expected_revision) or expected_revision < 0) ->
+        {:error, "expected_transcript_revision must be a non-negative integer or null"}
+
+      not is_nil(expected_awaiting) and not is_boolean(expected_awaiting) ->
+        {:error, "expected_awaiting_facilitation must be a boolean or null"}
+
+      expected_updated_at == :invalid ->
+        {:error, "expected_updated_at must be an ISO-8601 timestamp or null"}
+
+      true ->
         {:ok,
          %{
            session_id: session_id,
            paused_agent_id: paused,
            reviewer_agent_id: reviewer,
            resolution_payload: resolution,
-           status: status
+           status: status,
+           expected_phase: expected_phase,
+           expected_transcript_revision: expected_revision,
+           expected_awaiting_facilitation: expected_awaiting,
+           expected_updated_at: expected_updated_at
          }}
-
-      _ ->
-        {:error, "status must be 'resolved' or 'failed'"}
     end
   end
 
@@ -1365,6 +1524,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       last_heartbeat_at: iso(lease.last_heartbeat_at),
       released_at: iso(lease.released_at),
       release_reason: lease.release_reason,
+      active_effect_id: Map.get(lease, :effect_fence),
       audit_session: lease.audit_session,
       original_ttl_s: lease.original_ttl_s,
       earned_status: lease.earned_status,

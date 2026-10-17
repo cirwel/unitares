@@ -71,6 +71,16 @@ require `cloud_allowed`. A pinned call requires
 `allow_degraded=false` and never tries another host. Selection grants no
 configuration or identity authority; own-family selection is advisory only.
 
+Amended 2026-10-16: the bounded surface above stays bounded. `call_model` is
+deprecated in favour of `consult(effort='standard')` (#2847), and its model,
+temperature and token-limit controls for HTTP hosts retire with it rather than
+moving onto `consult`. Local model choice is operator configuration
+(`UNITARES_MODEL_ID`, which the standard lane resolves through
+`default_local_model()`), not a per-call knob. Removal is not before 2026-12-02,
+so the pre-registered 2026-12-01 read does not see `call_model`'s route change
+mid-window; #2484 changes that route on the same date. `delegate_inference`
+keeps its model and timeout controls for the CLI hosts.
+
 The lower-overhead effort is named `standard`, not `fast`: neither its HTTP
 provider nor the 480-second public tool boundary is a latency SLA. The internal
 standard request uses cancellable async I/O under an aggregate 450-second

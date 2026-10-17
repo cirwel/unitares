@@ -91,7 +91,7 @@ class GovernorConfig:
     flip_threshold: int = 4
 
     # V damping adaptation
-    delta_default: float = 0.25          # V damping (matches parameters.py)
+    delta_default: float = 0.25          # V damping start/decay target. Does NOT match parameters.py (0.4); this value replaces it in the ODE (contract ledger row 53)
     delta_floor: float = 0.15            # Min damping (more sensitive)
     delta_ceiling: float = 0.50          # Max damping (more stable)
     delta_ref_variance: float = 0.005    # Target V variance for coherence spread

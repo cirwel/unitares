@@ -46,6 +46,9 @@ or [User Manual](../manual/README.md).
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
   lease-plane operations.
+- [`dialectic-resolution-effects.md`](dialectic-resolution-effects.md) —
+  read-only inventory and state-specific recovery for interrupted dialectic
+  runtime effects.
 - [`public-site.md`](public-site.md) — public landing page and ontology glossary publishing path.
 - [`dormant-capability-registry.md`](dormant-capability-registry.md) — built but
   unwired capabilities and their disposition.

@@ -801,6 +801,7 @@ class TestLoadSessionAsDict:
         assert result is not None
         assert result["session_id"] == "fast_sess_1"
         assert result["phase"] == "thesis"
+        assert result["status"] == "active"
         assert result["paused_agent"] == "agent_a"
         assert result["reviewer"] == "agent_b"
         assert result["topic"] == "Test topic"

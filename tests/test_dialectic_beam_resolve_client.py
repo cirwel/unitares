@@ -3,8 +3,9 @@ Tests for the BEAM dialectic-resolve client (dialectic-on-BEAM Slice 1.2).
 
 The client must be fail-safe: it returns None (caller falls back to the Python
 pg_resolve_session path) whenever the flag is off, the lease plane is not
-configured, a required field is missing, or BEAM returns non-OK — and must never
-raise.
+configured, a required field is missing, or BEAM returns an ordinary non-OK.
+Authoritative governance-policy, transcript-frontier, and in-flight-saga
+refusals raise rather than fall back to a second writer.
 """
 
 import sys
@@ -57,23 +58,158 @@ async def test_enabled_missing_reviewer_returns_none(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_missing_transcript_frontier_never_calls_beam(monkeypatch):
+    """A new Python worker must not send an unfenced write to any BEAM version."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(
+        200,
+        {"ok": True, "status": "resolved", "saga_id": "unsafe", "origin": "new"},
+    )
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, expected_phase="synthesis"
+        )
+
+    assert out is None
+    fake.Client.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_success_returns_body(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "true")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     body = {"ok": True, "status": "resolved", "saga_id": "abc", "origin": "new"}
-    with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}):
-        out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+    fake = _fake_httpx(200, body)
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"},
+            expected_phase="synthesis", expected_transcript_revision=0,
+        )
     assert out == body
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v2/dialectic/resolve-with-effect")
 
 
 @pytest.mark.asyncio
-async def test_saga_in_flight_falls_back_to_none(monkeypatch):
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"ok": True},
+        {"ok": True, "status": "failed", "saga_id": "abc", "origin": "new"},
+        {"ok": True, "status": "resolved", "saga_id": None, "origin": "new"},
+        {"ok": True, "status": "resolved", "saga_id": "abc", "origin": "mystery"},
+        {
+            "ok": True,
+            "status": "active",
+            "saga_id": None,
+            "origin": "already_terminal",
+        },
+    ],
+)
+async def test_invalid_positive_ack_is_commit_unknown(monkeypatch, body):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}):
+        out = await brc.beam_resolve(
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
+            detail=detail,
+        )
+
+    assert out is None
+    assert detail == {
+        "commit_unknown": True,
+        "http_status": 200,
+        "invalid_ack": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_effect_route_is_definitive_fallback(monkeypatch):
+    """A pre-protocol BEAM returns 404 without touching the session row."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(
+        sys.modules,
+        {"httpx": _fake_httpx(404, {"ok": False, "error": "not_found"})},
+    ):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
+            expected_phase="synthesis", expected_transcript_revision=0,
+        )
+
+    assert out is None
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_saga_in_flight_never_falls_back(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     body = {"ok": False, "error": "saga_in_flight"}
+    detail = {}
     with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
-        out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+        with pytest.raises(brc.BeamDialecticSagaInFlight):
+            await brc.beam_resolve(
+                "s1", "p", "r", {"verdict": "resume"}, detail=detail,
+                expected_phase="synthesis", expected_transcript_revision=0,
+            )
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_transcript_conflict_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "session_revision_mismatch"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticTranscriptConflict):
+            await brc.beam_resolve(
+                "s1",
+                "p",
+                "r",
+                {"verdict": "resume"},
+                expected_phase="synthesis",
+                expected_transcript_revision=4,
+            )
+
+
+@pytest.mark.asyncio
+async def test_pause_bound_self_review_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "self_review_not_authorizing"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_resolve(
+                "s1", "p", "p", {"verdict": "resume"},
+                expected_phase="synthesis", expected_transcript_revision=0,
+            )
+    assert exc.value.error_code == "self_review_not_authorizing"
+
+
+@pytest.mark.asyncio
+async def test_postcommit_503_marks_commit_unknown(monkeypatch):
+    """The row can commit before saga finalization returns a 5xx."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
+            expected_phase="synthesis", expected_transcript_revision=0,
+        )
     assert out is None
+    assert detail == {"commit_unknown": True, "http_status": 503}
 
 
 @pytest.mark.asyncio
@@ -82,7 +218,10 @@ async def test_status_failed_is_sent_and_validated(monkeypatch):
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     fake = _fake_httpx(200, {"ok": True, "status": "failed", "saga_id": "x", "origin": "new"})
     with patch.dict(sys.modules, {"httpx": fake}):
-        out = await brc.beam_resolve("s1", "p", "r", {"reason": "boom"}, status="failed")
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"reason": "boom"}, status="failed",
+            expected_transcript_revision=0,
+        )
     assert out is not None and out["status"] == "failed"
     # The status was forwarded in the POST body.
     sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
@@ -129,6 +268,17 @@ async def test_create_non_ok_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_authorship_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "reviewer_recused"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_create_session("s1", "p", {"reviewer_agent_id": "r"})
+    assert exc.value.error_code == "reviewer_recused"
+
+
+@pytest.mark.asyncio
 async def test_update_phase_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     assert await brc.beam_update_phase("s1", "antithesis") is None
@@ -169,11 +319,112 @@ async def test_update_reviewer_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_reviewer_open_slot_claim_is_sent(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"})
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1", "rev", claim_if_unassigned=True
+        )
+
+    assert out is not None
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
+    sent = post.call_args.kwargs["json"]
+    assert sent == {
+        "session_id": "s1",
+        "reviewer_agent_id": "rev",
+        "claim_if_unassigned": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_open_slot_old_beam_404_is_safe_fallback(
+    monkeypatch,
+):
+    """A pre-claim-route BEAM returns 404 without touching the session row."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    fake = _fake_httpx(404, {"ok": False, "error": "not_found"})
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1",
+            "rev",
+            claim_if_unassigned=True,
+            detail=detail,
+        )
+
+    assert out is None
+    assert detail == {}
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
+
+
+@pytest.mark.asyncio
 async def test_update_reviewer_blank_returns_none(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     # missing reviewer -> short-circuits to None (no HTTP)
     assert await brc.beam_update_reviewer("s1", None) is None
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_authorship_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "invalid_review_authorship"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_update_reviewer("s1", "rev")
+    assert exc.value.error_code == "invalid_review_authorship"
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_lost_response_marks_commit_unknown(monkeypatch):
+    """A response decode failure can follow a committed reviewer CAS."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = RuntimeError("response body lost")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1", "rev", claim_if_unassigned=True, detail=detail
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_503_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
+        out = await brc.beam_update_reviewer("s1", "rev", detail=detail)
+
+    assert out is None
+    assert detail == {"commit_unknown": True, "http_status": 503}
+
+
+@pytest.mark.asyncio
+async def test_resolve_identity_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "session_identity_mismatch"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_resolve(
+                "s1", "p", "r", {"action": "resume"},
+                expected_phase="synthesis", expected_transcript_revision=0,
+            )
+    assert exc.value.error_code == "session_identity_mismatch"
 
 
 @pytest.mark.asyncio
@@ -183,8 +434,34 @@ async def test_transport_error_falls_back_to_none(monkeypatch):
     boom = MagicMock()
     boom.Client.side_effect = RuntimeError("connection refused")
     with patch.dict(sys.modules, {"httpx": boom}):
-        out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+        detail = {}
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
+            expected_phase="synthesis", expected_transcript_revision=0,
+        )
     assert out is None
+    # Client construction failed before post() was entered, so there is no
+    # ambiguous server-side commit to reconcile.
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_response_decode_failure_after_post_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = ValueError("truncated JSON")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
+            expected_phase="synthesis", expected_transcript_revision=0,
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
 
 
 # --- synthesis_round on the phase wire (2026-08-16) -------------------------

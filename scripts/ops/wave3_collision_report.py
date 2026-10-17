@@ -173,8 +173,9 @@ the reap -- ordering (b) with no event of its own, which is how a BEAM
 ``update_reviewer`` just before a reap is seen.
 
 *Saga/row mismatch.* A ``pg_committed`` saga whose payload is not the session
-row's ``resolution_json``: the BEAM commit wrote zero rows because the row was
-already terminal (``commit_session_row`` returns ``:ok`` on zero rows).
+row's ``resolution_json``: the guarded BEAM terminal update lost to an earlier
+terminal writer, and the losing saga was committed to release its in-flight
+slot with ``origin=already_terminal``.
 
 *Heartbeat.* Per ``process_boot_id``, in ``cycle_seq`` order: a missing
 sequence number is a lost audit write; a boot change is a restart; an in-boot
@@ -265,8 +266,9 @@ WHERE session_id = ANY(%(session_ids)s)
 ORDER BY created_at
 """
 
-# BEAM's commit_session_row returns :ok on zero rows, so a saga can commit
-# while the session row keeps an earlier writer's status and payload.
+# A BEAM resolve that loses the guarded terminal update commits its saga to
+# release the in-flight slot, while the session row keeps the earlier writer's
+# status and payload.
 MISMATCH_QUERY = """
 SELECT g.saga_id::text AS saga_id, g.session_id, g.created_at, g.pg_committed_at,
        s.status AS row_status, s.resolution_json->>'reason' AS row_reason,
@@ -723,9 +725,9 @@ def classify_write(
             # (a) in flight across the commit, and defeated by it.
             if straddles and (
                 c.get("lost")
-                # A saga committing onto the row the reap made terminal writes
-                # zero rows; a resolution in flight while the sweeper flagged
-                # or reassigned was decided on stale state.
+                # A saga committing onto the row the reap made terminal loses
+                # its guarded update; a resolution in flight while the sweeper
+                # flagged or reassigned was decided on stale state.
                 or c["kind"] == "saga"
             ):
                 evidence["same_value_overlap" if same else "harm_a"].append(_placed(c))

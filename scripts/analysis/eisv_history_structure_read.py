@@ -55,6 +55,11 @@ Interpretation guards (also printed in every report):
   printed beside its chance floor, the value pure noise would produce.
 - Windows are regimes: numbers from one window do not transfer.
 
+The ``--window-days`` window ends at the snapshot's ``now()``. A window that
+crosses an EISV instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
+The all-time census counts rows only and is not era-checked.
+
 Usage:
     PYTHONPATH=. python3 scripts/analysis/eisv_history_structure_read.py
     PYTHONPATH=. python3 scripts/analysis/eisv_history_structure_read.py \
@@ -75,9 +80,13 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 DEFAULT_DB_URL = os.environ.get(
     "GOVERNANCE_DATABASE_URL",
@@ -319,12 +328,22 @@ def build_report(
     window_days: int,
     top: int,
     generated_at: str,
+    era_lines: Sequence[str] = (),
 ) -> str:
     lines: list[str] = []
     lines.append("# EISV history-structure read (descriptive)")
     lines.append("")
     lines.append(f"Generated: {generated_at} · window: last {window_days} days")
     lines.append("")
+    if era_lines:
+        for line in era_lines:
+            lines.append(line)
+            lines.append("")
+        lines.append(
+            "The era check covers the windowed sections; the all-time census "
+            "counts rows across every era."
+        )
+        lines.append("")
     lines.append(
         "Deciding standards, chosen not derived: analysis window "
         f"{window_days}d; per-identity structure reported for the top {top} "
@@ -453,7 +472,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
     parser.add_argument("--output", type=Path, default=None)
+    eisv_eras.add_cross_era_argument(parser)
     args = parser.parse_args(argv)
+
+    # Refuse a window that crosses an instrument change before connecting. The
+    # bounds are re-taken from the snapshot's now() below and checked again,
+    # with the stamped instrument ids, against exactly what the queries read.
+    approx_end = datetime.now(timezone.utc)
+    if eisv_eras.check_window(
+        approx_end - timedelta(days=args.window_days),
+        approx_end,
+        allow_cross=args.allow_cross_era,
+    ) is None:
+        return 2
 
     import psycopg2  # local import: keeps the pure-math surface importable without a DB driver
 
@@ -463,8 +494,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     # one moment even while check-ins continue.
     conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
     cur = conn.cursor()
-    cur.execute("SELECT now()")
-    cutoff_now = cur.fetchone()[0]
+    cur.execute(
+        "SELECT now(), now() - make_interval(days => %s)", (args.window_days,)
+    )
+    cutoff_now, window_start = cur.fetchone()
+
+    cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s"), (window_start, cutoff_now))
+    id_counts = {r[0]: int(r[1]) for r in cur.fetchall()}
+    era_lines = eisv_eras.check_window(
+        window_start, cutoff_now, allow_cross=args.allow_cross_era, id_counts=id_counts
+    )
+    if era_lines is None:
+        conn.rollback()
+        conn.close()
+        return 2
 
     cur.execute(
         """
@@ -491,11 +534,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         """
         SELECT identity_id, count(*) AS n
         FROM core.agent_state
-        WHERE synthetic = false AND recorded_at >= %s - make_interval(days => %s)
+        WHERE synthetic = false AND recorded_at >= %s AND recorded_at < %s
         GROUP BY identity_id
         ORDER BY n DESC
         """,
-        (cutoff_now, args.window_days),
+        (window_start, cutoff_now),
     )
     in_window = cur.fetchall()
     top_ids = [r[0] for r in in_window[: args.top]]
@@ -509,10 +552,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             SELECT recorded_at, epoch, state_json->>'coherence_form', {dim_select}
             FROM core.agent_state
             WHERE synthetic = false AND identity_id = %s
-              AND recorded_at >= %s - make_interval(days => %s)
+              AND recorded_at >= %s AND recorded_at < %s
             ORDER BY recorded_at
             """,
-            (identity_id, cutoff_now, args.window_days),
+            (identity_id, window_start, cutoff_now),
         )
         rows = cur.fetchall()
         if len(rows) < 3:
@@ -571,6 +614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         window_days=args.window_days,
         top=args.top,
         generated_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        era_lines=era_lines,
     )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

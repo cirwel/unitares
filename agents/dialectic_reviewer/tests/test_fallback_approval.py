@@ -577,3 +577,24 @@ async def test_the_pin_is_the_first_answering_host_even_when_the_floor_is_filed(
     assert log == ["codex", "codex", "local"]
     assert verdict.agrees is False and verdict.judgment_formed is True
     assert seen["pinned_host"] == "codex"
+
+
+# ---- inference-hosts-config-v0 step 3: the server's resolution error fails closed ---- #
+@pytest.mark.asyncio
+async def test_a_resolution_error_calls_no_host_and_the_floor_cannot_approve(monkeypatch):
+    log = _hosts(monkeypatch, "", {"codex": APPROVE}, local_reply=APPROVE)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR",
+                       "no host in the dialectic_reviewer job can review (claude:host-adapter)")
+    text = await r.obtain_reviewer_text("p")
+    assert log == ["local"]
+    assert text.provenance["vouched"] is False
+    out = withhold_fallback_approval(r.parse_reviewer_verdict(text), text.provenance)
+    assert out.agrees is False and out.judgment_formed is False
+
+
+@pytest.mark.asyncio
+async def test_an_empty_resolution_error_leaves_the_list_in_charge(monkeypatch):
+    log = _hosts(monkeypatch, "codex", {"codex": APPROVE})
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR", "")
+    text = await r.obtain_reviewer_text("p")
+    assert log == ["codex"] and text.provenance["vouched"] is True

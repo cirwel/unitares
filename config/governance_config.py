@@ -87,7 +87,8 @@ BASIN_BOUNDARY = BasinRegion(name="boundary")
 
 
 def classify_basin(E: float, I: float, S: float, V: float,
-                   coherence: float, risk_score: float) -> str:
+                   coherence: float, risk_score: float,
+                   s_setpoint: float = 0.0) -> str:
     """Classify current state into a basin region.
 
     Returns "high", "low", or "boundary".
@@ -96,6 +97,15 @@ def classify_basin(E: float, I: float, S: float, V: float,
       1. LOW — any single critical breach
       2. HIGH — all dimensions within healthy bounds
       3. BOUNDARY — everything else (transitional)
+
+    ``s_setpoint`` is the Stage A S setpoint σ the ODE rests at
+    (``src.monitor_setpoint.setpoint_for_monitor``). The HIGH region's S bound
+    is evaluated on ``S - s_setpoint``, the same detrend Φ applies
+    (``phi_eval_state``), so moving the S attractor up by σ moves neither the
+    verdict nor the basin. LOW has no S term. ``S`` itself is never altered:
+    callers pass the ODE state they were handed and σ separately. The default
+    0.0 is the un-detrended classifier (setpoint off, or a caller that has no
+    σ, such as a display surface or a historical record without one).
     """
     # Coerce None → 0.0 for defensive callers
     if risk_score is None:
@@ -110,7 +120,7 @@ def classify_basin(E: float, I: float, S: float, V: float,
         return "low"
 
     # HIGH: conjunctive — all bounds must hold
-    if BASIN_HIGH.contains(E, I, S, V, coherence, risk_score):
+    if BASIN_HIGH.contains(E, I, S - s_setpoint, V, coherence, risk_score):
         return "high"
 
     # BOUNDARY: neither high nor low
@@ -368,8 +378,9 @@ class GovernanceConfig:
     # Tuned for coding agent population — not autonomous weapons or financial trading.
     # Coding work naturally scores higher (code blocks, technical terms, longer responses
     # all increase complexity signals). Over-pausing costs more than under-pausing here.
-    # NOTE: Risk score is a blend: 70% UNITARES phi-based (includes ethical drift) + 30% traditional safety
-    # See governance_monitor.py estimate_risk() for details
+    # NOTE: The phi-path risk is RISK_PHI_WEIGHT x phi-based + RISK_TRADITIONAL_WEIGHT x
+    # traditional safety; the weights below are 1.0 / 0.0, so it is phi-based only.
+    # See monitor_risk.estimate_risk() for details
     RISK_APPROVE_THRESHOLD = 0.45    # < 45%: Proceed without guidance (was 0.35)
     RISK_REVISE_THRESHOLD = 0.70     # 45-70%: Proceed with guidance, >= 70%: Pause (was 0.60)
     RISK_REJECT_THRESHOLD = 0.80     # >= 80%: Critical pause (was 0.70, must stay > revise)
@@ -1576,6 +1587,22 @@ def grounding_apply_enabled() -> bool:
     all check-ins. `tau_floor`/`tau_ref` were calibrated against a signal that
     cannot reach them and must be re-derived against the grounded distribution
     FIRST. Do not flip this to "fix" the coherence signal_degeneracy finding.
+
+    ⛔ Correction (2026-10-15): the 18.09% above pooled two sensor instruments
+    and overstated what it counts. Re-split over the 14 days to 2026-10-15
+    (`grounding_shadow` events joined to the nearest non-synthetic
+    `core.agent_state` row of the same identity within 10s, by persisted
+    `sensor_eisv_source`):
+      * behavioral: n=9,052 (209 identities), grounded p50 0.037, 63.9% below
+        0.25;
+      * physical: n=6,547 (1 identity), grounded p50 0.676, 0 below 0.25;
+      * untagged rows: n=911, grounded p50 0.749, 32.4% below 0.25;
+      * legacy coherence below 0.25 on 0 rows in every group.
+    Grounding runs after the decision (run_grounding_stage, outside the update
+    lock), and the governor reads the monitor's ODE coherence, not these
+    metrics. So these are crossings in the persisted/returned value, not
+    measured verdict changes; what APPLY would do to later decisions is
+    unmeasured. Never quote a pooled figure across sensor classes.
     """
     return os.getenv("UNITARES_GROUNDING_APPLY", "").strip().lower() in {"1", "true", "on", "yes"}
 

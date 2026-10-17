@@ -134,7 +134,11 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # lands, and raise it only with the reason stated in the PR that raises it.
 # Measured 2026-09-25 at 40,455 B on the default schema policy,
 # with ~1.3% headroom so an ordinary parameter addition does not trip it.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 41_000
+# Raised 2026-10-17 to 41,200 B (#2862): store_finding's typed response_to
+# link measured 41,139 B on top of master. That parameter replaces a
+# describe_tool plus use_tool(tool_name='knowledge') round trip of ~10.6 KB
+# per linked finding, so the per-session listing pays about 180 B to save it.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_200
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

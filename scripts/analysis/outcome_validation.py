@@ -23,8 +23,14 @@ Key test: if grounded form's "flip to low" has bias (not just disagreement),
 agent-days dominated by high→low transitions should show measurably worse
 outcomes than agent-days that stayed high→high.
 
+State rows and outcome events are read over the same window,
+``[now - window-days, now)``. A window that crosses an EISV instrument change
+(src/eisv_eras.py) is refused unless ``--allow-cross-era REASON`` is given, and
+the crossed changes are printed.
+
 Usage:
     python3 scripts/analysis/outcome_validation.py --window-days 30
+    python3 scripts/analysis/outcome_validation.py --window-days 60 --allow-cross-era "why"
     python3 scripts/analysis/outcome_validation.py --csv outcome_validation.csv
 """
 from __future__ import annotations
@@ -35,19 +41,23 @@ import csv
 import json
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import asyncpg
 
 # Reuse the counterfactual logic verbatim by path import.
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "scripts"))
+sys.path.insert(0, str(project_root))
 from verdict_counterfactual import (  # noqa: E402
     classify_from_db_row,
     classify_basin,
     compute_manifold_coherence,
 )
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 
 FLIP_REFERENCE = "high→high"
@@ -61,7 +71,7 @@ FLIP_CATEGORIES_OF_INTEREST = [
 ]
 
 
-async def fetch_state_rows(conn, window_days: int) -> List[Dict]:
+async def fetch_state_rows(conn, start: datetime, end: datetime) -> List[Dict]:
     """One row per core.agent_state tuple, carrying agent_id + ts + EISV + coherence_legacy."""
     sql = """
         SELECT
@@ -76,10 +86,10 @@ async def fetch_state_rows(conn, window_days: int) -> List[Dict]:
           s.state_json                        AS state_json
         FROM core.agent_state s
         JOIN core.identities  i  USING (identity_id)
-        WHERE s.recorded_at >= now() - ($1::int * INTERVAL '1 day')
+        WHERE s.recorded_at >= $1::timestamptz AND s.recorded_at < $2::timestamptz
     """
     rows = []
-    for r in await conn.fetch(sql, window_days):
+    for r in await conn.fetch(sql, start, end):
         state_json = r["state_json"] or {}
         if isinstance(state_json, str):
             try:
@@ -117,7 +127,9 @@ async def fetch_state_rows(conn, window_days: int) -> List[Dict]:
     return rows
 
 
-async def fetch_outcome_aggregates(conn, window_days: int) -> Dict[Tuple[str, str], Dict]:
+async def fetch_outcome_aggregates(
+    conn, start: datetime, end: datetime
+) -> Dict[Tuple[str, str], Dict]:
     """Per (agent_id, day): count, mean outcome_score, any is_bad, dominant outcome_type.
 
     Filtered to outcome_type IN (test_passed, test_failed, task_completed,
@@ -134,13 +146,13 @@ async def fetch_outcome_aggregates(conn, window_days: int) -> Dict[Tuple[str, st
           bool_or(is_bad)              AS any_bad,
           sum(CASE WHEN is_bad THEN 1 ELSE 0 END)::int AS n_bad
         FROM audit.outcome_events
-        WHERE ts >= now() - ($1::int * INTERVAL '1 day')
+        WHERE ts >= $1::timestamptz AND ts < $2::timestamptz
           AND outcome_type IN ('test_passed', 'test_failed',
                                'task_completed', 'task_failed')
         GROUP BY agent_id, date_trunc('day', ts)
     """
     out: Dict[Tuple[str, str], Dict] = {}
-    for r in await conn.fetch(sql, window_days):
+    for r in await conn.fetch(sql, start, end):
         out[(r["agent_id"], r["day"].isoformat())] = {
             "n_events": r["n_events"],
             "mean_score": float(r["mean_score"]) if r["mean_score"] is not None else None,
@@ -258,11 +270,14 @@ def summarize(
     return {"by_bucket": dict(by_bucket), "by_bucket_class": dict(by_bucket_class)}
 
 
-def print_report(summary: Dict, total_agent_days: int, total_with_outcome: int) -> None:
+def print_report(summary: Dict, total_agent_days: int, total_with_outcome: int,
+                 era_lines: Sequence[str] = ()) -> None:
     print()
     print("=" * 88)
     print("OUTCOME VALIDATION — do basin flips predict worse objective outcomes?")
     print("=" * 88)
+    for line in era_lines:
+        print(line)
     print(f"Agent-days total:                         {total_agent_days:>6}")
     print(f"Agent-days with eprocess-eligible outcome: {total_with_outcome:>6}")
     coverage = 100.0 * total_with_outcome / total_agent_days if total_agent_days else 0.0
@@ -339,20 +354,42 @@ def write_csv(summary: Dict, path: str) -> None:
 
 
 async def main_async(args) -> int:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.window_days)
+    # Time check first, so a crossing window is refused before connecting.
+    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        return 2
+
     print(f"[outcome-validation] connecting...", file=sys.stderr)
     conn = await asyncpg.connect(args.db_url)
     try:
-        print(f"[outcome-validation] fetching state rows (window={args.window_days}d)...",
-              file=sys.stderr)
-        state_rows = await fetch_state_rows(conn, args.window_days)
-        print(f"[outcome-validation]   {len(state_rows)} state rows with computable E",
-              file=sys.stderr)
+        # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+        # reads below see the same committed rows.
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            id_rows = await conn.fetch(
+                eisv_era_sql.instrument_id_counts_sql(
+                    "$1::timestamptz", "$2::timestamptz", include_synthetic=True
+                ),
+                start, end,
+            )
+            era_lines = eisv_eras.check_window(
+                start, end, allow_cross=args.allow_cross_era,
+                id_counts={r["instrument_id"]: r["n"] for r in id_rows},
+            )
+            if era_lines is None:
+                return 2
 
-        print(f"[outcome-validation] fetching outcome aggregates (eprocess_eligible=true)...",
-              file=sys.stderr)
-        outcomes = await fetch_outcome_aggregates(conn, args.window_days)
-        print(f"[outcome-validation]   {len(outcomes)} (agent_id, day) outcome buckets",
-              file=sys.stderr)
+            print(f"[outcome-validation] fetching state rows (window={args.window_days}d)...",
+                  file=sys.stderr)
+            state_rows = await fetch_state_rows(conn, start, end)
+            print(f"[outcome-validation]   {len(state_rows)} state rows with computable E",
+                  file=sys.stderr)
+
+            print(f"[outcome-validation] fetching outcome aggregates (eprocess_eligible=true)...",
+                  file=sys.stderr)
+            outcomes = await fetch_outcome_aggregates(conn, start, end)
+            print(f"[outcome-validation]   {len(outcomes)} (agent_id, day) outcome buckets",
+                  file=sys.stderr)
     finally:
         await conn.close()
 
@@ -364,7 +401,7 @@ async def main_async(args) -> int:
 
     summary = summarize(agent_days, outcomes)
     print_report(summary, total_agent_days=len(agent_days),
-                 total_with_outcome=total_with_outcome)
+                 total_with_outcome=total_with_outcome, era_lines=era_lines)
 
     if args.csv:
         write_csv(summary, args.csv)
@@ -372,14 +409,15 @@ async def main_async(args) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--db-url", type=str,
                         default="postgresql://postgres:postgres@localhost:5432/governance")
     parser.add_argument("--csv", type=str, default=None,
                         help="Write per-bucket-class CSV to this path")
-    args = parser.parse_args()
+    eisv_eras.add_cross_era_argument(parser)
+    args = parser.parse_args(argv)
     return asyncio.run(main_async(args))
 
 

@@ -113,11 +113,14 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "as different questions: available says the adapter could run (a "
         "cached readiness check, not a promise), accepts_host_id_from says "
         "which tool will take that host as host_id — Ollama and Hugging Face "
-        "belong to call_model, the Claude, Codex and Antigravity adapters to "
-        "delegate_inference. Those adapters are an operator extension (the "
-        "agent orchestrator) that a default install does not run; the "
-        "extensions field says whether this server has it. Listing works "
-        "before onboarding; inference calls need a bound identity."
+        "belong to consult's standard effort (and the deprecated call_model), "
+        "the Claude, Codex and Antigravity adapters to consult's thorough "
+        "effort and delegate_inference. Those adapters are an operator "
+        "extension (the agent orchestrator, a process supervisor that starts "
+        "and stops the CLIs; it is not a model) that a default install does "
+        "not run; the extensions field says whether this server has it. "
+        "Listing works before onboarding; inference calls need a bound "
+        "identity."
     ),
     "describe_inference_host": (
         "Inspect one inference host by host_id: registry record and "
@@ -125,13 +128,18 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "Read accepts_host_id_from, not available, to "
         "learn which tool will take it. An unregistered id returns "
         "INFERENCE_HOST_NOT_FOUND rather than an empty record, so enumerate "
-        "ids with list_inference_hosts; call_model or delegate_inference "
+        "ids with list_inference_hosts; consult or delegate_inference "
         "actually reach the host. Reading the record neither invokes the "
         "host nor proves its credentials work."
     ),
     "call_model": (
-        "Run a raw completion on a local or Hugging Face inference host; "
-        "for advisory help prefer consult.\n\n"
+        "Deprecated since 2026-10-16: use consult(effort='standard'), which "
+        "reaches the same local host.\n\n"
+        "Still callable until its removal, no earlier than 2026-12-02. Its "
+        "model, temperature and max_tokens controls for HTTP hosts go with "
+        "it (consult does not take them, by design; delegate_inference keeps "
+        "model for a CLI host); if you depend on one, say so with leave_note "
+        "before then. "
         "One synchronous advisory completion on the local Ollama lane or the "
         "Hugging Face router, returning tool evidence, never a governed review "
         "record. provider='hf' also needs privacy='cloud' or 'auto', "
@@ -145,7 +153,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     ),
     "delegate_inference": (
         "Hand a bounded task to a strong-model CLI host (operator extension, "
-        "off by default); for a raw completion use call_model.\n\n"
+        "off by default); for a local completion use consult.\n\n"
         "Operator extension, off on a default install. Sends one bounded "
         "prompt to an operator-authorized subscription CLI "
         "(Claude, Codex or Antigravity), spawned as an isolated child with no "
@@ -184,15 +192,19 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "thorough for CLI); an explicit effort must match. External hosts require "
         "cloud_allowed and pinned calls require "
         "allow_degraded=false. No host fallback or same-family exclusion applies "
-        "to explicit selection. Use call_model or delegate_inference for model, "
-        "provider or timeout control. Full diagnostics explain tokens_used: backend "
+        "to explicit selection. Use delegate_inference for model or timeout "
+        "control on a CLI host. consult takes no model or sampling control "
+        "by design; the deprecated call_model, removed no earlier than "
+        "2026-12-02, is the last tool with them for an HTTP host. Full "
+        "diagnostics explain "
+        "tokens_used: backend "
         "aggregate usage, not answer length or comparable billed cost."
     ),
     "request_review": (
         "Request governed, on-record judgment through the dialectic lifecycle. "
         "The response identifies the actual reviewer path and provenance. This "
         "is categorically different from consult, which returns advisory model "
-        "evidence only."
+        "evidence only. For proxy filing, declare author UUIDs to recuse them."
     ),
     "dialectic": (
         "Open and advance governed, on-record peer review sessions. To OPEN a "
@@ -200,7 +212,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and "
         "list serve unbound callers; every other action needs a bound "
         "identity, quick fails without issue_description, and thesis, "
-        "antithesis, synthesis and reassign each need a session_id the "
+        "antithesis, synthesis, reassign and reconcile_effect each need a "
+        "session_id the "
         "schema does not mark required. request refuses "
         "with SESSION_EXISTS while your agent already has an active session. "
         "For a bound caller get with check_timeout=true becomes a write that "
@@ -215,7 +228,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "one-call alias for request. The separate consult tool advises "
         "without opening a record; dialectic(action='consult') is different: "
         "it files an outside verdict on an existing session as a "
-        "non-authoritative transcript record."
+        "non-authoritative transcript record. reconcile_effect is an "
+        "operator-only recovery action: it may apply a still-pending durable "
+        "terminal effect, but it never automatically replays an applying or "
+        "unknown-partial effect."
     ),
 }
 

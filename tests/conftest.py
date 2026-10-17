@@ -317,6 +317,54 @@ def _isolate_db_backend(monkeypatch):
         mock_dialectic_db.update_session_reviewer.return_value = True
         mock_dialectic_db.update_session_status.return_value = True
         mock_dialectic_db.resolve_session.return_value = True
+        async def _claim_resolution_effect(
+            session_id,
+            owner_token,
+            *,
+            paused_agent_id,
+            reviewer_agent_id,
+            effect_required,
+            pause_token,
+            resolution,
+        ):
+            if not effect_required:
+                return {
+                    "session_id": session_id,
+                    "paused_agent_id": paused_agent_id,
+                    "reviewer_agent_id": reviewer_agent_id,
+                    "effect_required": False,
+                    "pause_token": None,
+                    "resolution_payload_json": resolution,
+                    "state": "applied",
+                    "owner_token": None,
+                    "attempt_count": 0,
+                    "claimed": False,
+                    "execution_result_json": {
+                        "success": True,
+                        "no_op": True,
+                        "reason": "active_at_session_open",
+                    },
+                }
+            return {
+                "session_id": session_id,
+                "paused_agent_id": paused_agent_id,
+                "reviewer_agent_id": reviewer_agent_id,
+                "effect_required": True,
+                "pause_token": pause_token,
+                "resolution_payload_json": resolution,
+                "state": "applying",
+                "owner_token": owner_token,
+                "attempt_count": 1,
+                "claimed": True,
+            }
+        mock_dialectic_db.claim_resolution_effect.side_effect = (
+            _claim_resolution_effect
+        )
+        mock_dialectic_db.complete_resolution_effect.return_value = True
+        mock_dialectic_db.fail_resolution_effect.return_value = True
+        mock_dialectic_db.acknowledge_resolution_effect.return_value = True
+        mock_dialectic_db.quarantine_resolution_effect.return_value = True
+        mock_dialectic_db.get_resolution_effect.return_value = None
         mock_dialectic_db.create_session.return_value = {"session_id": "mock-session"}
         mock_dialectic_db.get_session.return_value = None
         mock_dialectic_db.get_session_by_agent.return_value = None

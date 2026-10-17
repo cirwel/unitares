@@ -227,7 +227,9 @@ ratified on merge, as a pre-read clarification in the registered stop rule
 clarification — drafted 2026-09-25"), which is the authority; no condition,
 threshold or pinned candidate of the read moved. Label-free work
 (self-predictability, windowed baselines, system identification) may proceed
-offline; live-path changes wait for the read's report. See
+offline; live-path changes wait for the read's report (amended 2026-10-15:
+they may land once their PR records `instrument_change_at` under the
+[stop-rule amendment](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)). See
 `docs/ontology/eisv-proprioception-contract.md`, "Fitted and learned
 estimators — which bucket they sit in".
 

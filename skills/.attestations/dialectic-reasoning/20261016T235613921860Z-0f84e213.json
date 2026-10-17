@@ -1,0 +1,26 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-16T23:56:13Z",
+  "verified_date": "2026-10-16",
+  "verifier": "Codex council rechecked pause-bound self-review authority and exact-row reconciliation evidence against final source changes",
+  "source_digests": {
+    "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
+    "unitares/src/dialectic_db.py": "f1fe3511d2309018",
+    "unitares/src/dialectic_protocol.py": "db00cf7482513d25",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "783b42ee9f213858",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "6d16cbed455bb20a",
+    "unitares/src/mcp_handlers/dialectic/resolution.py": "6de61a0f5fe6a5f2",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "b9ccb7d0e1ed8ba3",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "82de9d6852db5340",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "69ef02c4ad02ff33",
+    "unitares/src/mcp_handlers/tool_stability.py": "e80cdc5e28bc6bc0"
+  },
+  "skill_digest": "4333ca80b46b55f1"
+}

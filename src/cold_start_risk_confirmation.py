@@ -56,6 +56,19 @@ NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
     "non_authored_phi_cold_start_trap"
 )
 COLD_START_CONFIRMATION_ACTUATION_SCOPE = "fallback_risk_pause_deferral"
+LEGACY_CIRCUIT_BREAKER_EFFECT = "agent_metadata.status=paused"
+CIRCUIT_BREAKER_DURABLE_EFFECT = (
+    "durable_agent_status_and_pause_generation"
+)
+CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT = (
+    "durable_pause_generation_already_present"
+)
+CIRCUIT_BREAKER_IN_MEMORY_EFFECT = "in_memory_pause_only"
+COLD_START_RECOVERY_PAUSE_EFFECTS = frozenset({
+    LEGACY_CIRCUIT_BREAKER_EFFECT,
+    CIRCUIT_BREAKER_DURABLE_EFFECT,
+    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
+})
 
 
 def _is_risk_routed_pause(decision: Mapping[str, Any]) -> bool:
@@ -190,6 +203,15 @@ def _validated_risk_only_hard_stop_provenance(
     counterfactual_risk = _finite_number(counterfactual.get("risk_score"))
     if counterfactual_risk != 0.0:
         return None
+    # The S setpoint the producer detrended the basin's HIGH bound by. A
+    # record written before it was recorded carries none and was classified
+    # with σ = 0; a present but non-numeric value fails closed.
+    if "s_setpoint" in observed:
+        s_setpoint = _finite_number(observed.get("s_setpoint"))
+        if s_setpoint is None:
+            return None
+    else:
+        s_setpoint = 0.0
     if (
         policy_threshold_values["basin_low_I"] != BASIN_LOW_I_CEIL
         or policy_threshold_values["basin_low_coherence"]
@@ -207,6 +229,7 @@ def _validated_risk_only_hard_stop_provenance(
         V=V,
         coherence=coherence,
         risk_score=risk,
+        s_setpoint=s_setpoint,
     )
     recomputed_counterfactual_basin = classify_basin(
         E=E,
@@ -215,6 +238,7 @@ def _validated_risk_only_hard_stop_provenance(
         V=V,
         coherence=coherence,
         risk_score=counterfactual_risk,
+        s_setpoint=s_setpoint,
     )
     expected_policy_conditions = {
         "void_active": observed.get("void_active") is True,
@@ -865,7 +889,7 @@ def evaluate_non_authored_cold_start_trap(
         and enforcement.get("applied") is True
         and enforcement.get("mode") == "circuit_breaker"
         and enforcement.get("actor") == "agent_loop_detection"
-        and enforcement.get("effect") == "agent_metadata.status=paused"
+        and enforcement.get("effect") in COLD_START_RECOVERY_PAUSE_EFFECTS
     )
     legacy_enforcement_basis_exact = (
         enforcement.get("basis") == "phi_cold_start_unconfirmed_shadow"

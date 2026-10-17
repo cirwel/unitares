@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
@@ -49,6 +50,11 @@ from .host_backends import (
     call_antigravity_backend,
     call_claude_backend,
     call_openai_compat_backend,
+    codex_admin_config_conflict,
+    codex_confinement_verified,
+    codex_lane_config_overrides,
+    codex_lane_workdir,
+    codex_mcp_disable_overrides,
     resolve_host_cli,
 )
 
@@ -694,13 +700,58 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     except (TypeError, ValueError):
         timeout_s = 420.0
     timeout_s = max(1.0, timeout_s)
+    # Administrator codex configuration can override the lane's profile; the
+    # lane refuses rather than check its contents (see admin_config_conflict).
+    if codex_admin_config_conflict():
+        return None
+    # Off the event loop: the probe runs `codex sandbox` twice.
     try:
+        if not await asyncio.wait_for(
+            asyncio.to_thread(codex_confinement_verified, cli_path), timeout=60
+        ):
+            return None
+    except Exception:  # noqa: BLE001 - an unverifiable lane falls back locally
+        return None
+    # The run happens in a fresh empty directory outside any repository, so no
+    # project codex configuration or instructions load; it is removed after.
+    workdir = codex_lane_workdir()
+    try:
+        return await _run_codex_review(cli_path, prompt, workdir, timeout_s)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def _run_codex_review(
+    cli_path: str, prompt: str, workdir: str, timeout_s: float
+) -> Optional[str]:
+    try:
+        # The lane overrides replace --sandbox read-only, whose legacy sandbox
+        # reads the whole disk, and switch off hooks, plugins and browser and
+        # computer use. This call loads the operator's codex config (for its
+        # model and reasoning effort), so every MCP server that configuration
+        # still enables is switched off by name; if one cannot be, the call is
+        # refused and the caller falls back.
+        base = codex_lane_config_overrides(cli_path)
+        # Off the event loop and inside this call's budget: the enumeration
+        # runs `codex mcp list` twice, and a stalled one must not block the
+        # reviewer's own deadlines.
+        overrides = base + await asyncio.wait_for(
+            asyncio.to_thread(codex_mcp_disable_overrides, cli_path, base, workdir),
+            timeout=min(60.0, timeout_s),
+        )
+        slots = " ".join(f'-c "$DR_CODEX_C{i}"' for i in range(1, len(overrides) + 1))
         proc = await asyncio.create_subprocess_exec(
             "/bin/sh",
             "-c",
-            'exec "$DR_CLI" exec --sandbox read-only --skip-git-repo-check '
-            '"$DR_PROMPT" </dev/null',
-            env={**os.environ, "DR_CLI": cli_path, "DR_PROMPT": prompt},
+            f'exec "$DR_CLI" exec --ephemeral {slots} '
+            '--skip-git-repo-check "$DR_PROMPT" </dev/null',
+            env={
+                **os.environ,
+                "DR_CLI": cli_path,
+                "DR_PROMPT": prompt,
+                **{f"DR_CODEX_C{i}": value for i, value in enumerate(overrides, start=1)},
+            },
+            cwd=workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )

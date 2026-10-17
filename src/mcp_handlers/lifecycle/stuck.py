@@ -99,6 +99,28 @@ async def _trigger_dialectic_for_stuck_agent(
         )
         return None
 
+    # Bind the session to the actuator state visible at open. Stuck detection
+    # normally reviews an active agent, so its eventual resolution is a durable
+    # no-op rather than permission to release a later pause. Keep the paused
+    # branch fail-closed for direct callers and future detector changes.
+    paused_agent_state = dict(paused_agent_state)
+    try:
+        from src.agent_storage import read_authoritative_pause_binding
+
+        binding = await read_authoritative_pause_binding(agent_id)
+    except Exception as exc:
+        logger.warning(
+            "[STUCK_AGENT_RECOVERY] Could not bind %s to authoritative pause "
+            "state; no session opened: %s",
+            agent_id[:8],
+            exc,
+        )
+        return None
+    paused_agent_state["pause_effect_required"] = binding[
+        "pause_effect_required"
+    ]
+    paused_agent_state["pause_token"] = binding["pause_token"]
+
     session = DialecticSession(
         paused_agent_id=agent_id,
         reviewer_agent_id=reviewer_id,
