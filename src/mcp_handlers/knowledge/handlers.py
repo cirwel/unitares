@@ -6201,7 +6201,7 @@ async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
     Args:
         scope: "open" (default), "all", "by_agent"
         top_n: Number of stale entries to return (default: 10)
-        use_model: If true, use call_model to assess relevance (default: false)
+        use_model: If true, ask the local model to assess relevance (default: false)
 
     Returns audit report with bucket counts and top stale entries.
     """

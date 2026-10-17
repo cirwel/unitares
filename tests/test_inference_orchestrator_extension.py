@@ -99,7 +99,9 @@ async def test_delegate_inference_names_the_missing_extension(default_install):
     assert "agent orchestrator extension" in parsed["error"]
     action = parsed["recovery"]["action"]
     assert "consult(effort='standard')" in action
-    assert "call_model" in action
+    # call_model is deprecated (2026-10-16): recovery points at consult only.
+    assert "call_model" not in action
+    assert "call_model" not in parsed["recovery"]["related_tools"]
 
 
 @pytest.mark.asyncio
