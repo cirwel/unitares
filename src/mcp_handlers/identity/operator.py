@@ -58,9 +58,11 @@ _OPERATOR_TOKENS_ENV = "UNITARES_OPERATOR_TOKENS"
 def _allowlisted_tokens() -> Set[str]:
     """Parse the operator-token allowlist from env at call time.
 
-    Read fresh each call rather than caching, so operators can rotate
-    tokens without restarting the server. The set is small (a handful
-    of entries) and the env read is cheap.
+    Read from the environment on each call rather than cached. The
+    process environment is fixed at launch, so a rotated token takes
+    effect on restart; listing old and new tokens comma-separated keeps
+    both valid across the rotation. The set is small (a handful of
+    entries) and the env read is cheap.
     """
     raw = os.environ.get(_OPERATOR_TOKENS_ENV, "")
     return {t.strip() for t in raw.split(",") if t.strip()}

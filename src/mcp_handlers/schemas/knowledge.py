@@ -15,6 +15,12 @@ DiscoveryType = Literal[
 _DISCOVERY_TYPE_DESC = (
     "Type of discovery. One of: " + ", ".join(get_args(DiscoveryType)) + "."
 )
+# Search also matches the system-generated rollup rows (VALID_DISCOVERY_TYPES in
+# knowledge/handlers.py), so its filter lists them after the stored types.
+_SEARCH_DISCOVERY_TYPE_DESC = (
+    "Filter by type. One of: " + ", ".join(get_args(DiscoveryType))
+    + "; topic_rollup matches system-generated rollups."
+)
 
 Severity = Literal["low", "medium", "high", "critical"]
 
@@ -108,7 +114,7 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
     )
     discovery_type: Optional[str] = Field(
         default=None,
-        description="Filter by type"
+        description=_SEARCH_DISCOVERY_TYPE_DESC
     )
     agent_id_filter: Optional[str] = Field(
         default=None,

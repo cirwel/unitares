@@ -1,7 +1,8 @@
-"""Regression guards for the public claim ledger.
+"""Regression guards for the public evidence record.
 
-The ledger moved from the root README to docs/EVIDENCE_AND_LIMITS.md when the
-README became a landing page. These guards moved with it, unchanged in intent.
+The detailed record lives in docs/EVIDENCE_AND_LIMITS.md so the README can stay
+a landing page. Guard material evidence boundaries without requiring a table
+layout or a taxonomy ahead of the results.
 """
 
 from __future__ import annotations
@@ -16,21 +17,13 @@ EVIDENCE = (
 NORMALIZED = " ".join(EVIDENCE.split())
 
 
-def test_ledger_uses_evidence_classes_instead_of_project_sentiment() -> None:
-    """The ledger must distinguish result types before interpreting them."""
-    for evidence_class in (
-        "Operational observation",
-        "Benchmark pass / fail",
-        "Non-detection",
-        "Unidentified / inconclusive",
-        "Mismatch / path bound",
-        "Untested",
-    ):
-        assert evidence_class in NORMALIZED
-
-    assert "it is not a positive or negative judgement about the project" in NORMALIZED
+def test_ledger_distinguishes_operational_decisions_from_scientific_refutation() -> None:
+    """The full taxonomy may be linked, but its inference boundary stays clear."""
+    assert "ontology/falsification-inference-containment-2026-08-22.md" in EVIDENCE
+    assert "operational `FAIL` can close a scheduled line of work" in NORMALIZED
+    assert "without scientifically refuting the underlying capability" in NORMALIZED
     assert (
-        "A registered operational `FAIL` can close a scheduled line of work"
+        "target, counterfactual, independent unit, power, decision rule, and read protocol"
         in NORMALIZED
     )
 
@@ -65,28 +58,27 @@ def test_ledger_discloses_the_interim_execution_counts() -> None:
 
 def test_ledger_preserves_earned_and_unearned_claims_side_by_side() -> None:
     """Operational evidence stays visible without being promoted to efficacy."""
-    assert "Sustained operation | **Operational observation**" in NORMALIZED
-    assert (
-        "Pause actuation and delivery | **Event reconciled; protection untested**"
-        in NORMALIZED
-    )
-    assert (
-        "Predictive lift | **Non-detection; inconclusive for weak effects**"
-        in NORMALIZED
-    )
-    assert "Incident prevention or benefit from pausing | **Untested**" in NORMALIZED
+    assert "records sustained maintainer traffic" in NORMALIZED
+    assert "A governed pause landed" in NORMALIZED
+    assert "current rate has not been re-measured" in NORMALIZED
+    assert "did not establish predictive lift" in NORMALIZED
+    assert "inconclusive, not a demonstrated negative" in NORMALIZED
+    assert "Incident prevention and benefit from pausing remain untested" in NORMALIZED
     assert "sets no standing AUC ceiling" in NORMALIZED
 
 
 def test_ledger_separates_the_review_mechanism_from_its_benefit() -> None:
-    """One row cannot carry both claims without one of them being wrong.
+    """Review execution and corrections do not establish comparative benefit.
 
-    The mechanism is exercised and countable; the benefit is not measured. A
-    single "Untested" row understated the first, and a single "Exercised path"
-    row would overstate the second.
+    The mechanism is exercised and countable; comparative benefit is not
+    measured. Neither should erase the other, regardless of the page layout.
     """
-    assert "Review binds on the reviewed agent | **Exercised path**" in NORMALIZED
-    assert "Comparative benefit from review and coordination | **Untested**" in NORMALIZED
+    assert "cannot resolve its own review over a standing reviewer objection" in NORMALIZED
+    assert "no matched unreviewed or conventional-review control" in NORMALIZED
+    assert (
+        "no estimate of incident reduction, net productivity, or UNITARES's incremental contribution"
+        in NORMALIZED
+    )
 
 
 def test_ledger_states_the_review_coverage_boundary() -> None:

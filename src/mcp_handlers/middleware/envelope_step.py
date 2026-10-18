@@ -2184,13 +2184,29 @@ def _response_options(
             "all_inline_details": "response_mode='full' + include_details=true",
         }
     if friendly_name == "check_working_state":
-        return {
-            "current": resolve_metrics_verbosity(arguments),
+        current = resolve_metrics_verbosity(arguments)
+        options = {
+            "current": current,
             "routine": "verbosity='minimal' (default)",
             "interpreted_state": "verbosity='standard'",
             "complete_diagnostics": "verbosity='full'",
             "compatibility_aliases": "lite=true is minimal; lite=false is full",
         }
+        verdict = payload.get("verdict")
+        verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
+        if current == "full" and verdict_value == "unbound":
+            # An unbound full read returns what 'standard' does, so pointing
+            # complete_diagnostics back at verbosity='full' sends the caller
+            # round the same call. Say why full had nothing more instead.
+            # Recovery stays with next_action: it is cause-aware, and an
+            # established process that only lost its client_session_id must
+            # retry with its existing proof, not mint a second identity.
+            del options["complete_diagnostics"]
+            options["full_unavailable_reason"] = (
+                "unbound: full adds nothing until this session is bound; "
+                "follow next_action to bind it"
+            )
+        return options
     return None
 
 
