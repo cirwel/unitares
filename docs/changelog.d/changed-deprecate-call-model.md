@@ -1,1 +1,0 @@
-- Interface contract 1.42.0: call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only way to set model, temperature or max_tokens on an HTTP host. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.

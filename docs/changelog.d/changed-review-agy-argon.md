@@ -1,1 +1,0 @@
-- The Antigravity reviewer now defaults to Gemini 4 Argon (High) instead of Gemini 3.8 Flash (High). On a replay of three past PRs with known defects, Argon found 5, Flash 1. `REVIEW_AGY_MODEL` still overrides it.

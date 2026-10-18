@@ -1,1 +1,0 @@
-- **Inference hosts proposal: GLM retired from the plan.** The operator ended the GLM trial on 2026-10-15. The proposal's section 7 records the amendment (no GLM host declared, `pr_review` keeps today's order), and its section 2.1 example and the parser's secret-name hint now use placeholders. The `zhipu` family stays in the vocabulary.
