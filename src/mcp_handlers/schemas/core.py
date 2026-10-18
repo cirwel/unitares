@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Annotated, Optional, Union, Literal, Dict, Any, List
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
@@ -947,10 +948,10 @@ class ConsultParams(AgentIdentityMixin):
         ),
         json_schema_extra={"brief": "Pin a host; omitted effort follows it. External needs cloud_allowed; no fallback."},
     )
-    host_ids: Optional[List[Annotated[str, Field(min_length=1, max_length=128)]]] = Field(
+    # No size bounds here: the handler refuses a wrong size with the valid
+    # host ids and a recovery, which a schema error cannot carry.
+    host_ids: Optional[List[str]] = Field(
         None,
-        min_length=2,
-        max_length=3,
         description=(
             "Council: ask 2 or 3 distinct CLI hosts (claude:host-adapter, "
             "codex:host-adapter, antigravity:host-adapter) the same brief in "
@@ -959,7 +960,7 @@ class ConsultParams(AgentIdentityMixin):
             "allow_degraded false, and host_id unset. Nothing combines the "
             "answers. No fallback or same-family exclusion: you choose the hosts."
         ),
-        json_schema_extra={"brief": "Council: 2-3 CLI hosts at once."},
+        json_schema_extra={"brief": "Council of 2-3 CLI hosts; needs cloud_allowed."},
     )
 
     brief: str = Field(
@@ -991,7 +992,7 @@ class ConsultParams(AgentIdentityMixin):
             "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
             "An explicit value must match the selected host. Neither is a latency SLA."
         ),
-        json_schema_extra={"brief": "Omit: follows host_id, otherwise standard. Explicit effort must match the host."},
+        json_schema_extra={"brief": "Omit: follows host_id(s), otherwise standard. Explicit effort must match the host."},
     )
     privacy: Literal["local", "cloud_allowed"] = Field(
         "local",
@@ -1014,6 +1015,18 @@ class ConsultParams(AgentIdentityMixin):
             "a single diagnostics object with route and inference provenance."
         ),
     )
+
+    @field_validator("host_ids", mode="before")
+    @classmethod
+    def host_ids_from_json_text(cls, value: Any) -> Any:
+        # REST and use_tool deliver a list typed into a text field as JSON
+        # text; /mcp/ already parses it. Accept it on every transport.
+        if isinstance(value, str) and value.lstrip().startswith("["):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        return value
 
     @field_validator("brief")
     @classmethod

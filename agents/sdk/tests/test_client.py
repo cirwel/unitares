@@ -433,6 +433,38 @@ class TestToolMapping:
         assert client.call_tool.call_args.kwargs["retry"] is False
 
     @pytest.mark.asyncio
+    async def test_consult_council_keeps_every_member(self):
+        client = make_client_with_session(AsyncMock())
+        client.call_tool = AsyncMock(return_value={
+            "success": True,
+            "status": "partial",
+            "council_id": "k-1",
+            "answered": 1,
+            "asked": 2,
+            "members": [
+                {"host_id": "codex:host-adapter", "status": "completed", "advice": "A",
+                 "consultation_id": "c-1", "record": {"hash_key": "aa"}},
+                {"host_id": "antigravity:host-adapter", "status": "failed",
+                 "failure": {"code": "DELEGATED_INFERENCE_FAILED"}},
+            ],
+        })
+
+        result = await client.consult(
+            "review", privacy="cloud_allowed",
+            host_ids=["codex:host-adapter", "antigravity:host-adapter"],
+        )
+
+        args = client.call_tool.call_args[0][1]
+        assert args["host_ids"] == ["codex:host-adapter", "antigravity:host-adapter"]
+        assert "effort" not in args and "host_id" not in args
+        assert (result.council_id, result.answered, result.asked) == ("k-1", 1, 2)
+        assert result.advice is None
+        assert [m["host_id"] for m in result.members] == [
+            "codex:host-adapter", "antigravity:host-adapter"]
+        assert result.members[0]["advice"] == "A"
+        assert result.members[0]["record"]["hash_key"] == "aa"
+
+    @pytest.mark.asyncio
     async def test_consult_refusal_raises_through_real_call_tool(self):
         """success:false raises in call_tool, as for every SDK call."""
         from unitares_sdk.errors import GovernanceToolRefused

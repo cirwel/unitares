@@ -232,6 +232,10 @@ class ConsultResult(_GovModel):
     """consult's successful response. ``advice`` is the model's text, never a
     governed verdict. A refusal raises GovernanceToolRefused in call_tool and
     never reaches this model.
+
+    A council (``host_ids``) has no top-level ``advice``: each host's answer,
+    consultation id and record are in ``members``, and ``answered`` of
+    ``asked`` hosts replied (``status`` partial when some did not).
     """
 
     success: bool
@@ -245,6 +249,10 @@ class ConsultResult(_GovModel):
     completion: dict | None = None
     record: dict | None = None
     diagnostics: dict | None = None
+    council_id: str | None = None
+    answered: int | None = None
+    asked: int | None = None
+    members: list[dict] = Field(default_factory=list)
 
 
 class DelegatedInferenceResult(_GovModel):

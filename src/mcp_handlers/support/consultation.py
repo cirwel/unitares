@@ -1516,6 +1516,17 @@ def _record_consultation(
     }
 
 
+def _hosts_file_refusal(error: Any) -> tuple[str, str, str]:
+    """The thorough lane's refusal when the operator's hosts file does not load."""
+    return (
+        "INFERENCE_CONFIG_INVALID",
+        f"The inference hosts file does not load, so the thorough lane refuses: {error}",
+        f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
+        "the doctor's inference_hosts_file check names the line or field. "
+        "Standard effort still works.",
+    )
+
+
 def _pinned_host_refusal(
     host_id: str, config: inference_config.InferenceConfig,
 ) -> tuple[str, str, str] | None:
@@ -1662,11 +1673,11 @@ def _council_refusal(
 
 
 async def _council_member(request: ConsultRequest) -> ConsultationOutcome:
-    """Run and record one council member; a member that raises fails alone."""
+    """Run one council member; a member that raises fails alone. The caller
+    records it (see _run_council)."""
     try:
         outcome = await run_consultation(request)
     except asyncio.CancelledError:
-        _record_consultation(request, _with_failover(request, _cancelled(request)))
         raise
     except Exception as exc:
         logger.warning(f"council member {request.host_id} raised: {type(exc).__name__}")
@@ -1678,9 +1689,28 @@ async def _council_member(request: ConsultRequest) -> ConsultationOutcome:
             recovery_action="Inspect the server logs before retrying this host.",
             failure_details={"reason": "council_member_raised"},
         )
-    outcome = _with_failover(request, outcome)
-    _record_consultation(request, outcome)
-    return outcome
+    return _with_failover(request, outcome)
+
+
+async def _run_council(members: list[ConsultRequest]) -> list[ConsultationOutcome]:
+    """Run every member in parallel, then record each once.
+
+    Records are written only after the whole council returns, with no await
+    in between, so a record that keeps hashes always describes an answer
+    the caller receives together with its hash key. When the call is
+    cancelled, every member is recorded as cancelled, without hashes,
+    including one that had already answered: the caller never received that
+    answer or its key, as with a single consult cancelled mid-route.
+    """
+    try:
+        outcomes = await asyncio.gather(*(_council_member(member) for member in members))
+    except asyncio.CancelledError:
+        for member in members:
+            _record_consultation(member, _with_failover(member, _cancelled(member)))
+        raise
+    for member, outcome in zip(members, outcomes):
+        _record_consultation(member, outcome)
+    return list(outcomes)
 
 
 def _council_member_entry(
@@ -1770,12 +1800,7 @@ async def _handle_council(
     members = []
     for host_id in hosts:
         if loaded.state == "error" or loaded.config is None:
-            refusal: tuple[str, str, str] | None = (
-                "INFERENCE_CONFIG_INVALID",
-                "The inference hosts file does not load, so the thorough lane refuses: "
-                f"{loaded.error}",
-                f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}.",
-            )
+            refusal: tuple[str, str, str] | None = _hosts_file_refusal(loaded.error)
         else:
             refusal = _pinned_host_refusal(host_id, loaded.config)
         members.append(ConsultRequest(
@@ -1791,7 +1816,7 @@ async def _handle_council(
             council_id=council_id,
         ))
 
-    outcomes = await asyncio.gather(*(_council_member(member) for member in members))
+    outcomes = await _run_council(members)
     answered = sum(1 for outcome in outcomes if outcome.ok)
     data.update({
         "status": (
@@ -1808,10 +1833,15 @@ async def _handle_council(
         "message": f"{answered} of {len(members)} council members answered.",
     })
     if not answered:
+        # Caller-correctable only when every member was refused as invalid
+        # (a host the operator's job excludes or switched off).
+        categories = {outcome.failure.category for outcome in outcomes if outcome.failure}
         return [error_response(
             "No council member answered",
             error_code="CONSULT_COUNCIL_FAILED",
-            error_category="system_error",
+            error_category=(
+                "validation_error" if categories == {"validation_error"} else "system_error"
+            ),
             details=data,
             recovery={
                 "action": "Read each member's failure and recovery; retry the hosts that can serve.",
@@ -1858,14 +1888,7 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     if effort == "thorough" and privacy == "cloud_allowed":
         loaded = inference_config.load()
         if loaded.state == "error" or loaded.config is None:
-            policy_refusal = (
-                "INFERENCE_CONFIG_INVALID",
-                "The inference hosts file does not load, so the thorough lane refuses: "
-                f"{loaded.error}",
-                f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
-                "the doctor's inference_hosts_file check names the line or field. "
-                "Standard effort still works.",
-            )
+            policy_refusal = _hosts_file_refusal(loaded.error)
         elif selected_host is None:
             plan = _thorough_plan(_caller_family())
             chosen = thorough_fields["thorough_host_id"]

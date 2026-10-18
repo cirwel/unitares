@@ -316,7 +316,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.49.0 (2026-10-17): agent(action='resume') refuses a paused agent resuming itself with PAUSE_SELF_RESUME_REFUSED and the paused-write recovery block; an operator token still resumes it. Nothing is added, removed, retyped or renamed.
 # 1.50.0 (2026-10-17): search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed.
 # 1.51.0 (2026-10-18): consult accepts an optional host_ids: a council of 2 or 3 distinct CLI hosts asked the same brief in parallel, each an ordinary pinned consultation with its own record (tagged council_id), returned side by side under members with no synthesis. Requires privacy='cloud_allowed'; omitted effort becomes thorough. Calls without host_ids are unchanged.
-INTERFACE_CONTRACT_VERSION = "1.51.0"
+# 1.52.0 (2026-10-18): consult's host_ids schema drops its size bounds, so a wrong size reaches the handler's INVALID_CONSULT_COUNCIL refusal with the valid hosts instead of a schema error that also blamed effort; it accepts a list sent as JSON text on REST and use_tool; its brief names the cloud_allowed requirement and effort's brief covers host_ids. A council refused member by member reports validation_error, and records are written once the council returns (a cancelled council records every member as cancelled, without hashes).
+INTERFACE_CONTRACT_VERSION = "1.52.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

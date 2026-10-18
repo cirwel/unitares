@@ -2524,9 +2524,74 @@ async def test_council_member_on_the_wrong_route_returns_no_advice(monkeypatch, 
     assert by_host["codex:host-adapter"]["route"]["host_id"] == "claude:host-adapter"
 
 
-def test_council_schema_bounds_and_effort_default():
+def test_council_size_is_left_to_the_handler_and_json_text_is_accepted():
     params = ConsultParams(brief="q", host_ids=["codex:host-adapter", "claude:host-adapter"])
     assert params.effort == "thorough"
-    for bad in (["codex:host-adapter"], ["a", "b", "c", "d"], ["codex:host-adapter", ""]):
-        with pytest.raises(ValidationError):
-            ConsultParams(brief="q", host_ids=bad)
+    # A wrong size passes the schema so the handler can refuse it with the
+    # valid hosts (test_council_refusals_contact_no_host_and_leave_no_record),
+    # instead of a schema error that also blames effort's default.
+    for size in (["codex:host-adapter"], ["a", "b", "c", "d"]):
+        assert ConsultParams(brief="q", host_ids=size).effort == "thorough"
+    # REST and use_tool deliver a list as JSON text.
+    text = ConsultParams(brief="q", host_ids='["codex:host-adapter", "claude:host-adapter"]')
+    assert text.host_ids == ["codex:host-adapter", "claude:host-adapter"]
+    assert text.effort == "thorough"
+    with pytest.raises(ValidationError):
+        ConsultParams(brief="q", host_ids="codex:host-adapter")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_council_keeps_no_hashes_for_an_answer_never_delivered(
+    monkeypatch, audit_sinks
+):
+    import asyncio
+
+    codex_answered = asyncio.Event()
+
+    async def fake(request):
+        if request.host_id == "codex:host-adapter":
+            codex_answered.set()
+            return _served_by(request.host_id)
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    task = asyncio.ensure_future(co.handle_consult(_council_args()))
+    await asyncio.wait_for(codex_answered.wait(), timeout=2)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, pg = await audit_sinks()
+    records = {e["details"]["request"]["host_id"]: e["details"] for e in pg}
+    assert set(records) == {"codex:host-adapter", "antigravity:host-adapter"}
+    # codex answered, but the caller never got the answer or its key.
+    assert {r["status"] for r in records.values()} == {"cancelled"}
+    assert all(r["hashes"] is None for r in records.values())
+
+
+@pytest.mark.asyncio
+async def test_a_council_refused_member_by_member_is_a_validation_error(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [claude:host-adapter] }\n")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["error_code"] == "CONSULT_COUNCIL_FAILED"
+    assert parsed["error_category"] == "validation_error"
+    assert {m["failure"]["code"] for m in parsed["members"]} == {"CONSULT_HOST_NOT_IN_JOB"}
+
+
+@pytest.mark.asyncio
+async def test_council_and_single_consult_share_the_hosts_file_refusal(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    single = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "codex:host-adapter", "privacy": "cloud_allowed"}))
+    council = _payload(await co.handle_consult(_council_args()))
+    assert single["error_code"] == "INFERENCE_CONFIG_INVALID"
+    member = council["members"][0]
+    assert member["failure"]["code"] == "INFERENCE_CONFIG_INVALID"
+    assert (member["message"], member["recovery"]["action"]) == (
+        single["error"],
+        single["recovery"]["action"],
+    )
