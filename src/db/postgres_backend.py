@@ -48,6 +48,15 @@ POOL_CLOSE_TIMEOUT_SECONDS = 10.0
 # timeout reply of a write reports as its settled_by time (error_helpers).
 COMMAND_TIMEOUT_SECONDS = 30
 
+# Postgres extensions the server needs. This tuple is the source of truth for
+# "required": init() logs any that are missing, health_check() reports them as
+# degraded, and tests/test_required_stack_docs.py holds the docs to it.
+#   age      - lineage and graph traversal run Cypher through graph_query
+#   vector   - schema.sql creates core.discovery_embeddings (pgvector)
+#   pgcrypto - core.hash_api_key()/verify_api_key() call crypt()
+#   pg_trgm  - created by schema.sql
+REQUIRED_EXTENSIONS = ("age", "vector", "pgcrypto", "pg_trgm")
+
 
 def _hash_db_url(db_url: str) -> str:
     """Short non-reversible tag for the connection target. Hashes the full
@@ -490,13 +499,34 @@ class PostgresBackend(
                     "PostgreSQL schema not initialized. Run db/postgres/schema.sql first."
                 )
 
-            # Check AGE extension
+            missing = await self._missing_required_extensions(conn)
+            if missing:
+                logger.error(
+                    "PostgreSQL is missing required extension(s) %s; the server "
+                    "runs degraded (health_check reports status=degraded). "
+                    "See db/postgres/README.md.",
+                    ", ".join(missing),
+                )
+
             try:
                 await conn.execute("LOAD 'age'")
                 await conn.execute(f"SET search_path = ag_catalog, core, audit, public")
-            except Exception:
-                # AGE not available, graph queries will be disabled
-                pass
+            except Exception as e:
+                logger.error(f"LOAD 'age' failed; lineage and graph queries will error: {e}")
+
+    async def _missing_required_extensions(self, conn) -> Optional[list]:
+        """Return REQUIRED_EXTENSIONS absent from pg_extension, or None if the
+        check itself failed (unknown is not the same as all-present)."""
+        try:
+            rows = await conn.fetch(
+                "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])",
+                list(REQUIRED_EXTENSIONS),
+            )
+            installed = {r["extname"] for r in rows}
+        except Exception as e:
+            logger.warning(f"Could not read pg_extension: {e}")
+            return None
+        return [ext for ext in REQUIRED_EXTENSIONS if ext not in installed]
 
     async def close(self) -> None:
         """Close connection pool.
@@ -540,8 +570,12 @@ class PostgresBackend(
             except Exception:
                 age_available = False
 
+            missing_extensions = await self._missing_required_extensions(conn)
+
             return {
-                "status": "healthy",
+                # None (the check failed) is unverified, so it is not healthy.
+                "status": "healthy" if missing_extensions == [] else "degraded",
+                "missing_extensions": missing_extensions,
                 "backend": "postgres",
                 "db_url": self._db_url.split("@")[-1] if "@" in self._db_url else "***",  # Hide credentials
                 "pool_size": self._pool.get_size(),
