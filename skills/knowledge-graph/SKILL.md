@@ -35,7 +35,7 @@ source_files:
 
 ## What It Is
 
-The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default backend, with Apache AGE as an optional graph backend (`UNITARES_KNOWLEDGE_BACKEND=age`). Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default store, and routing it through Apache AGE is opt-in (`UNITARES_KNOWLEDGE_BACKEND=age`). The AGE extension itself is still required by the server. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
 
 ## Search Before Creating
 
@@ -64,7 +64,9 @@ less for the three digests alone. Open any row with
 `knowledge(action="details", discovery_id=...)`; on the progressive surface
 that router is reached as
 `use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": ...})`,
-which is the form the response hints name. When the digests carry scores on
+which is the form the response hints name. To record a finding as a reply
+to another, pass `response_to={"discovery_id": ..., "response_type": ...}` to
+`store_finding`; the ack's `state_summary.response_to` confirms the link. When the digests carry scores on
 more than one `relevance_basis`, `state_summary.relevance_note` says they are
 not comparable; the list order is the ranking.
 
@@ -129,7 +131,7 @@ Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
 relevance contests against native findings and evidence-linked governed claims.
 This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
-to preserve raw backend order, or filter by a source-memory tag to inspect that
+to preserve raw backend order, or filter by a `source-<provider>-memory` tag to inspect that
 lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
 window) apply no authority reorder: time order is what they asked for.
 
@@ -137,7 +139,7 @@ A queryless listing (no `query`, for example a `status="open"` sweep) leaves
 unpromoted imported memory out by default, because with nothing to match there
 is no contest for the down-rank to decide and imports would fill the page. The
 response reports `imported_omitted` with a hint; the same two routes read them
-(`authority_mode="all"`, or a source-memory tag filter). Check-in memory
+(`authority_mode="all"`, or a `source-<provider>-memory` tag filter). Check-in memory
 suggestions leave them out as well. A query search still returns them.
 
 ## Quick Contribution
@@ -191,12 +193,14 @@ For more control, use the `knowledge()` tool with an action parameter:
 
 ## Memory authority and promotion
 
-Imported memory is context, not policy. Source tags such as `memory-sync` and
-the harness-neutral `source-<provider>-memory` pattern classify a row as
-`imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
+Imported memory is context, not policy. The harness-neutral
+`source-<provider>-memory` tag pattern (for example `source-claude-memory`)
+classifies a row as `imported_context`. Topic words such as `memory-sync` or
+`imported-memory` do not: a finding about memory sync is not an import.
+Agent-to-agent channel messages (a `channel-<topic>` tag
 together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
 `channel_message` and get the same close-contest down-rank. A tag filter made
-only of source-memory tags reads that lane in its own order. A `channel-*` tag
+only of `source-<provider>-memory` tags reads that lane in its own order. A `channel-*` tag
 filter lifts the down-rank only from channel messages on that lane; every other
 row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.
 A row becomes

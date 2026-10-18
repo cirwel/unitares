@@ -140,7 +140,7 @@ the `middleware/` package. The pipeline runner first normalizes MCP `kwargs` wra
 identity and continuity inputs are visible before any session resolution or alias logic runs:
 
 ```
-unwrap_kwargs → resolve_identity → verify_trajectory → resolve_alias → inject_identity → validate_params
+unwrap_kwargs → strip_untrusted_dispatch_metadata → resolve_identity → verify_trajectory → resolve_alias → inject_identity → validate_params
     ↓ (handler lookup)
 check_rate_limit → track_patterns → handler()
     ↓ (result)
@@ -556,21 +556,21 @@ coverage does not establish argument or response compatibility:
 
 ### Reviewed candidates and open work
 
-The four reviewed entries from #2119 remain in `KNOWN_DEAD_ENDS`, with reasons
-and keys that include the action as well as the tool and source line. They
-are not a complete baseline for the expanded scan. Three describe benign
-context; the cross-agent metrics instruction remains an explicitly open
-question. An accepted entry for one action cannot hide another at the same
+`KNOWN_DEAD_ENDS` is empty. The four candidates inherited from #2119 are
+resolved by the complete catalog, and the candidates the expanded inventory
+then found in structured names and previously unscanned fields are resolved
+too: most hints now name the advertised router and action, and the few that
+named no dispatchable tool had their guidance rewritten. An entry, when one
+is deliberately added, is keyed by tool, source line and action and carries
+its reason. An accepted entry for one action cannot hide another at the same
 line. Moved/deleted entries are reported stale.
 
-The expanded inventory finds additional candidates in structured names and
-previously unscanned fields. **`--fail-on-finding` currently exits 3 on
-`standard`** because these candidates have not been reviewed or fixed. A green
-test suite verifies scanner behavior; it does not certify that every agent
-workflow is closed. Do not blindly add those findings to the ledger or expose
-operator capabilities to make a count green. Assess the receiving profile and
-caller, then correct actionable hints or design a separately reviewed surface
-change. Other profiles do not inherit the standard ledger.
+**`--fail-on-finding` exits 0** and runs as a gate in the smoke job, so a new
+candidate fails CI. A green test suite verifies scanner behavior; it does not
+certify that every agent workflow is closed. Do not blindly add new findings
+to the ledger or expose operator capabilities to make a count green. Assess the
+receiving profile and caller, then correct actionable hints or design a
+separately reviewed surface change.
 
 ---
 

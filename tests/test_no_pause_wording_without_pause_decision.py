@@ -450,8 +450,9 @@ def test_instructions_state_how_a_pause_actually_ends(mode):
     for exit_route in ("self_recovery (not at high risk)", "dialectic",
                        "an operator", "a safety net", "or it expires"):
         assert exit_route in sentence, exit_route
-    # agent(action='resume') has no ownership, risk or void gate and a paused
-    # agent can call it on itself; it must never be advertised to agents.
+    # agent(action='resume') is the operator's route (the agent itself cannot
+    # lift its own pause with it, and it has no risk or void gate); it must
+    # never be advertised to agents as a way out of a pause.
     assert "agent(action='resume')" not in text
 
 

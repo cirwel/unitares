@@ -503,7 +503,7 @@ class TestProcessAgentUpdate:
         assert data["error_category"] == "state_error"
         assert "archived" in data["error"] and "cannot" in data["error"]
         assert data["context"]["status"] == "archived"
-        assert "self_recovery" in data["recovery"]["related_tools"]
+        assert data["recovery"]["related_tools"] == ["start_session"]
         mock_server.lock_manager.acquire_agent_lock_async.assert_not_called()
 
     @pytest.mark.asyncio
@@ -905,7 +905,7 @@ class TestProcessAgentUpdateExtended:
         """Archived agent is refused when it checks in via process_agent_update.
 
         Pre-Stage 3 this reactivated implicitly. Now it returns an error;
-        recovery is via self_recovery() or onboard(force_new=true).
+        recovery is via start_session(resume=true) or start_session(force_new=true).
         """
         agent_uuid = "test-uuid-archived-refused"
         mock_server.agent_metadata = {}
@@ -1684,9 +1684,10 @@ class TestProcessAgentUpdateExtended:
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
         with self._apply_patches(p):
             # Patch the local import of maybe_emit_void_alert
+            mock_emit = MagicMock(return_value=mock_cirs_alert)
             with patch.dict("sys.modules", {
                 "src.mcp_handlers.cirs.protocol": MagicMock(
-                    maybe_emit_void_alert=MagicMock(return_value=mock_cirs_alert),
+                    maybe_emit_void_alert=mock_emit,
                     auto_emit_state_announce=MagicMock(return_value=None),
                 )
             }):
@@ -1698,6 +1699,9 @@ class TestProcessAgentUpdateExtended:
 
                 data = parse_result(result)
                 assert isinstance(data, dict)
+                # The import path was wrong from the 2026-03-09 package reorg
+                # until this assertion was added: the emitter was never reached.
+                mock_emit.assert_called_once()
 
     # ------------------------------------------------------------------
     # Lines 1424-1427, 1437: Relevant discoveries scored by overlap

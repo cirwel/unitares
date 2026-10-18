@@ -41,8 +41,9 @@ git show 7c6037b:dashboard/dashboard.js        # view a file
 git checkout 7c6037b -- dashboard/agents.js    # restore one into the worktree
 ```
 
-**Known non-parity (intentional).** The redesign is read-only —
-the classic operator write actions (archive/resume agent, request dialectic
-review, update discovery status) were **not** ported; do those via the MCP
-tools / CLI. The classic Resident-Progress panel and the richer EISV views
+**Known non-parity (intentional).** The redesign's governance views are
+read-only — the classic operator write actions (archive/resume agent, request
+dialectic review, update discovery status) were **not** ported; do those via
+the MCP tools / CLI. The Security tab writes only dashboard-auth state: sign
+out, revoke sessions or passkeys, and mint enrollment codes. The classic Resident-Progress panel and the richer EISV views
 (heatmap, ODE overlay, per-agent mode) were also not carried over.

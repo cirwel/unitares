@@ -8,7 +8,8 @@ An end-to-end, task-ordered guide to **installing, running, integrating with, re
 
 An MCP-native, harness-agnostic operating layer for fleets of autonomous AI agents.
 Each agent checks in while it works and receives a four-number state vector
-(EISV) plus one policy action: `proceed` / `guide` / `pause` / `reject`. The
+(EISV) plus one policy action: `proceed` / `guide` / `pause` (reject-severity
+decisions arrive as `pause` with `sub_action="reject"`). The
 first two check-ins use a cold-start prior, the next stage uses behavioral fixed
 thresholds, and self-relative scoring starts once the agent has enough history.
 It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a

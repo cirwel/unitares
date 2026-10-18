@@ -64,7 +64,7 @@ def test_authority_classification_is_harness_neutral_and_receipt_gated():
 
 
 def test_authority_ranking_corrects_close_false_memory_but_preserves_strong_match():
-    imported = _discovery("memory-1", tags=["memory-sync"])
+    imported = _discovery("memory-1", tags=["source-any-harness-memory"])
     native = _discovery("finding-1")
 
     corrected, changed = rank_by_authority(
@@ -83,7 +83,7 @@ def test_authority_ranking_corrects_close_false_memory_but_preserves_strong_matc
 
 
 def test_authority_ranking_can_be_disabled_for_raw_relevance_inspection():
-    imported = _discovery("memory-1", tags=["memory-import"])
+    imported = _discovery("memory-1", tags=["source-any-harness-memory"])
     native = _discovery("finding-1")
     ranked, changed = rank_by_authority(
         [imported, native],
@@ -128,7 +128,7 @@ async def test_search_authority_all_preserves_raw_backend_order():
         _parse_knowledge_search_request,
     )
 
-    imported = _discovery("memory-1", tags=["memory-sync"])
+    imported = _discovery("memory-1", tags=["source-any-harness-memory"])
     native = _discovery("finding-1")
     request = _parse_knowledge_search_request({
         "query": "production",
@@ -213,7 +213,7 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
 async def test_promote_memory_rejects_memory_only_corroboration():
     from src.mcp_handlers.knowledge.handlers import handle_promote_memory_claim
 
-    source = _discovery("memory-1", tags=["memory-sync"])
+    source = _discovery("memory-1", tags=["source-any-harness-memory"])
     evidence = _discovery("memory-2", tags=["source-other-memory"])
     graph = AsyncMock()
     graph.get_discovery = AsyncMock(side_effect=lambda discovery_id: {
@@ -320,7 +320,7 @@ def test_channel_message_is_the_tag_pair_or_the_summary_prefix():
 
 
 def test_imported_memory_wins_over_channel_when_both_markers_are_present():
-    both = _discovery("m1", tags=["memory-sync", "channel-x", "to-claude"])
+    both = _discovery("m1", tags=["source-any-harness-memory", "channel-x", "to-claude"])
     assert assess_authority(both).tier == IMPORTED_CONTEXT
 
 
@@ -400,8 +400,8 @@ def test_only_a_filter_made_of_lane_tags_is_exempt():
         )
 
     assert not enabled(["source-claude-memory"])
-    assert not enabled(["memory-sync", "source-claude-memory"])
-    assert enabled(["memory-sync", "review"])
+    assert not enabled(["source-bridge-memory", "source-claude-memory"])
+    assert enabled(["source-bridge-memory", "review"])
     # Channel filters never switch authority off for the whole query.
     assert enabled(["channel-resource-agent"])
     assert enabled(["channel-detection"])
@@ -547,7 +547,7 @@ async def test_an_ordinary_channel_topic_keeps_authority_order():
         _parse_knowledge_search_request,
     )
 
-    imported = _discovery("memory-1", tags=["channel-detection", "memory-sync"])
+    imported = _discovery("memory-1", tags=["channel-detection", "source-any-harness-memory"])
     native = _discovery("finding-1", tags=["channel-detection"])
     request = _parse_knowledge_search_request({
         "query": "channel", "limit": 2, "tags": ["channel-detection"],
@@ -587,7 +587,7 @@ def _paged_graph(rows):
 def _listing_rows():
     return [
         _discovery("memory-1", tags=["source-any-harness-memory"]),
-        _discovery("memory-2", tags=["memory-sync"]),
+        _discovery("memory-2", tags=["source-any-harness-memory"]),
         _discovery("finding-1"),
         _discovery(
             "claim-1",
@@ -697,3 +697,22 @@ async def test_queryless_listing_without_imports_reads_one_page():
     assert [row.id for row in state.results] == ["finding-0", "finding-1", "finding-2"]
     assert graph.query.await_count == 1
     assert graph.query.call_args.kwargs["limit"] == 3
+
+
+@pytest.mark.parametrize(
+    "tag", ["memory-sync", "memory-import", "imported-memory", "source-memory", "source--memory"]
+)
+def test_topic_words_about_memory_are_not_import_markers(tag):
+    # A native finding about memory sync used to rank as an import of it: the
+    # bare words were exact-match markers, and no importer wrote them alone.
+    from src.knowledge_authority import is_imported_memory_tag
+
+    assert not is_imported_memory_tag(tag)
+    assert assess_authority(_discovery("finding-1", tags=[tag, "kg-hygiene"])).tier == NATIVE_FINDING
+
+
+@pytest.mark.parametrize("tag", ["source-claude-memory", "Source-Codex-Memory", "source-any-harness-memory"])
+def test_source_provider_memory_tags_still_mark_imports(tag):
+    from src.knowledge_authority import is_imported_memory_tag
+
+    assert is_imported_memory_tag(tag)

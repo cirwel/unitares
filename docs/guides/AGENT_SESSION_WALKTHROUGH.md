@@ -54,7 +54,7 @@ start_session {"force_new": true, "name": "upload-fixer", "model_type": "claude"
  "identity_resolution_outcome": "minted_force_new",
  "label_is": "social_or_cosmetic",
  "identity_assurance": {"tier": "weak", "session_source": "ip_ua_fingerprint", "caller_proven": false, "baseline": "fresh_identity"},
- "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work."
+ "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work. Tier describes this mint only; check_working_state(client_session_id=...) confirms threading."
 }
 ```
 
@@ -128,7 +128,8 @@ sync_state {
 }
 ```
 
-`action` is the policy action: `proceed`, `guide` or `pause`. On a fresh
+`action` is the policy action: `proceed` or `pause`. A guided check-in
+returns `action: proceed` with `sub_action: guide`. On a fresh
 identity it is provisional, and the response says so. Keep the
 `prediction_id`.
 
@@ -271,7 +272,7 @@ start_session {
  "client_session_id": "agent-f70d8be8-366-bbftq35ql5vjpwxlcifx",
  "agent_uuid": "f70d8be8-3669-482b-936d-66a1b150eccf",
  "identity_resolution_outcome": "minted_force_new",
- "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work. Declared lineage for this fork is already recorded; do not redeclare it on the current session.",
+ "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work. Tier describes this mint only; check_working_state(client_session_id=...) confirms threading. Declared lineage for this fork is already recorded; do not redeclare it on the current session.",
  "state_summary": {"lineage_state": "provisional", "episode_fork_kind": "identity_lineage", "predecessor_uuid": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349"}
 }
 ```

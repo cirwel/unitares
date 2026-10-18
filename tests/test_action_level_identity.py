@@ -171,7 +171,15 @@ def test_write_actions_never_in_exemption_sets():
         "agent": {"update", "archive", "resume", "delete", "release_presence"},
         "calibration": {"update", "backfill", "rebuild"},
         "config": {"set"},
-        "dialectic": {"quick", "request", "thesis", "antithesis", "synthesis", "reassign"},
+        "dialectic": {
+            "quick",
+            "request",
+            "thesis",
+            "antithesis",
+            "synthesis",
+            "reassign",
+            "reconcile_effect",
+        },
         "observe": {"telemetry", "audit_events", "outcome_evidence", "bridge"},  # operator surfaces, kept gated
     }
     for tool, write_set in writes.items():

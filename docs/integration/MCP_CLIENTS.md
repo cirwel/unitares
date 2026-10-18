@@ -107,7 +107,8 @@ tool runs:
      ```
 
      The client sends it as `Authorization: Bearer <token>`. Comma-separated
-     values allow rotation without a restart.
+     values keep old and new tokens valid together, so a rotation needs a
+     restart but no lockout window.
 
    - **OAuth 2.1.** Set `UNITARES_OAUTH_ISSUER_URL` to the public base URL. The
      server then advertises Dynamic Client Registration, so a DCR-capable
@@ -298,7 +299,8 @@ Three things make a lockout harder than it needs to be:
   `UNITARES_MCP_ALLOWED_HOSTS`. An entry without a port does not match a `Host`
   that carries one, so use an explicit `host:port` or a `host:*` wildcard.
 - **Do not let OAuth be the only credential.** `UNITARES_MCP_BEARER_TOKENS` is
-  an independent path, and comma-separated values rotate without a restart. Keep
+  an independent path, and comma-separated values let old and new tokens
+  overlap across the restart a rotation needs. Keep
   one set, and keep a copy somewhere you can reach while locked out.
 - **`/mcp` has no loopback or UDS bypass, by design.** `check_mcp_bearer` has no
   trusted-network branch, because a hosted server sees only its proxy's address;

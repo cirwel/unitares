@@ -129,7 +129,7 @@ class TestArchivedRefusal:
         residents. Now residents carry the 'persistent' tag (PR #39) so
         sweep can't archive them, and auto-resume for other archived
         agents would mask real bugs. Recovery requires explicit
-        self_recovery() or onboard(force_new=true).
+        start_session(resume=true) or start_session(force_new=true).
         """
         agent_uuid = "test-uuid-old-archive"
         old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
@@ -151,7 +151,8 @@ class TestArchivedRefusal:
 
         assert data["success"] is False
         assert "archived" in data["error"].lower()
-        assert "self_recovery" in data["recovery"]["action"]
+        assert "start_session(resume=true)" in data["recovery"]["action"]
+        assert "self_recovery" not in data["recovery"]["action"]
 
 
 # ----------------------------------------------------------------------

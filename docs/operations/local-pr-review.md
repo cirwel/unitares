@@ -35,7 +35,7 @@ HTTP endpoint; proxies and redirects are disabled. One local review runs at a ti
 across repositories to avoid simultaneous large-model loads.
 
 Default context is 131,072 tokens for both models on the 128 GiB review host with a conservative byte-based admission budget;
-`--context 131072` supports larger reviews if the model and available memory permit.
+131,072 is also the maximum (further capped by the installed model's context length); `--context` can only lower it, down to 16,384.
 Default total generation budget is 1,800 seconds (`--budget`, maximum 3,600).
 Context overflow, missing source context/inspection, incomplete generation, malformed output,
 and tool/time exhaustion fail as UNREVIEWED. No truncated full diff earns a pass.

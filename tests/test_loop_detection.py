@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -370,10 +371,20 @@ class TestSafetyNetResume:
     async def test_safe_agent_is_resumed(self, safe_monitor):
         """Low-risk/no-void agent resumes regardless of legacy C(V) direction."""
         meta = _make_metadata(status="paused")
+        pause_token = meta.paused_at
+        resume = AsyncMock(return_value={
+            "applied": True,
+            "pause_token": pause_token,
+            "dialectic_conditions": [],
+        })
 
         with (
             patch("src.agent_loop_detection.agent_metadata", {"agent-1": meta}),
             patch("src.agent_loop_detection.monitors", {"agent-1": safe_monitor}),
+            patch(
+                "src.agent_storage.resume_agent_if_pause_token",
+                new=resume,
+            ),
         ):
             from src.agent_loop_detection import _safety_net_resume
             await _safety_net_resume("agent-1", reason="LLM unavailable")
@@ -382,6 +393,8 @@ class TestSafetyNetResume:
         assert meta.paused_at is None
         assert meta.loop_cooldown_until is None
         assert any("safety_net_resumed" in str(e) for e in meta._lifecycle_events)
+        resume.assert_awaited_once()
+        assert resume.await_args.kwargs["expected_pause_token"] == pause_token
 
     @pytest.mark.asyncio
     async def test_unsafe_agent_stays_paused(self, unsafe_monitor):
@@ -434,3 +447,71 @@ class TestSafetyNetResume:
             from src.agent_loop_detection import _safety_net_resume
             await _safety_net_resume("nonexistent", reason="test")
         # No exception = pass
+
+
+class TestAutoInitiateDialecticRecovery:
+    """The dialectic handler, not its recommendation text, owns resume."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {
+                "recommendation": "RESUME",
+                "resolved": False,
+                "effect_pending": False,
+                "awaiting_facilitation": True,
+            },
+            {
+                "recommendation": "RESUME",
+                "resolved": True,
+                "effect_pending": False,
+                "awaiting_facilitation": False,
+                "resolution_effect_state": "applied",
+                "execution": {
+                    "success": True,
+                    "no_op": True,
+                    "superseded": True,
+                },
+            },
+        ],
+    )
+    async def test_resume_recommendation_does_not_mutate_runtime(self, response):
+        from src import agent_loop_detection as ald
+        from src import agent_storage
+
+        meta = _make_metadata(status="paused")
+        pause_token = meta.paused_at
+        persist = AsyncMock()
+        resume = AsyncMock()
+        result = [SimpleNamespace(text=json.dumps(response))]
+
+        with (
+            patch.object(ald, "agent_metadata", {"agent-1": meta}),
+            patch.object(ald, "monitors", {}),
+            patch.object(ald.asyncio, "sleep", new=AsyncMock()),
+            patch.object(ald, "load_metadata_async", new=AsyncMock()),
+            patch(
+                "src.mcp_handlers.dialectic.reviewer.select_reviewer",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "src.mcp_handlers.dialectic.handlers."
+                "handle_request_dialectic_review",
+                new=AsyncMock(return_value=result),
+            ),
+            patch.object(agent_storage, "persist_runtime_state", new=persist),
+            patch.object(
+                agent_storage,
+                "resume_agent_if_pause_token",
+                new=resume,
+            ),
+        ):
+            await ald._auto_initiate_dialectic_recovery(
+                "agent-1", "circuit breaker"
+            )
+
+        assert meta.status == "paused"
+        assert meta.paused_at == pause_token
+        persist.assert_not_awaited()
+        resume.assert_not_awaited()

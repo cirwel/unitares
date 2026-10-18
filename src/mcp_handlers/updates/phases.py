@@ -623,24 +623,24 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
     # self-tagging 'persistent' (PR #39) — sweep no longer targets live agents,
     # so nothing legitimate hits the archived branch anymore. Manual archives
     # (PR #33) and the 2026-04-18 incident race (PR #33) were never supposed
-    # to auto-resume anyway. Any archived agent must explicitly self_recovery
-    # or onboard(force_new=true) to come back.
+    # to auto-resume anyway. An archived agent comes back through a
+    # proof-carrying start_session(resume=true), which unarchives the same
+    # UUID, or starts over with start_session(force_new=true). self_recovery
+    # rejects archived identities, so it is not offered here.
     meta = mcp_server.agent_metadata.get(ctx.agent_uuid)
     ctx.meta = meta
 
     if meta:
         if meta.status == "archived":
             logger.warning(
-                f"Refused process_agent_update on archived agent {agent_id[:12]}.... "
-                f"Use self_recovery(action='quick') to restore, "
-                f"or onboard(force_new=true) for a new identity."
+                f"Refused process_agent_update on archived agent {agent_id[:12]}...."
             )
+            from ..support.pause_ttl import describe_write_gate
             return [error_response(
                 f"Agent '{agent_id}' is archived and cannot be updated.",
                 recovery={
-                    "action": "Use self_recovery(action='quick') to restore yourself, "
-                              "or start_session(force_new=true) for a new identity",
-                    "related_tools": ["self_recovery", "onboard"],
+                    "action": describe_write_gate(meta)["held"],
+                    "related_tools": ["start_session"],
                 },
                 context={
                     "agent_id": agent_id,
@@ -1835,7 +1835,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     # CIRS: Void alert
     ctx.cirs_alert = None
     try:
-        from .cirs.protocol import maybe_emit_void_alert
+        from ..cirs.protocol import maybe_emit_void_alert
         V_value = ctx.metrics_dict.get('V', 0.0)
         ctx.cirs_alert = maybe_emit_void_alert(
             agent_id=agent_id,
@@ -1851,7 +1851,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     # CIRS: State announce
     ctx.cirs_state_announce = None
     try:
-        from .cirs.protocol import auto_emit_state_announce
+        from ..cirs.protocol import auto_emit_state_announce
         monitor = ctx.monitor
         ctx.cirs_state_announce = auto_emit_state_announce(
             agent_id=agent_id,
@@ -1863,7 +1863,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
 
     # CIRS: Resonance signal
     try:
-        from .cirs.protocol import maybe_emit_resonance_signal
+        from ..cirs.protocol import maybe_emit_resonance_signal
         cirs_data = ctx.result.get('cirs', {})
         monitor = ctx.monitor
         was_resonant = False
