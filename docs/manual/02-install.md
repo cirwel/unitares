@@ -265,8 +265,10 @@ non-zero unless deep health comes back healthy or moderate. A checkout already
 on the target release goes through the same steps without moving the code.
 
 Releases before this command existed shipped a `scripts/unitares update` that
-posted a check-in instead. From one of those, move the code once by hand and
-let the new `update` do the rest:
+posted a check-in instead. v3.3.0's `update` runs migrations without the
+attestation that migrations 077 and 078 require, so moving from v3.3.0 to
+v3.4.0 or later refuses and rolls back. From any of those releases, move the
+code once by hand and let the new `update` do the rest:
 
 ```bash
 git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
