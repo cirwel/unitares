@@ -952,6 +952,9 @@ _ALL_HOSTS = {"claude:host-adapter", "codex:host-adapter", "antigravity:host-ada
         # The Gemini connector names itself only in the user agent.
         (SessionSignals(user_agent="Google"), _ALL_HOSTS, "claude:host-adapter"),
         (SessionSignals(reported_model="gemini-3-pro"), _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(reported_model="gemini-4-argon"), _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(reported_model="argon-high"), _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(reported_harness_type="agy"), _ALL_HOSTS, "claude:host-adapter"),
         # The model decides before the harness: Antigravity also hosts Claude.
         (SessionSignals(reported_harness_type="antigravity", reported_model="claude-sonnet-4-5"),
          _ALL_HOSTS, "codex:host-adapter"),
@@ -1962,6 +1965,50 @@ async def test_pinned_cancellation_records_selected_target(monkeypatch, audit_si
     assert record["status"] == "cancelled"
     assert record["request"]["host_id"] == "codex:host-adapter"
     assert record["request"]["thorough_host_id"] == "codex:host-adapter"
+
+def test_caller_family_falls_back_to_bound_agent_metadata_over_generic_http_ua(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+    import src.agent_metadata_model as amm
+
+    monkeypatch.setattr(
+        co,
+        "get_session_signals",
+        lambda: SessionSignals(user_agent="Go-http-client/1.1"),
+    )
+    monkeypatch.setattr(co, "get_context_resolved_agent_id", lambda: "uuid-argon-1")
+    monkeypatch.setitem(
+        amm.agent_metadata,
+        "uuid-argon-1",
+        SimpleNamespace(
+            public_agent_id="Gemini_4_Argon_20261013",
+            auto_label="antigravity-gemini-4-argon_98cc129a",
+            structured_id=None,
+        ),
+    )
+    monkeypatch.setattr(co, "host_adapter_available", lambda host_id: host_id in _ALL_HOSTS)
+
+    assert co._caller_family() == "google"
+    assert co._thorough_host_for_caller() == "claude:host-adapter"
+    assert "antigravity:host-adapter" not in co._THOROUGH_PEERS[co._caller_family()]
+
+    # Antigravity hosting a Claude model still resolves to anthropic first.
+    monkeypatch.setitem(
+        amm.agent_metadata,
+        "uuid-argon-1",
+        SimpleNamespace(
+            public_agent_id="Antigravity_Claude_Sonnet_4_5_20261013",
+            auto_label="antigravity-sonnet_98cc129a",
+            structured_id=None,
+        ),
+    )
+    assert co._caller_family() == "anthropic"
+    assert co._thorough_host_for_caller() == "codex:host-adapter"
+
+    # Non-token substrings like "jargon" or "strategy" do not false-match google.
+    assert co._family_of("jargon-model") is None
+    assert co._family_of("strategy-runner") is None
 
 
 @pytest.mark.parametrize("host_id,expected", [

@@ -22,8 +22,10 @@ For local branches whose upstream is gone:
 - empty output means the branch has no commits ahead of `master`. The branch is
   safe to prune if the worktree is clean.
 - unparseable or failed `git cherry` output means **SKIP**. Do not delete.
-- dirty worktrees, paused rebases, paused cherry-picks, merges, or bisects are
-  never removed by the sweep.
+- dirty worktrees are never removed by the sweep. The in-progress-operation
+  check looks for sentinels under `<worktree>/.git/`, which a linked worktree
+  does not have, so a clean linked worktree paused mid-rebase or mid-bisect
+  can still be removed; finish or abort the operation first.
 - a stale branch checked out in the sweep process's current repo or in the
   primary checkout is held; move that checkout off the branch before removing
   it.

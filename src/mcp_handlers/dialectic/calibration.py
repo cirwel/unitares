@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime
 
 from src.dialectic_protocol import DialecticSession, Resolution
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.calibration import calibration_checker
 from src.audit_log import audit_logger
 from src.logging_utils import get_logger
@@ -69,6 +70,20 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
         logger.info(
             "Session %s was self-reviewed (reviewer == paused agent) — skipping "
             "fleet-global calibration update; self-attestation is not peer agreement",
+            session.session_id,
+        )
+        return False
+
+    reviewed_work_authorship = read_reviewed_work_authorship(
+        getattr(session, "paused_agent_state", {}),
+        expected_declared_by_agent_id=paused_id,
+    )
+    if reviewed_work_authorship.is_invalid or reviewed_work_authorship.recuses(
+        reviewer_id, paused_agent_id=paused_id
+    ):
+        logger.info(
+            "Session %s lacks independent review authority — skipping "
+            "fleet-global calibration update",
             session.session_id,
         )
         return False

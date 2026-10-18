@@ -175,12 +175,14 @@ _SEARCH_MORE_SUMMARY_CHARS = 100
 # the measurements). An anonymous mint at thread position 1: continuity_token
 # alone is ~330 B of it. The keyed client_session_id (identity/stable_session.py)
 # adds 49 B: 21 characters in the id and its base64 share of the token.
-_START_SESSION_BUDGET_BYTES = 1_250
+_START_SESSION_BUDGET_BYTES = 1_350
+# Both base budgets rose 100 B on 2026-10-17 for _FRESH_MINT_ASSURANCE_NOTE
+# (~95 B): a weak tier at mint otherwise reached the agent unexplained.
 # A fresh mint on a thread earlier process-instances occupied (sibling_locus)
 # also carries predecessor_uuid, episode_fork_kind and the ~210 B sentence
 # saying co-location does not establish lineage, which stays: it is what stops
 # the earlier node being read as this process's parent.
-_START_SESSION_SIBLING_BUDGET_BYTES = 1_600
+_START_SESSION_SIBLING_BUDGET_BYTES = 1_700
 # Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
 # paid for on top of its class budget; the largest measured is 294 B (a
 # not_on_roster verdict), a written bootstrap ack 224 B.
@@ -211,6 +213,14 @@ _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
 # baseline stays: "fresh_identity" is what says a weak mint binding is
 # expected, not a deficiency to fix.
 _ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven", "baseline")
+# Appended to a fresh mint's next_action when the minting call was not
+# caller-proven. Such a call has no session signal of its own (the /mcp/
+# transport is stateless and issues no Mcp-Session-Id), so its tier describes
+# that call, not the threading of later ones.
+_FRESH_MINT_ASSURANCE_NOTE = (
+    " Tier describes this mint only; "
+    "check_working_state(client_session_id=...) confirms threading."
+)
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -1418,6 +1428,9 @@ def _knowledge_write_summary(
         "updated_at",
         "resolved_at",
         "related_to",
+        # The typed link the record carries, so a linked store_finding
+        # confirms it in the ack. Absent when the record has none.
+        "response_to",
     )
     if not summary.get("related_to"):
         # The record's links: on store_finding, the similar findings this
@@ -2717,6 +2730,13 @@ def build_experience_envelope(
                 if _onboard_assurance_is_abnormal(assurance)
                 else _lift(assurance, *_ONBOARD_ASSURANCE_KEYS)
             )
+            if (
+                assurance.get("baseline") == "fresh_identity"
+                and assurance.get("caller_proven") is not True
+            ):
+                # The routine shape drops baseline_note, so without this the
+                # agent sees tier=weak beside nothing that says it is expected.
+                next_action += _FRESH_MINT_ASSURANCE_NOTE
         token = payload.get("continuity_token")
         if isinstance(token, str) and token:
             # Grouped with its caveat: the token is an advanced same-process
@@ -2875,7 +2895,8 @@ def build_experience_envelope(
             # to find out.
             gate_summary = envelope.setdefault("action_summary", {})
             gate_summary.update(_lift(
-                write_gate, "paused", "writes_held", "held", "expires_at", "note"
+                write_gate, "paused", "writes_held", "expiry_eligible",
+                "held", "expires_at", "note"
             ))
         next_action = _metrics_next_action(payload)
         if next_action is not None:

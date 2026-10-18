@@ -56,7 +56,7 @@ async def test_sweeper_skips_session_with_inflight_saga():
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=True), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", mock_reviewer), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
@@ -91,12 +91,26 @@ async def test_sweeper_proceeds_when_no_inflight_saga():
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
-    mock_update.assert_called_once_with("no-saga-1", "failed", winner=ANY)
+    mock_update.assert_awaited_once()
+    assert mock_update.await_args.args[:1] == ("no-saga-1",)
+    assert mock_update.await_args.args[1]["closed_by"] == "python_sweeper"
+    assert mock_update.await_args.args[2] == "failed"
+    assert mock_update.await_args.kwargs == {
+        "expected_phase": "thesis",
+        "expected_updated_at": sessions[0]["updated_at"],
+        "expected_reviewer": None,
+        "expected_transcript_revision": 0,
+        "expected_resolution_saga_revision": 0,
+        "exclude_inflight_saga": True,
+        "expected_awaiting_facilitation": False,
+        "clear_facilitation": True,
+        "winner": ANY,
+    }
     assert result["resolved_count"] == 1
     assert result["saga_inflight_skip_count"] == 0
     assert result["write_attempt_count"] == 1
@@ -123,12 +137,26 @@ async def test_sweeper_refused_reap_posts_no_failure_message():
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
-         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update), \
+         patch(f"{AUTO_RESOLVE}.resolve_session_async", mock_update), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
-    mock_update.assert_called_once_with("won-by-other-writer-1", "failed", winner=ANY)
+    mock_update.assert_awaited_once()
+    assert mock_update.await_args.args[:1] == ("won-by-other-writer-1",)
+    assert mock_update.await_args.args[1]["closed_by"] == "python_sweeper"
+    assert mock_update.await_args.args[2] == "failed"
+    assert mock_update.await_args.kwargs == {
+        "expected_phase": "thesis",
+        "expected_updated_at": sessions[0]["updated_at"],
+        "expected_reviewer": None,
+        "expected_transcript_revision": 0,
+        "expected_resolution_saga_revision": 0,
+        "exclude_inflight_saga": True,
+        "expected_awaiting_facilitation": False,
+        "clear_facilitation": True,
+        "winner": ANY,
+    }
     mock_add_msg.assert_not_called()
     assert result["resolved_count"] == 0
     assert result["skipped_count"] == 1, (

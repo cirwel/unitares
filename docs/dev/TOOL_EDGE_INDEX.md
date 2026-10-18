@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (56 actions) · 9 aliases.**
+**43 registered tools · 8 consolidated (57 actions) · 9 aliases.**
 
 ## Content-addressed snapshots
 
@@ -67,10 +67,10 @@ note for why the raw rendering is not.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:e98aac66989d2ec35f3967d026e28574c41b03ac1362e8095849da9b2a034870` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 9 | — | `sha256:c92d4a95a1c30fe39616cd66bd4f3d0caad871ae20fc861549bf058cd99b3820` |
+| `request_review` | `dialectic` | 10 | — | `sha256:b88e3593adb25ece4f6f03cb867f19adcdddfcc02ebf8dfd6366f216096ee6cb` |
 | `search_shared_memory` | `knowledge` | 25 | — | `sha256:dc157ccf4a395b292fe2a22c53edc8b1e13d0aca350023c2b71d1f9309a09e68` |
 | `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:51afe7dcf4e78ca9388431bab2ccd4128bf13ac33bba7be20ce6007edf2945fb` |
+| `store_finding` | `knowledge` | 14 | — | `sha256:bf3867980e14da5530de34e4a7d85aa9ad2338bd5be2c87aeda3ffea34d20607` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
 | `update_finding` | `knowledge` | 15 | — | `sha256:13943cd11bc42ecca28ab3ff275901481c8190c966e5928103d50302e62bdd26` |
 
@@ -196,6 +196,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `list` | `src/mcp_handlers/dialectic/handlers.py handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py handle_quick_dialectic` | — |
 | `reassign` | `src/mcp_handlers/dialectic/handlers.py handle_reassign_reviewer` | — |
+| `reconcile_effect` | `src/mcp_handlers/dialectic/handlers.py handle_reconcile_resolution_effect` | — |
 | `request` | `src/mcp_handlers/dialectic/handlers.py handle_request_dialectic_review` | — |
 | `synthesis` | `src/mcp_handlers/dialectic/handlers.py handle_submit_synthesis` | — |
 | `thesis` | `src/mcp_handlers/dialectic/handlers.py handle_submit_thesis` | — |

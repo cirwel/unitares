@@ -35,7 +35,7 @@ name they were never given a schema for.
 | Revise a finding | `update_finding` *(hidden)* | `knowledge(action="update" \| "supersede" \| "promote")` *(hidden)* |
 | Notice changes to relevant findings | `knowledge_changes` on the next successful proved call | `knowledge(action="notices")` *(hidden)* reads/replays the bounded inbox; acknowledge exact revision UUIDs or mute. No wake or predecessor-inbox inheritance; requires migration 074. |
 | Ask another model for advice | `consult` | see [Model calls](#model-calls) |
-| Get a governed, on-record review | `request_review` (one call can reach a verdict) | `dialectic` *(hidden)* to read or advance a session (`get`, `list`, `thesis`, `antithesis`, `synthesis`, `reassign`) |
+| Get a governed, on-record review | `request_review` (one call can reach a verdict) | `dialectic` *(hidden)* to read or advance a session (`get`, `list`, `thesis`, `antithesis`, `synthesis`, `reassign`); operators use `reconcile_effect` only when a terminal decision's runtime effect needs inspection or repair |
 | Lift a pause on yourself | `self_recovery` (`check`, then `quick` or `review`) | `request_review` / `dialectic` when self-recovery is refused; `operator_resume_agent` *(hidden)* needs an operator token |
 | Coordinate with live agents | `cirs_protocol` *(hidden)* | in-memory, process-local buffers; anything durable goes to `store_finding`. No lease or surface-claim tool is in the catalog |
 | Look at other agents or the fleet | `observe` *(hidden)* | `agent(action="list" \| "get")`, `dashboard`, `detect_stuck_agents`, `export` *(all hidden)* |
@@ -166,7 +166,11 @@ see (f). Raw model and timeout controls remain on hidden `delegate_inference`.
    revise it instead (step 3).
 2. `store_finding(summary="<one line>", details="<evidence>",
    discovery_type="bug_found", severity="medium", tags=["<topic>"])`. Keep the
-   returned `discovery_id`. Every call creates a new finding.
+   returned `discovery_id`. Every call creates a new finding. To link it to the
+   finding it answers, add `response_to={"discovery_id": "<parent id>",
+   "response_type": "extend"}` (or `question`, `disagree`, `support`, `answer`,
+   `follow_up`, `correction`, `elaboration`, `supersedes`); the ack's
+   `state_summary.response_to` confirms the link.
 3. Close it: `use_tool(tool_name="update_finding", arguments={"discovery_id":
    "<id>", "status": "resolved", "closure_class": "fix_verified",
    "closure_evidence": {"deployed": "<what shipped, confirmed in the running

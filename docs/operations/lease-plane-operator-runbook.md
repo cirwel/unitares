@@ -57,13 +57,68 @@ Two paths now exist: full-restart (always correct) and hot-code-reload (no resta
 scripts/ops/deploy-lease-plane.sh
 ```
 
+The deploy script checks the live migration manifest before compiling or
+restarting. It refuses a schema gap by default; an operator may deliberately
+run its schema-only apply mode with:
+
+```bash
+scripts/ops/deploy-lease-plane.sh --apply-migrations --dialectic-writers-quiesced
+```
+
+That invocation applies and verifies the schema, then exits without compiling
+or restarting the lease plane. The second flag is an explicit operator
+attestation and the wrapper also refuses while either writer LaunchAgent is
+still loaded. Run the script again without either flag only when the rollout
+order below reaches the BEAM restart step.
+
+For the dialectic resolution-effect/frontier rollout, the safe order is:
+
+1. Quiesce dialectic writers: block new dialectic submissions and stop/drain
+   the old Python governance MCP workers and the old lease-plane process. Do
+   not run either liveness sweeper during the maintenance window.
+2. With both writer runtimes stopped, apply migrations 075, 077, and 078 with
+   the schema-only command above. It also refuses until every legacy
+   resolution saga is out of all in-flight states.
+3. Restart the Python governance MCP on the new revision.
+4. Restart the lease plane on the same revision, verify both revisions, then
+   restore dialectic traffic.
+
+The normal deploy commands in steps 3 and 4 detect that quiescence booted the
+LaunchAgents out and bootstrap their installed plists. Do not substitute a
+bare `launchctl kickstart`: kickstart cannot register an unloaded job.
+
+The quiescence is required, not advisory. Old Python does not compare the saga
+generation and old BEAM does not increment it, so either mixed-version order
+reopens the maintenance-write/terminal-claim race. New Python calls the distinct
+`/v2/dialectic/resolve-with-effect` route; an old BEAM returns 404 without a
+write, allowing the guarded Python fallback. The v1 route is retained for
+protocol compatibility and offline diagnosis, not as an online rollback claim.
+After migration 078 there is no traffic-bearing rollback to old Python: its
+maintenance writers do not bind the saga generation, even with the new lease
+plane beside it. Migration 078 also removes the permanent same-payload
+uniqueness constraint that a pre-078 lease plane assumes, so older BEAM code is
+below the rollback floor. Any code rollback must keep dialectic submissions and
+both liveness sweepers quiesced until this generation-aware pair is restored;
+leave the additive migrations in place. New code with old schema is refused by
+both deploy gates. Do not hot-reload a change that depends on a new database
+migration.
+
 To deploy a stateless-module change (router, plugs, pure logic) *without* a restart, `git pull` in the deploy worktree then:
 
 ```bash
-scripts/ops/hot-reload.sh --changed     # or name modules explicitly
+elixir/lease_plane/scripts/ops/hot-reload.sh --changed
+# or name modules explicitly
+elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
 ```
 
-It fast-forwards `$HOME/projects/unitares-deploy` to `origin/master`, recompiles, restarts the LaunchAgent (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`), and verifies `/v1/health`. Idempotent; creates the deploy worktree if missing. Because the service runs from this dedicated worktree, "is the merged fix actually live?" has a clean answer: `git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
+The full deploy command above fast-forwards
+`$HOME/projects/unitares-deploy` to `origin/master`, verifies the schema,
+recompiles, restarts the LaunchAgent, and verifies `/v1/health`. The hot-reload
+helper does only the in-place compile/module swap: it neither applies or checks
+migrations nor restarts the service, so never use it for schema-dependent or
+supervision-tree changes. Because the service runs from the dedicated
+worktree, "is the merged fix actually live?" has a clean answer:
+`git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
 
 > Incident 2026-06-02: a merged fix (#568) was **not** live because the service ran from the dev checkout, which sat on a feature branch with uncommitted edits to the same file. The dedicated worktree exists to make running-code == `origin/master` by construction. This is the running-process-vs-master-commit drift class (`feedback_running-process-vs-master-commit.md`).
 
@@ -78,9 +133,9 @@ launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist
 
 ## Health check
 
-`GET /health` (root, unversioned) is the **unauthenticated** liveness probe: `curl -s http://127.0.0.1:8788/health` returns a static `{"ok": true, "status": "ok", "service": "lease-plane", "protocol_version": "v1.0"}` with no bearer — use it to tell "up and fail-closed" apart from "down." It is the single deliberate exception to the bearer gate and exposes nothing but liveness; `/v1/health` remains bearer-gated (its payload carries identity-binding metrics).
+`GET /health` (root, unversioned) is the **unauthenticated** liveness probe: `curl -s http://127.0.0.1:8788/health` returns a static `{"ok": true, "status": "ok", "service": "lease-plane", "build_sha": "<boot commit>", "protocol_version": "v1.0"}` with no bearer — use it to tell "up and fail-closed" apart from "down." `scripts/ops/deploy-status.sh` reads `build_sha` from it to report the running code as CURRENT or STALE. It is the single deliberate exception to the bearer gate and exposes nothing but liveness and that boot commit; `/v1/health` remains bearer-gated (its payload carries identity-binding metrics).
 
-Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
+The governance MCP's background deep-health probe calls `GET /v1/health` every 30s when `LEASE_PLANE_BEARER_TOKEN` is set (`checks["lease_plane"]`, built by `_probe_lease_plane_boundary` in `src/services/runtime_queries.py`), and the Docker Compose healthcheck polls it every 10s. `scripts/ops/deploy-lease-plane.sh` polls it after a restart, and `scripts/ops/nudge-lease-plane.sh` calls it as well.
 
 **What the probe is**
 
@@ -104,33 +159,19 @@ directly (`pg_isready`, `pg_stat_activity`) or read the `lease_plane.*` tables;
 a lease write failing with `service_unavailable` is the signal that the
 database is in trouble, not the health probe.
 
-> **The two Postgres rows in the alarm table below rest on the premise this
-> section just refuted.** `lease_plane.db_degraded` fires on sustained 503s and
-> `lease_plane.slow` on probe latency — but this handler does no database work,
-> so a Postgres outage does not move either signal. The only 503 paths on this
-> route are a token that is not configured (`HTTPAuth`) and `Plug.ErrorHandler`.
-> Whether to re-point those alarms at a probe that does touch the database, or
-> to retire them, is an operator call; they are left as they are here rather
-> than silently redefined by a documentation change.
+**What monitors the lease plane**
 
-**Sentinel alarm rules**
+- **Synthetic acquire check** — the `com.unitares.lease-plane-acquire-healthcheck` LaunchAgent runs `elixir/lease_plane/scripts/ops/lease_plane_acquire_healthcheck.sh` every 300s. Each run does a real acquire and release against a dedicated probe surface, so it catches "process up, acquires failing," which neither health route can. Consecutive-failure state persists across runs: it alerts to `$UNITARES_ALERT_LOG` (and posts a governance finding) only after `MAX_FAILURES` failures in a row, and notes recovery once. Restart-on-failure is opt-in via `LEASE_PLANE_HEALTHCHECK_AUTORESTART=1`.
+- **Deep-health snapshot** — `checks["lease_plane"]` reports `healthy`, `warning` (with the client's reason), `unavailable` (no bearer configured) or `error` (the probe itself raised) from the `/v1/health` call above, refreshed every 30s.
+- **Sentinel** — both Sentinels poll `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route.
 
-| Condition | Alarm | Action |
-|-----------|-------|--------|
-| 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane` |
-| HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source the secrets env file (`$SECRETS_FILE`, see "Where the token lives") and `launchctl kickstart` Sentinel |
-| HTTP 503 sustained | `lease_plane.db_degraded` | Postgres flapping; check `pg_isready -h localhost -p 5432` |
-| Probe latency > 1s sustained | `lease_plane.slow` | Postgres lock contention or backlog; inspect `pg_stat_activity` for stuck transactions on `lease_plane.surface_leases` |
+**What none of these cover**
 
-**Probe cadence**: every 30s (matches reaper sweep cadence — no point probing more often than the system's own internal pulse). Alarm thresholds use sliding 5-min windows so a single transient blip doesn't page.
+- Reaper liveness (stale `expires_at < now() - interval '60s' AND released_at IS NULL` rows); no alarm queries this, so check it by hand
+- Audit-outbox forwarding (`lease_plane_events WHERE forwarded_at IS NULL` growing); likewise unalarmed
+- Per-surface_kind acquire success rate
 
-**What the probe does NOT cover**
-
-- Reaper liveness (separate alarm: stale `expires_at < now() - interval '60s' AND released_at IS NULL` count > 0)
-- Audit-outbox forwarding (separate alarm: `lease_plane_events WHERE forwarded_at IS NULL` count growing unboundedly)
-- Per-surface_kind acquire success rate (telemetry, not a binary alarm)
-
-The healthcheck probe is a binary "is the front door open" signal. Functional health lives in the supplemental rules above.
+For restart, `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`; for database trouble, `pg_isready -h localhost -p 5432` and `pg_stat_activity` on `lease_plane.surface_leases`.
 
 ## Live introspection (the BEAM superpower)
 
@@ -379,7 +420,7 @@ If the token appears in shell history, a screenshot, a pasted log, or anywhere o
    ```
 3. If unexpected force-releases appear, file a `multi-agent-git-reset-incident.md`-style incident note
 
-**What invalidates a token**: only changing the value in `secrets.env` and restarting the lease plane. There is no revocation list, no JWT-style expiry — the lease plane reads `Application.get_env(:lease_plane, :force_release_bearer_token)` once at boot.
+**What invalidates a token**: only changing the value in `secrets.env` and restarting the lease plane. There is no revocation list, no JWT-style expiry — the lease plane copies `LEASE_FORCE_RELEASE_TOKEN` into `Application.get_env(:lease_plane, :force_release_token)` at application start, and `HTTPAuth` reads that key on each request, so only a restart picks up a new value.
 
 ## Renames and orphan leases (RFC §7.9)
 
@@ -479,7 +520,8 @@ Reload after pulling new code into the deploy worktree:
 ```bash
 cd "$HOME/projects/unitares-deploy" && git pull --ff-only
 elixir/lease_plane/scripts/ops/hot-reload.sh --changed
-# or name modules: scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
+# or name modules:
+elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
 ```
 
 The helper recompiles in the worktree and `:code.purge` + `:code.load_file`s

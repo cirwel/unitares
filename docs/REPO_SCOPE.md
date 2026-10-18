@@ -14,8 +14,9 @@ contracts.
   `~/career/` (see the operator's workfolder convention), not in the product
   repo. *(This is why the FRT sandbagging demo was removed from `demos/`.)*
 - **Per-vendor agent/tool config** — `.claude/`, `.codex/`, `.cursor/`, etc.
-  are machine-local state. They stay in `.gitignore` and are **never**
-  whitelisted back in. *(PR #1039 committed `.claude/settings.json` via a
+  are machine-local state. The guard refuses tracked files under any of them
+  and **never** lets `.gitignore` whitelist them back in; `.claude/` is also
+  in `.gitignore`. *(PR #1039 committed `.claude/settings.json` via a
   `!.claude/settings.json` exception — that was reverted.)*
 - **Per-vendor attribution conventions** — settings that strip or rewrite commit
   / PR attribution for one agent vendor belong in the operator's local
@@ -29,12 +30,14 @@ contracts.
   files and in PR bodies: operator-local paths (`/Users/cirwel`), second-person
   address of the operator (`per your guidance`, `your overlay`, `you flagged`,
   `questions for Kenny`), and exposed AI-review process (`council pass`,
-  `council fold`, `live-verifier`, `three-lane council`). It deliberately does
-  **not** flag the real product vocabulary `operator`, `council`, or `dialectic`,
-  and does not scan gitignored runtime/session data. Working notes belong in
+  `council fold`, `live-verifier`, and, in files only, `three-lane council`).
+  It deliberately does **not** flag the real product vocabulary `operator`,
+  `council`, or `dialectic`, and does not scan gitignored runtime/session data. Working notes belong in
   `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
-  discusses these patterns (this guard, a register cleanup, meta-docs) can opt
-  the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
+  discusses these patterns (this guard, a register cleanup, meta-docs) can skip
+  the PR-body register check with the HTML comment
+  `<!-- scope-guard: allow-register -->`; the operator-local path check on the
+  PR body always runs.
 ## Metered model-cloud dependencies
 
 The execution-cost policy (`CLAUDE.md` → *Execution-cost policy*) keeps the repo

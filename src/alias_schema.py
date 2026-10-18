@@ -84,6 +84,10 @@ ALIAS_SCHEMA_KEEP = {
         "memory_context",
         "task_label",
         "task_outcome",
+        # A linked record in one call (2026-10-16 dogfood read, item 5):
+        # before this, linking needed describe_tool plus
+        # use_tool(tool_name='knowledge', action='store'), about 10.6 KB.
+        "response_to",
     }),
     "update_finding": frozenset({
         "discovery_id",
@@ -108,6 +112,7 @@ ALIAS_SCHEMA_KEEP = {
         "reasoning",
         "root_cause",
         "proposed_conditions",
+        "reviewed_work_author_agent_ids",
         "use_brief_as_thesis",
     }),
 }
@@ -351,6 +356,19 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
             "description": (
                 "Optional stable key for comparing the same bounded task across "
                 "harnesses."
+            ),
+        },
+        "response_to": {
+            "description": (
+                "Optional typed link to the finding this one answers: "
+                "{discovery_id, response_type}, where response_type is one of "
+                "extend, question, disagree, support, answer, follow_up, "
+                "correction, elaboration, supersedes."
+            ),
+            "brief": (
+                "Optional link {discovery_id, response_type}; type: extend, "
+                "question, disagree, support, answer, follow_up, correction, "
+                "elaboration, supersedes."
             ),
         },
         "task_label": {"description": "Optional readable label for the bounded task."},

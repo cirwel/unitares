@@ -96,6 +96,7 @@ from .dialectic.handlers import (
     handle_submit_synthesis,
     handle_submit_consult,
     handle_reassign_reviewer,
+    handle_reconcile_resolution_effect,
 )
 
 
@@ -414,6 +415,7 @@ handle_dialectic = action_router(
         "synthesis": handle_submit_synthesis,
         "consult": handle_submit_consult,
         "reassign": handle_reassign_reviewer,
+        "reconcile_effect": handle_reconcile_resolution_effect,
     },
     # This router wait_for is the outer ceiling, so it must clear the slowest
     # action with headroom. That is action='request' in its one-call form,
@@ -435,5 +437,6 @@ handle_dialectic = action_router(
         "dialectic(action='thesis', session_id='abc123', root_cause='...', proposed_conditions=[...])",
         "dialectic(action='synthesis', session_id='abc123', agrees=True, reasoning='...', proposed_conditions=[...])",
         "dialectic(action='consult', session_id='abc123', reasoning='...', agrees=False, reviewer_provenance={'backend': 'codex-cli', 'consult_source': '...'})",
+        "dialectic(action='reconcile_effect', session_id='abc123')",
     ],
 )

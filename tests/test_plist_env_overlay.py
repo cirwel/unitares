@@ -351,7 +351,7 @@ LABEL = "com.unitares.governance-mcp"
 
 def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
             applier: Path = SCRIPT, prelude: str = "", bootstrap_fails: bool = False,
-            check: bool = True, postlude: str = "") -> list[str]:
+            check: bool = True, postlude: str = "", initially_loaded: bool = True) -> list[str]:
     """Run deploy-lib's overlay step and then its restart, with a stub
     launchctl that records its calls. Returns the recorded subcommands of
     this run. ``prelude`` runs after deploy-lib is sourced (to stub one of
@@ -364,12 +364,26 @@ def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "launchctl.log"
     log.write_text("")
+    loaded = tmp_path / "launchctl.loaded"
+    if initially_loaded:
+        loaded.write_text("")
+    else:
+        loaded.unlink(missing_ok=True)
     stub = bin_dir / "launchctl"
-    # `print` fails: the label is gone after bootout, and the env-key check
-    # treats empty output as "cannot tell". Everything else succeeds, unless
-    # bootstrap is told to fail.
-    failing = "[ \"$1\" = bootstrap ] && exit 5\n" if bootstrap_fails else ""
-    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\n{failing}exit 0\n')
+    # Model the registration state the restart primitive now checks before
+    # choosing kickstart vs bootstrap. The env-key check sees empty output and
+    # therefore treats the loaded definition as "cannot tell".
+    failing = "exit 5" if bootstrap_fails else f': > "{loaded}"; exit 0'
+    stub.write_text(
+        f'#!/bin/sh\necho "$1" >> "{log}"\n'
+        f'case "$1" in\n'
+        f'  print) [ -f "{loaded}" ]; exit $? ;;\n'
+        f'  bootout) rm -f "{loaded}"; exit 0 ;;\n'
+        f'  bootstrap) {failing} ;;\n'
+        f'  kickstart) [ -f "{loaded}" ]; exit $? ;;\n'
+        f'esac\n'
+        f'exit 0\n'
+    )
     stub.chmod(0o755)
     script = (f'set -euo pipefail; . "{LIB}"; {prelude}\n'
               f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{applier}"; '
@@ -396,6 +410,13 @@ def test_a_changed_overlay_is_reloaded_even_without_a_baseline(tmp_path, baselin
                     baseline=None if baseline == "none" else before)
     assert calls == ["bootout", "bootstrap"]
     assert (tmp_path / "state" / f"{LABEL}.plist.sha256").read_text() == _sha(plist)
+
+
+def test_an_unloaded_service_bootstraps_a_changed_overlay_without_bootout(tmp_path):
+    plist = _plist(tmp_path, {"UNITARES_HTTP_API_TOKEN": "secret"})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
+                    baseline=_sha(plist), initially_loaded=False)
+    assert calls == ["bootstrap"]
 
 
 def test_a_hand_edit_the_overlay_undoes_is_reloaded(tmp_path):

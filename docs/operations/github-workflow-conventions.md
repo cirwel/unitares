@@ -193,6 +193,18 @@ repositories. Cloud agents use explicitly provisioned repository-scoped App
 credentials; a missing cloud integration must be reported, never replaced
 with the operator's login. Other installers opt in to their own host and
 credentials.
+
+<a id="operator-login-agent-prs"></a>**Agent PRs through the operator
+login.** Hosted Claude sessions cannot use the App: their GitHub proxy
+attaches the operator's credential to every request and refuses the GraphQL
+calls `gh pr` makes even with a supplied token, and their network secrets
+exclude GitHub. Their PRs are therefore authored by the operator's account.
+The operator does not open PRs or press merge, so an agent branch authored by
+that account is an agent act, never an operator act. The
+`agent-via-operator-login` label (`operator-login-agent-pr.yml`) records this
+on `claude/*` and `codex/*` PRs. The footer stays the owner pointer: such a
+session onboards and ends the body with its own `UNITARES agent: <uuid>`,
+never a uuid copied from another session.
 Direct local `./scripts/dev/review.sh` remains available and shares the same
 per-PR lock and evidence, so it joins an in-flight host review.
 
@@ -222,6 +234,28 @@ shared App; the operator's user account is reserved for operator actions.
 > still comes first; the point is that an unavailable reviewer never stops a
 > finished PR.
 
+The purpose is another useful perspective on substantive work, not a required
+sequence of model invocations. Choose the review that helps the change:
+
+| Work | Appropriate scrutiny |
+|---|---|
+| Substantive implementation | One completed independent review when available: human, fresh-context model, or council |
+| Bounded corrections after review | Independent review of the cumulative delta and interactions; retain prior full coverage |
+| Material scope or security-assumption change | Full review of the changed work |
+| Sensitive paths | Coverage from two actual model families, under the existing rules |
+
+Council can be the review. Give independent participants the actual diff and
+relevant surrounding code, preserve their findings and reasoning, and record
+the completed review with `record --independent`. Once that review covers the
+work, do not launch the CLI reviewer merely to repeat it. A design council
+before implementation is useful input but cannot establish coverage of code
+it has not seen. An author participating in council is not an independent
+reviewer of their own contribution. A synthesis does not turn one family's
+work into two: sensitive changes need each credited family's actual review.
+If publishing with `ship.sh`, use its existing `SHIP_NO_REVIEW=1` option for
+that push, then immediately record the completed council review. This avoids
+starting an automatic model review before its evidence has been recorded.
+
 "Review round joined" used to be prose: some PRs carried a
 review in the body, some in a comment, most in neither, and nothing could tell
 which. It is now a command and a status check, the way `test-cache.sh` made
@@ -250,10 +284,11 @@ the test run one.
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
   where the file ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The flag
   attests a separate reviewer examined this diff; it is not authentication.
-  Consult remains advisory; do not turn advice into a verdict by adding a
-  marker. Council/dialectic is optional escalation for consequential design
-  choices or disagreement. Routine PRs need one completed code review. The
-  gate needs no model and no paid key; CI only reads review evidence.
+  Advisory consult output does not become a review by adding a verdict.
+  Council that independently reviewed the actual change counts directly;
+  council for design advice or disagreement remains optional. Substantive
+  routine work seeks one completed review, subject to the availability policy
+  above. The gate needs no model and no paid key; CI only reads evidence.
 - The record is keyed on the diff (path + blob of every changed file against
   the merge base), not the commit, so a base merge that leaves the PR's files
   alone — including `draft-base-refresh.yml`'s — keeps it.
@@ -360,9 +395,10 @@ on closed or merged PRs and check again before publishing results. Native
 cloud reviews already in flight can still finish after merge; triage any valid
 late findings in a follow-up change rather than reopening the merged PR.
 
-Native review focuses on major correctness issues. Consult is still useful
-for focused design advice; council/dialectic remains an optional escalation.
-Neither becomes an extra mandatory review step.
+Native review focuses on major correctness issues. Consult is useful for
+focused design advice. A council may supply the independent implementation
+review or help resolve design disagreement; neither route adds a mandatory
+second ritual.
 
 Pilot evidence: [draft #2340 native completion](https://github.com/cirwel/unitares/pull/2340#issuecomment-5794562451)
 named its reviewed commit after an explicit request. Automatic review did not
@@ -583,11 +619,9 @@ agy        # once, interactively: sign in, then /exit
 Antigravity's terms let Google collect interaction data unless you opt out in
 its settings. A review sends the diff and the changed files.
 
-Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
-was suspended). Until that entry is removed, review with a fresh-context
-Claude subagent or council, or another model such as Gemini, and record it
-honestly ([Recording a review without gh](#recording-a-review-without-gh)
-when `gh` is missing).
+Provider availability is controlled by `review_providers.json`; historical
+outage notes are not a current provider policy. Existing independent human,
+subagent or council reviews can be recorded regardless of CLI availability.
 
 #### Requesting review without local tooling
 
@@ -636,9 +670,9 @@ the next section.
 #### Recording a review without gh
 
 Operator decision, 2026-09-24: an agent without `gh` (a cloud session with
-only a GitHub connector) may complete its own review gate with a **subagent
-or council review**, as long as the record says which it was. Before this, a
-Codex usage limit left such sessions with no way to finish a PR (#2423).
+only a GitHub connector) may record a **subagent or council review**, as long
+as the record says which it was. This is equally valid when `gh` is installed:
+omit `--emit` to post directly. It is not an outage-only alternative.
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
@@ -890,20 +924,26 @@ the operator's machine is awake.
   has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
-**Drafts are the one case GitHub's updater never covers** — a draft cannot take
-`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
-open draft that is behind, conflict-free, and idle for 12h, every four hours.
-It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
-It is not a second updater racing the native one: it touches only what GitHub
-will not. Two rules carried over from the retired queue updater and from PR
-#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
-secret — a fine-grained token scoped to this repository with `Contents: read
-and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
-runs in the approval-required state: #2250's refreshed head sat `blocked` with
-eight parked workflows until a maintainer approved them by hand, less
-mergeable than the stale head it replaced. And a missing secret is loud rather
-than inert: the sweep withholds every push and fails the run, and after each
-real push it fails unless a `Tests` run is actually queued on the new head.
+**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
+fill with a scheduled updater: it is not yet a merge candidate. The former
+four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
+behind draft and started the full PR matrix each time. That recreated the
+N-wide CI cascade this section forbids without advancing any PR toward landing.
+PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
+validated `89888ed7b`, the schedule replaced it with base-only merge
+`a234075f3`, launched the matrix again, and produced a failing smoke head before
+any author change or readiness decision.
+
+`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
+for exactly one positive PR number. It has no schedule and rejects an empty
+all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
+exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
+remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
+head; when its work is complete, mark it ready and label it; the serial queue
+updates that one merge candidate against the then-current base. A later base
+commit does not invalidate review or tests for lines it did not change. Invoke
+the manual action only when preserving one long-lived draft justifies a
+deliberate pre-readiness merge.
 
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
@@ -985,6 +1025,8 @@ this entirely).
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
+| Draft is green but behind | Leave its evidence-bound head pinned; the queue updates it once after readiness |
+| One long-lived draft needs an early base merge | Manually dispatch `draft-base-refresh.yml` with that PR number; never sweep all drafts |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |

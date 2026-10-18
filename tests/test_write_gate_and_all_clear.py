@@ -52,21 +52,39 @@ def test_live_pause_holds_writes_and_names_its_expiry():
     assert meta.status == "paused"
 
 
-def test_stale_pause_is_reported_but_not_held_and_not_expired_by_the_read():
+def test_stale_pause_stays_held_until_durable_expiry_commits():
     from config.governance_config import GovernanceConfig
 
     stale = _iso(-(int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS) + 60))
     meta = SimpleNamespace(status="paused", paused_at=stale)
     gate = describe_write_gate(meta)
-    assert gate == {
-        "paused": True,
-        "writes_held": False,
-        "note": (
-            "The pause is past its expiry: the next check-in or new "
-            "shared-memory entry lifts it."
-        ),
-    }
+    assert gate["paused"] is True
+    assert gate["writes_held"] is True
+    assert gate["expiry_eligible"] is True
+    assert "remain refused" in gate["held"]
+    assert "not a durable resume receipt" in gate["note"]
+    assert gate["expires_at"]
     assert meta.status == "paused" and meta.paused_at == stale
+
+
+def test_stale_pause_description_matches_a_failed_durable_expiry_attempt():
+    from config.governance_config import GovernanceConfig
+    from src.mcp_handlers.support.agent_auth import check_agent_can_operate
+
+    stale = _iso(-(int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS) + 60))
+    meta = SimpleNamespace(status="paused", paused_at=stale)
+    server = SimpleNamespace(agent_metadata={"agent-1": meta})
+    with (
+        patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
+        patch(
+            "src.mcp_handlers.support.pause_ttl.maybe_auto_expire_pause_sync",
+            return_value=False,
+        ),
+    ):
+        refused = check_agent_can_operate("agent-1")
+
+    assert refused is not None
+    assert describe_write_gate(meta)["writes_held"] is True
 
 
 def test_archived_holds_writes_and_names_the_way_back():
@@ -183,6 +201,25 @@ async def test_paused_identity_read_says_writes_are_held():
     assert summary["paused"] is True
     assert summary["writes_held"] is True
     assert "refused, not queued" in summary["held"]
+
+
+@pytest.mark.asyncio
+async def test_expiry_eligibility_is_lifted_without_claiming_writable():
+    from config.governance_config import GovernanceConfig
+
+    payload, validated = await real_metrics_payload(check_ins=2)
+    stale = _iso(-(int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS) + 60))
+    payload["write_gate"] = describe_write_gate(
+        SimpleNamespace(status="paused", paused_at=stale)
+    )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+
+    summary = env["action_summary"]
+    assert summary["paused"] is True
+    assert summary["writes_held"] is True
+    assert summary["expiry_eligible"] is True
 
 
 # ---------------------------------------------------------------------------

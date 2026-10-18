@@ -37,7 +37,7 @@ Don't rebuild discrimination analysis — these exist and are current:
 
 - **`scripts/analysis/eisv_skeptic_report.py`** ✓ — computes AUC/Brier
   **lift of EISV/prior-state over a previous-outcome baseline**, emits a runtime verdict
-  (`DESCRIPTIVE ONLY` / `KEEP-TESTING` / `WEAK` / `INCONCLUSIVE`). A
+  (`DESCRIPTIVE ONLY` / `KEEP TESTING` / `WEAK SIGNAL` / `INCONCLUSIVE`). A
   non-positive split is explicitly not a harm or refutation claim. The
   [resolved distributional-probe record](proposals/archive/eisv-distributional-signal-probe-v0.md)
   used the earlier `SKEPTICAL` label; treat that wording as historical rather

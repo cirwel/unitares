@@ -42,6 +42,24 @@ def parse_result(result):
     return json.loads(result.text)
 
 
+async def successful_dialectic_message_append(
+    *_args,
+    detail=None,
+    expected_transcript_revision=0,
+    **_kwargs,
+):
+    """Model a successful guarded dialectic-message append.
+
+    Protocol handlers now require the storage mock to return both a message id
+    and the monotonic transcript revision advanced by that append. Tests that
+    merely use a blank ``AsyncMock`` otherwise model a refused database CAS.
+    """
+    if detail is not None:
+        detail["transcript_revision"] = expected_transcript_revision + 1
+        detail["written"] = True
+    return 1
+
+
 # ============================================================================
 # Agent metadata factory
 # ============================================================================

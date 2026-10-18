@@ -86,11 +86,12 @@ SQL_WRITERS: Dict[Tuple[str, str], Dict[str, object]] = {
         "columns": ("phase", "updated_at"), "observed_via": _OBSERVED_VIA_BEAM},
     (SAGA_EX, "update_reviewer"): {
         "columns": ("reviewer_agent_id", "updated_at"), "observed_via": _OBSERVED_VIA_BEAM},
-    (SAGA_EX, "commit_session_row"): {
-        "columns": ("status", "phase", "updated_at"),
+    (SAGA_EX, "guarded_terminal_update_sql"): {
+        "columns": ("status", "phase", "updated_at", "awaiting_facilitation"),
         "observed_via": (
-            f"{_OBSERVED_VIA_BEAM} (resolve); BEAM liveness commits are saga rows with "
-            "reason liveness_timeout, failed-only, benign by construction"
+            f"{_OBSERVED_VIA_BEAM} (resolve; SQL is executed by commit_session_row); "
+            "BEAM liveness commits are saga rows with reason liveness_timeout, "
+            "failed-only, benign by construction"
         )},
 }
 
@@ -103,10 +104,13 @@ BEAM_WRITERS = ("beam_create_session", "beam_update_phase", "beam_update_reviewe
 # observed through the helpers' own records; the entry says who the writer is.
 CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     (AUTO_RESOLVE, "_auto_resolve_stuck_sessions"): {
-        "calls": ("add_message_async", "update_session_status_async",
-                  "update_session_reviewer_async", "mark_awaiting_facilitation_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": "sweeper (via=sweeper; plus its own dialectic_guarded_write per guarded write)",
+        "calls": ("add_message_async", "mark_awaiting_facilitation_async",
+                  "resolve_session_async", "update_session_reviewer_async"),
+        "writer": (
+            "sweeper: reviewer reassignment, guarded transcript append, facilitation "
+            "request, and hard-limit terminal close (via=sweeper; plus its own "
+            "dialectic_guarded_write per guarded write)"
+        ),
     },
     (AUTO_RESOLVE, "_close_standing_rejections"): {
         "calls": ("resolve_session_async",),
@@ -116,48 +120,42 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
             "(via=sweeper; a reap_failed guarded write)"
         ),
     },
-    (HANDLERS, "_apply_reviewer_reassignment"): {
-        "calls": ("add_message_async", "reopen_session_async", "beam_update_reviewer",
-                  "update_session_reviewer_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": "request reassignment: reopen, BEAM update_reviewer, Python fallback",
+    (HANDLERS, "_append_protocol_message"): {
+        "calls": ("add_message_async",),
+        "writer": (
+            "shared interactive transcript append: message and phase/round/reviewer/"
+            "status frontier advance in one guarded transaction"
+        ),
     },
-    (HANDLERS, "handle_submit_thesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async"),
-        "writer": "thesis: message, phase advance (BEAM, Python fallback)",
-    },
-    (HANDLERS, "handle_submit_antithesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
-                  "beam_update_reviewer", "update_session_reviewer_async"),
-        "writer": "antithesis: message, phase advance, first-responder reviewer",
-    },
-    (HANDLERS, "handle_submit_synthesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
-                  "beam_resolve", "resolve_session_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": "synthesis: message, phase, terminal resolution, facilitation flag",
+    (HANDLERS, "_commit_terminal_resolution"): {
+        "calls": ("beam_resolve", "resolve_session_async"),
+        "writer": (
+            "shared terminal effect owner: BEAM resolution or exact "
+            "phase/reviewer/transcript-CAS Python fallback, before any runtime effect"
+        ),
     },
     (HANDLERS, "_set_awaiting_facilitation"): {
-        "calls": ("update_session_awaiting_facilitation_async",),
-        "writer": "facilitation flag (request path)",
-    },
-    (HANDLERS, "handle_get_dialectic_session"): {
-        "calls": ("add_message_async", "update_session_phase_async",
+        "calls": ("mark_awaiting_facilitation_async",
                   "update_session_awaiting_facilitation_async"),
-        "writer": "timeout / stuck-reviewer handling on read",
+        "writer": "shared guarded facilitation set/clear at the loaded transcript frontier",
     },
     (HANDLERS, "handle_request_dialectic_review"): {
         "calls": ("beam_create_session", "create_session_async"),
         "writer": "session creation",
     },
     (HANDLERS, "handle_llm_assisted_dialectic"): {
-        "calls": ("add_message_async", "create_session_async", "update_session_phase_async",
-                  "resolve_session_async"),
-        "writer": "one-call LLM-assisted dialectic (Python only)",
+        "calls": ("create_session_async",),
+        "writer": (
+            "one-call LLM-assisted session creation; later writes delegate to the "
+            "shared transcript and terminal helpers"
+        ),
     },
-    (HANDLERS, "_run_synthetic_review"): {
-        "calls": ("add_message_async", "update_session_phase_async", "resolve_session_async"),
-        "writer": "synthetic review (Python only)",
+    (HANDLERS, "handle_submit_thesis"): {
+        "calls": ("mark_awaiting_facilitation_async",),
+        "writer": (
+            "guarded facilitation request after a timed-out synthetic reviewer; "
+            "the thesis append itself delegates to the shared transcript helper"
+        ),
     },
     (SESSION, "save_session"): {
         "calls": ("beam_resolve", "resolve_session_async", "beam_update_phase",
@@ -171,11 +169,16 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     (ROUTER_EX, "POST /v1/dialectic/phase"): {
         "calls": ("update_phase",), "writer": "BEAM phase (from Python)",
         "observed_via": _OBSERVED_VIA_BEAM},
-    (ROUTER_EX, "POST /v1/dialectic/reviewer"): {
-        "calls": ("update_reviewer",), "writer": "BEAM update_reviewer (from Python)",
+    (ROUTER_EX, "update_dialectic_reviewer"): {
+        "calls": ("update_reviewer",),
+        "writer": (
+            "BEAM reviewer assignment and guarded open-slot claim routes "
+            "(from Python)"
+        ),
         "observed_via": _OBSERVED_VIA_BEAM},
-    (ROUTER_EX, "POST /v1/dialectic/resolve"): {
-        "calls": ("resolve",), "writer": "BEAM resolve (from Python)",
+    (ROUTER_EX, "resolve_dialectic"): {
+        "calls": ("resolve",),
+        "writer": "BEAM resolve / resolve-with-effect (from Python)",
         "observed_via": _OBSERVED_VIA_BEAM},
     (LIVENESS_EX, "fail_stuck"): {
         "calls": ("resolve",), "writer": "BEAM DialecticLiveness (4 h, writes failed only)",
