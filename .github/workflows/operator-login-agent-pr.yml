@@ -1,0 +1,39 @@
+name: Agent PR via Operator Login
+
+# Advisory-only. Hosted Claude/Codex sessions have no App path: their GitHub
+# proxy holds the operator's credential, so their PRs are authored by the
+# operator's account (docs/operations/github-workflow-conventions.md,
+# "Agent PRs through the operator login"). The operator does not open PRs, so
+# an agent branch authored by that account is an agent act, not an operator
+# act. This workflow labels it so the record says so. It never blocks and
+# never edits the PR body.
+
+on:
+  pull_request:
+    branches: [ master, main ]
+    types: [ opened, reopened ]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    if: >-
+      github.event.pull_request.user.login == github.repository_owner &&
+      (startsWith(github.event.pull_request.head.ref, 'claude/') ||
+       startsWith(github.event.pull_request.head.ref, 'codex/'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label agent PR opened through the operator login
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        # Fork PRs carry a read-only token; API failures here are tolerated.
+        run: |
+          echo "::notice::Agent branch authored by the operator account: an agent act without App credentials, not an operator act."
+          gh label create agent-via-operator-login --repo "$REPO" \
+            --description "Agent PR opened through the operator's GitHub login (no App credential); not an operator act" \
+            --color FBCA04 --force 2>/dev/null || true
+          gh pr edit "$PR" --repo "$REPO" --add-label agent-via-operator-login || true
