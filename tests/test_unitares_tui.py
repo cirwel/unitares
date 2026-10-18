@@ -110,3 +110,53 @@ def test_resident_with_null_fields_renders():
     assert not any("E energy" in line for line in detail)
     assert any(line.endswith("check-ins: ? ? G") for line in detail)
     assert tui.snapshot(data)["residents"][0]["verdict"] is None
+
+
+def _app(data, view="overview"):
+    app = tui.App(interval=10)
+    app.data, app.view = data, view
+    return app
+
+
+def test_unreadable_resident_panel_is_not_an_empty_roster():
+    gated = {"health": {"status": "ok"}, "residents": None, "auth_required": True}
+    notice = tui.residents_notice(gated)
+    assert "UNITARES_TOKEN" in notice[0]
+    assert "older server" in tui.residents_notice({"residents": None})[0]
+    assert tui.residents_notice({"residents": {"residents": []}}) is None  # genuinely empty
+    snap = tui.snapshot(gated)
+    assert snap["residents_available"] is False and snap["auth_required"] is True
+    assert tui.snapshot({"residents": {"residents": []}})["residents_available"] is True
+    lines = [row[0] for row in _app(gated).screen(20)]
+    assert any("auth required" in line for line in lines)
+
+
+def test_detail_view_scrolls_to_reach_hidden_rows():
+    resident = {"label": "x", "history": [{"verdict": "proceed"}] * 3,
+                "eisv": {"E": 0.1, "I": 0.2, "S": 0.3, "V": 0.0}, "coherence": 0.5, "risk_score": 0.1,
+                "recent_writes": [{"severity": "high", "summary": "needle"}]}
+    app = _app({"residents": {"residents": [resident]}}, view="detail")
+    small = 6
+    assert not any("needle" in row[0] for row in app.screen(small))
+    for _ in range(20):
+        app.handle(tui.curses.KEY_DOWN)
+    assert any("needle" in row[0] for row in app.screen(small))
+
+
+def test_overview_keeps_selection_visible_when_roster_exceeds_screen():
+    residents = [{"label": f"r{i}", "status": "healthy", "verdict": "proceed"} for i in range(30)]
+    app = _app({"health": {"status": "ok"}, "residents": {"residents": residents}})
+    for _ in range(25):
+        app.handle(tui.curses.KEY_DOWN)
+    rows = app.screen(12)
+    assert len(rows) <= 12
+    assert any(row[3] and "r25" in row[0] for row in rows)  # selected row is drawn, reversed
+
+
+def test_detail_left_right_switches_resident_and_resets_scroll():
+    data = {"residents": {"residents": [{"label": "a"}, {"label": "b"}]}}
+    app = _app(data, view="detail")
+    app.scroll = 3
+    app.handle(tui.curses.KEY_RIGHT)
+    assert app.selected == 1 and app.scroll == 0
+    assert app.screen(10)[0][0].startswith("b")

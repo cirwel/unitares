@@ -20,7 +20,12 @@ CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "unitares")
 FETCH_TIMEOUT = 20
 VERDICT_COLOR = {"proceed": 1, "approve": 1, "guide": 2, "pause": 3, "reject": 3}
 STATUS_COLOR = {"healthy": 1, "silent": 3}
-KEYS = "up/down select | Enter detail | Esc back | t tools | r refresh | q quit"
+KEYS = {
+    "overview": "up/down select | Enter detail | t tools | r refresh | q quit",
+    "detail": "up/down scroll | left/right or n/p other resident | Esc back | r refresh | q quit",
+    "tools": "up/down scroll | Esc back | r refresh | q quit",
+}
+PAGE = 10
 
 
 def run_cli(*args):
@@ -99,6 +104,18 @@ def overview_lines(data):
     return out
 
 
+def residents_notice(data):
+    """(text, color) when the resident panel could not be read, else None.
+
+    An unreadable panel (auth-gated, failed, warming up) is not an empty roster.
+    """
+    if (data or {}).get("residents") is not None:
+        return None
+    if data.get("auth_required"):
+        return ("Residents: unavailable (auth required - set UNITARES_TOKEN)", 3)
+    return ("Residents: unavailable (fetch failed, warming up, or an older server)", 2)
+
+
 def resident_rows(data):
     return [
         (
@@ -170,25 +187,30 @@ class App:
     def residents(self):
         return resident_list(self.data)
 
+    def _scroll_by(self, delta):
+        self.scroll = max(0, self.scroll + delta)
+
     def handle(self, key):
         """Return False to quit."""
         n = len(self.residents())
+        down = key in (curses.KEY_DOWN, ord("j"))
+        up = key in (curses.KEY_UP, ord("k"))
         if key in (ord("q"), ord("Q")):
             return False
         if key in (ord("r"), ord("R")):
             self.refresh()
-        elif key in (curses.KEY_DOWN, ord("j")):
-            if self.view == "tools":
-                self.scroll += 1
-            elif n:
-                self.selected = (self.selected + 1) % n
-        elif key in (curses.KEY_UP, ord("k")):
-            if self.view == "tools":
-                self.scroll = max(0, self.scroll - 1)
-            elif n:
-                self.selected = (self.selected - 1) % n
+        elif self.view == "overview" and (down or up) and n:
+            self.selected = (self.selected + (1 if down else -1)) % n
+        elif self.view in ("detail", "tools") and (down or up):
+            self._scroll_by(1 if down else -1)
+        elif self.view in ("detail", "tools") and key in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+            self._scroll_by(PAGE if key == curses.KEY_NPAGE else -PAGE)
+        elif self.view == "detail" and n and key in (curses.KEY_RIGHT, curses.KEY_LEFT, ord("n"), ord("p")):
+            forward = key in (curses.KEY_RIGHT, ord("n"))
+            self.selected = (self.selected + (1 if forward else -1)) % n
+            self.scroll = 0
         elif key in (curses.KEY_ENTER, 10, 13) and self.view == "overview" and n:
-            self.view = "detail"
+            self.view, self.scroll = "detail", 0
         elif key in (27, ord("b"), ord("o")):
             self.view, self.scroll = "overview", 0
         elif key in (ord("t"), ord("T")):
@@ -196,61 +218,60 @@ class App:
             self.tools, self.tools_error = fetch_tools()
         return True
 
+    def screen(self, body_height):
+        """Rows to draw: [(text, color, bold, reverse)], windowed to body_height."""
+        if self.data is None:
+            return [
+                (f"UNITARES unreachable: {self.error or 'no data yet'}", 3, True, False),
+                ("Check `unitares diag`; press r to retry, q to quit.", 2, False, False),
+            ]
+        if self.view == "overview":
+            pinned = [(t, c, False, False) for t, c in overview_lines(self.data)]
+            pinned.append((f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL", 0, True, False))
+            notice = residents_notice(self.data)
+            if notice:
+                return (pinned + [(notice[0], notice[1], False, False)])[:body_height]
+            self.selected = min(self.selected, max(0, len(self.residents()) - 1))
+            body = []
+            for i, (label, status, verdict, age) in enumerate(resident_rows(self.data)):
+                marker = ">" if i == self.selected else " "
+                color = STATUS_COLOR.get(status) or VERDICT_COLOR.get(verdict, 0)
+                body.append((f"{marker} {label:<18}{status:<10}{verdict:<10}{age}", color, False, i == self.selected))
+            visible = max(1, body_height - len(pinned))
+            top = max(0, self.selected - visible + 1)
+            return pinned[:body_height] + body[top:top + visible]
+        if self.view == "detail":
+            residents = self.residents()
+            if not residents:
+                return [("No residents to show.", 0, False, False)]
+            index = self.selected % len(residents)
+            lines = [(t, c, False, False) for t, c in resident_detail_lines(residents[index])]
+            self.scroll = min(self.scroll, max(0, len(lines) - body_height))
+            return lines[self.scroll:self.scroll + body_height]
+        if self.tools_error:
+            return [(f"Could not list tools: {self.tools_error}", 3, False, False)]
+        lines = [(t, 0, False, False) for t in (self.tools or [])]
+        self.scroll = min(self.scroll, max(0, len(lines) - body_height))
+        return lines[self.scroll:self.scroll + body_height]
+
     def draw(self, scr):
         scr.erase()
         height, width = scr.getmaxyx()
-        row = 0
-
-        def put(text, color=0, bold=False):
-            nonlocal row
-            if row >= height - 1:
-                return
+        for row, (text, color, bold, reverse) in enumerate(self.screen(max(1, height - 1))):
             attr = curses.color_pair(color) if color else 0
             if bold:
                 attr |= curses.A_BOLD
+            if reverse:
+                attr |= curses.A_REVERSE
+                text = text.ljust(max(0, width - 1))
             try:
                 scr.addnstr(row, 0, text, max(0, width - 1), attr)
             except curses.error:
                 pass
-            row += 1
-
-        if self.data is None:
-            put(f"UNITARES unreachable: {self.error or 'no data yet'}", 3, True)
-            put("Check `unitares diag`; press r to retry, q to quit.", 2)
-        elif self.view == "overview":
-            for text, color in overview_lines(self.data):
-                put(text, color)
-            put(f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL", 0, True)
-            for i, (label, status, verdict, age) in enumerate(resident_rows(self.data)):
-                marker = ">" if i == self.selected else " "
-                line = f"{marker} {label:<18}{status:<10}{verdict:<10}{age}"
-                color = STATUS_COLOR.get(status) or VERDICT_COLOR.get(verdict, 0)
-                if i == self.selected:
-                    try:
-                        scr.addnstr(row, 0, line.ljust(width - 1), width - 1,
-                                    curses.A_REVERSE | (curses.color_pair(color) if color else 0))
-                    except curses.error:
-                        pass
-                    row += 1
-                else:
-                    put(line, color)
-        elif self.view == "detail":
-            residents = self.residents()
-            if residents:
-                for text, color in resident_detail_lines(residents[self.selected % len(residents)]):
-                    put(text, color)
-        elif self.view == "tools":
-            if self.tools_error:
-                put(f"Could not list tools: {self.tools_error}", 3)
-            else:
-                lines = self.tools or []
-                self.scroll = min(self.scroll, max(0, len(lines) - (height - 2)))
-                for text in lines[self.scroll:]:
-                    put(text)
         age = int(time.time() - self.last_fetch) if self.last_fetch else 0
-        footer = f" {KEYS} | refreshed {age}s ago "
+        footer = f" {KEYS[self.view]} | refreshed {age}s ago "
         try:
-            scr.addnstr(height - 1, 0, footer.ljust(width - 1), width - 1, curses.A_REVERSE)
+            scr.addnstr(height - 1, 0, footer.ljust(max(0, width - 1)), max(0, width - 1), curses.A_REVERSE)
         except curses.error:
             pass
         scr.refresh()
@@ -289,6 +310,8 @@ def snapshot(data):
             "uptime_seconds": (health.get("uptime") or {}).get("seconds"),
             "database": (health.get("database") or {}).get("status"),
         },
+        "residents_available": data.get("residents") is not None,
+        "auth_required": bool(data.get("auth_required")),
         "tiers": {
             "total": tiers.get("total"),
             "earned": tiers.get("earned"),
@@ -324,6 +347,9 @@ def print_once(as_json=False):
     for text, _ in overview_lines(data):
         print(text)
     print(f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL")
+    notice = residents_notice(data)
+    if notice:
+        print(f"  {notice[0]}")
     for label, status, verdict, age in resident_rows(data):
         print(f"  {label:<18}{status:<10}{verdict:<10}{age}")
     return 0
