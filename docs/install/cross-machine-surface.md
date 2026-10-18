@@ -30,19 +30,19 @@ These values bake one operator's environment into code that ships to others. Eac
 
 | Status | File | Line | Value | Fix |
 |--------|------|------|-------|-----|
-| ✅ resolved | `scripts/ops/start_unitares.sh` | 14 | `UNITARES_MCP_ALLOWED_HOSTS` default = `192.168.1.151:*,192.168.1.164:*,100.96.201.46:*,gov.cirwel.org` | Default to empty (loopback-only); comment block documents opt-in env var |
-| ✅ resolved | `scripts/ops/start_unitares.sh` | 15 | `UNITARES_MCP_ALLOWED_ORIGINS` default = same LAN/Tailscale/`gov.cirwel.org` set | Default empty |
-| ✅ resolved | `scripts/ops/start_unitares.sh` | 37 | Prints `https://gov.cirwel.org/v1/tools` example | Generic `https://your-host.example/v1/tools` |
-| ✅ resolved | `scripts/ops/start_unitares.sh` | 121 | Prints `Tunnel: https://gov.cirwel.org/mcp/` unconditionally | Conditional print guarded by `CLOUDFLARE_TUNNEL_HOSTNAME` |
-| ✅ resolved | `scripts/ops/start_server.sh` | 60 | Same `gov.cirwel.org` example string | Generic example |
+| ✅ resolved | `scripts/ops/start_unitares.sh` | 14 | `UNITARES_MCP_ALLOWED_HOSTS` default = the operator's LAN, tailnet and public hostnames (`<lan-ip>:*,<tailnet-ip>:*,<public-host>`) | Default to empty (loopback-only); comment block documents opt-in env var |
+| ✅ resolved | `scripts/ops/start_unitares.sh` | 15 | `UNITARES_MCP_ALLOWED_ORIGINS` default = same LAN/tailnet/public-host set | Default empty |
+| ✅ resolved | `scripts/ops/start_unitares.sh` | 37 | Prints the operator's public `/v1/tools` URL as the example | Generic `https://your-host.example/v1/tools` |
+| ✅ resolved | `scripts/ops/start_unitares.sh` | 121 | Prints the operator's tunnel `/mcp/` URL unconditionally | Conditional print guarded by `CLOUDFLARE_TUNNEL_HOSTNAME` |
+| ✅ resolved | `scripts/ops/start_server.sh` | 60 | Same operator-host example string | Generic example |
 | ✅ resolved | `src/trusted_networks.py` | `BUILTIN_TRUSTED_NETWORKS` | Tailscale CGNAT range `100.64.0.0/10` built into the local-posture auth bypass (once judged fine as "the whole Tailscale spec"; it trusted one operator's network layout on every install) | Built-in set is loopback + RFC1918; an operator adds overlay ranges with `UNITARES_TRUSTED_NETWORKS` |
-| ⏸ deferred | `scripts/ops/health_watchdog.sh` | 28 | Hardcoded Pi Tailscale IP `100.79.215.83` | See *deferred rationale* below |
-| ✅ resolved | `requirements-core.txt` | 22 | Comment example uses `https://gov.cirwel.org/v1/tools` | Generic example |
+| ⏸ deferred | `scripts/ops/health_watchdog.sh` | 28 | Hardcoded Pi tailnet IP (`<pi-tailnet-ip>`) | See *deferred rationale* below |
+| ✅ resolved | `requirements-core.txt` | 22 | Comment example uses the operator's public `/v1/tools` URL | Generic example |
 | ✅ resolved | `scripts/ops/com.unitares.ipv6-loopback-proxy.plist.template` | 33 | Hardcoded `/Users/<operator>/projects/unitares/scripts/ops/ipv6_loopback_proxy.py` | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders; install header shows `sed` substitution |
 
 ### Deferred: `health_watchdog.sh:28`
 
-Applying the fix as written (`${ANIMA_HEALTH_URL:-}`, skip if unset) silently stops Kenny's running anima/Lumen monitoring because `com.unitares.health-watchdog.plist` does not currently set `ANIMA_HEALTH_URL` — it relied on the hardcoded default. Three paths forward:
+Applying the fix as written (`${ANIMA_HEALTH_URL:-}`, skip if unset) silently stops the operator's running anima/Lumen monitoring because `com.unitares.health-watchdog.plist` does not currently set `ANIMA_HEALTH_URL` — it relied on the hardcoded default. Three paths forward:
 
 1. Operator first adds `ANIMA_HEALTH_URL` env var to the live plist, then the script default is removed in a follow-up PR.
 2. Ship a gitignored `<workspace>/scripts/ops/operator.env.local` (proposed; not yet created) that the script sources if present; operator maintains their Pi IP there.
