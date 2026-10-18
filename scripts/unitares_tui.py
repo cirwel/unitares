@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UNITARES terminal dashboard: a live, read-only view over the `unitares` CLI.
 
-Usage: unitares tui [--interval SECONDS] [--once]
+Usage: unitares tui [--interval SECONDS] [--once [--json]] [--no-color]
 
 Data comes from `unitares status --json` and `unitares tools`, so URL, token
 and header handling stay in one place (scripts/unitares). Standard library only.
@@ -250,9 +250,9 @@ class App:
         scr.refresh()
 
 
-def main_curses(scr, interval):
+def main_curses(scr, interval, use_color=True):
     curses.curs_set(0)
-    if curses.has_colors():
+    if use_color and curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_GREEN, -1)
@@ -270,11 +270,51 @@ def main_curses(scr, interval):
             app.refresh()
 
 
-def print_once():
+def snapshot(data):
+    """Stable, minimal machine-readable view of `status --json` (schema v1)."""
+    health = data.get("health", {})
+    tiers = data.get("tiers", {})
+    return {
+        "schema": "unitares.tui.snapshot.v1",
+        "health": {
+            "status": health.get("status"),
+            "version": health.get("version"),
+            "build_sha": health.get("build_sha"),
+            "uptime_seconds": health.get("uptime", {}).get("seconds"),
+            "database": health.get("database", {}).get("status"),
+        },
+        "tiers": {
+            "total": tiers.get("total"),
+            "earned": tiers.get("earned"),
+            "counts": tiers.get("tiers"),
+        },
+        "residents": [
+            {
+                "label": r.get("label"),
+                "agent_id": r.get("agent_id"),
+                "status": r.get("status"),
+                "verdict": r.get("verdict"),
+                "silence_seconds": r.get("silence_seconds"),
+                "coherence": r.get("coherence"),
+                "risk_score": r.get("risk_score"),
+                "eisv": r.get("eisv"),
+            }
+            for r in data.get("residents", {}).get("residents", [])
+        ],
+    }
+
+
+def print_once(as_json=False):
     data, err = fetch_status()
     if data is None:
-        print(f"UNITARES unreachable: {err}", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"schema": "unitares.tui.snapshot.v1", "error": err}))
+        else:
+            print(f"UNITARES unreachable: {err}", file=sys.stderr)
         return 1
+    if as_json:
+        print(json.dumps(snapshot(data), indent=2))
+        return 0
     for text, _ in overview_lines(data):
         print(text)
     print(f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL")
@@ -287,10 +327,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="unitares tui", description=__doc__.split("\n")[0])
     parser.add_argument("--interval", type=float, default=10.0, help="refresh seconds (default 10)")
     parser.add_argument("--once", action="store_true", help="print one snapshot and exit (no TTY needed)")
+    parser.add_argument("--json", action="store_true", help="with --once: print a stable JSON snapshot")
+    parser.add_argument("--no-color", action="store_true", help="no color (also honored: NO_COLOR env)")
     args = parser.parse_args(argv)
+    if args.json and not (args.once or not sys.stdout.isatty()):
+        parser.error("--json needs --once (or a non-TTY stdout)")
     if args.once or not sys.stdout.isatty():
-        return print_once()
-    curses.wrapper(main_curses, max(2.0, args.interval))
+        return print_once(as_json=args.json)
+    use_color = not (args.no_color or os.environ.get("NO_COLOR"))
+    curses.wrapper(main_curses, max(2.0, args.interval), use_color)
     return 0
 
 

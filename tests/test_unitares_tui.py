@@ -66,3 +66,18 @@ def test_no_resident_name_branching():
     src = _PATH.read_text()
     for name in ("Lumen", "Sentinel", "Vigil", "Watcher", "Chronicler"):
         assert name not in src
+
+
+def test_snapshot_schema_is_stable_and_minimal():
+    snap = tui.snapshot(DATA)
+    assert snap["schema"] == "unitares.tui.snapshot.v1"
+    assert snap["health"]["version"] == "9.9.9"
+    assert snap["tiers"]["counts"] == {"verified": 1, "unknown": 9}
+    assert [r["label"] for r in snap["residents"]] == ["alpha", "beta"]
+    assert "history" not in snap["residents"][0]
+    assert "recent_writes" not in snap["residents"][0]
+
+
+def test_snapshot_tolerates_empty_status():
+    snap = tui.snapshot({})
+    assert snap["residents"] == [] and snap["health"]["status"] is None
