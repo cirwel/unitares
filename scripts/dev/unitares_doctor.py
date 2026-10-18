@@ -47,7 +47,9 @@ from typing import Callable
 
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "uuid-ossp", "vector")
+# Mirrors REQUIRED_EXTENSIONS in src/db/postgres_backend.py (this script stays
+# stdlib-only); tests/test_required_stack_docs.py keeps the two equal.
+REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "vector")
 # Which resident LaunchAgents this host is expected to run is deployment
 # configuration, not something the doctor can know: a fresh install has none.
 # Declare them as comma-separated slots; a slot may name alternatives with

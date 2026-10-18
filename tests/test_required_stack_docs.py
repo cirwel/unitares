@@ -7,6 +7,7 @@ Docker init SQL and named where the docs state requirements.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -33,6 +34,17 @@ def test_postgres_readme_lists_exactly_the_required_extensions():
     assert match, "db/postgres/README.md lost its 'Required extensions:' line"
     listed = re.findall(r"`([^`]+)`", match.group(1))
     assert listed == list(REQUIRED_EXTENSIONS)
+
+
+def test_doctor_checks_the_same_extensions():
+    tree = ast.parse((REPO / "scripts/dev/unitares_doctor.py").read_text())
+    doctor_exts = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "REQUIRED_PG_EXTENSIONS" for t in node.targets)
+    )
+    assert set(doctor_exts) == set(REQUIRED_EXTENSIONS)
 
 
 @pytest.mark.parametrize("doc", ["CLAUDE.md", "AGENTS.md"])

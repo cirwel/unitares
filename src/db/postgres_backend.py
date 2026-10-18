@@ -502,10 +502,9 @@ class PostgresBackend(
             missing = await self._missing_required_extensions(conn)
             if missing:
                 logger.error(
-                    "PostgreSQL is missing required extension(s) %s; the server "
-                    "runs degraded (health_check reports status=degraded). "
-                    "See db/postgres/README.md.",
-                    ", ".join(missing),
+                    f"PostgreSQL is missing required extension(s) {', '.join(missing)}; "
+                    "the server runs degraded (health_check reports status=degraded). "
+                    "See db/postgres/README.md."
                 )
 
             try:
