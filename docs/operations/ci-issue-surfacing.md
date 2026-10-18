@@ -26,7 +26,7 @@ producer that reads those issues into the governance record.
 ## Collectors
 
 - **`ruff`** (default) — `ruff check --output-format=json` lint diagnostics.
-  Diff-scoped on PRs. The diff-relevant code signal.
+  Diff-scoped on PRs that change `.py` files. The diff-relevant code signal.
 - **`doctor`** (opt-in) — `scripts/dev/unitares_doctor.py --json` fail/warn
   checks. Meaningful only on a host that *has* the governance stack; on a bare
   runner it would surface "no Postgres" noise, so it is **not** a default.
@@ -50,8 +50,9 @@ still-present finding will not re-open while the issue stays open.
 
 - **`workflow_dispatch`** — the experiment button. Opens/dedups GitHub issues.
   Run it from the Actions tab; optionally set the `collectors` input.
-- **`pull_request`** — runs the bridge against the PR's changed `.py` files and
-  writes a **job-summary table only**. No issue spam on every push.
+- **`pull_request`** — runs the bridge against the PR's changed `.py` files
+  (the whole repo when the PR changes none) and writes a **job-summary table
+  only**. No issue spam on every push.
 
 Findings are advisory: a finding never red-Xes the job. The bridge supports
 `--fail-on <severity>` for callers that want it as a gate, but the workflow
@@ -196,9 +197,9 @@ details decide what that search means:
   the escalation reads as one thread rather than two unrelated notes.
 - **Only the labelled forms of a fingerprint count as a match.** A row matches
   on the exact fingerprint tag, or on `finding-fingerprint: <slug>` or the HTML
-  marker in a text field. A bare occurrence of the slug does not. Three of the
-  four live emitters use a constant, word-shaped fingerprint
-  (`stranded-work-audit`, `sdk-release-sync`, `server-release-sync`), so a bare
+  marker in a text field. A bare occurrence of the slug does not. Several live
+  emitters use a constant, word-shaped fingerprint (`stranded-work-audit`,
+  `sdk-release-sync`, `server-release-sync`, `automerge-disarm-detector`), so a bare
   match let any pre-existing note whose prose contained that phrase suppress
   that guard's findings for good, and the full-text probe on those tokens is
   what retrieves exactly such notes. Slug boundaries still apply, so a longer
@@ -317,11 +318,13 @@ wiring decision is the operator's.
   write, a fingerprint refiled as a new issue after the previous one closed, is
   the case the pair key and the linked follow-up cover.
 - A non-open issue is reported and not stored, so `--state all` audits the
-  board rather than backfilling fixed findings. `knowledge(action='store')`
-  carries no `status` field, only `update` does, so a closed finding could only
-  enter the graph as an `open` entry with no resolution condition: unfinished
-  work to every later sweep until somebody closes it by hand. Backfilling one
-  is therefore a deliberate two-step act, a store followed by a
+  board rather than backfilling fixed findings. This producer passes no
+  `status` to `knowledge(action='store')`, which then stores the entry as
+  `open`, so a closed finding would enter the graph with no resolution
+  condition: unfinished work to every later sweep until somebody closes it by
+  hand. A proper close also carries a `closure_class` and its evidence, which
+  `update` accepts and `store` does not. Backfilling one is therefore a
+  deliberate two-step act, a store followed by a
   `knowledge(action='update', status=...)`, and not something this producer
   does on its own.
 - Every record is stored as `discovery_type: bug_found` at severity `medium`.
