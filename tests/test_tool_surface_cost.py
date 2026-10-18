@@ -138,7 +138,10 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # link measured 41,139 B on top of master. That parameter replaces a
 # describe_tool plus use_tool(tool_name='knowledge') round trip of ~10.6 KB
 # per linked finding, so the per-session listing pays about 180 B to save it.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 41_200
+# Raised 2026-10-18 to 41,400 B: consult's host_ids (a council of 2-3 CLI
+# hosts) measured 41,340 B, 201 B over master's 41,139 B. One council call
+# replaces two or three consult calls and their separate result envelopes.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_400
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

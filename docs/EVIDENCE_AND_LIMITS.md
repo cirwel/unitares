@@ -17,7 +17,7 @@ This page brings those results together with their sources, dates, and scope.
 | Cross-session retrieval | A second process retrieves the first process's resolved finding, including its author and recorded closure. | [Captured successor sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) |
 | Governed review | A paused agent's submission cannot resolve its own review over a standing reviewer objection; the objection remains pending for facilitation. | [Review constraint implementation](../src/dialectic_protocol.py) |
 | Review-driven corrections | Published findings can be traced to fixes for evidence grading, approval handling, and preservation of unresolved findings. | [September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md) |
-| Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [August 11 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
+| Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
 
 For predictive lift, pause benefit, and cross-operator verification, see the
 [evaluation boundaries](#evaluation-boundaries).
@@ -79,22 +79,32 @@ are retained historical counts, not a current fleet rate.
 
 ## Where the deployment numbers come from
 
-The [2026-08-11 frozen snapshot](PRODUCTION_SNAPSHOT.md) records sustained
-maintainer traffic and provides the queries behind the counts:
+The [2026-10-18 operational snapshot](PRODUCTION_SNAPSHOT.md) records sustained
+maintainer traffic. Its captured JSON and read-only SQL give the counts,
+event composition, and date ranges at one cutoff:
 
 | Record | Count and scope |
 |---|---|
-| Audit and telemetry | **4,573,890 events**, including **68,075 in the preceding week**. Session-resolution observations and cross-device-call records make up 91.4% of the total. |
-| State observations | **71,141 stored EISV rows** in `core.agent_state`. These are observations, not independent agents or trials. |
-| Recovery | **15 recorded self-recoveries** among 21 canonical, non-automatic lifecycle-resume records. |
-| Resident deployment | **6 long-running resident agents**, including one on a separate Raspberry Pi. The deployment also serves ephemeral process identities. |
-| Published trajectories | **32,181 labeled windows**: 20,655 overlapping real windows from one 39-day Raspberry Pi run and 11,526 synthetic windows. The [dataset card](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) documents windowing, generation, and per-row provenance; the [evaluation catalog](EVALUATION_INDEX.md#labelled-sets) indexes the set. |
+| Audit and telemetry | **6,593,939 retained events**, including **52,264 in the preceding week**. Session-resolution observations and cross-device-call records make up 88.29% of the total. |
+| State observations | **102,728 stored EISV rows** in `core.agent_state`. These are observations, not independent agents or trials. |
+| Recovery | **20 recorded self-recoveries** among 27 non-automatic lifecycle-resume records in the snapshot’s broadcaster-form subset; direct fallback/test records without a `type` field are excluded. |
+| Shared findings | **2,129 retained discovery records** in the knowledge graph. |
+| Process registry | **8,677 retained process-instance records**; 287 distinct identities emitted audit events in the preceding week. |
 
 This is a single-operator deployment whose agents also help build the system.
-The counts establish recorded activity and exercised paths; the event queries
-are not an uptime measurement. The
-[deployment data notes](operations/DEPLOYMENT_DATA_CAVEAT.md) explain the
-sampling and co-development context for reuse of these figures.
+The counts establish recorded activity and exercised paths. They include
+resident, ephemeral, development, and test/operational traffic; they are retained
+inventories, not lifetime totals, independent-user counts, or an uptime
+measurement. The [deployment data notes](operations/DEPLOYMENT_DATA_CAVEAT.md)
+explain the sampling and co-development context. The August snapshot remains
+available as a historical record on the same page.
+
+Separately, the published trajectory dataset contains **32,181 labeled
+windows**: 20,655 overlapping real windows from one 39-day Raspberry Pi run and
+11,526 synthetic windows. The [dataset card](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories)
+documents windowing, generation, and per-row provenance; the
+[evaluation catalog](EVALUATION_INDEX.md#labelled-sets) indexes the set. This
+published dataset was not regenerated for the October operational inventory.
 
 ### What is built
 
@@ -109,20 +119,26 @@ structural snapshots**; current capabilities and setup are described in
 | Surface | Recorded size |
 |---|---|
 | Complete tool registry | **43 registered tools**, plus 8 workflow aliases; 8 routers over 52 actions and a 70-entry legacy alias table |
-| Test suite | **13,614 test functions** across 776 files |
-| Database migrations | **67** |
-| Python modules | **524** across `src/`, `governance_core/`, and reference residents |
-| Documents | **226** |
+| Test suite | **18,193 test functions** across 965 files |
+| Database migrations | **76** |
+| Python modules | **567** across `src/`, `governance_core/`, and reference residents |
+| Documents | **328** |
 | Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Ecosystem](../README.md#ecosystem) |
 
-The tool count was refreshed 2026-09-20 at `76a68c02`; the other counts were
-recorded 2026-09-09 at `e017c45e`. Methods: an AST walk for `def test_*` in
-tracked `test_*.py` files; tracked files under `db/postgres/migrations/`;
-tracked `.py` files under `src/`, `governance_core/`, and `agents/`; and tracked
-`.md` files under `docs/`. Tool, router, action, and alias counts come from
-`src/tool_meta.py` and router `ACTION_FIELDS` declarations. The complete
-catalog is callable on every transport; the default initial listing is
-progressive, with omitted names accessible through `use_tool` after discovery.
+The tool/router/alias counts were recorded 2026-09-20 at `76a68c02` from
+`src/tool_meta.py` and router `ACTION_FIELDS` declarations. The test, migration,
+module, and document counts were recorded 2026-10-18 from the committed tree at
+`dd793928ad5ebc136a35815fbfd510c666f2e982`; the
+[repository inventory](evaluations/production-snapshots/2026-10-18-repository.json)
+records the counting methods. Test counts include synchronous and asynchronous
+`test_*` definitions in tracked `tests/**/test_*.py` files, including nested
+definitions; they are source counts, not collected or passing test cases.
+Migration, module, and document counts use tracked paths in the stated tree.
+Companion repositories are listed in the linked ecosystem overview.
+
+The complete catalog is callable on every transport; the default initial
+listing is progressive, with omitted names accessible through `use_tool` after
+discovery.
 
 </details>
 
@@ -149,6 +165,16 @@ Two high-severity advisories published on 2026-10-05 document fixes in 3.2.0:
   bypass was reachable from a browser page through CSRF or DNS rebinding.
   [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v)
 
+Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0.
+Neither credits an outside finder:
+
+- **Lifecycle actions on another agent:** any bound client could archive,
+  delete or unpause another agent, and an agent could give itself the operator
+  label. [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-r9q5-7j8h-82rr)
+- **Identity from a UUID:** an agent's identity could be assumed from its UUID
+  through the derived session id.
+  [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-6fqf-5ccj-vcc4)
+
 ## Evaluation boundaries
 
 ### Predictive lift
@@ -164,11 +190,21 @@ standing AUC ceiling.
 
 After the frozen cutoff, recurring automation exposed live discrimination
 output: the ablation watchdog completed 42 of 51 executions and the dogfood
-guard completed 43 of 52. Those jobs are paused. The fixed
+guard completed 43 of 52. Those jobs are paused. The
 [2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 remains an operational decision rule, but it is not the only post-registration
 read and cannot be described as clean single-read blinding; its report must
 disclose the interim access and read-specific power.
+
+The read was amended on 2026-10-15, before any read in its registered units had
+run. It now admits only data recorded before `2026-10-15T13:45Z`, a boundary set
+no later than the first deployment of a change to the live EISV update path; that
+change deployed about 30 minutes afterwards. The
+[stop rule's instrument-change record](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)
+documents both times. The 2026-12-01 result must therefore be described as **amended after
+interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
+eligible as a result. The cluster threshold is not lowered, so a shortfall
+closes the read as inconclusive, not as a measured null.
 
 An operational `FAIL` can close a scheduled line of work without scientifically
 refuting the underlying capability. The

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-10-18",
+  "repository": "cirwel/unitares",
+  "commit": "dd793928ad5ebc136a35815fbfd510c666f2e982",
+  "method": "Enumerate committed paths with git ls-tree -r --name-only COMMIT; read contents with git show COMMIT:PATH. Working-tree edits excluded.",
+  "test_source": {
+    "files": 965,
+    "synchronous_definitions": 12697,
+    "asynchronous_definitions": 5496,
+    "total_definitions": 18193,
+    "parse_errors": 0,
+    "method": "AST walk over tracked tests/**/test_*.py; count FunctionDef and AsyncFunctionDef nodes whose names start with test_, including nested definitions. Not a count of collected or passing pytest cases."
+  },
+  "migrations": {
+    "files": 76,
+    "method": "Tracked files under db/postgres/migrations/; all 76 have .sql suffix."
+  },
+  "python_modules": {
+    "files": 567,
+    "by_directory": {
+      "src": 417,
+      "governance_core": 13,
+      "agents": 137
+    },
+    "method": "Tracked .py files under src/, governance_core/, agents/."
+  },
+  "documents": {
+    "files": 328,
+    "method": "Tracked .md files under docs/."
+  }
+}
