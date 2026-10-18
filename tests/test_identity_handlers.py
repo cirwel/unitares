@@ -2404,6 +2404,7 @@ class TestHandleOnboardV2:
                 result = await handle_identity_adapter({
                     "client_session_id": old_session_key,
                     "force_new": True,
+                    "model_type": "claude-opus-4",
                 })
             data = parse_result(result)
             new_uuid = data["uuid"]
@@ -2426,11 +2427,74 @@ class TestHandleOnboardV2:
             upsert_id_kwargs = mock_db.upsert_identity.await_args.kwargs
             assert upsert_id_kwargs.get("spawn_reason") != "old_spawn_reason"
             meta_written = upsert_id_kwargs.get("metadata") or {}
+            assert meta_written.get("public_agent_id") == data["agent_id"]
             assert meta_written.get("public_agent_id") != "OldDisplay_20260101"
+            assert meta_written.get("label") and meta_written["label"].endswith(f"_{new_uuid[:8]}")
             assert meta_written.get("label") != "OldAgentLabel"
+
+            # Post-restart scenario: old binding survives ONLY in Redis
+            # (_session_identities is empty), and caller invokes force_new=true
+            # on an unkeyed session key. New agent must still persist its own
+            # public_agent_id and auto-label under its own keyed session id.
+            _session_identities.clear()
+            unkeyed_old = "unkeyed-redis-only-slot"
+            mock_redis.get.side_effect = lambda key: (
+                {
+                    "agent_id": old_uuid,
+                    "display_agent_id": "OldDisplay_20260101",
+                    "label": "OldAgentLabel",
+                    "spawn_reason": "old_spawn_reason",
+                }
+                if key == unkeyed_old
+                else None
+            )
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="restart-ident-2707", metadata={}),
+            ]
+            restart_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            restart_data = parse_result(restart_res)
+            restart_uuid = restart_data["uuid"]
+            restart_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert restart_meta.get("public_agent_id") == restart_data["agent_id"]
+            assert restart_meta.get("label") and restart_meta["label"].endswith(f"_{restart_uuid[:8]}")
+
+            # Plain arg-less identity() on a fresh transport must also persist
+            # its own public_agent_id and auto-label.
+            _session_identities.clear()
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="plain-ident-2707", metadata={}),
+            ]
+            plain_res = await handle_identity_adapter({"model_type": "claude-opus-4"})
+            plain_data = parse_result(plain_res)
+            plain_uuid = plain_data["uuid"]
+            plain_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert plain_meta.get("public_agent_id") == plain_data["agent_id"]
+            assert plain_meta.get("label") and plain_meta["label"].endswith(f"_{plain_uuid[:8]}")
 
             # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
             # refuses to hydrate handles from old_uuid's cached session entry.
+            _session_identities[old_session_key] = {
+                "bound_agent_id": old_uuid,
+                "agent_uuid": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "public_agent_id": "OldDisplay_20260101",
+                "agent_label": "OldAgentLabel",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
             direct_uuid = str(uuid.uuid4())
             mock_db.upsert_agent.reset_mock()
             mock_db.upsert_identity.reset_mock()

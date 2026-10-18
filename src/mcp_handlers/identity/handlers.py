@@ -1300,12 +1300,10 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
 
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
-    # taxonomy of continuity". Mirrors the gate in handle_onboard_v2 (~L1197);
-    # without it, arg-less identity() falls through to IP:UA-pin resolution
-    # and silently re-binds to the prior session, which is the resolution
-    # path S13 retires for the unauthenticated case. `name` is a cosmetic
-    # display label (PATH 2.5 removed 2026-04-17), never a lookup or proof
-    # signal (#2708).
+    # taxonomy of continuity". Parallels _s13_freshness_gate in
+    # handle_onboard_v2, except that here cosmetic `name` is not counted as a
+    # proof signal (#2708) — `identity(name="X")` without session/UUID/token
+    # proof mints fresh and applies the label to the new agent.
     _has_proof_signal = bool(
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
@@ -2055,10 +2053,15 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
     """S13 v2-ontology gate: arg-less onboard from a fresh process-instance
     mints fresh by default per identity.md §"Layered taxonomy of continuity".
 
-    Caller opts back into resume by passing any proof signal — explicit
-    force_new flag, ownership proof (continuity_token, agent_uuid, agent_id),
-    transport-bound session signal (client_session_id), or display name.
-    Without any signal we have nothing to honestly resume to; the legacy
+    A declared ``parent_agent_id`` always promotes ``force_new=True`` (unless
+    already set), even when accompanied by a proof signal such as ``name`` or
+    ``client_session_id``, because declaring a parent on onboard is a fresh
+    child-mint lineage declaration (#2670).
+
+    Otherwise, caller opts back into resume by passing any proof signal —
+    explicit force_new flag, ownership proof (continuity_token, agent_uuid,
+    agent_id), transport-bound session signal (client_session_id), or display
+    name. Without any signal we have nothing to honestly resume to; the legacy
     IP:UA pin path was the performative fill-in this gate retires for the
     arg-less case. Plugin-side complement of this gate landed as
     unitares-governance-plugin#17 (S11) on 2026-04-21.

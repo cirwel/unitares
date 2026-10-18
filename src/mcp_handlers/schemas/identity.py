@@ -106,11 +106,14 @@ class OnboardParams(AgentIdentityMixin):
         description=(
             "Resume existing identity when a proof signal is present "
             "(continuity_token, agent_uuid, agent_id, client_session_id, "
-            "or name). An arg-less onboard() with no proof signal is "
-            "refused under strict identity (the default) with "
-            "lineage_declaration_required: pass force_new=true for a fresh "
-            "identity. A server with STRICT_IDENTITY_REQUIRED=false sets "
-            "force_new=true for that call instead (identity.md v2, S13)."
+            "or name) and parent_agent_id is not declared. Declaring "
+            "parent_agent_id promotes the call to force_new=true so lineage "
+            "declarations always mint a fresh child (#2670). An arg-less "
+            "onboard() with no proof signal is refused under strict identity "
+            "(the default) with lineage_declaration_required: pass "
+            "force_new=true for a fresh identity. A server with "
+            "STRICT_IDENTITY_REQUIRED=false sets force_new=true for that call "
+            "instead (identity.md v2, S13)."
         )
     )
     force_new: Union[bool, str, None] = Field(
