@@ -81,3 +81,32 @@ def test_snapshot_schema_is_stable_and_minimal():
 def test_snapshot_tolerates_empty_status():
     snap = tui.snapshot({})
     assert snap["residents"] == [] and snap["health"]["status"] is None
+
+
+def test_null_panels_do_not_crash():
+    # Warmup, auth-gated and fresh-install responses carry null panels.
+    for data in (
+        {"health": None, "tiers": None, "residents": None},
+        {"health": {"status": "ok", "uptime": None, "database": None}, "tiers": {"tiers": None}, "residents": {"residents": None}},
+        {},
+    ):
+        assert tui.overview_lines(data)
+        assert tui.resident_rows(data) == []
+        assert tui.snapshot(data)["residents"] == []
+
+
+def test_resident_with_null_fields_renders():
+    resident = {
+        "label": "gamma", "status": None, "verdict": None, "silence_seconds": None,
+        "eisv": {"E": None, "I": 0.4, "S": None, "V": None},
+        "coherence": None, "risk_score": None,
+        "history": [{"verdict": None}, None, {"verdict": "guide"}],
+        "recent_writes": [{"severity": None, "summary": None}],
+    }
+    data = {"residents": {"residents": [resident]}}
+    assert tui.resident_rows(data) == [("gamma", "?", "-", "-")]
+    detail = [t for t, _ in tui.resident_detail_lines(resident)]
+    assert any("I integrity" in line for line in detail)
+    assert not any("E energy" in line for line in detail)
+    assert any(line.endswith("check-ins: ? ? G") for line in detail)
+    assert tui.snapshot(data)["residents"][0]["verdict"] is None

@@ -51,8 +51,12 @@ def fetch_tools():
     return out.splitlines(), err
 
 
+def is_num(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def fmt_age(seconds):
-    if seconds is None:
+    if not is_num(seconds):
         return "-"
     seconds = int(seconds)
     if seconds < 90:
@@ -73,10 +77,10 @@ def bar(value, width=20):
 
 def overview_lines(data):
     """Return [(text, color_key)] for the overview screen."""
-    health = data.get("health", {})
-    db = health.get("database", {}).get("status", "?")
-    up = health.get("uptime", {}).get("formatted", "?")
-    tiers = data.get("tiers", {})
+    health = data.get("health") or {}
+    db = (health.get("database") or {}).get("status", "?")
+    up = (health.get("uptime") or {}).get("formatted", "?")
+    tiers = data.get("tiers") or {}
     out = [
         (
             f"UNITARES {health.get('status', '?')} - v{health.get('version', '?')}"
@@ -84,7 +88,7 @@ def overview_lines(data):
             1 if health.get("status") == "ok" else 3,
         )
     ]
-    counts = tiers.get("tiers", {})
+    counts = tiers.get("tiers") or {}
     if counts:
         parts = " | ".join(f"{k} {v}" for k, v in counts.items())
         out.append((f"Agents: {tiers.get('total', '?')} total - earned {tiers.get('earned', '?')}", 0))
@@ -96,42 +100,46 @@ def overview_lines(data):
 
 
 def resident_rows(data):
-    residents = data.get("residents", {}).get("residents", [])
     return [
         (
-            r.get("label", "?"),
-            r.get("status", "?"),
-            r.get("verdict", "-"),
+            str(r.get("label") or "?"),
+            str(r.get("status") or "?"),
+            str(r.get("verdict") or "-"),
             fmt_age(r.get("silence_seconds")),
         )
-        for r in residents
+        for r in resident_list(data)
     ]
+
+
+def resident_list(data):
+    """The resident entries, tolerating null panels (warmup, auth-gated, fresh install)."""
+    return [r for r in ((data or {}).get("residents") or {}).get("residents") or [] if isinstance(r, dict)]
 
 
 def resident_detail_lines(resident):
     eisv = resident.get("eisv") or {}
     lines = [
-        (f"{resident.get('label', '?')}  status {resident.get('status', '?')}  "
-         f"verdict {resident.get('verdict', '-')}", STATUS_COLOR.get(resident.get("status"), 0)),
-        (f"agent_id   {resident.get('agent_id', '?')}", 0),
+        (f"{resident.get('label') or '?'}  status {resident.get('status') or '?'}  "
+         f"verdict {resident.get('verdict') or '-'}", STATUS_COLOR.get(resident.get("status"), 0)),
+        (f"agent_id   {resident.get('agent_id') or '?'}", 0),
         (f"last check-in {fmt_age(resident.get('silence_seconds'))} ago via "
-         f"{resident.get('last_checkin_source', '?')}"
+         f"{resident.get('last_checkin_source') or '?'}"
          f"{' (event-driven)' if resident.get('event_driven') else ''}", 0),
         (f"silence threshold {fmt_age(resident.get('silence_threshold_seconds'))}", 0),
         ("", 0),
     ]
     for key, name in (("E", "energy"), ("I", "integrity"), ("S", "entropy")):
-        if key in eisv:
+        if is_num(eisv.get(key)):
             lines.append((f"{key} {name:<9} {bar(eisv[key])}", 0))
-    if "V" in eisv:
+    if is_num(eisv.get("V")):
         lines.append((f"V valence   {eisv['V']:+.3f}  (EMA of E - I, range -1..1)", 0))
-    if resident.get("coherence") is not None:
+    if is_num(resident.get("coherence")):
         lines.append((f"coherence   {bar(resident['coherence'])}", 0))
-    if resident.get("risk_score") is not None:
+    if is_num(resident.get("risk_score")):
         lines.append((f"risk        {bar(resident['risk_score'])}", 0))
     history = resident.get("history") or []
     if history:
-        verdicts = [h.get("verdict", "?") for h in history[-30:]]
+        verdicts = [str((h or {}).get("verdict") or "?") for h in history[-30:]]
         lines.append(("", 0))
         lines.append((f"last {len(verdicts)} check-ins: " + " ".join(v[0].upper() for v in verdicts), 0))
     writes = resident.get("recent_writes") or []
@@ -139,7 +147,7 @@ def resident_detail_lines(resident):
         lines.append(("", 0))
         lines.append(("Recent findings:", 0))
         for w in writes[:5]:
-            lines.append((f"  [{w.get('severity', '?')}] {w.get('summary', '')}", 2))
+            lines.append((f"  [{w.get('severity') or '?'}] {w.get('summary') or ''}", 2))
     return lines
 
 
@@ -160,9 +168,7 @@ class App:
             self.tools, self.tools_error = fetch_tools()
 
     def residents(self):
-        if not self.data:
-            return []
-        return self.data.get("residents", {}).get("residents", [])
+        return resident_list(self.data)
 
     def handle(self, key):
         """Return False to quit."""
@@ -272,16 +278,16 @@ def main_curses(scr, interval, use_color=True):
 
 def snapshot(data):
     """Stable, minimal machine-readable view of `status --json` (schema v1)."""
-    health = data.get("health", {})
-    tiers = data.get("tiers", {})
+    health = data.get("health") or {}
+    tiers = data.get("tiers") or {}
     return {
         "schema": "unitares.tui.snapshot.v1",
         "health": {
             "status": health.get("status"),
             "version": health.get("version"),
             "build_sha": health.get("build_sha"),
-            "uptime_seconds": health.get("uptime", {}).get("seconds"),
-            "database": health.get("database", {}).get("status"),
+            "uptime_seconds": (health.get("uptime") or {}).get("seconds"),
+            "database": (health.get("database") or {}).get("status"),
         },
         "tiers": {
             "total": tiers.get("total"),
@@ -299,7 +305,7 @@ def snapshot(data):
                 "risk_score": r.get("risk_score"),
                 "eisv": r.get("eisv"),
             }
-            for r in data.get("residents", {}).get("residents", [])
+            for r in resident_list(data)
         ],
     }
 
