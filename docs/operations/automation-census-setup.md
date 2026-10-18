@@ -27,8 +27,11 @@ and registered adaptive-versus-fixed evaluation, see
 [Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
 
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
-no dependencies). The operator's live install is a copy on `PATH`
-(`~/.local/bin/unitares-automations`); this repo copy is canonical.
+no dependencies). The operator's live install is a symlink on `PATH`
+(`~/.local/bin/unitares-automations`) into a checkout of this repo at
+`~/.local/share/cirwel/unitares-ops`. Each census run checks that entry and
+adds a `self:` warning if it is a copy or points anywhere else; that expected
+path is fixed in the tool, not env-overridable.
 
 ## What shows up automatically
 
@@ -63,10 +66,13 @@ auto-discovered.
 
 1. **Get the tool onto `PATH`** (or run it from the repo):
    ```bash
-   install -m 755 scripts/ops/unitares-automations ~/.local/bin/unitares-automations
+   ln -sfn "$PWD/scripts/ops/unitares-automations" ~/.local/bin/unitares-automations
    ```
-2. **Point it at your world.** All locations are env-overridable — nothing is
-   hardcoded to one user:
+   Use a symlink, not a copy. Unless the checkout lives at
+   `~/.local/share/cirwel/unitares-ops`, the census still reports a `self:`
+   warning that the symlink is not the canonical path.
+2. **Point it at your world.** These locations are env-overridable (the
+   self-install check path above is not):
    | Env var | Default | Purpose |
    |---|---|---|
    | `--projects-root` (flag) | `~/projects` | where to scan for GitHub Actions |

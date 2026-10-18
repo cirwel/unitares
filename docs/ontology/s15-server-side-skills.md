@@ -242,7 +242,7 @@ Three layers:
 
 Cache invalidation reconciles the index. Neither top-level field is complete on its own, and the bare index is cheap (metadata only, no bodies), so a client that caches skills re-reads `skills()` on each poll and compares per skill: drop any cached skill the index no longer lists (first removal: `discord-bridge`, 2026-09-27); re-fetch with `skills(name=...)` any skill whose `content_hash` differs; and take `last_verified`, `version`, `stale` and the other metadata from the index itself. `registry_hash` may be used only to skip body re-fetches when it is unchanged, never to skip the metadata comparison. The shipped adapter, the plugin's `_fetch_skills.py`, fetches single skills by `name` with a TTL cache, so it re-reads each skill it uses and is unaffected. The `since_version` parameter description in `SkillsParams` still says "cache invalidation" and is left for the next interface-contract release, because a parameter description is inside the hashed schema.
 
-**Staleness signal** flows from `source_files`. If any file in `source_files` has commits after `last_verified`, the skill is potentially stale. This is computed by the server on read, not stored. Cheap (`git log --since` is O(log n)).
+**Staleness signal** is date arithmetic: `stale` is true when the UTC date minus the effective `last_verified` (the frontmatter date, or a newer attestation `verified_date` that vouches for the served text) exceeds `freshness_days`. This is computed by the server on read, not stored. `source_files` is passed through unchanged; git-log staleness against it (commits after `last_verified`) is not implemented.
 
 ## 8. Risks and breakage
 
