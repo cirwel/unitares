@@ -1426,6 +1426,14 @@ cmd_update() {
     _report_health "Updated $current → $target."
 }
 
+cmd_tui() {
+    # Live terminal view over `unitares status --json` (scripts/unitares_tui.py).
+    local self dir
+    self=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")
+    dir=$(dirname "$self")
+    exec python3 "$dir/unitares_tui.py" "$@"
+}
+
 cmd_help() {
     cat <<'EOF'
 UNITARES CLI — REST wrapper for the governance MCP server
@@ -1443,6 +1451,8 @@ Install (Docker Compose install in this checkout):
   logs [service]                    Follow logs (default: governance-mcp)
 
 Commands:
+  tui [--interval N] [--once]       Live terminal view: residents, EISV, tools
+                                    (read-only; wraps `status --json`)
   agent <id|label> [--json]         Drill into one agent: state, verdict,
                                     composition, trajectory
   status [--json] [--no-release]    One operator screen: server, release
@@ -1486,6 +1496,7 @@ EOF
 
 case "${1:-help}" in
     status|st)   shift; cmd_status "$@" ;;
+    tui)         shift; cmd_tui "$@" ;;
     agent|a)     shift; cmd_agent "$@" ;;
     onboard|o)   shift; cmd_onboard "$@" ;;
     update)      shift; cmd_update "$@" ;;
