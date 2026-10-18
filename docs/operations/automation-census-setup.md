@@ -27,8 +27,11 @@ and registered adaptive-versus-fixed evaluation, see
 [Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
 
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
-no dependencies). The operator's live install is a copy on `PATH`
-(`~/.local/bin/unitares-automations`); this repo copy is canonical.
+no dependencies). The operator's live install is a symlink on `PATH`
+(`~/.local/bin/unitares-automations`) into a checkout of this repo at
+`~/.local/share/cirwel/unitares-ops`. Each census run checks that entry and
+adds a `self:` warning if it is a copy or points anywhere else; that expected
+path is fixed in the tool, not env-overridable.
 
 ## What shows up automatically
 
@@ -48,7 +51,7 @@ So a host only "sees" the schedulers it actually has:
 | `crontab` | your user crontab | any unix |
 | `github-actions` | `.github/workflows/*` under `--projects-root` | any repo host |
 | `systemd` | `--user` + system timers via `systemctl list-timers` | **Linux** (see caveat) |
-| `launchd` | `~/Library/LaunchAgents/*` | macOS only |
+| `launchd` | `~/Library/LaunchAgents/*`, reconciled with the user domain's loaded/disabled state and latest exit code | macOS only |
 | `claude` | `~/.claude/tasks` (scheduler `claude-tasks`) | Claude Code users |
 | `codex` / `hermes` | `~/.codex/automations`, `~/.hermes/cron/jobs.json` | those tools only |
 | `claude-hooks` | hook commands in `~/.claude/settings.json` / `settings.local.json` and installed Claude/Codex plugins' hook declarations, plus orphaned executables in `~/.claude/hooks` and plugin `hooks/` dirs | Claude Code / Codex plugin users |
@@ -59,14 +62,30 @@ Anything *not* in that list (Kubernetes CronJobs, Airflow DAGs, Jenkins, Tempora
 …) is still representable via the **external escape hatch** below — it just isn't
 auto-discovered.
 
+On macOS, a plist on disk is configuration, not proof that launchd loaded it.
+The collector reads `launchctl list` (rather than `launchctl print`, whose
+environment block can contain credentials) and `launchctl print-disabled`.
+It reports an enabled plist absent from the loaded domain as `inactive`, a
+provably missing executable/interpreter script as `missing`, and the latest
+launchd exit as `last_status`. The normalized `scheduler_state`,
+`scheduler_last_exit_code`, and `scheduler_pid` fields retain that provenance.
+Wrapper receipts still supply timestamps and messages, but cannot overrule a
+newer contradictory launchd exit. A disproven `running` receipt is flagged as
+stale while its completion remains `unknown`; if its scheduler definition is
+gone, it remains visible as an `orphaned` attention row instead of disappearing
+from the census.
+
 ## Setup (any host)
 
 1. **Get the tool onto `PATH`** (or run it from the repo):
    ```bash
-   install -m 755 scripts/ops/unitares-automations ~/.local/bin/unitares-automations
+   ln -sfn "$PWD/scripts/ops/unitares-automations" ~/.local/bin/unitares-automations
    ```
-2. **Point it at your world.** All locations are env-overridable — nothing is
-   hardcoded to one user:
+   Use a symlink, not a copy. Unless the checkout lives at
+   `~/.local/share/cirwel/unitares-ops`, the census still reports a `self:`
+   warning that the symlink is not the canonical path.
+2. **Point it at your world.** These locations are env-overridable (the
+   self-install check path above is not):
    | Env var | Default | Purpose |
    |---|---|---|
    | `--projects-root` (flag) | `~/projects` | where to scan for GitHub Actions |

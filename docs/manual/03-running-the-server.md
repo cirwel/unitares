@@ -93,25 +93,26 @@ python src/mcp_server.py --port 8767
    export UNITARES_MCP_BEARER_TOKENS="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
    ```
 
-   Comma-separated values rotate without a restart. For OAuth 2.1 with Dynamic Client Registration, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-claudeai-perplexity-etc) and `src/oauth_provider.py`). OAuth protects the `/mcp` resource by default; use `UNITARES_OAUTH_RESOURCE_URL` only if a proxy exposes it at a different public URL.
+   Comma-separated values let an old and a new token overlap during a rotation; the server reads the list from its environment, so a changed list takes effect on restart. For OAuth 2.1 with Dynamic Client Registration, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-claudeai-perplexity-etc) and `src/oauth_provider.py`). OAuth protects the `/mcp` resource by default; use `UNITARES_OAUTH_RESOURCE_URL` only if a proxy exposes it at a different public URL.
 
 After changing any of these, restart and sanity-check from outside:
 
 ```bash
 curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
-# 403 gone → Host gate open. 401 → auth gate on (expected before the client sends a valid bearer/OAuth access token).
+# 401 → auth gate on (expected here: this request carries no bearer/OAuth access token, so the Host check never runs).
+# With a valid credential: 421 → Host not allowlisted, 403 → Origin rejected.
 ```
 
 ## 3.6 Key environment variables
 
 | Variable | Effect |
 |---|---|
-| `DB_BACKEND` / `DB_POSTGRES_URL` | Database backend and DSN |
+| `DB_POSTGRES_URL` | PostgreSQL DSN (PostgreSQL is the only database backend) |
 | `DB_AGE_GRAPH` | AGE graph name (e.g. `governance_graph`) |
 | `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (default, FTS) or `age` (cypher-style traversal) |
 | `UNITARES_BIND_ALL_INTERFACES` / `UNITARES_MCP_HOST` | Bind beyond loopback |
 | `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS` | Host/Origin allowlists |
-| `UNITARES_MCP_BEARER_TOKENS` | Bearer auth (comma-separated, hot-rotatable) |
+| `UNITARES_MCP_BEARER_TOKENS` | Bearer auth (comma-separated, so old and new tokens can overlap during a rotation) |
 | `UNITARES_OAUTH_ISSUER_URL` | Enable OAuth 2.1 / DCR |
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
@@ -134,7 +135,7 @@ launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 launchctl list | grep unitares
 ```
 
-The template sets `UNITARES_BIND_ALL_INTERFACES=1` and passes no `--host`, so the rendered plist binds `0.0.0.0`, not loopback — remove that key, or set `UNITARES_MCP_HOST=127.0.0.1`, for a loopback-only install (`default_listen_host` in `src/mcp_listen_config.py`). Its `DB_POSTGRES_URL` names the `postgres` role and password rather than the user/password-free trust-auth DSN. Other tunables are inline at the top of the rendered plist.
+The template sets `UNITARES_BIND_ALL_INTERFACES=0` and passes no `--host`, so the rendered plist binds `127.0.0.1` — set that key to `1`, or set `UNITARES_MCP_HOST`, only when LAN clients connect directly; a tunnel or reverse proxy on the same host does not need it (`default_listen_host` in `src/mcp_listen_config.py`). Its `DB_POSTGRES_URL` names the `postgres` role and password rather than the user/password-free trust-auth DSN. Other tunables are inline at the top of the rendered plist.
 
 ---
 

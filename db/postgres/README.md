@@ -42,11 +42,17 @@ createdb -h localhost -p 5432 -U postgres governance
 export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
 export DB_AGE_GRAPH=governance_graph
 
-psql "$DB_POSTGRES_URL" -f db/postgres/init-extensions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/schema.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/partitions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/graph_schema.sql
+# Dry-run by default; --apply executes the DDL
+scripts/install/bootstrap_postgres.sh --apply --db-url "$DB_POSTGRES_URL"
 ```
+
+The bootstrap applies, in order: `init-extensions.sql`, `schema.sql`, `knowledge_schema.sql`, both embeddings schemas, the pre-partition numbered migrations, `partitions.sql`, `graph_schema.sql`, the remaining numbered migrations, and finally `scripts/dev/apply_migrations.py --check`. Applying only a subset of these files leaves the server able to boot but missing tables and columns it depends on.
+
+Required extensions: `age`, `vector`, `pgcrypto`, `pg_trgm`. The list is
+`REQUIRED_EXTENSIONS` in `src/db/postgres_backend.py`; the server logs any that
+are missing at startup and `health_check` reports `status: degraded` with
+`missing_extensions`. `tests/test_required_stack_docs.py` fails if this line or
+`init-extensions.sql` falls out of step with that tuple.
 
 ### Configure Environment
 
@@ -108,10 +114,10 @@ python scripts/migration/reembed_corpus.py --rebuild --dry-run
 ### Relational Tables (core schema)
 
 - `core.agents` - Agent identity and metadata
-- `core.agent_sessions` - Session bindings (fast lookup)
+- `core.sessions` - Persistent session bindings (live bindings are held mainly in Redis)
 - `core.dialectic_sessions` - Dialectic recovery sessions
 - `core.dialectic_messages` - Dialectic session messages (thesis/antithesis/synthesis)
-- `core.identities` - (Legacy) Identity records for backward compatibility
+- `core.identities` - Identity registry (api_key_hash, lineage via parent_agent_id/spawn_reason, status, metadata), one row per `core.agents` row
 - `core.schema_migrations` - Schema version tracking
 
 ### Knowledge Schema (knowledge schema)

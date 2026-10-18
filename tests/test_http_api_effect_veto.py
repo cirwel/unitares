@@ -226,3 +226,44 @@ def test_db_error_returns_503_so_caller_fails_closed():
 def test_missing_proposer_is_422():
     r = _post(body={})
     assert r.status_code == 422
+
+
+# ── lifecycle status — revocation at the issuer's own enforcement point ──────
+# An archived, disabled, deleted or paused identity must not commit an effect
+# even when its last check-in was clean and its continuity token is unexpired:
+# archival does not revoke tokens, so the veto is where it takes effect.
+
+@pytest.mark.parametrize("status", ["archived", "disabled", "deleted", "paused"])
+def test_inactive_identity_is_vetoed_despite_clean_verdict_and_strong_token(status):
+    r = _post({**_CLEAN, "identity_status": status, "state_present": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["vetoed"] is True
+    assert body["tier_ok"] is True
+    assert f"identity_status={status}" in body["reason"]
+
+
+@pytest.mark.parametrize("status", ["archived", "disabled", "deleted", "paused"])
+def test_inactive_identity_without_state_is_vetoed(status):
+    # An identity with no governance state takes the unknown-proposer branch,
+    # where §6 fails open; lifecycle status must still apply there.
+    r = _post({"verdict": None, "action": None, "risk_score": None,
+               "identity_status": status, "state_present": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["vetoed"] is True
+    assert f"identity_status={status}" in body["reason"]
+
+
+@pytest.mark.parametrize("status", ["active", "waiting_input"])
+def test_active_identity_is_allowed(status):
+    r = _post({**_CLEAN, "identity_status": status, "state_present": True})
+    assert r.json()["vetoed"] is False
+
+
+def test_identity_without_state_keeps_unknown_proposer_semantics():
+    r = _post({"verdict": None, "action": None, "risk_score": None,
+               "identity_status": "active", "state_present": False})
+    body = r.json()
+    assert body["vetoed"] is False
+    assert body["reason"] == "no_governance_state"

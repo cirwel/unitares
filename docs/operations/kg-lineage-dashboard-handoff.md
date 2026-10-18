@@ -169,8 +169,7 @@ expander hides after a probe (worse UX).
   `supersedes` / `superseded_by` / `related` resolve and are depth-bounded. Add a
   cycle / depth-cap case so a bad chain can't hang the read.
 - `pytest tests/test_dashboard_redesign_route.py tests/test_dashboard.py`
-- `cd dashboard && npm test && npm run lint && npm run format:check`
-  (the `format:check` gate bit a prior dashboard PR — prettier the JS).
+- `cd dashboard && npm test && npm run lint`
 - Verify in a **real browser** on a discovery with a known supersedes chain
   (post-#991, once a real supersession has created an edge — query for a
   discovery that is the target of a `SUPERSEDES` edge, not merely

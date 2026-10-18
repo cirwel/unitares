@@ -12,7 +12,9 @@ development stack, not a hardened local production deployment.**
 
 - Every service (`postgres-age`, `redis`, `lease-plane`, `governance-mcp`)
   runs with `security_opt: [no-new-privileges:true]` and `cap_drop: [ALL]`.
-  Verified against `docker compose up`: all four still start and pass their
+  `redis` then adds back `SETUID`, `SETGID`, `CHOWN` and `FOWNER` so its
+  entrypoint can drop to the `redis` user and fix volume permissions; the
+  other three add nothing back. Verified against `docker compose up`: all four still start and pass their
   healthchecks (`postgres-age` already runs as the non-root `postgres` user
   per `db/postgres/Dockerfile.age-vector`; none of the four bind a port below
   1024 inside the container, so `CAP_NET_BIND_SERVICE` is never needed).
@@ -90,7 +92,8 @@ the dashboard on a LAN address or a hostname also needs its origin in
 - **`governance-mcp` and `lease-plane` still run as root** — neither
   Dockerfile has a `USER` directive. Adding one needs a separate pass:
   `governance-mcp` writes to the `governance-data` named volume
-  (`/app/data`) and `lease-plane` compiles/runs an Elixir release, and both
+  (`/app/data`) and `lease-plane` compiles its Mix project at build time and runs it with
+  `mix run --no-halt` (not a packaged release), and both
   need their runtime file-permission needs verified against a non-root UID
   before switching, not assumed.
 - **Two dev-only default secrets are still defaults.** `LEASE_PLANE_BEARER_TOKEN`

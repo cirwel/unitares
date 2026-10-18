@@ -33,13 +33,14 @@ problem one layer up.
   path no longer exists, so a refactor cannot silently detach a sensitive
   file from the inventory.
 - **CI**: `.github/workflows/governance-sensitivity.yml` — pull requests
-  only; label + upserted comment; always exits green.
+  only; label + upserted comment. The diff advisory never fails the job; the
+  `--check` step does, when a manifest path has moved or been deleted.
 
 ## What is on the list, and why
 
 | Surface | Symbols | Leverage |
 |---|---|---|
-| `config/governance_config.py` | `GAP_RECOVERY_CYCLES`, `DT_MAX` | The gap-suppress window. The 2026-08-06 audit measured 195 of 218 recorded pauses (89.4%) downgraded once inter-check-in gaps crossed 150s — the highest-leverage single-constant change in the repo. |
+| `config/governance_config.py` | `GAP_RECOVERY_CYCLES`, `GAP_RECOVERY_ARM_SECONDS`, `DT_MAX` | The gap-suppress window. `GAP_RECOVERY_ARM_SECONDS` is the arming threshold itself; `DT_MAX` only seeds its default. The 2026-08-06 audit measured 195 of 218 recorded pauses (89.4%) downgraded once inter-check-in gaps crossed 150s — the highest-leverage single-constant change in the repo. |
 | `config/governance_config.py` | `RISK_APPROVE_THRESHOLD`, `RISK_REVISE_THRESHOLD`, `COHERENCE_CRITICAL_THRESHOLD` | The decision lines themselves (proceed/guide edge, pause line, coherence critical). Also echoed to agents as threshold hints, so moving them silently moves both enforcement and coaching. |
 | `src/governance_monitor.py` | `_maybe_gap_suppress`, `_gap_recovery_cycles_remaining` | The pause-downgrade mechanism, distinct from its window constant. |
 | `src/outcome_corroboration.py` | `GRADE_WEIGHTS` | Evidence weight per corroboration grade; rescaling re-weights every outcome-grounded signal at once. |
@@ -47,6 +48,7 @@ problem one layer up.
 | `src/knowledge_graph_lifecycle.py` | `EPHEMERAL_TAGS` | Membership silently re-scopes what the KG lifecycle may expire. |
 | `governance_core/verification.py` | `_CATEGORY_SPECS` | The deterministic verification floor (categories, weights, patterns). The model backend can only add recall on top of this floor, so weakening the floor weakens the whole channel. |
 | `tests/test_outcome_corroboration.py` · `tests/test_verification_harm_confession.py` · `tests/test_dialectic_attestation.py` · `tests/test_ethical_drift_signals.py` · `tests/test_calibrated_capability_concealment.py` | (whole file) | The anti-gaming test class. Deleting, renaming, or skip-marking any of these is flagged as a class rather than passing as an ordinary red diff line. |
+| `scripts/dev/governance_sensitivity_manifest.tsv` · `scripts/dev/check_governance_sensitivity.sh` · `.github/workflows/governance-sensitivity.yml` | (whole file) | The advisory's own inventory, detector and CI wiring. Removing an entry, weakening the detector, or disabling the workflow is itself a governance-posture change. |
 
 ## Maintaining the list
 

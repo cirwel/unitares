@@ -45,7 +45,7 @@ Phases (`DialecticPhase`): `thesis` → `antithesis` → `synthesis` → `resolv
 Agents reach the dialectic through **one registered tool** plus its friendly alias:
 
 - `request_review(...)` — the alias agents actually see; resolves to `dialectic(action='request')`
-- `dialectic(action='get'|'list'|'quick'|'request'|'thesis'|'antithesis'|'synthesis'|'reassign')`
+- `dialectic(action='get'|'list'|'quick'|'request'|'thesis'|'antithesis'|'synthesis'|'consult'|'reassign'|'reconcile_effect')`
 
 The handlers `llm_assisted_dialectic`, `get_dialectic_session`, and
 `list_dialectic_sessions` are `register=False` — internal delegates, not
@@ -104,10 +104,14 @@ thesis → antithesis → synthesis inside the thesis submission. The clean
 "peer path vs LLM path" split is historical; in practice the peer path degrades
 into the synthetic path when the pool is empty.
 
-**Governed reviewer spawn:** when an external reviewer process is spawned, the
-spawn routes through the lease plane's effect binding
-(`src/mcp_handlers/dialectic/governed_spawn.py`, flag
-`UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN`). Spawn outcomes follow a
+**Governed reviewer spawn:** an external reviewer process is spawned by a
+direct orchestrator POST by default. With `UNITARES_DIALECTIC_GOVERNED_SPAWN=1`
+(default off; it also needs `UNITARES_DIALECTIC_DISPATCHER_UUID`) the spawn
+goes governed-first through the lease plane's `/v1/effects` surface
+(`src/mcp_handlers/dialectic/governed_spawn.py`). The separate
+`UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN` flag makes governance's
+`/v1/effect-veto` endpoint (which the lease plane calls) enforce effect binding
+for `agent_spawn`. Governed spawn outcomes follow a
 four-bucket contract — COMMITTED / REFUSED / UNAVAILABLE / CONFIG_ERROR — which
 decides whether a failure may fall back to a direct orchestrator spawn or must
 degrade to the synthetic reviewer. Modify reviewer dispatch only with that
@@ -167,6 +171,8 @@ This provides durability and auditability, enabling post‑hoc review and calibr
 - `dialectic(action='get')` — inspect session state and transcript (by session id or agent id)
 - `dialectic(action='list')` — list sessions with optional filters
 - `dialectic(action='quick')` — lightweight structured check without a full session
+- `dialectic(action='consult')` — file an outside verdict beside a review; it needs no reviewer slot and never advances a phase
+- `dialectic(action='reconcile_effect')` — operator reconciliation of a resolution effect left pending or partially applied
 
 **Recovery tools:**
 - `self_recovery(action="quick")` — fast path resume when safe
