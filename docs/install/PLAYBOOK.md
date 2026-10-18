@@ -212,6 +212,7 @@ sed -e "s|/PATH/TO/UNITARES|$PWD|g" \
     -e "s|/YOUR/HOME|$HOME|g" \
     -e "s|GENERATE_YOUR_OWN_TOKEN|$(openssl rand -hex 32)|g" \
     -e "s|GENERATE_YOUR_OWN_SECRET|$(openssl rand -hex 32)|g" \
+    -e "s|postgresql://postgres:postgres@localhost:5432/governance|postgresql://localhost:5432/governance|g" \
     scripts/ops/com.unitares.governance-mcp.plist \
     > ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 
@@ -223,7 +224,7 @@ launchctl list | grep unitares
 curl -s http://127.0.0.1:8767/health/live
 ```
 
-The plist's other tunables (DB DSN, allowed hosts, log paths) are inline at the top of the rendered file. Defaults bind loopback-only and use the trust-auth Postgres connection from Step 3.
+The plist's other tunables (DB DSN, allowed hosts, log paths) are inline in the rendered file, most of them in the `EnvironmentVariables` block at the bottom. Defaults bind loopback-only; the last `sed` expression above swaps the template's `postgres:postgres` DSN for the trust-auth Postgres connection from Step 3.
 
 ---
 

@@ -31,7 +31,7 @@ Every serialized row carries:
 
 - `verification_source = synthetic_fixture`,
 - `detail.synthetic_negative_control = true`,
-- `detail.do_not_persist = true`,
+- `detail.do_not_use_for_live_validation = true`,
 - `detail.prediction_binding = synthetic_negative_control`.
 
 ## What the fixture proves
