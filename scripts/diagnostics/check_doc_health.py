@@ -837,11 +837,22 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
         re.compile(
             r"Redis is (?:an? )?optional|Redis is (?:a )?session cache only|"
-            r"Redis \(optional\)|Redis optional cache",
+            r"Redis \(optional\)|Redis optional cache|disable Redis entirely",
             re.IGNORECASE,
         ),
         "corrected: Redis is the de-facto primary session store (boots degraded "
         "local-only without it) — see UNIFIED_ARCHITECTURE.md and the registry",
+    ),
+    (
+        # Case-sensitive on purpose: lowercase "age" is an ordinary word.
+        re.compile(
+            r"\bAGE\b[^.\n]{0,30}\b[Oo]ptional\b"
+            r"|\b[Oo]ptional:?\s+(?:Apache\s+)?AGE\b"
+            r"|\bAGE\s*\(optional\)"
+        ),
+        "corrected: the AGE extension is required (lineage and graph reads run "
+        "Cypher via graph_query); only the knowledge-graph *store* is opt-in "
+        "via UNITARES_KNOWLEDGE_BACKEND=age",
     ),
     (
         re.compile(r"schema auto.?creates|schema is auto.?created", re.IGNORECASE),
@@ -1003,6 +1014,7 @@ _CONTESTED_EXTRA_SURFACES: tuple[str, ...] = (
     "CITATION.cff",
     "pyproject.toml",
     "src/tool_modes.py",
+    "src/cache/redis_client.py",
     "scripts/dev/brand/render_social_preview.py",
 )
 

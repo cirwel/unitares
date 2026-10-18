@@ -128,7 +128,8 @@ sync_state {
 }
 ```
 
-`action` is the policy action: `proceed`, `guide` or `pause`. On a fresh
+`action` is the policy action: `proceed` or `pause`. A guided check-in
+returns `action: proceed` with `sub_action: guide`. On a fresh
 identity it is provisional, and the response says so. Keep the
 `prediction_id`.
 

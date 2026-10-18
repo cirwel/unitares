@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.47.0",
+  "version": "1.49.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "56ffafc140a6f92d248be154354f1467b17684d92a0419257f78b80ac82316f6",
+  "surface_sha256": "84bbf383db3bb7be3e7c5a3e31a0967a29649c12e7a7b7c928e8feb4b63c8747",
   "capabilities": [
     {
       "name": "start_session",
@@ -70,7 +70,7 @@
       "name": "store_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "d8d05c58b4baaec3848242a3d13e95f529c494a8b9fc85c35d5b9a586a5d4931",
+      "input_schema_sha256": "f1de51b2470cdd204399eab537d560807be342e3d0bdbd54caa874c90938be2d",
       "transport_names": {
         "mcp_streamable_http": "store_finding",
         "rest_v1_tools": "store_finding",

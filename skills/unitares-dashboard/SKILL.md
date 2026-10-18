@@ -99,7 +99,7 @@ if it draws charts; add `applyEvent` / `notifyNew` if it's a live surface — se
 **Live-surface hooks** below). `load()` renders into its mount on first call and
 updates **in place** on subsequent calls (so a refresh doesn't flicker or reset
 form state). Worked references: `sections/eisv.js` (charts, retheme,
-`applyEvent`) and `sections/risk.js` (charts + a resident picker that preserves
+`applyEvent`) and `sections/risk.js` (charts + an agent picker that preserves
 its selection across `load()` — exercised by its manual ↻, since Risk is not on
 the auto-refresh tick).
 
@@ -130,7 +130,8 @@ as the template for a new section.
 Views never call `fetch` directly. They `await DATA.x()`, which returns
 `{ source: "live" | "snapshot" | "unavailable", data }`. The accessor tries the live endpoint
 (`authFetch` for REST, `callTool` for `/v1/tools/call`) and, on any failure,
-returns its `snapFn` result tagged `snapshot`. The bundled `SNAPSHOT` backs
+returns its `snapFn` result, tagged `snapshot` when the bundled `SNAPSHOT`
+backs it and `unavailable` otherwise. The bundled `SNAPSHOT` backs
 that fallback only when there is no server to ask — the page opened from a
 file — or when a design preview passes `?snapshot=1` (`SNAPSHOT_FALLBACK` in
 `data.js`). On a page served by a UNITARES server, the `S` accessor returns `{}`: the bundle is

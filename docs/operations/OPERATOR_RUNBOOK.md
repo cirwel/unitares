@@ -258,14 +258,14 @@ Symptom:
 
 Interpretation:
 
-- If `knowledge_graph.info.error` mentions `graph with oid ... does not exist`, the AGE catalog and schema drifted out of sync.
-- Current runtime logic will attempt to repair the AGE graph and rehydrate it from durable PostgreSQL tables.
-- If recovery succeeds, `knowledge_graph.status` should return to `healthy` and the discovery counts should be nonzero again.
+- The `health_check()` knowledge graph check does not touch the database or AGE. It reports capability only: `degraded` means semantic search is unreachable (no embedder loaded while `UNITARES_EMBEDDING_MODEL` asks for one, an embedder with a backend that has no semantic search, or an unknown `UNITARES_KNOWLEDGE_BACKEND`). Its `warning` field names which.
+- AGE drift does not show up there. If server logs mention `graph with oid ... does not exist`, the AGE catalog and schema drifted out of sync; the query path repairs the stale graph by recreating it empty. It does not refill it: `KnowledgeGraphAGE.load()` rehydrates AGE from durable PostgreSQL tables only when the AGE knowledge backend (`UNITARES_KNOWLEDGE_BACKEND=age`) initializes (first KG access after a server restart), so drift persists until then. Under the default postgres backend nothing refills AGE, so a restart does not clear the drift.
+- If recovery succeeds after that restart (AGE backend only), `./scripts/diagnostics/check_health.sh` reports the durable and AGE counts as matching, and the server log shows a `Rehydrated AGE graph ...` or `Rehydrated missing AGE rows ...` line.
 
 What to check:
 
-- `health_check().checks.knowledge_graph.lifecycle`
-- `health_check().checks.knowledge_graph.info`
+- `health_check().checks.knowledge_graph` (`backend`, `embedder_available`, `semantic_backend_available`, `warning`)
+- `./scripts/diagnostics/check_health.sh` for `Knowledge graph drift: durable=N AGE=M`
 - server logs during startup or first KG access
 
 ### Weak continuity
@@ -302,4 +302,4 @@ When something feels wrong, do the checks in this order:
 4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
 5. Only after that inspect logs or restart services
 
-This order matters because many apparent "agent bugs" are actually continuity or process issues, and many apparent "graph bugs" are now observable directly through `health_check()` without guessing from symptoms.
+This order matters because many apparent "agent bugs" are actually continuity or process issues, and many apparent "graph bugs" are observable directly through `check_health.sh` and `health_check()` without guessing from symptoms.

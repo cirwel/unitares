@@ -166,7 +166,11 @@ see (f). Raw model and timeout controls remain on hidden `delegate_inference`.
    revise it instead (step 3).
 2. `store_finding(summary="<one line>", details="<evidence>",
    discovery_type="bug_found", severity="medium", tags=["<topic>"])`. Keep the
-   returned `discovery_id`. Every call creates a new finding.
+   returned `discovery_id`. Every call creates a new finding. To link it to the
+   finding it answers, add `response_to={"discovery_id": "<parent id>",
+   "response_type": "extend"}` (or `question`, `disagree`, `support`, `answer`,
+   `follow_up`, `correction`, `elaboration`, `supersedes`); the ack's
+   `state_summary.response_to` confirms the link.
 3. Close it: `use_tool(tool_name="update_finding", arguments={"discovery_id":
    "<id>", "status": "resolved", "closure_class": "fix_verified",
    "closure_evidence": {"deployed": "<what shipped, confirmed in the running

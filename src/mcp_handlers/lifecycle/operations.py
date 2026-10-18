@@ -49,7 +49,10 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     Lightweight resume handler for human operators (dashboard).
     Authorization: the agent itself, or a caller presenting a valid
     ``X-Unitares-Operator`` token (``require_owner_or_operator``); mirrors
-    archive_agent. Only resumes agents in paused or waiting_input status.
+    archive_agent. Only resumes agents in paused or waiting_input status,
+    and only an operator may resume a paused one: the agent itself is
+    refused with ``PAUSE_SELF_RESUME_REFUSED``, because this path has no
+    risk gate and would let it skip self_recovery.
     """
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -69,6 +72,29 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     denied = require_owner_or_operator(agent_uuid, arguments, action="resume", display_id=agent_id)
     if denied:
         return denied
+
+    # A paused agent may not lift its own pause here: that skipped
+    # self_recovery's risk gate entirely. A pause ends through self_recovery,
+    # dialectic, an operator or a safety net, or it expires. The agent itself
+    # may still resume from waiting_input and unstick itself while active.
+    if meta.status == "paused":
+        from ..identity.operator import is_operator_caller
+
+        if not is_operator_caller():
+            from ..support.pause_ttl import paused_refusal_recovery
+
+            return [error_response(
+                f"Agent '{agent_id}' is paused; an agent cannot lift its own pause with resume",
+                error_code="PAUSE_SELF_RESUME_REFUSED",
+                error_category="state_error",
+                details={
+                    "error_type": "pause_self_resume_refused",
+                    "agent_id": agent_id,
+                    "paused_at": meta.paused_at,
+                    "status": "paused",
+                },
+                recovery=paused_refusal_recovery(meta, agent_uuid),
+            )]
 
     # Allow resuming paused/waiting_input agents AND "unsticking" active agents
     # Stuck agents are typically still "active" but caught in a timeout/loop

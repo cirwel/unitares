@@ -56,7 +56,7 @@ source_files:
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.47.0` on 2026-10-17.
+contract `1.49.0` on 2026-10-17.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
