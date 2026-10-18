@@ -31,13 +31,14 @@ change. This document collapses that to one rule set, and `ship.sh`'s default
 
 ## The convention
 
-### 1. Branch naming — one pattern, agent-prefixed
+### 1. Branch naming — one pattern, author-prefixed
 
 ```
-<agent>/<topic>-<short-id>
+<author>/<topic>-<short-id>
 ```
 
-- `<agent>` is `claude` or `codex` — kept as a prefix so a branch is
+- `<author>` identifies who is making the change: an agent (`claude`,
+  `codex`, …) or a contributor handle. It is kept as a prefix so a branch is
   self-identifying at a glance, which matters when several sessions run in
   parallel.
 - `<topic>` is a short kebab-case slug of the change.
@@ -45,7 +46,7 @@ change. This document collapses that to one rule set, and `ship.sh`'s default
 
 Both existing generators already satisfy this shape:
 
-- `ship.sh` mints `<agent>/auto/<timestamp>-<slug>` (the agent prefix is
+- `ship.sh` mints `<author>/auto/<timestamp>-<slug>` (the agent prefix is
   detected from `CLAUDECODE`, or set via `UNITARES_SHIP_AGENT`).
 - The web/cloud harness hands Claude a `claude/<topic>-<id>` branch.
 
