@@ -150,3 +150,19 @@ def test_migration_060_is_atomic_and_registers_after_postconditions():
     assert text.index("RAISE EXCEPTION") < text.index(
         "INSERT INTO core.schema_migrations"
     )
+
+
+def test_search_discovery_type_description_lists_what_search_accepts():
+    """The search filter's description is the agent's only list of valid types
+    for search_knowledge_graph; keep it equal to what the handler accepts."""
+    from typing import get_args
+
+    from src.mcp_handlers.knowledge.handlers import VALID_DISCOVERY_TYPES
+    from src.mcp_handlers.schemas.knowledge import DiscoveryType, SearchKnowledgeGraphParams
+
+    description = SearchKnowledgeGraphParams.model_fields["discovery_type"].description
+    listed = set(get_args(DiscoveryType)) | {"topic_rollup"}
+    for value in listed:
+        assert value in description, value
+    # "bug" is a compatibility spelling the handler normalizes to bug_found.
+    assert listed - {"bug"} == VALID_DISCOVERY_TYPES
