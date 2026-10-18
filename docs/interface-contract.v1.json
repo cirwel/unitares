@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.51.0",
+  "version": "1.52.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "3892a37452b3073ca7b14f8cfb579e2deda9c6f9fd87a8241adc6beb92cd0b12",
+  "surface_sha256": "e8ae32e68394193b26e93311167c27bd3ac769ed51d3879e1f3ec559f99957e4",
   "capabilities": [
     {
       "name": "start_session",
@@ -334,7 +334,7 @@
       "name": "consult",
       "implementation": "consult",
       "kind": "canonical_tool",
-      "input_schema_sha256": "cf06d70db48eff1b6138c3d8c49fe38b4b982730a9003adbf534e69fed861a8e",
+      "input_schema_sha256": "8ffef62011f8fe29940fe75d2efbf5c11838117d1722ca25936950f764893567",
       "transport_names": {
         "mcp_streamable_http": "consult",
         "rest_v1_tools": "consult",
