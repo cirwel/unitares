@@ -204,7 +204,17 @@ that account is an agent act, never an operator act. The
 `agent-via-operator-login` label (`operator-login-agent-pr.yml`) records this
 on `claude/*` and `codex/*` PRs. The footer stays the owner pointer: such a
 session onboards and ends the body with its own `UNITARES agent: <uuid>`,
-never a uuid copied from another session.
+never a uuid copied from another session. `agent-pr-relay.yml` then reopens
+the PR under the `unitares-pr-relay` App, which can write pull requests on
+this repository and nothing else. The original is closed with a link to its
+replacement. Branch, commits, labels and footer carry over, except the
+queue labels `approved-to-merge` and `operator-armed`, which are earned on
+the new PR. The new body opens by
+saying the branch was pushed through the operator login, so the record keeps
+the credential path while the operator account stops being the author. The
+session keeps pushing to the same branch and does its follow-ups (review,
+ready, label) on the new number. Label a PR `relay-hold` to keep it where it
+is; a failed relay reopens the original with that label.
 Direct local `./scripts/dev/review.sh` remains available and shares the same
 per-PR lock and evidence, so it joins an in-flight host review.
 
