@@ -25,7 +25,7 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
         '3. Install dependencies: '
         '`pip install -e ".[full]" -c constraints.txt`'
     )
-    start = '5. Start: `python src/mcp_server.py --port 8767`'
+    start = 'Start: `python src/mcp_server.py --port 8767`'
 
     for relative in ("AGENTS.md", "CLAUDE.md"):
         setup = _read(relative).split("## Setup\n", 1)[1].split("\n## ", 1)[0]
