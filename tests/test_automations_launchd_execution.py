@@ -29,7 +29,7 @@ def census(tmp_path, monkeypatch):
     agents.mkdir(parents=True)
     for name in ("idle", "live", "missing", "paused"):
         (agents / f"{name}.plist").write_bytes(plistlib.dumps({
-            "Label": name, "ProgramArguments": ["/bin/true"], "StartInterval": 60,
+            "Label": name, "ProgramArguments": ["/usr/bin/true"], "StartInterval": 60,
         }))
     for collector in ("collect_crontab", "collect_systemd", "collect_remote_host",
                       "collect_codex", "collect_hermes", "collect_claude_tasks",

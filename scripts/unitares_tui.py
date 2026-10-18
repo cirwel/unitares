@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""UNITARES terminal dashboard: a live, read-only view over the `unitares` CLI.
+
+Usage: unitares tui [--interval SECONDS] [--once [--json]] [--no-color]
+
+Data comes from `unitares status --json` and `unitares tools`, so URL, token
+and header handling stay in one place (scripts/unitares). Standard library only.
+
+Keys: up/down or j/k select - Enter drill in - Esc/b back - t tools - r refresh - q quit
+"""
+import argparse
+import curses
+import json
+import os
+import subprocess
+import sys
+import time
+
+CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "unitares")
+FETCH_TIMEOUT = 20
+VERDICT_COLOR = {"proceed": 1, "approve": 1, "guide": 2, "pause": 3, "reject": 3}
+STATUS_COLOR = {"healthy": 1, "silent": 3}
+KEYS = {
+    "overview": "up/down select | Enter detail | t tools | r refresh | q quit",
+    "detail": "up/down scroll | left/right or n/p other resident | Esc back | r refresh | q quit",
+    "tools": "up/down scroll | Esc back | r refresh | q quit",
+}
+PAGE = 10
+
+
+def run_cli(*args):
+    """Run the sibling CLI; return (stdout, error)."""
+    try:
+        proc = subprocess.run(
+            [CLI, *args], capture_output=True, text=True, timeout=FETCH_TIMEOUT
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        return "", (proc.stderr.strip() or f"exit {proc.returncode}").splitlines()[0]
+    return proc.stdout, ""
+
+
+def fetch_status():
+    out, err = run_cli("status", "--json", "--no-release")
+    if err:
+        return None, err
+    try:
+        return json.loads(out), ""
+    except ValueError as exc:
+        return None, f"bad JSON from status: {exc}"
+
+
+def fetch_tools():
+    out, err = run_cli("tools")
+    return out.splitlines(), err
+
+
+def is_num(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def fmt_age(seconds):
+    if not is_num(seconds):
+        return "-"
+    seconds = int(seconds)
+    if seconds < 90:
+        return f"{seconds}s"
+    if seconds < 5400:
+        return f"{seconds // 60}m"
+    if seconds < 172800:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds // 86400}d"
+
+
+def bar(value, width=20):
+    """Render a 0..1 value as a bar; clamp anything outside."""
+    value = max(0.0, min(1.0, value))
+    filled = int(round(value * width))
+    return "[" + "#" * filled + "." * (width - filled) + f"] {value:.2f}"
+
+
+def overview_lines(data):
+    """Return [(text, color_key)] for the overview screen."""
+    health = data.get("health") or {}
+    db = (health.get("database") or {}).get("status", "?")
+    up = (health.get("uptime") or {}).get("formatted", "?")
+    tiers = data.get("tiers") or {}
+    out = [
+        (
+            f"UNITARES {health.get('status', '?')} - v{health.get('version', '?')}"
+            f" ({health.get('build_sha', '?')}) - up {up} - db {db}",
+            1 if health.get("status") == "ok" else 3,
+        )
+    ]
+    counts = tiers.get("tiers") or {}
+    if counts:
+        parts = " | ".join(f"{k} {v}" for k, v in counts.items())
+        out.append((f"Agents: {tiers.get('total', '?')} total - earned {tiers.get('earned', '?')}", 0))
+        out.append((f"Tiers:  {parts}", 0))
+    else:
+        out.append(("Agents: tier data unavailable (auth-gated or older server)", 2))
+    out.append(("", 0))
+    return out
+
+
+def residents_notice(data):
+    """(text, color) when the resident panel could not be read, else None.
+
+    An unreadable panel (auth-gated, failed, warming up) is not an empty roster.
+    """
+    if (data or {}).get("residents") is not None:
+        return None
+    if data.get("auth_required"):
+        return ("Residents: unavailable (auth required - set UNITARES_TOKEN)", 3)
+    return ("Residents: unavailable (fetch failed, warming up, or an older server)", 2)
+
+
+def resident_rows(data):
+    return [
+        (
+            str(r.get("label") or "?"),
+            str(r.get("status") or "?"),
+            str(r.get("verdict") or "-"),
+            fmt_age(r.get("silence_seconds")),
+        )
+        for r in resident_list(data)
+    ]
+
+
+def resident_list(data):
+    """The resident entries, tolerating null panels (warmup, auth-gated, fresh install)."""
+    return [r for r in ((data or {}).get("residents") or {}).get("residents") or [] if isinstance(r, dict)]
+
+
+def resident_detail_lines(resident):
+    eisv = resident.get("eisv") or {}
+    lines = [
+        (f"{resident.get('label') or '?'}  status {resident.get('status') or '?'}  "
+         f"verdict {resident.get('verdict') or '-'}", STATUS_COLOR.get(resident.get("status"), 0)),
+        (f"agent_id   {resident.get('agent_id') or '?'}", 0),
+        (f"last check-in {fmt_age(resident.get('silence_seconds'))} ago via "
+         f"{resident.get('last_checkin_source') or '?'}"
+         f"{' (event-driven)' if resident.get('event_driven') else ''}", 0),
+        (f"silence threshold {fmt_age(resident.get('silence_threshold_seconds'))}", 0),
+        ("", 0),
+    ]
+    for key, name in (("E", "energy"), ("I", "integrity"), ("S", "entropy")):
+        if is_num(eisv.get(key)):
+            lines.append((f"{key} {name:<9} {bar(eisv[key])}", 0))
+    if is_num(eisv.get("V")):
+        lines.append((f"V valence   {eisv['V']:+.3f}  (EMA of E - I, range -1..1)", 0))
+    if is_num(resident.get("coherence")):
+        lines.append((f"coherence   {bar(resident['coherence'])}", 0))
+    if is_num(resident.get("risk_score")):
+        lines.append((f"risk        {bar(resident['risk_score'])}", 0))
+    history = resident.get("history") or []
+    if history:
+        verdicts = [str((h or {}).get("verdict") or "?") for h in history[-30:]]
+        lines.append(("", 0))
+        lines.append((f"last {len(verdicts)} check-ins: " + " ".join(v[0].upper() for v in verdicts), 0))
+    writes = resident.get("recent_writes") or []
+    if writes:
+        lines.append(("", 0))
+        lines.append(("Recent findings:", 0))
+        for w in writes[:5]:
+            lines.append((f"  [{w.get('severity') or '?'}] {w.get('summary') or ''}", 2))
+    return lines
+
+
+class App:
+    def __init__(self, interval):
+        self.interval = interval
+        self.data, self.error = None, ""
+        self.tools, self.tools_error = None, ""
+        self.view = "overview"
+        self.selected = 0
+        self.scroll = 0
+        self.last_fetch = 0.0
+
+    def refresh(self):
+        self.data, self.error = fetch_status()
+        self.last_fetch = time.time()
+        if self.view == "tools":
+            self.tools, self.tools_error = fetch_tools()
+
+    def residents(self):
+        return resident_list(self.data)
+
+    def _scroll_by(self, delta):
+        self.scroll = max(0, self.scroll + delta)
+
+    def handle(self, key):
+        """Return False to quit."""
+        n = len(self.residents())
+        down = key in (curses.KEY_DOWN, ord("j"))
+        up = key in (curses.KEY_UP, ord("k"))
+        if key in (ord("q"), ord("Q")):
+            return False
+        if key in (ord("r"), ord("R")):
+            self.refresh()
+        elif self.view == "overview" and (down or up) and n:
+            self.selected = (self.selected + (1 if down else -1)) % n
+        elif self.view in ("detail", "tools") and (down or up):
+            self._scroll_by(1 if down else -1)
+        elif self.view in ("detail", "tools") and key in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+            self._scroll_by(PAGE if key == curses.KEY_NPAGE else -PAGE)
+        elif self.view == "detail" and n and key in (curses.KEY_RIGHT, curses.KEY_LEFT, ord("n"), ord("p")):
+            forward = key in (curses.KEY_RIGHT, ord("n"))
+            self.selected = (self.selected + (1 if forward else -1)) % n
+            self.scroll = 0
+        elif key in (curses.KEY_ENTER, 10, 13) and self.view == "overview" and n:
+            self.view, self.scroll = "detail", 0
+        elif key in (27, ord("b"), ord("o")):
+            self.view, self.scroll = "overview", 0
+        elif key in (ord("t"), ord("T")):
+            self.view, self.scroll = "tools", 0
+            self.tools, self.tools_error = fetch_tools()
+        return True
+
+    def screen(self, body_height):
+        """Rows to draw: [(text, color, bold, reverse)], windowed to body_height."""
+        if self.data is None:
+            return [
+                (f"UNITARES unreachable: {self.error or 'no data yet'}", 3, True, False),
+                ("Check `unitares diag`; press r to retry, q to quit.", 2, False, False),
+            ]
+        if self.view == "overview":
+            pinned = [(t, c, False, False) for t, c in overview_lines(self.data)]
+            pinned.append((f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL", 0, True, False))
+            notice = residents_notice(self.data)
+            if notice:
+                # The notice outranks the headers on a short terminal.
+                return pinned[:max(0, body_height - 1)] + [(notice[0], notice[1], False, False)]
+            self.selected = min(self.selected, max(0, len(self.residents()) - 1))
+            body = []
+            for i, (label, status, verdict, age) in enumerate(resident_rows(self.data)):
+                marker = ">" if i == self.selected else " "
+                color = STATUS_COLOR.get(status) or VERDICT_COLOR.get(verdict, 0)
+                body.append((f"{marker} {label:<18}{status:<10}{verdict:<10}{age}", color, False, i == self.selected))
+            # On a short terminal drop pinned rows (tiers first) so the selection stays on screen.
+            for shorter in ([pinned[0], pinned[-1]], [pinned[-1]], []):
+                if body_height - len(pinned) >= 1:
+                    break
+                pinned = shorter
+            visible = max(1, body_height - len(pinned))
+            top = max(0, self.selected - visible + 1)
+            return pinned + body[top:top + visible]
+        if self.view == "detail":
+            residents = self.residents()
+            notice = residents_notice(self.data)
+            if notice:
+                return [(notice[0], notice[1], False, False)]
+            if not residents:
+                return [("No residents to show.", 0, False, False)]
+            index = self.selected % len(residents)
+            lines = [(t, c, False, False) for t, c in resident_detail_lines(residents[index])]
+            self.scroll = min(self.scroll, max(0, len(lines) - body_height))
+            return lines[self.scroll:self.scroll + body_height]
+        if self.tools_error:
+            return [(f"Could not list tools: {self.tools_error}", 3, False, False)]
+        lines = [(t, 0, False, False) for t in (self.tools or [])]
+        self.scroll = min(self.scroll, max(0, len(lines) - body_height))
+        return lines[self.scroll:self.scroll + body_height]
+
+    def draw(self, scr):
+        scr.erase()
+        height, width = scr.getmaxyx()
+        for row, (text, color, bold, reverse) in enumerate(self.screen(max(1, height - 1))):
+            attr = curses.color_pair(color) if color else 0
+            if bold:
+                attr |= curses.A_BOLD
+            if reverse:
+                attr |= curses.A_REVERSE
+                text = text.ljust(max(0, width - 1))
+            try:
+                scr.addnstr(row, 0, text, max(0, width - 1), attr)
+            except curses.error:
+                pass
+        age = int(time.time() - self.last_fetch) if self.last_fetch else 0
+        footer = f" {KEYS[self.view]} | refreshed {age}s ago "
+        try:
+            scr.addnstr(height - 1, 0, footer.ljust(max(0, width - 1)), max(0, width - 1), curses.A_REVERSE)
+        except curses.error:
+            pass
+        scr.refresh()
+
+
+def main_curses(scr, interval, use_color=True):
+    curses.curs_set(0)
+    if use_color and curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_GREEN, -1)
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)
+        curses.init_pair(3, curses.COLOR_RED, -1)
+    app = App(interval)
+    app.refresh()
+    scr.timeout(500)
+    while True:
+        app.draw(scr)
+        key = scr.getch()
+        if key != -1 and not app.handle(key):
+            return
+        if time.time() - app.last_fetch >= interval:
+            app.refresh()
+
+
+def snapshot(data):
+    """Stable, minimal machine-readable view of `status --json` (schema v1)."""
+    health = data.get("health") or {}
+    tiers = data.get("tiers") or {}
+    return {
+        "schema": "unitares.tui.snapshot.v1",
+        "health": {
+            "status": health.get("status"),
+            "version": health.get("version"),
+            "build_sha": health.get("build_sha"),
+            "uptime_seconds": (health.get("uptime") or {}).get("seconds"),
+            "database": (health.get("database") or {}).get("status"),
+        },
+        "residents_available": data.get("residents") is not None,
+        "auth_required": bool(data.get("auth_required")),
+        "tiers": {
+            "total": tiers.get("total"),
+            "earned": tiers.get("earned"),
+            "counts": tiers.get("tiers"),
+        },
+        "residents": [
+            {
+                "label": r.get("label"),
+                "agent_id": r.get("agent_id"),
+                "status": r.get("status"),
+                "verdict": r.get("verdict"),
+                "silence_seconds": r.get("silence_seconds"),
+                "coherence": r.get("coherence"),
+                "risk_score": r.get("risk_score"),
+                "eisv": r.get("eisv"),
+            }
+            for r in resident_list(data)
+        ],
+    }
+
+
+def print_once(as_json=False):
+    data, err = fetch_status()
+    if data is None:
+        if as_json:
+            print(json.dumps({"schema": "unitares.tui.snapshot.v1", "error": err}))
+        else:
+            print(f"UNITARES unreachable: {err}", file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps(snapshot(data), indent=2))
+        return 0
+    for text, _ in overview_lines(data):
+        print(text)
+    print(f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL")
+    notice = residents_notice(data)
+    if notice:
+        print(f"  {notice[0]}")
+    for label, status, verdict, age in resident_rows(data):
+        print(f"  {label:<18}{status:<10}{verdict:<10}{age}")
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="unitares tui", description=__doc__.split("\n")[0])
+    parser.add_argument("--interval", type=float, default=10.0, help="refresh seconds (default 10)")
+    parser.add_argument("--once", action="store_true", help="print one snapshot and exit (no TTY needed)")
+    parser.add_argument("--json", action="store_true", help="with --once: print a stable JSON snapshot")
+    parser.add_argument("--no-color", action="store_true", help="no color (also honored: NO_COLOR env)")
+    args = parser.parse_args(argv)
+    if args.json and not (args.once or not sys.stdout.isatty()):
+        parser.error("--json needs --once (or a non-TTY stdout)")
+    if args.once or not sys.stdout.isatty():
+        return print_once(as_json=args.json)
+    use_color = not (args.no_color or os.environ.get("NO_COLOR"))
+    curses.wrapper(main_curses, max(2.0, args.interval), use_color)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
