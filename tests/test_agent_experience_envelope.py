@@ -2348,10 +2348,32 @@ def test_unbound_full_metrics_say_why_full_has_nothing_more():
     options = env["response_options"]
     assert options["current"] == "full"
     assert options["full_unavailable_reason"] == (
-        "unbound: call start_session(force_new=true) first"
+        "unbound: full adds nothing until this session is bound; "
+        "follow next_action to bind it"
     )
     assert "complete_diagnostics" not in options
     assert "verbosity='full'" not in options.values()
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        # An established process that omitted its client_session_id, and a
+        # failed session lookup: both must retry with existing proof, so the
+        # options must never tell them to mint (review of #2867).
+        {"value": "unbound", "reason": "client_session_id_missing"},
+        {"value": "unbound", "reason": "pg_lookup_exception"},
+    ],
+)
+def test_unbound_full_reason_never_prescribes_a_new_identity(verdict):
+    payload = {"success": True, "verdict": verdict}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {"verbosity": "full"}
+    )
+    reason = env["response_options"]["full_unavailable_reason"]
+    assert "force_new" not in reason
+    assert "start_session" not in reason
+    assert "next_action" in reason
 
 
 @pytest.mark.parametrize(

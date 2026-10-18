@@ -2198,9 +2198,13 @@ def _response_options(
             # An unbound full read returns what 'standard' does, so pointing
             # complete_diagnostics back at verbosity='full' sends the caller
             # round the same call. Say why full had nothing more instead.
+            # Recovery stays with next_action: it is cause-aware, and an
+            # established process that only lost its client_session_id must
+            # retry with its existing proof, not mint a second identity.
             del options["complete_diagnostics"]
             options["full_unavailable_reason"] = (
-                "unbound: call start_session(force_new=true) first"
+                "unbound: full adds nothing until this session is bound; "
+                "follow next_action to bind it"
             )
         return options
     return None
