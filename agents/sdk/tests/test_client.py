@@ -465,6 +465,14 @@ class TestToolMapping:
         assert result.members[0]["record"]["hash_key"] == "aa"
 
     @pytest.mark.asyncio
+    async def test_consult_sends_a_string_host_ids_unsplit(self):
+        client = make_client_with_session(AsyncMock())
+        client.call_tool = AsyncMock(return_value={"success": True, "members": []})
+        text = '["codex:host-adapter", "claude:host-adapter"]'
+        await client.consult("review", privacy="cloud_allowed", host_ids=text)
+        assert client.call_tool.call_args[0][1]["host_ids"] == text
+
+    @pytest.mark.asyncio
     async def test_consult_refusal_raises_through_real_call_tool(self):
         """success:false raises in call_tool, as for every SDK call."""
         from unitares_sdk.errors import GovernanceToolRefused

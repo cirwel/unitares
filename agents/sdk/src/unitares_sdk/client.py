@@ -897,7 +897,8 @@ class GovernanceClient:
         if host_id is not None:
             args["host_id"] = host_id
         if host_ids is not None:
-            args["host_ids"] = list(host_ids)
+            # A str goes as-is: the server reads JSON text or a lone host id.
+            args["host_ids"] = host_ids if isinstance(host_ids, str) else list(host_ids)
         args.update(kwargs)
         raw = await self.call_tool(
             "consult",

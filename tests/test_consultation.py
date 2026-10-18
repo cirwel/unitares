@@ -2536,8 +2536,16 @@ def test_council_size_is_left_to_the_handler_and_json_text_is_accepted():
     text = ConsultParams(brief="q", host_ids='["codex:host-adapter", "claude:host-adapter"]')
     assert text.host_ids == ["codex:host-adapter", "claude:host-adapter"]
     assert text.effort == "thorough"
-    with pytest.raises(ValidationError):
-        ConsultParams(brief="q", host_ids="codex:host-adapter")
+    # A lone host id becomes a one-item list: the handler refuses it with the
+    # valid hosts instead of a schema error that blames effort.
+    assert ConsultParams(brief="q", host_ids="codex:host-adapter").host_ids == ["codex:host-adapter"]
+
+
+def test_abridged_briefs_state_the_council_requirements():
+    fields = ConsultParams.model_fields
+    assert "cloud_allowed" in fields["host_ids"].json_schema_extra["brief"]
+    effort_brief = fields["effort"].json_schema_extra["brief"]
+    assert "host_ids" in effort_brief and "thorough" in effort_brief
 
 
 @pytest.mark.asyncio
@@ -2591,7 +2599,33 @@ async def test_council_and_single_consult_share_the_hosts_file_refusal(monkeypat
     assert single["error_code"] == "INFERENCE_CONFIG_INVALID"
     member = council["members"][0]
     assert member["failure"]["code"] == "INFERENCE_CONFIG_INVALID"
-    assert (member["message"], member["recovery"]["action"]) == (
-        single["error"],
-        single["recovery"]["action"],
-    )
+    assert member["message"] == single["error"]
+    # A council cannot fall back to standard effort, so it is not offered.
+    assert "Standard effort still works" in single["recovery"]["action"]
+    assert "Standard effort" not in member["recovery"]["action"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_council_keeps_a_members_policy_refusal(monkeypatch, hosts_file, audit_sinks):
+    import asyncio
+
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [antigravity:host-adapter] }\n")
+    started = asyncio.Event()
+
+    async def fake(request):
+        started.set()
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    task = asyncio.ensure_future(co.handle_consult(_council_args()))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, pg = await audit_sinks()
+    records = {e["details"]["request"]["host_id"]: e["details"] for e in pg}
+    # codex was refused before any host was contacted; cancelling does not
+    # turn that into "cancelled", which would suggest the brief went out.
+    assert records["codex:host-adapter"]["status"] == "failed"
+    assert records["codex:host-adapter"]["failure"]["code"] == "CONSULT_HOST_NOT_IN_JOB"
+    assert records["antigravity:host-adapter"]["status"] == "cancelled"

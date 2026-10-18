@@ -992,7 +992,7 @@ class ConsultParams(AgentIdentityMixin):
             "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
             "An explicit value must match the selected host. Neither is a latency SLA."
         ),
-        json_schema_extra={"brief": "Omit: follows host_id(s), otherwise standard. Explicit effort must match the host."},
+        json_schema_extra={"brief": "Omit: thorough for a CLI host_id or host_ids, else standard. Explicit effort must match."},
     )
     privacy: Literal["local", "cloud_allowed"] = Field(
         "local",
@@ -1020,12 +1020,16 @@ class ConsultParams(AgentIdentityMixin):
     @classmethod
     def host_ids_from_json_text(cls, value: Any) -> Any:
         # REST and use_tool deliver a list typed into a text field as JSON
-        # text; /mcp/ already parses it. Accept it on every transport.
-        if isinstance(value, str) and value.lstrip().startswith("["):
-            try:
-                return json.loads(value)
-            except ValueError:
-                return value
+        # text; /mcp/ already parses it. Accept it on every transport. A lone
+        # host id becomes a one-item list, so the handler refuses it with the
+        # valid hosts rather than a schema error.
+        if isinstance(value, str):
+            if value.lstrip().startswith("["):
+                try:
+                    return json.loads(value)
+                except ValueError:
+                    return value
+            return [value]
         return value
 
     @field_validator("brief")

@@ -72,7 +72,7 @@ require `cloud_allowed`. A pinned call requires
 `allow_degraded=false` and never tries another host. Selection grants no
 configuration or identity authority; own-family selection is advisory only.
 
-Amended 2026-10-18 (#2900): optional `host_ids` asks a council of 2 or 3
+Amended 2026-10-18 (#2900, corrected in its follow-up): optional `host_ids` asks a council of 2 or 3
 distinct thorough hosts in parallel. Each member is a pinned call with the
 rules above (no failover, route enforced, own record and hash key), and the
 records share a `council_id`. A council needs `cloud_allowed` and

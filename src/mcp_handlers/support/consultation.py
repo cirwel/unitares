@@ -1516,14 +1516,18 @@ def _record_consultation(
     }
 
 
-def _hosts_file_refusal(error: Any) -> tuple[str, str, str]:
-    """The thorough lane's refusal when the operator's hosts file does not load."""
+def _hosts_file_refusal(error: Any, *, council: bool = False) -> tuple[str, str, str]:
+    """The thorough lane's refusal when the operator's hosts file does not load.
+
+    A council cannot fall back to standard effort, so its recovery does not
+    offer it.
+    """
     return (
         "INFERENCE_CONFIG_INVALID",
         f"The inference hosts file does not load, so the thorough lane refuses: {error}",
         f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
-        "the doctor's inference_hosts_file check names the line or field. "
-        "Standard effort still works.",
+        "the doctor's inference_hosts_file check names the line or field."
+        + ("" if council else " Standard effort still works."),
     )
 
 
@@ -1695,22 +1699,33 @@ async def _council_member(request: ConsultRequest) -> ConsultationOutcome:
 async def _run_council(members: list[ConsultRequest]) -> list[ConsultationOutcome]:
     """Run every member in parallel, then record each once.
 
-    Records are written only after the whole council returns, with no await
-    in between, so a record that keeps hashes always describes an answer
-    the caller receives together with its hash key. When the call is
-    cancelled, every member is recorded as cancelled, without hashes,
-    including one that had already answered: the caller never received that
-    answer or its key, as with a single consult cancelled mid-route.
+    Records are written after the whole council returns, with no await in
+    between, so a completed member's hashes are written in the same step
+    that hands its hash key back toward the caller (a transport that drops
+    the response afterwards loses it, as for a single consult). When the
+    council is cancelled, a member that had answered is recorded as
+    cancelled, without hashes, because its answer and key never reached the
+    caller; a member already refused or failed keeps that outcome; one still
+    running is recorded as cancelled.
     """
+    finished: dict[int, ConsultationOutcome] = {}
+
+    async def run(index: int, member: ConsultRequest) -> None:
+        finished[index] = await _council_member(member)
+
     try:
-        outcomes = await asyncio.gather(*(_council_member(member) for member in members))
+        await asyncio.gather(*(run(i, member) for i, member in enumerate(members)))
     except asyncio.CancelledError:
-        for member in members:
-            _record_consultation(member, _with_failover(member, _cancelled(member)))
+        for i, member in enumerate(members):
+            outcome = finished.get(i)
+            if outcome is None or outcome.ok:
+                outcome = _with_failover(member, _cancelled(member))
+            _record_consultation(member, outcome)
         raise
+    outcomes = [finished[i] for i in range(len(members))]
     for member, outcome in zip(members, outcomes):
         _record_consultation(member, outcome)
-    return list(outcomes)
+    return outcomes
 
 
 def _council_member_entry(
@@ -1800,7 +1815,9 @@ async def _handle_council(
     members = []
     for host_id in hosts:
         if loaded.state == "error" or loaded.config is None:
-            refusal: tuple[str, str, str] | None = _hosts_file_refusal(loaded.error)
+            refusal: tuple[str, str, str] | None = _hosts_file_refusal(
+                loaded.error, council=True,
+            )
         else:
             refusal = _pinned_host_refusal(host_id, loaded.config)
         members.append(ConsultRequest(

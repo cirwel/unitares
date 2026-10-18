@@ -954,16 +954,21 @@ adversarial review after it merged.
     to fail schema validation with a generic `PARAMETER_ERROR` that also
     blamed `effort`'s default.
   - `host_ids` sent as JSON text (REST, `use_tool`) is parsed into a list.
-    `/mcp/` already did this.
+    `/mcp/` already did this. A lone host id becomes a one-item list, which
+    the handler refuses with the valid hosts.
   - The `host_ids` brief names the `cloud_allowed` requirement, and the
     `effort` brief covers `host_ids`.
   - `CONSULT_COUNCIL_FAILED` reports `validation_error` when every member
     was refused for a validation reason, such as a host outside the
     operator's job. Otherwise it reports `system_error`, as before.
-  - Council records are written once the whole council returns. A cancelled
-    council records every member as `cancelled` without hashes, including a
-    member that had already answered, because its answer and hash key never
-    reached the caller.
+  - Council records are written once the whole council returns. When a
+    council is cancelled:
+    - a member that had already answered is recorded as `cancelled` without
+      hashes, because its answer and hash key never reached the caller;
+    - a member already refused or failed keeps that outcome;
+    - a member still running is recorded as `cancelled`.
+  - A council's hosts-file refusal no longer suggests standard effort, which
+    a council cannot use.
 - **Compatibility:** additive or corrective. Every call 1.51.0 accepted is
   still accepted. Calls with the wrong size are still refused, now with the
   council's own code.
