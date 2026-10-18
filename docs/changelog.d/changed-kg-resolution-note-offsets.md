@@ -1,1 +1,0 @@
-- Interface contract 1.38.0: KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.

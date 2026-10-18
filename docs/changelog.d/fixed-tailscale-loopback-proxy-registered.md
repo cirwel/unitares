@@ -1,1 +1,0 @@
-- **Fixed:** `deploy-status.sh` now registers the `tailscale-loopback-proxy` LaunchAgent, a second instance of `scripts/ops/ipv6_loopback_proxy.py` that forwards this host's Tailscale address to `:8767`. It used to print `UNGOVERNED`, so a change to the shared proxy script left it running old code without any verdict saying so.

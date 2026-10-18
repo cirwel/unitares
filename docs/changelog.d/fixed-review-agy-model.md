@@ -1,1 +1,0 @@
-- Replace the retired Antigravity review model pin with Gemini 3.8 Flash (High), verified in the installed CLI's model catalog. Explicit model overrides and model-family attribution remain supported.
