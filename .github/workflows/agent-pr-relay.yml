@@ -1,0 +1,105 @@
+name: Agent PR Relay
+
+# Hosted Claude/Codex sessions have no App credential: their GitHub proxy
+# holds the operator's login, so the PRs they open are authored by it
+# (#2874). This reopens such a PR under the unitares-pr-relay App so its
+# author is an App and an operator-authored PR keeps meaning the operator.
+# The original is closed with a link. Branch, commits and owner footer carry
+# over unchanged; the new body says the branch was pushed through the
+# operator login, so the relay records the credential path instead of
+# hiding it (docs/operations/github-workflow-conventions.md,
+# "Agent PRs through the operator login").
+#
+# Why pull_request_target: it runs this file as it is on master, never a
+# branch's copy, so a pushed branch cannot rewrite the relay or reach its key.
+# Keep it that way: no step may check out, run or install anything from the
+# PR. The key is in the master-only `pr-relay` environment, and the App can
+# only write pull requests, on this repository only.
+#
+# Label a PR `relay-hold` to keep it where it is. GITHUB_TOKEN writes do not
+# trigger workflows, so the rollback reopen below cannot loop.
+
+on:
+  pull_request_target:
+    branches: [ master, main ]
+    types: [ opened, reopened ]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: agent-pr-relay-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    if: >-
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.event.pull_request.head.ref, 'claude/') ||
+       startsWith(github.event.pull_request.head.ref, 'codex/')) &&
+      !contains(github.event.pull_request.labels.*.name, 'relay-hold')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: pr-relay
+    steps:
+      - name: Mint the relay App token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app
+        with:
+          client-id: ${{ vars.PR_RELAY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PR_RELAY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      - name: Reopen the PR under the App
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Read live: the payload is frozen at the event, and the session
+          # may have edited the body since.
+          gh api "repos/$REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          if [ "$(jq -r .state "$RUNNER_TEMP/pr.json")" != open ]; then
+            echo "::notice::#$PR is no longer open; nothing to relay."
+            exit 0
+          fi
+          jq -n --slurpfile pr "$RUNNER_TEMP/pr.json" --arg n "$PR" '
+            $pr[0] as $p
+            | {title: $p.title, head: $p.head.ref, base: $p.base.ref,
+               draft: $p.draft, maintainer_can_modify: true,
+               body: ("> Relayed from #" + $n + ". The hosted session that owns this branch pushed it through the operator login, which is the only GitHub credential hosted sessions have (#2874). The relay App opened this PR so the operator account is not its author.\n\n" + ($p.body // ""))}
+          ' > "$RUNNER_TEMP/new.json"
+
+          # One open PR per head and base: the original closes first, and
+          # reopens if the App cannot open its replacement.
+          gh api -X PATCH "repos/$REPO/pulls/$PR" -f state=closed > /dev/null
+          if ! GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/pulls" \
+              --input "$RUNNER_TEMP/new.json" > "$RUNNER_TEMP/created.json"; then
+            gh label create relay-hold --repo "$REPO" --color BFD4F2 \
+              --description "Keep this agent PR where it is; the PR relay skips it" --force > /dev/null || true
+            gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=relay-hold" > /dev/null || true
+            gh api -X PATCH "repos/$REPO/pulls/$PR" -f state=open > /dev/null
+            echo "::error::The relay App could not open a replacement; #$PR is reopened and held."
+            exit 1
+          fi
+          NEW="$(jq -r .number "$RUNNER_TEMP/created.json")"
+
+          # The queue label is earned on the new PR, never carried over.
+          gh label create agent-via-operator-login --repo "$REPO" --color FBCA04 \
+            --description "Agent PR opened through the operator's GitHub login (no App credential); not an operator act" \
+            --force > /dev/null || true
+          jq -c '{labels: ([.labels[].name | select(. != "approved-to-merge")] + ["agent-via-operator-login"] | unique)}' \
+            "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/labels.json"
+          GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/issues/$NEW/labels" \
+            --input "$RUNNER_TEMP/labels.json" > /dev/null || echo "::warning::Labels were not copied to #$NEW."
+
+          gh api -X POST "repos/$REPO/issues/$PR/comments" \
+            -f body="Reopened as #$NEW, authored by the relay App. Keep pushing to this branch; reviews, labels and follow-ups go on #$NEW." > /dev/null
+          echo "::notice::#$PR reopened as #$NEW under the relay App."
+          echo "Relayed #$PR to #$NEW." >> "$GITHUB_STEP_SUMMARY"
