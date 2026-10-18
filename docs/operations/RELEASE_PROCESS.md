@@ -33,7 +33,10 @@ the version choice, changelog, review, merge, tag, release page, Promote
 Release dispatch, the pin pull request and the `sdk-v*` tag (operator decision,
 2026-10-17, KG `2026-10-18T05:54:48.538440+00:00`). The operator's one act per
 release is approving the `release-promotion` environment, which GitHub enforces
-with a required reviewer who must be a user or team. Publishing the release
+with a required reviewer who must be a user or team. Until the agents' GitHub
+App holds `actions: write`, the operator also dispatches Promote Release
+(`gh workflow run promote-release.yml -f tag=vX.Y.Z`): the App can read
+workflow runs but not start them, as v3.4.0 found. Publishing the release
 page also archives the tagged tree on Zenodo, which mints a permanent software
 DOI, so publish only the reviewed release commit.
 
