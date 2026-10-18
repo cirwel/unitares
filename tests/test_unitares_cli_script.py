@@ -1538,6 +1538,7 @@ _compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
 MIGRATION_SCHEMA_BEFORE=76
 MIGRATION_SCHEMA_AFTER=76
 MIGRATION_APPLY_ATTEMPTED=1
+MIGRATION_RUNNING_BEFORE_OK=1
 MIGRATION_RUNNING_BEFORE=$'postgres-age\\ngovernance-mcp'
 _recover_same_target_migration_failure v2
 '''
@@ -1562,6 +1563,7 @@ _compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
 MIGRATION_SCHEMA_BEFORE=76
 MIGRATION_SCHEMA_AFTER=76
 MIGRATION_APPLY_ATTEMPTED=1
+MIGRATION_RUNNING_BEFORE_OK=1
 MIGRATION_RUNNING_BEFORE=""
 _recover_same_target_migration_failure v2
 '''
@@ -1570,7 +1572,29 @@ _recover_same_target_migration_failure v2
     )
     assert out.returncode == 1
     assert not log.exists()
-    assert "No services were running before the update" in out.stderr
+    assert "No application services were running before the update" in out.stderr
+
+
+def test_same_target_migration_failure_reports_unknown_pre_state_when_ps_failed(tmp_path):
+    """When the initial `compose ps` status query failed, recovery must not
+    claim nothing was running or blindly build/start services."""
+    log = tmp_path / "same-target.log"
+    script = f'''
+eval "$(sed -n '/^_backup_hint()/,/^}}/p;/^_dialectic_frontier_advanced()/,/^}}/p;/^_recover_same_target_migration_failure()/,/^}}/p' "{CLI}")"
+_compose() {{ printf 'compose %s\\n' "$*" >> "{log}"; return 0; }}
+MIGRATION_SCHEMA_BEFORE=76
+MIGRATION_SCHEMA_AFTER=76
+MIGRATION_APPLY_ATTEMPTED=1
+MIGRATION_RUNNING_BEFORE_OK=0
+MIGRATION_RUNNING_BEFORE=""
+_recover_same_target_migration_failure v2
+'''
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 1
+    assert not log.exists()
+    assert "Could not determine which services were running before the update" in out.stderr
 
 
 def test_update_hands_over_to_the_target_release_script(tmp_path):
@@ -1590,9 +1614,9 @@ def test_update_hands_over_to_the_target_release_script(tmp_path):
     marker = tmp_path / "reexec_marker.txt"
     (work / "scripts" / "unitares").write_text(
         "#!/usr/bin/env bash\n"
-        f'printf "reexec=%s from_label=%s from_sha=%s args=%s\\n" '
+        f'printf "reexec=%s from_label=%s from_sha=%s target_sha=%s args=%s\\n" '
         '"${UNITARES_UPDATE_REEXEC:-}" "${UNITARES_UPDATE_FROM_LABEL:-}" '
-        '"${UNITARES_UPDATE_FROM_SHA:-}" "$*" > "' + str(marker) + '"\n'
+        '"${UNITARES_UPDATE_FROM_SHA:-}" "${UNITARES_UPDATE_TARGET_SHA:-}" "$*" > "' + str(marker) + '"\n'
         'echo "v2 target script ran"\n'
     )
     (work / "scripts" / "unitares").chmod(0o755)
@@ -1603,6 +1627,10 @@ def test_update_hands_over_to_the_target_release_script(tmp_path):
 
     v1_sha = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    v2_sha = subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
@@ -1616,6 +1644,7 @@ def test_update_hands_over_to_the_target_release_script(tmp_path):
     assert "reexec=1" in recorded
     assert "from_label=v1.0.0" in recorded
     assert f"from_sha={v1_sha}" in recorded
+    assert f"target_sha={v2_sha}" in recorded
     assert "args=update --to v2.0.0 --yes" in recorded
 
 
@@ -1643,10 +1672,19 @@ def test_update_reexec_rolls_back_to_pre_checkout_release_on_migration_failure(t
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    # Create a v2.0.0 tag with a migration that fails when applied.
+    # Create a v2.0.0 tag whose target script emits a handover marker and whose
+    # migration fails when applied.
     work = tmp_path / "work_v2_fail"
     subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True)
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(work)]
+    target_script = (work / "scripts" / "unitares").read_text()
+    (work / "scripts" / "unitares").write_text(
+        target_script.replace(
+            '_migrate_quiesced() {\n',
+            '_migrate_quiesced() {\n    echo "v2 target script _migrate_quiesced ran"\n',
+            1,
+        )
+    )
     (work / "scripts" / "dev").mkdir(parents=True, exist_ok=True)
     (work / "scripts" / "dev" / "apply_migrations.py").write_text(
         "import sys\n"
@@ -1662,6 +1700,63 @@ def test_update_reexec_rolls_back_to_pre_checkout_release_on_migration_failure(t
     env["UNITARES_BACKUP_DIR"] = str(tmp_path / "backups")
     result = subprocess.run(
         [str(repo / "scripts" / "unitares"), "update", "--to", "v2.0.0", "--yes"],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 1
+    assert "v2 target script _migrate_quiesced ran" in result.stdout
+    assert result.stdout.count("Installed:") == 1
+    assert "Rolling the code back to v1.0.0" in result.stderr
+    head_after = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head_after == v1_sha
+
+
+def test_update_falls_through_in_process_when_target_script_lacks_reexec_support(tmp_path):
+    """When updating to a target whose `scripts/unitares` predates
+    `UNITARES_UPDATE_REEXEC`, `cmd_update` must keep its in-process migration
+    and rollback path rather than handing over to a script that would treat the
+    checkout as already on target."""
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=True)
+    docker_bin = tmp_path / "bin" / "docker"
+    docker_bin.write_text(
+        docker_bin.read_text().replace(
+            "\nexit 0\n",
+            '\ncase "$*" in *"SELECT COALESCE(MAX(version), 0)"*) echo 76; exit 0 ;; '
+            '*"pg_dump"*) echo "-- dump"; exit 0 ;; esac\nexit 0\n',
+        )
+    )
+    docker_bin.chmod(0o755)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+
+    v1_sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    work = tmp_path / "work_legacy_target"
+    subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(work)]
+    # Target script lacks UNITARES_UPDATE_REEXEC and would exit 99 if executed.
+    (work / "scripts" / "unitares").write_text("#!/usr/bin/env bash\nexit 99\n")
+    (work / "scripts" / "unitares").chmod(0o755)
+    (work / "scripts" / "dev").mkdir(parents=True, exist_ok=True)
+    (work / "scripts" / "dev" / "apply_migrations.py").write_text(
+        "import sys\n"
+        "if '--apply' in sys.argv:\n"
+        "    sys.exit(1)\n"
+        "print('1 pending migration')\n"
+    )
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "v0.9.0"], check=True)
+    subprocess.run([*git, "tag", "-a", "v0.9.0", "-m", "v0.9.0"], check=True)
+    subprocess.run(["git", "-C", str(work), "push", "-q", "origin", "--tags"], check=True)
+
+    env["UNITARES_BACKUP_DIR"] = str(tmp_path / "backups")
+    result = subprocess.run(
+        [str(repo / "scripts" / "unitares"), "update", "--to", "v0.9.0", "--yes"],
         env=env, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 1

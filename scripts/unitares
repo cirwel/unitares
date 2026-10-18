@@ -1271,12 +1271,14 @@ _recover_same_target_migration_failure() {
         for svc in ${MIGRATION_RUNNING_BEFORE:-}; do
             to_restart+=("$svc")
         done
-        if [ "${#to_restart[@]}" -gt 0 ]; then
+        if [ "${MIGRATION_RUNNING_BEFORE_OK:-0}" != "1" ]; then
+            echo "error: migrations did not complete on $target. Could not determine which services were running before the update; leaving application services stopped." >&2
+        elif [ "${#to_restart[@]}" -gt 0 ]; then
             echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
             _compose up -d --no-build --wait "${to_restart[@]}" >/dev/null 2>&1 \
                 || echo "       The stack did not restart either; see: unitares logs" >&2
         else
-            echo "error: migrations did not complete on $target. No services were running before the update; leaving the stack stopped." >&2
+            echo "error: migrations did not complete on $target. No application services were running before the update; not starting any." >&2
         fi
     fi
     _backup_hint
@@ -1308,7 +1310,7 @@ _rollback_code() {
 }
 
 cmd_update() {
-    local check_only=0 target="" assume_yes=0 reexeced=0 from_label="" from_sha=""
+    local check_only=0 target="" assume_yes=0 reexeced=0 from_label="" from_sha="" reexec_target_sha=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --check) check_only=1 ;;
@@ -1325,6 +1327,9 @@ cmd_update() {
         reexeced=1
         from_label="${UNITARES_UPDATE_FROM_LABEL:-}"
         from_sha="${UNITARES_UPDATE_FROM_SHA:-}"
+    fi
+    if [ "$reexeced" = "1" ]; then
+        reexec_target_sha="${UNITARES_UPDATE_TARGET_SHA:-}"
     fi
     _require_compose_install existing || return 1
 
@@ -1345,14 +1350,18 @@ cmd_update() {
         echo "Installed: $current"
         echo "Target:    $target"
     fi
-    if ! git -C "$root" ls-remote "$(_update_remote)" HEAD >/dev/null 2>&1; then
-        echo "error: could not reach $(_update_remote); check the network and try again." >&2
-        return 1
-    fi
-    target_sha=$(_remote_commit "$root" "$target")
-    if [ -z "$target_sha" ]; then
-        echo "error: $(_update_remote) has no tag or branch named $target." >&2
-        return 1
+    if [ -n "$reexec_target_sha" ]; then
+        target_sha="$reexec_target_sha"
+    else
+        if ! git -C "$root" ls-remote "$(_update_remote)" HEAD >/dev/null 2>&1; then
+            echo "error: could not reach $(_update_remote); check the network and try again." >&2
+            return 1
+        fi
+        target_sha=$(_remote_commit "$root" "$target")
+        if [ -z "$target_sha" ]; then
+            echo "error: $(_update_remote) has no tag or branch named $target." >&2
+            return 1
+        fi
     fi
 
     # Compare commits, not names: a checkout moved by commit shows a SHA, not
@@ -1398,6 +1407,7 @@ cmd_update() {
     MIGRATION_SCHEMA_AFTER=""
     MIGRATION_APPLY_ATTEMPTED=0
     MIGRATION_RUNNING_BEFORE=""
+    MIGRATION_RUNNING_BEFORE_OK=0
     if [ "$current_sha" = "$target_sha" ]; then
         if [ "$reexeced" = "1" ] && [ -n "$from_sha" ] && [ "$from_sha" != "$target_sha" ]; then
             local prev_label="${from_label:-$from_sha}"
@@ -1454,27 +1464,34 @@ cmd_update() {
 
     git -C "$root" checkout --quiet --detach "$fetched" || return 1
 
-    # Hand over to the checked-out release's own scripts/unitares so its
-    # migration flags and recovery logic run instead of the old release's
-    # already-parsed bash functions (#2891). Guarded by UNITARES_UPDATE_REEXEC
-    # so a target script cannot re-exec in a loop.
-    if [ "$reexeced" = "0" ] && [ -x "$root/scripts/unitares" ]; then
+    # Hand over to the checked-out release's own scripts/unitares when that
+    # target script supports UNITARES_UPDATE_REEXEC, so its migration flags and
+    # recovery logic run instead of the old release's already-parsed bash
+    # functions (#2891). Guarded by UNITARES_UPDATE_REEXEC so a target script
+    # cannot re-exec in a loop; older targets without the handover marker fall
+    # through to the in-process migration and rollback path.
+    if [ "$reexeced" = "0" ] \
+        && [ -x "$root/scripts/unitares" ] \
+        && grep -q "UNITARES_UPDATE_REEXEC" "$root/scripts/unitares" 2>/dev/null; then
         UNITARES_UPDATE_REEXEC=1 \
         UNITARES_UPDATE_FROM_LABEL="$current" \
         UNITARES_UPDATE_FROM_SHA="$current_sha" \
+        UNITARES_UPDATE_TARGET_SHA="$fetched" \
             exec "$root/scripts/unitares" update --to "$target" --yes
     fi
 
+    local rollback_label="${from_label:-$current}"
+    local rollback_sha="${from_sha:-$current_sha}"
     if ! _migrate_quiesced "$target"; then
         echo "error: migrations did not complete for $target." >&2
-        _rollback_code "$root" "$current" "$current_sha" "$target"
+        _rollback_code "$root" "$rollback_label" "$rollback_sha" "$target"
         return 1
     fi
 
     echo "… Rebuilding and starting the stack"
-    _compose up -d --build --wait || { echo "error: the stack did not come up on $target." >&2; _rollback_code "$root" "$current" "$current_sha" "$target"; return 1; }
+    _compose up -d --build --wait || { echo "error: the stack did not come up on $target." >&2; _rollback_code "$root" "$rollback_label" "$rollback_sha" "$target"; return 1; }
 
-    _report_health "Updated $current → $target."
+    _report_health "Updated ${rollback_label} → $target."
 }
 
 cmd_tui() {
