@@ -104,6 +104,11 @@ TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # GitHub-issued App ID -> bot actor ID. This is review-evidence admission
 # only, configured in the trusted gate checkout, never in a PR's marker.
 TRUSTED_REVIEW_APPS = {5306351: 342195540}  # UNITARES agents
+# Bot actor IDs whose PRs the sweep may route to a reviewer. Routing only:
+# these actors' comments are never review evidence (TRUSTED_REVIEW_APPS is).
+# unitares-pr-relay reopens hosted-session PRs under its own author
+# (agent-pr-relay.yml), so without this they would drop out of the sweep.
+ROUTED_AUTHOR_APPS = {344200749}  # unitares-pr-relay[bot]
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
@@ -274,6 +279,9 @@ def pr_fields(pr: dict) -> dict:
         "trustedReviewApp": (author.get("type") == "Bot"
                              and type(author.get("id")) is int
                              and author["id"] in TRUSTED_REVIEW_APPS.values()),
+        "routedAuthorApp": (author.get("type") == "Bot"
+                            and type(author.get("id")) is int
+                            and author["id"] in ROUTED_AUTHOR_APPS),
         "sameRepository": (type(head_repo) is int and head_repo > 0
                            and type(base_repo) is int and head_repo == base_repo),
         "updatedAt": pr.get("updated_at", ""),
@@ -3554,7 +3562,7 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
         if not p.get("sameRepository"):
             continue
         if (login.lower() != owner.lower() and login not in BOT_AUTHORS
-                and not p.get("trustedReviewApp")):
+                and not p.get("trustedReviewApp") and not p.get("routedAuthorApp")):
             continue
         updated = datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")).timestamp()
         if now - updated < quiet_s:

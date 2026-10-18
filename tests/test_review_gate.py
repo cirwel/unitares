@@ -1144,7 +1144,8 @@ def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, 
     assert info == {"number": 7, "headRefOid": "abc", "headRefName": "claude/topic",
                     "baseRefName": "master", "state": expected, "isDraft": False,
                     "author": {"login": "cirwel"}, "updatedAt": "2026-10-03T00:00:00Z",
-                    "labels": [{"name": "x"}], "trustedReviewApp": False, "sameRepository": True}
+                    "labels": [{"name": "x"}], "trustedReviewApp": False,
+                    "routedAuthorApp": False, "sameRepository": True}
 
 
 def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
@@ -3942,6 +3943,26 @@ def test_sweep_app_eligibility_uses_github_metadata_not_name(login, actor_id, ac
                    author_association="COLLABORATOR")
     pr = rg.pr_fields(raw)
     assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+
+
+@pytest.mark.parametrize("actor_id,actor_type,eligible", [
+    (344200749, "Bot", True),
+    (344200749, "User", False),
+    ("344200749", "Bot", False),
+])
+def test_sweep_routes_relay_authored_prs(actor_id, actor_type, eligible):
+    raw = _rest_pr(user={"login": "unitares-pr-relay[bot]", "id": actor_id, "type": actor_type})
+    pr = rg.pr_fields(raw)
+    assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+
+
+def test_relay_app_comments_are_not_review_evidence():
+    """Routing a PR is not trusting its author's comments as review records."""
+    assert not rg.trusted_review_comment({
+        "author_association": "NONE",
+        "user": {"id": 344200749, "type": "Bot"},
+        "performed_via_github_app": {"id": 5365160},
+    })
 
 
 @pytest.mark.parametrize("head_repo", [{"id": 99}, None, {}, {"id": True}])
