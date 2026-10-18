@@ -1,1 +1,0 @@
-- Correct present-tense claims in 39 living docs that the current code contradicted (setup steps, defaults, bind addresses, token rotation, review routing, CI wiring, runbook health fields and others), found by a docs-against-code audit and each re-verified before editing.

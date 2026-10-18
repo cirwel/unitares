@@ -1,1 +1,0 @@
-- Draft a bounded knowledge-row change notice with explicit recipients, durable replay and no automatic wake or authority transfer.

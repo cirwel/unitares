@@ -1,1 +1,0 @@
-- Record the operator decision to retain evidence-attributed collaborative low/medium archival, preserving high/critical checks and sync ownership of imports.
