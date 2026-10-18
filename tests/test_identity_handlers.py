@@ -2282,6 +2282,171 @@ class TestHandleOnboardV2:
         ), "identity() v2 gate must NOT fire when client_session_id is presented"
 
     @pytest.mark.asyncio
+    async def test_cosmetic_name_alone_does_not_bypass_identity_v2_gate(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog
+    ):
+        """#2708: passing only cosmetic `name` to identity() must NOT count as
+        a proof signal for the S13 fresh-instance gate."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_identity_adapter
+
+        existing_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Victim_20260207",
+            "label": "VictimLabel",
+        }
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident-2708", metadata={}),
+        ]
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+            result = await handle_identity_adapter({"name": "CosmeticOnly"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["identity_status"] == "created"
+        assert data["uuid"] != existing_uuid
+        assert any(
+            "[FRESH_INSTANCE]" in record.getMessage()
+            and "identity()" in record.getMessage()
+            for record in caplog.records
+        ), "identity(name=...) with no proof signal must fire the S13 fresh-instance gate (#2708)"
+
+    @pytest.mark.asyncio
+    async def test_onboard_parent_agent_id_with_proof_signal_mints_fresh(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog
+    ):
+        """#2670: onboard(parent_agent_id=..., name=...) or alongside a session
+        signal must promote to force_new=true and mint a fresh child rather than
+        resuming the existing session identity and dropping parent_agent_id."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        existing_uuid = str(uuid.uuid4())
+        parent_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Existing_20260207",
+            "label": "ExistingAgent",
+        }
+        mock_db.get_identity.return_value = SimpleNamespace(
+            identity_id="new-child-ident",
+            metadata={},
+        )
+        mock_db.find_agent_by_label.return_value = None
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+            result = await handle_onboard_v2({
+                "name": "ChildAgent",
+                "client_session_id": "existing-session-slot",
+                "parent_agent_id": parent_uuid,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["is_new"] is True
+        assert data["uuid"] != existing_uuid
+        assert any(
+            "#2670" in record.getMessage() for record in caplog.records
+        ), "onboard with parent_agent_id must log promotion to force_new=true (#2670)"
+        upsert_calls = mock_db.upsert_agent.await_args_list
+        assert any(
+            call.kwargs.get("parent_agent_id") == parent_uuid for call in upsert_calls
+        ), f"Expected parent_agent_id={parent_uuid} in upsert_agent calls; got {upsert_calls!r}"
+
+    @pytest.mark.asyncio
+    async def test_identity_force_new_persists_under_own_key_without_old_handle_bleed(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog
+    ):
+        """#2707: identity(force_new=true) called with an existing session key
+        must persist the new agent under its own make_client_session_id(new_uuid)
+        and never hydrate handles or collide with the caller's old session key."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_identity_adapter
+        from src.mcp_handlers.identity.persistence import ensure_agent_persisted
+        from src.mcp_handlers.identity.shared import _session_identities
+
+        old_uuid = str(uuid.uuid4())
+        old_session_key = f"agent-{old_uuid[:12]}"
+        _session_identities[old_session_key] = {
+            "bound_agent_id": old_uuid,
+            "agent_uuid": old_uuid,
+            "display_agent_id": "OldDisplay_20260101",
+            "public_agent_id": "OldDisplay_20260101",
+            "agent_label": "OldAgentLabel",
+            "label": "OldAgentLabel",
+            "spawn_reason": "old_spawn_reason",
+        }
+        mock_redis.get.side_effect = lambda key: (
+            {
+                "agent_id": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            if key == old_session_key
+            else None
+        )
+        mock_db.get_identity.side_effect = [
+            None,
+            SimpleNamespace(identity_id="new-ident-2707", metadata={}),
+        ]
+        mock_db.get_agent.return_value = None
+        mock_db.create_session = AsyncMock(return_value=True)
+
+        try:
+            with caplog.at_level(logging.WARNING):
+                result = await handle_identity_adapter({
+                    "client_session_id": old_session_key,
+                    "force_new": True,
+                })
+            data = parse_result(result)
+            new_uuid = data["uuid"]
+            expected_new_key = f"agent-{new_uuid[:12]}"
+
+            assert data["success"] is True
+            assert data["identity_status"] == "created"
+            assert new_uuid != old_uuid
+            assert not any(
+                "S21A_PG_SESSION_COLLISION" in r.getMessage() for r in caplog.records
+            )
+
+            create_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert expected_new_key in create_session_keys
+            assert old_session_key not in create_session_keys
+
+            upsert_id_kwargs = mock_db.upsert_identity.await_args.kwargs
+            assert upsert_id_kwargs.get("spawn_reason") != "old_spawn_reason"
+            meta_written = upsert_id_kwargs.get("metadata") or {}
+            assert meta_written.get("public_agent_id") != "OldDisplay_20260101"
+            assert meta_written.get("label") != "OldAgentLabel"
+
+            # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
+            # refuses to hydrate handles from old_uuid's cached session entry.
+            direct_uuid = str(uuid.uuid4())
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="direct-ident-2707", metadata={}),
+            ]
+            await ensure_agent_persisted(direct_uuid, old_session_key)
+            direct_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert direct_meta.get("public_agent_id") != "OldDisplay_20260101"
+            assert direct_meta.get("label") != "OldAgentLabel"
+            assert mock_db.upsert_agent.await_args.kwargs.get("spawn_reason") != "old_spawn_reason"
+        finally:
+            _session_identities.pop(old_session_key, None)
+
+    @pytest.mark.asyncio
     @patch(
         "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
         return_value=(True, "test_caller_owns_target"),

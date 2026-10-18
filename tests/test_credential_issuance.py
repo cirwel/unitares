@@ -310,8 +310,12 @@ async def test_identity_adapter_session_resume_renames_only_with_proof(origin, r
          patch.object(handlers, "set_agent_label", label), \
          patch.object(handlers, "_cache_session", AsyncMock()), \
          patch.object(handlers, "_perform_session_bind", AsyncMock()):
-        await handlers.handle_identity_adapter({"name": "attacker-chosen", "resume": True})
+        res, _ = await handlers.handle_identity_adapter(
+            {"agent_id": VICTIM, "name": "attacker-chosen", "resume": True}
+        ), None
+        body = json.loads(res[0].text)
 
+    assert body["resumed"] is True
     assert label.await_count == (1 if renamed else 0)
 
 

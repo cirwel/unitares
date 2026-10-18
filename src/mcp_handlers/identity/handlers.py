@@ -660,7 +660,14 @@ async def handle_identity_v2(
     if name and not identity.get("created") and not _label_write_allowed(agent_uuid):
         name = None
     if name:
-        success = await set_agent_label(agent_uuid, name, session_key=session_key)
+        from .shared import make_client_session_id
+
+        label_session_key = (
+            make_client_session_id(agent_uuid)
+            if identity.get("created")
+            else session_key
+        )
+        success = await set_agent_label(agent_uuid, name, session_key=label_session_key)
         if success:
             identity["label"] = name
             identity["label_set"] = True
@@ -1296,13 +1303,14 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # taxonomy of continuity". Mirrors the gate in handle_onboard_v2 (~L1197);
     # without it, arg-less identity() falls through to IP:UA-pin resolution
     # and silently re-binds to the prior session, which is the resolution
-    # path S13 retires for the unauthenticated case.
+    # path S13 retires for the unauthenticated case. `name` is a cosmetic
+    # display label (PATH 2.5 removed 2026-04-17), never a lookup or proof
+    # signal (#2708).
     _has_proof_signal = bool(
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
         or arguments.get("agent_id")
-        or arguments.get("name")
     )
     # Coerced once, before the S13 default and like handle_identity_v2's
     # resolver call, so a string "false" is treated exactly as False here,
@@ -1375,6 +1383,8 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     result = await handle_identity_v2(arguments, session_key, model_type=model_type)
     agent_id = result.get("agent_id", result["agent_uuid"])
     agent_uuid = result["agent_uuid"]
+    from .shared import make_client_session_id
+    client_session_id = make_client_session_id(agent_uuid)
 
     # CRITICAL: Update request context so signature in response matches resolved identity
     try:
@@ -1394,6 +1404,9 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     #
     # Fix: when identity() creates a fresh agent (result.created is True),
     # write it to PostgreSQL before returning so the token's promise is real.
+    # Persist under the new agent's own client_session_id rather than the
+    # caller's old session_key so a force_new mint does not collide with or
+    # hydrate handles from the previous agent's session (#2707).
     if result.get("created") and not result.get("persisted"):
         try:
             # parent_agent_id is only set when the caller explicitly asserted
@@ -1408,7 +1421,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
             _spawn = arguments.get("spawn_reason") or result.get("spawn_reason") or ("new_session" if _parent else None)
             newly_persisted = await ensure_agent_persisted(
                 agent_uuid,
-                session_key,
+                client_session_id,
                 parent_agent_id=_parent,
                 spawn_reason=_spawn,
             )
@@ -1463,9 +1476,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Derive client_session_id for session continuity. Both it and the token
     # are credentials, returned only to a caller that proved ownership or
     # minted this identity (credential_issuance.py).
-    from .shared import make_client_session_id
     from .credential_issuance import WITHHELD_HINT, credentials_issuable, log_withheld
-    client_session_id = make_client_session_id(agent_uuid)
     issuable, issuance_basis = credentials_issuable(agent_uuid, minted=bool(result.get("created")))
     continuity_token = create_continuity_token(
         agent_uuid,
@@ -2075,16 +2086,22 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
         or arguments.get("name")
     )
     _force_new_requested = coerce_bool(arguments.get("force_new"), default=False)
+    if arguments.get("parent_agent_id") and not _force_new_requested:
+        # A declared parent_agent_id is a lineage declaration for a fresh mint
+        # by definition, even when accompanied by a proof signal such as a
+        # display name or a prior session key (#2670).
+        arguments["force_new"] = True
+        logger.info(
+            "[FRESH_INSTANCE] onboard() with declared parent_agent_id — "
+            "promoting to force_new=true so lineage declaration mints fresh (#2670)"
+        )
+        return None
     if not _has_proof_signal and not _force_new_requested:
         from src.mcp_handlers.identity_bootstrap import (
             is_strict_identity_required,
             strict_identity_refusal_payload,
         )
-        # A declared parent_agent_id is not ownership proof, but it is the
-        # lineage declaration this refusal asks for (its hint names it), and
-        # a declared-lineage onboard is a fresh mint by definition. So it
-        # passes here and is promoted to force_new like the permissive path.
-        if is_strict_identity_required() and not arguments.get("parent_agent_id"):
+        if is_strict_identity_required():
             logger.info(
                 "[FRESH_INSTANCE] STRICT_IDENTITY_REQUIRED=true and "
                 "arg-less onboard() has no caller-proof signal — refusing "
