@@ -2,7 +2,7 @@
 """Report whether the server's source, release, and publication surfaces agree.
 
 This is a scheduled reporter, not a pull-request gate. Releasing, verifying,
-promoting, and merging a maintenance tag back are separate human acts, and any
+promoting, and merging a maintenance tag back are separate acts, and any
 one of them may lag the others on purpose. A lag must not become invisible:
 the weekly workflow turns every disagreement into one deduplicated issue and
 closes that issue once the surfaces converge.
