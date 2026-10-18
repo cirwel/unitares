@@ -40,12 +40,8 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   from an enum to a bounded string and still accepts every value it accepted
   before; `consult` gains an optional `host_id`. It is a minor release: each
   behavior change is documented with what it affects and, where one exists,
-  the setting that restores the old behavior. Several have none, among them
-  the fallback reviewer's lost approval when reviewer hosts are set, the codex
-  lane hardening, the effect veto for inactive proposers, unweighted search
-  ranking on the AGE backend, the expired-pause write hold, CIRS auto-emit and
-  the EISV decision-path repairs. The four that change what an existing client
-  receives or may do are these.
+  the setting that restores the old behavior. Several have none. These change
+  what an existing client receives or may do.
   `observe(action="agent")` returns the listed identifier instead of the UUID
   to a caller that is neither the operator nor the observed agent, and refuses
   a target that names several agents with `AMBIGUOUS_TARGET` (#2736). An
@@ -53,10 +49,16 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   as `new_session`, and its lineage is rejected while that parent is live, so
   a dispatched child passes `spawn_reason="subagent"` (#2777). Imported memory
   is classified only by `source-<provider>-memory` tags (#2866). A paused
-  agent cannot lift its own pause with `agent(action="resume")` (#2813).
+  agent cannot lift its own pause with `agent(action="resume")` (#2813). An
+  expired pause reports writes held until its token-fenced resume commits
+  (#2836). `POST /v1/effect-veto` vetoes archived, disabled, deleted and
+  paused proposers (#2840). The others without a setting are the local
+  fallback reviewer's lost approval when reviewer hosts are set, the codex
+  lane hardening, unweighted search ranking on the AGE backend, CIRS
+  auto-emit and the EISV decision-path repairs.
   Migrations 074 to 078 must be applied before any 3.4.0 process starts, and
-  recovery is forward-only once 077 or 078 is applied: v3.3.0 code must not
-  run on that schema. The `scripts/unitares update` of v3.0.0 to v3.3.0
+  recovery is forward-only once 077 or 078 is applied: code from before 3.4.0
+  must not run on that schema. The `scripts/unitares update` of v3.0.0 to v3.3.0
   cannot pass the attestation that 077 and 078 require, so a Compose install
   on any of them moves its code to v3.4.0 by hand first and then runs the
   3.4.0 `update`
