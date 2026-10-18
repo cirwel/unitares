@@ -51,7 +51,7 @@ So a host only "sees" the schedulers it actually has:
 | `crontab` | your user crontab | any unix |
 | `github-actions` | `.github/workflows/*` under `--projects-root` | any repo host |
 | `systemd` | `--user` + system timers via `systemctl list-timers` | **Linux** (see caveat) |
-| `launchd` | `~/Library/LaunchAgents/*` | macOS only |
+| `launchd` | `~/Library/LaunchAgents/*`, reconciled with the user domain's loaded/disabled state and latest exit code | macOS only |
 | `claude` | `~/.claude/tasks` (scheduler `claude-tasks`) | Claude Code users |
 | `codex` / `hermes` | `~/.codex/automations`, `~/.hermes/cron/jobs.json` | those tools only |
 | `claude-hooks` | hook commands in `~/.claude/settings.json` / `settings.local.json` and installed Claude/Codex plugins' hook declarations, plus orphaned executables in `~/.claude/hooks` and plugin `hooks/` dirs | Claude Code / Codex plugin users |
@@ -61,6 +61,19 @@ So a host only "sees" the schedulers it actually has:
 Anything *not* in that list (Kubernetes CronJobs, Airflow DAGs, Jenkins, Temporal,
 …) is still representable via the **external escape hatch** below — it just isn't
 auto-discovered.
+
+On macOS, a plist on disk is configuration, not proof that launchd loaded it.
+The collector reads `launchctl list` (rather than `launchctl print`, whose
+environment block can contain credentials) and `launchctl print-disabled`.
+It reports an enabled plist absent from the loaded domain as `inactive`, a
+provably missing executable/interpreter script as `missing`, and the latest
+launchd exit as `last_status`. The normalized `scheduler_state`,
+`scheduler_last_exit_code`, and `scheduler_pid` fields retain that provenance.
+Wrapper receipts still supply timestamps and messages, but cannot overrule a
+newer contradictory launchd exit. A disproven `running` receipt is flagged as
+stale while its completion remains `unknown`; if its scheduler definition is
+gone, it remains visible as an `orphaned` attention row instead of disappearing
+from the census.
 
 ## Setup (any host)
 

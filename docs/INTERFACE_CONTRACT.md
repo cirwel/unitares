@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.49.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.50.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -898,3 +898,18 @@ renamed, and the description that says the rule is outside every input schema,
 so no input digest moves. Client action: a paused agent follows the refusal's
 `recovery` block (`self_recovery(action='check')`, its dialectic review, an
 operator, or the pause's expiry) instead of calling `resume` on itself.
+
+## 1.50.0 (2026-10-17)
+
+search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed.
+
+- **Affected:** `search_knowledge_graph`'s `discovery_type` parameter
+  description (was "Filter by type") and its tool description's
+  VALID ENUM VALUES block and example comment, which listed `answer`
+  (rejected) and omitted most accepted types.
+- **Compatibility:** description-only. Accepted values, validation and the
+  `bug` → `bug_found` normalization are unchanged.
+- **Schema digests:** `search_knowledge_graph` moves (its parameter
+  description changed); no other capability's digest moves.
+- **Client action:** none. A client that copied the old list should read the
+  parameter description instead.
