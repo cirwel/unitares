@@ -182,9 +182,13 @@ string literal in any of its four scanned roots — `src/`, `governance_core/`,
 Two things bound that reach. In code, a literal is flagged only when it *is* a
 name, so a route such as `/v1/sentinel/backlog` passes. And it carries a
 `NOT_IDENTITIES` list of files whose matches are homonyms rather than agent
-names — "steward" as a role in `VALID_ROLES`, and the legacy `data/watcher`
-path component in `src/watcher_state_reader.py` — which are skipped outright
-rather than flagged.
+names, which are skipped outright rather than flagged:
+
+<!-- mirrors: scripts/dev/check_fleet_identity_leak.py::NOT_IDENTITIES -->
+- `src/evaluation/resident_validation/model.py`: "steward" as a role in
+  `VALID_ROLES`, unrelated to the agent of that name.
+- `src/watcher_state_reader.py`: the legacy `data/watcher` path component,
+  read only to migrate off the pre-#595 location.
 
 Text the server delivers verbatim is held to a stricter rule, because it has
 no comments and every word reaches a reader: a resident name anywhere in it, as
@@ -199,18 +203,19 @@ Python that becomes tool input schemas: a `Field`'s `description=` and
 `json_schema_extra` `"brief"`, a schema model's docstring, and the alias
 overrides in `src/alias_schema.py`. `NOT_IDENTITIES` does not apply to that
 text. Served files that already named residents when the rule arrived were
-listed in `SERVED_KNOWN_COUPLINGS`, each with the exact names it held, and
-reported on every run (currently none: the last entry,
-`src/tool_descriptions.json`, had its example mentions replaced with generic
-ones on 2026-09-27), so no served file is exempt from these rules. Schema text
-has no such entries.
+reported on every run rather than failed, each with the exact names it held, in
+`SERVED_KNOWN_COUPLINGS` <!-- mirrors: scripts/dev/check_fleet_identity_leak.py::SERVED_KNOWN_COUPLINGS -->
+(currently none: the last entry, `src/tool_descriptions.json`, had its example
+mentions replaced with generic ones on 2026-09-27), so no served file is exempt
+from these rules. Schema text has no such entries.
 
 Provenance in a **comment** is deliberately not flagged — a note explaining that
 a threshold has its value because of what a particular resident did on a
 particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
-The guard also prints the couplings that already exist and have not been fixed
+The guard also prints the couplings that already exist and have not been fixed,
+its `KNOWN_COUPLINGS` <!-- mirrors: scripts/dev/check_fleet_identity_leak.py::KNOWN_COUPLINGS -->
 (currently none: the last one, the resident-specific Vigil route module, moved
 to `agents/vigil/routes.py` on 2026-09-27) on every run, passing or failing —
 these are reported but do not fail the build. It does not silence them: a guard
