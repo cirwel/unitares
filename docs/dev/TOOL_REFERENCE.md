@@ -922,7 +922,7 @@ RELATED TOOLS:
 - knowledge(action='get'): Get agent's knowledge
 
 VALID ENUM VALUES:
-- discovery_type: "bug_found" | "insight" | "pattern" | "improvement" | "question" | "answer" | "note" | "exploration"
+- discovery_type: the values listed in the discovery_type parameter description (describe_tool)
 - severity: "low" | "medium" | "high" | "critical"
 - status: "open" | "resolved" | "archived" | "disputed"
 
@@ -930,7 +930,7 @@ VALID ENUM VALUES:
 EXAMPLE REQUEST:
 {
   "tags": ["security", "bug"],
-  "discovery_type": "bug_found",  # Valid: "bug_found" | "insight" | "pattern" | "improvement" | "question" | "answer" | "note" | "exploration"
+  "discovery_type": "bug_found",  # Valid values: see the discovery_type parameter description
   "severity": "high",  # Valid: "low" | "medium" | "high" | "critical"
   "limit": 10
 }

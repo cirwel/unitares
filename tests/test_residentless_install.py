@@ -423,3 +423,27 @@ def test_an_empty_roster_still_stamps_rows(residentless):
         assert stamp is not None and stamp["carried_from"] is None
     finally:
         eisv_instrument.reset_caches()
+
+
+def test_unitares_tui_renders_with_no_residents():
+    """`unitares tui` is what a fresh install shows first: no residents, maybe no tiers."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "unitares_tui.py"
+    spec = importlib.util.spec_from_file_location("unitares_tui_residentless", path)
+    tui = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tui)
+
+    data = {
+        "health": {"status": "ok", "version": "1"},
+        "tiers": None,
+        "residents": {"success": True, "configured": [], "residents": []},
+    }
+    assert tui.resident_rows(data) == []
+    assert tui.overview_lines(data)
+    assert tui.snapshot(data)["residents"] == []
+    app = tui.App(interval=10)
+    app.data = data
+    assert app.residents() == []
+    assert app.handle(ord("j")) is True  # navigation on an empty roster must not crash
