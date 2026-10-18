@@ -1,0 +1,1 @@
+- The knowledge search description no longer carries a hand-copied discovery_type list (it named an invalid `answer` and omitted most valid types); it points to the parameter description, which is generated from the schema.
