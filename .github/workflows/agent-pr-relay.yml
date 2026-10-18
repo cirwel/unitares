@@ -53,6 +53,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-pull-requests: write
+          permission-contents: read
 
       - name: Reopen the PR under the App
         env:
@@ -67,6 +68,10 @@ jobs:
           gh api "repos/$REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
           if [ "$(jq -r .state "$RUNNER_TEMP/pr.json")" != open ]; then
             echo "::notice::#$PR is no longer open; nothing to relay."
+            exit 0
+          fi
+          if jq -e 'any(.labels[]; .name == "relay-hold")' "$RUNNER_TEMP/pr.json" > /dev/null; then
+            echo "::notice::#$PR carries relay-hold; left where it is."
             exit 0
           fi
           jq -n --slurpfile pr "$RUNNER_TEMP/pr.json" --arg n "$PR" '
@@ -90,11 +95,11 @@ jobs:
           fi
           NEW="$(jq -r .number "$RUNNER_TEMP/created.json")"
 
-          # The queue label is earned on the new PR, never carried over.
+          # Queue labels are earned on the new PR, never carried over.
           gh label create agent-via-operator-login --repo "$REPO" --color FBCA04 \
             --description "Agent PR opened through the operator's GitHub login (no App credential); not an operator act" \
             --force > /dev/null || true
-          jq -c '{labels: ([.labels[].name | select(. != "approved-to-merge")] + ["agent-via-operator-login"] | unique)}' \
+          jq -c '{labels: ([.labels[].name | select(. != "approved-to-merge" and . != "operator-armed")] + ["agent-via-operator-login"] | unique)}' \
             "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/labels.json"
           GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/issues/$NEW/labels" \
             --input "$RUNNER_TEMP/labels.json" > /dev/null || echo "::warning::Labels were not copied to #$NEW."
