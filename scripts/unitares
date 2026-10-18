@@ -1451,7 +1451,8 @@ Install (Docker Compose install in this checkout):
   logs [service]                    Follow logs (default: governance-mcp)
 
 Commands:
-  tui [--interval N] [--once]       Live terminal view: residents, EISV, tools
+  tui [--interval N] [--once [--json]]
+                                    Live terminal view: residents, EISV, tools
                                     (read-only; wraps `status --json`)
   agent <id|label> [--json]         Drill into one agent: state, verdict,
                                     composition, trajectory
