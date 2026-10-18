@@ -947,6 +947,20 @@ class ConsultParams(AgentIdentityMixin):
         ),
         json_schema_extra={"brief": "Pin a host; omitted effort follows it. External needs cloud_allowed; no fallback."},
     )
+    host_ids: Optional[List[Annotated[str, Field(min_length=1, max_length=128)]]] = Field(
+        None,
+        min_length=2,
+        max_length=3,
+        description=(
+            "Council: ask 2 or 3 distinct CLI hosts (claude:host-adapter, "
+            "codex:host-adapter, antigravity:host-adapter) the same brief in "
+            "parallel; each answer comes back separately under members, with "
+            "its own audit record. Needs cloud_allowed; effort is thorough, "
+            "allow_degraded false, and host_id unset. Nothing combines the "
+            "answers. No fallback or same-family exclusion: you choose the hosts."
+        ),
+        json_schema_extra={"brief": "Council: 2-3 CLI hosts at once."},
+    )
 
     brief: str = Field(
         ...,
@@ -962,16 +976,18 @@ class ConsultParams(AgentIdentityMixin):
         ),
     )
     effort: Literal["standard", "thorough"] = Field(
-        # host_id is declared first, so it is validated before this factory.
-        # Keep the schema free of an unconditional default: clients must not
-        # insert standard before we can infer a selected CLI host's lane.
+        # host_id and host_ids are declared first, so they are validated before
+        # this factory. Keep the schema free of an unconditional default:
+        # clients must not insert standard before we can infer a selected CLI
+        # host's lane.
         default_factory=lambda data: (
-            "thorough" if data.get("host_id") in (
+            "thorough" if data.get("host_ids") or data.get("host_id") in (
                 "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter",
             ) else "standard"
         ),
         description=(
-            "Omit to infer from host_id, or use standard when no host is selected. "
+            "Omit to infer from host_id (thorough for host_ids), or use standard "
+            "when no host is selected. "
             "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
             "An explicit value must match the selected host. Neither is a latency SLA."
         ),

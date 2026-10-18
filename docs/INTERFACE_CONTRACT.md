@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.50.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.51.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -913,3 +913,31 @@ search_knowledge_graph's discovery_type filter description lists the values sear
   description changed); no other capability's digest moves.
 - **Client action:** none. A client that copied the old list should read the
   parameter description instead.
+
+## 1.51.0 (2026-10-18)
+
+`consult` accepts an optional `host_ids`: a council of 2 or 3 distinct CLI
+hosts (`claude:host-adapter`, `codex:host-adapter`,
+`antigravity:host-adapter`) asked the same brief in parallel. Each member is
+an ordinary pinned consultation: the same route postconditions, its own
+`consultation_id`, audit record and `hash_key`, and no failover. The records
+carry a shared `council_id`. The result (`unitares.consultation_council.v1`)
+lists the members side by side under `members`, with `answered` and `asked`;
+nothing combines, ranks or votes on the answers.
+
+- **Affected:** `consult`'s input schema (one added optional property, and
+  the `effort` default, which becomes `thorough` when `host_ids` is set) and
+  its tool description.
+- **Compatibility:** additive. A call without `host_ids` is unchanged. A
+  council needs `privacy='cloud_allowed'`, `effort='thorough'` (the default)
+  and `allow_degraded=false`, and cannot be combined with `host_id`; any
+  other combination, a size outside 2 or 3, a repeated host or a non-CLI host
+  is refused before any host is contacted, and is not recorded. A member the
+  operator's `consult.thorough` job excludes or switches off fails alone and
+  is recorded. The call succeeds with `status` `completed` or `partial` when
+  at least one member answered, and fails with `CONSULT_COUNCIL_FAILED`
+  when none did.
+- **Schema digests:** `consult` moves; `surface_sha256` moves with it.
+- **Client action:** none. A client that wants several families' advice
+  can make one `consult(host_ids=[...], privacy='cloud_allowed')` call
+  instead of one call per host.
