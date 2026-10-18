@@ -79,7 +79,7 @@ These four each look like 1-2 weeks of storage/fit work. None of them are blocke
 
 ## New helper: `reconstruct_eisv_series`
 
-`src/mcp_handlers/identity/lineage_verification.py` (proposed module name at draft time was `<draft>/src/identity/lineage_continuity.py`; landed at the current path during implementation) exposes:
+The draft proposed a module-level helper in `<draft>/src/identity/lineage_continuity.py` exposing the signature below. As built, the helper is an async backend method, `reconstruct_eisv_series(self, agent_id, window, *, epoch=None)` in `src/db/mixins/state.py`, and the scorer that consumes it lives in `src/identity/trajectory_continuity.py`. (`src/mcp_handlers/identity/lineage_verification.py` is the unrelated same-host ppid check and defines neither.) Draft-time signature:
 
 ```python
 def reconstruct_eisv_series(
@@ -96,6 +96,8 @@ def reconstruct_eisv_series(
     """
 ```
 
+**As built:** the method acquires its own connection (no `conn` parameter) and maps E→`state_json.E`, I→`integrity`, S→`entropy`, V→`volatility`. The draft-time E→`entropy`, S→`stability_index` mapping above is superseded; the `stability_index` column is retired (migration 058 made it nullable and nulled the post-retirement sentinels; no Python writer or reader uses it, though the SQL views `core.v_active_identities` and `core.mv_latest_agent_states` still project the column).
+
 **SQL shape.** `core.agent_state` stores `identity_id` (BIGINT FK to `core.identities`), not the text `agent_id`, so the helper joins `core.identities` to resolve the UUID string. This matches the existing pattern in `get_latest_agent_state` at `src/db/mixins/state.py` (see the same file for `_row_to_agent_state` mapping — Python field name `void` corresponds to SQL column `volatility`; use the SQL name `volatility` in the query).
 
 ```sql
@@ -108,11 +110,13 @@ WHERE i.agent_id = $1
 ORDER BY s.recorded_at ASC;
 ```
 
+As built, the query selects `s.entropy, s.integrity, s.volatility, s.state_json, s.recorded_at` (no `stability_index`), joins on `i.identity_id = s.identity_id` (see v3.3-I), and also filters `s.synthetic = false`.
+
 Index coverage: `db/postgres/schema.sql:169` provides `idx_agent_state_identity_time ON core.agent_state(identity_id, recorded_at DESC)`. Planner resolves identity first, then range-scans the index. No new index needed.
 
 **Epoch filter (v3.2 correction).** The 2026-04-25 code-review pass found that every row written by `record_agent_state` (`src/db/mixins/state.py:33`) stamps an `epoch` column, and every existing read query filters on `s.epoch = $N`. Without the filter, the helper returns rows from all epochs (pre-grounding + grounded) on any deployed instance, conflating calibration data across the EISV grounding boundary. Use `GovernanceConfig.CURRENT_EPOCH` as the bound at call time; do not hardcode a literal.
 
-**Schema specifics** (for implementor): columns are `REAL NOT NULL DEFAULT ...`; `recorded_at` is `TIMESTAMPTZ NOT NULL`. Group rows into per-dimension lists in Python by reading the four scalar columns in order.
+**Schema specifics** (for implementor): columns are `REAL NOT NULL DEFAULT ...`; `recorded_at` is `TIMESTAMPTZ NOT NULL`. Group rows into per-dimension lists in Python by reading the four scalar columns in order. (As built: three scalar columns, `integrity`, `entropy`, `volatility`, plus `E` read from `state_json`.)
 
 ## Plausibility → verdict thresholds
 
@@ -143,7 +147,7 @@ Near-term call-sites and their postures:
 
 ## Implementation sketch
 
-- **Location:** `<draft>/src/identity/lineage_continuity.py` (new — landed at `src/mcp_handlers/identity/lineage_verification.py` during implementation; this section captures the design intent at draft time). Consumers import `score_trajectory_continuity` directly.
+- **Location:** `<draft>/src/identity/lineage_continuity.py` (new; this section captures the design intent at draft time. As built, the scorer landed at `src/identity/trajectory_continuity.py` and the series reader as a backend method in `src/db/mixins/state.py`). Consumers import `score_trajectory_continuity` directly.
 - **DB pattern:** sync DB read inside `run_in_executor`. The project's `src/agent_loop_detection.py:374` template uses in-memory state and does *not* generalize to DB reads. The correct template already exists at `tests/test_db_utils.py:36-38` — it runs an asyncpg connection on a fresh event loop inside the executor thread via `asyncio.run(...)`. This adds no new dependency (project already has `asyncpg>=0.29.0`; `psycopg2` is not in `pyproject.toml`). Env var is `DB_POSTGRES_URL` (see `src/db/postgres_backend.py:72`), not `DATABASE_URL`. An implementation may promote the `test_db_utils` pattern into a reusable helper, but no new driver is required.
 - **Exposure:** internal policy consumers only. No MCP tool wrapper in v3.
 - **Observability:** emits a KG discovery of type `trajectory_continuity_score` with `plausibility`, `verdict`, `components` (per-dimension), and `observations`. Provides audit trail.
