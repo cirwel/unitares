@@ -3544,8 +3544,9 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
     - Drafts need review-requested; ready PRs remain eligible automatically.
       Reading never authorizes editing, marking ready, or merging.
     - `no-auto-review` explicitly holds automatic review of unfinished work.
-    - Same-repository PRs from the owner, Dependabot, or an already trusted
-      review App. Forks, unknown authors and unreadable repository IDs wait.
+    - Same-repository PRs from the owner, Dependabot, an already trusted
+      review App, or a ROUTED_AUTHOR_APPS actor (routing only, no review
+      trust). Forks, unknown authors and unreadable repository IDs wait.
     - Nothing updated in the last `quiet_s`: the pusher's own review may be
       about to start, and the lock only sees reviews already running.
     """
