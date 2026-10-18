@@ -15,9 +15,12 @@ This page brings those results together with their sources, dates, and scope.
 |---|---|---|
 | Process attribution | Calls and stored findings are bound to the process that made them. | [Captured identity and write sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) |
 | Cross-session retrieval | A second process retrieves the first process's resolved finding, including its author and recorded closure. | [Captured successor sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) |
-| Governed review | A paused agent's submission cannot resolve its own review over a standing reviewer objection; the objection remains pending for facilitation. | [Review mechanism and observations](ontology/eisv-proprioception-contract.md) |
+| Governed review | A paused agent's submission cannot resolve its own review over a standing reviewer objection; the objection remains pending for facilitation. | [Review constraint implementation](../src/dialectic_protocol.py) |
 | Review-driven corrections | Published findings can be traced to fixes for evidence grading, approval handling, and preservation of unresolved findings. | [September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md) |
 | Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [August 11 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
+
+For predictive lift, pause benefit, and cross-operator verification, see the
+[evaluation boundaries](#evaluation-boundaries).
 
 The [two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) was captured
 on 2026-10-08 from a fresh Docker quickstart install. Its task is illustrative;
@@ -64,13 +67,13 @@ run, as infeasible for a single operator.
 <details>
 <summary>Recorded exercise of the review constraint</summary>
 
-The [review ledger](ontology/eisv-proprioception-contract.md) records 33
-non-canary sessions with a submission after a reviewer's rejection. Since the
-2026-07-02 reviewer-label split, the retained tally has 81 non-canary verdicts,
+The [historical exercise record](CHANGELOG.md) reports 33 non-canary sessions
+with a submission after a reviewer's rejection. The
+[September 17 review audit](plans/competitive-survival-audit-review-2026-09-17.md)
+reports 81 non-canary verdicts since the 2026-07-02 reviewer-label split,
 77 carrying reviewer conditions. Of 42 recorded dissents, one is a parse
 failure recorded as disagreement rather than a reviewer's judgement. These
-counts describe the recorded review channel at that audit, not a current fleet
-rate.
+are retained historical counts, not a current fleet rate.
 
 </details>
 
