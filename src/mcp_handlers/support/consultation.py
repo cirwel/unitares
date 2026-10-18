@@ -264,6 +264,9 @@ class ConsultRequest:
     # router returns it so it is recorded like every other routed refusal.
     policy_refusal: tuple[str, str, str] | None = None
     consultation_id: str = field(default_factory=lambda: str(uuid4()))
+    # Set on each member of a council (host_ids), so the members' audit
+    # records can be read together.
+    council_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1422,6 +1425,8 @@ def _consultation_record(
         "status": data.get("status"),
         "request": dict(data.get("request") or {}),
     }
+    if request.council_id is not None:
+        record["council_id"] = request.council_id
     if data.get("status") == "cancelled":
         # The caller never receives a cancelled call's key, so hashes under
         # it could never be verified; the row records only that it happened.
@@ -1511,6 +1516,312 @@ def _record_consultation(
     }
 
 
+def _pinned_host_refusal(
+    host_id: str, config: inference_config.InferenceConfig,
+) -> tuple[str, str, str] | None:
+    """Why the operator's hosts file refuses a pinned thorough host, or None."""
+    job = config.jobs.get("consult.thorough")
+    entry = config.hosts.get(host_id)
+    if job is not None and host_id not in job.prefer:
+        return (
+            "CONSULT_HOST_NOT_IN_JOB",
+            f"{host_id} is not in the consult.thorough job's list "
+            f"({', '.join(job.prefer)})",
+            "Pin a host the consult.thorough job lists, or omit host_id.",
+        )
+    if entry is not None and not entry.enabled:
+        return (
+            "CONSULT_HOST_DISABLED",
+            f"{host_id} is switched off in the inference hosts file",
+            "Pin another host, or omit host_id for automatic routing.",
+        )
+    return None
+
+
+def _argument_refusal(request: ConsultRequest) -> ConsultationOutcome | None:
+    """The refusal for an invalid call, decided before routing, or None.
+
+    These refusals are not recorded: tool-usage counts them.
+    """
+    if request.requester_uuid is None:
+        return _failed(
+            request,
+            message="A resolved caller identity is required for consultation",
+            code="CONSULT_IDENTITY_REQUIRED",
+            category="auth_error",
+            recovery_action=(
+                "Bind this transport with start_session(force_new=true), then retry."
+            ),
+            failure_details={"reason": "resolved_identity_missing"},
+        )
+    if not request.brief or len(request.brief) > _BRIEF_MAX_CHARS:
+        return _failed(
+            request,
+            message="brief must contain 1 to 32000 non-whitespace characters",
+            code="INVALID_CONSULT_BRIEF",
+            category="validation_error",
+            recovery_action="Provide a shorter, non-empty consultation brief.",
+            failure_details={"reason": "brief_out_of_bounds"},
+        )
+    if request.purpose not in _PURPOSE_INSTRUCTIONS:
+        return _failed(
+            request,
+            message="Unknown consultation purpose",
+            code="INVALID_CONSULT_PURPOSE",
+            category="validation_error",
+            recovery_action="Use answer, critique, summarize, or generate.",
+        )
+    if request.effort not in {"standard", "thorough"}:
+        return _failed(
+            request,
+            message="Unknown consultation effort",
+            code="INVALID_CONSULT_EFFORT",
+            category="validation_error",
+            recovery_action="Use standard or thorough.",
+        )
+    if request.privacy not in {"local", "cloud_allowed"}:
+        return _failed(
+            request,
+            message="Unknown consultation privacy policy",
+            code="INVALID_CONSULT_PRIVACY",
+            category="validation_error",
+            recovery_action="Use local or cloud_allowed.",
+        )
+    if request.response_mode not in {"compact", "full"}:
+        return _failed(
+            request,
+            message="Unknown consultation response mode",
+            code="INVALID_CONSULT_RESPONSE_MODE",
+            category="validation_error",
+            recovery_action="Use compact or full.",
+        )
+    if request.host_id is not None and request.host_id not in _SELECTABLE_HOST_ROUTES:
+        return _failed(
+            request,
+            message="Unknown consultation host",
+            code="INFERENCE_HOST_NOT_FOUND",
+            category="validation_error",
+            recovery_action=(
+                "Choose a host listed by list_inference_hosts that accepts consult: "
+                + ", ".join(_SELECTABLE_HOST_ROUTES)
+            ),
+            failure_details={"valid_host_ids": list(_SELECTABLE_HOST_ROUTES)},
+        )
+    return None
+
+
+_COUNCIL_SCHEMA = "unitares.consultation_council.v1"
+_COUNCIL_SIZES = (2, 3)
+
+
+def _council_refusal(
+    template: ConsultRequest, hosts: Any, host_id: Any,
+) -> tuple[str, str, str, dict[str, Any]] | None:
+    """Why a council call is refused before any host is contacted, or None:
+    (code, message, recovery, failure details)."""
+    if host_id is not None:
+        return (
+            "CONSULT_POLICY_UNSATISFIED",
+            "host_id and host_ids cannot be combined",
+            "Name every council member in host_ids, or pin one host with host_id.",
+            {"reason": "host_id_with_host_ids"},
+        )
+    if (
+        not isinstance(hosts, (list, tuple))
+        or not all(isinstance(h, str) for h in hosts)
+        or len(set(hosts)) != len(hosts)
+        or len(hosts) not in _COUNCIL_SIZES
+    ):
+        return (
+            "INVALID_CONSULT_COUNCIL",
+            "host_ids takes 2 or 3 distinct host ids",
+            "Name 2 or 3 different hosts: " + ", ".join(_THOROUGH_HOST_ROUTES),
+            {"reason": "council_size", "valid_host_ids": list(_THOROUGH_HOST_ROUTES)},
+        )
+    unknown = [h for h in hosts if h not in _THOROUGH_HOST_ROUTES]
+    if unknown:
+        return (
+            "INFERENCE_HOST_NOT_FOUND",
+            "A council member is not a thorough-lane host",
+            "A council asks CLI hosts only: " + ", ".join(_THOROUGH_HOST_ROUTES),
+            {"reason": "council_host_not_thorough", "valid_host_ids": list(_THOROUGH_HOST_ROUTES)},
+        )
+    if (
+        template.effort != "thorough"
+        or template.privacy != "cloud_allowed"
+        or template.allow_degraded
+    ):
+        return (
+            "CONSULT_POLICY_UNSATISFIED",
+            "A council needs effort='thorough', privacy='cloud_allowed' and "
+            "allow_degraded=false",
+            "Pass privacy='cloud_allowed'; omit effort and allow_degraded.",
+            {"reason": "council_policy_conflict"},
+        )
+    return None
+
+
+async def _council_member(request: ConsultRequest) -> ConsultationOutcome:
+    """Run and record one council member; a member that raises fails alone."""
+    try:
+        outcome = await run_consultation(request)
+    except asyncio.CancelledError:
+        _record_consultation(request, _with_failover(request, _cancelled(request)))
+        raise
+    except Exception as exc:
+        logger.warning(f"council member {request.host_id} raised: {type(exc).__name__}")
+        outcome = _failed(
+            request,
+            message="The council member raised unexpectedly",
+            code="INTERNAL_INFERENCE_CONTRACT",
+            category="system_error",
+            recovery_action="Inspect the server logs before retrying this host.",
+            failure_details={"reason": "council_member_raised"},
+        )
+    outcome = _with_failover(request, outcome)
+    _record_consultation(request, outcome)
+    return outcome
+
+
+def _council_member_entry(
+    request: ConsultRequest, outcome: ConsultationOutcome,
+) -> dict[str, Any]:
+    entry = {
+        key: value for key, value in outcome.data.items()
+        if key not in {"schema", "authority", "guidance"}
+    }
+    entry["host_id"] = request.host_id
+    if outcome.failure is not None:
+        entry["message"] = outcome.failure.message
+        entry["recovery"] = outcome.failure.recovery
+    return entry
+
+
+async def _handle_council(
+    arguments: Dict[str, Any], brief_text: str, requester_uuid: str | None,
+) -> Sequence[TextContent]:
+    """Ask each host in host_ids the same brief, in parallel.
+
+    Each member is an ordinary pinned consultation: the same route checks,
+    its own consultation id, record and hash key, and no failover. The
+    council only runs them together and returns them side by side; it does
+    not combine, rank or vote on the answers.
+    """
+    council_id = str(uuid4())
+    hosts = arguments.get("host_ids")
+    template = ConsultRequest(
+        brief=brief_text,
+        requester_uuid=requester_uuid,
+        purpose=str(arguments.get("purpose", "answer")),
+        effort=str(arguments.get("effort", "thorough")),
+        privacy=str(arguments.get("privacy", "local")),
+        allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
+        response_mode=str(arguments.get("response_mode", "compact")),
+        council_id=council_id,
+    )
+    data: dict[str, Any] = {
+        "schema": _COUNCIL_SCHEMA,
+        "council_id": council_id,
+        "authority": dict(_AUTHORITY),
+        "request": {
+            "purpose": template.purpose,
+            "effort": template.effort,
+            "privacy": template.privacy,
+            "host_ids": list(hosts) if isinstance(hosts, (list, tuple)) else hosts,
+        },
+        "guidance": {
+            "on_record_review": (
+                "Use request_review when you need governed, on-record judgment."
+            ),
+            "council": (
+                "Each member answered on its own. Nothing combined or ranked the "
+                "answers; agreement between models is not a verdict."
+            ),
+        },
+    }
+
+    refused = _argument_refusal(template)
+    if refused is not None:
+        failure = refused.failure
+        assert failure is not None
+        data.update(status="failed", failure=refused.data["failure"])
+        return [error_response(
+            failure.message,
+            error_code=failure.code,
+            error_category=failure.category,
+            details=data,
+            recovery=failure.recovery,
+            arguments=None if failure.code == "CONSULT_IDENTITY_REQUIRED" else arguments,
+        )]
+    council_refusal = _council_refusal(template, hosts, arguments.get("host_id"))
+    if council_refusal is not None:
+        code, message, recovery, details = council_refusal
+        data.update(status="failed", failure={"code": code, "category": "validation_error", **details})
+        return [error_response(
+            message,
+            error_code=code,
+            error_category="validation_error",
+            details=data,
+            recovery={"action": recovery, "related_tools": ["consult", "list_inference_hosts"]},
+            arguments=arguments,
+        )]
+
+    loaded = inference_config.load()
+    members = []
+    for host_id in hosts:
+        if loaded.state == "error" or loaded.config is None:
+            refusal: tuple[str, str, str] | None = (
+                "INFERENCE_CONFIG_INVALID",
+                "The inference hosts file does not load, so the thorough lane refuses: "
+                f"{loaded.error}",
+                f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}.",
+            )
+        else:
+            refusal = _pinned_host_refusal(host_id, loaded.config)
+        members.append(ConsultRequest(
+            brief=template.brief,
+            requester_uuid=template.requester_uuid,
+            purpose=template.purpose,
+            effort=template.effort,
+            privacy=template.privacy,
+            response_mode=template.response_mode,
+            host_id=host_id,
+            thorough_host_id=host_id,
+            policy_refusal=refusal,
+            council_id=council_id,
+        ))
+
+    outcomes = await asyncio.gather(*(_council_member(member) for member in members))
+    answered = sum(1 for outcome in outcomes if outcome.ok)
+    data.update({
+        "status": (
+            "completed" if answered == len(members)
+            else "partial" if answered
+            else "failed"
+        ),
+        "answered": answered,
+        "asked": len(members),
+        "members": [
+            _council_member_entry(member, outcome)
+            for member, outcome in zip(members, outcomes)
+        ],
+        "message": f"{answered} of {len(members)} council members answered.",
+    })
+    if not answered:
+        return [error_response(
+            "No council member answered",
+            error_code="CONSULT_COUNCIL_FAILED",
+            error_category="system_error",
+            details=data,
+            recovery={
+                "action": "Read each member's failure and recovery; retry the hosts that can serve.",
+                "related_tools": ["consult", "list_inference_hosts"],
+            },
+            arguments=arguments,
+        )]
+    return success_response(data, agent_id=requester_uuid, arguments=arguments)
+
+
 @mcp_tool("consult", timeout=CONSULT_TIMEOUT_S)
 async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Ask for advisory model help without creating a governed review record."""
@@ -1523,6 +1834,8 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # historically accepts non-UUID agent_id values as legacy references; that
     # compatibility must not turn an unbound value into inference authority.
     requester_uuid = get_context_resolved_agent_id()
+    if arguments.get("host_ids") is not None:
+        return await _handle_council(arguments, brief_text, requester_uuid)
     selected_host = (
         str(arguments["host_id"]) if arguments.get("host_id") is not None else None
     )
@@ -1566,21 +1879,7 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                          if not plan.peers or item["host_id"] != chosen],
             )
         elif selected_host in _THOROUGH_HOST_ROUTES:
-            job = loaded.config.jobs.get("consult.thorough")
-            entry = loaded.config.hosts.get(selected_host)
-            if job is not None and selected_host not in job.prefer:
-                policy_refusal = (
-                    "CONSULT_HOST_NOT_IN_JOB",
-                    f"{selected_host} is not in the consult.thorough job's list "
-                    f"({', '.join(job.prefer)})",
-                    "Pin a host the consult.thorough job lists, or omit host_id.",
-                )
-            elif entry is not None and not entry.enabled:
-                policy_refusal = (
-                    "CONSULT_HOST_DISABLED",
-                    f"{selected_host} is switched off in the inference hosts file",
-                    "Pin another host, or omit host_id for automatic routing.",
-                )
+            policy_refusal = _pinned_host_refusal(selected_host, loaded.config)
     request = ConsultRequest(
         brief=brief_text,
         requester_uuid=requester_uuid,
@@ -1599,71 +1898,8 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             else {}
         ),
     )
-    if requester_uuid is None:
-        outcome = _failed(
-            request,
-            message="A resolved caller identity is required for consultation",
-            code="CONSULT_IDENTITY_REQUIRED",
-            category="auth_error",
-            recovery_action=(
-                "Bind this transport with start_session(force_new=true), then retry."
-            ),
-            failure_details={"reason": "resolved_identity_missing"},
-        )
-    elif not brief_text or len(brief_text) > _BRIEF_MAX_CHARS:
-        outcome = _failed(
-            request,
-            message="brief must contain 1 to 32000 non-whitespace characters",
-            code="INVALID_CONSULT_BRIEF",
-            category="validation_error",
-            recovery_action="Provide a shorter, non-empty consultation brief.",
-            failure_details={"reason": "brief_out_of_bounds"},
-        )
-    elif request.purpose not in _PURPOSE_INSTRUCTIONS:
-        outcome = _failed(
-            request,
-            message="Unknown consultation purpose",
-            code="INVALID_CONSULT_PURPOSE",
-            category="validation_error",
-            recovery_action="Use answer, critique, summarize, or generate.",
-        )
-    elif request.effort not in {"standard", "thorough"}:
-        outcome = _failed(
-            request,
-            message="Unknown consultation effort",
-            code="INVALID_CONSULT_EFFORT",
-            category="validation_error",
-            recovery_action="Use standard or thorough.",
-        )
-    elif request.privacy not in {"local", "cloud_allowed"}:
-        outcome = _failed(
-            request,
-            message="Unknown consultation privacy policy",
-            code="INVALID_CONSULT_PRIVACY",
-            category="validation_error",
-            recovery_action="Use local or cloud_allowed.",
-        )
-    elif request.response_mode not in {"compact", "full"}:
-        outcome = _failed(
-            request,
-            message="Unknown consultation response mode",
-            code="INVALID_CONSULT_RESPONSE_MODE",
-            category="validation_error",
-            recovery_action="Use compact or full.",
-        )
-    elif request.host_id is not None and request.host_id not in _SELECTABLE_HOST_ROUTES:
-        outcome = _failed(
-            request,
-            message="Unknown consultation host",
-            code="INFERENCE_HOST_NOT_FOUND",
-            category="validation_error",
-            recovery_action=(
-                "Choose a host listed by list_inference_hosts that accepts consult: "
-                + ", ".join(_SELECTABLE_HOST_ROUTES)
-            ),
-            failure_details={"valid_host_ids": list(_SELECTABLE_HOST_ROUTES)},
-        )
-    else:
+    outcome = _argument_refusal(request)
+    if outcome is None:
         try:
             outcome = await run_consultation(request)
         except asyncio.CancelledError:
