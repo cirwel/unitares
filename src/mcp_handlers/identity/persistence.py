@@ -839,7 +839,10 @@ async def ensure_agent_persisted(
                     if public_agent_id and label and spawn_reason:
                         break
                     try:
-                        cached = await session_cache.get(_cand_key)
+                        cached = await asyncio.wait_for(
+                            session_cache.get(_cand_key),
+                            timeout=_REDIS_WRITE_TIMEOUT,
+                        )
                         if isinstance(cached, dict):
                             cached_owner = (
                                 cached.get("agent_uuid")

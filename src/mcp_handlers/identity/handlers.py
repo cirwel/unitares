@@ -620,6 +620,59 @@ def _label_write_allowed(agent_uuid: Optional[str]) -> bool:
     return allowed
 
 
+async def _choose_fresh_persist_session_key(session_key: str, agent_uuid: str) -> str:
+    """Select the session key to persist for a newly created identity (#2707).
+
+    When ``session_key`` was already bound to another agent (or is another
+    agent's stable id), persist under the new agent's own ``client_session_id``
+    so a ``force_new`` mint does not collide with or hydrate handles from the
+    previous agent's session; when ``session_key`` is a fresh transport key
+    that just bound to this agent, persist under ``session_key`` so the
+    transport retains its durable PostgreSQL session row.
+    """
+    from .persistence import _REDIS_WRITE_TIMEOUT, _get_redis
+    from .shared import _session_identities, make_client_session_id
+    from .stable_session import classify as _csid_kind, verifies_for as _csid_verifies
+
+    own_session_key = make_client_session_id(agent_uuid)
+    if not session_key or session_key == own_session_key:
+        return own_session_key
+
+    sk_entry = _session_identities.get(session_key)
+    sk_foreign_stable = (
+        (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+        or (
+            _csid_kind(session_key) == "legacy"
+            and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
+        )
+    )
+    sk_redis_conflict = False
+    try:
+        rc = _get_redis()
+        if rc is not None:
+            rc_entry = await asyncio.wait_for(
+                rc.get(session_key), timeout=_REDIS_WRITE_TIMEOUT
+            )
+            if isinstance(rc_entry, dict):
+                rc_owner = (
+                    rc_entry.get("agent_uuid")
+                    or rc_entry.get("bound_agent_id")
+                    or rc_entry.get("agent_id")
+                )
+                if rc_owner and rc_owner != agent_uuid:
+                    sk_redis_conflict = True
+    except Exception:
+        pass
+
+    sk_bound_to_new = (
+        not sk_foreign_stable
+        and not sk_redis_conflict
+        and isinstance(sk_entry, dict)
+        and (sk_entry.get("bound_agent_id") or sk_entry.get("agent_uuid")) == agent_uuid
+    )
+    return session_key if sk_bound_to_new else own_session_key
+
+
 async def handle_identity_v2(
     arguments: Dict[str, Any],
     session_key: str,
@@ -660,10 +713,8 @@ async def handle_identity_v2(
     if name and not identity.get("created") and not _label_write_allowed(agent_uuid):
         name = None
     if name:
-        from .shared import make_client_session_id
-
         label_session_key = (
-            make_client_session_id(agent_uuid)
+            await _choose_fresh_persist_session_key(session_key, agent_uuid)
             if identity.get("created")
             else session_key
         )
@@ -1418,40 +1469,9 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # transport retains its durable PostgreSQL session row.
     if result.get("created") and not result.get("persisted"):
         try:
-            from .persistence import _get_redis
-            from .shared import _session_identities
-            from .stable_session import classify as _csid_kind, verifies_for as _csid_verifies
-
-            _sk_entry = _session_identities.get(session_key)
-            _sk_foreign_stable = (
-                (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
-                or (
-                    _csid_kind(session_key) == "legacy"
-                    and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
-                )
+            _persist_session_key = await _choose_fresh_persist_session_key(
+                session_key, agent_uuid
             )
-            _sk_redis_conflict = False
-            try:
-                _rc = _get_redis()
-                if _rc is not None:
-                    _rc_entry = await _rc.get(session_key)
-                    if isinstance(_rc_entry, dict):
-                        _rc_owner = (
-                            _rc_entry.get("agent_uuid")
-                            or _rc_entry.get("bound_agent_id")
-                            or _rc_entry.get("agent_id")
-                        )
-                        if _rc_owner and _rc_owner != agent_uuid:
-                            _sk_redis_conflict = True
-            except Exception:
-                pass
-            _sk_bound_to_new = (
-                not _sk_foreign_stable
-                and not _sk_redis_conflict
-                and isinstance(_sk_entry, dict)
-                and (_sk_entry.get("bound_agent_id") or _sk_entry.get("agent_uuid")) == agent_uuid
-            )
-            _persist_session_key = session_key if _sk_bound_to_new else client_session_id
 
             # parent_agent_id is only set when the caller explicitly asserted
             # succession (post-2026-04-16 EISV inheritance spec). Fingerprint

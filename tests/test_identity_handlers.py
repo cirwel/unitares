@@ -2361,7 +2361,7 @@ class TestHandleOnboardV2:
 
     @pytest.mark.asyncio
     async def test_identity_force_new_persists_under_own_key_without_old_handle_bleed(
-        self, patch_onboard_deps, mock_db, mock_redis, caplog
+        self, patch_onboard_deps, mock_db, mock_redis, caplog, monkeypatch
     ):
         """#2707: identity(force_new=true) called with an existing session key
         must persist the new agent under its own make_client_session_id(new_uuid)
@@ -2369,7 +2369,8 @@ class TestHandleOnboardV2:
         import logging
         from src.mcp_handlers.identity.handlers import handle_identity_adapter
         from src.mcp_handlers.identity.persistence import ensure_agent_persisted
-        from src.mcp_handlers.identity.shared import _session_identities
+        from src.mcp_handlers.identity.shared import _session_identities, make_client_session_id
+        from src.mcp_handlers.identity.stable_session import classify
 
         old_uuid = str(uuid.uuid4())
         old_session_key = f"agent-{old_uuid[:12]}"
@@ -2532,6 +2533,78 @@ class TestHandleOnboardV2:
             ]
             assert "test-ctx-key" in plain_session_keys
             assert f"agent-{plain_uuid[:12]}" in plain_session_keys
+
+            # Named fresh mint on a fresh transport must also write the
+            # transport key's durable PG core.sessions row (not only the
+            # agent's own client_session_id).
+            _session_identities.clear()
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+            ]
+            with patch(
+                "src.mcp_handlers.identity.persistence._find_agent_by_label",
+                new=AsyncMock(return_value=None),
+            ):
+                named_res = await handle_identity_adapter({
+                    "name": "NamedFresh2707",
+                    "model_type": "claude-opus-4",
+                })
+            named_data = parse_result(named_res)
+            named_uuid = named_data["uuid"]
+            named_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert "test-ctx-key" in named_session_keys
+            assert f"agent-{named_uuid[:12]}" in named_session_keys
+
+            # Production keyed client_session_id branch (UNITARES_CONTINUITY_TOKEN_SECRET
+            # set so classify() == "keyed"): force_new with old_uuid's keyed id
+            # must never bind or persist old_keyed_key for the new agent.
+            monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret-for-keyed-csid-2707")
+            old_keyed_key = make_client_session_id(old_uuid)
+            assert classify(old_keyed_key) == "keyed"
+            _session_identities.clear()
+            _session_identities[old_keyed_key] = {
+                "bound_agent_id": old_uuid,
+                "agent_uuid": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "public_agent_id": "OldDisplay_20260101",
+                "agent_label": "OldAgentLabel",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="keyed-ident-2707", metadata={}),
+            ]
+            keyed_res = await handle_identity_adapter({
+                "client_session_id": old_keyed_key,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            keyed_data = parse_result(keyed_res)
+            keyed_new_uuid = keyed_data["uuid"]
+            expected_keyed_new = make_client_session_id(keyed_new_uuid)
+            assert classify(expected_keyed_new) == "keyed"
+            assert _session_identities[old_keyed_key]["bound_agent_id"] == old_uuid
+            assert _session_identities[expected_keyed_new]["bound_agent_id"] == keyed_new_uuid
+            keyed_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert expected_keyed_new in keyed_session_keys
+            assert old_keyed_key not in keyed_session_keys
+            monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET", raising=False)
 
             # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
             # refuses to hydrate handles from old_uuid's cached session entry.
