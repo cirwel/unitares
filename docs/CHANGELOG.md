@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- changelog-coverage-exempt: #2879 no-user-effect -->
 
 A minor release from master, following v3.3.0. The interface contract moves
-from 1.31.0 to 1.49.0 without leaving major version 1: no tool, action or input
-is removed or renamed, and the one retyped input (`host_id` on `consult` and
-`delegate_inference`, from an enum to a bounded string) accepts every value it
-accepted before. Each behavior change below says what it affects and, where
+from 1.31.0 to 1.50.0 without leaving major version 1: no tool, action or input
+is removed or renamed, and the one retyped input (`delegate_inference`'s
+`host_id`, from an enum to a bounded string) accepts every value it accepted
+before; `consult` gains an optional `host_id`. Each behavior change below says
+what it affects and, where
 one exists, the setting that restores the old behavior. The
 [release notes](releases/3.4.0.md) give the upgrade order and the rollback
 limit in full.
@@ -34,8 +35,9 @@ limit in full.
 the detail.
 
 - **Migrations 074 to 078, before any 3.4.0 process starts.** The
-  `scripts/unitares update` in a v3.3.0 checkout cannot pass the attestation
-  that 077 and 078 require, so from v3.3.0 check out v3.4.0 by hand first, then
+  `scripts/unitares update` in a checkout of v3.0.0 to v3.3.0 cannot pass the
+  attestation that 077 and 078 require, so from those releases check out
+  v3.4.0 by hand first, then
   run `./scripts/unitares update --to v3.4.0`: it stops the server and the
   lease plane, backs up the database and applies the migrations. Do not start
   the 3.4.0 images before they are applied. An operator install stops both
@@ -45,14 +47,15 @@ the detail.
   while a resolution saga is in flight. Drain live file-write executors first;
   the 3.4.0 lease plane needs 076, because its lease queries read the new
   column even with execute flags off.
-- **Rollback is forward-only once 077 or 078 is applied.** v3.3.0 code must not
-  run on the migrated schema, and `unitares update --to v3.3.0` refuses once
-  the schema is past 073; returning to v3.3.0 then means restoring the
-  pre-upgrade database.
+- **Rollback is forward-only once 077 or 078 is applied.** Before 077, check
+  out v3.3.0 and start its images (`unitares update --to v3.3.0` refuses once
+  the schema is past 073). After 077 or 078, v3.3.0 code must not run on the
+  migrated schema, and returning means restoring the pre-upgrade database.
 - **Verdicts shift for behavioral agents.** Two EISV decision-path repairs make
-  `proceed` (`sub_action: approve`) more frequent for warmed behavioral agents
-  where `guide` used to appear; the entries give the estimates and their
-  limits. Rows from either side belong to different instrument eras.
+  `sub_action: approve` more frequent for warmed behavioral agents where
+  `sub_action: guide` used to appear (the policy action stays `proceed`); the
+  entries give the estimates and their limits. Rows from either side belong to
+  different instrument eras.
 - **Declare `spawn_reason` alongside a live parent.** The server no longer
   infers `subagent` or `compaction` from thread context or `client_hint`: an
   onboard that declares `parent_agent_id` without `spawn_reason` is recorded as
@@ -130,6 +133,7 @@ which it had not been updated to show.
 - **knowledge graph:** `search_shared_memory` in its `lean` and `compact` tiers lists the results after the three digests when the caller passes `limit` above 3. The digest showed three results whatever `limit` asked for, so the one route to a fourth was the `full` tier, which serializes every record. The further results arrive under `more_results`, one row each (`discovery_id`, `type`, `status`, a summary bounded at 100 characters), up to 17 rows inside a 2,000-byte budget of their own, with `state_summary.more_results_shown` counting them. A search that passes no `limit`, or a `limit` of 3 or less, is byte-identical to before and keeps its 3 KB budget; the `full` tier and `knowledge(action="search")` are unchanged. Rows are added only when all three digests survived the digest budget. The interface contract moves 1.32.0 → 1.33.0 to record the output change; no input digest moves. Not covered: `more_results` rows carry no writer attribution, tags or staleness field, so a reader still opens a row to learn who wrote it. (#2767)
 - **eisv:** the telemetry envelope persisted with each check-in (`state_json.eisv_telemetry`, also returned in full response mode) gains two measurement-only records. `shadow_ablations.regime_self_loop_neutralized` recomputes the behavioral S observation with the regime-instability term held at its observed fleet level (0.12), beside the two existing E shadows, on check-ins where the server computes the behavioral sensor; it has its own error guard so it cannot interrupt the live observation handoff. `self_report` records the confidence the agent stated (`confidence_reported`, `confidence_effective` after dampening, `confidence_dampened`). Nothing on the estimator or policy path reads either. `scripts/analysis/eisv_i_calibration_shadow_read.py` pairs stated confidence with verified outcomes offline; on lifetime data no identity reaches the estimator's eligibility yet. (#2759)
 - **`unitares tui`:** a live, read-only terminal view over `unitares status --json` and `unitares tools`. It shows server health, agent tiers and the resident table with a per-resident EISV, coherence, risk, check-in history and recent-finding drill-in. It uses the standard library only and reuses the CLI's URL and token handling. `unitares tui --once` prints a plain snapshot without a TTY, `--once --json` a stable machine-readable one (schema `unitares.tui.snapshot.v1`), and `NO_COLOR` or `--no-color` turns color off. (#2880)
+- **agent PR relay:** a new workflow reopens `claude/*` and `codex/*` PRs that hosted sessions open through the operator's account, authored instead by the `unitares-pr-relay` App (pull requests on this repository only). The original is closed with a link; branch, commits, labels and owner footer carry over, and the new body states that the branch was pushed through the operator login. It runs from master via `pull_request_target`, never executes PR code, and reads its key from a master-only environment. `relay-hold` opts a PR out. (#2884)
 
 ### Changed
 - Interface contract 1.45.0: search_shared_memory lean and compact tiers list further results under more_results when limit is unset (limit of 3 or less omits them), and add state_summary.relevance_note when shown digests carry more than one relevance_basis. Response hints that named knowledge(action=...) name use_tool(tool_name='knowledge', ...), which every advertised surface can call. store_finding field descriptions drop router vocabulary, the knowledge response_to description lists its response_type values, and search_shared_memory's include_details brief names the use_tool route; those description changes move the store_finding and search_shared_memory input digests. Nothing is added, removed, retyped or renamed. (#2861)
@@ -186,6 +190,7 @@ which it had not been updated to show.
 - **plugin skill sync:** the workflow that mirrors `skills/` into the plugin repository now authenticates with a short-lived `unitares-agents` App token, limited to that repository's contents and pull requests and minted from a master-only `plugin-sync` environment, instead of the `PLUGIN_SYNC_TOKEN` secret, which it no longer reads. It runs only on `cirwel/unitares` master, and a missing App credential fails the run where a missing token used to warn and skip. The App authors the mirror PR, and the plugin repository's verified mirror delivery workflow completes it after checking canonical content and CI, instead of leaving the merge to the maintainer. (#2798)
 - **PR review:** after a base merge, a follow-up review separates the author's later edits from the merged upstream work. Git rebuilds the reviewed contribution on the base the new head includes, and the reviewer receives every later author edit, merge resolutions and reversions included, as the delta, with the base-integration diff and the original and current PR diffs as context; it is told that upstream breadth alone is not expanded scope and that an empty delta does not prove the earlier reasoning still holds. When the rebuild conflicts, the reviewer gets the whole unseparated delta as before. Replaying #2789, where a follow-up declined coverage because a four-file PR showed 95 upstream files, now yields an empty author delta. Scope confirmation, sensitive-path rules, findings and cycle accounting are unchanged. (#2804)
 - **eisv:** `config/eisv_instrument_eras.json` records era RK1, the ODE substep change of #2757, as taking effect at its deploy restart, 2026-10-16T02:59:50Z. While RK1 had no recorded time, any window reaching past the latest timed change counted as crossing it; era-aware readers now accept a window that lies wholly after the restart, and the basin read no longer needs its stamp-filter fallback for RK1. (#2837)
+- Interface contract 1.50.0: search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed. (#2882)
 
 ### Removed
 - **repo scope guard:** the session-link rule is removed at the operator's direction (2026-10-14). The guard no longer refuses `claude.ai/code/session` links or the `Claude-Session:` trailer in changed files, PR bodies or commit messages, CI no longer rewrites PR bodies to strip the harness footer, and the workflow drops its `pull-requests: write` permission. `scripts/dev/pr_body_attribution.py` and its test go with it. The operator-local-path and chat-register checks on files and PR bodies are unchanged. The contract's ownership line is `UNITARES agent: <uuid>`; a session link may sit beside it. (#2808)
@@ -242,6 +247,8 @@ which it had not been updated to show.
 - **ops:** `sentinel-plist.py` and `rotate-secrets.sh` handle LaunchAgents that start through a secrets wrapper (`with-cirwel-secrets --keys ... -- program`) and keep no credential in the plist. Before, `sentinel-plist.py check` refused such a Sentinel plist, so `deploy-sentinel.sh` would have stopped at preflight, the `render` it suggested would have written the bearer back into the plist, and `rotate-secrets.sh` rewrote plists only, so wrapped jobs would have kept the old values. `check`, `probe`, `rotation-preflight` and `rotate-token` now read a wrapped bearer from the file the wrapper reads (the job's absolute `CIRWEL_SECRETS_FILE`, else `<job HOME>/.config/cirwel/secrets.env`) and refuse a file that is not a private regular file owned by the user; `render` keeps an installed wrapper and pins that file. New `set-secret --key K` takes the value on stdin and rewrites that key atomically in every secrets file a reader may use, after checking all of them, and `secrets-files` lists them. `rotate-secrets.sh` backs up and rotates those files before the plists, keeps its backup directory at mode 0700, and names the wrapped jobs that need a reload without restarting them. Unwrapped plists behave as before. (#2810)
 - **identity:** a fresh `start_session` whose minting call was not caller-proven now says what its tier describes: the routine `next_action` appends "Tier describes this mint only; check_working_state(client_session_id=...) confirms threading.", and the full-shape `baseline_note` says the same. A caller-proven mint gets no note. Tiers, how they are computed, enforcement and identity resolution are unchanged; the routine `start_session` byte budgets rise by 100 bytes to fit the note. (#2860)
 - **lifecycle:** an archived identity's check-in refusal, the in-process archived gate and the `agent` tool description no longer point to `self_recovery(action='quick')`, which refuses archived identities. They name a proof-carrying `start_session(resume=true)` from the same live process, which unarchives the same UUID, or `start_session(force_new=true)`, and the refusal's `related_tools` is now `["start_session"]`. The refusal, its error code and category are unchanged. (#2863)
+- Correct the bearer- and operator-token docstrings: tokens are read from the environment on each call, but the environment is fixed at launch, so a rotated token takes effect on restart (comma-separated old and new tokens overlap across it). (#2883)
+- **check_working_state:** on an unbound session, a `verbosity='full'` read no longer points back at `verbosity='full'` for complete diagnostics, because an unbound full read carries nothing beyond the standard tier. Its `response_options` drops `complete_diagnostics` and adds `full_unavailable_reason` (`unbound: call start_session(force_new=true) first`); bound full reads and the standard and minimal tiers are unchanged. (#2867)
 
 ### Security
 - **governed effects:** `POST /v1/effect-veto` now also vetoes a proposer whose `core.identities.status` is `archived`, `disabled`, `deleted` or `paused`, on every path including the unknown-proposer branch. Archival does not revoke continuity tokens, so an archived identity whose last check-in was clean could previously pass the verdict and tier gates until its token expired (about an hour). The check reads the deployment's own store; it implies no cross-deployment revocation. (#2840)
@@ -305,7 +312,7 @@ which it had not been updated to show.
 - **eisv:** the `governance_core/dynamics.py` module docstring describes the ODE as a hand-set controller and marks "thermodynamic" a historical name; S is described as a decaying accumulator driven by drift and complexity, not a measured entropy, and the Helmholtz comparison for V is labelled an analogy. The glossary rows that quoted the old docstring now match it. Docstring only; no executable line changes. (#2854)
 - **evaluation:** `docs/evaluations/ax-dogfood/read-2026-10-16.md` records an exploratory agent-experience read: three ordinary tasks (a prior-work check, whether the agent is paused or its writes held, and storing then finding a linked note) run once through a raw MCP client on the advertised tool surface of a 3.3.0 server, with the protocol and labelling rubric committed before any call. Each task took 3 calls; the tasks used about 26% of the 24,521 bytes returned, 3 of the 9 calls were labelled accidental burden, and ten candidate fixes are listed for operator review, none implemented here. One agent, one run and a single rater: not a usability result. (#2855)
 - **docs:** stack documentation no longer calls AGE optional. The Postgres README, `docs/UNIFIED_ARCHITECTURE.md` and the knowledge-graph skill say the AGE extension is required, because lineage and other graph reads run Cypher through `graph_query`, while routing the knowledge store through AGE (`UNITARES_KNOWLEDGE_BACKEND=age`) is opt-in. The Postgres README names PostgreSQL as the only runtime backend and drops `DB_BACKEND`, which the code still reads in four places; the `redis_client.py` docstring calls `REDIS_ENABLED=0` a degraded local-only mode for tests and diagnostics; the shared contract's stack and setup add pgvector; and `check_doc_health.py` now flags "AGE optional" and "disable Redis entirely" wording. (#2870)
-- **release process:** the releasing agent performs the release, including the tag, the release page, the Promote Release dispatch, the pin pull request and the `sdk-v*` tag, once CI is green and an independent review is recorded; the operator's one act per release is the `release-promotion` approval, which GitHub enforces with a required reviewer (operator decision, 2026-10-17). `docs/operations/RELEASE_PROCESS.md` and the comments in the promotion and release-sync workflows say so, and note that publishing a release page also archives the tagged tree on Zenodo. `docs/releases/3.4.0.md` holds this release's page body, reviewed in the release pull request. (#2888)
+- **release process:** the releasing agent performs the release, including the tag, the release page, the Promote Release dispatch, the pin pull request and the `sdk-v*` tag, once CI is green and an independent review is recorded; the operator's one act per release is the `release-promotion` approval, which GitHub enforces with a required reviewer (operator decision, 2026-10-17). `docs/operations/RELEASE_PROCESS.md` and the comments in the promotion and release-sync workflows say so, and `RELEASE_PROCESS.md` notes that publishing a release page also archives the tagged tree on Zenodo. `docs/releases/3.4.0.md` holds this release's page body, reviewed in the release pull request. (#2888)
 
 ## [3.3.0] - 2026-10-08
 
