@@ -2593,6 +2593,25 @@ def _normalize_surface_audience(audience: str | None) -> str | None:
     return normalized
 
 
+def _governance_agent_uuid(value: str) -> str:
+    """Validate ``--agent-id`` as a UUID before anything is attributed to it.
+
+    ``resolved_by`` is the audit trail for a resolution, and confirmed rows
+    feed pattern-floor calibration. A free-form string used to be stored
+    verbatim: on 2026-10-14 a dogfood probe confirmed a live finding as
+    ``cron-unitares-dogfood-test``. Omitting ``--agent-id`` stays allowed
+    and records an honest ``None``; a malformed value is refused.
+    """
+    from uuid import UUID
+
+    try:
+        return str(UUID(value.strip()))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"must be a governance agent UUID, got {value!r}"
+        ) from None
+
+
 def _surface_receipts(finding: dict[str, Any]) -> dict[str, str]:
     receipts = finding.get("surface_receipts")
     if not isinstance(receipts, dict):
@@ -4048,10 +4067,6 @@ def list_findings(only_open: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Carry forward any legacy checkout-relative state to the shared dir once
-    # per process, before anything reads/writes findings.
-    migrate_legacy_watcher_state()
-
     parser = argparse.ArgumentParser(description="UNITARES Watcher bug-pattern agent")
     parser.add_argument("--file", help="file to scan")
     parser.add_argument("--region", help="line range within file, e.g. L10-L40")
@@ -4092,7 +4107,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent-id",
         metavar="UUID",
-        help="governance UUID of the agent resolving/dismissing (for audit trail)",
+        type=_governance_agent_uuid,
+        help="governance UUID of the agent resolving/dismissing (for audit trail); "
+             "a non-UUID value is refused before any state changes",
     )
     parser.add_argument(
         "--reason",
@@ -4147,6 +4164,12 @@ def main(argv: list[str] | None = None) -> int:
         help='git --since=<value> for --scan-commits (default: "30 days ago")',
     )
     args = parser.parse_args(argv)
+
+    # Carry forward any legacy checkout-relative state to the shared dir once
+    # per process, before anything reads/writes findings. This runs after
+    # argument validation so a refused invocation (e.g. a malformed
+    # --agent-id) exits without creating shared state.
+    migrate_legacy_watcher_state()
 
     # Context hooks have a strict host-side timeout. Keep their read/deliver
     # paths free of identity, check-in, and remote lease-plane calls so a slow
