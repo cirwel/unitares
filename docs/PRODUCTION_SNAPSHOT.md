@@ -23,7 +23,7 @@ record.
 | Distinct event-emitting identities (prior 7 days) | **287** |
 | Audit/telemetry events recorded | **6,593,939** retained rows; **52,264** in the prior 7 days |
 | Stored EISV state rows | **102,728** observations |
-| Canonical non-automatic lifecycle resumes | **27**, including **20** recorded self-recoveries; requires a `type` field and the reason predicates in the SQL |
+| Canonical non-automatic lifecycle resumes | **27** broadcaster-form records, including **20** recorded self-recoveries; counting subset defined below |
 | Knowledge graph discoveries | **2,129** retained records |
 | Earliest retained agent-registry record | **2025-11-29 00:18:15.693081 UTC** |
 
@@ -53,7 +53,14 @@ composition is retained in the JSON.
 
 ### Recovery count and provenance updates
 
-The self-recovery count uses `LIKE 'Self-recovery%'`, which covers both
+For continuity with the August query, recovery counts select lifecycle records
+with a payload `type` field: the broadcaster-form subset. This excludes legacy
+dual-written copies, but also direct fallback and test records that lack that
+field; it is not a complete deduplicated inventory of all resumes. The
+[lifecycle writer](../src/agent_metadata_model.py) and
+[broadcaster](../src/broadcaster.py) define those paths.
+
+Within that subset, the self-recovery count uses `LIKE 'Self-recovery%'`, which covers both
 `Self-recovery: ...` and `Self-recovery (<basis>): ...`. The old colon-only
 predicate returns **15** at this same cutoff; the broader predicate returns
 **20**. This resolves the reason-format gap recorded in the August notes.

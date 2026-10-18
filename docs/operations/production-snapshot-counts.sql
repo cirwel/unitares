@@ -24,6 +24,8 @@ WITH p AS (
            WHERE ts > p.cutoff - interval '7 days') AS emitters_7d,
          count(*) FILTER (WHERE event_type IN (
            'session_resolve_miss_observed', 'cross_device_call')) AS session_and_call_rows,
+         -- Historical comparison subset: broadcaster-form payloads only.
+         -- Direct fallback/test records without type are also excluded.
          count(*) FILTER (WHERE event_type = 'lifecycle_resumed'
            AND payload ? 'type'
            AND payload->>'reason' NOT LIKE 'Auto-resumed%') AS non_auto_resumes,

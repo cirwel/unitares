@@ -87,7 +87,7 @@ event composition, and date ranges at one cutoff:
 |---|---|
 | Audit and telemetry | **6,593,939 retained events**, including **52,264 in the preceding week**. Session-resolution observations and cross-device-call records make up 88.29% of the total. |
 | State observations | **102,728 stored EISV rows** in `core.agent_state`. These are observations, not independent agents or trials. |
-| Recovery | **20 recorded self-recoveries** among 27 canonical, non-automatic lifecycle-resume records. |
+| Recovery | **20 recorded self-recoveries** among 27 non-automatic lifecycle-resume records in the snapshot’s broadcaster-form subset; direct fallback/test records without a `type` field are excluded. |
 | Shared findings | **2,129 retained discovery records** in the knowledge graph. |
 | Process registry | **8,677 retained process-instance records**; 287 distinct identities emitted audit events in the preceding week. |
 
