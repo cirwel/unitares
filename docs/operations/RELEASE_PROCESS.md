@@ -56,6 +56,11 @@ DOI, so publish only the reviewed release commit.
    published from its own tag; until an image exists, Compose builds that
    service from source.
    In the same commit as the changelog fold, prune the skill attestations
+   (when the release diff would then pass 300 files, land the prune instead
+   as a separate `chore(release)` pull request merged just before the
+   release: the merge queue fingerprints a pull request's diff through
+   GitHub's API, which refuses a diff of more than 300 files, as v3.4.0
+   found)
    with the wrapper, which resolves cited sources in other repositories
    against `UNITARES_PROJECTS_ROOT` (default: the directory above this
    checkout). Set it when the release checkout is a worktree, for example

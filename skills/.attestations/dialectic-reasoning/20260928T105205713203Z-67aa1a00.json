@@ -1,0 +1,27 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-09-28T10:52:05Z",
+  "verified_date": "2026-09-28",
+  "verifier": "claude (PR #2576): re-checked dialectic-reasoning against the alias cut; it names none of the 24 removed aliases, and the dialectic aliases it relies on (submit_*, request_dialectic_review, reassign_reviewer) are kept",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "809729e4afadc9da",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "307c430fc62a752d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "a8afd68903b1b645",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "87cd7dbc224dc325",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "d8df1a60cefe2f96",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "c2e3ee6733917d94",
+    "unitares/src/mcp_handlers/tool_stability.py": "0cbd77573aeca8c4"
+  },
+  "skill_digest": "086516b9f9636671",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "f710162df0b5d424"
+    ]
+  }
+}

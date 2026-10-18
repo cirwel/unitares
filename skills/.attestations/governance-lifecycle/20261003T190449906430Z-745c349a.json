@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-03T19:04:49Z",
+  "verified_date": "2026-10-03",
+  "verifier": "Claude Code agent re-read envelope_step.py (progressive_aware_hint rewrite of bare update_finding(...) hints to use_tool in _friendly_hint_text; knowledge search next_action now adds the knowledge(action='update') revise hint; closure_class/closure_standard kept in memory_suggestions and truncated search projection) and tool_stability.py (search_shared_memory/store_finding alias text now says use_tool(tool_name='update_finding', ...)) at merged head; checked against skill claims: governance-lifecycle",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "82a2d21673dac84f",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "86cf1303adea1b1b",
+    "unitares/src/mcp_handlers/identity/handlers.py": "6bafb43dd2dc40ef",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "f383dd25aa68e73e",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "76060be105b596d0",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "21588db986cf1eef",
+    "unitares/src/mcp_handlers/updates/phases.py": "4080d56cabc16cbd",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "2a604180b001fd9d"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "0d0ef632f5fc572f"
+    ]
+  }
+}

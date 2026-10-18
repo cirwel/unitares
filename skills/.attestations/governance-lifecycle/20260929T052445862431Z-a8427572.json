@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-09-29T05:24:45Z",
+  "verified_date": "2026-09-29",
+  "verifier": "claude (#2593): re-checked governance-lifecycle after restoring the _SINCE_* constants; it names none of the 37 removed legacy aliases, and its router, workflow-alias and raw-tool claims are unchanged",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "24670fc985c7bb73",
+    "unitares/src/mcp_handlers/admin/handlers.py": "a243611b2fbcbc98",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "665769655248cbaa",
+    "unitares/src/mcp_handlers/identity/handlers.py": "e125cb5d5bc56e74",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "1d7045e559c3dc5e",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "382a9fef840baf06",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "7ced01098a7fcf37",
+    "unitares/src/mcp_handlers/updates/phases.py": "e33112c6082f5fd1",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "1a2d7782ab306af3"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "26d05116bea394b0"
+    ]
+  }
+}

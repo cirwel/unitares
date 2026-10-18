@@ -1,0 +1,27 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-02T05:54:53Z",
+  "verified_date": "2026-10-02",
+  "verifier": "Claude: re-checked dialectic-reasoning against master's #2593 (hint strings in dialectic/handlers.py now name dialectic(action=...) calls; 37 legacy alias description entries removed from tool_descriptions.json); the skill names no removed alias and its dialectic and knowledge claims use router calls",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "809729e4afadc9da",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "307c430fc62a752d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "86cf1303adea1b1b",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "b9ccb7d0e1ed8ba3",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "c2e3ee6733917d94",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569"
+  },
+  "skill_digest": "086516b9f9636671",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/dialectic/handlers.py": [
+      "3364538fbd80d31a"
+    ]
+  }
+}

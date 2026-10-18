@@ -1,0 +1,27 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-09-27T22:12:12Z",
+  "verified_date": "2026-09-27",
+  "verifier": "claude-opus (re-checked dialectic-reasoning's Facilitation and Reviewer Recovery claims -- sweep fails a session after the hold, SYNTHESIS stall raises a request without reassigning, the 4h facilitation hold, check_timeout replacement -- against the Wave 3 instrument v2 effect_ts change: auto_resolve.py only carries the DB-clock effect time on its per-write row and corrects a comment about add_message moving updated_at; no documented behavior changed)",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "5d45e1193d8c118b",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "307c430fc62a752d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "99e43bc7cce98df8",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "87cd7dbc224dc325",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "d8df1a60cefe2f96",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "645211e3fa8d96ed",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424"
+  },
+  "skill_digest": "683eefd8f32b8544",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": [
+      "54a3332b8f549743"
+    ]
+  }
+}
