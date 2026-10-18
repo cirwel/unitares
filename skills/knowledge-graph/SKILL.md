@@ -35,7 +35,7 @@ source_files:
 
 ## What It Is
 
-The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default backend, with Apache AGE as an optional graph backend (`UNITARES_KNOWLEDGE_BACKEND=age`). Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default store, and routing it through Apache AGE is opt-in (`UNITARES_KNOWLEDGE_BACKEND=age`). The AGE extension itself is still required by the server. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
 
 ## Search Before Creating
 

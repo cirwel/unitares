@@ -65,28 +65,28 @@ This repo standardizes on the AGE graph name **`governance_graph`**.
 
 ### 4.2 Knowledge Graph Backend Selection
 
-The main runtime DB backend is controlled by `DB_BACKEND`, but the **knowledge graph** also supports backend override via `UNITARES_KNOWLEDGE_BACKEND`:
+PostgreSQL is the sole runtime backend (the SQLite and dual backends were removed). The **knowledge graph** store can be selected via `UNITARES_KNOWLEDGE_BACKEND`:
 
 | Backend | Value | Description |
 |---------|-------|-------------|
 | **PostgreSQL FTS** (recommended) | `postgres` | Canonical KG store using native PostgreSQL with tsvector full-text search |
-| **AGE** | `age` | Apache AGE graph backend for graph-specific traversal experiments |
-| **Auto** (default) | `auto` | Uses PostgreSQL FTS when `DB_BACKEND=postgres` |
+| **AGE** | `age` | Opt-in: route knowledge-graph traversal through Apache AGE |
+| **Auto** (default) | `auto` | Resolves to PostgreSQL FTS |
 
 ```bash
 # Recommended: PostgreSQL FTS canonical store
 export UNITARES_KNOWLEDGE_BACKEND=postgres
 
-# Auto-select based on DB_BACKEND setting
+# Default: resolves to PostgreSQL FTS
 export UNITARES_KNOWLEDGE_BACKEND=auto
 
-# Optional: AGE graph backend for graph-specific traversal work
+# Opt-in: knowledge-graph traversal through AGE
 export UNITARES_KNOWLEDGE_BACKEND=age
 ```
 
-**Note:** When `UNITARES_KNOWLEDGE_BACKEND=auto` (default), the system will:
-1. Use PostgreSQL FTS if `DB_BACKEND=postgres`
-2. Otherwise require an explicit supported backend
+**Note:** This setting selects the *knowledge-graph* store only. The AGE
+extension itself is **required** regardless: lineage reachability and other
+graph reads run Cypher through `graph_query` (`src/db/mixins/graph.py`).
 
 ### Migrations / Backfills
 

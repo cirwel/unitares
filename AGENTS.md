@@ -225,14 +225,14 @@ EISV is one instrument inside it, not its definition: each check-in returns a be
 ## Stack
 
 - Python 3.14+, asyncio
-- PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) via Homebrew
+- PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) + pgvector via Homebrew (the Docker image `db/postgres/Dockerfile.age-vector` ships PG18; both are supported)
 - Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/archive/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
 - MCP (Model Context Protocol) server
 
 ## Setup
 
-1. Install PostgreSQL@17 with AGE extension
+1. Install PostgreSQL@17 with the AGE and pgvector extensions
 2. Create a `governance` database
 3. Install dependencies: `pip install -e ".[full]" -c constraints.txt`
 4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
