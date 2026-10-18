@@ -48,6 +48,12 @@ psql "$DB_POSTGRES_URL" -f db/postgres/partitions.sql
 psql "$DB_POSTGRES_URL" -f db/postgres/graph_schema.sql
 ```
 
+Required extensions: `age`, `vector`, `pgcrypto`, `pg_trgm`. The list is
+`REQUIRED_EXTENSIONS` in `src/db/postgres_backend.py`; the server logs any that
+are missing at startup and `health_check` reports `status: degraded` with
+`missing_extensions`. `tests/test_required_stack_docs.py` fails if this line or
+`init-extensions.sql` falls out of step with that tuple.
+
 ### Configure Environment
 
 ```bash
