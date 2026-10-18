@@ -90,6 +90,16 @@ Run Release Seams on PRs into `release/**` (release-seams.yml:24-29 triggers on 
 
 Cut when PRs since the last tag reach about 50, or at most every one to two weeks, and do the tag, release page and pin PR in one sitting. Recent minors had 49 to 61 first-parent commits in range; v3.0.0 had 348. The cadence is a suggestion only; it raises the count of operator acts per month even though each act gets cheaper, so it is decision 7.
 
+## Other surfaces a release touches
+
+Checked by grep in the worktree at 50bece6b5 and not exercised.
+
+- **Skills and the plugin mirror.** No file under `skills/`, `commands/` or `agents/` references the `unitares` CLI subcommands (one watcher test does), so these steps need no skill change. The skill mirror stays automated by `plugin-skill-sync.yml`; nothing here should hand-sync it.
+- **MCP registry listing.** `publish-mcp-registry.yml` fires when the pin PR merges and follows `PUBLISHED_VERSION`. Making the pin PR open automatically (step 5) therefore also moves the registry listing sooner. The tracked `server.json` says 3.2.0 while `PUBLISHED_VERSION` is 3.3.0; I did not check whether the workflow rewrites it at publish time.
+- **Glama listing.** `glama.json` carries only `maintainers`, so no release step changes it.
+- **Citation and DOI.** Release prep edits `CITATION.cff` (`version`, `date-released`), which carries a Zenodo DOI. No workflow in this repo mentions Zenodo, but the Zenodo-GitHub integration is a repository setting that cannot be read from the tree. If it is enabled, publishing a GitHub Release (including one created by a workflow, step 5) could archive a version immutably. Confirm that setting before step 5.
+- **Paper repos.** They are tagged separately (`paper-v*`) and are not touched by a server release. I did not read them; a cadence change should not alter any paper citation, but that is unchecked.
+
 ## What stays manual
 
 - Tagging: the operator creates and pushes `vX.Y.Z`. Steps 1 to 3 only print the command with the SHA pinned. Tags stay immutable; corrections remain errata or a patch release.
