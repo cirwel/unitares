@@ -452,12 +452,22 @@ properties, not surprises:
 - **Under `STRICT_IDENTITY_REQUIRED` the pin does not carry a check-in.**
   A `sync_state` / `process_agent_update` whose binding was server-inferred
   (pin, fingerprint, sticky cache, transport-injected session id) is refused
-  unless the resolved agent is substrate-earned, and the refusal points the
-  caller back to the `client_session_id` its `start_session` returned. That
-  refusal belongs to the check-in path; it is not a general write gate. A
-  low- or medium-severity `store_finding` resolves its writer from the bound
-  context without checking proof origin, so it can still be attributed
-  through the pin, and the co-residency caveats above still apply to it.
+  unless the resolved agent is exempt from caller proof (substrate-earned, or
+  dedicated substrate: `is_exempt_from_caller_proof`), and the refusal points
+  the caller back to the `client_session_id` its `start_session` returned. A
+  high- or critical-severity `store_finding` / `update_finding` on such a
+  binding gets the same refusal. For `update_finding` the severity gated is
+  the effective one, the higher of the stored and requested values
+  (`_effective_update_severity`), so an update that raises a finding into
+  high or critical takes that refusal. A low- or medium-severity
+  `store_finding` or note on a server-inferred binding is recorded under the
+  anonymous writer id rather than the inferred agent. A low- or
+  medium-severity `update_finding` there resolves its writer to the anonymous
+  id too, but the update stores no writer, so the finding keeps its original
+  author. Neither is refused, whether or not strict identity is on
+  (`_resolve_low_friction_writer`), and in neither case does the pin
+  attribute the write. An exempt resident's `store_finding` or note keeps
+  its attribution.
 - **`tier: strong` on an echoed `agent-{uuid}` is itself a
   performative claim across a process boundary — a known, bounded
   over-claim, named here so it is a property and not a surprise.** The
