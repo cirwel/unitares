@@ -1298,17 +1298,27 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     arguments = arguments or {}
     normalize_client_session_id_argument(arguments)
 
+    from ..context import get_session_signals, get_mcp_session_id
+    signals = get_session_signals()
+    _has_header_session = bool(
+        (signals and (signals.x_session_id or signals.mcp_session_id))
+        or get_mcp_session_id()
+    )
+
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
     # taxonomy of continuity". Parallels _s13_freshness_gate in
-    # handle_onboard_v2, except that here cosmetic `name` is not counted as a
-    # proof signal (#2708) — `identity(name="X")` without session/UUID/token
-    # proof mints fresh and applies the label to the new agent.
+    # handle_onboard_v2, except that here cosmetic `name` alone is not counted
+    # as a proof signal (#2708) — `identity(name="X")` without session/UUID/token
+    # proof mints fresh and applies the label to the new agent, whereas a caller
+    # with an explicit header session (X-Session-ID or Mcp-Session-Id) can still
+    # rename its bound agent through STEP 1.
     _has_proof_signal = bool(
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
         or arguments.get("agent_id")
+        or (arguments.get("name") and _has_header_session)
     )
     # Coerced once, before the S13 default and like handle_identity_v2's
     # resolver call, so a string "false" is treated exactly as False here,
@@ -1325,8 +1335,6 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     model_type = arguments.get("model_type")
 
     # Derive base session key (unified)
-    from ..context import get_session_signals
-    signals = get_session_signals()
     base_session_key = await derive_session_key(signals, arguments)
     normalized_model = None
     explicit_resume_binding = bool(arguments.get("client_session_id") or arguments.get("continuity_token"))
@@ -1402,11 +1410,32 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     #
     # Fix: when identity() creates a fresh agent (result.created is True),
     # write it to PostgreSQL before returning so the token's promise is real.
-    # Persist under the new agent's own client_session_id rather than the
-    # caller's old session_key so a force_new mint does not collide with or
-    # hydrate handles from the previous agent's session (#2707).
+    # When session_key was already bound to another agent (or is another
+    # agent's stable id), persist under the new agent's own client_session_id
+    # so a force_new mint does not collide with or hydrate handles from the
+    # previous agent's session (#2707); when session_key is a fresh transport
+    # key that just bound to this agent, persist under session_key so the
+    # transport retains its durable PostgreSQL session row.
     if result.get("created") and not result.get("persisted"):
         try:
+            from .shared import _session_identities
+            from .stable_session import classify as _csid_kind, verifies_for as _csid_verifies
+
+            _sk_entry = _session_identities.get(session_key)
+            _sk_foreign_stable = (
+                (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+                or (
+                    _csid_kind(session_key) == "legacy"
+                    and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
+                )
+            )
+            _sk_bound_to_new = (
+                not _sk_foreign_stable
+                and isinstance(_sk_entry, dict)
+                and (_sk_entry.get("bound_agent_id") or _sk_entry.get("agent_uuid")) == agent_uuid
+            )
+            _persist_session_key = session_key if _sk_bound_to_new else client_session_id
+
             # parent_agent_id is only set when the caller explicitly asserted
             # succession (post-2026-04-16 EISV inheritance spec). Fingerprint
             # match no longer auto-claims lineage, so no predecessor_uuid to
@@ -1419,7 +1448,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
             _spawn = arguments.get("spawn_reason") or result.get("spawn_reason") or ("new_session" if _parent else None)
             newly_persisted = await ensure_agent_persisted(
                 agent_uuid,
-                client_session_id,
+                _persist_session_key,
                 parent_agent_id=_parent,
                 spawn_reason=_spawn,
             )

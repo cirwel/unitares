@@ -2498,14 +2498,17 @@ class TestHandleOnboardV2:
             assert _session_identities[f"agent-{inmem_uuid[:12]}"]["bound_agent_id"] == inmem_uuid
 
             # Plain arg-less identity() on a fresh transport must both bind the
-            # fresh transport key and persist its own public_agent_id/auto-label.
+            # fresh transport key (in memory and durable PG core.sessions) and
+            # persist its own public_agent_id/auto-label.
             _session_identities.clear()
             mock_redis.get.side_effect = None
             mock_redis.get.return_value = None
             mock_db.upsert_agent.reset_mock()
             mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
             mock_db.get_identity.side_effect = [
                 None,
+                SimpleNamespace(identity_id="plain-ident-2707", metadata={}),
                 SimpleNamespace(identity_id="plain-ident-2707", metadata={}),
             ]
             plain_res = await handle_identity_adapter({"model_type": "claude-opus-4"})
@@ -2515,6 +2518,12 @@ class TestHandleOnboardV2:
             assert plain_meta.get("public_agent_id") == plain_data["agent_id"]
             assert plain_meta.get("label") and plain_meta["label"].endswith(f"_{plain_uuid[:8]}")
             assert _session_identities.get("test-ctx-key", {}).get("bound_agent_id") == plain_uuid
+            plain_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert "test-ctx-key" in plain_session_keys
+            assert f"agent-{plain_uuid[:12]}" in plain_session_keys
 
             # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
             # refuses to hydrate handles from old_uuid's cached session entry.

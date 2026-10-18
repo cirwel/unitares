@@ -320,6 +320,38 @@ async def test_identity_adapter_session_resume_renames_only_with_proof(origin, r
 
 
 @pytest.mark.asyncio
+async def test_identity_adapter_header_session_rename_resumes_and_renames():
+    """An /mcp/ caller whose session comes from a caller-asserted header
+    (X-Session-ID or Mcp-Session-Id) and calls identity(name=...) with no
+    argument-level session/UUID signal must resume and rename the bound agent
+    through STEP 1 rather than minting a fresh identity."""
+    from src.mcp_handlers.context import SessionSignals, reset_session_signals, set_session_signals
+    from src.mcp_handlers.identity import handlers
+
+    existing = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
+
+    async def resolve(*args, **kwargs):
+        _caller_session_resolved_to(VICTIM)
+        return dict(existing)
+
+    label = AsyncMock(return_value=True)
+    tok = set_session_signals(SessionSignals(x_session_id="hdr-session-1", transport="mcp"))
+    try:
+        with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+             patch.object(handlers, "set_agent_label", label), \
+             patch.object(handlers, "_cache_session", AsyncMock()), \
+             patch.object(handlers, "_perform_session_bind", AsyncMock()):
+            res = await handlers.handle_identity_adapter({"name": "renamed-via-header"})
+            body = json.loads(res[0].text)
+    finally:
+        reset_session_signals(tok)
+
+    assert body["resumed"] is True
+    assert body["uuid"] == VICTIM
+    assert label.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_a_callers_own_session_does_not_vouch_for_a_claimed_uuid(monkeypatch):
     """IDENTITY_STRICT=log lets a bare agent_uuid resume proceed (with a hijack
     log). The caller's own client_session_id made the request caller-asserted,
