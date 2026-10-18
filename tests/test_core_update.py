@@ -1684,9 +1684,10 @@ class TestProcessAgentUpdateExtended:
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
         with self._apply_patches(p):
             # Patch the local import of maybe_emit_void_alert
+            mock_emit = MagicMock(return_value=mock_cirs_alert)
             with patch.dict("sys.modules", {
                 "src.mcp_handlers.cirs.protocol": MagicMock(
-                    maybe_emit_void_alert=MagicMock(return_value=mock_cirs_alert),
+                    maybe_emit_void_alert=mock_emit,
                     auto_emit_state_announce=MagicMock(return_value=None),
                 )
             }):
@@ -1698,6 +1699,9 @@ class TestProcessAgentUpdateExtended:
 
                 data = parse_result(result)
                 assert isinstance(data, dict)
+                # The import path was wrong from the 2026-03-09 package reorg
+                # until this assertion was added: the emitter was never reached.
+                mock_emit.assert_called_once()
 
     # ------------------------------------------------------------------
     # Lines 1424-1427, 1437: Relevant discoveries scored by overlap
