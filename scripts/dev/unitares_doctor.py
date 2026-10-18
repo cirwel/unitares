@@ -3699,6 +3699,122 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
 
 
 # ---------------------------------------------------------------------------
+# PR owner footer
+# ---------------------------------------------------------------------------
+
+_OWNER_FOOTER = re.compile(
+    r"UNITARES agent:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
+_AGENT_BRANCH_PREFIXES = ("claude/", "codex/")
+_GITHUB_REMOTE = re.compile(r"github\.com[:/]+([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def _github_runner() -> str | None:
+    """The App runner, which a launchd PATH may not include."""
+    found = shutil.which("unitares-github")
+    if found:
+        return found
+    fallback = Path.home() / ".local" / "bin" / "unitares-github"
+    return str(fallback) if fallback.exists() else None
+
+
+def _open_agent_prs(runner: str, repo_root: Path) -> list[dict] | None:
+    try:
+        url = subprocess.run(
+            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        match = _GITHUB_REMOTE.search(url)
+        if not match:
+            return None
+        out = subprocess.run(
+            [runner, "--read-only", "--", "gh", "pr", "list",
+             "--repo", match.group(1), "--state", "open", "--limit", "200",
+             "--json", "number,headRefName,body"],
+            cwd=repo_root, capture_output=True, text=True, timeout=60, check=True,
+        ).stdout
+        prs = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return [p for p in prs
+            if str(p.get("headRefName", "")).startswith(_AGENT_BRANCH_PREFIXES)]
+
+
+def check_pr_owner_footer(db_url: str, repo_root: Path) -> CheckResult:
+    """Can a later session find the owner of every open agent PR?
+
+    The contract ends every agent PR body with ``UNITARES agent: <uuid>`` so a
+    later session can find the owner and check it against the server. Local
+    sessions get it stamped by the App runner. Hosted cloud sessions type it by
+    hand, so it goes missing or names an identity the server never minted.
+    This reads open ``claude/*`` and ``codex/*`` PRs only: ownership matters
+    while a PR can still be handed over or adopted, and a merged PR has no
+    owner left to find.
+
+    A footer uuid can resolve and still be the wrong session (one mobile-app
+    identity footered cloud PRs on three days in October 2026); the detail
+    lists the uuids so a reader can check that, but nothing here judges it.
+    SKIPs on a host without the App runner.
+    """
+    name, mode = "pr_owner_footer", "operator"
+    runner = _github_runner()
+    if runner is None:
+        return CheckResult(name, mode, Status.SKIP,
+                           "no unitares-github runner on this host")
+    prs = _open_agent_prs(runner, repo_root)
+    if prs is None:
+        return CheckResult(name, mode, Status.WARN,
+                           "could not list open PRs through the App runner",
+                           detail="the footer check did not run; this is not a pass")
+    if not prs:
+        return CheckResult(name, mode, Status.PASS, "no open agent PRs")
+
+    missing: list[int] = []
+    footers: dict[str, list[int]] = {}
+    for pr in prs:
+        uuids = {u.lower() for u in _OWNER_FOOTER.findall(pr.get("body") or "")}
+        if not uuids:
+            missing.append(pr["number"])
+        for uuid in uuids:
+            footers.setdefault(uuid, []).append(pr["number"])
+
+    unknown: dict[str, list[int]] = {}
+    if footers:
+        listed = ",".join(f"'{u}'" for u in sorted(footers))
+        rows = _psql_rows(db_url, (
+            "SELECT agent_id::text FROM core.identities "
+            f"WHERE agent_id::text IN ({listed})"
+        ))
+        if rows is None:
+            return CheckResult(name, mode, Status.WARN,
+                               "could not read core.identities",
+                               detail="footer uuids were not checked; this is not a pass")
+        known = {r[0].lower() for r in rows if r}
+        unknown = {u: n for u, n in footers.items() if u not in known}
+
+    owners = "; ".join(f"{u[:8]}: #{', #'.join(map(str, sorted(n)))}"
+                       for u, n in sorted(footers.items()))
+    if not missing and not unknown:
+        return CheckResult(name, mode, Status.PASS,
+                           f"{len(prs)} open agent PR(s), every footer resolves",
+                           detail=owners)
+    problems = []
+    if missing:
+        problems.append("no footer: #" + ", #".join(map(str, sorted(missing))))
+    if unknown:
+        problems.append("footer uuid unknown to the server: " + "; ".join(
+            f"{u} (#{', #'.join(map(str, sorted(n)))})"
+            for u, n in sorted(unknown.items())))
+    return CheckResult(
+        name, mode, Status.WARN,
+        f"{len(missing) + sum(len(n) for n in unknown.values())} open agent "
+        "PR(s) without a resolvable owner footer",
+        detail=" | ".join(problems + ([f"owners: {owners}"] if owners else [])),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Local model endpoint
 # ---------------------------------------------------------------------------
 
@@ -3931,6 +4047,10 @@ def build_checks(
         # thing that separates a quiet finding stream from a broken alarm path.
         Check("forced_release_transform", "operator",
               lambda: check_forced_release_transform(db_url)),
+        # Hosted cloud sessions type the owner footer by hand; this is the only
+        # place a missing or unminted one is noticed.
+        Check("pr_owner_footer", "operator",
+              lambda: check_pr_owner_footer(db_url, repo_root)),
     ]
 
 

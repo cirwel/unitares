@@ -193,6 +193,18 @@ repositories. Cloud agents use explicitly provisioned repository-scoped App
 credentials; a missing cloud integration must be reported, never replaced
 with the operator's login. Other installers opt in to their own host and
 credentials.
+
+<a id="operator-login-agent-prs"></a>**Agent PRs through the operator
+login.** Hosted Claude sessions cannot use the App: their GitHub proxy
+attaches the operator's credential to every request and refuses the GraphQL
+calls `gh pr` makes even with a supplied token, and their network secrets
+exclude GitHub. Their PRs are therefore authored by the operator's account.
+The operator does not open PRs or press merge, so an agent branch authored by
+that account is an agent act, never an operator act. The
+`agent-via-operator-login` label (`operator-login-agent-pr.yml`) records this
+on `claude/*` and `codex/*` PRs. The footer stays the owner pointer: such a
+session onboards and ends the body with its own `UNITARES agent: <uuid>`,
+never a uuid copied from another session.
 Direct local `./scripts/dev/review.sh` remains available and shares the same
 per-PR lock and evidence, so it joins an in-flight host review.
 

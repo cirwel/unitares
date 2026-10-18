@@ -19,7 +19,7 @@ PostgreSQL+AGE (5432)            Redis (6379)
   core.agent_state                 identity continuity
   audit.events
   knowledge.discoveries / governance_graph (AGE)
-  dialectic.*
+  core.dialectic_sessions / core.dialectic_messages
   core.calibration
   audit.tool_usage
 ```
@@ -76,7 +76,7 @@ For fleets that coordinate, the **CIRS protocol** ([`../guides/CIRS_PROTOCOL.md`
 
 ## 6.8 Updates and backups
 
-On a Docker install, `./scripts/unitares update --check` reports whether a newer release is published, and `./scripts/unitares update` moves to it. Before it applies any migration it stops the writers and dumps the database to `~/.unitares/backups/` (or `UNITARES_BACKUP_DIR`); a failed migration or rebuild puts the previous release's code back. [Updating](02-install.md#updating) has the full behavior, and the one-time step for installs made before the command existed.
+On a Docker install, `./scripts/unitares update --check` reports whether a newer release is published, and `./scripts/unitares update` moves to it. Before it applies any migration it stops the writers and dumps the database to `~/.unitares/backups/` (or `UNITARES_BACKUP_DIR`); a failed migration or rebuild puts the previous release's code back, unless the attempt advanced the protected dialectic schema (or the schema afterwards cannot be read), in which case it leaves the new release checked out with the writers stopped for you to repair forward. [Updating](02-install.md#updating) has the full behavior, and the one-time step for installs made before the command existed.
 
 These dumps are taken only when a release brings migrations. They are gzipped plain SQL, readable only by your account, and nothing prunes them, so clear old ones yourself. They are not a backup schedule; for one, run `pg_dump` on a timer yourself.
 

@@ -27,7 +27,7 @@ Workflow:
 
 1. If phase is `thesis`: the paused agent should respond via `dialectic(action='thesis', ...)`.
 2. If phase is `antithesis` and the current bound agent is the assigned reviewer: respond via `dialectic(action='antithesis', ...)`.
-3. If phase is `antithesis` and the current bound agent should answer instead of the assigned reviewer: use `dialectic(action='antithesis', ..., take_over_if_requested=true, takeover_reason='...')`.
+3. If phase is `antithesis` and the current bound agent should answer instead of the assigned reviewer: an authenticated operator caller can use `dialectic(action='antithesis', ..., take_over_if_requested=true, takeover_reason='...')`; anyone else gets `TAKEOVER_FORBIDDEN`. Otherwise wait for the assigned reviewer, or have the operator or the current reviewer use `dialectic(action='reassign', session_id=..., new_reviewer_id=...)`.
 4. If phase is `synthesis`: respond via `dialectic(action='synthesis', ...)`.
 5. If the session is already resolved/failed/escalated, report that instead of trying to write.
 

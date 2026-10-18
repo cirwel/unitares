@@ -52,7 +52,10 @@ both believing they are canonical.
    host with a public route to it:
    - `POSTGRES_PASSWORD` — non-default.
    - `LEASE_PLANE_BEARER_TOKEN` — unique random value.
-   - `UNITARES_CONTINUITY_TOKEN_SECRET` — unique random secret.
+   - `UNITARES_CONTINUITY_TOKEN_SECRET` — not a shipped default. Left empty,
+     the server generates one at startup and keeps it under `data/secrets/`
+     on the `governance-data` volume, which must travel with a migration.
+     Set it only to share a key.
    - `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` — fresh 32-byte Ed25519 seed,
      base64url without padding (`python3 -c 'import os,base64;
      print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))'`).
@@ -98,8 +101,10 @@ both believing they are canonical.
 5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).
 
-`scripts/ops/rotate-secrets.sh` documents the rotation path once the install
-is live.
+`scripts/ops/rotate-secrets.sh` rotates secrets for the macOS launchd install
+only. On a Compose host, rotate by editing `.env` (the bearer allowlist and
+its singular member, the lease-plane bearer and the attestation signing key)
+and running `docker compose up -d` to recreate the services.
 
 ## Exposure: keep loopback binding, tunnel in
 
@@ -159,9 +164,10 @@ machine. Two gaps to close on any deployment whose machine can be lost:
    way the dump alerts.
 2. **Redis is state, not cache, and needs its own snapshot.** Most live
    session/identity bindings exist only in Redis (see
-   `docs/proposals/archive/redis-retirement-v0.md`). Trigger `BGSAVE` (or rely on
-   AOF, which the Compose service enables) and copy the resulting
-   `dump.rdb`/`appendonly.aof` off-site alongside the SQL dump.
+   `docs/proposals/archive/redis-retirement-v0.md`). Trigger `BGSAVE` and copy
+   `/data/dump.rdb` off-site alongside the SQL dump once it completes (check
+   `LASTSAVE`), or, if relying on AOF (which the Compose service enables),
+   copy the whole `/data/appendonlydir/` directory.
 
 For a Compose install, run the equivalents inside the containers:
 

@@ -30,9 +30,10 @@ Stores the durable system of record:
 
 ### Redis
 
-Stores ephemeral runtime support data in the production posture:
+Stores runtime state, not just cache, in the production posture:
 
-- session bindings
+- session/identity bindings (the primary store for these; most live sessions
+  exist only in Redis, so back it up as state)
 - metadata cache
 - distributed-lock helpers
 - other short-lived cache/coordination entries

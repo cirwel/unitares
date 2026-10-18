@@ -78,9 +78,10 @@ GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo
 ```
 
 The coordination demo talks to both the governance server and the lease plane,
-so give it both ports. With only the lease-plane port it falls back to the
-default governance port, 8767, and registers its demo agents on whatever server
-answers there.
+so give it both ports. If only one port is moved and nothing in the environment
+or `.env` states the other, it refuses to start (exit 2) rather than fall back
+to the other default and register its demo agents on whatever server answers
+there. If one half really is on its default port, set that port explicitly.
 
 ### Choose a model (optional)
 
@@ -255,7 +256,11 @@ The backup is a gzipped plain-SQL `pg_dump` written to
 `UNITARES_BACKUP_DIR` to put it elsewhere) and readable only by your account.
 If the dump fails, nothing is migrated. If a migration or the rebuild fails,
 `update` checks the previous release back out and rebuilds it; migrations that
-already applied stay applied, and the error names the backup. The command exits
+already applied stay applied, and the error names the backup. The exception is
+an attempt that crossed the protected dialectic schema frontier (migrations 077
+and 078), or whose schema cannot be read afterwards: then `update` does not
+roll the code back, but leaves the target release checked out with the
+governance server and lease plane stopped for forward repair. The command exits
 non-zero unless deep health comes back healthy or moderate. A checkout already
 on the target release goes through the same steps without moving the code.
 
@@ -287,7 +292,7 @@ values are ignored. Action authorization and identity gates are unchanged.
 
 Earlier releases used `minimal`, `lite`, and `full` discovery profiles. The
 `standard` profile existed only on unreleased master between #2102 and #2137
-and never shipped in a release; v2.22.1 is the latest release and defaults to
+and never shipped in a release; v2.22.1 is the last 2.x release and defaults to
 `minimal` as described below. Those releases still require their own
 configuration instructions; changing an old server's environment does not
 install the unified catalog.

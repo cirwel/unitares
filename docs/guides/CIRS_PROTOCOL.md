@@ -147,11 +147,11 @@ This protocol has no `emit` action.
 
 ## Auto-Emit Hooks
 
-Most CIRS signals are emitted automatically during `process_agent_update()`. You don't need to call them manually:
+`process_agent_update()` is wired to emit the CIRS signals below automatically, so you don't need to call them manually. **Current status:** all three hooks are skipped at the moment. The call sites in `src/mcp_handlers/updates/phases.py` import `.cirs.protocol`, a module that does not exist under `updates/`. The `ImportError` is caught and logged only at debug level, so no auto-emit happens until that import is fixed. The table describes what each helper does once it is reached:
 
 | Hook | When it fires |
 |------|---------------|
-| Void-alert helper | After check-in if |V| > threshold |
+| Void-alert helper | After a check-in where the agent enters void (`void_active` goes from false to true); staying in void does not re-emit |
 | State-announce helper | Every fifth check-in — `auto_emit_state_announce` emits only when the update count is 1 or a multiple of 5 |
 | Resonance-signal helper | When the agent's own resonance flag changes — resonance-alert on entering, stability-restored on leaving |
 
@@ -163,7 +163,7 @@ Additional standalone signals:
 
 ## When to Use CIRS Manually
 
-Most agents never need to call CIRS directly — the auto-emit hooks handle broadcasting. Manual use is for:
+Most agents never need to call CIRS directly — the auto-emit hooks will handle broadcasting once the import above is fixed; until then, nothing is broadcast automatically. Manual use is for:
 
 1. **Setting boundary contracts** — Define how you want to interact with specific agents
 2. **Querying state** — Check what other agents are broadcasting
