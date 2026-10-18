@@ -1,0 +1,1 @@
+- Correct identity, lineage and Φ doc claims the code contradicts: strict identity also refuses high- and critical-severity knowledge writes on an inferred binding, and low- and medium-severity writes there are recorded under the anonymous writer; the lineage design records now carry as-built corrections; `UNITARES_PHI_TELEMETRY_ONLY` is on by default.
