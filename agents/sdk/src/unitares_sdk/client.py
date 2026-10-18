@@ -29,6 +29,7 @@ from unitares_sdk.errors import (
     parse_retry_after_header,
 )
 from unitares_sdk.models import (
+    _host_ids_list,
     ArchiveResult,
     AuditResult,
     CheckinResult,
@@ -897,8 +898,9 @@ class GovernanceClient:
         if host_id is not None:
             args["host_id"] = host_id
         if host_ids is not None:
-            # A str goes as-is: the server reads JSON text or a lone host id.
-            args["host_ids"] = host_ids if isinstance(host_ids, str) else list(host_ids)
+            # Always send a list: /mcp/ refuses a bare string before the
+            # server can read it as one host.
+            args["host_ids"] = _host_ids_list(host_ids)
         args.update(kwargs)
         raw = await self.call_tool(
             "consult",

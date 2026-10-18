@@ -1,5 +1,8 @@
 """Pydantic response models for governance tool results."""
 
+import json
+from typing import Any
+
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
@@ -226,6 +229,19 @@ class ModelResult(_GovModel):
     routed_via: str | None = None
     task_type: str | None = None
     inference: InferenceProvenance | None = None
+
+
+def _host_ids_list(value: Any) -> list:
+    """consult's host_ids as a list: JSON text is parsed, a lone id wrapped."""
+    if isinstance(value, str):
+        if value.lstrip().startswith("["):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return [value]
+            return parsed if isinstance(parsed, list) else [value]
+        return [value]
+    return list(value)
 
 
 class ConsultResult(_GovModel):

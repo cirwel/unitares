@@ -29,6 +29,7 @@ from src.mcp_handlers.context import (
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
 from .coerce import coerce_bool
+from ..schemas.core import council_host_ids
 from .delegated_inference import (
     DelegatedInferenceRequest,
     run_delegated_inference,
@@ -1759,7 +1760,7 @@ async def _handle_council(
     not combine, rank or vote on the answers.
     """
     council_id = str(uuid4())
-    hosts = arguments.get("host_ids")
+    hosts = council_host_ids(arguments.get("host_ids"))
     template = ConsultRequest(
         brief=brief_text,
         requester_uuid=requester_uuid,

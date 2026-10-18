@@ -2545,6 +2545,22 @@ def test_council_size_is_left_to_the_handler_and_json_text_is_accepted():
     assert ConsultParams(brief="q", host_ids="codex:host-adapter").host_ids == ["codex:host-adapter"]
 
 
+@pytest.mark.asyncio
+async def test_direct_handler_reads_json_text_host_ids(monkeypatch):
+    calls = []
+
+    async def fake(request):
+        calls.append(request.host_id)
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    parsed = _payload(await co.handle_consult(
+        _council_args(host_ids='["codex:host-adapter", "antigravity:host-adapter"]')))
+    assert parsed["status"] == "completed"
+    assert sorted(calls) == ["antigravity:host-adapter", "codex:host-adapter"]
+    assert parsed["request"]["host_ids"] == ["codex:host-adapter", "antigravity:host-adapter"]
+
+
 def test_abridged_briefs_state_the_council_requirements():
     fields = ConsultParams.model_fields
     assert "cloud_allowed" in fields["host_ids"].json_schema_extra["brief"]

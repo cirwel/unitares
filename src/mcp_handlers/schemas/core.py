@@ -930,6 +930,26 @@ class DelegateInferenceParams(AgentIdentityMixin):
     )
 
 
+def council_host_ids(value: Any) -> Any:
+    """consult's host_ids as a list where text can be read as one.
+
+    REST and use_tool deliver a list typed into a text field as JSON text,
+    which /mcp/ parses itself. A lone host id becomes a one-item list, so the
+    handler refuses it with the valid hosts. /mcp/ builds its argument model
+    from the advertised schema, which has no string branch, so there a lone
+    host id fails as a parameter error before this runs. The handler applies
+    the same reading for direct callers.
+    """
+    if isinstance(value, str):
+        if value.lstrip().startswith("["):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        return [value]
+    return value
+
+
 class ConsultParams(AgentIdentityMixin):
     """Bounded policy surface for advisory model consultation."""
 
@@ -1019,18 +1039,7 @@ class ConsultParams(AgentIdentityMixin):
     @field_validator("host_ids", mode="before")
     @classmethod
     def host_ids_from_json_text(cls, value: Any) -> Any:
-        # REST and use_tool deliver a list typed into a text field as JSON
-        # text; /mcp/ already parses it. Accept it on every transport. A lone
-        # host id becomes a one-item list, so the handler refuses it with the
-        # valid hosts rather than a schema error.
-        if isinstance(value, str):
-            if value.lstrip().startswith("["):
-                try:
-                    return json.loads(value)
-                except ValueError:
-                    return value
-            return [value]
-        return value
+        return council_host_ids(value)
 
     @field_validator("brief")
     @classmethod

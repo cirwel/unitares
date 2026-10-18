@@ -954,8 +954,10 @@ adversarial review after it merged.
     to fail schema validation with a generic `PARAMETER_ERROR` that also
     blamed `effort`'s default.
   - `host_ids` sent as JSON text (REST, `use_tool`) is parsed into a list.
-    `/mcp/` already did this. A lone host id becomes a one-item list, which
-    the handler refuses with the valid hosts.
+    `/mcp/` already did this. On REST and `use_tool`, a lone host id becomes
+    a one-item list, which the handler refuses with the valid hosts. `/mcp/`
+    refuses a bare string as a parameter error, because its advertised schema
+    has no string branch.
   - The `host_ids` brief names the `cloud_allowed` requirement, and the
     `effort` brief covers `host_ids`.
   - `CONSULT_COUNCIL_FAILED` reports `validation_error` when every member
