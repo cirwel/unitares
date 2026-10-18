@@ -22,29 +22,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- changelog-coverage-exempt: #2879 no-user-effect -->
 
 A minor release from master, following v3.3.0. The interface contract moves
-from 1.31.0 to 1.49.0 without leaving major version 1: no tool, action or
-input is removed, renamed or retyped, and each behavior change below names the
-setting or step it needs. The [release notes](releases/3.4.0.md) give the
-upgrade order and the rollback limit in full.
+from 1.31.0 to 1.49.0 without leaving major version 1: no tool, action or input
+is removed or renamed, and the one retyped input (`host_id` on `consult` and
+`delegate_inference`, from an enum to a bounded string) accepts every value it
+accepted before. Each behavior change below says what it affects and, where
+one exists, the setting that restores the old behavior. The
+[release notes](releases/3.4.0.md) give the upgrade order and the rollback
+limit in full.
 
 **Upgrading.** Check these before restarting on 3.4.0; the entries below give
 the detail.
 
-- **Migrations 074 to 078, before any 3.4.0 process starts.** A Docker Compose
-  install applies them with `scripts/unitares update`, which stops the server
-  and the lease plane and backs up the database first; do not start the 3.4.0
-  images before they are applied. An operator install stops both dialectic
-  writers and runs `python3 scripts/dev/apply_migrations.py --apply
-  --dialectic-writers-quiesced`; 077 and 078 refuse without that attestation
-  or while a resolution saga is in flight. Drain live file-write executors
-  first; the 3.4.0 lease plane needs 076, because its lease queries read the
-  new column even with execute flags off.
+- **Migrations 074 to 078, before any 3.4.0 process starts.** The
+  `scripts/unitares update` in a v3.3.0 checkout cannot pass the attestation
+  that 077 and 078 require, so from v3.3.0 check out v3.4.0 by hand first, then
+  run `./scripts/unitares update --to v3.4.0`: it stops the server and the
+  lease plane, backs up the database and applies the migrations. Do not start
+  the 3.4.0 images before they are applied. An operator install stops both
+  dialectic writers and runs `python3 scripts/dev/apply_migrations.py --apply
+  --dialectic-writers-quiesced`; without that attestation the run refuses
+  before applying anything while 077 or 078 is pending, and it also refuses
+  while a resolution saga is in flight. Drain live file-write executors first;
+  the 3.4.0 lease plane needs 076, because its lease queries read the new
+  column even with execute flags off.
 - **Rollback is forward-only once 077 or 078 is applied.** v3.3.0 code must not
-  run on the migrated schema; return to v3.3.0 only by restoring the
-  pre-upgrade database backup.
-- **Verdicts shift for behavioral agents.** Two EISV decision-path repairs give
-  warmed behavioral agents `approve` where they used to get `guide`. Rows from
-  either side belong to different instrument eras.
+  run on the migrated schema, and `unitares update --to v3.3.0` refuses once
+  the schema is past 073; returning to v3.3.0 then means restoring the
+  pre-upgrade database.
+- **Verdicts shift for behavioral agents.** Two EISV decision-path repairs make
+  `proceed` (`sub_action: approve`) more frequent for warmed behavioral agents
+  where `guide` used to appear; the entries give the estimates and their
+  limits. Rows from either side belong to different instrument eras.
 - **Declare `spawn_reason` alongside a live parent.** The server no longer
   infers `subagent` or `compaction` from thread context or `client_hint`: an
   onboard that declares `parent_agent_id` without `spawn_reason` is recorded as
@@ -52,27 +60,35 @@ the detail.
   (`rejected_coincidental`) and the identity is minted without it. A dispatched
   child passes `spawn_reason="subagent"`. `unitares onboard` and
   `onboard_helper.py` no longer declare the cached identity as parent.
-- **`observe(action="agent")` redacts the UUID for other callers** and refuses
-  an ambiguous target with `AMBIGUOUS_TARGET`.
+- **`observe(action="agent")` redacts the UUID** for a caller that is neither
+  the operator nor the observed agent, and refuses an ambiguous target with
+  `AMBIGUOUS_TARGET`.
 - **A paused agent cannot lift its own pause with `agent(action="resume")`**
   (`PAUSE_SELF_RESUME_REFUSED`).
 - **`call_model` is deprecated**, removable no earlier than 2026-12-02; move
   callers to `consult(effort='standard')`.
 - **`list_inference_hosts` lists configured hosts by default**, and queryless
   knowledge listings omit unpromoted imported memory by default.
-- **`health_check` reports `degraded`** when a required Postgres extension is
-  missing.
+- **`health_check` and `/health/deep` report `moderate`** when a required
+  Postgres extension is missing, with `primary_db` among the degraded checks.
 - **With reviewer hosts set, the local fallback reviewer no longer approves**:
   a failed orchestrated dispatch now waits for facilitation.
+- **Codex lanes deny reads outside the runtime's own paths**, and refuse to run
+  under an administrator codex configuration or a codex that does not honor
+  permission profiles.
 - **Native BEAM services keep their Erlang cookie off the command line** from
   their next restart.
 
-`unitares-sdk` 0.4.1, declared in v3.2.0, is published from this release
-commit: it adds `consult()`, sends `consult()` and `delegate_inference()` once
-without retrying, and deprecates `call_model()`. The skills bundle changed,
-and the governance plugin carries it as v0.4.21. The compatibility table now
-names plugin v0.4.20, the bundle published for v3.3.0, which it had not been
-updated to show.
+`unitares-sdk` 0.5.0 is published from this release commit, a behavioral minor
+over 0.4.0. It carries everything since 0.4.0, including v3.2.0's progressive
+tool dispatch and `CheckinResult.metrics`; it adds `consult()` and the lease
+plane's `effect_in_progress` result, sends `consult()` and
+`delegate_inference()` once without retrying, narrows `list_inference_hosts()`
+to configured hosts, and deprecates `call_model()`. The in-tree 0.4.1 that
+v3.2.0 declared was never published, and this release skips it. The skills
+bundle changed, and the governance plugin carries it as v0.4.21. The
+compatibility table now names plugin v0.4.20, the bundle published for v3.3.0,
+which it had not been updated to show.
 
 ### Added
 - **Component boundary ratchet:** `scripts/dev/check_component_boundaries.py` records where the code crosses the federation boundaries in `federation-component-boundaries-v0` Section 6 and fails a change that adds a crossing. It covers reference residents importing `src` or querying Core tables, also through scripts they launch; route packs importing outside an allowlist; private imports across components; and SQL against another component's tables, including from Elixir. The crossings that existed (69 rule-and-file entries, 148 occurrences) are baselined in `scripts/dev/component_boundaries_baseline.txt` and may only shrink. It runs in pre-commit and the Repo Scope Guard workflow, changes no runtime code, and its counts authorize no retirement. (#2716)
@@ -197,7 +213,7 @@ updated to show.
 - **eisv:** the decision-path basin now reads ODE S detrended by the same S setpoint σ that Φ uses, so the Stage A attractor move no longer turns warmed agents' `safe` check-ins into `guide` (contract row 50). The ODE, Φ and the basin take σ from one resolver, so an agent whose class resolves to `None` no longer gets σ = 0 in the ODE and the default σ in Φ (row 51). The Φ-derived latest-risk fast-trip is skipped when the behavioral assessment owns the verdict and kept in Φ cold start (row 52). The decision records the σ it used in `policy_evaluation.inputs.s_setpoint`. The governor's adaptive δ is unchanged by decision (row 53). Expected direct effect, from a one-step replay of 14 days of persisted inputs that does not model the closed loop: behavioral `safe` → `approve` 9.5% → 28.9% (n = 9,088 rows, 209 identities), untagged 87.0% → 97.7% (n = 914), physical unchanged at 0 (n = 6,547). This is the first instrument change under the 2026-10-15 stop-rule amendment: it sets `instrument_change_at` = `2026-10-15T13:45:00Z`, and the 2026-12-01 registered read admits only outcomes before that instant. The ODE I-rest shift that keeps many rows in BOUNDARY is a separate defect and is not repaired here. (#2831)
 - **eisv:** the S setpoint σ now moves ODE S and nothing else (contract row 50). Before this change, the E and I equations (−β_E·E·(S − σ), −k·(S − σ)) and the regime detector's ODE fallback read raw S, and a fresh monitor's S seed sat at 0.2. As a result the setpoint dragged the E and I rests down and moved the cold-start transient. All three now read S − σ or are shifted by σ, as do Φ and the basin already, and the agent-visible saturation diagnostic. With no sensor spring, a monitor run with the setpoint on and off now agrees on everything but S while S − σ stays clear of S's own floor (`tests/test_eisv_setpoint_invariance.py`), and the offline Stage A red-team panel passes. No live row before T came near that floor. The derived-confidence formula stays on raw S because its weights are frozen for a prospective calibration read. Against the deployed build's golden trajectories, no action, verdict or status changes. An equilibrium-shift estimate over the frozen 14-day export puts behavioral `safe` → `approve` between 44.1% and 84.5% (from 26.7%–28.9% as deployed; n = 9,088 rows, 209 identities), depending on how many rows the Φ fast-trip still covers, and moves physical rows from BOUNDARY to HIGH. The estimate models neither the transient nor the closed loop. It creates no LOW basin and no pause. The change was made after T (`2026-10-15T13:45:00Z`), so the 2026-12-01 registered read is unaffected. (#2834)
 - **observe:** `observe(action="agent")` resolves every identifier `agent(action="list")` prints for a non-operator caller, no longer returns the registry UUID to that caller, and no longer picks one agent when a target names several. The listing shows `{public_agent_id}_{uuid8}` in place of the UUID, but the resolver compared the target with the unsuffixed stored id, so the printed handle answered "not found in active metadata" for an agent that had checked in the same day. The resolver now compares against exactly what the listing prints (`lifecycle.disclosure.listed_agent_identifier`), including the `agent-redacted-<digest>` fallback. Separately, a target that resolved came back with its full UUID in `agent_id`, which undid the listing's redaction with one more read. The returned id now goes through the listing's disclosure rule (`lifecycle.disclosure.visible_agent_identifier_for_caller`) with no exception: the operator and the observed agent get the UUID, anyone else gets the listed identifier with `uuid_redacted: true`, including a caller who passed the UUID. Resolution has a fixed order: the UUID, then a listed identifier the server composed, then an alias (label, display name, structured id, bare `public_agent_id`). A label is chosen by the agent that wears it, so a label set to another agent's handle neither receives nor blocks that agent's lookups. An alias names its one live holder ahead of archived or deleted ones, so a label shared by an archived predecessor and its live successor resolves to the successor whatever order the registry holds them in. A target that still names more than one agent (two live holders of a label, the bare bucket `public_agent_id`, two agents whose UUIDs share a first block) is refused with `AMBIGUOUS_TARGET`, where the first matching registry row used to be returned; the refusal points the caller at the identifier the listing prints. Behavior changes for callers: a non-operator client that read a UUID out of an observe response now receives a handle, and a lookup by a label or bucket id that several agents share now fails where it used to answer for one of them. The interface contract moves 1.31.0 → 1.32.0 to record this; no input digest moves. Not covered: `observe` `similar` and `anomalies` still return peer UUIDs, and knowledge-graph search results carry writer UUIDs, so the listing's redaction is not yet a boundary on every surface (#2736). (#2736)
-- The PostgreSQL backend no longer hides a missing required extension. Startup logs any of `age`, `vector`, `pgcrypto` or `pg_trgm` that is absent, and `health_check` reports `status: degraded` with `missing_extensions` instead of `healthy`. A test now holds the Docker init SQL and the setup docs to the same list. (#2871)
+- The PostgreSQL backend no longer hides a missing required extension. Startup logs any of `age`, `vector`, `pgcrypto` or `pg_trgm` that is absent, and the backend's health check reports `status: degraded` with `missing_extensions` instead of `healthy`; the `health_check` tool and `/health/deep` show that as overall `moderate`, with `primary_db` among the degraded checks. A test now holds the Docker init SQL and the setup docs to the same list. (#2871)
 - Replace the retired Antigravity review model pin with Gemini 3.8 Flash (High), verified in the installed CLI's model catalog. Explicit model overrides and model-family attribution remain supported. (#2785)
 - Accept ordinary review evidence from the verified UNITARES agents GitHub App, preserving diff and model-family checks. Keep bot comments and App credentials out of operator waivers and extra-review authorization. (#2784)
 - **sdk:** `delegate_inference()` is sent once and never retried, on both clients. Before, a timeout or transport error was retried, and because the outer `timeout_s + 75` never raised the HTTP client's own 30s timeout, a delegation longer than 30s on the MCP transport could be re-sent while the first child was still running, spending subscription quota twice and starting a second orchestrator execution. The docstring now says the HTTP client's `timeout` bounds the call. Uses `call_tool(retry=False)` from the `consult()` change. (#2853)

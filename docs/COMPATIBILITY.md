@@ -35,6 +35,28 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.4.0 removes and renames no registered callable, action or input
+  parameter. The one retyped input, `host_id` on `consult` and
+  `delegate_inference`, moves from an enum to a bounded string and still
+  accepts every value it accepted before. It is a minor release: each
+  behavior change is documented with what it affects and, where one exists,
+  the setting that restores the old behavior. Four have no restoring setting.
+  `observe(action="agent")` returns the listed identifier instead of the UUID
+  to a caller that is neither the operator nor the observed agent, and refuses
+  a target that names several agents with `AMBIGUOUS_TARGET` (#2736). An
+  onboard that declares `parent_agent_id` without `spawn_reason` is recorded
+  as `new_session`, and its lineage is rejected while that parent is live, so
+  a dispatched child passes `spawn_reason="subagent"` (#2777). Imported memory
+  is classified only by `source-<provider>-memory` tags (#2866). A paused
+  agent cannot lift its own pause with `agent(action="resume")` (#2813).
+  Migrations 074 to 078 must be applied before any 3.4.0 process starts, and
+  recovery is forward-only once 077 or 078 is applied: v3.3.0 code must not
+  run on that schema. A v3.3.0 checkout's `scripts/unitares update` cannot
+  pass the attestation that 077 and 078 require, so a Compose install moves
+  its code to v3.4.0 by hand first and then runs the 3.4.0 `update`
+  ([release notes](releases/3.4.0.md)). `unitares-sdk` 0.5.0 is a behavioral
+  minor over 0.4.0 that removes nothing public; the in-tree 0.4.1 that
+  v3.2.0 declared was never published.
 - v3.3.0 removes no registered callable's canonical name and no input
   parameter. It changes identity defaults in ways an existing install can
   notice; the release is a minor by operator decision (2026-10-08), because
