@@ -1,5 +1,102 @@
 # Production snapshot
 
+## October 18, 2026 inventory
+
+Captured at **2026-10-18 22:24:05.925104 UTC** from the maintainer's
+single-operator deployment. The retained record contains **6,593,939 audit and
+telemetry events**, including **52,264 in the preceding seven days**,
+alongside **2,129 discovery records** and **20 recorded self-recoveries**.
+
+The [captured aggregate JSON](evaluations/production-snapshots/2026-10-18.json)
+and [read-only SQL](operations/production-snapshot-counts.sql) provide the
+complete counts, event composition, and date ranges. All queries ran in one
+repeatable-read, read-only transaction with the same cutoff. The
+[August snapshot](#august-11-2026-historical-record) remains below as a historical
+record.
+
+### Recorded activity
+
+| Metric | Value |
+|---|---|
+| Agents onboarded | **8,677** retained process-instance records in `core.agents` |
+| Distinct event-emitting identities (prior 21 days) | **883** |
+| Distinct event-emitting identities (prior 7 days) | **287** |
+| Audit/telemetry events recorded | **6,593,939** retained rows; **52,264** in the prior 7 days |
+| Stored EISV state rows | **102,728** observations |
+| Canonical non-automatic lifecycle resumes | **27** broadcaster-form records, including **20** recorded self-recoveries; counting subset defined below |
+| Knowledge graph discoveries | **2,129** retained records |
+| Earliest retained agent-registry record | **2025-11-29 00:18:15.693081 UTC** |
+
+The deployment includes development sessions, residents, and test/operational
+traffic. Process records are not a count of independent users, and repeated
+state observations are not independent trials. These are inventories of the
+records present at capture, not lifetime totals or an uptime measurement.
+The retained audit events span **2026-04-01 through 2026-10-18**; the JSON
+records each table's own date range. Retention, deletion, and backfill can
+change later reruns even with the same timestamp cutoff.
+
+### Event composition
+
+| Event type | Rows | Share |
+|---|---:|---:|
+| `session_resolve_miss_observed` | 4,803,867 | 72.85% |
+| `cross_device_call` | 1,018,196 | 15.44% |
+| `auto_attest` | 213,353 | 3.24% |
+| `grounding_shadow` | 101,919 | 1.55% |
+| `progress_flat_candidate` | 93,202 | 1.41% |
+| All other event types | 363,402 | 5.51% |
+
+Session-resolution observations and cross-device-call records account for
+**5,822,063 events (88.29%)**. The event total therefore
+describes infrastructure activity across these channels. The complete
+composition is retained in the JSON.
+
+### Recovery count and provenance updates
+
+For continuity with the August query, recovery counts select lifecycle records
+with a payload `type` field: the broadcaster-form subset. This excludes legacy
+dual-written copies, but also direct fallback and test records that lack that
+field; it is not a complete deduplicated inventory of all resumes. The
+[lifecycle writer](../src/agent_metadata_model.py) and
+[broadcaster](../src/broadcaster.py) define those paths.
+
+Within that subset, the self-recovery count uses `LIKE 'Self-recovery%'`, which covers both
+`Self-recovery: ...` and `Self-recovery (<basis>): ...`. The old colon-only
+predicate returns **15** at this same cutoff; the broader predicate returns
+**20**. This resolves the reason-format gap recorded in the August notes.
+The current `refresh_snapshot.py` helper already uses the broader predicate.
+
+This capture also records the earliest retained `core.agents.created_at`
+value and the explicit session/call composition rollup. These complete the
+three provenance items identified for the next refresh without changing the
+historical August figures.
+
+### Reproduce the October inventory
+
+From the repository root, against the same deployment database:
+
+```bash
+psql -XqAt -v ON_ERROR_STOP=1 -h localhost -U postgres -d governance \
+  -v cutoff='2026-10-18T22:24:05.925104+00:00' \
+  -f docs/operations/production-snapshot-counts.sql
+```
+
+Omit `-v cutoff=...` for a new inventory at the transaction's start time. Save
+that output as a new dated record. The SQL reads only operational counts and
+event types; it does not read outcome labels or run the registered prediction
+evaluation. Public readers can inspect the captured aggregates and query;
+reproducing live database counts requires access to this deployment.
+
+For capability evidence, start with the
+[captured two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) and
+[review-correction traces](evaluations/review-correction-traces-2026-09-21.md).
+The [evidence summary](EVIDENCE_AND_LIMITS.md) combines these with the inventory.
+
+## August 11, 2026 historical record
+
+<details>
+<summary>Frozen August counts, original queries, refresh notes, and historical dashboard images</summary>
+
 Frozen at **2026-08-11 14:02:51 MDT** from a single-operator deployment: the
 author's own traffic, not external adoption. Headline: **4,573,890 audit and
 telemetry events recorded · 68,075 in the prior 7 days**. Weekly volume varies with the
@@ -162,3 +259,5 @@ audit of the README's claims are queued for the next refresh:
   <img src="assets/dashboard-activity.png" width="80%" alt="Activity as of June 2026: filterable event log across all agents"/>
 </p>
 <p align="center"><em>Activity, June 2026: filterable event log across all agents, covering check-ins, verdicts, and discoveries</em></p>
+
+</details>

@@ -1,113 +1,103 @@
 # UNITARES Reviewer Guide
 
-**Created:** May 23, 2026  
-**Last Updated:** October 11, 2026
+**Created:** May 23, 2026
+
+**Last Updated:** October 18, 2026
+
 **Status:** Active
 
----
-
-This guide is for a cold evaluator: what UNITARES does, what layer it occupies, and how to verify the public claims quickly.
-
-## One-sentence read
-
 UNITARES is accountability infrastructure for long-running AI agents: a
-self-hosted, single-operator server that keeps one attributed record of
-identity, claims and evidence, review, outcomes, and reconstruction across
-sessions, handoffs, and agents from different vendors. Each check-in also
-returns a policy action (`proceed`, `guide`, or `pause`) derived from an EISV
-state estimate. What remains open is listed under
-[Common objections](#common-objections) and in the
-[claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status).
+self-hosted, single-operator server that keeps attributed records of identity,
+claims and evidence, review, outcomes, and reconstruction across sessions,
+handoffs, and agents from different vendors.
 
-## What this is
+Start with the captured workflow and concrete corrections below, then exercise
+that workflow in a test deployment. The [evidence and limitations](EVIDENCE_AND_LIMITS.md)
+page collects the results and their scope; [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md)
+covers interfaces, storage, and authorization.
 
-- A governance MCP + HTTP server for agent runtime state.
-- A continuous check-in loop: `start_session` -> `sync_state` -> `record_result` -> `check_working_state`. These are the agent-facing workflow names; the implementation tools they route to are `onboard`, `process_agent_update`, `outcome_event`, and `get_governance_metrics` (mapping in [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md)).
-- A signal layer that blends and smooths runtime observations and controller history into EISV indices; its proprioceptive interpretation is documented in [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md).
-- A calibration layer that combines self-reported confidence with exogenous outcomes such as tests, exit codes, and tool results.
-- A continuity and audit layer for long-running and repeated agent process-instances.
-- A research implementation backed by a public paper, DOI, reproducibility kit, and deployment-derived datasets.
+## Evidence to check
 
-## What this is not
+| What to evaluate | Record to inspect | What it establishes |
+|---|---|---|
+| Attribution and outcome binding | [Process A in the captured walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) | Calls bind to one process; its finding retains authorship; an outcome grades the intended prediction and retains its evidence grade. |
+| Continuity across processes | [Process B in the walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) | A fresh process retrieves A's resolved finding, author, and closure class, then declares the handoff. |
+| Review findings becoming corrections | [September 21 review retrospective](evaluations/review-correction-traces-2026-09-21.md) | Public finding-to-revision chains preserve evidence grades, prevent formatting repair from manufacturing approval, and keep unresolved findings visible. |
+| Review conditions surviving a session | [Carried condition and later repair](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317) | A public PR implements a condition ten days after its originating review opened; the original transcript is operator-private. |
+| Operation and recovery | [Dated production snapshot and queries](PRODUCTION_SNAPSHOT.md) | Recorded deployment activity and exercised recovery paths, with counting methods and scope. |
 
-- Not an output filter or guardrail classifier.
-- Not a sandbox or permission system.
-- Not an outcome oracle or grand jury. EISV reports changes in its specified inputs and history; external outcome evidence and policy/review layers decide task-negative, contract, authority/harm, or synthetic labels.
-- Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict. I blends calibration and controller history with optional outcome-consistency and other features; it is not a truth score.
-- Not hardened against a motivated adversary gaming the EISV proxy. Some outcome
-  sources are harder for the agent to manipulate and baselines are self-relative,
-  but enforcement leans lenient by intent and red-teaming has been ad hoc rather
-  than sustained. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md).
+The walkthrough's task is illustrative; its server responses were captured
+from a fresh Docker install on 2026-10-08. The retrospective establishes
+specific corrections in a recent, non-random sample. Comparative benefit over
+other review or handoff approaches remains unmeasured. Deployment counts
+measure recorded activity, not uptime or independent trials.
 
-## Common objections
+## Verify one complete workflow
 
-Each answer below says what UNITARES claims, what remains open, and where the
-evidence lives.
+Use the [walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) for exact calls and
+responses. The same sequence is a small first integration for coding, research,
+operations, or monitoring agents:
 
-**"There is no evidence it improves outcomes."** Outcome improvement is not the
-product claim. The product claim is that agent work stays attributed and
-reconstructable across sessions, handoffs, and vendors, which a reviewer can check
-directly: bind a session, write a finding, restart, and read it back. Version
-control and audit logs are judged the same way, by whether the record is complete
-and trustworthy, not by whether the code got better. Whether governance improves
-outcomes is a research question on top: no governed-versus-ungoverned comparison
-has shown an outcome improved, the frozen outcome-lift read was inconclusive, not
-negative ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)), and a
-[registered stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
-constrains how it may be answered.
+1. **Search before repeating work.** Use `search_shared_memory` and read relevant
+   findings, including their status and corrections. Authorized reads can precede
+   identity binding.
+2. **Bind the process.** Call `start_session(force_new=true)`, retain
+   `client_session_id`, and thread it on later calls. Confirm that
+   `check_working_state` returns the new process's `agent_uuid`.
+3. **Preserve the finding.** Use `store_finding` for a durable claim and its
+   evidence. Use `sync_state` after meaningful work; its report text is transient,
+   so it does not replace the finding. Retain a returned `prediction_id` when
+   grading that check-in later.
+4. **Request review when needed.** `request_review` starts a governed review;
+   retain its session ID, positions, reviewer judgment, and unresolved conditions.
+   Inspect the completed exchange with `dialectic` reads. A request alone does
+   not establish completed review, and an advisory `consult` is a separate path.
+5. **Record what happened.** Send `record_result` with outcome provenance and the
+   intended `prediction_id`. The walkthrough shows both binding and the
+   `self_report_with_refs` grade: an agent-reported test result remains a
+   self-report. Ordinary test failures are task-negative evidence unless a
+   separate contract, authority, or harm boundary was crossed.
+6. **Close and retrieve.** Use `update_finding` with the closure class and evidence.
+   Release process presence when exiting. A successor searches for the record,
+   starts fresh, and declares `parent_agent_id` with `spawn_reason="explicit"`
+   only for a real handoff from that finished predecessor.
 
-**"How does this work with a handoff note?"** A well-written note may be all a
-task needs. An agent can also reference it in a UNITARES finding alongside code,
-logs, and test results. The document supplies a concise summary; the shared record
-keeps process attribution, selected findings, corrections, and participating
-reviewers' decisions available to authorized readers. Agents and integrations
-must capture those records explicitly. Updating or superseding a finding does
-not rewrite a handoff file or a copy already held in another agent's context;
-later readers must retrieve current records to see the correction. Retention,
-authorization, and replacement-link traversal have the boundaries described in
-[capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md).
+The captured walkthrough covers steps 1–3 and 5–6. For step 4, inspect the
+[review protocol](../src/dialectic_protocol.py) and the correction records above,
+then exercise review with participating reviewers in your test deployment. A
+paused agent cannot resolve its own review over a standing reviewer objection;
+the objection remains pending for facilitation.
 
-**"EISV is not a validated measure."** EISV computes specified weighted indices
-and their evolution from runtime observations and controller history. The
-[computation reference](EISV_COMPUTATION.md) defines those signals and their
-provenance. A narrow or derived signal is still inspectable information;
-validation of a particular diagnosis or use is a separate question. Its
-`proceed` and `guide` actions are advisory; its `pause` holds governed writes until
-self-recovery, review, an operator, or expiry lifts it. Added outcome-prediction
-value is unestablished ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)). The operator decided on 2026-10-10 to move it out of the core
-into an optional module subscribed to check-ins
-([plan](proposals/active/eisv-core-boundary-v0.md)). Identity, findings,
-requested review, outcomes, and reconstruction do not need its estimate to work. The runtime separation is
-staged so it does not disturb the registered 2026-12-01 read. Until then the
-estimator ships in the core path, but its validity is a question about a research
-instrument, not about the record.
-
-**"The ontology is overbuilt."** Terms such as proprioception, allostatic load,
-dialectic, and trajectory identity come from the research program. The mechanisms under them
-are ordinary: a process identity bound to a session, a declared lineage pointer, a
-state estimate, a review session with a recorded verdict. The product claim
-rests on those mechanisms, not on the research framing, which lives in
-`docs/ontology/` and the papers, where its claims carry evidence classes.
+Evaluate the record that a later reader can actually retrieve: author, claim,
+evidence grade, review conditions, outcome binding, closure, and any missing
+links. Keep source IDs in a reconstruction. Updating a finding does not rewrite
+copies already held in a handoff file or another agent's context; readers must
+retrieve current records. Governance-history exports omit shared knowledge,
+and retention, authorization, and replacement-link traversal have
+[backend-specific boundaries](CAPABILITIES_AND_DEPLOYMENT.md#choose-a-deployment-profile).
 
 ## Implementation status: what's live vs proposed
 
-This table is the authoritative shipped/proposed line; anything found only under
-`docs/proposals/` is proposed. If it disagrees with
-runtime, trust [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) and the
-referenced files.
+These core mechanisms are shipped. Use the linked implementation and the
+[canonical source registry](dev/CANONICAL_SOURCES.md) to verify behavior;
+a proposal alone does not establish shipment.
 
-| Surface | Status | Where to verify it's real |
+| Mechanism | Public entry points | Where to verify |
 |---|---|---|
-| Check-in / EISV / verdict loop | **Live** | `src/behavioral_assessment.py`, `src/behavioral_state.py`; flow in [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
-| Self-relative risk scoring (z-score vs own Welford baseline after warmup, alongside absolute thresholds; coordinates remain weighted indices) | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
-| Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, reached as `dialectic(action='thesis'/'antithesis'/'synthesis'/'request')` on every transport. Their own names are legacy aliases: REST `/v1/tools/call` and stdio resolve them, `/mcp/` answers `Unknown tool`. Not a stub. |
-| Knowledge graph (discoveries, edges, FTS) | **Live** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()` (workflow aliases `store_finding`, `search_shared_memory`, `update_finding`) and `search_knowledge_graph`. `store_knowledge_graph` is a legacy alias for `knowledge(action='store')` that REST and stdio resolve and `/mcp/` refuses. AGE relational store is canonical; AGE graph is advisory. |
-| HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-mostly, not read-only: the Security pane (`dashboard/redesign/sections/security.js`) revokes passkeys and dashboard sessions. The HTTP adjudication surface (the Sentinel queue and its verdict routes) was removed 2026-09-27; the Sentinel CLI (`--resolve`/`--dismiss`) remains the supported path for operator-recorded outcomes. Historical `*_confirmed` / `*_dismissed` outcome rows remain. |
-| ODE / thermodynamic model | **Live, coupled to assessment and policy** | Behavioral assessment owns the post-cold-start assessment; ODE state supplies structural basin/void/coherence checks and feeds later behavioral observations through controller history. See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
-| BEAM Wave 3a outbound proxy | **Live, optimization-only** | `src/wave3a_beam_proxy.py`. Python in-process dispatch is the authority; BEAM is a routed fast-path that **fails open to Python** on any error (500ms hard timeout). Routing is env-flag-gated (`src/wave3a_routing.py`). Observability: DB coordination events + `unitares_beam_proxy_*` Prometheus metrics. |
+| Process identity and declared lineage | `start_session`, `identity` | [`identity/`](../src/mcp_handlers/identity/), [identity contract](ontology/identity.md) |
+| Durable findings and retrieval | `store_finding`, `update_finding`, `search_shared_memory`, `knowledge` reads | [`knowledge/handlers.py`](../src/mcp_handlers/knowledge/handlers.py), [knowledge schema](../db/postgres/knowledge_schema.sql) |
+| Governed review | `request_review`, `dialectic` | [Review handlers](../src/mcp_handlers/dialectic/handlers.py), [protocol and resolution constraints](../src/dialectic_protocol.py) |
+| Outcomes and prediction binding | `record_result` | [Outcome handler](../src/mcp_handlers/observability/outcome_events.py), [captured binding](guides/AGENT_SESSION_WALKTHROUGH.md#6-grade-the-check-in-against-what-happened) |
+| Reconstruction | Knowledge and review reads, `export`, operator-gated `observe(action="outcome_evidence")` | [Capabilities and read boundaries](CAPABILITIES_AND_DEPLOYMENT.md#start-with-the-core-workflow), [export implementation](../src/mcp_handlers/introspection/export.py) |
+| Behavioral state and policy | `sync_state`, `check_working_state`, `self_recovery` | [Deployed EISV computation](EISV_COMPUTATION.md), [architecture](UNIFIED_ARCHITECTURE.md) |
 
-If a capability is **not** in this table and only appears under `docs/proposals/`,
-treat it as proposed, not shipped.
+The [interface contract](INTERFACE_CONTRACT.md) maps workflow names to canonical
+tools. Discover names with `list_tools(lite=true)` and schemas with
+`describe_tool`; use `use_tool` for tools omitted from the initial progressive
+listing. Legacy aliases have transport-specific support. PostgreSQL full-text
+search is the default; AGE provides replacement-link and response-chain
+traversal. Neither a tool listing nor a successful review request proves a
+complete deployment.
 
 ## Fast path: three minutes
 
@@ -119,76 +109,60 @@ docker compose up -d --wait
 make demo
 ```
 
-This is the README install pinned to the latest verified release; cloning
-`master` instead gets unreleased work.
+This installs the latest verified release. Cloning `master` instead gets
+unreleased work. `make demo` is an **installation smoke test**: a fresh identity,
+six check-ins, response shape, and warmup position. It stays below the
+self-relative baseline threshold; use the workflow above to evaluate the
+accountability record and the registered evidence below for prediction claims.
 
-`make demo` is an installation smoke test. It onboards a fresh process, sends six
-check-ins, and prints the response shape and warmup position. The run stays below
-the self-relative baseline threshold, so it does not establish predictive value
-or demonstrate the post-warmup model. Use the falsifiability path below for that
-question.
-
-If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports (Postgres/Redis aren't published to the host by default, so only the governance server and lease plane ports can collide):
+If a local UNITARES service already uses port `8767`, run `make demo` against it,
+or start a separate stack on alternate host ports:
 
 ```bash
 GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 ```
 
-## Ten-minute path
+PostgreSQL and Redis are not published to host ports by default. Deployment
+profiles, dependencies, and configured reviewer/provider requirements are in
+[Capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md).
 
-1. Read the top of [`README.md`](../README.md) through "How it works", then the one-page [product definition](PRODUCT_DEFINITION.md).
-2. Run `make demo` and inspect `scripts/demo/quick_demo.py`.
-3. Open the dashboard screenshots in `docs/assets/` to see the operator view.
-4. Inspect `src/mcp_handlers/` for the MCP surface and `governance_core/` for pure governance logic.
-5. Inspect the companion integration repo: [`CIRWEL/unitares-governance-plugin`](https://github.com/CIRWEL/unitares-governance-plugin).
-6. Inspect the embodied longitudinal testbed: [`CIRWEL/anima-mcp`](https://github.com/CIRWEL/anima-mcp).
+## Research and operational boundaries
 
-## Thirty-minute path
+EISV computes weighted, smoothed runtime observations and controller history.
+The [computation reference](EISV_COMPUTATION.md) defines the formulas, provenance,
+and distinction between deployed indices and the paper's research targets.
+`proceed` and `guide` are advisory; `pause` holds governed writes until recovery,
+review, an operator, or expiry lifts it. External enforcement needs host
+integration. The operator adopted moving EISV into an optional module on
+2026-10-10; the [staged implementation plan](proposals/active/eisv-core-boundary-v0.md)
+governs that work. The estimator still ships in the core path.
 
-1. Read the latest release of [`CIRWEL/unitares-paper-v6`](https://github.com/CIRWEL/unitares-paper-v6).
-2. Reproduce the §11.6 verdict counterfactual with [`CIRWEL/unitares-repro-v6`](https://github.com/CIRWEL/unitares-repro-v6).
-3. Inspect [`CIRWEL/eisv-lumen`](https://github.com/CIRWEL/eisv-lumen) for trajectory-derived expression and benchmark artifacts.
-4. Check GitHub Actions on this repo for tests, documentation validation, and CodeQL.
-5. Read [`SECURITY.md`](../.github/SECURITY.md) and [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md) to understand operational posture.
+Correctness, safety, adversarial resistance, predictive lift, and incident
+prevention require their own evidence. The [scope and threat model](SCOPE_AND_THREAT_MODEL.md)
+and [evaluation boundaries](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) state
+what remains open. The current trust boundary is one operator and its explicitly
+trusted issuer; independent cross-operator verification remains a research goal.
 
-## Buyer / operator wedge
-
-UNITARES is for teams operating agents that persist long enough to drift: coding agents, research agents, operations agents, monitoring agents, or multi-agent fleets with repeated process lifecycles.
-
-The first integration is deliberately small:
-
-1. Give each process-instance an identity with `start_session(force_new=true)`.
-2. Send one `sync_state` after each meaningful unit of work.
-3. Send `record_result` when a hard result exists: test passed/failed, tool rejected, task completed/failed, CI signal, or external observation. Treat ordinary CI/test failures as task-negative evidence unless a separate contract, authority, or harm boundary was crossed.
-4. Let the agent read the returned state and verdict before deciding whether to proceed, narrow scope, ask for review, or pause.
-
-This complements evals, guardrails, and sandboxes. Evals ask whether a model should be deployed. Guardrails and sandboxes constrain actions. UNITARES asks what the already-running agent is doing now, whether it is still calibrated to its own baseline, and whether it should self-regulate.
-
-## Evidence to check
-
-- Deployed EISV formulas, producer fields, conditional per-coordinate provenance tags, and the deployed-vs-target-semantics table: [`docs/EISV_COMPUTATION.md`](EISV_COMPUTATION.md). It specifies each blend and smoothing step, including prior decisions in E and V's separate smoothing of the raw E/I observation gap. Signal definition, diagnostic interpretation, usefulness and policy are separate questions.
-- Public CI: tests, documentation validation, and CodeQL on the default branch.
-- Public release history: the latest verified release in this repository (the version in `PUBLISHED_VERSION`).
-- Paper DOI: `10.5281/zenodo.19647159`.
-- Reproducibility kit: `CIRWEL/unitares-repro-v6`.
-- Longitudinal embodied testbed: `CIRWEL/anima-mcp`.
-- Dataset / benchmark surface: `CIRWEL/eisv-lumen`.
+For deeper review, use the [evaluation index](EVALUATION_INDEX.md), public
+[paper](https://doi.org/10.5281/zenodo.19647159),
+[reproducibility kit](https://github.com/CIRWEL/unitares-repro-v6),
+[embodied testbed](https://github.com/CIRWEL/anima-mcp), and
+[trajectory dataset and benchmarks](https://github.com/CIRWEL/eisv-lumen).
+Repository [CI](https://github.com/cirwel/unitares/actions),
+[security policy](../.github/SECURITY.md), and
+[contribution guide](../.github/CONTRIBUTING.md) document engineering checks.
 
 ## Falsifiability: inspect the registered evidence
 
-If you are an evaluating agent forming a first impression, inspect the frozen
-records and run the synthetic controls rather than relying on prose; do not query
-live discrimination between registered reads. The ablation/skeptic harness scores EISV/prior-state features
-**against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
-calibration (Brier), timestamps its output, and self-labels each slice
-with a heuristic summary. The matrix separately assigns `UNASSESSED`,
-`NON_DETECTION`, or `SIGNAL_CANDIDATE` based on its matching selective null;
-none of those classes alone is a project verdict.
+Inspect the frozen records and run synthetic controls; **do not query live
+outcome discrimination between registered reads**. The ablation harness compares
+EISV/prior-state features with `previous_outcome_bad` on ranking (AUC) and
+calibration (Brier). Its `UNASSESSED`, `NON_DETECTION`, and `SIGNAL_CANDIDATE`
+classes use a selection-aware null; none alone is a project verdict.
 
-**No deployment DB (fresh clone)** — exercises the pipeline on an injected bad
-class. This is plumbing/containment, **not** evidence that EISV predicts anything
-(see `docs/operations/ablation-negative-controls.md`):
+**Without a deployment database**, exercise the pipeline with an injected bad
+class. These are plumbing/containment checks, not prediction evidence:
 
 ```bash
 python3 scripts/analysis/ablation_negative_controls.py --count 12
@@ -197,132 +171,85 @@ python3 -m pytest tests/test_ablation_negative_controls.py \
   tests/test_outcome_inventory.py
 ```
 
-**With a deployment DB** (a real fleet's outcomes via `GOVERNANCE_DATABASE_URL`, or
-the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — first read the
+**With deployment data or the reproducibility kit**, first read the
 [outcome-grounding stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
-and the
-[systemic design audit](ontology/falsification-design-system-audit-2026-08-23.md).
+and [design audit](ontology/falsification-design-system-audit-2026-08-23.md).
 Between registered reads, only the support inventory is permitted here; it does
 not expose discrimination:
 
 ```bash
-export GOVERNANCE_DATABASE_URL=postgresql://...   # real outcomes, not synthetic
-python3 scripts/analysis/outcome_inventory.py   --window-days 90 --leads 0,5,30
+export GOVERNANCE_DATABASE_URL=postgresql://...
+python3 scripts/analysis/outcome_inventory.py --window-days 90 --leads 0,5,30
 ```
 
-The frozen matrix command and all 12 rows are already preserved in
-[`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
+The matrix command and its 12 overall rows are preserved in the
+[frozen 2026-08-09 read](operations/eisv-ablation-frozen-2026-08-09.md).
 Running that command again still exposes outcome discrimination even with the
-same cutoff; it is not reviewer hygiene. The lane/exclusion contract is covered
-by synthetic unit tests. The fixed 2026-12-01 decision command belongs only to
-the registered execution, with the interim-access disclosure in the stop rule.
+same cutoff; it is not reviewer hygiene. Use synthetic unit tests for the
+lane/exclusion contract. The fixed 2026-12-01 decision command belongs only to
+the registered execution, with all interim-access disclosures. Its October 15
+amendment limits eligible data to before `2026-10-15T13:45Z`; the scheduled date
+and cluster threshold remain unchanged. Describe that read as **amended after
+interim exposure**, not as clean single-read blinding. A support shortfall closes
+it as inconclusive, not as a measured null.
 
-Wiring your own outcome producers (CI, test runners) through the
-operator-gated `/v1/harness/outcome` endpoint: send `confidence` only if the
-producer genuinely holds one; a producer without one, such as a test hook,
-sends none. The endpoint ignores `prediction_id` on purpose (an
-operator-asserted `agent_uuid` has no work correlation, so a forwarded id could
-bind an unrelated open prediction); an agent with a registered prediction
-records its outcome through `record_result` on its own bound session. The server then scrapes a confidence and stamps the row
-`calibration_excluded` so calibration never trains on it, and records why
-(`calibration_exclusion_reasons`). Since 2026-09-02 the non-protocol instruments (inventory, skeptic report,
-telemetry-health summary, exploratory reads) keep such rows under their default
-`corrected` fixture rule and name it in every report; `--fixture-rule
-registered` reproduces the earlier counts. Protocol-bound reads never take the
-default: a registered read's rule is fixed by the ablation matrix's protocol
-manifest, and the coherence-shadow v0 contract stays on the registered rule.
+### What the frozen read establishes
 
-**Telemetry step change, 2026-09-02.** The counts those non-protocol
-instruments publish (`strict_outcomes`, `fixtures_excluded`, the inventory's
-strict totals, the skeptic report's cohort) stepped once when the default
-moved: rows whose only exclusion is a scraped confidence became evidence.
-Every payload and report
-carries `fixture_rule`, which is the marker for that step; compare figures
-across the date only with the rule held fixed, and never read the step as
-event accrual. Inventing a confidence
-to avoid the flag reproduces the scraped-confidence defect client-side (#1445).
-The response carries a `validation_visibility` note when the flag is stamped,
-and `outcome_inventory.py` reports the population as `calibration_excluded_only`
-with `scraped_only_rows_kept` (#1790; decision packet
-[`proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`](proposals/archive/outcome-fixture-conflation-decision-packet-v0.md)).
+At `2026-08-09T20:00:00Z`, with trusted anchors and the BEAM harness lane
+excluded, the strict/task slices contain 223–227 outcomes, 53 bad rows, 28–29
+prior-state permutation blocks, and 16 agents. Report rows, blocks, and agents
+together; blocks are not independent failures.
 
-Envelope telemetry is future-only: rows written before
-`eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an
-inferred source; outcomes with no joinable prior state appear separately as
-`no_prior_state`. Enforcement slices are intervention-conditioned because the
-actuator can alter the later outcome; use them to audit requested-vs-applied
-behavior, not as causal evidence that EISV prevented or caused an outcome. See
-[`eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md).
+All 12 overall scope/window/lead slices are `NON_DETECTION`: selective p ranges
+from 0.070 to 0.567 after best-candidate selection is included in the null.
+Several unadjusted estimates improve ranking and calibration, usually through
+`prior_risk`, `prior_s`, or dispersion; those estimates do not establish the full
+E/I/S/V decomposition. The [corrected power audit](operations/falsifiability-power-audit-2026-08-23.md)
+withdraws its original table: preserved evidence cannot establish this read's
+power. Cite the p-values with that limitation. A corrected synthetic procedure
+supplies no valid historical power number for this cohort.
 
-**Operator rollout health** — query:
+The result is a dated descriptive non-detection. It cannot distinguish absent
+association from an underpowered read, validate EISV or its ontology, set a
+standing AUC bound, establish prevention, or consume the December read.
+An operational stop and scientific refutation have distinct requirements under
+the [inference-status contract](ontology/falsification-inference-containment-2026-08-22.md).
 
-```bash
-curl -H "Authorization: Bearer $UNITARES_HTTP_API_TOKEN" \
-  'http://127.0.0.1:8767/v1/eisv/telemetry-health?days=30'
-```
+### Preserve outcome and telemetry provenance
 
-This surface answers whether the instrumentation exists and is internally
-consistent before asking whether EISV is useful. It reports envelope and agent
-coverage, behavioral-vs-fallback source rates, warmup/missingness, same-row
-serialization violations (including malformed or incomplete envelopes), strict
-outcome-linked risk bins, and policy-requested versus enforcement-delivered
-counts. Legacy rows remain in the coverage
-denominator and are never backfilled. Calibration bins are five-minute
-lead-separated, strict-external, controlled-fixture-excluded, and clustered by
-the prior measurement; sparse bins remain labeled `sparse`/`inconclusive`.
+For CI/test producers using operator-gated `/v1/harness/outcome`, send confidence
+only when the producer holds one. The endpoint ignores `prediction_id` because
+an operator-asserted identity does not establish work correlation. An agent
+instead uses `record_result` with its own bound session and prediction ID.
+When confidence is absent, the server scrapes one and stamps
+`calibration_excluded` with reasons; inventing confidence defeats that safeguard.
 
-The view also makes the current verdict, experience-summary, and health-status
-risk bands visible side by side. Their labels answer different questions and
-their thresholds overlap, so differing words are not treated as a contract
-failure by themselves. Actual violation counts are confined to fields that
-disagree inside the same persisted observation.
+Since 2026-09-02, non-protocol instruments use the `corrected` fixture rule,
+retaining rows excluded only for scraped confidence. This caused a counting
+step, not event accrual: compare reports with `fixture_rule` held fixed.
+`--fixture-rule registered` reproduces earlier counting. Protocol-bound reads
+use their manifest's rule; coherence-shadow v0 stays on the registered rule.
+The [decision packet](proposals/archive/outcome-fixture-conflation-decision-packet-v0.md)
+documents `validation_visibility`, `calibration_excluded_only`, and
+`scraped_only_rows_kept`.
 
-**Honest current read** — frozen at `2026-08-09T20:00:00Z`, trusted anchors,
-BEAM harness lane excluded:
-
-- The overall strict/task slices contain 223–227 outcomes, 53 bad rows grouped
-  into 28–29 prior-state permutation blocks across 16 agents, depending on lead
-  and window. Report all three counts; blocks are not independent failures.
-- Across both scopes, 30/90-day windows, and 0/5/30-minute leads, **all 12
-  overall slices are `NON_DETECTION`** after the selected best candidate is
-  compared with the matching best-of-candidates permutation null. Selective p
-  ranges from 0.070 to 0.567; none clears p < 0.05.
-- Several unqualified point estimates improve both ranking and calibration, but
-  the selected features are usually `prior_risk`, `prior_s`, or recent
-  dispersion rather than evidence for the full E/I/S/V decomposition.
-- The frozen rows predate the telemetry envelope, so all source/warmup/
-  enforcement/missingness strata are `legacy/no-envelope`. **No prevention is
-  demonstrated.**
-- **What the non-detection does not say.** A `NON_DETECTION` slice cannot
-  distinguish "no association" from "an association this cohort is too small to
-  resolve". The corrected
-  [`operations/falsifiability-power-audit-2026-08-23.md`](operations/falsifiability-power-audit-2026-08-23.md)
-  withdraws its original power table and explains why the preserved evidence
-  cannot establish read-specific power for this frozen cohort. Report the
-  p-values with that unresolved power limitation. The corrected synthetic
-  procedure in `scripts/analysis/ablation_power_probe.py` supplies no valid
-  historical power number for this slice.
-
-This is a reproducible dated descriptive snapshot after best-candidate selection
-is included in the null. It tests measurable signal over a simple previous-outcome
-baseline; it does not validate EISV or its ontology, set a standing AUC bound, or
-consume the 2026-12-01 read.
-
-The 12 overall rows and run provenance are preserved in
-[`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
+Telemetry is future-only: pre-envelope rows remain `legacy/no-envelope`,
+including the entire frozen read; outcomes without a joinable prior state are
+`no_prior_state`. Never infer sources or backfill legacy coverage. Enforcement
+slices are intervention-conditioned: they audit requested versus applied
+behavior, not whether EISV caused or prevented an outcome. Health risk bins are
+five-minute lead-separated, strict-external, controlled-fixture-excluded, and clustered by
+prior measurement; sparse bins remain `sparse`/`inconclusive`. Different verdict,
+experience-summary, and health-status bands answer different questions;
+contract violations concern disagreement within the same persisted observation.
+See the [telemetry contract](ontology/eisv-telemetry-envelope-v1.md).
 
 ## Deployment scope and next validation step
 
-The public deployment is intentionally described as single-operator. Treat it
-as evidence that the pipeline has operated under sustained maintainer traffic,
-not as evidence of external product-market pull or efficacy.
-
-The next validation step is **independent draws with effective-n accounting**,
-not a headcount of operators. The 2026-07-30 individuality read failed at
-effective n=4 against a nominal n=7 because three eligible identities were one
-replicated Raspberry Pi; a second operator would not have repaired that. Report
-effective independent clusters, collapse replicate identities, and prefer
-corpora whose outcome the acting agent neither authors nor observes. An
-independent operator is one route to those draws and is required for the
-separate multi-principal trust claim, but it is not a precondition for efficacy
-evidence.
+The maintainer deployment supplies operational evidence in a single-operator
+setting. For efficacy research, report effective independent clusters, collapse
+replicate identities, and prefer outcomes the acting agent neither authors nor
+observes. The 2026-07-30 individuality read had effective n=4 despite nominal
+n=7 because three identities shared one replicated Raspberry Pi. Independent
+operators can supply new draws and are required for a multi-principal trust
+claim; headcount alone does not establish independent evidence.
