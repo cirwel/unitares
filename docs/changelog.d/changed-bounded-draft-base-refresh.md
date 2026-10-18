@@ -1,1 +1,0 @@
-- **delivery:** stop the scheduled all-draft base-refresh cascade; drafts now stay pinned until readiness, while the retained manual workflow requires one PR number and preserves its quiet-period, exact-head, token and post-push CI guards.

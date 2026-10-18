@@ -4,8 +4,9 @@ name: Promote Release
 # the already-published artifacts and records their evidence; `promote` waits for
 # a required reviewer on the release-promotion environment, then moves GHCR
 # latest to the verified server digest without rebuilding; `pin` pushes a branch
-# that advances PUBLISHED_VERSION. Merging that branch's PR stays a human act,
-# and GITHUB_TOKEN cannot open pull requests in this repository by setting.
+# that advances PUBLISHED_VERSION. The releasing agent opens that branch's PR
+# and queues it (GITHUB_TOKEN cannot open pull requests in this repository by
+# setting); the environment approval is the one human act.
 #
 # The lease-plane and database images are verified but never tagged `latest`.
 # The tagged docker-compose.yml already names them by the release tag

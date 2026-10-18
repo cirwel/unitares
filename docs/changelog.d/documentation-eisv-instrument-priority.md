@@ -1,1 +1,0 @@
-- **EISV:** prioritize supported instrument repair and evaluation, with a concrete sequence for S validation, E/I evidence inputs, and agent-facing usefulness; retain the optional-module architecture and registered study protections.

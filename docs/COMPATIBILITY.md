@@ -8,10 +8,10 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.3.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
-| Published server/container | `v3.3.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 37765542396](https://github.com/cirwel/unitares/actions/runs/37765542396). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.3.0). |
-| `unitares-governance` plugin | `v0.4.19` | Carries the skills bundle for server `v3.1.0`: its `skills/` mirrors master at `ef127104`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.19). |
-| `unitares-sdk` | `0.4.0` | Published Python client for resident and custom integrations, released with server v3.0.0. A behavioral minor release: `checkin` reads the verdict from the response envelope, so `GovernanceAgent`'s pause and reject handling (`VerdictError`) can now fire where every verdict used to parse as proceed; `get_metrics().action` is the policy action; `audit_knowledge` no longer requests a model by default; and the async `GovernanceClient` raises `GovernanceToolRefused`, a subclass of `GovernanceConnectionError`, when a tool answers `success: false`. It adds an optional NeMo Relay integration (`unitares-sdk[nemo-relay]`). Install it with `pip install unitares-sdk==0.4.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
+| UNITARES server | `v3.4.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
+| Published server/container | `v3.4.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 39120784863](https://github.com/cirwel/unitares/actions/runs/39120784863). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.4.0). |
+| `unitares-governance` plugin | `v0.4.21` | Carries the skills bundle for server `v3.4.0`: its `skills/` mirrors `3c12b1a8`, the v3.4.0 release commit, compared file by file (every file matches; the plugin adds only `SKILLS_MANIFEST.sha256`). This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.21). |
+| `unitares-sdk` | `0.5.0` | Published Python client for resident and custom integrations, released with server v3.4.0. A behavioral minor release over 0.4.0 that removes nothing public: it negotiates progressive tool listings on connect and sends calls to unadvertised tools through `use_tool`, fills `CheckinResult.metrics`, adds `consult()`, `ConsultResult` and a `retry` keyword on `call_tool`, sends `consult()` and `delegate_inference()` once without retrying, raises `GovernanceToolRefused` from the sync client too, adds the lease plane's `effect_in_progress` result, narrows `list_inference_hosts()` to configured hosts, and deprecates `call_model()`. The in-tree 0.4.1 that server v3.2.0 and v3.3.0 declared was never published. Install it with `pip install unitares-sdk==0.5.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
 | `unitares-host-adapter` | `0.3` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.3`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
 
@@ -35,6 +35,36 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.4.0 removes and renames no registered callable, action or input
+  parameter. The one retyped input, `delegate_inference`'s `host_id`, moves
+  from an enum to a bounded string and still accepts every value it accepted
+  before; `consult` gains an optional `host_id`. It is a minor release: each
+  behavior change is documented with what it affects and, where one exists,
+  the setting that restores the old behavior. Several have none. These change
+  what an existing client receives or may do.
+  `observe(action="agent")` returns the listed identifier instead of the UUID
+  to a caller that is neither the operator nor the observed agent, and refuses
+  a target that names several agents with `AMBIGUOUS_TARGET` (#2736). An
+  onboard that declares `parent_agent_id` without `spawn_reason` is recorded
+  as `new_session`, and its lineage is rejected while that parent is live, so
+  a dispatched child passes `spawn_reason="subagent"` (#2777). Imported memory
+  is classified only by `source-<provider>-memory` tags (#2866). A paused
+  agent cannot lift its own pause with `agent(action="resume")` (#2813). An
+  expired pause reports writes held until its token-fenced resume commits
+  (#2836). `POST /v1/effect-veto` vetoes archived, disabled, deleted and
+  paused proposers (#2840). The others without a setting are the local
+  fallback reviewer's lost approval when reviewer hosts are set, the codex
+  lane hardening, unweighted search ranking on the AGE backend, CIRS
+  auto-emit and the EISV decision-path repairs.
+  Migrations 074 to 078 must be applied before any 3.4.0 process starts, and
+  recovery is forward-only once 077 or 078 is applied: code from before 3.4.0
+  must not run on that schema. The `scripts/unitares update` of v3.0.0 to v3.3.0
+  cannot pass the attestation that 077 and 078 require, so a Compose install
+  on any of them moves its code to v3.4.0 by hand first and then runs the
+  3.4.0 `update`
+  ([release notes](releases/3.4.0.md)). `unitares-sdk` 0.5.0 is a behavioral
+  minor over 0.4.0 that removes nothing public; the in-tree 0.4.1 that
+  v3.2.0 declared was never published.
 - v3.3.0 removes no registered callable's canonical name and no input
   parameter. It changes identity defaults in ways an existing install can
   notice; the release is a minor by operator decision (2026-10-08), because

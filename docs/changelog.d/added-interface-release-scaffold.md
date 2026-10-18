@@ -1,1 +1,0 @@
-- Prepare the interface version, dated source note, generated contract, documentation entry and changelog with `python3 scripts/dev/prepare_interface_release.py`; list affected skills without claiming to verify them.

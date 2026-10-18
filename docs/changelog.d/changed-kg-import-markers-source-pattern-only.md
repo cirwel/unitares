@@ -1,1 +1,0 @@
-- Interface contract 1.46.0: Imported-memory classification keys only on source-<provider>-memory tags; the bare topic words memory-sync, memory-import, imported-memory and source-memory no longer mark a row imported_context.
