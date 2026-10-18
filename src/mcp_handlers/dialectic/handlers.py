@@ -4242,17 +4242,24 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 "agent_id": execution_id_spawned,
                                 "via": "agent-orchestrator",
                             }
-                            try:
-                                await _set_awaiting_facilitation(session, False)
-                            except Exception:
-                                result["success"] = False
-                                result["state_reload_required"] = True
-                                result["note"] = (
-                                    "The independent reviewer was dispatched, but "
-                                    "the facilitation flag could not be reconciled. "
-                                    "Reload the session before another write."
-                                )
-                                return success_response(result)
+                            # The thesis append above already cleared any stale
+                            # flag, so normally there is nothing to reconcile. A
+                            # False-to-False compare-and-set cannot change state;
+                            # it can only fail, and it fails exactly when the
+                            # spawned reviewer has claimed the slot during the
+                            # fast-crash wait (dialectic canary, 2026-10-18).
+                            if session.awaiting_facilitation:
+                                try:
+                                    await _set_awaiting_facilitation(session, False)
+                                except Exception:
+                                    result["success"] = False
+                                    result["state_reload_required"] = True
+                                    result["note"] = (
+                                        "The independent reviewer was dispatched, but "
+                                        "the facilitation flag could not be reconciled. "
+                                        "Reload the session before another write."
+                                    )
+                                    return success_response(result)
                             await _emit_dialectic_event(
                                 "dialectic_reviewer_dispatched",
                                 session,

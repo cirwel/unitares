@@ -1,0 +1,1 @@
+- **dialectic:** `request_review` no longer reports a failure, or says the thesis was not recorded, when the independent reviewer it spawned claims the slot during the fast-crash wait. The post-dispatch facilitation check could only fail in that case; it now runs only when there is a flag to clear. Reviewer verdicts and session resolution are unchanged.
