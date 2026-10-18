@@ -82,8 +82,9 @@ effort becomes thorough. The result, schema
 member's result under `members`, with `answered` of `asked`, and status
 `completed` or `partial`; none answering fails as `CONSULT_COUNCIL_FAILED`.
 Nothing combines, ranks or votes on the answers. Records are written once
-the whole council returns; a cancelled council records every member as
-cancelled, without hashes.
+the whole council returns. A cancelled council keeps no hashes in any
+member's record: a member that answered or was still running is recorded as
+cancelled, and one already refused keeps its refusal.
 
 Amended 2026-10-16: the bounded surface above stays bounded. `call_model` is
 deprecated in favour of `consult(effort='standard')` (#2847), and its model,

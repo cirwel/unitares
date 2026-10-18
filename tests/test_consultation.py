@@ -2536,6 +2536,10 @@ def test_council_size_is_left_to_the_handler_and_json_text_is_accepted():
     text = ConsultParams(brief="q", host_ids='["codex:host-adapter", "claude:host-adapter"]')
     assert text.host_ids == ["codex:host-adapter", "claude:host-adapter"]
     assert text.effort == "thorough"
+    # An empty council still defaults to thorough, so the handler refuses it
+    # for its size rather than its effort.
+    assert ConsultParams(brief="q", host_ids=[]).effort == "thorough"
+    assert ConsultParams(brief="q", host_ids="[]").effort == "thorough"
     # A lone host id becomes a one-item list: the handler refuses it with the
     # valid hosts instead of a schema error that blames effort.
     assert ConsultParams(brief="q", host_ids="codex:host-adapter").host_ids == ["codex:host-adapter"]
@@ -2629,3 +2633,5 @@ async def test_cancelled_council_keeps_a_members_policy_refusal(monkeypatch, hos
     assert records["codex:host-adapter"]["status"] == "failed"
     assert records["codex:host-adapter"]["failure"]["code"] == "CONSULT_HOST_NOT_IN_JOB"
     assert records["antigravity:host-adapter"]["status"] == "cancelled"
+    # Nothing reached the caller, so no row keeps hashes under an unseen key.
+    assert all(r["hashes"] is None for r in records.values())

@@ -4,5 +4,5 @@
   - `host_ids` sent as JSON text is accepted on REST and `use_tool`.
   - The abridged schema says a council needs `cloud_allowed`.
   - A council whose members were all refused for caller-correctable reasons reports `validation_error`.
-  - A cancelled council records every member as cancelled without hashes.
+  - A cancelled council keeps no hashes in any member's record. Members that answered or were still running are recorded as cancelled; members already refused keep their refusal.
   - Interface contract 1.52.0.

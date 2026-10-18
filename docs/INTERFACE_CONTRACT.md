@@ -965,7 +965,8 @@ adversarial review after it merged.
     council is cancelled:
     - a member that had already answered is recorded as `cancelled` without
       hashes, because its answer and hash key never reached the caller;
-    - a member already refused or failed keeps that outcome;
+    - a member already refused or failed keeps that outcome, also without
+      hashes;
     - a member still running is recorded as `cancelled`.
   - A council's hosts-file refusal no longer suggests standard effort, which
     a council cannot use.

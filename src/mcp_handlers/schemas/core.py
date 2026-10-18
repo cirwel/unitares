@@ -982,7 +982,7 @@ class ConsultParams(AgentIdentityMixin):
         # clients must not insert standard before we can infer a selected CLI
         # host's lane.
         default_factory=lambda data: (
-            "thorough" if data.get("host_ids") or data.get("host_id") in (
+            "thorough" if data.get("host_ids") is not None or data.get("host_id") in (
                 "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter",
             ) else "standard"
         ),

@@ -1400,6 +1400,8 @@ def _consultation_record(
     request: ConsultRequest,
     outcome: ConsultationOutcome,
     key: str,
+    *,
+    delivered: bool = True,
 ) -> dict[str, Any]:
     """Build the durable envelope for one consultation: who, route, outcome, hashes.
 
@@ -1427,9 +1429,10 @@ def _consultation_record(
     }
     if request.council_id is not None:
         record["council_id"] = request.council_id
-    if data.get("status") == "cancelled":
-        # The caller never receives a cancelled call's key, so hashes under
-        # it could never be verified; the row records only that it happened.
+    if data.get("status") == "cancelled" or not delivered:
+        # The caller never receives a cancelled call's key (nor, with
+        # delivered false, this outcome's), so hashes under it could never be
+        # verified; the row records only that it happened.
         record["hashes"] = None
         hashes: dict[str, Any] = {}
     else:
@@ -1482,12 +1485,15 @@ def _consultation_record(
 def _record_consultation(
     request: ConsultRequest,
     outcome: ConsultationOutcome,
+    *,
+    delivered: bool = True,
 ) -> None:
     """Append the consultation record and tell the caller how to verify it.
 
     A failed audit write never fails the consultation; the caller-facing
     ``record`` block is added only when the row was handed to the audit
-    writer.
+    writer. ``delivered`` false records an outcome the caller will never
+    receive (a council cancelled after this member finished), without hashes.
     """
     key = secrets.token_hex(32)
     try:
@@ -1495,7 +1501,7 @@ def _record_consultation(
 
         audit_logger.log_consultation(
             agent_id=request.requester_uuid,
-            record=_consultation_record(request, outcome, key),
+            record=_consultation_record(request, outcome, key, delivered=delivered),
         )
     except Exception as exc:
         logger.warning(f"consultation audit record failed (non-fatal): {exc}")
@@ -1703,10 +1709,10 @@ async def _run_council(members: list[ConsultRequest]) -> list[ConsultationOutcom
     between, so a completed member's hashes are written in the same step
     that hands its hash key back toward the caller (a transport that drops
     the response afterwards loses it, as for a single consult). When the
-    council is cancelled, a member that had answered is recorded as
-    cancelled, without hashes, because its answer and key never reached the
-    caller; a member already refused or failed keeps that outcome; one still
-    running is recorded as cancelled.
+    council is cancelled, nothing reaches the caller, so no member's row
+    keeps hashes: a member that had answered, or was still running, is
+    recorded as cancelled; a member already refused or failed keeps that
+    outcome, without hashes.
     """
     finished: dict[int, ConsultationOutcome] = {}
 
@@ -1720,7 +1726,7 @@ async def _run_council(members: list[ConsultRequest]) -> list[ConsultationOutcom
             outcome = finished.get(i)
             if outcome is None or outcome.ok:
                 outcome = _with_failover(member, _cancelled(member))
-            _record_consultation(member, outcome)
+            _record_consultation(member, outcome, delivered=False)
         raise
     outcomes = [finished[i] for i in range(len(members))]
     for member, outcome in zip(members, outcomes):
