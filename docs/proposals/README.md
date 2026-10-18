@@ -29,8 +29,9 @@ selection that day, parked four Active rows whose documents are untouched for
 because its named phases had shipped; rows it
 did not flag keep the 2026-09-03 reading. A re-read on **2026-10-18** retagged eleven
 rows whose shipped work, flag state or landed decision had overturned the tag
-(Built, Built (partial), Built (dormant), Closed); parking candidates from that
-read wait for operator selection, as on 2026-09-23. The tags are not a current work queue or permission
+(Built, Built (partial), Built (dormant), Closed); and, at the operator's
+selection, parked six Active rows untouched for 30 days with nothing in flight
+waiting on them. The tags are not a current work queue or permission
 to build. In particular, an Active row can be blocked or already partly built.
 Read its body and linked implementation before choosing work.
 
@@ -43,7 +44,7 @@ Read its body and linked implementation before choosing work.
 | **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
 
 Current counts:
-Built 36 · Registered 7 · Active 27 · Parked 25 · Closed 18
+Built 36 · Registered 7 · Active 21 · Parked 31 · Closed 18
 
 These counts cover the tagged entries across all three indexes. The archive
 also preserves the 19 older records previously indexed under `resolved/`, and
