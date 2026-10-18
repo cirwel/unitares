@@ -2010,22 +2010,22 @@ async def resolve_session_identity(
 
     # Lazy creation: just cache in Redis, don't write to PostgreSQL.
     # mint_guard=True: PATH 3 lazy mint must not silently overwrite an
-    # existing live binding for the same session_key (S21-a). When force_new is
-    # set (including the S13 fresh-instance default) or session_key is another
-    # agent's keyed id, cache under the new agent's own keyed id so
-    # ensure_agent_persisted(agent_uuid, client_session_id) always finds the
-    # new agent's public handle and auto-label without colliding with any prior
-    # session in memory or Redis (#2707).
+    # existing live binding for the same session_key (S21-a). When session_key
+    # is another agent's keyed id, cache under the new agent's own keyed id;
+    # otherwise cache under session_key (so a fresh transport or dispatch
+    # auto-mint stays bound to this agent) and also mirror the new agent's
+    # handle/label entry under its own keyed id so ensure_agent_persisted
+    # always finds it even when mint_guard refused overwriting session_key (#2707).
     from .stable_session import classify as _csid_kind
     from .stable_session import verifies_for as _csid_verifies
     from .shared import make_client_session_id, _session_identities
 
     _own_lazy_key = make_client_session_id(agent_uuid)
-    _use_own_lazy_key = (
-        bool(force_new)
-        or (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+    _foreign_keyed_session = (
+        _csid_kind(session_key) == "keyed"
+        and not _csid_verifies(session_key, agent_uuid)
     )
-    _lazy_cache_key = _own_lazy_key if _use_own_lazy_key else session_key
+    _lazy_cache_key = _own_lazy_key if _foreign_keyed_session else session_key
     await _cache_session(
         _lazy_cache_key, agent_uuid, display_agent_id=agent_id, label=label,
         spawn_reason=spawn_reason,
@@ -2033,14 +2033,21 @@ async def resolve_session_identity(
     )
     if _lazy_cache_key != _own_lazy_key:
         try:
-            _own_entry = dict(_session_identities.get(_lazy_cache_key) or {
-                "bound_agent_id": agent_uuid,
-                "agent_uuid": agent_uuid,
-                "public_agent_id": agent_id or agent_uuid,
-                "display_agent_id": agent_id,
-                "agent_label": label,
-                "spawn_reason": spawn_reason,
-            })
+            _cached = _session_identities.get(_lazy_cache_key)
+            if (
+                isinstance(_cached, dict)
+                and (_cached.get("bound_agent_id") or _cached.get("agent_uuid")) == agent_uuid
+            ):
+                _own_entry = dict(_cached)
+            else:
+                _own_entry = {
+                    "bound_agent_id": agent_uuid,
+                    "agent_uuid": agent_uuid,
+                    "public_agent_id": agent_id or agent_uuid,
+                    "display_agent_id": agent_id,
+                    "agent_label": label,
+                    "spawn_reason": spawn_reason,
+                }
             if label:
                 _own_entry["label"] = label
             _session_identities[_own_lazy_key] = _own_entry

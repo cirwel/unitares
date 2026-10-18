@@ -2465,9 +2465,40 @@ class TestHandleOnboardV2:
             restart_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
             assert restart_meta.get("public_agent_id") == restart_data["agent_id"]
             assert restart_meta.get("label") and restart_meta["label"].endswith(f"_{restart_uuid[:8]}")
+            assert _session_identities[f"agent-{restart_uuid[:12]}"]["bound_agent_id"] == restart_uuid
 
-            # Plain arg-less identity() on a fresh transport must also persist
-            # its own public_agent_id and auto-label.
+            # In-memory unkeyed collision: when _session_identities[unkeyed_old]
+            # already holds old_uuid and mint_guard refuses overwriting it, the
+            # mirror under the new agent's own key must still record the new
+            # agent as owner, never copy old_uuid's entry.
+            _session_identities[unkeyed_old] = {
+                "bound_agent_id": old_uuid,
+                "agent_uuid": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "public_agent_id": "OldDisplay_20260101",
+                "agent_label": "OldAgentLabel",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="inmem-unkeyed-2707", metadata={}),
+            ]
+            inmem_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            inmem_data = parse_result(inmem_res)
+            inmem_uuid = inmem_data["uuid"]
+            assert _session_identities[unkeyed_old]["bound_agent_id"] == old_uuid
+            assert _session_identities[f"agent-{inmem_uuid[:12]}"]["bound_agent_id"] == inmem_uuid
+
+            # Plain arg-less identity() on a fresh transport must both bind the
+            # fresh transport key and persist its own public_agent_id/auto-label.
             _session_identities.clear()
             mock_redis.get.side_effect = None
             mock_redis.get.return_value = None
@@ -2483,6 +2514,7 @@ class TestHandleOnboardV2:
             plain_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
             assert plain_meta.get("public_agent_id") == plain_data["agent_id"]
             assert plain_meta.get("label") and plain_meta["label"].endswith(f"_{plain_uuid[:8]}")
+            assert _session_identities.get("test-ctx-key", {}).get("bound_agent_id") == plain_uuid
 
             # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
             # refuses to hydrate handles from old_uuid's cached session entry.
