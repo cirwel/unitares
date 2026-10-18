@@ -1,0 +1,1 @@
+- The PostgreSQL backend no longer hides a missing required extension. Startup logs any of `age`, `vector`, `pgcrypto` or `pg_trgm` that is absent, and `health_check` reports `status: degraded` with `missing_extensions` instead of `healthy`. A test now holds the Docker init SQL and the setup docs to the same list.
