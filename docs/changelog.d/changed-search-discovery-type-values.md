@@ -1,0 +1,1 @@
+- Interface contract 1.50.0: search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed.

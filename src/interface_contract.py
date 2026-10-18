@@ -314,7 +314,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # operator-only, inspected-version-fenced reconciliation for interrupted effects.
 # 1.48.0 (2026-10-17): store_finding accepts an optional response_to {discovery_id, response_type}, the same typed link knowledge(action='store') already takes, so a linked finding is one call; its ack lifts the recorded link as state_summary.response_to.
 # 1.49.0 (2026-10-17): agent(action='resume') refuses a paused agent resuming itself with PAUSE_SELF_RESUME_REFUSED and the paused-write recovery block; an operator token still resumes it. Nothing is added, removed, retyped or renamed.
-INTERFACE_CONTRACT_VERSION = "1.49.0"
+# 1.50.0 (2026-10-17): search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed.
+INTERFACE_CONTRACT_VERSION = "1.50.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

@@ -276,8 +276,9 @@ const RELOAD = {
   overview: () => window.Landing && window.Landing.refresh(),
   activity: () => window.Activity && window.Activity.load(),
   eisv: () => window.EISV && window.EISV.load(),
-  // Risk is NOT auto-refreshed: it reads Chronicler's DAILY scrape, so a 10s
-  // tick is pointless and would rebuild the resident picker (closing an open
+  // Risk is NOT auto-refreshed: its trend is /v1/governance/trend, seven-day
+  // windows that move daily and are cached server-side for ten minutes, so a
+  // 10s tick is pointless and would rebuild the agent picker (closing an open
   // dropdown) for no fresh data, and its per-agent panel is a whole-lifespan
   // decimation a tick cannot meaningfully move. Loads on nav, manual refresh.
   // Extensions add themselves here only when their manifest says `auto`.
