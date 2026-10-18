@@ -1,0 +1,39 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-18T03:23:28Z",
+  "verified_date": "2026-10-18",
+  "verifier": "claude session 401c01d3 (re-checked governance-lifecycle against phases.py CIRS import-path fix; the skill makes no CIRS auto-emit claim)",
+  "source_digests": {
+    "unitares/commands/closeout.md": "abd5ddd6c2f17dc4",
+    "unitares/src/agent_storage.py": "1540b45fea55bc08",
+    "unitares/src/db/mixins/identity.py": "0ae8fb7bb1d724b3",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/governance_monitor.py": "b5b880745cc2273c",
+    "unitares/src/interface_contract.py": "b3942c3337ffd523",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "4f696cec434805a2",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4a49fc5f10d53cce",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "aa7e268ecc4fb172",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/support/agent_auth.py": "32ff869a5aa64f89",
+    "unitares/src/mcp_handlers/support/pause_ttl.py": "2abc3f7d3c9432e7",
+    "unitares/src/mcp_handlers/tool_stability.py": "e80cdc5e28bc6bc0",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "4c7f11cecfa8e90d",
+    "unitares/src/mcp_handlers/updates/phases.py": "cac530cfe6346eb2",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "fd5c6685c33f0d4d"
+  },
+  "skill_digest": "3ccc77121b07e98a",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/updates/phases.py": [
+      "e855ad27fa88f7a4"
+    ]
+  }
+}

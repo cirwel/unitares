@@ -1835,7 +1835,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     # CIRS: Void alert
     ctx.cirs_alert = None
     try:
-        from .cirs.protocol import maybe_emit_void_alert
+        from ..cirs.protocol import maybe_emit_void_alert
         V_value = ctx.metrics_dict.get('V', 0.0)
         ctx.cirs_alert = maybe_emit_void_alert(
             agent_id=agent_id,
@@ -1851,7 +1851,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     # CIRS: State announce
     ctx.cirs_state_announce = None
     try:
-        from .cirs.protocol import auto_emit_state_announce
+        from ..cirs.protocol import auto_emit_state_announce
         monitor = ctx.monitor
         ctx.cirs_state_announce = auto_emit_state_announce(
             agent_id=agent_id,
@@ -1863,7 +1863,7 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
 
     # CIRS: Resonance signal
     try:
-        from .cirs.protocol import maybe_emit_resonance_signal
+        from ..cirs.protocol import maybe_emit_resonance_signal
         cirs_data = ctx.result.get('cirs', {})
         monitor = ctx.monitor
         was_resonant = False
