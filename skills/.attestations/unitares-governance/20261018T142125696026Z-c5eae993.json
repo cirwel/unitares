@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-10-18T10:55:47Z",
+  "verified_at": "2026-10-18T14:21:25Z",
   "verified_date": "2026-10-18",
   "verifier": "gemini-4-argon (789650a0): re-checked governance-lifecycle and unitares-governance claims against handlers.py and schemas/identity.py changes (#2707, #2708, #2670)",
   "source_digests": {
@@ -13,7 +13,7 @@
     "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
     "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
     "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
-    "unitares/src/mcp_handlers/identity/handlers.py": "3f4fca501b93aff0",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4d9c3687ed868369",
     "unitares/src/mcp_handlers/identity/session.py": "9e6c97b560fcf021",
     "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
     "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",

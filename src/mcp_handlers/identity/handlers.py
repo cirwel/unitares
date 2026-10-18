@@ -1418,6 +1418,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # transport retains its durable PostgreSQL session row.
     if result.get("created") and not result.get("persisted"):
         try:
+            from .persistence import _get_redis
             from .shared import _session_identities
             from .stable_session import classify as _csid_kind, verifies_for as _csid_verifies
 
@@ -1429,8 +1430,24 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
                     and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
                 )
             )
+            _sk_redis_conflict = False
+            try:
+                _rc = _get_redis()
+                if _rc is not None:
+                    _rc_entry = await _rc.get(session_key)
+                    if isinstance(_rc_entry, dict):
+                        _rc_owner = (
+                            _rc_entry.get("agent_uuid")
+                            or _rc_entry.get("bound_agent_id")
+                            or _rc_entry.get("agent_id")
+                        )
+                        if _rc_owner and _rc_owner != agent_uuid:
+                            _sk_redis_conflict = True
+            except Exception:
+                pass
             _sk_bound_to_new = (
                 not _sk_foreign_stable
+                and not _sk_redis_conflict
                 and isinstance(_sk_entry, dict)
                 and (_sk_entry.get("bound_agent_id") or _sk_entry.get("agent_uuid")) == agent_uuid
             )

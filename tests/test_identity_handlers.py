@@ -2438,6 +2438,7 @@ class TestHandleOnboardV2:
             # public_agent_id and auto-label under its own keyed session id.
             _session_identities.clear()
             unkeyed_old = "unkeyed-redis-only-slot"
+            unkeyed_old_scoped = f"{unkeyed_old}:claude"
             mock_redis.get.side_effect = lambda key: (
                 {
                     "agent_id": old_uuid,
@@ -2445,7 +2446,7 @@ class TestHandleOnboardV2:
                     "label": "OldAgentLabel",
                     "spawn_reason": "old_spawn_reason",
                 }
-                if key == unkeyed_old
+                if key in (unkeyed_old, unkeyed_old_scoped)
                 else None
             )
             mock_db.upsert_agent.reset_mock()
@@ -2466,12 +2467,19 @@ class TestHandleOnboardV2:
             assert restart_meta.get("public_agent_id") == restart_data["agent_id"]
             assert restart_meta.get("label") and restart_meta["label"].endswith(f"_{restart_uuid[:8]}")
             assert _session_identities[f"agent-{restart_uuid[:12]}"]["bound_agent_id"] == restart_uuid
+            restart_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert f"agent-{restart_uuid[:12]}" in restart_session_keys
+            assert unkeyed_old not in restart_session_keys
+            assert unkeyed_old_scoped not in restart_session_keys
 
-            # In-memory unkeyed collision: when _session_identities[unkeyed_old]
+            # In-memory unkeyed collision: when _session_identities[unkeyed_old_scoped]
             # already holds old_uuid and mint_guard refuses overwriting it, the
             # mirror under the new agent's own key must still record the new
             # agent as owner, never copy old_uuid's entry.
-            _session_identities[unkeyed_old] = {
+            _session_identities[unkeyed_old_scoped] = {
                 "bound_agent_id": old_uuid,
                 "agent_uuid": old_uuid,
                 "display_agent_id": "OldDisplay_20260101",
@@ -2494,7 +2502,7 @@ class TestHandleOnboardV2:
             })
             inmem_data = parse_result(inmem_res)
             inmem_uuid = inmem_data["uuid"]
-            assert _session_identities[unkeyed_old]["bound_agent_id"] == old_uuid
+            assert _session_identities[unkeyed_old_scoped]["bound_agent_id"] == old_uuid
             assert _session_identities[f"agent-{inmem_uuid[:12]}"]["bound_agent_id"] == inmem_uuid
 
             # Plain arg-less identity() on a fresh transport must both bind the
