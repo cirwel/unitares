@@ -203,6 +203,11 @@ async def _check_effect_binding(body: dict, proposer: str):
     return True, None
 
 
+# Identity lifecycle states that may not commit a governed effect. A pause holds
+# governed writes; archived/disabled/deleted identities are retired.
+_INACTIVE_IDENTITY_STATUSES = frozenset({"archived", "disabled", "deleted", "paused"})
+
+
 async def http_effect_veto(request):
     """POST /v1/effect-veto — governance veto for a proposed governed effect.
 
@@ -221,8 +226,13 @@ async def http_effect_veto(request):
       re-certify as strong is vetoed. This gate applies on EVERY path,
       including the unknown-proposer branch §6 alone fails open.
 
+      §6b (lifecycle) — vetoes a proposer whose ``core.identities.status`` is
+      archived, disabled, deleted or paused. Archival does not revoke
+      continuity tokens, so without this an archived identity with a clean
+      last check-in passes §6/§7 until its token expires.
+
     Policy:
-      * VETO   §6 flagged  OR  §7 not strong (no/invalid/expired/mismatched token)
+      * VETO   §6 flagged  OR  §6b inactive  OR  §7 not strong (no/invalid/expired/mismatched token)
       * ALLOW  safe/caution + approve/guide  AND  strong-tier re-cert
       * UNKNOWN proposer (no governance state) → §6 fails OPEN, but §7 still
         applies: allowed only if the token re-certifies strong (a strong,
@@ -290,14 +300,20 @@ async def http_effect_veto(request):
         async with db.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT s.state_json->>'verdict' AS verdict,
-                       s.state_json->>'action'  AS action,
-                       s.risk_score             AS risk_score
+                SELECT i.status                       AS identity_status,
+                       (s.recorded_at IS NOT NULL)    AS state_present,
+                       s.state_json->>'verdict'       AS verdict,
+                       s.state_json->>'action'        AS action,
+                       s.risk_score                   AS risk_score
                 FROM core.identities i
-                JOIN core.agent_state s ON s.identity_id = i.identity_id
-                WHERE i.agent_id = $1 AND s.synthetic = false
-                ORDER BY s.recorded_at DESC
-                LIMIT 1
+                LEFT JOIN LATERAL (
+                    SELECT state_json, risk_score, recorded_at
+                    FROM core.agent_state
+                    WHERE identity_id = i.identity_id AND synthetic = false
+                    ORDER BY recorded_at DESC
+                    LIMIT 1
+                ) s ON true
+                WHERE i.agent_id = $1
                 """,
                 proposer,
             )
@@ -309,7 +325,16 @@ async def http_effect_veto(request):
             status_code=503,
         )
 
-    if row is None:
+    # Lifecycle status (§6b). Archival does not revoke continuity tokens, so an
+    # archived identity whose last check-in was clean could otherwise pass §6
+    # and §7 until its token expires. The issuer's own store is the authority
+    # here; no cross-deployment lookup is implied. Applies on every exit path,
+    # including the unknown-proposer branch.
+    identity_status = row.get("identity_status") if row is not None else None
+    status_ok = identity_status not in _INACTIVE_IDENTITY_STATUSES
+    status_reason = None if status_ok else f"identity_status={identity_status}"
+
+    if row is None or row.get("state_present", True) is False:
         # Unknown proposer. §6 (verdict) fails OPEN for newcomers — the two
         # bearers already gate access and the veto's job is to stop a KNOWN-
         # flagged agent. But §7 (tier) still applies: a newcomer must STILL
@@ -318,10 +343,10 @@ async def http_effect_veto(request):
         # no/invalid token → vetoed. This is the intended composition —
         # "a strong, never-flagged identity may spawn; a weak/unverified one
         # may not" — not an emergent property of the old early return.
-        unknown_reasons = [r for r in (tier_reason, binding_reason) if r]
+        unknown_reasons = [r for r in (status_reason, tier_reason, binding_reason) if r]
         return JSONResponse({
             "ok": True,
-            "vetoed": not (tier_ok and binding_ok),
+            "vetoed": not (status_ok and tier_ok and binding_ok),
             "verdict": None, "action": None, "risk_score": None,
             "tier": tier, "tier_ok": tier_ok,
             "binding_ok": binding_ok,
@@ -334,10 +359,13 @@ async def http_effect_veto(request):
     block_verdict = verdict == "high-risk"
     block_action = action is not None and action not in ("approve", "guide")
     # §6 verdict/action OR §7 tier OR §8 effect-binding — any trips the veto.
-    vetoed = bool(block_verdict or block_action or (not tier_ok) or (not binding_ok))
+    vetoed = bool(block_verdict or block_action or (not status_ok)
+                  or (not tier_ok) or (not binding_ok))
 
     if vetoed:
         reasons = []
+        if not status_ok:
+            reasons.append(status_reason)
         if block_verdict or block_action:
             reasons.append(f"verdict={verdict} action={action}")
         if not tier_ok:
