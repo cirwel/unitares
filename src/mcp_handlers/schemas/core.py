@@ -959,7 +959,7 @@ class ConsultParams(AgentIdentityMixin):
             "allow_degraded false, and host_id unset. Nothing combines the "
             "answers. No fallback or same-family exclusion: you choose the hosts."
         ),
-        json_schema_extra={"brief": "Council: 2-3 CLI hosts answer in parallel; cloud_allowed; no synthesis."},
+        json_schema_extra={"brief": "Council: 2-3 CLI hosts at once."},
     )
 
     brief: str = Field(
