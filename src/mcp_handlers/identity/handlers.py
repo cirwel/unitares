@@ -1368,7 +1368,6 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
-        or arguments.get("agent_id")
         or (arguments.get("name") and _has_header_session)
     )
     # Coerced once, before the S13 default and like handle_identity_v2's
@@ -2119,10 +2118,10 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
     """S13 v2-ontology gate: arg-less onboard from a fresh process-instance
     mints fresh by default per identity.md §"Layered taxonomy of continuity".
 
-    A declared ``parent_agent_id`` always promotes ``force_new=True`` (unless
-    already set), even when accompanied by a proof signal such as ``name`` or
-    ``client_session_id``, because declaring a parent on onboard is a fresh
-    child-mint lineage declaration (#2670).
+    A declared ``parent_agent_id`` always promotes ``force_new=True`` (even if
+    ``force_new`` was omitted or false), including when accompanied by a proof
+    signal such as ``name`` or ``client_session_id``, because declaring a
+    parent on onboard is a fresh child-mint lineage declaration (#2670).
 
     Otherwise, caller opts back into resume by passing any proof signal —
     explicit force_new flag, ownership proof (continuity_token, agent_uuid,

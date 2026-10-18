@@ -293,6 +293,7 @@ async def test_identity_name_renames_only_with_proof(origin, renamed):
 async def test_identity_adapter_session_resume_renames_only_with_proof(origin, renamed):
     """The adapter's session-key resume (STEP 1) writes a requested name before
     returning; it must not for a caller matched to the agent by inference."""
+    from src.mcp_handlers.context import SessionSignals, reset_session_signals, set_session_signals
     from src.mcp_handlers.identity import handlers
 
     existing = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
@@ -305,15 +306,19 @@ async def test_identity_adapter_session_resume_renames_only_with_proof(origin, r
         return dict(existing)
 
     label = AsyncMock(return_value=True)
-    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
-         patch.object(handlers, "derive_session_key", AsyncMock(return_value="pin:shared-ua")), \
-         patch.object(handlers, "set_agent_label", label), \
-         patch.object(handlers, "_cache_session", AsyncMock()), \
-         patch.object(handlers, "_perform_session_bind", AsyncMock()):
-        res, _ = await handlers.handle_identity_adapter(
-            {"agent_id": VICTIM, "name": "attacker-chosen", "resume": True}
-        ), None
-        body = json.loads(res[0].text)
+    tok = set_session_signals(SessionSignals(x_session_id="hdr-session-1", transport="mcp"))
+    try:
+        with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+             patch.object(handlers, "derive_session_key", AsyncMock(return_value="pin:shared-ua")), \
+             patch.object(handlers, "set_agent_label", label), \
+             patch.object(handlers, "_cache_session", AsyncMock()), \
+             patch.object(handlers, "_perform_session_bind", AsyncMock()):
+            res, _ = await handlers.handle_identity_adapter(
+                {"name": "attacker-chosen", "resume": True}
+            ), None
+            body = json.loads(res[0].text)
+    finally:
+        reset_session_signals(tok)
 
     assert body["resumed"] is True
     assert label.await_count == (1 if renamed else 0)

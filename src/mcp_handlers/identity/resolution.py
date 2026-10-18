@@ -2021,11 +2021,14 @@ async def resolve_session_identity(
     from .shared import make_client_session_id, _session_identities
 
     _own_lazy_key = make_client_session_id(agent_uuid)
-    _foreign_keyed_session = (
-        _csid_kind(session_key) == "keyed"
-        and not _csid_verifies(session_key, agent_uuid)
+    _foreign_stable_session = (
+        (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+        or (
+            _csid_kind(session_key) == "legacy"
+            and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
+        )
     )
-    _lazy_cache_key = _own_lazy_key if _foreign_keyed_session else session_key
+    _lazy_cache_key = _own_lazy_key if _foreign_stable_session else session_key
     await _cache_session(
         _lazy_cache_key, agent_uuid, display_agent_id=agent_id, label=label,
         spawn_reason=spawn_reason,
