@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.48.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.49.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -118,7 +118,8 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.27.0` is the negotiated interface release. Compatible additions
+- `version` (the current value is in the header above) is the negotiated
+  interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -885,3 +886,15 @@ Calls without it are unchanged.
 **Client action.** None. A client that links findings through
 `use_tool(tool_name='knowledge', arguments={'action': 'store', ...})` may call
 `store_finding(..., response_to=...)` instead.
+
+## 1.49.0 (2026-10-17)
+
+Authorization only. `agent(action="resume")` on a paused agent now needs a
+valid `X-Unitares-Operator` token; the agent itself gets
+`PAUSE_SELF_RESUME_REFUSED`, with the paused-write `recovery` block, where it
+used to succeed. Resuming from `waiting_input`, unsticking an active agent and
+every operator-token call are unchanged. Nothing is added, removed, retyped or
+renamed, and the description that says the rule is outside every input schema,
+so no input digest moves. Client action: a paused agent follows the refusal's
+`recovery` block (`self_recovery(action='check')`, its dialectic review, an
+operator, or the pause's expiry) instead of calling `resume` on itself.

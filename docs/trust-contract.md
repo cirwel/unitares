@@ -37,7 +37,7 @@ A composite value (e.g., `summary`, `state.health`) inherits the **weakest** pro
 ## 4. Non-guarantees (stated plainly)
 
 - **Predictive validity of EISV is a research claim, not a system guarantee.** The system guarantees honest computation and labeling of EISV, not that EISV predicts agent failure in your deployment.
-- **Experimental surfaces** (dialectic, semantic search, extended observability) carry `tier: experimental` and may change, lag, or be wrong. They are excluded from the core contract until promoted.
+- **Experimental surfaces** (dialectic, semantic search, extended observability) may change, lag, or be wrong. Responses carry no per-surface label. The only marker is a tool's declared `stability` (`stable`/`beta`/`experimental`, reported per tool by `list_tools(lite=false)` and `describe_tool`). `dialectic` is declared `beta`. Semantic search is a mode of `knowledge`/`search_knowledge_graph`, both declared `stable`, and observability's experimental actions sit inside `observe`, declared `beta`, so neither has a marker of its own. They are excluded from the core contract until promoted.
 - **No availability SLA.** This is research infrastructure.
 - **Calibration figures describe the fleet they were fitted on.** They do not transfer to new deployments without re-baselining.
 
@@ -90,7 +90,7 @@ The currently shipping `primary_eisv_source` + `verdict_source_meta` pattern is 
 
 ## 8. Promotion path for experimental surfaces
 
-An experimental feature joins the core contract only when it: (a) passes provenance linting, (b) has a defined ignorance schema, (c) has contract tests, and (d) has run ≥30 days without a contract violation. Until then it ships behind `tier: experimental` and is absent from default responses.
+An experimental feature joins the core contract only when it: (a) passes provenance linting, (b) has a defined ignorance schema, (c) has contract tests, and (d) has run ≥30 days without a contract violation. Until then, a feature that is its own tool keeps a declared `stability` of `beta` or `experimental` (reported by `list_tools(lite=false)` and `describe_tool`). A feature that is a mode or action of a stable tool, such as semantic search in `knowledge`, has no separate marker yet.
 
 ## 9. Grounding log (v0.2)
 

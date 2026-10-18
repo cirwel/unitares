@@ -410,3 +410,32 @@ def test_allows_coupled_eisv_authority_and_relative_assessment(tmp_path, monkeyp
     assert _warnings(tmp_path, monkeypatch, doc_health,
         "Raw coordinates are weighted indices. Risk assessment becomes "
         "self-relative after warmup. ODE state supplies structural policy checks.") == []
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "# Optional: AGE graph backend for graph-specific traversal work",
+        "AGE is optional for most deployments.",
+        "Postgres + AGE (optional) + pgvector",
+        "REDIS_ENABLED: Set to 0 to disable Redis entirely",
+    ],
+)
+def test_flags_optional_age_and_redis_off_claims(
+    tmp_path, monkeypatch, doc_health, claim
+):
+    warnings = _warnings(tmp_path, monkeypatch, doc_health, claim)
+    assert warnings, claim
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Opt-in: knowledge-graph traversal through AGE",
+        "The stage is optional for this step.",
+    ],
+)
+def test_age_pattern_ignores_opt_in_store_and_lowercase_age(
+    tmp_path, monkeypatch, doc_health, line
+):
+    assert _warnings(tmp_path, monkeypatch, doc_health, line) == []

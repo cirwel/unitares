@@ -133,9 +133,9 @@ launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist
 
 ## Health check
 
-`GET /health` (root, unversioned) is the **unauthenticated** liveness probe: `curl -s http://127.0.0.1:8788/health` returns a static `{"ok": true, "status": "ok", "service": "lease-plane", "protocol_version": "v1.0"}` with no bearer — use it to tell "up and fail-closed" apart from "down." It is the single deliberate exception to the bearer gate and exposes nothing but liveness; `/v1/health` remains bearer-gated (its payload carries identity-binding metrics).
+`GET /health` (root, unversioned) is the **unauthenticated** liveness probe: `curl -s http://127.0.0.1:8788/health` returns a static `{"ok": true, "status": "ok", "service": "lease-plane", "build_sha": "<boot commit>", "protocol_version": "v1.0"}` with no bearer — use it to tell "up and fail-closed" apart from "down." `scripts/ops/deploy-status.sh` reads `build_sha` from it to report the running code as CURRENT or STALE. It is the single deliberate exception to the bearer gate and exposes nothing but liveness and that boot commit; `/v1/health` remains bearer-gated (its payload carries identity-binding metrics).
 
-Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
+The governance MCP's background deep-health probe calls `GET /v1/health` every 30s when `LEASE_PLANE_BEARER_TOKEN` is set (`checks["lease_plane"]`, built by `_probe_lease_plane_boundary` in `src/services/runtime_queries.py`), and the Docker Compose healthcheck polls it every 10s. `scripts/ops/deploy-lease-plane.sh` polls it after a restart, and `scripts/ops/nudge-lease-plane.sh` calls it as well.
 
 **What the probe is**
 
@@ -159,33 +159,19 @@ directly (`pg_isready`, `pg_stat_activity`) or read the `lease_plane.*` tables;
 a lease write failing with `service_unavailable` is the signal that the
 database is in trouble, not the health probe.
 
-> **The two Postgres rows in the alarm table below rest on the premise this
-> section just refuted.** `lease_plane.db_degraded` fires on sustained 503s and
-> `lease_plane.slow` on probe latency — but this handler does no database work,
-> so a Postgres outage does not move either signal. The only 503 paths on this
-> route are a token that is not configured (`HTTPAuth`) and `Plug.ErrorHandler`.
-> Whether to re-point those alarms at a probe that does touch the database, or
-> to retire them, is an operator call; they are left as they are here rather
-> than silently redefined by a documentation change.
+**What monitors the lease plane**
 
-**Sentinel alarm rules**
+- **Synthetic acquire check** — the `com.unitares.lease-plane-acquire-healthcheck` LaunchAgent runs `elixir/lease_plane/scripts/ops/lease_plane_acquire_healthcheck.sh` every 300s. Each run does a real acquire and release against a dedicated probe surface, so it catches "process up, acquires failing," which neither health route can. Consecutive-failure state persists across runs: it alerts to `$UNITARES_ALERT_LOG` (and posts a governance finding) only after `MAX_FAILURES` failures in a row, and notes recovery once. Restart-on-failure is opt-in via `LEASE_PLANE_HEALTHCHECK_AUTORESTART=1`.
+- **Deep-health snapshot** — `checks["lease_plane"]` reports `healthy`, `warning` (with the client's reason), `unavailable` (no bearer configured) or `error` (the probe itself raised) from the `/v1/health` call above, refreshed every 30s.
+- **Sentinel** — both Sentinels poll `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route.
 
-| Condition | Alarm | Action |
-|-----------|-------|--------|
-| 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane` |
-| HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source the secrets env file (`$SECRETS_FILE`, see "Where the token lives") and `launchctl kickstart` Sentinel |
-| HTTP 503 sustained | `lease_plane.db_degraded` | Postgres flapping; check `pg_isready -h localhost -p 5432` |
-| Probe latency > 1s sustained | `lease_plane.slow` | Postgres lock contention or backlog; inspect `pg_stat_activity` for stuck transactions on `lease_plane.surface_leases` |
+**What none of these cover**
 
-**Probe cadence**: every 30s (matches reaper sweep cadence — no point probing more often than the system's own internal pulse). Alarm thresholds use sliding 5-min windows so a single transient blip doesn't page.
+- Reaper liveness (stale `expires_at < now() - interval '60s' AND released_at IS NULL` rows); no alarm queries this, so check it by hand
+- Audit-outbox forwarding (`lease_plane_events WHERE forwarded_at IS NULL` growing); likewise unalarmed
+- Per-surface_kind acquire success rate
 
-**What the probe does NOT cover**
-
-- Reaper liveness (separate alarm: stale `expires_at < now() - interval '60s' AND released_at IS NULL` count > 0)
-- Audit-outbox forwarding (separate alarm: `lease_plane_events WHERE forwarded_at IS NULL` count growing unboundedly)
-- Per-surface_kind acquire success rate (telemetry, not a binary alarm)
-
-The healthcheck probe is a binary "is the front door open" signal. Functional health lives in the supplemental rules above.
+For restart, `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`; for database trouble, `pg_isready -h localhost -p 5432` and `pg_stat_activity` on `lease_plane.surface_leases`.
 
 ## Live introspection (the BEAM superpower)
 
@@ -434,7 +420,7 @@ If the token appears in shell history, a screenshot, a pasted log, or anywhere o
    ```
 3. If unexpected force-releases appear, file a `multi-agent-git-reset-incident.md`-style incident note
 
-**What invalidates a token**: only changing the value in `secrets.env` and restarting the lease plane. There is no revocation list, no JWT-style expiry — the lease plane reads `Application.get_env(:lease_plane, :force_release_bearer_token)` once at boot.
+**What invalidates a token**: only changing the value in `secrets.env` and restarting the lease plane. There is no revocation list, no JWT-style expiry — the lease plane copies `LEASE_FORCE_RELEASE_TOKEN` into `Application.get_env(:lease_plane, :force_release_token)` at application start, and `HTTPAuth` reads that key on each request, so only a restart picks up a new value.
 
 ## Renames and orphan leases (RFC §7.9)
 

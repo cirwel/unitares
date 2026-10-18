@@ -169,7 +169,7 @@ This complements evals, guardrails, and sandboxes. Evals ask whether a model sho
 
 - Deployed EISV formulas, producer fields, conditional per-coordinate provenance tags, and the deployed-vs-target-semantics table: [`docs/EISV_COMPUTATION.md`](EISV_COMPUTATION.md). It specifies each blend and smoothing step, including prior decisions in E and V's separate smoothing of the raw E/I observation gap. Signal definition, diagnostic interpretation, usefulness and policy are separate questions.
 - Public CI: tests, documentation validation, and CodeQL on the default branch.
-- Public release history: latest `v2.x` release in this repository.
+- Public release history: the latest verified release in this repository (the version in `PUBLISHED_VERSION`).
 - Paper DOI: `10.5281/zenodo.19647159`.
 - Reproducibility kit: `CIRWEL/unitares-repro-v6`.
 - Longitudinal embodied testbed: `CIRWEL/anima-mcp`.

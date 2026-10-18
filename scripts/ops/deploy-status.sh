@@ -116,6 +116,11 @@ COMPONENTS=(
 # to :8767, and probing that would report the governance MCP's health under
 # this proxy's name.
 "ipv6-loopback-proxy|com.unitares.ipv6-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
+# The same script, run a second time to listen on this host's Tailscale
+# address and forward to :8767, so tailnet peers reach the MCP without a
+# public route. Same shared-tree hazard and same reason for no port as the
+# row above. It printed UNGOVERNED until this row existed.
+"tailscale-loopback-proxy|com.unitares.tailscale-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
 "anima-noauth-proxy|com.unitares.anima-noauth-proxy|$H/projects/anima-mcp|scripts/mcp_noauth_proxy.py|restart|"
 "anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
 "anima-mcp||$H/projects/anima-mcp||pi-deploy|"

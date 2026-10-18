@@ -11,34 +11,20 @@ from master at install time, so merging the publication PR updates it.
 Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
 not publish a server tag or container.
 
-## v2.22.1 maintenance candidate
+## v2.22.1 maintenance release
 
-See the [candidate notes and publication checklist](../releases/2.22.1.md).
+See the [release notes and publication checklist](../releases/2.22.1.md).
 
-This correction is prepared from tag `v2.22.0` (`b1360809`) on
-`release/2.22`, rather than from current master. It backports #2092 and the
-release-evidence corrections while preserving the published callable surface
-and skills. Master has removed `direct_resume_if_safe` and changed schemas and
-skills; those changes need their own release/version assessment.
+v2.22.1 was prepared from tag `v2.22.0` (`b1360809`) on `release/2.22`,
+rather than from master. It backported #2092 and the release-evidence
+corrections while preserving the published callable surface and skills. It
+was tagged and published from `release/2.22` on 2026-09-08, and its history
+was forward-merged into master by #2209, which makes the maintenance tag an
+ancestor of later mainline releases, as the release-range gate requires.
 
-Merge the maintenance PR into `release/2.22` only after independent review and
-its Python, Docker, Elixir, documentation, scope and release-seam checks pass.
-Tag v2.22.1 at that reviewed merge commit; do not tag current master for this
-candidate. Apply the publication verification steps below to that exact tag.
-Do not retarget the maintenance PR to master. After tagging, integrate its
-history through a reviewed forward-merge PR, preserving master's newer code
-and assessing its source-version label separately. This makes the maintenance
-tag an ancestor of the next mainline release, as the release-range gate
-requires. The shared documentation correction has its own master PR.
-
-The existing v2.22.0 tag and release remain intact. Append
-[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md) to the release
-body without overwriting its existing text.
-
-After v2.22.1's tag, release page, both container architectures, SBOM and
-provenance are verified, advance `PUBLISHED_VERSION` in a separate master PR.
-Keep the install pin at v2.21.0 during preparation. A merge into the maintenance
-branch does not deploy the master-only public Pages workflow.
+The v2.22.0 tag and release were left intact; their correction is recorded in
+[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md). A merge into a
+maintenance branch does not deploy the master-only public Pages workflow.
 
 ## Server release
 
@@ -80,7 +66,7 @@ branch does not deploy the master-only public Pages workflow.
    in the release PR's own diff, also run the documented Docker quickstart on a
    Docker-capable host and record the command/result in the release PR. Check
    the range with
-   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py .github/workflows/docker-quickstart.yml`.
+   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py .github/workflows/docker-quickstart.yml`.
    This covers dependency resolution and stack wiring; application source is
    also copied into the image but deliberately does not trigger every rebuild.
    Delegating this check

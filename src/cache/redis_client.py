@@ -11,7 +11,9 @@ Features:
 
 Environment variables:
 - REDIS_URL: Redis connection URL (default: redis://localhost:6379/0)
-- REDIS_ENABLED: Set to "0" to disable Redis entirely
+- REDIS_ENABLED: Set to "0" for degraded local-only mode (tests/diagnostics only).
+  Redis is the de-facto primary session/identity store, not an optional cache;
+  see docs/UNIFIED_ARCHITECTURE.md.
 - REDIS_SENTINEL_HOSTS: Comma-separated sentinel hosts (e.g., "host1:26379,host2:26379")
 - REDIS_SENTINEL_MASTER: Sentinel master name (default: "mymaster")
 - REDIS_POOL_SIZE: Connection pool size (default: 10)

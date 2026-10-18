@@ -66,11 +66,13 @@ network path reports OFFLINE.
 
 ## Hook audit — residentless cloud container
 
-All 13 hooks `hooks/claude-hooks.json` wires were executed in a cloud container
-with no governance server, no lease plane, no resident roster, and the default
-`UNITARES_FILE_LEASES_REQUIRED=0`. Every one exited 0. None blocked a tool call.
-None errored. Setting `UNITARES_FILE_LEASES_REQUIRED` to a truthy value changes
-that posture deliberately: `pre-edit` then fails closed when leases are absent.
+All 13 hooks `hooks/claude-hooks.json` wired when this runbook was written were
+executed in a cloud container with no governance server, no lease plane, no
+resident roster, and the default `UNITARES_FILE_LEASES_REQUIRED=0`. Every one
+exited 0. None blocked a tool call. None errored. The `post-tool-failure` hook
+(PostToolUseFailure) was wired later and is not in this audit. Setting
+`UNITARES_FILE_LEASES_REQUIRED` to a truthy value changes that posture
+deliberately: `pre-edit` then fails closed when leases are absent.
 
 | Hook | Event | Verdict without a server | Cost |
 | --- | --- | --- | --- |
@@ -240,10 +242,12 @@ tools `review.sh` needs.
   use, although it restricts unrelated GraphQL operations. The hosted session
   of 2026-09-25 had no `gh`; its only PR channel was the GitHub connector.
   Check with `command -v gh` rather than assuming either.
-- **Reviewer CLIs vary too.** Local review prefers the other model:
-  `default_reviewer` picks `codex` for branches not named `codex/*`. If that
-  CLI is absent or unavailable, `review.sh` tries the other provider in a
-  fresh reviewer session. With `git config review.native true`, it can instead
+- **Reviewer CLIs vary too.** `default_reviewer` takes the first usable
+  provider in a fixed order with Codex first, skipping providers disabled in
+  `scripts/dev/review_providers.json`. `review.sh` makes one provider attempt
+  per run: if that CLI is absent or unavailable, the run ends UNREVIEWED and
+  the provider goes on cooldown, and the author picks another with
+  `--reviewer <provider>`. With `git config review.native true`, it can instead
   request and join native GitHub Codex review without needing a local Codex
   CLI. The 2026-09-25 session had the `claude` CLI and no `codex`.
 
@@ -267,8 +271,10 @@ is recorded the same way, with
 `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`
 (plus `--emit` without `gh`), or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
 Consult advice alone is not a code review. If no reviewer completes, the
-author reports the blocker; CI shows a neutral warning. The author keeps the
-PR draft until review is complete.
+author records that in the PR body; CI shows a neutral `review` check, meaning
+unreviewed. Ordinary changes may then proceed after validation; a diff that
+touches a `review_policy.json` sensitive path stays parked until its required
+review coverage passes.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.

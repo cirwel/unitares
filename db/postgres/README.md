@@ -42,11 +42,11 @@ createdb -h localhost -p 5432 -U postgres governance
 export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
 export DB_AGE_GRAPH=governance_graph
 
-psql "$DB_POSTGRES_URL" -f db/postgres/init-extensions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/schema.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/partitions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/graph_schema.sql
+# Dry-run by default; --apply executes the DDL
+scripts/install/bootstrap_postgres.sh --apply --db-url "$DB_POSTGRES_URL"
 ```
+
+The bootstrap applies, in order: `init-extensions.sql`, `schema.sql`, `knowledge_schema.sql`, both embeddings schemas, the pre-partition numbered migrations, `partitions.sql`, `graph_schema.sql`, the remaining numbered migrations, and finally `scripts/dev/apply_migrations.py --check`. Applying only a subset of these files leaves the server able to boot but missing tables and columns it depends on.
 
 ### Configure Environment
 
@@ -65,28 +65,28 @@ This repo standardizes on the AGE graph name **`governance_graph`**.
 
 ### 4.2 Knowledge Graph Backend Selection
 
-The main runtime DB backend is controlled by `DB_BACKEND`, but the **knowledge graph** also supports backend override via `UNITARES_KNOWLEDGE_BACKEND`:
+PostgreSQL is the sole runtime backend (the SQLite and dual backends were removed). The **knowledge graph** store can be selected via `UNITARES_KNOWLEDGE_BACKEND`:
 
 | Backend | Value | Description |
 |---------|-------|-------------|
 | **PostgreSQL FTS** (recommended) | `postgres` | Canonical KG store using native PostgreSQL with tsvector full-text search |
-| **AGE** | `age` | Apache AGE graph backend for graph-specific traversal experiments |
-| **Auto** (default) | `auto` | Uses PostgreSQL FTS when `DB_BACKEND=postgres` |
+| **AGE** | `age` | Opt-in: route knowledge-graph traversal through Apache AGE |
+| **Auto** (default) | `auto` | Resolves to PostgreSQL FTS |
 
 ```bash
 # Recommended: PostgreSQL FTS canonical store
 export UNITARES_KNOWLEDGE_BACKEND=postgres
 
-# Auto-select based on DB_BACKEND setting
+# Default: resolves to PostgreSQL FTS
 export UNITARES_KNOWLEDGE_BACKEND=auto
 
-# Optional: AGE graph backend for graph-specific traversal work
+# Opt-in: knowledge-graph traversal through AGE
 export UNITARES_KNOWLEDGE_BACKEND=age
 ```
 
-**Note:** When `UNITARES_KNOWLEDGE_BACKEND=auto` (default), the system will:
-1. Use PostgreSQL FTS if `DB_BACKEND=postgres`
-2. Otherwise require an explicit supported backend
+**Note:** This setting selects the *knowledge-graph* store only. The AGE
+extension itself is **required** regardless: lineage reachability and other
+graph reads run Cypher through `graph_query` (`src/db/mixins/graph.py`).
 
 ### Migrations / Backfills
 
@@ -108,10 +108,10 @@ python scripts/migration/reembed_corpus.py --rebuild --dry-run
 ### Relational Tables (core schema)
 
 - `core.agents` - Agent identity and metadata
-- `core.agent_sessions` - Session bindings (fast lookup)
+- `core.sessions` - Persistent session bindings (live bindings are held mainly in Redis)
 - `core.dialectic_sessions` - Dialectic recovery sessions
 - `core.dialectic_messages` - Dialectic session messages (thesis/antithesis/synthesis)
-- `core.identities` - (Legacy) Identity records for backward compatibility
+- `core.identities` - Identity registry (api_key_hash, lineage via parent_agent_id/spawn_reason, status, metadata), one row per `core.agents` row
 - `core.schema_migrations` - Schema version tracking
 
 ### Knowledge Schema (knowledge schema)

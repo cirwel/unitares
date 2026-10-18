@@ -207,10 +207,12 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
   EISV lanes with bounded source identifiers. Raw sensors, submitted afferents,
   and caller-declared provenance are excluded from reviewer prompts.
 - `GET /v1/eisv/telemetry-health?days=30` returns a cached, read-only fleet
-  aggregate over measured state rows. The dashboard's **Telemetry** tab uses
-  this surface for rollout coverage, primary/consumed source rates, warmup,
-  missing inputs, same-row contract checks, strict outcome-linked calibration,
-  and policy-requested versus enforcement-applied counts. Windows are clamped
+  aggregate over measured state rows: rollout coverage, primary/consumed source
+  rates, warmup, missing inputs, same-row contract checks, strict outcome-linked
+  calibration, and policy-requested versus enforcement-applied counts. The core
+  dashboard does not render it; a deployment can show it through a dashboard
+  extension tab (`UNITARES_DASHBOARD_EXT_DIR`, see `dashboard/EXTENSIONS.md`).
+  Windows are clamped
   to 1–90 days and cached for 30 seconds so a monitor view does not turn into a
   database load generator.
 - `export_monitor_history(..., "json")` now exposes separate ODE and behavioral
@@ -239,7 +241,7 @@ source. Malformed and unsupported envelope values are included in the contract
 denominator but excluded from rollout coverage. Historical rows are not
 re-judged using current risk thresholds.
 
-The dashboard separately publishes the three current numeric vocabularies
+The health report payload separately publishes the three current numeric vocabularies
 (`behavioral_verdict`, `experience_summary`, and `health_status`). Their bands
 overlap by design. Policy can also be overridden by legacy coherence-compatibility
 or void gates, while health is risk/void-derived; those policy overrides are not
