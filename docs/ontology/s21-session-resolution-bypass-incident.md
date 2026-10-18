@@ -5,9 +5,9 @@
 **Blocks:** S1-a, S2, S3 (cannot retire `continuity_token` while explicit `client_session_id` doesn't resume).
 **Does not duplicate:** S13/PR #156 (which flips arg-less default; this is the explicit-session-id resolution path — different code site).
 **Related plan rows:** S13 clause (d) — `derive_session_key` step 7 audit event; this incident is the pre-condition that makes that audit event *necessary*.
-**Synthesis context:** filed under the operator's "lumen reboots but is the same, our identity system worked when we first started months ago and now is all over the place" pivot (2026-04-27 conversation). This is the empirical floor under that intuition.
+**Synthesis context:** filed under the operator's 2026-04-27 pivot: Lumen survives reboots as the same identity, while session identity, which had worked months earlier, had become inconsistent. This is the empirical floor under that intuition.
 
-**Postscript — rate correction (2026-04-27, S21-a review pass):** the headline "95.1% fleet-wide ghost-fork rate" cited at lines 66 and 95 is the snapshot at incident-write time. After applying audit-window scoping (memory entry `feedback_audit-window-scoping.md`) the corrected rate is ~38%; live verification on 2026-04-27 (post-onboard restoration) shows ~20% on a 30-day window in `core.agents` (442 of 2210 fresh agents with `parent_agent_id IS NULL AND spawn_reason IS NULL`). The diagnosis still stands — the resolution path silently mints — but the magnitude was inflated by counting pre-audit-window entries that pre-dated the recording. The DoD threshold below ("drops below a threshold to be set after a calibration period") reads correctly either way; the calibration period is what determines the post-fix target.
+**Postscript — rate correction (2026-04-27, S21-a review pass):** the headline "95.1% fleet-wide ghost-fork rate" cited at lines 66 and 95 is the snapshot at incident-write time. After applying audit-window scoping (counting only identities created inside the audit-recording window) the corrected rate is ~38%; live verification on 2026-04-27 (post-onboard restoration) shows ~20% on a 30-day window in `core.agents` (442 of 2210 fresh agents with `parent_agent_id IS NULL AND spawn_reason IS NULL`). The diagnosis still stands — the resolution path silently mints — but the magnitude was inflated by counting pre-audit-window entries that pre-dated the recording. The DoD threshold below ("drops below a threshold to be set after a calibration period") reads correctly either way; the calibration period is what determines the post-fix target.
 
 ---
 
@@ -84,15 +84,15 @@ The "is_registered" check is consulting a path that doesn't include `core.identi
 
 Both layers point to a Redis (or in-memory) cache that's drifting away from canonical Postgres state.
 
-## Work mis-attribution this session
+## Work mis-attribution in the incident session
 
 All KG cleanup performed between 03:13:46 and 03:28:06 — 7 status updates (6 archives + 1 archive of an already-archived row), 1 `process_agent_update` check-in, 1 `leave_note` about KG hygiene, 1 status-flip on the broadcaster note — was attributed to ghost identity `c8811a0f` in the audit trail, **NOT** to the onboarded `6648432c`. Audit reconstruction by `agent_id` would show those rows performed by an agent that has no `spawn_reason` and no lineage. The audit log is technically consistent (each row records the actor at write time) but **the intended actor and the recorded actor diverge silently**.
 
-## Council review (2026-04-27, three-agent parallel pass)
+## Review round (2026-04-27, three independent reviewers)
 
-Council ran across independent reviewers. Major upgrades to the diagnosis:
+The review ran across independent reviewers. Major upgrades to the diagnosis:
 
-### Live-verifier (production blast radius)
+### Live verification (production blast radius)
 
 - **Fleet-wide ghost-fork rate is 95.1% over the last 30 days** (1944 of 2045 fresh identities have neither `parent_agent_id` nor `spawn_reason`). 91.7% in last 2h. **Chronic, not a regression** — daily rate has been 77–100% since at least 2026-04-01. Brief Apr 22–25 dip to 17–44% coincided with PR #192 (PATH 1 sync-path fingerprint cross-check) and PR #187 (S19 substrate-anchored HTTP rejection); rebounded to 79% by Apr 26.
 - **Residents are clean.** Vigil/Sentinel/Watcher/Steward/Chronicler all have exactly one identity row with no recent forks. Substrate-anchored hardcoded-UUID pattern is doing the work the resolution layer should be doing. Blast radius is session-like agents only.
@@ -173,9 +173,9 @@ Concrete code changes per the "Resolved diagnosis" above:
 
 8. **Audit emission on rejected explicit session_id.** When an explicit `client_session_id` is rejected in favor of a fresh mint, emit the same `concurrent_session_binding_observed` event the S13 §(d) handler emits for IPUA-pin-match drift.
 
-### Council-required before merge
+### Independent review required before merge
 
-Per memory entry "Council also for load-bearing implementation" (PR #24 vs PR #23 collision lesson, 2026-04-26): identity resolution is fleet-bricking territory. Both S21-a and S21-b need parallel independent review on the actual diff before merging. The first review pass diagnosed the bug; the implementation diff needs its own pass.
+Load-bearing implementation gets independent review, not only design docs (PR #24 vs PR #23 collision lesson, 2026-04-26): identity resolution is fleet-bricking territory. Both S21-a and S21-b need parallel independent review on the actual diff before merging. The first review pass diagnosed the bug; the implementation diff needs its own pass.
 
 ## Definition of done
 
@@ -252,7 +252,7 @@ Verified live 2026-04-27: an internal session minted via `force_new=true` post-m
 - "S21 is closed" requires `null_orphan_concentration_pct` to drop, which only happens when upstream callers thread `parent_agent_id`/`spawn_reason` through `_session_identities` so the eventual upsert carries declared lineage. That's S21-b territory.
 - Cite both rates side-by-side. Don't quote a single number from this query in isolation.
 
-## Open questions for the next process-instance picking this up
+## Open questions
 
 - Where is the cache layer between `session_key` and `identity_id`? Likely Redis under a key prefix like `session:` or `agent_uuid:` — needs grep for the writer.
 - Does the IPUA pin-lookup at session.py:710 (`lookup_onboard_pin`) feed into this cache, or is it a separate one?

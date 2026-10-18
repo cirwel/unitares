@@ -170,6 +170,9 @@ Archived scripts organized by type — completed migrations, deprecated CLI tool
 
 ## Service Management
 
+On a macOS LaunchAgent install (under Docker Compose, use
+`docker compose restart governance-mcp` and `docker compose logs -f governance-mcp`):
+
 ```bash
 # Restart governance-mcp
 launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist

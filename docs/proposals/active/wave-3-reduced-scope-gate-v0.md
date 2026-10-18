@@ -489,7 +489,7 @@ the session reported as a limitation of the project, without reading the reposit
 `.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
 apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
 `sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
-from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+from hex. It is green on `master`. **Hex is reachable from CI; only the authoring session's proxy blocks it.**
 
 ⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
 a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
@@ -630,7 +630,7 @@ precisely because it is not one.
 
 ---
 
-## §8 Council pass — held; design pass owed
+## §8 Review round — held; design pass owed
 
 The council round was held on 2026-09-27 and adopted as §10 (A10 splits this section). The §4
 authorisation names "its design pass and council review" alongside this document; the design pass
