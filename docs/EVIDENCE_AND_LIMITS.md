@@ -109,14 +109,14 @@ structural snapshots**; current capabilities and setup are described in
 | Surface | Recorded size |
 |---|---|
 | Complete tool registry | **43 registered tools**, plus 8 workflow aliases; 8 routers over 52 actions and a 70-entry legacy alias table |
-| Test suite | **13,614 test functions** across 776 files |
-| Database migrations | **67** |
-| Python modules | **524** across `src/`, `governance_core/`, and reference residents |
-| Documents | **226** |
+| Test suite | **18,171 test functions** across 962 files |
+| Database migrations | **76** |
+| Python modules | **567** across `src/`, `governance_core/`, and reference residents |
+| Documents | **324** |
 | Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Ecosystem](../README.md#ecosystem) |
 
 The tool count was refreshed 2026-09-20 at `76a68c02`; the other counts were
-recorded 2026-09-09 at `e017c45e`. Methods: an AST walk for `def test_*` in
+recorded 2026-10-18 at `742c1ae1d`. Methods: an AST walk for `def test_*` in
 tracked `test_*.py` files; tracked files under `db/postgres/migrations/`;
 tracked `.py` files under `src/`, `governance_core/`, and `agents/`; and tracked
 `.md` files under `docs/`. Tool, router, action, and alias counts come from
@@ -149,6 +149,16 @@ Two high-severity advisories published on 2026-10-05 document fixes in 3.2.0:
   bypass was reachable from a browser page through CSRF or DNS rebinding.
   [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v)
 
+Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0.
+Neither credits an outside finder:
+
+- **Lifecycle actions on another agent:** any bound client could archive,
+  delete or unpause another agent, and an agent could give itself the operator
+  label. [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-r9q5-7j8h-82rr)
+- **Identity from a UUID:** an agent's identity could be assumed from its UUID
+  through the derived session id.
+  [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-6fqf-5ccj-vcc4)
+
 ## Evaluation boundaries
 
 ### Predictive lift
@@ -164,11 +174,21 @@ standing AUC ceiling.
 
 After the frozen cutoff, recurring automation exposed live discrimination
 output: the ablation watchdog completed 42 of 51 executions and the dogfood
-guard completed 43 of 52. Those jobs are paused. The fixed
+guard completed 43 of 52. Those jobs are paused. The
 [2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 remains an operational decision rule, but it is not the only post-registration
 read and cannot be described as clean single-read blinding; its report must
 disclose the interim access and read-specific power.
+
+The read was amended on 2026-10-15, before any read in its registered units had
+run. It now admits only data recorded before `2026-10-15T13:45Z`, a boundary set
+no later than the first deployment of a change to the live EISV update path; that
+change deployed about 30 minutes afterwards. The
+[stop rule's instrument-change record](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)
+documents both times. The 2026-12-01 result must therefore be described as **amended after
+interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
+eligible as a result. The cluster threshold is not lowered, so a shortfall
+closes the read as inconclusive, not as a measured null.
 
 An operational `FAIL` can close a scheduled line of work without scientifically
 refuting the underlying capability. The
