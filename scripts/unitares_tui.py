@@ -230,7 +230,8 @@ class App:
             pinned.append((f"{'RESIDENT':<20}{'STATUS':<10}{'VERDICT':<10}LAST SIGNAL", 0, True, False))
             notice = residents_notice(self.data)
             if notice:
-                return (pinned + [(notice[0], notice[1], False, False)])[:body_height]
+                # The notice outranks the headers on a short terminal.
+                return pinned[:max(0, body_height - 1)] + [(notice[0], notice[1], False, False)]
             self.selected = min(self.selected, max(0, len(self.residents()) - 1))
             body = []
             for i, (label, status, verdict, age) in enumerate(resident_rows(self.data)):

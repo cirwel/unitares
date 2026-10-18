@@ -177,3 +177,12 @@ def test_overview_selection_survives_a_very_short_terminal():
         rows = app.screen(height)
         assert len(rows) <= height
         assert any(row[3] and "r1" in row[0] for row in rows), height
+
+
+def test_unavailable_notice_survives_a_short_terminal():
+    gated = {"health": {"status": "ok"}, "tiers": {"total": 1, "tiers": {"a": 1}},
+             "residents": None, "auth_required": True}
+    for height in (1, 2, 3, 6):
+        rows = _app(gated).screen(height)
+        assert len(rows) <= height
+        assert any("UNITARES_TOKEN" in row[0] for row in rows), height
