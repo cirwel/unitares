@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 README = (ROOT / "README.md").read_text()
 EVIDENCE = (ROOT / "docs" / "EVIDENCE_AND_LIMITS.md").read_text()
+NORMALIZED_EVIDENCE = " ".join(EVIDENCE.split())
 
 
 def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
@@ -33,12 +34,20 @@ def test_readme_links_to_evidence_instead_of_repeating_the_ledger() -> None:
 
 
 def test_detailed_qualifications_remain_on_the_evidence_surface() -> None:
+    """Keep deployment and trust limits, not a particular section structure."""
     for phrase in (
-        "single-operator and co-development dogfood",
-        "Local control and cross-operator trust",
-        "Identity binding and the lease plane",
+        "single-operator deployment",
+        "agents also help build the system",
+        "trust boundary is one operator and its explicitly trusted issuer",
+        "Multi-issuer trust requires lease principals to retain both issuer and subject",
     ):
-        assert phrase in EVIDENCE
+        assert phrase in NORMALIZED_EVIDENCE
+    for reference in (
+        "operations/DEPLOYMENT_DATA_CAVEAT.md",
+        "proposals/active/federation-trust-decisions-2026-09-25.md",
+        "UNIFIED_ARCHITECTURE.md",
+    ):
+        assert reference in EVIDENCE
 
 
 def test_readme_stays_a_landing_page() -> None:

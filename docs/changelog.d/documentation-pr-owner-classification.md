@@ -1,1 +1,0 @@
-- Record PR ownership footers and fix/capability classification in the shared agent contract, with an explicitly expiring freeze pointer.

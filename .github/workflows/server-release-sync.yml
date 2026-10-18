@@ -1,7 +1,7 @@
 name: Server release sync
 
 # Source version, release tags, release pages, the verified PUBLISHED_VERSION,
-# GHCR latest, and maintenance-tag ancestry are advanced by separate human acts.
+# GHCR latest, and maintenance-tag ancestry are advanced by separate acts.
 # Any of them may lag on purpose; this keeps the lag visible as one issue. Runs
 # after the SDK (09:07) and Resident (09:17) checks so the findings stay distinct.
 on:

@@ -73,8 +73,21 @@ class TestInitAndHealth:
 
     @pytest.mark.asyncio
     async def test_health_check_returns_healthy(self, backend):
+        """Healthy exactly when every required extension is installed.
+
+        CI's pgvector image has no AGE, so there the honest answer is
+        degraded with ``age`` named, not healthy.
+        """
+        from src.db.postgres_backend import REQUIRED_EXTENSIONS
+
+        async with backend.acquire() as conn:
+            rows = await conn.fetch("SELECT extname FROM pg_extension")
+        installed = {r["extname"] for r in rows}
+        expected_missing = [e for e in REQUIRED_EXTENSIONS if e not in installed]
+
         result = await backend.health_check()
-        assert result["status"] == "healthy"
+        assert result["missing_extensions"] == expected_missing
+        assert result["status"] == ("degraded" if expected_missing else "healthy")
         assert result["backend"] == "postgres"
         assert result["pool_size"] >= 1
         assert result["pool_free"] >= 0
