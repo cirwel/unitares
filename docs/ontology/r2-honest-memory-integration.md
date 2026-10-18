@@ -61,7 +61,7 @@ This is a **necessary-but-not-sufficient** gate toward axiom #12. R2 v1 honestly
 | **Memory access** | Successor reads any/all of parent's memory artifacts unconditionally at onboard. Reading is not gated. |
 | **Lineage claim state at t=0** | `provisional_lineage=true` on successor's `core.identities` row. Claim exists; chain weight is conditional. |
 | **Subject identity at t=0** | Successor is a distinct subject. `parent_agent_id` records inheritance, not identity. |
-| **Cross-role declaration** | Pre-check at onboard: if successor's class tag differs from parent's class tag (S8a), lineage declaration is **rejected** with audit event `lineage_cross_role_rejected`. Successor proceeds without lineage edge. (See §"Cross-role pre-check.") |
+| **Cross-role declaration** | Pre-check at onboard: if the role family (`role_family()`) of successor's primary class tag differs from that of parent's (S8a), lineage declaration is **rejected** with audit event `lineage_cross_role_rejected`. Successor proceeds without lineage edge. (See §"Cross-role pre-check.") |
 | **Promotion measurement** | R1's `score_trajectory_continuity(parent, successor)`, evaluated as successor accumulates check-ins. |
 | **Promotion criterion** | `verdict == "plausible"` AND `successor.observations >= min_observations`. |
 | **Demotion criterion** | `verdict == "unsupported"` AND `successor.observations >= min_observations`. |
@@ -98,8 +98,8 @@ R1 measures per-dimension EISV-trajectory similarity assuming a shared operating
 If R2 silently allows cross-role declarations through to the demotion path, the audit log will fill with `lineage_demoted` events whose actual cause is "wrong role" — not "failed integration." This is a category error that pollutes the audit trail and makes telemetry uninterpretable.
 
 **Pre-check rule.** At onboard, when `parent_agent_id` is provided:
-1. Look up parent's class tags (`core.identities.metadata.class_tags` per S8a).
-2. Compare to successor's class tags (which are stamped at onboard per S8a Phase 2).
+1. Look up parent's primary class tag (`core.identities.metadata.tags[0]`; per S8a the class is stamped first).
+2. Compare to successor's primary class tag (the first of the tags stamped at onboard per S8a Phase 2, or of the caller-supplied tags).
 3. If the **role family** differs (`role_family()` in
    `src/identity/trajectory_continuity.py`), **reject the lineage
    declaration** with audit event `lineage_cross_role_rejected`, payload
@@ -168,6 +168,10 @@ Same as v1, with explicit acknowledgement these are deferred *not* because they'
 ```
 [declared at onboard]
      │
+     ├─ parent live (succession or unregistered spawn_reason) ──▶ [rejected]
+     │                                   (audit: lineage_coincidental_rejected;
+     │                                    edge cleared)
+     │
      ├─ class mismatch ──▶ [rejected]   (audit: lineage_cross_role_rejected;
      │                                   no edge written)
      ▼
@@ -184,7 +188,7 @@ Same as v1, with explicit acknowledgement these are deferred *not* because they'
                                                             (Open question #3 — fork vs demote)
 ```
 
-(v1 omitted the cross-role rejection branch and the confirmed→demoted path. v2 completes both.)
+(v1 omitted the cross-role rejection branch and the confirmed→demoted path. v2 completes both. As built, the live-parent rejection branch runs before the cross-role check; see §"Caller policy".)
 
 ### Evaluation triggers (v2 — anyio-safe)
 
@@ -223,13 +227,14 @@ This pattern matches existing background tasks (`class_promotion_sweeper_task`, 
 
 Audit events fire from two contexts:
 
-1. **`lineage_cross_role_rejected`** and **`lineage_declared`** fire from the onboard handler (anyio context). Per the same rule above, these use the existing `append_audit_event_async` pattern that wraps writes in fire-and-forget background dispatch (see the `agent_silent` audit emit in `src/background_tasks.py` for the precedent). Onboard handler does NOT block on the audit write.
+1. **`lineage_cross_role_rejected`** and **`lineage_declared`** fire from the onboard handler (anyio context). *Design-time text:* these were to use fire-and-forget background dispatch so the onboard handler would not block on the audit write (precedent cited: the `agent_silent` audit emit in `src/background_tasks.py`). **As built:** `lineage_coincidental_rejected`, added later with the liveness pre-check (see §"Caller policy"), also fires from the onboard handler, and all three take the same path: `_r2_pre_check_and_declare` awaits `_emit_audit` inline, which awaits `append_audit_event_async` (itself a direct `await db.append_audit_event(...)`, not a background dispatch). The onboard handler therefore waits for the audit write; the write is fail-soft (errors are logged at warning level, not raised).
 2. **`lineage_promoted`**, **`lineage_demoted`**, **`lineage_grace_expired`** fire from `_evaluate_lineage_for` or from the sweeper — both outside anyio context — and can use the standard direct-await audit path.
 
 ### What changes at each transition (v2 — with clawback semantics)
 
 | Transition | Storage change | Audit event | Downstream effect |
 |---|---|---|---|
+| **declared → rejected (live parent)** | Successor's `parent_agent_id` and `spawn_reason` cleared. Applies when `spawn_reason` is not a dispatched-child or context-continuation reason and the declared parent has a live process binding or presence lease. | `lineage_coincidental_rejected` | None. Successor proceeds as fresh. |
 | **declared → rejected (cross-role)** | No edge written. Successor's `parent_agent_id` field cleared. | `lineage_cross_role_rejected` (new) | None. Successor proceeds as fresh. |
 | **declared → provisional** | Write `provisional_lineage=true`, `lineage_declared_at=now`, `lineage_last_eval_at=NULL`. | `lineage_declared` (new) | Trust-tier ignores; KG provenance flags; dashboard shows "provisional" badge. |
 | **provisional → confirmed** | Flip `provisional_lineage=false`; stamp `lineage_promoted_at=now`. Initialize chain observation counter (`chain_obs_count=0`). | `lineage_promoted` (new) | Trust-tier begins crediting forward-only to chain counter; KG provenance treats edge as confirmed; dashboard removes badge. **No retroactive credit.** |
@@ -277,6 +282,8 @@ Open question for chain-of-chains aggregation policy is deferred to S7's KG prov
 
 R2 inherits R1's `marks` policy at the onboard call-site (per R1 v3.1 §"Caller policy"): a fresh declaration always proceeds (subject to the cross-role pre-check), lineage edge is written `provisional`, R1 evaluates as observations accumulate. There is no "pre-flight rejection" in R2 *for same-role lineage*.
 
+**As built:** a same-role declaration can also be rejected at onboard by a liveness pre-check that runs before the cross-role check. When `spawn_reason` is not a dispatched-child reason (`subagent`, `dialectic_reviewer`, `dispatch`) or a context-continuation reason (`compaction`), and the declared parent has a live process binding or an agent presence lease, `_r2_pre_check_and_declare` clears `parent_agent_id` and `spawn_reason`, emits `lineage_coincidental_rejected` (reason `parent_live_at_declaration`), and returns `lineage_state="rejected_coincidental"`. This covers `explicit` and `new_session` handoffs to a live parent, and missing or unregistered `spawn_reason` values. A failed liveness lookup counts as not live, and the declaration proceeds.
+
 The orphan-archival call-site (S8) — when a long-idle agent re-emerges with declared lineage — runs R1 with `blocks` posture. **Asymmetry vs. onboard path acknowledged:** because the re-emergent successor by definition has few recent observations, R1 will return `inconclusive`, which the orphan call-site treats as orphan. The successor does NOT get the grace window R2 grants the onboard path. This is intentional (orphan = high suspicion, default-deny is correct under axiom #5 "do not stylize what has not yet earned continuity"); R2 v2 documents the asymmetry rather than papering over it.
 
 ## Test fixture (synthetic)
@@ -311,10 +318,11 @@ R1's calibration-status framing (v3.2-C: `seeded` → `earned`) applies recursiv
 
 Following the `class_promotion_sweeper_task` precedent:
 
-- **State transitions emit audit events** (`lineage_declared`, `lineage_promoted`, `lineage_demoted`, `lineage_grace_expired`, `lineage_cross_role_rejected`).
-- **Sweeper cycles do NOT emit audit events** when no transition occurs. Per-cycle visibility lives in `logger.debug` lines and a stat counter exposed via the metrics endpoint (e.g., `r2_sweeper_cycles_total`, `r2_evaluations_total`, `r2_no_transition_total`). This matches the existing `class_promotion_sweeper_task` convention (zero audit events emitted when no class promoted).
+- **State transitions emit audit events** (`lineage_declared`, `lineage_promoted`, `lineage_demoted`, `lineage_grace_expired`, `lineage_cross_role_rejected`, `lineage_coincidental_rejected`).
+- **Sweeper cycles do NOT emit audit events** when no transition occurs. This matches the existing `class_promotion_sweeper_task` convention (zero audit events emitted when no class promoted). Per-cycle visibility lives in `[R2_SWEEPER]` log lines from `lineage_eval_sweeper_task`; no metrics-endpoint counter is implemented.
+- **Phase 1 telemetry gate.** A read-only DB rollup over `core.identities` and `audit.events` in `src/identity/r2_phase1_telemetry.py`.
 - **Identity response addition.** `provisional_lineage` is added to the `identity()` response (as a top-level boolean field). Phase 1 callers are expected to ignore this field; Phase 2 wires consumers.
-- **Onboard response addition.** `provisional_lineage` and `lineage_state` (literal `"provisional" | "rejected_cross_role" | "no_lineage_declared"`) are added to the `onboard()` response so a freshly-onboarded agent knows immediately whether its lineage declaration succeeded, was rejected, or was recorded as provisional.
+- **Onboard response addition.** `provisional_lineage` and `lineage_state` are added to the `onboard()` response so a freshly-onboarded agent knows immediately whether its lineage declaration succeeded, was rejected, or was recorded as provisional. As built, a fresh onboard yields `"no_lineage_declared"` when no parent is given (`_finalize_onboard_lineage` in `src/mcp_handlers/identity/handlers.py`). Otherwise `_r2_pre_check_and_declare` returns `"provisional"`, `"rejected_cross_role"` or `"rejected_coincidental"`. A resumed identity's state is read from storage by `derive_lineage_state` (`src/identity/lineage_lifecycle.py`) and can also be `"confirmed"`, `"archived"` or `"demoted"`.
 
 ## Dependency map (v2)
 
