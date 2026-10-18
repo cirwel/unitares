@@ -48,6 +48,12 @@ scripts/install/bootstrap_postgres.sh --apply --db-url "$DB_POSTGRES_URL"
 
 The bootstrap applies, in order: `init-extensions.sql`, `schema.sql`, `knowledge_schema.sql`, both embeddings schemas, the pre-partition numbered migrations, `partitions.sql`, `graph_schema.sql`, the remaining numbered migrations, and finally `scripts/dev/apply_migrations.py --check`. Applying only a subset of these files leaves the server able to boot but missing tables and columns it depends on.
 
+Required extensions: `age`, `vector`, `pgcrypto`, `pg_trgm`. The list is
+`REQUIRED_EXTENSIONS` in `src/db/postgres_backend.py`; the server logs any that
+are missing at startup and `health_check` reports `status: degraded` with
+`missing_extensions`. `tests/test_required_stack_docs.py` fails if this line or
+`init-extensions.sql` falls out of step with that tuple.
+
 ### Configure Environment
 
 ```bash
