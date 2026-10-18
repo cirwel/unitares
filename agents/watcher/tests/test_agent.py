@@ -1433,6 +1433,25 @@ def test_main_refuses_non_uuid_agent_id_before_mutating(
     assert watcher_module.FINDINGS_FILE.read_text() == before
 
 
+def test_main_refuses_non_uuid_agent_id_before_legacy_migration(
+    watcher_module, monkeypatch
+):
+    """Legacy-state migration creates shared state files, so it must not run
+    for an invocation argparse is about to refuse."""
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("a refused invocation must not migrate state")
+
+    monkeypatch.setattr(watcher_module, "migrate_legacy_watcher_state", must_not_run)
+
+    with pytest.raises(SystemExit) as exc:
+        watcher_module.main(
+            ["--resolve", "aaaaaaaa", "--agent-id", "cron-unitares-dogfood-test"]
+        )
+
+    assert exc.value.code == 2
+
+
 def test_governance_agent_uuid_normalizes_valid_values(watcher_module):
     value = uuid4()
     assert watcher_module._governance_agent_uuid(f" {str(value).upper()} ") == str(value)

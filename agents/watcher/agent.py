@@ -4067,10 +4067,6 @@ def list_findings(only_open: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Carry forward any legacy checkout-relative state to the shared dir once
-    # per process, before anything reads/writes findings.
-    migrate_legacy_watcher_state()
-
     parser = argparse.ArgumentParser(description="UNITARES Watcher bug-pattern agent")
     parser.add_argument("--file", help="file to scan")
     parser.add_argument("--region", help="line range within file, e.g. L10-L40")
@@ -4168,6 +4164,12 @@ def main(argv: list[str] | None = None) -> int:
         help='git --since=<value> for --scan-commits (default: "30 days ago")',
     )
     args = parser.parse_args(argv)
+
+    # Carry forward any legacy checkout-relative state to the shared dir once
+    # per process, before anything reads/writes findings. This runs after
+    # argument validation so a refused invocation (e.g. a malformed
+    # --agent-id) exits without creating shared state.
+    migrate_legacy_watcher_state()
 
     # Context hooks have a strict host-side timeout. Keep their read/deliver
     # paths free of identity, check-in, and remote lease-plane calls so a slow
