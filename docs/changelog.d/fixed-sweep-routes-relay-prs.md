@@ -1,1 +1,0 @@
-- **review sweep routes relayed PRs:** the review sweep now routes PRs authored by the `unitares-pr-relay` App (which reopens hosted-session PRs under its own author) by GitHub actor id. This is routing only: that actor's comments are not review evidence.

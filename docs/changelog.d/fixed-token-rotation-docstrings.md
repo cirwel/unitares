@@ -1,1 +1,0 @@
-- Correct the bearer- and operator-token docstrings: tokens are read from the environment on each call, but the environment is fixed at launch, so a rotated token takes effect on restart (comma-separated old and new tokens overlap across it).

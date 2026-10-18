@@ -1,1 +1,0 @@
-- Interface contract 1.36.0: select an existing host through consult, retain bounded adapter failure diagnostics, and report observed HF auth/quota cooldowns. Automatic routing and advisory authority remain unchanged.

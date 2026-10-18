@@ -265,19 +265,27 @@ non-zero unless deep health comes back healthy or moderate. A checkout already
 on the target release goes through the same steps without moving the code.
 
 Releases before this command existed shipped a `scripts/unitares update` that
-posted a check-in instead. From one of those, move the code once by hand and
-let the new `update` do the rest:
+posted a check-in instead, and the `update` in v3.0.0 to v3.3.0 runs
+migrations without the attestation that migrations 077 and 078 require, so
+moving from any of them to v3.4.0 or later refuses and rolls back. From any of
+those releases, move the code once by hand and let the new `update` do the
+rest:
 
 ```bash
 git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
 git checkout --detach vX.Y.Z
-docker compose up -d --build --wait postgres-age
+docker compose up -d --build --wait postgres-age   # only from a release before `update` existed
 ./scripts/unitares update --to vX.Y.Z
 ```
 
-The database starts first so the new server never runs against the old
-schema; `update` then applies the release's migrations and rebuilds, restarts
-and health-checks the stack.
+From a release before `update` existed, the database starts first so the new
+server never runs against the old schema. From v3.0.0 to v3.3.0, leave that
+line out: the new `update` stops the server and the lease plane before it
+starts the database. `update` then applies the release's migrations and
+rebuilds, restarts and health-checks the stack. If it stops before a release's
+protected migrations are applied (077 and 078 for v3.4.0), it restarts the
+stack from the checked-out Compose file; to run the previous release instead,
+check that release out and run `docker compose up -d --wait`.
 
 ### Tool discovery (interface 1.13.0 and later)
 

@@ -1,1 +1,0 @@
-- Interface contract 1.43.0: call_model's deprecation states its removal window: no earlier than 2026-12-02, and its model, temperature and max_tokens controls for HTTP hosts retire with it rather than moving onto consult. Descriptions and the describe_tool migration text say so. Nothing is added, removed, retyped or renamed.
