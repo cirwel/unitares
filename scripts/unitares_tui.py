@@ -237,11 +237,19 @@ class App:
                 marker = ">" if i == self.selected else " "
                 color = STATUS_COLOR.get(status) or VERDICT_COLOR.get(verdict, 0)
                 body.append((f"{marker} {label:<18}{status:<10}{verdict:<10}{age}", color, False, i == self.selected))
+            # On a short terminal drop pinned rows (tiers first) so the selection stays on screen.
+            for shorter in ([pinned[0], pinned[-1]], [pinned[-1]], []):
+                if body_height - len(pinned) >= 1:
+                    break
+                pinned = shorter
             visible = max(1, body_height - len(pinned))
             top = max(0, self.selected - visible + 1)
-            return pinned[:body_height] + body[top:top + visible]
+            return pinned + body[top:top + visible]
         if self.view == "detail":
             residents = self.residents()
+            notice = residents_notice(self.data)
+            if notice:
+                return [(notice[0], notice[1], False, False)]
             if not residents:
                 return [("No residents to show.", 0, False, False)]
             index = self.selected % len(residents)

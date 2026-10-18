@@ -160,3 +160,20 @@ def test_detail_left_right_switches_resident_and_resets_scroll():
     app.handle(tui.curses.KEY_RIGHT)
     assert app.selected == 1 and app.scroll == 0
     assert app.screen(10)[0][0].startswith("b")
+
+
+def test_detail_view_shows_unavailable_notice_after_a_failed_refresh():
+    gated = {"residents": None, "auth_required": True}
+    rows = _app(gated, view="detail").screen(10)
+    assert "UNITARES_TOKEN" in rows[0][0]
+
+
+def test_overview_selection_survives_a_very_short_terminal():
+    residents = [{"label": f"r{i}", "status": "healthy", "verdict": "proceed"} for i in range(5)]
+    data = {"health": {"status": "ok"}, "tiers": {"total": 1, "tiers": {"a": 1}}, "residents": {"residents": residents}}
+    for height in (1, 2, 3, 4, 6):
+        app = _app(data)
+        app.handle(tui.curses.KEY_DOWN)
+        rows = app.screen(height)
+        assert len(rows) <= height
+        assert any(row[3] and "r1" in row[0] for row in rows), height
