@@ -2565,21 +2565,18 @@ class TestHandleOnboardV2:
             assert f"agent-{named_uuid[:12]}" in named_session_keys
 
             # Production keyed client_session_id branch (UNITARES_CONTINUITY_TOKEN_SECRET
-            # set so classify() == "keyed"): force_new with old_uuid's keyed id
-            # must never bind or persist old_keyed_key for the new agent.
+            # set so classify() == "keyed"): when old_keyed_key has no live
+            # entry in _session_identities or Redis (e.g. TTL expiry/restart),
+            # force_new with old_uuid's keyed id must still refuse to bind or
+            # persist old_keyed_key for the new agent.
+            from src.mcp_handlers.identity.handlers import _choose_fresh_persist_session_key
+
             monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret-for-keyed-csid-2707")
             old_keyed_key = make_client_session_id(old_uuid)
             assert classify(old_keyed_key) == "keyed"
             _session_identities.clear()
-            _session_identities[old_keyed_key] = {
-                "bound_agent_id": old_uuid,
-                "agent_uuid": old_uuid,
-                "display_agent_id": "OldDisplay_20260101",
-                "public_agent_id": "OldDisplay_20260101",
-                "agent_label": "OldAgentLabel",
-                "label": "OldAgentLabel",
-                "spawn_reason": "old_spawn_reason",
-            }
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
             mock_db.upsert_agent.reset_mock()
             mock_db.upsert_identity.reset_mock()
             mock_db.create_session.reset_mock()
@@ -2596,7 +2593,7 @@ class TestHandleOnboardV2:
             keyed_new_uuid = keyed_data["uuid"]
             expected_keyed_new = make_client_session_id(keyed_new_uuid)
             assert classify(expected_keyed_new) == "keyed"
-            assert _session_identities[old_keyed_key]["bound_agent_id"] == old_uuid
+            assert old_keyed_key not in _session_identities
             assert _session_identities[expected_keyed_new]["bound_agent_id"] == keyed_new_uuid
             keyed_session_keys = [
                 call.kwargs.get("session_id")
@@ -2604,6 +2601,19 @@ class TestHandleOnboardV2:
             ]
             assert expected_keyed_new in keyed_session_keys
             assert old_keyed_key not in keyed_session_keys
+
+            # Direct check on _choose_fresh_persist_session_key's keyed arm:
+            # even if _session_identities[old_keyed_key] were bound to
+            # keyed_new_uuid, sk_foreign_stable must still reject old_keyed_key.
+            _session_identities[old_keyed_key] = {
+                "bound_agent_id": keyed_new_uuid,
+                "agent_uuid": keyed_new_uuid,
+            }
+            assert (
+                await _choose_fresh_persist_session_key(old_keyed_key, keyed_new_uuid)
+                == expected_keyed_new
+            )
+            _session_identities.pop(old_keyed_key, None)
             monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET", raising=False)
 
             # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
