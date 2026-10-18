@@ -204,8 +204,10 @@ def cors_extra_origins() -> List[str]:
 def mcp_bearer_tokens() -> List[str]:
     """Allowlist of bearer tokens accepted on the ``/mcp`` endpoint.
 
-    Read fresh each call so an operator can rotate tokens without a restart
-    (mirrors the operator-token allowlist in identity/operator.py). Empty by
+    Read from the environment on each call (no cache, mirroring the
+    operator-token allowlist in identity/operator.py). The process environment
+    is fixed at launch, so a new token takes effect on restart; listing old and
+    new tokens comma-separated lets both work across the rotation. Empty by
     default: when empty the ``/mcp`` bearer gate is OFF and the endpoint
     behaves exactly as before — this preserves the localhost / self-host
     default where no token is configured.
