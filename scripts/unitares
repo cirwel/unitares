@@ -1197,6 +1197,12 @@ _migrate_quiesced() {
     # only when the protected dialectic frontier is proven unchanged; otherwise
     # both writers stay stopped for forward repair.
     local target="$1" plan apply_rc
+    if MIGRATION_RUNNING_BEFORE=$(_compose ps --status running --services 2>/dev/null); then
+        MIGRATION_RUNNING_BEFORE_OK=1
+    else
+        MIGRATION_RUNNING_BEFORE=""
+        MIGRATION_RUNNING_BEFORE_OK=0
+    fi
     echo "… Stopping the server so nothing writes during migrations"
     # Fail closed: migrate only when the stop succeeded AND a status query that
     # itself succeeded shows neither writer running.
@@ -1250,6 +1256,10 @@ _recover_same_target_migration_failure() {
     # before apply failed.  In that case `up` without a forward rebuild can
     # restart stale images over the new contract.  Unknown post-apply state is
     # handled as frontier advancement by _dialectic_frontier_advanced.
+    # Even below the frontier, only services that were running before
+    # _migrate_quiesced stopped them may be restarted: after a manual checkout
+    # to a newer release, a bare `_compose up` would build and start the new
+    # release's services over a partly migrated database (#2891).
     local target="$1"
     if _dialectic_frontier_advanced; then
         echo "error: migrations did not complete on $target." >&2
@@ -1257,9 +1267,17 @@ _recover_same_target_migration_failure() {
         echo "       Keeping governance-mcp and lease-plane stopped; repair forward and rebuild on $target." >&2
         _compose stop governance-mcp lease-plane >/dev/null 2>&1 || :
     else
-        echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
-        _compose up -d --wait >/dev/null 2>&1 \
-            || echo "       The stack did not restart either; see: unitares logs" >&2
+        local svc to_restart=()
+        for svc in ${MIGRATION_RUNNING_BEFORE:-}; do
+            to_restart+=("$svc")
+        done
+        if [ "${#to_restart[@]}" -gt 0 ]; then
+            echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
+            _compose up -d --no-build --wait "${to_restart[@]}" >/dev/null 2>&1 \
+                || echo "       The stack did not restart either; see: unitares logs" >&2
+        else
+            echo "error: migrations did not complete on $target. No services were running before the update; leaving the stack stopped." >&2
+        fi
     fi
     _backup_hint
     return 1
@@ -1290,17 +1308,24 @@ _rollback_code() {
 }
 
 cmd_update() {
-    local check_only=0 target="" assume_yes=0 arg
+    local check_only=0 target="" assume_yes=0 reexeced=0 from_label="" from_sha=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --check) check_only=1 ;;
             --yes|-y) assume_yes=1 ;;
+            --reexec-from) shift; reexeced=1; from_label="${1:-}"; shift; from_sha="${1:-}"
+                  [ -n "$from_label" ] && [ -n "$from_sha" ] || { echo "error: --reexec-from needs <label> <sha>" >&2; return 2; } ;;
             --to) shift; target="${1:-}"
                   [ -n "$target" ] || { echo "error: --to needs a tag or branch" >&2; return 2; } ;;
             *) echo "error: unknown update option '$1' (--check, --to REF, --yes)" >&2; return 2 ;;
         esac
         shift
     done
+    if [ "${UNITARES_UPDATE_REEXEC:-}" = "1" ] && [ "$reexeced" = "0" ]; then
+        reexeced=1
+        from_label="${UNITARES_UPDATE_FROM_LABEL:-}"
+        from_sha="${UNITARES_UPDATE_FROM_SHA:-}"
+    fi
     _require_compose_install existing || return 1
 
     local root current current_sha target_sha
@@ -1316,8 +1341,10 @@ cmd_update() {
         fi
         target="v${published#v}"
     fi
-    echo "Installed: $current"
-    echo "Target:    $target"
+    if [ "$reexeced" = "0" ]; then
+        echo "Installed: $current"
+        echo "Target:    $target"
+    fi
     if ! git -C "$root" ls-remote "$(_update_remote)" HEAD >/dev/null 2>&1; then
         echo "error: could not reach $(_update_remote); check the network and try again." >&2
         return 1
@@ -1370,7 +1397,20 @@ cmd_update() {
     MIGRATION_SCHEMA_BEFORE=""
     MIGRATION_SCHEMA_AFTER=""
     MIGRATION_APPLY_ATTEMPTED=0
+    MIGRATION_RUNNING_BEFORE=""
     if [ "$current_sha" = "$target_sha" ]; then
+        if [ "$reexeced" = "1" ] && [ -n "$from_sha" ] && [ "$from_sha" != "$target_sha" ]; then
+            local prev_label="${from_label:-$from_sha}"
+            if ! _migrate_quiesced "$target"; then
+                echo "error: migrations did not complete for $target." >&2
+                _rollback_code "$root" "$prev_label" "$from_sha" "$target"
+                return 1
+            fi
+            echo "… Rebuilding and starting the stack"
+            _compose up -d --build --wait || { echo "error: the stack did not come up on $target." >&2; _rollback_code "$root" "$prev_label" "$from_sha" "$target"; return 1; }
+            _report_health "Updated ${prev_label} → $target."
+            return $?
+        fi
         echo "✓ Already on $target."
         _confirm "Apply any pending migrations, then rebuild and restart the stack on $target?"
         case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
@@ -1413,6 +1453,17 @@ cmd_update() {
     fi
 
     git -C "$root" checkout --quiet --detach "$fetched" || return 1
+
+    # Hand over to the checked-out release's own scripts/unitares so its
+    # migration flags and recovery logic run instead of the old release's
+    # already-parsed bash functions (#2891). Guarded by UNITARES_UPDATE_REEXEC
+    # so a target script cannot re-exec in a loop.
+    if [ "$reexeced" = "0" ] && [ -x "$root/scripts/unitares" ]; then
+        UNITARES_UPDATE_REEXEC=1 \
+        UNITARES_UPDATE_FROM_LABEL="$current" \
+        UNITARES_UPDATE_FROM_SHA="$current_sha" \
+            exec "$root/scripts/unitares" update --to "$target" --yes
+    fi
 
     if ! _migrate_quiesced "$target"; then
         echo "error: migrations did not complete for $target." >&2
