@@ -19,7 +19,7 @@ import pytest
 
 
 def test_canonicalize_case_detection_uses_tmpfile_probe():
-    """Live-verifier DRIFT-3: pathconf(_PC_CASE_SENSITIVE) is REFUTED on macOS Python.
+    """Runtime check: pathconf(_PC_CASE_SENSITIVE) is REFUTED on macOS Python.
     The detection MUST use a tmpfile probe, not pathconf."""
     from src.lease_plane import canonicalize as canon
 
@@ -39,7 +39,7 @@ def test_canonicalize_case_detection_uses_tmpfile_probe():
 
 
 def test_canonicalize_resolves_var_to_private_var_on_macos():
-    """Live-verifier DRIFT-2: os.path.realpath on macOS must double-resolve so
+    """Runtime check: os.path.realpath on macOS must double-resolve so
     /var/folders/.../tmpfile and /private/var/folders/.../tmpfile produce the same form."""
     from src.lease_plane import canonicalize as canon
 

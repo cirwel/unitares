@@ -1086,7 +1086,7 @@ class TestFormatMirror:
         meta = MagicMock()
         meta.total_updates = 1
         result = _format_mirror(data, saved_trust_tier=None, meta=meta)
-        # No complexity divergence signals should appear. (Council fold,
+        # No complexity divergence signals should appear. (Review finding,
         # PR #603: the old assertion checked for "complexity=", a string
         # no signal ever contained — a no-op that passed regardless.)
         assert not any("Complexity calibration" in s for s in result["mirror"]), (
