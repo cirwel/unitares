@@ -62,23 +62,25 @@ work across both processes (full trace in the
 [captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md)):
 
 ```text
-# Process A — bind identity, record evidence, check in, log outcome, and exit
+# Process A — bind identity, record finding, check in, log outcome, close, and exit
 start_session        {"force_new": true, "name": "upload-fixer"}        -> agent_uuid_A, client_session_id_A
-store_finding        {"client_session_id": ..., "discovery_type": "bug_found", "summary": "..."}
-request_review       {"client_session_id": ..., "summary": "Scoped fake clock to function..."}
+store_finding        {"client_session_id": ..., "discovery_type": "bug_found", "summary": "..."} -> discovery_id
 sync_state           {"client_session_id": ..., "complexity": 0.4, "confidence": 0.7} -> action: "proceed", prediction_id
 record_result        {"client_session_id": ..., "outcome_type": "test_passed", "prediction_id": ...}
+use_tool             {"tool_name": "update_finding", "arguments": {"discovery_id": ..., "status": "resolved", "closure_class": "fix_verified", ...}}
+use_tool             {"tool_name": "agent", "arguments": {"action": "release_presence", "client_session_id": ...}}
 
 # Process B (after restart) — recover A's record before acting, then declare lineage
-search_shared_memory {"query": "flaky upload retry test"}               -> A's finding, review, and agent_uuid_A
+search_shared_memory {"query": "flaky upload retry test"}               -> A's resolved finding and agent_uuid_A
 start_session        {"force_new": true, "parent_agent_id": agent_uuid_A, "spawn_reason": "explicit"}
 ```
 
-The server runs alongside evals, sandboxes, and guardrails, connecting their
-outputs over time without taking over the agent's execution loop. Core storage
-is self-hosted on PostgreSQL (with AGE and pgvector) and Redis with no required
-external model API. Each `sync_state` check-in returns a policy action derived
-from an EISV behavioral state estimate, a form of
+Alongside findings and outcomes, agents can request structured review
+(`request_review`) or cross-vendor advice (`consult`). The server runs beside
+evals, sandboxes, and guardrails without taking over the agent's execution loop.
+Core storage is self-hosted on PostgreSQL (with AGE and pgvector) and Redis with
+no required external model API. Each `sync_state` check-in returns a policy
+action derived from an EISV behavioral state estimate, a form of
 runtime [proprioception](docs/ontology/eisv-proprioception-contract.md); that
 estimator is moving out of the core record into an optional policy module.
 
