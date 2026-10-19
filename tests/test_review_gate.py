@@ -3042,10 +3042,11 @@ def test_the_codex_reviewer_runs_under_the_deny_by_default_profile(monkeypatch, 
     overrides = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-c"]
     table = next(o for o in overrides if ".filesystem=" in o)
     checkout = os.getcwd()
+    key = lambda path: json.dumps(path)  # how the table writes each path, escapes included
     assert '":root"="deny"' in table
-    assert f'"{checkout}"="read"' in table and '"/repo/.git"="read"' in table
-    assert f'"{checkout}/**/.env*"="deny"' in table
-    assert f'"{checkout}/.unitares"="deny"' in table
+    assert f'{key(checkout)}="read"' in table and '"/repo/.git"="read"' in table
+    assert f'{key(checkout + "/**/.env*")}="deny"' in table
+    assert f'{key(checkout + "/.unitares")}="deny"' in table
     assert any(o.startswith("default_permissions=") for o in overrides)
     assert 'shell_environment_policy.set.GIT_CONFIG_NOSYSTEM="1"' in overrides
     include = next(o for o in overrides if o.startswith("shell_environment_policy.include_only="))
