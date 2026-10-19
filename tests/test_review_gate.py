@@ -3085,10 +3085,14 @@ def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path):
     git("worktree", "add", "-q", str(tmp_path / "wt"))
     dirs = _REAL_GIT_DIRS(str(tmp_path / "wt"))
     assert str((repo / ".git").resolve()) in [str(Path(d).resolve()) for d in dirs]
-    # Outside a repository: nothing, or the enclosing repository's own git
-    # dir when the temporary directory happens to sit inside a checkout.
-    outside = _REAL_GIT_DIRS(str(tmp_path))
-    assert outside == [] or all(Path(d).name == ".git" or d.endswith(".git") for d in outside)
+    # Outside a repository: nothing. When the temporary directory happens to
+    # sit inside a checkout, that checkout's own git dirs, whatever git says.
+    probe = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "--absolute-git-dir",
+                            "--git-common-dir"], capture_output=True, text=True)
+    expected = (sorted({os.path.abspath(os.path.join(str(tmp_path), line))
+                        for line in probe.stdout.split("\n") if line.strip()})
+                if probe.returncode == 0 else [])
+    assert _REAL_GIT_DIRS(str(tmp_path)) == expected
 
 
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
