@@ -2,7 +2,7 @@
 # plane (127.0.0.1:8788) using the REAL LeasePlaneClient, prove acquire-on-spawn
 # and release-on-exit end to end.
 #
-#   source "$UNITARES_SECRETS_ENV"   # the explicitly selected secrets env file
+#   source "${UNITARES_SECRETS_ENV:?select the secrets file explicitly}"
 #   LEASE_PLANE_BEARER_TOKEN=$LEASE_PLANE_BEARER_TOKEN mix run scripts/live_smoke.exs
 #
 # Acquires a remote_heartbeat lease on a novel `agent:<id>` surface (pure DB TTL
