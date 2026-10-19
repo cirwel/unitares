@@ -1193,6 +1193,11 @@ async def test_hung_cooldown_record_does_not_hold_a_failure_past_the_deadline(mo
         assert elapsed <= _SCALED_TIMEOUT_S + _SCALED_OVERHEAD_S + _TIMING_SLACK_S
         assert outcome.failure.details["orchestrator_execution_id"] == "ex-1"
         assert outcome.failure.details["accounting_deferred"] == ["provider_cooldown"]
-        assert "provider_unavailable" not in outcome.failure.details
+        # The classification is known before the write, so consult can still
+        # fail over on it while the cooldown record finishes in the background.
+        assert outcome.failure.details["provider_unavailable"]["reason"] == "quota"
+        assert outcome.failure.details["provider_unavailable"]["cooldown_recorded"] is False
+        # A terminal answer leaves no child running, so no backstop is named.
+        assert "orchestrator_backstop_s" not in outcome.failure.details
     finally:
         await _cancel_deferred_bookkeeping()

@@ -425,6 +425,12 @@ async def run_delegated_inference(
                 )
                 if not finished:
                     accounting_deferred.append("provider_cooldown")
+                    # The classification is already known even though the
+                    # cooldown record is still being written: consult's
+                    # failover reads provider_unavailable.reason, so a
+                    # deferred write must not turn a usage-limit or logged-out
+                    # answer into a terminal failure.
+                    provider_unavailable = {**classified, "cooldown_recorded": False}
         return InferenceOutcome.failed(
             message,
             code=(
@@ -449,11 +455,19 @@ async def run_delegated_inference(
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
                 "possibly_running": possibly_running,
-                # The window this call waited, and when the orchestrator
-                # stops a child nobody is waiting for any more.
-                "timeout_s": request.timeout_s,
-                "orchestrator_backstop_s": (
-                    request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S
+                # Only a timeout or a failure that may leave a child running
+                # names the window this call waited and when the orchestrator
+                # stops a child nobody is waiting for any more; with no child,
+                # a backstop time would describe nothing.
+                **(
+                    {
+                        "timeout_s": request.timeout_s,
+                        "orchestrator_backstop_s": (
+                            request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S
+                        ),
+                    }
+                    if still_running or possibly_running
+                    else {}
                 ),
                 **(
                     {"provider_unavailable": provider_unavailable}

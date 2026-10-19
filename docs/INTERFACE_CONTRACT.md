@@ -1000,7 +1000,10 @@ default (#2285).
     completes in the background, and the response names it in
     `accounting_deferred` (`inference.accounting_deferred` on success,
     alongside the complete answer and execution id; the failure details on
-    a failure). The field is absent when nothing was deferred.
+    a failure). The field is absent when nothing was deferred. A deferred
+    provider-cooldown write still reports `provider_unavailable` with its
+    `reason` and `cooldown_recorded: false`, so `consult` fails over on a
+    usage-limit or logged-out answer whether or not the record finished.
     An orchestrator that accepts the child and then stalls the await now
     yields `DELEGATED_INFERENCE_TIMEOUT` with the execution id by that
     deadline (it used to wait out the window plus 15s of HTTP grace, and an
