@@ -992,6 +992,14 @@ default (#2285).
     reconcile the child by. 45s leaves about 15s for host resolution, the
     spawn request and the response, so by default the structured
     `DELEGATED_INFERENCE_TIMEOUT` reaches the caller.
+  - Every call answers within `timeout_s` + 10s. That is one wall-clock
+    deadline: host resolution, the spawn request and each await are clipped
+    to the time left before it rather than adding their own timeouts on top.
+    An orchestrator that accepts the child and then stalls the await now
+    yields `DELEGATED_INFERENCE_TIMEOUT` with the execution id by that
+    deadline (it used to wait out the window plus 15s of HTTP grace, and an
+    await that timed out in transit reported `DELEGATED_INFERENCE_FAILED`).
+    The default call ends by 55s, 5s inside a 60s client budget.
   - Failures that may leave a child running add `timeout_s` (the window
     this call waited) and `orchestrator_backstop_s` (`timeout_s` + 30, when
     the orchestrator stops the child itself). The recovery action names

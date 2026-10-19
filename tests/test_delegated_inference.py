@@ -89,6 +89,9 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
     assert parsed["response"] == "careful answer"
     assert parsed["models_used"] == ["claude-haiku-4-5", "claude-opus-5"]
     assert "raw" not in parsed
+    # One overall deadline for the call: timeout_s plus the fixed overhead.
+    deadline = captured.pop("deadline")
+    assert isinstance(deadline, float)
     assert captured == {
         "host_id": "claude:host-adapter",
         "prompt": "challenge this thesis",
@@ -847,11 +850,22 @@ def test_default_timeout_answers_inside_a_60s_client_with_headroom():
     accepted for clients that wait longer.
     """
     from src.mcp_handlers.schemas.core import (
+        DELEGATE_INFERENCE_CLIENT_BUDGET_S,
         DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
+        DELEGATE_INFERENCE_OVERHEAD_S,
+        DELEGATE_INFERENCE_RESPONSE_HEADROOM_S,
         DelegateInferenceParams,
     )
 
-    assert DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S + 15 <= 60
+    assert DELEGATE_INFERENCE_CLIENT_BUDGET_S == 60
+    assert DELEGATE_INFERENCE_RESPONSE_HEADROOM_S > 0
+    # The whole default call, overhead included, ends with headroom to spare.
+    assert (
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
+        + DELEGATE_INFERENCE_OVERHEAD_S
+        + DELEGATE_INFERENCE_RESPONSE_HEADROOM_S
+        <= DELEGATE_INFERENCE_CLIENT_BUDGET_S
+    )
     assert DelegateInferenceParams(prompt="x").timeout_s == (
         DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
     )
@@ -954,3 +968,115 @@ async def test_an_explicit_longer_timeout_is_still_honoured(monkeypatch):
     assert parsed["timeout_s"] == 300
     assert parsed["orchestrator_backstop_s"] == 330
     assert parsed["orchestrator_execution_id"] == "ex-long"
+
+
+def _stalling_orchestrator(monkeypatch, *, stall_spawn=False):
+    """Enable the real adapter against an orchestrator that hangs.
+
+    It accepts the spawn and then never answers the await (or, with
+    ``stall_spawn``, never answers the spawn). Neither the fake nor anything
+    else enforces the per-request httpx timeout, so only the call's own
+    deadline can end the wait.
+    """
+    import asyncio
+
+    import httpx
+
+    from src.mcp_handlers.support import host_adapter as ha
+
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_ENABLED", "1")
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    monkeypatch.setattr(ha.shutil, "which", lambda c: "/usr/bin/" + c)
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    posts = []
+
+    class _Orchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, **kwargs):
+            posts.append(url)
+            if url.endswith("/v1/agents") and not stall_spawn:
+                return _FakeOrchestratorResp(201, {"execution_id": "ex-stalled"})
+            await asyncio.sleep(3600)
+            raise AssertionError("the stall was not cut off")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Orchestrator)
+    return posts
+
+
+# Scaled down so the test runs in about a second: the same arithmetic as the
+# default (timeout_s + overhead, with the HTTP grace clipped to what is left).
+_SCALED_TIMEOUT_S = 1
+_SCALED_OVERHEAD_S = 0.5
+_TIMING_SLACK_S = 0.5
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_await_still_returns_the_execution_id_by_the_deadline(monkeypatch):
+    """#2285 review: an orchestrator that accepts the child and then stalls
+    the await must not hold the reply past timeout_s + overhead, or the
+    client's own timeout wins and the execution id is lost."""
+    import time
+
+    posts = _stalling_orchestrator(monkeypatch)
+    monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
+
+    started = time.monotonic()
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "long review",
+        "timeout_s": _SCALED_TIMEOUT_S,
+    }))
+    elapsed = time.monotonic() - started
+
+    assert elapsed <= _SCALED_TIMEOUT_S + _SCALED_OVERHEAD_S + _TIMING_SLACK_S
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_TIMEOUT"
+    assert parsed["orchestrator_execution_id"] == "ex-stalled"
+    assert parsed["dispatch_phase"] == "await_timeout"
+    assert parsed["possibly_running"] is True
+    assert posts[-1].endswith("/v1/executions/ex-stalled/await")
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_spawn_still_answers_by_the_deadline(monkeypatch):
+    """A spawn that never answers cannot carry an id, but the caller still
+    gets a structured possibly-running failure rather than a transport cut."""
+    import time
+
+    _stalling_orchestrator(monkeypatch, stall_spawn=True)
+    monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
+
+    started = time.monotonic()
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "long review",
+        "timeout_s": _SCALED_TIMEOUT_S,
+    }))
+    elapsed = time.monotonic() - started
+
+    assert elapsed <= _SCALED_TIMEOUT_S + _SCALED_OVERHEAD_S + _TIMING_SLACK_S
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_FAILED"
+    assert parsed["possibly_running"] is True
+    assert "Do not retry yet." in parsed["recovery"]["action"]
+
+
+@pytest.mark.asyncio
+async def test_no_spawn_is_sent_once_the_deadline_has_passed(monkeypatch):
+    """Preflight that used up the whole allowance proves no child exists."""
+    from src.mcp_handlers.support import host_adapter as ha
+
+    posts = _stalling_orchestrator(monkeypatch)
+    result = await ha.invoke_host_adapter(
+        "claude:host-adapter", "review", timeout_s=5, deadline=0.0,
+    )
+
+    assert posts == []
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "preflight"

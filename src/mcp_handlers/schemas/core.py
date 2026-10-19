@@ -883,15 +883,27 @@ class CallModelParams(AgentIdentityMixin):
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
 
 
+#: The per-tool budget many MCP clients give one call (the client in #2285
+#: did). A client that gives up first receives a bare transport error with no
+#: execution id, so delegate_inference's default must answer inside it.
+DELEGATE_INFERENCE_CLIENT_BUDGET_S = 60
+#: Seconds of that budget kept free for serialising and delivering the reply.
+DELEGATE_INFERENCE_RESPONSE_HEADROOM_S = 5
+#: Seconds past timeout_s that one call may spend on host resolution, the
+#: spawn request and a stalled await before it answers anyway. Every call
+#: answers within timeout_s plus this: it is one wall-clock deadline that the
+#: per-request HTTP timeouts are clipped to, not added to.
+DELEGATE_INFERENCE_OVERHEAD_S = 10
 #: delegate_inference's default timeout_s: the server-side await window, and
-#: the child's runtime budget, when the caller names none. Many MCP clients
-#: give one tool call about 60s (the client in #2285 did), and a client that
-#: gives up first receives a bare transport error with no execution id (#2285).
-#: 45s leaves about 15s of that for host resolution, the spawn request and the
-#: response, so by default the structured timeout, which carries the id,
-#: reaches the caller. A larger value stays accepted for clients that wait
+#: the child's runtime budget, when the caller names none. Derived so the
+#: whole default call, overhead included, ends inside the client budget with
+#: the headroom to spare. A larger value stays accepted for clients that wait
 #: longer (the Python SDK sizes its transport timeout to timeout_s + 75).
-DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S = 45
+DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S = (
+    DELEGATE_INFERENCE_CLIENT_BUDGET_S
+    - DELEGATE_INFERENCE_RESPONSE_HEADROOM_S
+    - DELEGATE_INFERENCE_OVERHEAD_S
+)
 
 
 class DelegateInferenceParams(AgentIdentityMixin):

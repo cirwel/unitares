@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
@@ -13,7 +14,10 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
-from ..schemas.core import DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
+from ..schemas.core import (
+    DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
+    DELEGATE_INFERENCE_OVERHEAD_S,
+)
 from ..utils import error_response, require_argument, success_response
 from . import host_availability
 from src import inference_config
@@ -150,12 +154,22 @@ def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
 async def run_delegated_inference(
     request: DelegatedInferenceRequest,
 ) -> InferenceOutcome:
-    """Run one strong advisory inference without an MCP response envelope."""
+    """Run one strong advisory inference without an MCP response envelope.
+
+    Answers within ``request.timeout_s + DELEGATE_INFERENCE_OVERHEAD_S`` of
+    being called: one wall-clock deadline bounds host resolution, the spawn
+    request and every await, so their own timeouts cannot add up past it.
+    """
     host_id = request.host_id
+    deadline = time.monotonic() + request.timeout_s + DELEGATE_INFERENCE_OVERHEAD_S
     # Registry construction includes a cached blocking Ollama probe even when
-    # looking up Claude. Keep that probe off the MCP event loop.
+    # looking up Claude. Keep that probe off the MCP event loop, and off the
+    # caller's clock: past the overhead allowance it is a pre-execution failure.
     try:
-        host = await asyncio.to_thread(get_inference_host, host_id)
+        host = await asyncio.wait_for(
+            asyncio.to_thread(get_inference_host, host_id),
+            timeout=DELEGATE_INFERENCE_OVERHEAD_S,
+        )
     except Exception as exc:  # noqa: BLE001 - registry failure is pre-execution
         logger.warning("Could not resolve inference host %s: %s", host_id, exc)
         return InferenceOutcome.failed(
@@ -304,6 +318,7 @@ async def run_delegated_inference(
         timeout_s=request.timeout_s,
         sandbox="read-only",
         model=request.model,
+        deadline=deadline,
     )
     adapter_provenance = adapter_result.get("provenance") or {}
     terminal_answer = adapter_provenance.get("terminal_answer")
