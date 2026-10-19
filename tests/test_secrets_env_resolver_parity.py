@@ -249,3 +249,40 @@ def test_deploy_bridge_env_file_resolution(tmp_path, scenario):
         ["bash", "-c", script], env=env, capture_output=True, text=True, check=True
     )
     assert Path(result.stdout) == home / expected_rel
+
+
+def _bridge_link_block() -> str:
+    text = (REPO / "scripts/ops/deploy-bridge.sh").read_text(encoding="utf-8")
+    start = text.index("# -L, not -e:")
+    end = text.index("\nfi\n", start) + len("\nfi\n")
+    return text[start:end]
+
+
+@pytest.mark.parametrize(
+    ("existing", "selected", "relinked"),
+    [
+        (BRIDGE_LEGACY_REL, BRIDGE_NEUTRAL_REL, True),  # neutral file created later
+        (BRIDGE_LEGACY_REL, BRIDGE_LEGACY_REL, False),  # legacy-only host: untouched
+        (BRIDGE_NEUTRAL_REL, BRIDGE_NEUTRAL_REL, False),
+    ],
+)
+def test_deploy_bridge_env_symlink_follows_selected_file(tmp_path, existing, selected, relinked):
+    home = tmp_path / "home"
+    for rel in (BRIDGE_NEUTRAL_REL, BRIDGE_LEGACY_REL):
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        (home / rel).write_text("PLACEHOLDER=1\n")
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / ".env").symlink_to(home / existing)
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "TAG": "test",
+        "DEPLOY": str(deploy),
+        "ENV_FILE": str(home / selected),
+    }
+    script = f"set -euo pipefail\n{_bridge_link_block()}"
+    result = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, check=True
+    )
+    assert (deploy / ".env").readlink() == home / selected
+    assert ("linking .env" in result.stdout) is relinked

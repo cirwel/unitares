@@ -109,7 +109,10 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 # -L, not -e: -e is false for a DANGLING symlink, so a link left pointing at an
 # old location would fall through to `ln -s` on an existing path and fail.
-if [ ! -L "$DEPLOY/.env" ] || [ ! -e "$DEPLOY/.env" ]; then
+# Relink when the target differs too: a link to the legacy file must follow
+# once the neutral file exists, or the restarted bot keeps reading the old one.
+if [ ! -L "$DEPLOY/.env" ] || [ ! -e "$DEPLOY/.env" ] \
+  || [ "$(readlink "$DEPLOY/.env")" != "$ENV_FILE" ]; then
   echo "[$TAG] linking .env -> $ENV_FILE"
   ln -sfn "$ENV_FILE" "$DEPLOY/.env"
 fi
