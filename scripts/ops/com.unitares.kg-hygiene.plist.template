@@ -18,10 +18,11 @@
       __PYTHON__         → interpreter that has psycopg2 (same one the
                            governance-mcp service runs; see its plist)
 
-    Example:
-      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+    Example (from the checkout the job should run against; replace
+    $(command -v python3) with the governance-mcp interpreter if they differ):
+      sed -e "s|__UNITARES_ROOT__|$(git rev-parse --show-toplevel)|g" \
           -e "s|__HOME__|$HOME|g" \
-          -e "s|__PYTHON__|/Library/Frameworks/Python.framework/Versions/3.14/bin/python3|g" \
+          -e "s|__PYTHON__|$(command -v python3)|g" \
           scripts/ops/com.unitares.kg-hygiene.plist.template \
           > ~/Library/LaunchAgents/com.unitares.kg-hygiene.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.kg-hygiene.plist

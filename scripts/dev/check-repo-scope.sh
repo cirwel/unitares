@@ -24,6 +24,21 @@ cd "$PROJECT_ROOT" || exit 2
 
 ALLOW_FILE="scripts/dev/repo-scope-allow.txt"
 
+# Detection patterns are GENERAL, never one contributor's identity: a guard that
+# names the person it protects publishes exactly what it exists to keep out.
+#
+# Personal webmail address (Rule 3). Provider list, not a person.
+WEBMAIL_RE='[A-Za-z0-9._%+-]+@(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|proton|protonmail)\.(com|me)([^A-Za-z0-9_-]|$)'
+# Machine-absolute macOS home path (Rule 8): /Users/<name>, ending on a
+# non-dot so a sentence-final "/Users/you." still reads as the name "you".
+# .github/workflows/repo-scope.yml carries the same two patterns for the PR
+# body, and tests/test_doc_contract_ci_wiring.py holds them identical.
+HOME_PATH_RE='/Users/[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9_-])?'
+# Names that are illustrative, not anybody's account: docs placeholders, test
+# fixtures (one letter, testuser, op), the GitHub macOS runner, and macOS's own
+# /Users/Shared. A templated /Users/<name> or /Users/$USER never matches above.
+HOME_PLACEHOLDER_RE='^/Users/([A-Za-z0-9]|you|me|user|username|name|alice|bob|example|test|testuser|foo|runner|operator|op|someone|Shared)$'
+
 # Files that legitimately contain the trigger words (this guard and its docs).
 is_self() {
   case "$1" in
@@ -90,7 +105,7 @@ while IFS= read -r f; do
 
   # Rule 2: career / personal artifacts by name or path segment.
   # "resume"/"cv" only count as a CV artifact when they're the trailing word of a
-  # *document* name (resume.pdf, kenny-resume.docx, cv.md) — NOT the verb "resume"
+  # *document* name (resume.pdf, jane-resume.docx, cv.md) — NOT the verb "resume"
   # buried in technical names (lifecycle/resume.py, identity-resume-v0.md), which
   # were false-flagged before.
   cv_artifact=0
@@ -104,14 +119,14 @@ while IFS= read -r f; do
      [[ "/$f" =~ /[Jj]ob[-_][Aa]pplication ]] || \
      [[ "$bn" =~ ^[Ff][Rr][Tt][_-] ]] || \
      [[ "/$f" =~ /[Ff][Rr][Tt][_-] ]]; then
-    report "$f" "Looks like a career/personal artifact — belongs in ~/career, not the product repo."
+    report "$f" "Looks like a career/personal artifact — belongs outside the product repo."
     continue
   fi
 
   # Rule 3: content checks (text files only; -I skips binaries).
   [ -f "$f" ] || continue
-  if grep -nIE 'hikewa@gmail\.com' "$f" >/dev/null 2>&1; then
-    report "$f" "Contains a personal job-application email — keep personal contact info out of the repo."
+  if grep -niIE "$WEBMAIL_RE" "$f" >/dev/null 2>&1; then
+    report "$f" "Contains a personal webmail address — keep personal contact info out of the repo; use the project's public contact surfaces, or user@example.com in an example."
   fi
   if grep -nIE '"includeCoAuthoredBy"|"attribution"[[:space:]]*:' "$f" >/dev/null 2>&1; then
     report "$f" "Per-vendor attribution config belongs in local ~/.claude config, not the agnostic repo."
@@ -127,9 +142,6 @@ while IFS= read -r f; do
   case "$f" in
     src/data/*) ;;
     *)
-      if grep -nIE '/Users/cirwel' "$f" >/dev/null 2>&1; then
-        report "$f" "Leaks an operator-local path (/Users/cirwel) — use ~, \$HOME, or an env var, never a machine-absolute path."
-      fi
       if grep -nIE 'per your guidance|your overlay|you flagged|questions for [Kk]enny' "$f" >/dev/null 2>&1; then
         report "$f" "Addresses the operator in second person (chat-session register) — product docs/PRs are third-person/imperative, not a reply to one operator."
       fi
@@ -137,7 +149,7 @@ while IFS= read -r f; do
       # and "council-folded" match too. Character classes rather than -i keep
       # these alternatives in the form tests/test_doc_contract_ci_wiring.py parses.
       if grep -nIE '[Ll]ive[- ]verifier|[Cc]ouncil[- ]pass|[Cc]ouncil[- ]fold|three-lane council' "$f" >/dev/null 2>&1; then
-        report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes in ~/projects/_notes-archive and ship clean docs."
+        report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes outside the product checkout and ship clean docs."
       fi
       ;;
   esac
@@ -180,6 +192,19 @@ while IFS= read -r f; do
       # not flagged, so a repo file such as docs/project_layout.md passes.
       if grep -nIE '(^|[^A-Za-z0-9/_])(feedback|project)_[a-z0-9_-]+\.md|memory/(feedback|project)_[a-z0-9_-]+\.md' "$f" >/dev/null 2>&1; then
         report "$f" "Cites a harness-memory file (feedback_*/project_*.md) — that memory is machine-local. Cite the repo artifact or the knowledge-graph entry instead."
+      fi
+      ;;
+  esac
+
+  # Rule 8: a machine-absolute home path (/Users/<name>/...) for any account
+  # other than a placeholder. Same exemption as Rule 5. Its own rule, not a
+  # Rule 5 alternative, because the placeholder exclusion is a second filter.
+  case "$f" in
+    src/data/*) ;;
+    *)
+      leaked_homes="$(grep -ohIE "$HOME_PATH_RE" "$f" 2>/dev/null | grep -viE "$HOME_PLACEHOLDER_RE" | sort -u | tr '\n' ' ')"
+      if [ -n "$leaked_homes" ]; then
+        report "$f" "Leaks a machine-absolute home path (${leaked_homes% }) — use ~, \$HOME, an env var, or a placeholder such as /Users/you."
       fi
       ;;
   esac
@@ -228,7 +253,7 @@ fi
 if [ "$violations" -gt 0 ]; then
   echo ""
   echo "❌ Repo scope guard: $violations issue(s). unitares is user/agent-agnostic — see docs/REPO_SCOPE.md."
-  echo "   Move the file out (e.g. ~/career), strip the content, or allowlist it in $ALLOW_FILE."
+  echo "   Move the file out of the repo, strip the content, or allowlist it in $ALLOW_FILE."
   exit 1
 fi
 

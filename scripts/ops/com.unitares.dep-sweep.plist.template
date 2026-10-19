@@ -12,8 +12,8 @@
       __UNITARES_ROOT__  → absolute path to your unitares checkout
       __HOME__           → your $HOME (expanded absolute path)
 
-    Example:
-      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+    Example (from the checkout the job should run against):
+      sed -e "s|__UNITARES_ROOT__|$(git rev-parse --show-toplevel)|g" \
           -e "s|__HOME__|$HOME|g" \
           scripts/ops/com.unitares.dep-sweep.plist.template \
           > ~/Library/LaunchAgents/com.unitares.dep-sweep.plist
