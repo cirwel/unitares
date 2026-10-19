@@ -28,9 +28,9 @@ Design:
 
 Token storage:
 
-- Tokens are deployment secrets. Recommended location:
-  ``~/.config/cirwel/secrets.env`` (mode 600) per
-  ``project_secrets-location`` memory.
+- Tokens are deployment secrets. Recommended location: the
+  deployment secrets env file (``$UNITARES_SECRETS_ENV``, default
+  ``~/.config/unitares/secrets.env``, mode 600), never the repo.
 - Bridge/dashboard/ollama plists or systemd units load the token
   into the client process and pass it on every request.
 - Rotation is operator action: update the env var in
