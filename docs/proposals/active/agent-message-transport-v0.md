@@ -84,8 +84,8 @@ that reading.
 Registered in `surface_kind_catalog` and added to the `surface_id_grammar`
 CHECK, following the migration-050 precedent for `maintenance:/`. Topics are
 **lowercased** by the canonicalizer — unlike `resident:/` and `maintenance:/` —
-because a topic is typed from prose and `Revenue-Engine` must not become a
-second mailbox beside `revenue-engine`.
+because a topic is typed from prose and `Release-Notes` must not become a
+second mailbox beside `release-notes`.
 
 Registering the scheme makes a topic *leasable*, which is the topic-key gating
 the 2026-08-19 coordination dialectic ruled correct ("file leases are the wrong

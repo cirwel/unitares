@@ -45,7 +45,7 @@ Queried `audit.events`, T+0 through today:
 
 Daily breakdown: all 203 events on T+0, then zero through T+13.
 
-For context — `audit.events` overall traffic (any event_type) ran **824 to 16,786** rows/day during the same window, no gaps. The server was up and processing throughout. The 824 floor was on 2026-05-12, the first day the operator went AFK to Mercor; the 16,786 ceiling was on T+0.
+For context — `audit.events` overall traffic (any event_type) ran **824 to 16,786** rows/day during the same window, no gaps. The server was up and processing throughout. The 824 floor was on 2026-05-12, the first day of a scheduled operator absence; the 16,786 ceiling was on T+0.
 
 `core.agent_state` writes/day (proxy for active agent check-in load):
 
@@ -149,7 +149,7 @@ If these three hold, condition 1 has been honestly tested at representative load
 
 1. **One-site fix**: add `incident_id` to `src/mcp_handlers/decorators.py:163` emit payload. Smallest possible PR; restores criterion-evaluability for any future window. **Shipped 2026-05-18 as PR #463.**
 2. ~~Commit to one audit sink~~ — withdrawn. Caveat 4 was wrong; the sink question was resolved by PR #403 on 2026-05-07. The dual-write is the design; both tables are intentional. Next coordination_failure fire will exercise it for real.
-3. **Run a representative-load window**: once the operator returns from Mercor, the next 14-day window with ≥500 writes/day average is the real §129 evaluation.
+3. **Run a representative-load window**: once normal operator availability resumes, the next 14-day window with ≥500 writes/day average is the real §129 evaluation.
 4. **(Independent of this doc)** Conditions 2 and 3 still need their own evaluation before any Wave 1 close. They are not in scope here.
 
 ## Lessons (added 2026-05-18 after Caveat 4 amendment)

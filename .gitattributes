@@ -1,0 +1,4 @@
+# Leave internal planning records out of `git archive` release archives.
+# docs/proposals/archive/ stays in: shipped tests read files there.
+/docs/plans export-ignore
+/docs/plans/** export-ignore
