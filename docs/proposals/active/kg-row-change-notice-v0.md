@@ -1,6 +1,6 @@
 # Let active sessions learn that relevant knowledge changed
 
-**Status:** Bounded active-session notices authorized by Kenny on 2026-10-13
+**Status:** Bounded active-session notices authorized by the operator on 2026-10-13
 (“proceed” after the recommendations). Implementation is in PR #2776; pending
 validation, merge and migration/deploy. No automatic wake or actor authority.
 

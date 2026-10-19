@@ -307,7 +307,7 @@ Single-channel design from v3.1 is unchanged. v3.2's normative additions (provis
 
 ### v3.3-A. Public payload — strict redaction (supersedes v3.2-A)
 
-**Council finding (architect, forcing).** v3.2-A's "audit-only `components`" left `verdict + plausibility (scalar) + parent_mature + observations (per-dim counts)` public. With dedupe-by-pair (v3.2-D) and 30-day TTL, an adversary with KG read still gets (a) the exact scalar that crossed the cut and (b) which dims were `None` via the per-dim `observations` map. The split moves the leak; it does not close it.
+**Review finding (architect, forcing).** v3.2-A's "audit-only `components`" left `verdict + plausibility (scalar) + parent_mature + observations (per-dim counts)` public. With dedupe-by-pair (v3.2-D) and 30-day TTL, an adversary with KG read still gets (a) the exact scalar that crossed the cut and (b) which dims were `None` via the per-dim `observations` map. The split moves the leak; it does not close it.
 
 **Operator decision 2026-05-03.** Strict public redaction.
 
@@ -325,7 +325,7 @@ This closes v3.2's residual leak and pre-resolves review finding A4 (audit↔pub
 
 ### v3.3-B. R2 row added to consumer table (closes v3.2-B gap)
 
-**Council finding (architect, forcing).** v3.2-B's read-side contract listed four consumers (trust-tier S6, KG provenance S7, R3 baselines, dashboard) but omitted R2. R2 (honest memory integration, design v2 merged 2026-05-02) walks `provenance_chain` and credits along confirmed lineage chains. With `provisional_lineage` defaulting to "treat as confirmed" for unaware consumers (the unsafe-default backstop v3.2-B itself names), provisional edges would flow through honest-memory crediting via the unsafe default.
+**Review finding (architect, forcing).** v3.2-B's read-side contract listed four consumers (trust-tier S6, KG provenance S7, R3 baselines, dashboard) but omitted R2. R2 (honest memory integration, design v2 merged 2026-05-02) walks `provenance_chain` and credits along confirmed lineage chains. With `provisional_lineage` defaulting to "treat as confirmed" for unaware consumers (the unsafe-default backstop v3.2-B itself names), provisional edges would flow through honest-memory crediting via the unsafe default.
 
 **Specification.** Extend the v3.2-B consumer table with an R2 row:
 
@@ -338,7 +338,7 @@ This closes v3.2's residual leak and pre-resolves review finding A4 (audit↔pub
 
 ### v3.3-C. `calibration_status` lifecycle — three-state with timestamps (supersedes v3.2-C)
 
-**Council finding (architect, forcing).** v3.2-C's two-state `seeded → earned` forecloses the third reality: shadow-mode ran and distributions did not separate at the proposed cuts. Operator's only choices become "leave seeded" (silent-indefinite-advisory) or "mark earned" (false). v3.2-C is *explicitly* written to prevent the silent-graduation failure; the missing state recreates the symmetric silent-stagnation failure.
+**Review finding (architect, forcing).** v3.2-C's two-state `seeded → earned` forecloses the third reality: shadow-mode ran and distributions did not separate at the proposed cuts. Operator's only choices become "leave seeded" (silent-indefinite-advisory) or "mark earned" (false). v3.2-C is *explicitly* written to prevent the silent-graduation failure; the missing state recreates the symmetric silent-stagnation failure.
 
 **Operator decision 2026-05-03.** Add `calibration_failed` first-class. Add `seeded_since` timestamp.
 
@@ -364,7 +364,7 @@ Transitions are explicit operator actions; no automatic flips. (Automatic transi
 
 ### v3.3-D. `provisional_lineage` storage — explicit SQL columns on `core.identities` (supersedes v3.2-B storage spec)
 
-**Council finding (reviewer + verifier, forcing).** v3.2-B said "boolean column on the lineage edge or `provenance_chain` entry." Live-verifier confirmed neither exists: no `lineage_edges` table, no `provenance_chain` table, no `provisional_lineage` column anywhere in the live schema. Declared lineage lives in `core.identities.parent_agent_id` (TEXT FK) and the AGE graph. v3.2-B's "must be patched in the same PR" backstop was unenforceable until the storage target was named.
+**Review finding (reviewer + verifier, forcing).** v3.2-B said "boolean column on the lineage edge or `provenance_chain` entry." Live verification confirmed neither exists: no `lineage_edges` table, no `provenance_chain` table, no `provisional_lineage` column anywhere in the live schema. Declared lineage lives in `core.identities.parent_agent_id` (TEXT FK) and the AGE graph. v3.2-B's "must be patched in the same PR" backstop was unenforceable until the storage target was named.
 
 **Operator decision 2026-05-03.** SQL column on `core.identities`. AGE edge property may mirror later if graph traversal benefits surface; SQL is the source of truth for R2 / trust-tier / dashboard / audit consumers.
 
@@ -389,13 +389,13 @@ Migration slot: take the next available slot in `db/postgres/migrations/`. No ne
 | R2 honest memory | (R2 impl row prereq, not in R1's PR — see v3.3-B sequencing) | Exclude provisional from forward-only chain crediting |
 | Dashboard | `unitares-dashboard/` (specific file TBD during impl) | Show "provisional" badge with `provisional_recorded_at` |
 
-Migration + first three consumers shipped in the R1 implementation row (PRs #306/#309/#314/#320/#321/#324). The R3 row was originally framed as a fourth in-PR consumer; review pass 2026-05-04 (architect + reviewer + live verification) found the named consumer site does not exist in code and that constructing one would violate v3.3-C's "calibration is operator-driven, not automatic" invariant. R3 row deferred per the table above; PR 4b folded into this doc-correction edit. Dashboard patch may ship in a follow-up if scoping demands it (note: per memory `unitares-dashboard.md`, dashboard panel changes follow file-allowlist conventions). R2 consumer patch lives in R2's own implementation PR.
+Migration + first three consumers shipped in the R1 implementation row (PRs #306/#309/#314/#320/#321/#324). The R3 row was originally framed as a fourth in-PR consumer; review pass 2026-05-04 (architect + reviewer + live verification) found the named consumer site does not exist in code and that constructing one would violate v3.3-C's "calibration is operator-driven, not automatic" invariant. R3 row deferred per the table above; PR 4b folded into this doc-correction edit. Dashboard patch may ship in a follow-up if scoping demands it (note: dashboard panel changes follow file-allowlist conventions). R2 consumer patch lives in R2's own implementation PR.
 
 **Why explicit columns, not JSON metadata.** R2 / trust-tier / R3 / dashboard all need to query on `provisional_lineage = false`. JSONB metadata makes the predicate awkward and untyped. Explicit columns + SQL constraints are the source-of-truth shape; AGE edge property can mirror later via a write-side trigger if graph traversal benefits surface.
 
 ### v3.3-E. Audit table — name and retention corrections (supersedes v3.2-A storage location and v3.2-D retention claim)
 
-**Council finding (reviewer + verifier, forcing).** v3.2-A and v3.2-D both named `core.audit_events` as the audit persistence target and claimed 90-day retention. Live-verifier confirmed: actual table is `audit.events` (schema `audit`, not `core`); retention is **180 days** per `db/postgres/partitions.sql:4` and `drop_old_events_partitions(p_retention_days INTEGER DEFAULT 180)`. The 90-day figure applies to `audit.tool_usage`, not `audit.events`.
+**Review finding (reviewer + verifier, forcing).** v3.2-A and v3.2-D both named `core.audit_events` as the audit persistence target and claimed 90-day retention. Live verification confirmed: actual table is `audit.events` (schema `audit`, not `core`); retention is **180 days** per `db/postgres/partitions.sql:4` and `drop_old_events_partitions(p_retention_days INTEGER DEFAULT 180)`. The 90-day figure applies to `audit.tool_usage`, not `audit.events`.
 
 **Operator decision 2026-05-03.** `audit.r1_score_audit` is a new dedicated table (not folded into `audit.events`). Retention: **180 days**, inheriting `audit.events`. R1 shadow calibration needs long enough windows to diagnose separation failure; 90 days is too easy to starve, especially for low-volume class partitions (e.g., `subagent` declared-lineage pairs).
 
@@ -408,7 +408,7 @@ Migration + first three consumers shipped in the R1 implementation row (PRs #306
 
 ### v3.3-F. `epoch` column reference (supersedes v3.2-E item 1)
 
-**Council finding (reviewer, forcing).** v3.2-E said "see `schema.sql:169` for the index" and named `epoch` as a column to filter on, but `db/postgres/schema.sql:146-167`'s `core.agent_state` DDL does not define `epoch`. The column is live (write path stamps it via `GovernanceConfig.CURRENT_EPOCH = 3`) — it was added in a migration that never folded back into the base `schema.sql`.
+**Review finding (reviewer, forcing).** v3.2-E said "see `schema.sql:169` for the index" and named `epoch` as a column to filter on, but `db/postgres/schema.sql:146-167`'s `core.agent_state` DDL does not define `epoch`. The column is live (write path stamps it via `GovernanceConfig.CURRENT_EPOCH = 3`) — it was added in a migration that never folded back into the base `schema.sql`.
 
 **Specification (impl row work).** Implementor identifies the migration that added `epoch` (search `db/postgres/migrations/` for `epoch` or `CURRENT_EPOCH`) and either (a) cites it directly in the v3.2-E correction, or (b) backports the column into `schema.sql` so the base DDL is honest. The latter is the migration-discipline-clean path; the former is the minimal-scope path. **Operator default:** backport into `schema.sql` if it's a one-line addition; cite-only if the migration carries other unrelated changes that complicate a partial backport.
 
@@ -416,7 +416,7 @@ This is migration-discipline housekeeping, not R1-specific work; it surfaces her
 
 ### v3.3-G. `class_tag` on score record (closes flag A5)
 
-**Council finding (architect, flag elevated to spec).** v3.2-F flagged the resident-class deterministic-script cluster as a known limitation. Without a `class_tag` on each score record, the calibration analysis must reconstruct partition membership *at analysis time* from `core.identities.metadata.class_tag` — which is what S8a Phase 1 stamps at onboard. That reconstruction is straightforward today but couples calibration analysis to S8a's tag-discipline state at *analysis time*, not *scoring time*.
+**Review finding (architect, flag elevated to spec).** v3.2-F flagged the resident-class deterministic-script cluster as a known limitation. Without a `class_tag` on each score record, the calibration analysis must reconstruct partition membership *at analysis time* from `core.identities.metadata.class_tag` — which is what S8a Phase 1 stamps at onboard. That reconstruction is straightforward today but couples calibration analysis to S8a's tag-discipline state at *analysis time*, not *scoring time*.
 
 **Specification.** Add `class_tag TEXT NULL` to `audit.r1_score_audit` (per v3.3-A audit columns). Stamped at scoring time by reading the parent's current `class_tag` from `core.identities.metadata`. NULL when the parent has no class tag (S8a Phase 2 backfill not yet complete for that agent).
 
@@ -446,7 +446,7 @@ These are mechanical fixes to v3.1/v3.2 prose — no spec impact. Future readers
 | `record_agent_state` at line 33 | def at line 17; epoch arg at line 39 | `src/db/mixins/state.py:17,39` |
 | `_write_entry` at lines 431-439 | def at line 515; fire-and-forget docstring at line 541 | `src/audit_log.py:515,541` |
 
-**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer review pass as requiring a MERGE primitive that "doesn't exist." Live-verifier ground-truthed this: `kg_add_discovery` (`src/db/mixins/knowledge_graph.py`), the write the `knowledge_graph_postgres` store delegates to, already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
+**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer review pass as requiring a MERGE primitive that "doesn't exist." Live verification ground-truthed this: `kg_add_discovery` (`src/db/mixins/knowledge_graph.py`), the write the `knowledge_graph_postgres` store delegates to, already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
 
 ### v3.3 summary
 

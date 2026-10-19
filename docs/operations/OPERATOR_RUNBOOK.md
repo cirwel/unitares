@@ -235,7 +235,9 @@ make logs-err    # ... and data/logs/mcp_server_error.log
 
 Those are the paths `scripts/ops/com.unitares.governance-mcp.plist` sets via
 `StandardOutPath` / `StandardErrorPath`, so they are the right ones whenever the
-server runs under launchd — which is the deployment the install steps prescribe.
+server runs under launchd — the macOS LaunchAgent install option. A Docker
+Compose install logs through its container runtime instead
+(`docker compose logs -f governance-mcp`).
 
 If instead you started it by hand with `start_with_deps.sh`, there is no log
 file: that path execs `start_server.sh`, which execs `python3 src/mcp_server.py`

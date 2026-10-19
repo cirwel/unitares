@@ -59,13 +59,13 @@ storage, deployment command, or inference behavior changes.
   scope, identity, dependency, data-locality, and falsifiability concerns. Its
   generic diagram requirement was not treated as authority; the actual diff was
   checked against each concern and the existing workflow/profile tables.
-- A two-seat Codex council found one mounted-versus-registered overclaim and four
+- Two independent Codex reviewers found one mounted-versus-registered overclaim and four
   deeper reconstruction boundaries. The patch now says discovery is the
   registered-and-mounted public intersection, original `sync_state` report text
   is not retained as history, PostgreSQL-only knowledge cannot traverse the
   successor edge of a superseded finding, Glama is provider-hosted, and federation
   means many runtimes sharing one operator-controlled server/authority domain.
-- The council's topicality condition produced an executable conformance check in
+- The reviewers' topicality condition produced an executable conformance check in
   the existing CI doc-drift gate rather than another prose promise.
 
 ## Verification and follow-through
