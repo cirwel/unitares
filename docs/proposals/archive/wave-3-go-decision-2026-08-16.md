@@ -216,7 +216,7 @@ single-day burst, so treat either date as a band, not a forecast.
 
 ## §4 Decision
 
-**GO-WITH-REDUCED-SCOPE.** _(operator — Kenny Wang, 2026-08-22)_
+**GO-WITH-REDUCED-SCOPE.** _(operator, 2026-08-22)_
 
 ### What this signature authorises
 

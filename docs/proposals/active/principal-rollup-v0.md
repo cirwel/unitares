@@ -9,7 +9,7 @@
 
 ## Council amendment (2026-06-18)
 
-A three-member council (ontology, implementation, live verification) reviewed
+Three independent reviewers (ontology, implementation, live verification) reviewed
 Move 3. **Unanimous verdict: do NOT resolve-or-create `principal_id` at onboard.
 Keep the principal DERIVED.** Move 3 is reframed; the surface goal ("you are
 instance K of principal P") is kept, delivered without a stored mint-time FK.
@@ -26,7 +26,7 @@ instance K of principal P") is kept, delivered without a stored mint-time FK.
   (concurrent siblings on a shared thread/parent → incoherent root) and forces a
   stored-FK **re-point** on every late lineage edge, with no safe mechanism.
   Derived cost is sub-ms over in-memory dicts — storing is premature optimization.
-- *Live-verifier (ground-truth):* root identities have **no** principal context
+- *Live verification (ground-truth):* root identities have **no** principal context
   at mint; **65% of active agents have no `parent_agent_id` at all**; lineage-at-
   mint covers only a minority; multi-root threads are the norm (15 active threads
   with >1 root); 5 active cross-thread parents would force after-the-fact merges.

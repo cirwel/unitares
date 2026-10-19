@@ -2,7 +2,7 @@
 
 **Status:** Binding amendment. Session 1b executes against v4 **with** these deltas applied.
 **Companion to:** `v7-fhat-spec.md` v4 (unchanged on disk; this amendment supersedes specific sections), `data/v7-fhat/session1a-findings.md` (the precondition audit that motivated these deltas).
-**Operator authorization:** 2026-04-23, delegated decision ("you decide" applied to the four redirect options in session1a-findings.md §4); chose Option X.
+**Operator authorization:** 2026-04-23, delegated decision (the operator delegated the choice among the four redirect options in session1a-findings.md §4); chose Option X.
 
 ---
 
@@ -54,7 +54,7 @@ The generative-model structure (v4 §2.1–2.3 state-space, v4 §2.5 estimator, 
 
 > Reference corpus: epoch-2 epoch-1 ~~, non-archived,~~ non-archived, tag-populated agent-turns from `core.agent_state` joined against `core.agents.tags` via `core.identities`. Time window: **2026-02-20 through 2026-03-20** (28 days, comfortably pre-dating the evaluation slice by a week).
 
-**Rationale.** Epoch 2 started in production on 2026-04-01 (Phase-1+2 grounding merge, per `project_eisv-grounding-phase-1.md`). The v4 spec's "epoch-2" phrase was forward-looking (assumed a Phase-3 swap that has not landed). The reference window is entirely within epoch 1 by the window dates themselves.
+**Rationale.** Epoch 2 started in production on 2026-04-01 (Phase-1+2 grounding merge). The v4 spec's "epoch-2" phrase was forward-looking (assumed a Phase-3 swap that has not landed). The reference window is entirely within epoch 1 by the window dates themselves.
 
 **Canonical SQL** that encodes this delta is frozen at `data/v7-fhat/sql/reference_state.sql`.
 
@@ -101,7 +101,7 @@ v4 §6.2 and §7.1 already contained the default rule: "fall back to B2 unless a
 
 v4 §2.3 specified: "ODE parameters $(\alpha, \beta_E, k, \beta_I, \gamma_I, \mu, \lambda_2, \kappa, \delta)$ are taken **fleet-wide** with v6 production values (Appendix A of `unitares-v6.tex`)."
 
-Session 1a surfaced that `config/governance_config.py` (lines 635–651) holds values that differ from paper Appendix A (α=0.5 vs 0.42; β_I=0.05 vs 0.30; γ_I=0.3 vs 0.169 linear). Per memory `feedback_eisv-bounds-drift.md` ("papers are source of truth"), paper App A is authoritative. v5 confirms this with a frozen artifact.
+Session 1a surfaced that `config/governance_config.py` (lines 635–651) holds values that differ from paper Appendix A (α=0.5 vs 0.42; β_I=0.05 vs 0.30; γ_I=0.3 vs 0.169 linear). Where code constants and the paper disagree, the paper is the source of truth, so paper App A is authoritative. v5 confirms this with a frozen artifact.
 
 **v5 binding:** `data/v7-fhat/ode_params.json` is the single source of truth. SHA-256 `dee1182cd109c4a3d2999f21168a3093b9be8660765cd0d34f8c4337fce9751e`. Session 2's pre-dispatch hash check reads this file; mismatch against the live file at dispatch time aborts the horse race (spec §2.5 "stale-prior silent error" protection — unchanged).
 

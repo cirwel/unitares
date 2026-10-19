@@ -20,7 +20,7 @@ rows — never one operator's live fleet, paths, or accountable principals.
 - `owner` — the accountable **principal** (a person). Not the verifier. A constant.
 - `escalates_to` — the **machine verifier / gate** that grounds the automation in
   truth (CI + migration-preflight, governance verdict + anomaly detection,
-  dialectic review, Vigil, a deterministic scrape, …). For an ungated row this
+  dialectic review, a resident groundskeeper agent, a deterministic scrape, …). For an ungated row this
   is honestly `none`.
 - `notes: ["gate:<class>"]` — the **gate-class** the dashboard colours:
   - `gate:machine` — a machine check verifies it (green).
