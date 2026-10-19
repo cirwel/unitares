@@ -74,7 +74,7 @@ def main(arg: str) -> int:
         "the auto_attest sleep-wake artifact pattern (Mac clamshell / Maintenance-Sleep "
         "spikes risk_score on near-identical inputs and falsely pauses residents). The "
         "in-memory pause persisted across sleep because the governance MCP server stayed "
-        "up. Operator was AFK on Mercor/applications and did not see the silence. "
+        "up. The operator was away during a scheduled absence and did not see the silence. "
         "Recovery: bulk operator-initiated; no behavior change needed in agent code. "
         "Follow-up tracked: auto_attest sleep-wake artifact memory entry."
     )
