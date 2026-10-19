@@ -273,7 +273,7 @@ def test_role_family_map_covers_class_tag_priority():
 def test_role_family_map_covers_promotion_path():
     """The S8a promotion source AND target tags share one family.
 
-    Council fold (PR #601): the original bug was a tag RENAME
+    Review finding (PR #601): the original bug was a tag RENAME
     (ephemeral → engaged_ephemeral) splitting parent from successor.
     `_CLASS_TAG_PRIORITY` is the scoring tuple, not the mutation path —
     a future promotion target added to `class_promotion.py` without a
