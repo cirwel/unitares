@@ -92,3 +92,50 @@ def test_reviewer_codex_call_refuses_an_unconfining_cli(monkeypatch):
     monkeypatch.setattr(reviewer, "codex_confinement_verified", lambda cli: False)
     monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
     assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+
+
+def test_reviewer_codex_call_gets_no_secret_and_its_own_process_group(monkeypatch):
+    """The reviewer runs under the orchestrator, whose environment holds
+    bearers and metered API keys (OPENAI_API_KEY would move codex onto
+    metered billing). The CLI gets an allowlist, and a timeout kills its
+    whole process group, sandboxed children included."""
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AGENT_ORCHESTRATOR_BEARER_TOKEN",
+                 "DIALECTIC_TEST_CANARY"):
+        monkeypatch.setenv(name, "secret-value")
+    seen = {}
+
+    async def fake_exec(*argv, env=None, cwd=None, **kwargs):
+        seen.update(env=env, kwargs=kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_mcp_disable_overrides", lambda cli, base, cwd: [])
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    asyncio.run(reviewer.call_codex_reviewer("review this"))
+    assert "secret-value" not in seen["env"].values()
+    assert seen["env"]["HOME"] == os.environ["HOME"]
+    assert seen["kwargs"]["start_new_session"] is True
+
+
+def test_reviewer_codex_timeout_kills_the_process_group(monkeypatch):
+    groups = []
+
+    class _Slow(_Proc):
+        pid = 5151
+
+        async def communicate(self):
+            await asyncio.sleep(10)
+            return b"", b""
+
+    async def fake_exec(*argv, **kwargs):
+        return _Slow()
+
+    monkeypatch.setenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_mcp_disable_overrides", lambda cli, base, cwd: [])
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    from agents.dialectic_reviewer import host_backends
+
+    monkeypatch.setattr(host_backends.os, "killpg", lambda pid, sig: groups.append(pid))
+    assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+    assert groups == [5151]
