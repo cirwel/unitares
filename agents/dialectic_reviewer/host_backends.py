@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import os
 import re
@@ -108,6 +109,28 @@ def _extract_verdict(text: str) -> Optional[str]:
         position = start + consumed
 
 
+# The claude and codex reviewer CLIs keep the real HOME (their subscription
+# logins live under it) and USER (claude's credential lookup keys on it; the
+# orchestrator's launchd environment may lack it). Nothing else the reviewer
+# process holds reaches them: it runs under the orchestrator, whose
+# environment carries service bearers and, from the secrets file, metered
+# API keys that would move a subscription CLI onto metered billing
+# (2026-10-18 lane map). Same list as scripts/dev/review_gate.py.
+_CLI_ENV_ALLOWLIST = (*_AGY_ENV_ALLOWLIST, "CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS")
+
+
+def cli_env(**extra: str) -> dict[str, str]:
+    """An allowlisted environment for a subscription reviewer CLI, plus ``extra``."""
+    env = {name: os.environ[name] for name in _CLI_ENV_ALLOWLIST if name in os.environ}
+    if "USER" not in env:
+        try:
+            env["USER"] = getpass.getuser()
+        except Exception:  # noqa: BLE001 - no name: the CLI reports its own login error
+            pass
+    env.update(extra)
+    return env
+
+
 async def call_claude_backend(prompt: str) -> HostReviewResult:
     """Run Claude safely and return exact provider-reported model provenance.
 
@@ -145,14 +168,11 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
             "/bin/sh",
             "-c",
             command,
-            env={
-                **os.environ,
-                "DR_CLI": cli_path,
-                "DR_PROMPT": prompt,
-                "DR_MODEL": model or "",
-            },
+            env=cli_env(DR_CLI=cli_path, DR_PROMPT=prompt, DR_MODEL=model or ""),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            # Own process group, so a timeout reaches the CLI's children too.
+            start_new_session=True,
         )
     except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
         return HostReviewResult(
@@ -165,8 +185,7 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+        await _reap_group(proc)
         return HostReviewResult(
             text=None,
             host_id=host_id,
@@ -175,11 +194,7 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
             error=f"Claude CLI exceeded {timeout_s:g}s timeout",
         )
     except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
-        try:
-            proc.kill()
-            await proc.communicate()
-        except Exception:
-            pass
+        await _reap_group(proc)
         return HostReviewResult(
             text=None,
             host_id=host_id,
@@ -569,7 +584,8 @@ def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
 
 
 async def _reap_group(proc: Any) -> None:
-    """Kill agy's whole process group and wait briefly; never raises."""
+    """Kill a reviewer CLI's whole process group (spawned with
+    start_new_session) and wait briefly; never raises."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
@@ -578,6 +594,9 @@ async def _reap_group(proc: Any) -> None:
         await asyncio.wait_for(proc.communicate(), timeout=5)
     except Exception:  # noqa: BLE001 - best-effort reap after a kill
         pass
+
+
+reap_group = _reap_group  # for reviewer.py's codex lane (component boundary)
 
 
 async def call_antigravity_backend(prompt: str) -> HostReviewResult:
