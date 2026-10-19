@@ -430,6 +430,46 @@ class TestOneCallIdentityForwarding:
         assert "next_call" not in data
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "nested,expected_prefix",
+        [
+            ({"success": True, "awaiting_facilitation": True},
+             "an operator's or a replacement reviewer's"),
+            ({"success": False, "state_reload_required": True}, "unknown"),
+        ],
+    )
+    async def test_exited_reviewer_is_never_named_as_next_to_move(
+        self, env, nested, expected_prefix
+    ):
+        """#2905 review: the reviewer that took the session then exited inside
+        the fast-crash wait. It will not act again, so whose_move must not
+        hand the session to it, whether or not facilitation was recorded."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({
+                **nested,
+                "thesis_recorded": True,
+                "session_advanced": True,
+                "reviewer_exited": True,
+                "reviewer_agent_id": "reviewer-orchestrated",
+                "phase": "synthesis",
+            }),
+        ):
+            result = await handle_request_dialectic_review({
+                "issue_description": "Review my decision to ship X",
+                "reasoning": "I chose X because Y",
+            })
+
+        data = parse_result(result)
+        assert data["thesis_recorded"] is True
+        assert data["whose_move"].startswith(expected_prefix)
+        assert "NOT recorded" not in data["whose_move"]
+        assert "next_call" not in data
+
+    @pytest.mark.asyncio
     async def test_recorded_thesis_needing_reload_is_not_called_unrecorded(self, env):
         """#2905: the facilitation mark was refused and the re-read could not
         say who moved the session. The call is not a success, but the thesis

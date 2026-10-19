@@ -2743,18 +2743,24 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 f"dialectic(action='get', session_id='{session.session_id}') "
                 "for its antithesis/synthesis"
             )
-        elif payload.get("session_advanced"):
-            payload["whose_move"] = (
-                "the reviewer's — thesis recorded and a reviewer has already "
-                "taken the session; poll "
-                f"dialectic(action='get', session_id='{session.session_id}')"
-            )
         elif payload.get("state_reload_required"):
             payload["whose_move"] = (
                 "unknown — thesis recorded, but the session changed before its "
                 "state could be confirmed; reload with "
                 f"dialectic(action='get', session_id='{session.session_id}') "
                 "before another write"
+            )
+        elif payload.get("reviewer_exited"):
+            payload["whose_move"] = (
+                "an operator's or a replacement reviewer's — thesis recorded; "
+                "the reviewer that took the session exited, and a request for "
+                "facilitation is recorded"
+            )
+        elif payload.get("session_advanced"):
+            payload["whose_move"] = (
+                "the reviewer's — thesis recorded and a reviewer has already "
+                "taken the session; poll "
+                f"dialectic(action='get', session_id='{session.session_id}')"
             )
         else:
             payload["whose_move"] = (
@@ -4136,8 +4142,38 @@ def _thesis_session_advanced(
     )
 
 
+async def _request_facilitation_for_exited_reviewer(
+    session_id: str, reason: str
+) -> bool:
+    """Record the facilitation request against the re-read session row.
+
+    Used when the reviewer that took the session has already exited: nothing
+    else will mark the session, and a synthesis-phase session is reassigned
+    only once it awaits facilitation (check_reviewer_stuck). False when the row
+    cannot be loaded or moved again before the mark.
+    """
+    try:
+        fresh = await load_session(session_id)
+        if fresh is None:
+            return False
+        await _set_awaiting_facilitation(fresh, True, reason=reason)
+    except _TranscriptAppendRefused:
+        return False
+    except Exception as exc:
+        logger.warning(
+            "Could not request facilitation for %s after its reviewer exited: %s",
+            session_id[:16],
+            type(exc).__name__,
+        )
+        return False
+    return True
+
+
 async def _thesis_recorded_after_facilitation_refused(
-    session: DialecticSession, result: Dict[str, Any]
+    session: DialecticSession,
+    result: Dict[str, Any],
+    *,
+    reviewer_exited: bool = False,
 ) -> Sequence[TextContent]:
     """Report a recorded thesis whose facilitation request was refused.
 
@@ -4200,6 +4236,40 @@ async def _thesis_recorded_after_facilitation_refused(
             _terminal_readback_next_step(readback, session_id)
             or f"Follow the review with {poll}."
         )
+        if (
+            reviewer_exited
+            and persisted_reviewer
+            and not readback.terminal
+        ):
+            # The reviewer that took the slot exited inside the fast-crash
+            # wait, so it will not act again and nobody else will mark the
+            # session. Record the facilitation request on the re-read row.
+            result["reviewer_exited"] = True
+            if await _request_facilitation_for_exited_reviewer(
+                session_id, "reviewer_crashed_fast"
+            ):
+                result["awaiting_facilitation"] = True
+                result["note"] = (
+                    "The thesis is recorded. Reviewer "
+                    f"{persisted_reviewer} took the session (phase is now "
+                    f"'{persisted_phase}') and then exited, so it will not act "
+                    "again. A request for facilitation is recorded."
+                )
+                result["next_step"] = (
+                    "Assign a replacement reviewer or facilitate this session "
+                    f"as operator; follow it with {poll}."
+                )
+            else:
+                result["success"] = False
+                result["state_reload_required"] = True
+                result["note"] = (
+                    "The thesis is recorded. Reviewer "
+                    f"{persisted_reviewer} took the session and then exited, "
+                    "and the session changed again before a request for "
+                    "facilitation could be recorded. Reload the session before "
+                    "another write."
+                )
+                result["next_step"] = f"Reload with {poll}."
         logger.info(
             "[DIALECTIC] session %s advanced during the thesis fallback "
             "(phase=%s); reporting the recorded thesis",
@@ -4388,6 +4458,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # reviewer. ANY dispatch failure falls through to the in-process path
             # below (the orchestrator being down never breaks dialectic).
             review_path_failure_reason = "no_automated_reviewer"
+            # Set when the spawned reviewer exits inside the fast-crash wait;
+            # the in-process fallback below overwrites the failure reason.
+            orchestrated_reviewer_exited = False
             if session.reviewer_agent_id is None:
                 from .orchestrator_dispatch import (
                     orchestrated_review_enabled,
@@ -4511,6 +4584,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                             return success_response(result)
                         # reviewer crashed fast → fall through to in-process
                         review_path_failure_reason = "reviewer_crashed_fast"
+                        orchestrated_reviewer_exited = True
                     # dispatch failed → fall through to in-process synthetic reviewer
 
             # End-to-end completion: when no independent live reviewer has claimed
@@ -4773,7 +4847,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     # wait, or one spawned by a dispatch call that timed out
                     # after the spawn (#2905). The thesis is recorded either way.
                     return await _thesis_recorded_after_facilitation_refused(
-                        session, result
+                        session,
+                        result,
+                        reviewer_exited=orchestrated_reviewer_exited,
                     )
                 result["awaiting_facilitation"] = True
                 result["note"] = (
