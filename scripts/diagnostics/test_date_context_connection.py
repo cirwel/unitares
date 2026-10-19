@@ -7,6 +7,7 @@ This script tests the date-context server directly via stdio to verify it's work
 
 import asyncio
 import os
+import subprocess
 import sys
 import json
 from pathlib import Path
@@ -16,12 +17,31 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+
+def _default_projects_root() -> Path:
+    """Parent of the MAIN checkout, so a linked worktree resolves siblings the
+    same way the main checkout does (as agents/watcher/watcher-sweep.sh does).
+    Falls back to the parent of this checkout outside git."""
+    repo = Path(__file__).resolve().parents[2]
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return repo.parent
+    common_dir = Path(common)
+    if common_dir.name == ".git":
+        return common_dir.parent.parent
+    return repo.parent
+
+
 # date-context-mcp is a separate repo; set DATE_CONTEXT_MCP_ROOT to point at
-# your local checkout. Defaults to a sibling of this checkout:
+# your local checkout. Defaults to a sibling of the main checkout:
 # $UNITARES_PROJECTS_ROOT/date-context-mcp, where UNITARES_PROJECTS_ROOT
-# defaults to the parent directory of this repo.
+# defaults to the parent directory of the main checkout.
 _PROJECTS_ROOT = Path(
-    os.environ.get("UNITARES_PROJECTS_ROOT") or Path(__file__).resolve().parents[3]
+    os.environ.get("UNITARES_PROJECTS_ROOT") or _default_projects_root()
 )
 DATE_CONTEXT_MCP_ROOT = Path(
     os.environ.get("DATE_CONTEXT_MCP_ROOT") or _PROJECTS_ROOT / "date-context-mcp"
