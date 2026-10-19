@@ -316,7 +316,7 @@ The range of agents this covers runs from an ephemeral CLI session that checks i
 
 ## Threat model and security posture
 
-UNITARES has run continuously in production since November 2025 on a **single-operator fleet**. The deployment defaults assume a single trusted operator network; multi-tenant and internet-facing use needs a harder auth posture. See [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model) for the adversarial boundaries and the open gap in sustained adversarial testing. The defaults, concretely:
+UNITARES has run in production since November 2025 on a **single-operator fleet**. The deployment defaults assume a single trusted operator network; multi-tenant and internet-facing use needs a harder auth posture. See [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model) for the adversarial boundaries and the open gap in sustained adversarial testing. The defaults, concretely:
 
 - All services bind to `127.0.0.1` by default — public exposure is an operator decision (env-var gated)
 - The lease plane fails closed if `LEASE_PLANE_BEARER_TOKEN` is unset
