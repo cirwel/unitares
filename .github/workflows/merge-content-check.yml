@@ -4,8 +4,10 @@ name: Merge Content Check
 # merged green while the branch's final pushed commit was silently absent
 # from master. On every merge to master, recover the branch's latest actual
 # pushed tip from the repo event stream and verify the merged head contains
-# it; if not, fail the run and file a ci-finding issue naming the missing
-# commits. Unverifiable cases (events window exceeded, compare unavailable)
+# it. Only pushes from the merging PR's own lifetime count (after it opened,
+# or among its commits), so a branch name reused across PRs (#2384) is not
+# compared against an earlier PR's final push. If not contained, fail the
+# run and file a ci-finding issue naming the missing commits. Unverifiable cases (events window exceeded, compare unavailable)
 # report as DEGRADED — never as silence.
 #
 # GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
@@ -40,4 +42,5 @@ jobs:
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGED_AT: ${{ github.event.pull_request.merged_at }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
         run: python3 scripts/ci/merge_content_check.py

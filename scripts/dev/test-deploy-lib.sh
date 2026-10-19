@@ -882,6 +882,51 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
 ) && ok "[guard] deploy-orchestrator.sh warns when the new boot logs an idempotency problem" \
   || bad "deploy-orchestrator.sh idempotency log guard"
 
+# ── the agy dispatch bot is an instance only once its LaunchAgent is installed ──
+# Uninstalled, it must not exist anywhere: a deploy-status row would read DOWN,
+# and deploy-apply holds every component whose script also controls a DOWN one,
+# so a bot nobody installed would freeze the claude and codex deploys; a
+# deploy-dispatch-beam instance would fail its plist preflight and require an
+# .env.agy that is not there. Installed, it must be a full instance in both.
+# The real blocks are extracted between their markers and executed against a
+# fixture HOME, so the test exercises the code that ships, not a retyping.
+(
+  set -euo pipefail
+  OPS_DIR="$(dirname "$LIB")"
+  FH="$SB/agy-home"; mkdir -p "$FH/Library/LaunchAgents"
+  plist="$FH/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist"
+
+  ddb_block=$(sed -n '/^INSTANCES=(/,/^# --- optional instances (END)/p' "$OPS_DIR/deploy-dispatch-beam.sh")
+  ds_block=$(sed -n '/^# --- optional components (BEGIN)/,/^# --- optional components (END)/p' "$OPS_DIR/deploy-status.sh")
+  [ -n "$ddb_block" ] && [ -n "$ds_block" ] || exit 2
+
+  instances() { (HOME="$FH"; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
+  components() { (H="$FH"; DISPATCH_TREE=/fixture/dispatch; COMPONENTS=(); eval "$ds_block"; printf '%s\n' "${COMPONENTS[@]}"); }
+
+  # Not installed: exactly today's two instances and two env files, no row.
+  out=$(instances)
+  [ "$(printf '%s\n' "$out" | grep -c '^com\.cirwel\.')" = 2 ] || exit 3
+  ! printf '%s\n' "$out" | grep -q 'agy' || exit 4
+  printf '%s\n' "$out" | grep -qx '.env' && printf '%s\n' "$out" | grep -qx '.env.codex' || exit 5
+  [ -z "$(components)" ] || exit 6
+
+  # Installed: a third instance with its own state files, its env file, a row.
+  : > "$plist"
+  out=$(instances)
+  printf '%s\n' "$out" | grep -qx 'com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log' || exit 7
+  printf '%s\n' "$out" | grep -qx '.env.agy' || exit 8
+  [ "$(components)" = "dispatch-beam-agy|com.cirwel.dispatch-beam-agy|/fixture/dispatch||restart|" ] || exit 9
+
+  # Every consumer reads the arrays, so the third instance is preflighted,
+  # linked, restarted and rolled back like the others; deploy-apply routes it.
+  ddb="$OPS_DIR/deploy-dispatch-beam.sh"
+  grep -q 'for env_name in "${ENV_FILES\[@\]}"; do' "$ddb" || exit 10
+  ! grep -q 'for env_name in .env' "$ddb" || exit 11
+  [ "$(grep -c 'for e2 in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 12
+  grep -q 'dispatch-beam|dispatch-beam-codex|dispatch-beam-agy)' "$OPS_DIR/deploy-apply.sh" || exit 13
+) && ok "agy dispatch bot is absent until its plist is installed, then a full instance" \
+  || bad "optional agy dispatch instance"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
