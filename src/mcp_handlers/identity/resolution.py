@@ -1951,18 +1951,35 @@ async def resolve_session_identity(
             except Exception as e:
                 logger.warning(f"Eager dict hydration failed for {agent_uuid[:8]}: {e}")
 
-            # Create session binding, unless the key is another agent's keyed
-            # stable id (a force_new mint that presented one): a keyed id
-            # names its agent by itself, so binding it to this new uuid would
-            # only record a mapping the resolver never uses. The new agent
-            # gets its own keyed id from onboard.
+            # Create session binding, unless the key is another agent's stable
+            # id or already belongs to another agent in PostgreSQL (a force_new
+            # mint that skipped PATH 1/2): binding it to this new uuid would
+            # either record a mapping the resolver never uses or diverge Redis
+            # from the durable PG session row.
             from .stable_session import classify as _csid_kind
             from .stable_session import verifies_for as _csid_verifies
 
-            _bind_mint_key = not (
-                _csid_kind(session_key) == "keyed"
-                and not _csid_verifies(session_key, agent_uuid)
+            _foreign_stable_mint = (
+                (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+                or (
+                    _csid_kind(session_key) == "legacy"
+                    and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
+                )
             )
+            _pg_mint_conflict = False
+            if force_new and not _foreign_stable_mint:
+                try:
+                    _existing_pg_sess = await db.get_session(session_key)
+                    _existing_pg_owner = (
+                        getattr(_existing_pg_sess, "agent_id", None)
+                        if _existing_pg_sess
+                        else None
+                    )
+                    if _existing_pg_owner and _existing_pg_owner != agent_uuid:
+                        _pg_mint_conflict = True
+                except Exception:
+                    pass
+            _bind_mint_key = not (_foreign_stable_mint or _pg_mint_conflict)
             identity = await db.get_identity(agent_uuid) if _bind_mint_key else None
             if identity:
                 await db.create_session(
@@ -2011,12 +2028,41 @@ async def resolve_session_identity(
 
     # Lazy creation: just cache in Redis, don't write to PostgreSQL.
     # mint_guard=True: PATH 3 lazy mint must not silently overwrite an
-    # existing live binding for the same session_key (S21-a).
+    # existing live binding for the same session_key (S21-a). When session_key
+    # is another agent's stable id or already owned by another agent in PG/cache,
+    # cache under the new agent's own stable id through _cache_session (recording
+    # the bind fingerprint) so ensure_agent_persisted finds it (#2707).
+    from .stable_session import classify as _csid_kind
+    from .stable_session import verifies_for as _csid_verifies
+    from .shared import make_client_session_id, _session_identities
+
+    _own_lazy_key = make_client_session_id(agent_uuid)
+    _foreign_stable_session = (
+        (_csid_kind(session_key) == "keyed" and not _csid_verifies(session_key, agent_uuid))
+        or (
+            _csid_kind(session_key) == "legacy"
+            and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
+        )
+    )
+    _lazy_cache_key = _own_lazy_key if _foreign_stable_session else session_key
     await _cache_session(
-        session_key, agent_uuid, display_agent_id=agent_id, label=label,
+        _lazy_cache_key, agent_uuid, display_agent_id=agent_id, label=label,
         spawn_reason=spawn_reason,
         mint_guard=True,
     )
+    _cached_after = _session_identities.get(_lazy_cache_key)
+    if (
+        _lazy_cache_key != _own_lazy_key
+        and not (
+            isinstance(_cached_after, dict)
+            and (_cached_after.get("bound_agent_id") or _cached_after.get("agent_uuid")) == agent_uuid
+        )
+    ):
+        await _cache_session(
+            _own_lazy_key, agent_uuid, display_agent_id=agent_id, label=label,
+            spawn_reason=spawn_reason,
+            mint_guard=True,
+        )
     logger.debug(f"Created new agent (lazy): {agent_id} (uuid: {agent_uuid[:8]}...) label={label}")
 
     result = {

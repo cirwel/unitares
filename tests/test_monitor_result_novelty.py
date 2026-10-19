@@ -379,7 +379,7 @@ def test_build_result_includes_risk_attribution():
 
 
 def test_simulate_update_does_not_consume_novelty():
-    """Council fold (PR #603): simulate_update runs the full governance
+    """Review finding (PR #603): simulate_update runs the full governance
     cycle, including result building, which advances the novelty gate.
     The simulation must save/restore the gap so a dry run doesn't
     consume the agent's first REAL surfacing of the complexity line."""
@@ -389,7 +389,7 @@ def test_simulate_update_does_not_consume_novelty():
     assert monitor._last_surfaced_complexity_gap is None
 
     # Large reported-vs-derived gap: short text + complexity 0.9 is the
-    # shape the live verifier reproduced (derived ≈ 0, Δ ≈ 0.9).
+    # shape reproduced against the live server (derived ≈ 0, Δ ≈ 0.9).
     agent_state = {"response_text": "ok", "complexity": 0.9}
 
     monitor.simulate_update(dict(agent_state))

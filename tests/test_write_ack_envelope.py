@@ -392,8 +392,9 @@ def test_write_ack_without_a_liftable_id_keeps_raw_governance(
 
 
 def test_request_review_ack_still_carries_raw_governance():
-    """The review ack carries the review itself (resolution, dispatch,
-    thesis-failure flags), and the dialectic canary reads those fields there."""
+    """An ack that carries the review itself (here a resolution) keeps the
+    canonical payload; only a routine ack omits it
+    (tests/test_request_review_routine_ack.py, #2443)."""
     payload = {
         "success": True,
         "session_id": "sess-1",
