@@ -900,7 +900,7 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   ds_block=$(sed -n '/^# --- optional components (BEGIN)/,/^# --- optional components (END)/p' "$OPS_DIR/deploy-status.sh")
   [ -n "$ddb_block" ] && [ -n "$ds_block" ] || exit 2
 
-  instances() { (HOME="$FH"; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
+  instances() { (HOME="$FH"; TAG=t; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
   components() { (H="$FH"; DISPATCH_TREE=/fixture/dispatch; COMPONENTS=(); eval "$ds_block"; printf '%s\n' "${COMPONENTS[@]}"); }
 
   # Not installed: exactly today's two instances and two env files, no row.
@@ -911,7 +911,8 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   [ -z "$(components)" ] || exit 6
 
   # Installed: a third instance with its own state files, its env file, a row.
-  : > "$plist"
+  # A bot plist pins its boot witness; that is what marks it as a bot.
+  printf '<plist><dict><key>EnvironmentVariables</key><dict><key>DISPATCH_BOOT_WITNESS_PATH</key><string>/s/boot_witness_agy.bin</string></dict></dict></plist>\n' > "$plist"
   out=$(instances)
   printf '%s\n' "$out" | grep -qx 'com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log' || exit 7
   printf '%s\n' "$out" | grep -qx '.env.agy' || exit 8
@@ -926,6 +927,61 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   grep -q 'dispatch-beam|dispatch-beam-codex|dispatch-beam-agy)' "$OPS_DIR/deploy-apply.sh" || exit 13
 ) && ok "agy dispatch bot is absent until its plist is installed, then a full instance" \
   || bad "optional agy dispatch instance"
+
+# ── further dispatch bots are discovered from their installed LaunchAgents ──
+# deploy-dispatch-beam.sh no longer names the optional bots: each installed
+# com.cirwel.dispatch-beam-<name>.plist that pins DISPATCH_BOOT_WITNESS_PATH is
+# an instance. Helper jobs sharing the prefix (logrotate, a later doctor job)
+# must never be kickstarted and waited on as bots, codex must not be listed
+# twice, and discovery must not read the deploy worktree, which has not been
+# fast-forwarded yet when the block runs.
+(
+  set -euo pipefail
+  OPS_DIR="$(dirname "$LIB")"
+  ddb="$OPS_DIR/deploy-dispatch-beam.sh"
+  FH="$SB/discover-home"; LA="$FH/Library/LaunchAgents"; mkdir -p "$LA"
+  bot='<plist><dict><key>EnvironmentVariables</key><dict><key>DISPATCH_BOOT_WITNESS_PATH</key><string>x</string></dict></dict></plist>'
+  helper='<plist><dict><key>Label</key><string>helper</string></dict></plist>'
+
+  ddb_block=$(sed -n '/^INSTANCES=(/,/^# --- optional instances (END)/p' "$ddb")
+  [ -n "$ddb_block" ] || exit 2
+  instances() { (HOME="$FH"; TAG=t; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}") 2>/dev/null; }
+
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam.plist"
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam-codex.plist"
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam-agy.plist"
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam-gemini.plist"
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam-codex.plist.bak-sec-20261005"
+  printf '%s\n' "$helper" > "$LA/com.cirwel.dispatch-beam-logrotate.plist"
+  printf '%s\n' "$helper" > "$LA/com.cirwel.dispatch-beam-doctor.plist"
+  printf '%s\n' "$bot" > "$LA/com.cirwel.dispatch-beam-Bad.Name.plist"
+
+  out=$(instances)
+  expected='com.cirwel.dispatch-beam|boot_witness.bin|presence.bin|dispatch-beam.log
+com.cirwel.dispatch-beam-codex|boot_witness_codex.bin|presence_codex.bin|dispatch-beam-codex.log
+com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log
+com.cirwel.dispatch-beam-gemini|boot_witness_gemini.bin|presence_gemini.bin|dispatch-beam-gemini.log
+--
+.env
+.env.codex
+.env.agy
+.env.gemini'
+  [ "$out" = "$expected" ] || { printf 'got:\n%s\n' "$out" >&2; exit 3; }
+
+  # A helper that is not a bot is named on stderr, not silently dropped.
+  err=$( (HOME="$FH"; TAG=t; eval "$ddb_block") 2>&1 >/dev/null)
+  printf '%s\n' "$err" | grep -q 'skipping com.cirwel.dispatch-beam-doctor' || exit 4
+  ! printf '%s\n' "$err" | grep -q 'logrotate' || exit 5
+
+  # Discovery reads ~/Library/LaunchAgents only, never the unpulled worktree.
+  ! printf '%s\n' "$ddb_block" | grep -v '^[[:space:]]*#' | grep -q 'DEPLOY' || exit 6
+
+  # The preflight, restart and both rollback loops iterate INSTANCES, so a
+  # discovered bot is held to every check the listed ones are.
+  [ "$(grep -c 'for entry in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 7
+  [ "$(grep -c 'for e2 in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 8
+) && ok "dispatch bots are discovered from installed plists; helpers and backups are not bots" \
+  || bad "dispatch instance discovery"
 
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"

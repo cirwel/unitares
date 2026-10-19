@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploy every dispatch_beam instance (com.cirwel.dispatch-beam and
-# com.cirwel.dispatch-beam-codex, plus com.cirwel.dispatch-beam-agy once its
-# LaunchAgent is installed) from a DEDICATED worktree pinned to origin/master —
-# never the shared dev checkout.
+# com.cirwel.dispatch-beam-codex, plus each further bot such as
+# com.cirwel.dispatch-beam-agy once its LaunchAgent is installed) from a
+# DEDICATED worktree pinned to origin/master — never the shared dev checkout.
 #
 # Why this exists: deploy-bridge.sh's own header already named this gap —
 # "dispatch-beam and dispatch-beam-codex also have COMPONENTS rows with no
@@ -65,15 +65,39 @@ INSTANCES=(
 ENV_FILES=(.env .env.codex)
 
 # --- optional instances (BEGIN) ---------------------------------------------
-# The agy (Antigravity) bot, dispatch_beam#90, exists only once its LaunchAgent
-# is installed. Until then it is not an instance at all: no plist preflight, no
-# .env.agy requirement, no restart, and no rollback kickstart. Installing the
-# plist makes it a full instance, held to the same checks as the other two.
-AGY_PLIST="$HOME/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist"
-if [ -f "$AGY_PLIST" ]; then
-  INSTANCES+=("com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log")
-  ENV_FILES+=(.env.agy)
-fi
+# Every other bot (agy today, dispatch_beam#90) is DISCOVERED from its installed
+# LaunchAgent, com.cirwel.dispatch-beam-<name>.plist, rather than listed here.
+# Until that plist is installed it is not an instance at all: no plist
+# preflight, no .env.<name> requirement, no restart, and no rollback kickstart.
+# Installing it makes a full instance, held to the same checks as the other two,
+# with the files named the way the claude/codex/agy ones already are:
+# boot_witness_<name>.bin, presence_<name>.bin, dispatch-beam-<name>.log and
+# .env.<name>. Discovery reads ~/Library/LaunchAgents only — never anything in
+# $DEPLOY, which has not been fast-forwarded yet at this point.
+#
+# The same prefix also names helper jobs that are not bots (logrotate, and any
+# later scheduled job). Kickstarting one of those and waiting for a boot witness
+# it never writes would roll back a good deploy, so a plist counts as a bot only
+# if it pins DISPATCH_BOOT_WITNESS_PATH, which every bot plist does (the
+# migration sets it) and no helper has. -a so a binary plist still matches.
+for plist in "$HOME"/Library/LaunchAgents/com.cirwel.dispatch-beam-*.plist; do
+  [ -f "$plist" ] || continue # no match leaves the pattern itself
+  name="${plist##*/com.cirwel.dispatch-beam-}"
+  name="${name%.plist}"
+  case "$name" in
+    codex | logrotate) continue ;; # codex is listed above; logrotate is no bot
+    "" | *[!a-z0-9_]*)
+      echo "[$TAG] skipping $plist: '$name' is not a usable instance name ([a-z0-9_])" >&2
+      continue
+      ;;
+  esac
+  if ! grep -qa 'DISPATCH_BOOT_WITNESS_PATH' "$plist"; then
+    echo "[$TAG] skipping com.cirwel.dispatch-beam-$name: its plist pins no DISPATCH_BOOT_WITNESS_PATH, so it is not a dispatch bot" >&2
+    continue
+  fi
+  INSTANCES+=("com.cirwel.dispatch-beam-$name|boot_witness_$name.bin|presence_$name.bin|dispatch-beam-$name.log")
+  ENV_FILES+=(".env.$name")
+done
 # --- optional instances (END) -----------------------------------------------
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
