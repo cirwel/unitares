@@ -2418,6 +2418,12 @@ def _git_dirs(checkout: str) -> list[str]:
                    for line in proc.stdout.split("\n") if line.strip()})
 
 
+def _glob_unsafe(path: str) -> bool:
+    """Whether ``path`` holds glob syntax (or its escape), so a glob rooted
+    at it may not match what it names."""
+    return any(ch in path for ch in "*?[]{}\\")
+
+
 def _codex_cli() -> str | None:
     """The codex binary on PATH, or None."""
     return shutil.which("codex")
@@ -2491,7 +2497,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             return (f"codex reviewer refused: {refusal}",
                     "could not start codex: confinement unavailable")
         checkout = os.getcwd()
-        if any(ch in checkout for ch in "*?[]{}\\"):  # glob syntax, and its escape
+        if _glob_unsafe(checkout):
             # The deny entries below are globs rooted at the checkout path; a
             # path that is itself a glob could stop them matching, so the
             # lane refuses rather than run with denials that may not apply.

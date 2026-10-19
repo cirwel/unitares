@@ -33,6 +33,7 @@ shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 _REAL_CODEX_LANE = rg._codex_lane_client()
 _REAL_GIT_DIRS = rg._git_dirs
+_REAL_GLOB_UNSAFE = rg._glob_unsafe
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +51,8 @@ def confined_codex_available(monkeypatch):
     monkeypatch.setattr(rg, "_git_dirs", lambda checkout: ["/repo/.git"])
     # CI has no codex installed; the fake Popen stands in for it.
     monkeypatch.setattr(rg, "_codex_cli", lambda: "/usr/local/bin/codex")
+    # The tests run in the checkout, whose path may hold glob characters.
+    monkeypatch.setattr(rg, "_glob_unsafe", lambda path: False)
 
 
 def full_record(*args, **kwargs):
@@ -3069,6 +3072,7 @@ def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tm
 
 def test_the_codex_reviewer_refuses_a_checkout_path_that_is_a_glob(monkeypatch, tmp_path):
     """Its .env and .unitares denials are globs rooted at the checkout path."""
+    monkeypatch.setattr(rg, "_glob_unsafe", _REAL_GLOB_UNSAFE)
     for name in ("repo[1]", "repo\\x"):
         odd = tmp_path / name
         odd.mkdir()
@@ -5376,3 +5380,9 @@ def test_severity_comes_from_the_title_not_the_explanation():
             for i in range(3)]
     rounds = rg.count_review_cycles(runs)
     assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")
+
+
+def test_glob_unsafe_names_every_glob_character():
+    for path in ("/a/[b]", "/a/b*", "/a/b?", "/a/{b}", "/a/b\\c"):
+        assert _REAL_GLOB_UNSAFE(path)
+    assert not _REAL_GLOB_UNSAFE("/Users/me/projects/wt/unitares-review")
