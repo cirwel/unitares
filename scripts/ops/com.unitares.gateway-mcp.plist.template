@@ -6,13 +6,14 @@
   external clients (e.g. Cursor). It proxies to the governance server on :8767.
 
   Production: render __UNITARES_ROOT__ against a MASTER-PINNED worktree
-  (e.g. ~/projects/unitares-deploy), NOT the shared dev checkout — else a
+  ($UNITARES_DEPLOY, the deploy worktree), NOT the shared dev checkout — else a
   concurrent session that switches the dev checkout's branch will deploy the
   wrong code on this service's next restart. (governance-mcp + agent-orchestrator
   already run from pinned worktrees; the [DEV] services were pinned 2026-06-29.)
 
-  Install (render __VARS__ then load):
-    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+  Install (render __VARS__ then load; UNITARES_DEPLOY = that worktree's
+  absolute path):
+    sed -e "s|__UNITARES_ROOT__|${UNITARES_DEPLOY:?set UNITARES_DEPLOY to the deploy worktree path}|g" \
         -e "s|__HOME__|$HOME|g" \
         -e "s|__PYTHON3__|$(command -v python3)|g" \
         scripts/ops/com.unitares.gateway-mcp.plist.template \
