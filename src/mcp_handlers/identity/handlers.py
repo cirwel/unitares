@@ -1359,8 +1359,10 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
     # taxonomy of continuity". Parallels _s13_freshness_gate in
-    # handle_onboard_v2, except that here cosmetic `name` alone is not counted
-    # as a proof signal (#2708) — `identity(name="X")` without session/UUID/token
+    # handle_onboard_v2 (checking continuity_token, client_session_id,
+    # agent_uuid, and agent_id — including middleware-injected agent_id from
+    # inject_identity), except that here cosmetic `name` alone is not counted
+    # as a proof signal (#2708): `identity(name="X")` without session/UUID/token
     # proof mints fresh and applies the label to the new agent, whereas a caller
     # with an explicit header session (X-Session-ID or Mcp-Session-Id) can still
     # rename its bound agent through STEP 1.
@@ -1368,6 +1370,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
+        or arguments.get("agent_id")
         or (arguments.get("name") and _has_header_session)
     )
     # Coerced once, before the S13 default and like handle_identity_v2's
