@@ -2043,24 +2043,7 @@ async def resolve_session_identity(
             and session_key != f"agent-{str(agent_uuid).lower()[:12]}"
         )
     )
-    _pg_lazy_conflict = False
-    if force_new and not _foreign_stable_session:
-        try:
-            _existing_pg_sess = await get_db().get_session(session_key)
-            _existing_pg_owner = (
-                getattr(_existing_pg_sess, "agent_id", None)
-                if _existing_pg_sess
-                else None
-            )
-            if _existing_pg_owner and _existing_pg_owner != agent_uuid:
-                _pg_lazy_conflict = True
-        except Exception:
-            pass
-    _lazy_cache_key = (
-        _own_lazy_key
-        if (_foreign_stable_session or _pg_lazy_conflict)
-        else session_key
-    )
+    _lazy_cache_key = _own_lazy_key if _foreign_stable_session else session_key
     await _cache_session(
         _lazy_cache_key, agent_uuid, display_agent_id=agent_id, label=label,
         spawn_reason=spawn_reason,
