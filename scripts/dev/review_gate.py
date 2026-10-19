@@ -2472,13 +2472,19 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         # review, its git directories and the toolchain git loads from, with
         # .env files still denied.
         lane = _codex_lane_client()
-        cli = shutil.which("codex") or "codex"
+        cli = shutil.which("codex")
+        if cli is None:
+            codex_dir.cleanup()
+            # Same wording as a failed launch, so the provider cooldown applies.
+            return ("codex is not on PATH", "could not start codex: not found on PATH")
         refusal = lane.admin_config_conflict()
         if refusal is None and not lane.confinement_verified(cli):
             refusal = "this codex does not enforce the lane's permission profile (sandbox probe)"
         if refusal is not None:
             codex_dir.cleanup()
-            return (f"codex reviewer refused: {refusal}", "skipped: codex confinement unavailable")
+            # A startup failure: it will not clear by itself, so back off.
+            return (f"codex reviewer refused: {refusal}",
+                    "could not start codex: confinement unavailable")
         checkout = os.getcwd()
         overrides = lane.lane_config_overrides(
             cli,

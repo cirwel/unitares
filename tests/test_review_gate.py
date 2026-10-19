@@ -3061,7 +3061,17 @@ def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tm
     calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
     text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
     assert calls == []  # never launched
-    assert note.startswith("skipped:") and reason in text
+    # Worded as a startup failure, so remember_unavailable backs the provider off.
+    assert note.startswith("could not start codex") and reason in text
+
+
+def test_a_missing_codex_is_a_startup_failure_not_a_sandbox_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg.shutil, "which", lambda name: None)
+    calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+    text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    assert calls == []
+    assert note == "could not start codex: not found on PATH"
+    assert "sandbox" not in text
 
 
 def test_codex_lane_client_loads_the_consult_lane_module():
@@ -3075,7 +3085,7 @@ def test_codex_lane_client_loads_the_consult_lane_module():
     assert len(module.lane_config_overrides("codex", "p")) == module.LANE_CONFIG_OVERRIDE_COUNT
 
 
-def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path):
+def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
@@ -3085,14 +3095,12 @@ def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path):
     git("worktree", "add", "-q", str(tmp_path / "wt"))
     dirs = _REAL_GIT_DIRS(str(tmp_path / "wt"))
     assert str((repo / ".git").resolve()) in [str(Path(d).resolve()) for d in dirs]
-    # Outside a repository: nothing. When the temporary directory happens to
-    # sit inside a checkout, that checkout's own git dirs, whatever git says.
-    probe = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "--absolute-git-dir",
-                            "--git-common-dir"], capture_output=True, text=True)
-    expected = (sorted({os.path.abspath(os.path.join(str(tmp_path), line))
-                        for line in probe.stdout.split("\n") if line.strip()})
-                if probe.returncode == 0 else [])
-    assert _REAL_GIT_DIRS(str(tmp_path)) == expected
+    # Outside a repository: nothing. The ceiling stops git from finding a
+    # repository the temporary directory may sit inside.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    assert _REAL_GIT_DIRS(str(plain)) == []
 
 
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
