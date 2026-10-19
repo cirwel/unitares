@@ -339,7 +339,7 @@ evidence cases, and a measured price of decentralization.
 - **2026-10-19 (editorial, no protocol change; not an amendment, no version
   bump):** discloses two post-freeze edits that were not logged when they were
   made. This entry records them on the date they were found; it does not make
-  them contemporaneous. (1) `8e788434` (#1679, 2026-08-16) inserted the line
+  them contemporaneous. (1) `8e7884434` (#1679, 2026-08-16) inserted the line
   beginning "Demotion review (2026-08-16)" directly under the Status
   paragraph. It came from a repository-wide documentation-health review that
   decided which proposal documents stay active, and it records that review's
