@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploy BOTH dispatch_beam instances (com.cirwel.dispatch-beam and
-# com.cirwel.dispatch-beam-codex) from a DEDICATED worktree pinned to
-# origin/master — never the shared dev checkout.
+# Deploy every dispatch_beam instance (com.cirwel.dispatch-beam and
+# com.cirwel.dispatch-beam-codex, plus com.cirwel.dispatch-beam-agy once its
+# LaunchAgent is installed) from a DEDICATED worktree pinned to origin/master —
+# never the shared dev checkout.
 #
 # Why this exists: deploy-bridge.sh's own header already named this gap —
 # "dispatch-beam and dispatch-beam-codex also have COMPONENTS rows with no
@@ -55,11 +56,25 @@ LOG_DIR="$HOME/Library/Logs"
 UID_NUM="$(id -u)"
 TAG="deploy-dispatch-beam"
 
-# label | plist basename | boot-witness file | presence file | log basename
+# label | boot-witness file | presence file | log basename
 INSTANCES=(
   "com.cirwel.dispatch-beam|boot_witness.bin|presence.bin|dispatch-beam.log"
   "com.cirwel.dispatch-beam-codex|boot_witness_codex.bin|presence_codex.bin|dispatch-beam-codex.log"
 )
+# Env files run.sh sources, one per instance, symlinked in from $STATE_DIR.
+ENV_FILES=(.env .env.codex)
+
+# --- optional instances (BEGIN) ---------------------------------------------
+# The agy (Antigravity) bot, dispatch_beam#90, exists only once its LaunchAgent
+# is installed. Until then it is not an instance at all: no plist preflight, no
+# .env.agy requirement, no restart, and no rollback kickstart. Installing the
+# plist makes it a full instance, held to the same checks as the other two.
+AGY_PLIST="$HOME/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist"
+if [ -f "$AGY_PLIST" ]; then
+  INSTANCES+=("com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log")
+  ENV_FILES+=(.env.agy)
+fi
+# --- optional instances (END) -----------------------------------------------
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -109,7 +124,7 @@ HEAD_SHA="$(git -C "$DEPLOY" rev-parse HEAD)"
 # and .env* is gitignored, so a fresh worktree carries none. Symlink, never
 # copy: two real token files would drift and nobody could tell which one the
 # live bot actually read. Same reasoning as deploy-bridge.sh.
-for env_name in .env .env.codex; do
+for env_name in "${ENV_FILES[@]}"; do
   src="$STATE_DIR/$env_name"
   if [ ! -f "$src" ]; then
     echo "[$TAG] REFUSING: no $env_name at $src — the bot would boot with an empty" >&2
@@ -210,7 +225,7 @@ for entry in "${INSTANCES[@]}"; do
   echo "[$TAG]   waiting for boot witness (up to 60s)"
   if ! deploy_lib_poll 20 3 booted; then
     echo "[$TAG] FAILED — $label never wrote a boot witness; the new code did not start." >&2
-    echo "[$TAG] Rolling the worktree back to ${PREV:0:8} and restarting both instances." >&2
+    echo "[$TAG] Rolling the worktree back to ${PREV:0:8} and restarting every instance." >&2
     git -C "$DEPLOY" reset --hard "$PREV"
     for e2 in "${INSTANCES[@]}"; do
       IFS='|' read -r l2 _ _ _ <<<"$e2"
@@ -230,7 +245,7 @@ for entry in "${INSTANCES[@]}"; do
     echo "[$TAG]   waiting for the gateway to connect (up to 150s)"
     if ! deploy_lib_poll 30 5 connected; then
       echo "[$TAG] FAILED — $label booted but never connected to Discord." >&2
-      echo "[$TAG] Rolling the worktree back to ${PREV:0:8} and restarting both instances." >&2
+      echo "[$TAG] Rolling the worktree back to ${PREV:0:8} and restarting every instance." >&2
       git -C "$DEPLOY" reset --hard "$PREV"
       for e2 in "${INSTANCES[@]}"; do
         IFS='|' read -r l2 _ _ _ <<<"$e2"

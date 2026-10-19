@@ -4,8 +4,8 @@
 # that otherwise has to be re-derived by hand every time someone asks "what's live?".
 #
 # Stakeholders: an operator reads the table; an agent reads `--json` and verifies
-# against it instead of assuming. Driven by the topology documented in
-# ~/.claude .../memory/project_deploy-topology.md — keep the two in sync.
+# against it instead of assuming. The service rows below are the deploy
+# topology; keep them in sync with what launchd actually runs.
 #
 # Verdicts:
 #   CURRENT      running, and its code is not older than the checkout HEAD
@@ -125,6 +125,17 @@ COMPONENTS=(
 "anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
 "anima-mcp||$H/projects/anima-mcp||pi-deploy|"
 )
+
+# --- optional components (BEGIN) ---------------------------------------------
+# The third dispatch bot (agy, dispatch_beam#90) is opt-in. Until its LaunchAgent
+# is installed it has no row: a row would read DOWN, and deploy-apply.sh holds
+# every component whose deploy script also controls a DOWN one, so a bot nobody
+# has installed would freeze deploys of the other two. deploy-dispatch-beam.sh
+# applies the same rule.
+if [ -f "$H/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist" ]; then
+  COMPONENTS+=("dispatch-beam-agy|com.cirwel.dispatch-beam-agy|$DISPATCH_TREE||restart|")
+fi
+# --- optional components (END) -----------------------------------------------
 
 # --- git helpers (operate on the repo containing repo_path; worktrees ok) -----
 base_ref() { # echo origin/master or origin/main
