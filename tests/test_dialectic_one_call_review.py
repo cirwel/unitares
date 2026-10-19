@@ -301,7 +301,7 @@ class TestOneCallReview:
 # side effect never happened in test. These tests reproduce it.
 # ----------------------------------------------------------------------
 
-REAL_UUID = "3b531b97-a39d-4b95-aeb3-91a1003c9685"
+REAL_UUID = "3c4e02db-67b8-5111-af6c-e10d7b0e8227"
 REAL_HANDLE = "Claude_Opus_5_20260730"
 
 

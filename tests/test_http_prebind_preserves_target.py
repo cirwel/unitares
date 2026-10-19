@@ -26,9 +26,9 @@ import pytest
 import src.http_api as http_api
 
 
-UUID_ID = "69a1a4f7-a30f-4f4a-bcf9-2de8606fb819"
+UUID_ID = "9613c89c-836e-59db-a213-80fe60f25986"
 OPERATOR_UUID = "5b1adba0-1111-2222-3333-444455556666"
-HANDLE = "Claude_Code_20260805_33fcecfd"
+HANDLE = "Claude_Code_20260805_73599c68"
 
 
 # --- the helper itself ---

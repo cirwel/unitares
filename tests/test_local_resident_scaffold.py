@@ -140,14 +140,14 @@ def test_anomaly_formatting_uses_the_fields_observe_actually_returns():
     timestamp, type.
     """
     payload = {"anomalies": [{
-        "agent_name": "codex-cirwel#7168c86d",
+        "agent_name": "codex-example#7168c86d",
         "type": "risk_spike",
         "severity": "high",
         "description": "Risk increased from 0.49 to 0.81 (0.32 change)",
         "stale": False,
     }]}
     text = format_anomalies(payload)
-    assert "codex-cirwel#7168c86d" in text
+    assert "codex-example#7168c86d" in text
     assert "risk_spike" in text
     assert "high" in text
     assert "Risk increased from 0.49 to 0.81" in text

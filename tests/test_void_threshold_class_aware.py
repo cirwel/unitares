@@ -15,12 +15,10 @@ Pins the API surface added by PR 3:
 
 The interim safety net's job: a resident-class agent with V_ss = 0.19 does
 NOT trip check_void_state, while a non-resident at the same V_ss DOES trip.
-0.19 = the live-measured Steward V_ss from the 2026-05-01 incident memory
-(`project_steward-paused.md`). 0.30 (the resident override) clears it;
-0.15 (default INITIAL) does not.
+0.19 = the live-measured Steward V_ss from the 2026-05-01 pause incident.
+0.30 (the resident override) clears it; 0.15 (default INITIAL) does not.
 
 Spec: §7.13.6 PR 3
-      memory: project_steward-paused.md
 """
 
 from __future__ import annotations
@@ -170,8 +168,8 @@ def test_governance_monitor_uuid_resolves_via_agent_metadata_cache():
     from src.agent_metadata_model import AgentMetadata, agent_metadata
     from src.governance_monitor import UNITARESMonitor
 
-    # Steward's actual production UUID per project_steward-paused.md memory.
-    steward_uuid = "9a6681ec-1d16-4143-ada9-282f14483fea"
+    # A synthetic stand-in for the paused Steward resident's UUID.
+    steward_uuid = "1c4f9a1f-b890-5e4e-9b15-fb60e82ffa0a"
 
     # Simulate a populated cache entry (what background_metadata_load produces
     # in production for Steward).

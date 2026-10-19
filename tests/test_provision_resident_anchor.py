@@ -45,8 +45,8 @@ assert _spec.loader is not None
 _spec.loader.exec_module(pra)
 
 
-UUID = "b1b28308-dca3-46df-8e8b-5a23a524fe39"
-OTHER_UUID = "34b595dc-9628-41ff-b960-54857f99ba72"
+UUID = "2db2ce66-ee2c-5d04-b632-e340e75e5df7"
+OTHER_UUID = "b189e26c-93f6-5152-9380-0e12888b9bf7"
 NAME = "Worker-A"          # deliberately mixed case: the filename must lowercase
 LOWER = "worker-a"
 SECRET = "test-continuity-secret"
@@ -415,7 +415,7 @@ def test_dry_run_does_not_need_the_server_modules(tmp_path):
         "m._call = lambda n, a, t: {'result': {'status': 'active', "
         "'tags': ['persistent','autonomous'], 'label': 'probe'}}\n"
         f"m.ANCHOR_DIR = __import__('pathlib').Path({str(tmp_path)!r})\n"
-        "sys.exit(m.main(['--agent-uuid','b1b28308-dca3-46df-8e8b-5a23a524fe39',"
+        "sys.exit(m.main(['--agent-uuid','2db2ce66-ee2c-5d04-b632-e340e75e5df7',"
         "'--name','probe']))\n"
     )
     env = {**os.environ, "UNITARES_CONTINUITY_TOKEN_SECRET": "x"}

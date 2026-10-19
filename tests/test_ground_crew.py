@@ -87,19 +87,19 @@ def test_collect_repo_state_marks_status_failure_as_unknown_not_dirty() -> None:
 def test_parse_cron_failures_extracts_named_failed_jobs() -> None:
     """Cron parsing should surface failed jobs but ignore ok jobs."""
     cron_text = """
-  ea2e3655cee4 [active]
-    Name:      UNITARES dogfood pulse
+  000000000001 [active]
+    Name:      Example pulse job
     Last run:  2026-05-30T04:06:15-06:00  error: RuntimeError: Codex auth is missing access_token
 
-  5139fb8f9079 [active]
-    Name:      UNITARES ablation watchdog
+  000000000002 [active]
+    Name:      Example watchdog job
     Last run:  2026-05-30T07:59:16-06:00  ok
 """
 
     failures = parse_cron_failures(cron_text)
 
     assert len(failures) == 1
-    assert failures[0].name == "UNITARES dogfood pulse"
+    assert failures[0].name == "Example pulse job"
     assert failures[0].error == "RuntimeError: Codex auth is missing access_token"
 
 
@@ -111,13 +111,13 @@ def test_render_pulse_is_silent_when_no_failures() -> None:
 def test_render_pulse_surfaces_cron_failure_with_signal_evidence_next() -> None:
     """Quiet pulse should emit only actionable failures."""
     output = render_pulse(
-        cron_text="Name: UNITARES dogfood pulse\nLast run: now error: RuntimeError: missing token\n"
+        cron_text="Name: Example pulse job\nLast run: now error: RuntimeError: missing token\n"
     )
 
     assert "Signal:" in output
     assert "Evidence:" in output
     assert "Next:" in output
-    assert "UNITARES dogfood pulse" in output
+    assert "Example pulse job" in output
     assert "RuntimeError: missing token" in output
     assert "[SILENT]" not in output
 
@@ -205,7 +205,7 @@ def test_render_handoff_pack_includes_repo_state_and_stop_conditions() -> None:
     output = render_handoff_pack(
         task="Ground Crew audit and handoff",
         repo_state=RepoLike(),
-        cron_text="Name: UNITARES dogfood pulse\nLast run: now ok\n",
+        cron_text="Name: Example pulse job\nLast run: now ok\n",
         surfaces=("file:///repo/scripts/ops/ground_crew.py",),
         tests=("pytest tests/test_ground_crew.py -q -> pending",),
     )
