@@ -193,3 +193,43 @@ signature in a slot whose party did not produce it.
   follow-up can link them to this record after #2441 merges.
 - It changes no code, flag, schema or deployment, and it makes no efficacy or
   adoption claim.
+
+## Addendum, 2026-10-19: what D3a's "not scheduled" means, and a second wake condition
+
+Appended 2026-10-19. The 2026-09-25 text above is unchanged, including the
+basis and provenance paragraphs at the top. This section clarifies D3a and adds
+a wake condition; where the two differ on when D3a wakes, this section governs.
+**Basis:** drafted by the working agent; the operator approves this wording by
+merging it, as for the original record.
+
+**What "not scheduled" means.** D3a's "not scheduled" and "nothing is in motion
+on this track" describe unfunded, single-operator time: on the operator's own
+time and budget, no engineering or outreach work on multi-principal trust is
+planned or in progress. They do not mean the track was abandoned or had no
+design. Its evaluation design was already in the repository when D3a was
+recorded: the frozen
+[evaluation pre-registration](../registered/accountable-testbed-metrics-preregistration-v1.md)
+(v1.1, frozen 2026-08-05) and the dated
+[two-governor preliminary trace](../archive/accountable-testbed-preliminary-trace.md)
+(captured 2026-08-03). The 2026-09-25 text also did not mention that a pending
+external funding application for the multi-principal testbed existed at the
+time. This addendum records it.
+
+**Wake conditions.** D3a now wakes on either of two conditions:
+
+1. **As recorded on 2026-09-25:** a real outside party, meaning another person
+   or organisation with its own administrative root, asks to verify a record
+   from this deployment.
+2. **Added 2026-10-19:** external funding for the multi-principal testbed is
+   awarded, or an outside principal with its own administrative root commits to
+   take part in it.
+
+If D3a wakes under the second condition, the evaluation contract is the frozen
+v1.1 pre-registration linked above; this addendum changes none of its terms.
+D3b still wakes when D3a does.
+
+**What is unchanged.** The 2026-09-25 reasons hold as of that date: there was
+no second principal and no external verifier. The 2027-03-25 backstop stands.
+This addendum schedules no engineering work, changes no code, flag, schema or
+deployment, and makes no efficacy or adoption claim. In summary, the track is
+not scheduled without external funding or an outside principal.
