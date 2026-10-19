@@ -14,6 +14,32 @@ pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 
+# The dispatch-bot discovery blocks read plists with macOS plutil. The CI smoke
+# job runs on Linux, which has none, so stand in for the one form they call,
+# `plutil -extract KEY.PATH raw -o - FILE`, with plistlib: same parse, same exit
+# status (non-zero when the key path is missing or not a string). On macOS the
+# real plutil runs.
+if ! command -v plutil >/dev/null 2>&1; then
+  plutil() {
+    [ "$#" = 6 ] && [ "$1" = -extract ] && [ "$3" = raw ] && [ "$4" = -o ] && [ "$5" = - ] || return 64
+    python3 -I -c '
+import plistlib, sys
+try:
+    with open(sys.argv[2], "rb") as f:
+        v = plistlib.load(f)
+except Exception:
+    sys.exit(1)
+for k in sys.argv[1].split("."):
+    if not isinstance(v, dict) or k not in v:
+        sys.exit(1)
+    v = v[k]
+if not isinstance(v, str):
+    sys.exit(1)
+print(v)
+' "$2" "$6"
+  }
+fi
+
 # ── executing the lib directly must refuse ──
 if bash "$LIB" >/dev/null 2>&1; then bad "lib refuses direct execution"; else ok "lib refuses direct execution"; fi
 
