@@ -29,6 +29,13 @@ def setup_mod():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_secrets_env(monkeypatch):
+    # run_pipeline resolves the secrets file from os.environ; an exported
+    # UNITARES_SECRETS_ENV would point --apply at the developer's real file.
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
+
+
 def test_module_loads_and_exposes_main(setup_mod):
     assert callable(setup_mod.main)
     assert setup_mod.SCHEMA_VERSION == 1
@@ -432,10 +439,15 @@ def test_run_pipeline_apply_runs_final_doctor(setup_mod, monkeypatch, tmp_path):
     assert (fake_home / ".unitares").is_dir()
 
 
-def test_run_pipeline_idempotent_apply_on_healthy_state(setup_mod, monkeypatch, tmp_path):
+# The neutral default a fresh install gets, and the pre-2026-09 legacy path an
+# existing install may hold alone (kept as the backward-compat case).
+@pytest.mark.parametrize("secrets_dir", ["unitares", "cirwel"])
+def test_run_pipeline_idempotent_apply_on_healthy_state(
+    setup_mod, monkeypatch, tmp_path, secrets_dir
+):
     fake_home = tmp_path / "home"
     (fake_home / ".unitares").mkdir(mode=0o700, parents=True)
-    secrets = fake_home / ".config" / "cirwel" / "secrets.env"
+    secrets = fake_home / ".config" / secrets_dir / "secrets.env"
     secrets.parent.mkdir(parents=True)
     secrets.write_text("EXISTING=1\n")
     secrets.chmod(0o600)

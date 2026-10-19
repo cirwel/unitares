@@ -137,7 +137,7 @@ The substrate-tax-at-lease-boundary question is **deferred** until:
    boundary would falsify "no substrate tax here"; sub-100ms p95 would
    support "lease boundary is clean."
 
-This is **measure-first**, not redraft. Per `feedback_redraft-cycle-bias-trap.md`, this doc does not propose any change to
+This is **measure-first**, not redraft: a paused design is measured before it is redrafted, so this doc does not propose any change to
 the Wave 3 RFC; it adds the missing instrumentation that the v0.3.2
 amendment's gate needed.
 

@@ -55,7 +55,9 @@ logger = logging.getLogger(__name__)
 #   1. Land the handler PR. Behavior is unchanged — flag default is OFF.
 #   2. Confirm the BEAM listener is healthy (PR #4 launchd plist loaded).
 #   3. Run the pre-cutover script (verifies ``requires_identity`` posture).
-#   4. Set the env flag in ``~/.config/cirwel/secrets.env``.
+#   4. Set the env flag in the secrets env file (``$UNITARES_SECRETS_ENV``,
+#      default ``~/.config/unitares/secrets.env``; a legacy
+#      ``~/.config/cirwel/secrets.env`` is still read when only it exists).
 #   5. Restart the MCP. ``apply_env_flag_routes`` runs once at boot and
 #      adds the route to the table. Subsequent calls flow through BEAM.
 #   6. Rollback: clear the env flag and restart, OR call

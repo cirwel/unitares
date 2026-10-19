@@ -27,8 +27,9 @@ defmodule UnitaresSdk.MixProject do
 
   def application do
     # :inets provides :httpc; :ssl is needed the moment a consumer points at
-    # an https governance URL (gov.cirwel.org). Both ship with OTP — the SDK
-    # has, and should keep, zero third-party runtime dependencies.
+    # an https governance URL (e.g. https://governance.example.org). Both
+    # ship with OTP — the SDK has, and should keep, zero third-party runtime
+    # dependencies.
     [extra_applications: [:logger, :inets, :ssl]]
   end
 

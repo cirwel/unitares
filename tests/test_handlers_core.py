@@ -442,7 +442,7 @@ class TestGetGovernanceMetrics:
         not UUID-like so `disambiguate_public_handle` appends nothing. This case
         uses a real UUID, which is the only shape that reproduces the bug.
         """
-        agent_uuid = "c8f703d8-ce60-4978-a8dc-623be4e3fa39"
+        agent_uuid = "9f0f650e-e2fc-5b1c-b893-fbcebbd93dd8"
         meta = MagicMock()
         meta.purpose = None
         meta.public_agent_id = "Claude_20260808"
@@ -469,7 +469,7 @@ class TestGetGovernanceMetrics:
         # agent_signature envelope report. Never uuid8-suffixed.
         assert data["structured_agent_id"] == "Claude_20260808"
         # The unique-per-agent view keeps the disambiguation, under its own name.
-        assert data["public_handle"] == "Claude_20260808_c8f703d8"
+        assert data["public_handle"] == "Claude_20260808_9f0f650e"
         assert data["agent_uuid"] == agent_uuid
         assert data["display_name"] == "kg-sweep-triage"
         # The claimed label lives in display_name only — never in agent_id.

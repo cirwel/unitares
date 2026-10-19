@@ -309,7 +309,7 @@ class TestAckCommand:
         _mock_db(monkeypatch, self.SESSIONS, self._backlog())
         rc = report.main(["ack", "4444bbbb", "7777cccc88889999",
                           "--disposition", "superseded", "--reason", "PR #2025 merged",
-                          "--by", "kenny"])
+                          "--by", "operator"])
         assert rc == 0
         rows = [json.loads(ln) for ln in ledger.read_text().splitlines()]
         assert [r["session_id"] for r in rows] == ["4444bbbb55556666", "7777cccc88889999"]
@@ -319,7 +319,7 @@ class TestAckCommand:
             assert r["session_updated_at"] == "2026-09-03T12:00:00+00:00"
             assert r["disposition"] == "superseded"
             assert r["reason"] == "PR #2025 merged"
-            assert r["acknowledged_by"] == "kenny"
+            assert r["acknowledged_by"] == "operator"
             assert r["timestamp"]
 
     def test_one_bad_id_refuses_the_whole_batch(self, ledger, monkeypatch, capsys):

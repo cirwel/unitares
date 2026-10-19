@@ -25,7 +25,7 @@ from src.mcp_listen_config import rest_strict_required
 
 BEARER = "hosted-secret"  # noqa: S105 - test fixture
 LOCAL_TOKEN = "local-token"  # noqa: S105 - test fixture
-RP_ORIGIN = "https://gov.cirwel.org"
+RP_ORIGIN = "https://gov.example.org"
 
 
 class _Req:
@@ -154,7 +154,7 @@ def test_strict_accepts_a_validated_passkey_session(monkeypatch):
     browser path at all — a navigation cannot send an Authorization header."""
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", BEARER)
     monkeypatch.setenv("UNITARES_REST_STRICT", "1")
-    req = _Req(ip="203.0.113.7", session={"operator_label": "kenny"})
+    req = _Req(ip="203.0.113.7", session={"operator_label": "operator"})
     assert _check_http_auth(req, http_api_token=None) is True
 
 

@@ -185,7 +185,7 @@ Ordinary work may still proceed after validation with that fact in the body;
 sensitive paths retain their required coverage. `approved-to-merge` remains
 the owning author's separate readiness declaration.
 
-On this operator's host, `com.unitares.review-sweep` is the designated runner.
+On the reference deployment, `com.unitares.review-sweep` is the designated runner.
 `scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
 clean checkout of merged `origin/master`, reads PR heads separately, and uses
 `unitares-github` for this repository's fetches and review publication. It
@@ -250,7 +250,7 @@ sequence of model invocations. Choose the review that helps the change:
 
 | Work | Appropriate scrutiny |
 |---|---|
-| Substantive implementation | One completed independent review when available: human, fresh-context model, or council |
+| Substantive implementation | One completed independent review when available: human, fresh-context model, or a panel of independent reviewers ("council") |
 | Bounded corrections after review | Independent review of the cumulative delta and interactions; retain prior full coverage |
 | Material scope or security-assumption change | Full review of the changed work |
 | Sensitive paths | Coverage from two actual model families, under the existing rules |
@@ -349,7 +349,7 @@ restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
 
 Native Codex is an optional default for an operator who has enabled GitHub
-code review. On this operator's UNITARES repo, native requests are owned by
+code review. On the reference deployment's UNITARES repo, native requests are owned by
 the author/sweep workflow: repository auto review is **Follow personal**, and
 the shared account's personal **Auto review is off**. Explicit native review
 requests remain available, with exhaustive review and credit overage off.
@@ -738,7 +738,9 @@ so it may still be marked ready (section above). Exit 3 is not this case: it sta
 The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
-The fallback needs an actual scheduler installation. On the operator's Mac:
+The fallback needs an actual scheduler installation. On a macOS LaunchAgent
+install such as the reference deployment (`--repo` defaults to
+`~/projects/unitares`; pass your own checkout):
 
 ```bash
 python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares

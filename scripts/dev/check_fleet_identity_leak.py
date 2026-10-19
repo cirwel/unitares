@@ -62,9 +62,10 @@ from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Directories whose contents SHIP or run as the server. Ops scripts, docs,
-# tests, dashboards and plist templates are deliberately excluded: a deploy
-# script for this operator's fleet is supposed to name this operator's fleet.
+# Python packages covered by this AST guard. Ops scripts, docs, tests,
+# dashboards and plist templates need other checks or review; exclusion here
+# does not exempt them from the repository-wide user/agent neutrality rule.
+# Actual fleet configuration belongs in an external deployment repository.
 #
 # This list must track ``[tool.setuptools.packages.find].include`` in
 # pyproject.toml, which is ``src``, ``governance_core`` and ``config``;
@@ -86,8 +87,8 @@ FLEET_IDENTITIES = (
     "Lumen",
 )
 
-# The operator's domains. Deployment config (plists, docs, ops scripts) names
-# them; shipped source must read them from configuration instead.
+# Known operator domains for this scanner. Reusable shipped mechanisms read
+# deployment domains from configuration; actual values live outside this repo.
 OPERATOR_DOMAINS = ("cirwel.org",)
 
 # Homonyms and protocol values — NOT agent-label dispatch. Exempt, with the
@@ -109,9 +110,9 @@ NOT_IDENTITIES: dict[str, str] = {
 # would be the same failure it exists to catch: an instrument reporting health
 # it did not establish. Fix an entry and delete its line; never add one to
 # quiet a NEW leak.
-# (Empty since 2026-09-27: the one entry, the resident-specific Vigil route
-# module, moved to agents/vigil/routes.py, the reference-resident zone outside
-# this guard's scope, and mounts only with the reference-residents route pack.)
+# Empty in the packages scanned here. Optional resident route packs still
+# require separate boundary review; moving a module outside DEFAULT_PATHS
+# narrows coverage and does not by itself resolve a deployment coupling.
 KNOWN_COUPLINGS: dict[str, str] = {}
 
 # Match only when the literal IS a name, not when it merely contains one.

@@ -3,8 +3,11 @@ governance plist (scripts/ops/apply_plist_env_overlay.py)."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import os
 import plistlib
+import shlex
 import stat
 import subprocess
 import sys
@@ -14,7 +17,6 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts/ops/apply_plist_env_overlay.py"
-OVERLAY = REPO / "scripts/ops/governance-mcp.env"
 DEPLOY = REPO / "scripts/ops/deploy-mcp.sh"
 
 _spec = importlib.util.spec_from_file_location("apply_plist_env_overlay", SCRIPT)
@@ -329,20 +331,103 @@ def test_an_unreadable_plist_is_refused_with_exit_2(tmp_path, body):
     assert plist.read_bytes() == body
 
 
-def test_the_tracked_overlay_parses_and_the_deploy_applies_it():
-    values = overlay_mod.parse_overlay(OVERLAY.read_text())
-    assert values, "the deployment overlay must set something"
+def test_deploy_applies_the_reviewed_external_overlay_before_restart():
+    assert not (REPO / "scripts/ops/governance-mcp.env").exists()
     deploy = DEPLOY.read_text()
     apply_at = deploy.index('if ! deploy_lib_apply_env_overlay "$TAG"')
     assert apply_at < deploy.index('deploy_lib_restart_service "$TAG"'), \
         "the overlay must land before the restart that reloads a changed plist"
+    assert '"$MCP_ENV_OVERLAY_SHA256"' in deploy[apply_at:deploy.index('; then', apply_at)]
 
 
 def test_the_overlay_is_second_family_reviewed():
     # It can widen the auth bypass (UNITARES_TRUSTED_NETWORKS), like access.py.
     import json
     paths = json.loads((REPO / "scripts/dev/review_policy.json").read_text())["second_family_paths"]
-    assert "scripts/ops/governance-mcp.env" in paths
+    assert {
+        "scripts/ops/governance-mcp.env",  # deletion and future reintroduction
+        "scripts/ops/apply_plist_env_overlay.py",
+        "scripts/ops/deploy-mcp.sh",
+        "scripts/ops/deploy-lib.sh",
+    } <= set(paths)
+
+
+@pytest.mark.parametrize("body", [b"", b"A_KEY=reviewed\n"])
+def test_reviewed_overlay_accepts_exact_bytes_including_empty(tmp_path, body):
+    plist = _plist(tmp_path, {})
+    overlay = tmp_path / "external.env"
+    overlay.write_bytes(body)
+    expected = hashlib.sha256(body).hexdigest()
+    changed = overlay_mod.apply_overlay(plist, overlay, expected_sha256=expected.upper())
+    assert changed == (["A_KEY"] if body else [])
+
+
+@pytest.mark.parametrize("expected", ["0" * 64, "", "a" * 63, "g" * 64])
+def test_bad_reviewed_digest_refuses_before_plist_access(tmp_path, expected):
+    overlay = _overlay(tmp_path, "A_KEY=private-value\n")
+    # A nonexistent plist proves digest validation occurs before reading it.
+    with pytest.raises(overlay_mod.OverlayError, match="SHA-256"):
+        overlay_mod.apply_overlay(tmp_path / "no-plist", overlay, expected_sha256=expected)
+
+
+def test_digest_is_checked_against_the_same_buffer_that_is_applied(tmp_path, monkeypatch):
+    plist = _plist(tmp_path, {})
+    overlay = _overlay(tmp_path, "A_KEY=reviewed\n")
+    reviewed = overlay.read_bytes()
+    real_read = Path.read_bytes
+    reads = []
+
+    def replace_after_read(path):
+        content = real_read(path)
+        if path == overlay:
+            reads.append(content)
+            overlay.write_text("A_KEY=unreviewed\n")
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_read)
+    overlay_mod.apply_overlay(plist, overlay, expected_sha256=hashlib.sha256(reviewed).hexdigest())
+    assert reads == [reviewed]
+    assert _env(plist) == {"A_KEY": "reviewed"}
+
+
+@pytest.mark.parametrize("case", [
+    "no_selection", "no_digest", "missing", "directory", "mismatch", "bad_digest",
+    "invalid_syntax", "invalid_utf8", "valid", "empty",
+])
+def test_mcp_overlay_gate_runs_before_any_deployment_effect(tmp_path, case):
+    # Execute the real script up to its first effect boundary. The sourced
+    # library is a trap: no lock, git, migration, plist, or service can run.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    script = ops / DEPLOY.name
+    script.write_bytes(DEPLOY.read_bytes())
+    (ops / SCRIPT.name).write_bytes(SCRIPT.read_bytes())
+    marker = tmp_path / "effect-started"
+    (ops / "deploy-lib.sh").write_text('printf reached > "$TEST_EFFECT_MARKER"\nexit 17\n')
+    overlay = tmp_path / "external.env"
+    content = {"empty": b"", "invalid_syntax": b"not-an-assignment\n",
+               "invalid_utf8": b"A_KEY=\xff\n"}.get(case, b"A_KEY=private-value\n")
+    if case == "directory":
+        overlay.mkdir()
+    elif case != "missing":
+        overlay.write_bytes(content)
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"],
+           "TEST_EFFECT_MARKER": str(marker)}
+    if case != "no_selection":
+        env["UNITARES_MCP_ENV_OVERLAY"] = str(overlay)
+    if case not in {"no_selection", "no_digest"}:
+        env["UNITARES_MCP_ENV_OVERLAY_SHA256"] = (
+            "0" * 64 if case == "mismatch" else "not-a-digest" if case == "bad_digest"
+            else hashlib.sha256(content).hexdigest())
+    result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+    if case in {"valid", "empty"}:
+        assert result.returncode == 17, result.stderr
+        assert marker.read_text() == "reached"
+    else:
+        assert result.returncode == 1, result.stderr
+        assert not marker.exists()
+        assert "REFUSING" in result.stderr
+    assert "private-value" not in result.stdout + result.stderr
 
 
 LIB = REPO / "scripts/ops/deploy-lib.sh"
@@ -351,7 +436,8 @@ LABEL = "com.unitares.governance-mcp"
 
 def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
             applier: Path = SCRIPT, prelude: str = "", bootstrap_fails: bool = False,
-            check: bool = True, postlude: str = "", initially_loaded: bool = True) -> list[str]:
+            check: bool = True, postlude: str = "", initially_loaded: bool = True,
+            expected_sha256: str | None = None) -> list[str]:
     """Run deploy-lib's overlay step and then its restart, with a stub
     launchctl that records its calls. Returns the recorded subcommands of
     this run. ``prelude`` runs after deploy-lib is sourced (to stub one of
@@ -385,13 +471,44 @@ def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
         f'exit 0\n'
     )
     stub.chmod(0o755)
+    digest_arg = "" if expected_sha256 is None else " " + shlex.quote(expected_sha256)
     script = (f'set -euo pipefail; . "{LIB}"; {prelude}\n'
-              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{applier}"; '
+              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{applier}"{digest_arg}; '
               f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"; {postlude}')
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
            "UNITARES_DEPLOY_STATE_DIR": str(state)}
     subprocess.run(["bash", "-c", script], env=env, check=check, capture_output=True, text=True)
     return [line for line in log.read_text().split() if line != "print"]
+
+
+def test_overlay_replaced_after_check_cannot_apply_or_restart(tmp_path):
+    plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
+    overlay = _overlay(tmp_path, "A_KEY=reviewed\n")
+    expected = hashlib.sha256(overlay.read_bytes()).hexdigest()
+    applier = tmp_path / "replace-after-check.py"
+    applier.write_text(
+        "import pathlib, subprocess, sys\n"
+        f"result = subprocess.run([sys.executable, {str(SCRIPT)!r}, *sys.argv[1:]])\n"
+        "if '--check' in sys.argv and result.returncode == 3:\n"
+        f"    pathlib.Path({str(overlay)!r}).write_text('A_KEY=unreviewed\\n')\n"
+        "sys.exit(result.returncode)\n"
+    )
+    assert _deploy(tmp_path, plist, overlay, baseline=None, applier=applier,
+                   expected_sha256=expected, check=False) == []
+    assert plist.read_bytes() == original
+    assert not (tmp_path / "state" / f"{LABEL}.plist.pre-overlay").exists()
+
+
+def test_reviewed_overlay_keeps_reload_and_backup_behavior(tmp_path):
+    plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
+    overlay = _overlay(tmp_path, "A_KEY=reviewed\n")
+    calls = _deploy(tmp_path, plist, overlay, baseline=None,
+                    expected_sha256=hashlib.sha256(overlay.read_bytes()).hexdigest())
+    assert calls == ["bootout", "bootstrap"]
+    assert _env(plist) == {"A_KEY": "reviewed"}
+    assert (tmp_path / "state" / f"{LABEL}.plist.pre-overlay").read_bytes() == original
 
 
 def _sha(path: Path) -> str:

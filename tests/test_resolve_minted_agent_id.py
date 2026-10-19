@@ -20,7 +20,7 @@ class _Text:
         self.text = json.dumps(payload)
 
 
-MINTED = "7750bf80-20ad-4108-a952-5271b73845b8"
+MINTED = "660ba42a-baca-501c-ab2a-110f348bab92"
 
 
 def test_onboard_null_agent_falls_back_to_top_level_uuid():

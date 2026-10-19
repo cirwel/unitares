@@ -451,7 +451,7 @@ in CI or a recorded manual run.
 3. **Local addresses.** Tailscale is not part of UNITARES setup. The endpoint
    check reuses the server's trusted-network list rather than defining "local"
    a second way (2.3). On the Tailscale range itself, the operator's answer in
-   #2560 applies here too: "are you asking me if outside users should inherit
-   my tailscale address by default?" So 100.64.0.0/10 is not local by default;
+   #2560 applies here too: outside users should not inherit the operator's own
+   Tailscale address by default. So 100.64.0.0/10 is not local by default;
    an operator adds it through `UNITARES_TRUSTED_NETWORKS`. Step 1 builds on
    #2560, so #2560 lands first.

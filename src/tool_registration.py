@@ -67,8 +67,9 @@ from src.mcp_handlers import dispatch_tool
 # Wave 3a per-tool routing table imports — hoisted to module load time so
 # (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
 # path, and (b) ``patch("src.tool_registration.get_route")`` style mocks
-# affect the wrapper (function-local imports bypass module-level patches —
-# see memory ``feedback_patch-local-imports``). FIND-A3 review fold.
+# affect the wrapper (a function-local import re-resolves the name from the
+# source module on each call, so it bypasses a patch on this module's
+# namespace). FIND-A3 review fold.
 from src.wave3a_routing import get_route as _wave3a_get_route
 from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
 # tool_usage telemetry (#1387). Module-level for the same two reasons as the

@@ -198,7 +198,7 @@ async def test_non_persistent_agent_skipped(isolated_silence_state):
 
     stale = datetime.now(timezone.utc) - timedelta(hours=30)
     agent_metadata["ephemeral"] = _make_meta(
-        "ephemeral", "claude_cirwel_20260410", stale.isoformat()
+        "ephemeral", "claude_example_20260410", stale.isoformat()
     )
 
     await background_tasks._silence_check_iteration()
