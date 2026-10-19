@@ -36,18 +36,10 @@ import tool_edge_index as tei  # noqa: E402
 
 @pytest.fixture(scope="module")
 def collected():
-    # ``collect()`` sets UNITARES_DISABLE_PLUGINS=1 in-process (by design, so
-    # the generator is reproducible). Restore the prior value on teardown so
-    # it does not leak into later session-scoped fixtures that copy os.environ.
-    missing = object()
-    prior = os.environ.pop("UNITARES_DISABLE_PLUGINS", missing)
-    try:
-        yield tei.collect()
-    finally:
-        if prior is missing:
-            os.environ.pop("UNITARES_DISABLE_PLUGINS", None)
-        else:
-            os.environ["UNITARES_DISABLE_PLUGINS"] = prior
+    # ``collect()`` disables plugins only while it loads the registries and
+    # puts the caller's UNITARES_DISABLE_PLUGINS back (tests/env_leak_guard.py
+    # fails the run if it does not).
+    return tei.collect()
 
 
 @pytest.fixture(scope="module")
@@ -274,10 +266,40 @@ def _declare_in_module(module_name: str, source: str) -> types.ModuleType:
     return module
 
 
-def test_generator_refuses_entry_point_plugins_at_the_loader(collected):
+@pytest.mark.parametrize("prior", [None, "", "0"])
+def test_generator_refuses_entry_point_plugins_at_the_loader(monkeypatch, prior):
     """Factor 1, first fence: the loader flag is set before any handler import,
-    so an installed ``governance_mcp.plugins`` package can never register."""
-    assert os.environ.get("UNITARES_DISABLE_PLUGINS") == "1"
+    so an installed ``governance_mcp.plugins`` package can never register.
+
+    It is set for the load only. The caller's value comes back afterwards, so
+    an in-process caller (this suite, ``generate_tool_docs``) does not leave
+    plugins disabled for everything after it."""
+    if prior is None:
+        monkeypatch.delenv("UNITARES_DISABLE_PLUGINS", raising=False)
+    else:
+        monkeypatch.setenv("UNITARES_DISABLE_PLUGINS", prior)
+    seen = []
+
+    def load():
+        seen.append(os.environ.get("UNITARES_DISABLE_PLUGINS"))
+        return {}, {}, {}, []
+
+    monkeypatch.setattr(tei, "_load_registries_with_plugins_disabled", load)
+    assert tei._load_registries() == ({}, {}, {}, [])
+    assert seen == ["1"]
+    assert os.environ.get("UNITARES_DISABLE_PLUGINS") == prior
+
+
+def test_generator_restores_the_plugin_flag_when_the_load_fails(monkeypatch):
+    monkeypatch.delenv("UNITARES_DISABLE_PLUGINS", raising=False)
+
+    def load():
+        raise ImportError("broken re-export")
+
+    monkeypatch.setattr(tei, "_load_registries_with_plugins_disabled", load)
+    with pytest.raises(ImportError):
+        tei._load_registries()
+    assert "UNITARES_DISABLE_PLUGINS" not in os.environ
 
 
 def test_tools_registered_outside_the_repo_are_not_indexed():
