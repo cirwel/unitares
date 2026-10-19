@@ -1,0 +1,5 @@
+- **review gate:** a pull request can no longer steer its own Claude or Codex reviewer.
+  - **The problem:** both reviewers ran in the PR-head checkout. Claude loaded that checkout's CLAUDE.md and the operator's plugins, hooks, MCP servers and acceptEdits default. Codex loaded its AGENTS.md as instructions. A live canary with a planted CLAUDE.md or AGENTS.md changed both reviewers' answers.
+  - **Claude reviewer:** now runs with `--safe-mode --restricted --strict-mcp-config`, read tools only (Read, Grep, Glob) and `dontAsk`. It no longer has `Bash(git diff:*)`, which also allowed `git diff --output=<path>` to write anywhere.
+  - **Codex reviewer:** passes `-c project_doc_max_bytes=0`.
+  - **House rules:** both prompts now point at AGENTS.md as of the base, written beside the diff, not at the PR's copy.
