@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root))
 
 from src.dialectic_protocol import DialecticPhase, DialecticSession
 from src.mcp_handlers.dialectic.session import save_session
+from tests.helpers import successful_dialectic_message_append
 
 
 @pytest.fixture(autouse=True)
@@ -170,10 +171,12 @@ async def test_converged_synthesis_defers_the_flush_before_finalize():
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
              patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch(f"{DIALECTIC}.save_session", new=_recording_save), \
-             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(
+                 f"{DIALECTIC}.pg_add_message",
+                 new=AsyncMock(side_effect=successful_dialectic_message_append),
+             ), \
              patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.pg_resolve_session", new_callable=AsyncMock), \
-             patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
              patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
              patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
                    return_value={"success": True}), \

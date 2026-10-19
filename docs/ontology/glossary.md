@@ -21,6 +21,19 @@ The layer table in `harness-substrate-plurality.md` already works this way
 ("Harness | what body/interface mediates action?"). This file generalizes that
 discipline across the whole vocabulary.
 
+**Claim status.** This file names terms. It does not raise the status of any
+claim. The claim boundary is the
+[EISV proprioception contract](eisv-proprioception-contract.md#canonical-operational-doctrine):
+digital proprioception senses, EISV estimates state, autonomic governance
+regulates. The contract has four epistemic levels: operational/deployed,
+measured/empirical, research interpretation, and hypothetical/analogy. The
+`fep` markers in the cross-register map below fit onto those levels:
+`✓ earned` is operational; `◐ research-lens` is operational as code but only
+a research interpretation as physics; `~ candidate` is hypothetical/analogy;
+`✗ false friend` makes no claim at all. A physics or biology word in an entry
+(free energy, Helmholtz, entropy, Markov blanket, active inference) is at most
+a research interpretation, unless the entry says otherwise and cites evidence.
+
 ## How to add or change a term
 
 1. **State the question it answers**, in one line, before any examples.
@@ -182,20 +195,23 @@ for users; keep it consistent with this entry.
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is "like Helmholtz free energy", a signed integrator |
+| `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is a damped, signed integrator of the E−I imbalance |
 | `free energy (variational −F)` | What is `E` as negative variational free energy under a generative model? | `src/grounding/free_energy.py` — Tier-1 FEP, **explicitly stubbed** (`NotImplementedError`, "Phase 2") |
 
 The first ships and does not own the post-warmup verdict, but it is not inert:
 through coherence it feeds part of behavioral `E` and `I` (see the `coherence`
 entry below). The second is the *target* `E` semantics and is honestly
 not-yet-implemented. Don't let "free energy" stand unqualified across the two.
+The `dynamics.py` docstring used to compare `V` to Helmholtz free energy; it now
+labels that comparison an analogy (the hypothetical/analogy level), not a
+physical quantity: `V` is a dimensionless signed integrator, clamped to `[-1, 1]`.
 
 ### V — three quantities share one letter (code level)
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `V (behavioral)` | Which side of the E−I imbalance is leading right now, smoothed? EMA of E−I, `[-1, 1]` (same range as the ODE V, so range cannot tell them apart); the value in `metrics['V']` once the agent is warm. | `src/behavioral_state.py`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
-| `V (ODE)` | What is the damped running integral of the E−I imbalance? "Like Helmholtz free energy"; clamped to `[-1, 1]` by default. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
+| `V (ODE)` | What is the damped running integral of the E−I imbalance? Clamped to `[-1, 1]` by default; the old Helmholtz comparison is an analogy only. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
 | `V (embodied, instantaneous)` | What is the undamped E−I imbalance of a sensor-driven agent this tick? | *external:* `anima-mcp` `eisv_mapper.py` — "V is Valence — the signed E-I imbalance shared with governance" (separate repo; not checked by the drift gate) |
 
 ⛔ **`metrics['V']` and the V that coherence is computed from can be different
@@ -470,7 +486,7 @@ orthogonal second axis to "question answered."
 | Register | What it is *for* | Source of truth |
 |---|---|---|
 | **philosophical** (grounding) | What counts as real / earned vs. performative | `identity.md` — three stances, layered taxonomy |
-| **fep** (modeling) | Why the math is justified — borrowed from the Free Energy Principle / active inference | external (Friston); adopt only when *earned* |
+| **fep** (modeling) | A research interpretation of the math, borrowed from the Free Energy Principle / active inference; it does not justify the deployed computation | external (Friston); adopt only when *earned* |
 | **ops** (mechanism) | How it's implemented | handlers, lease plane, EISV code |
 | **standard** (public) | How an outside AI/ML engineer would name the referent — the register for public copy, dashboards, pitch, onboarding intros | external observability / MLOps conventions (drift, telemetry, health signals, guardrails). Pulled from `ops`, **never** from `fep` |
 | **manifesto** (norm) | What must *not* be built | Synthetic Life Axioms (`identity.md` cites them) |
@@ -505,7 +521,7 @@ not by uncontrolled vocabulary. Status marks the `fep` column specifically:
 | Referent | philosophical | ops | standard (AI/ML) | fep | manifesto |
 |---|---|---|---|---|---|
 | Agent identity | layered continuity bundle | `uuid` + `client_session_id` | session / agent ID, trace ID | — | must be earned, not performative |
-| Internal state | behavioral trajectory | `EISV` state vector | **agent health signals** / state telemetry | ◐ ODE state (`governance_core/dynamics.py`); target `E=−F` tiered+stubbed in `grounding/free_energy.py` | — |
+| Internal state | behavioral trajectory | `EISV` state vector | **runtime state telemetry** / state estimate | ◐ ODE state (`governance_core/dynamics.py`); target `E=−F` tiered+stubbed in `grounding/free_energy.py` | — |
 | Healthy operating region | "stable self" | `basin` (+ health gating) | **operating regime** (healthy / degraded) / health band | ◐ attractor — **real** in `check_basin` (bistable ODE), but verdict path uses a configured `BASIN_HIGH` box, not the attractor | — |
 | Deviation signal | — | `running hot`, basin-edge crossing | **drift** / anomaly signal | ◐ `running hot` (V-sign) ships; `surprise`/prediction-error as `−log P` does not | — |
 | Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | resource scope / permissions boundary | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |

@@ -19,6 +19,7 @@ from src.dialectic_outcomes import (  # noqa: E402
     FAILED,
     OPEN,
     RESOLVED,
+    RESOLVED_EFFECT_PENDING,
     UNRESOLVED_AWAITING_FACILITATION,
     classify_outcome,
     is_canary_label,
@@ -49,6 +50,31 @@ class TestClassifyOutcome:
 
     def test_resolved_is_resolved(self):
         assert classify_outcome("resolved", False, "opus_2f1ecbdf") == RESOLVED
+
+    @pytest.mark.parametrize("effect_state", ["pending", "applying", "unknown_partial"])
+    def test_resolved_with_unconfirmed_runtime_effect_is_not_counted_resolved(
+        self, effect_state
+    ):
+        assert classify_outcome(
+            "resolved",
+            False,
+            "opus_2f1ecbdf",
+            resolution_effect_state=effect_state,
+        ) == RESOLVED_EFFECT_PENDING
+
+    def test_applied_and_legacy_resolved_rows_remain_resolved(self):
+        assert classify_outcome(
+            "resolved",
+            False,
+            "opus_2f1ecbdf",
+            resolution_effect_state="applied",
+        ) == RESOLVED
+        assert classify_outcome(
+            "resolved",
+            False,
+            "opus_2f1ecbdf",
+            resolution_effect_state=None,
+        ) == RESOLVED
 
     def test_non_terminal_status_is_open(self):
         for status in ("active", "reviewing", "synthesis", None):
@@ -83,6 +109,14 @@ class TestResolutionRate:
         """A rate of 0.0 would read as total failure; there is no rate at all."""
         assert resolution_rate({UNRESOLVED_AWAITING_FACILITATION: 5}) is None
         assert resolution_rate({}) is None
+
+    def test_unconfirmed_resolution_effect_is_excluded_from_denominator(self):
+        counts = {
+            RESOLVED: 3,
+            FAILED: 1,
+            RESOLVED_EFFECT_PENDING: 100,
+        }
+        assert resolution_rate(counts) == pytest.approx(0.75)
 
     def test_the_live_window_shape(self):
         """Trailing 30d on the live DB as measured 2026-08-19.

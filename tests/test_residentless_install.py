@@ -404,3 +404,22 @@ def test_every_non_reasoning_tag_is_privileged():
     assert NON_REASONING_TAGS <= mutation.PRIVILEGED_TAGS
     assert reviewer.NON_REASONING_TAGS is NON_REASONING_TAGS
     assert stuck.NON_REASONING_TAGS is NON_REASONING_TAGS
+
+
+def test_an_empty_roster_still_stamps_rows(residentless):
+    # The instrument stamp hashes the resident roster as part of the effective
+    # configuration. With no roster it must still produce a stamp, and the
+    # hash must name an empty roster rather than fail.
+    from types import SimpleNamespace
+
+    from src import eisv_instrument
+
+    eisv_instrument.reset_caches()
+    try:
+        assert eisv_instrument.effective_config()["residents"] == []
+        monitor = SimpleNamespace(state=SimpleNamespace(update_count=1))
+        eisv_instrument.advance(monitor)
+        stamp = eisv_instrument.stamp(monitor)
+        assert stamp is not None and stamp["carried_from"] is None
+    finally:
+        eisv_instrument.reset_caches()

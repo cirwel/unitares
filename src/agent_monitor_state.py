@@ -174,6 +174,13 @@ def _attach_monitor_transients(monitor: UNITARESMonitor, state_data: dict) -> No
         if last_update is not None:
             state_data["last_update_iso"] = last_update.isoformat()
 
+        # Check-ins counted under the current EISV instrument (src/eisv_instrument.py).
+        from src.eisv_instrument import TRACK_ATTR, TRACK_STATE_KEY
+
+        instrument_track = getattr(monitor, TRACK_ATTR, None)
+        if isinstance(instrument_track, dict):
+            state_data[TRACK_STATE_KEY] = dict(instrument_track)
+
         # Open check-in forecasts, so a restart between a check-in and its
         # outcome does not orphan the prediction_id the agent was given.
         open_predictions = getattr(monitor, "_open_predictions", None)
@@ -507,6 +514,9 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         # shadow gate therefore treats this lineage as uncertain and leaves any
         # pause intact, even though measurement state itself was restored.
         monitor._cold_start_confirmation_lineage_status = "db_hydrated_restart"
+        from src.eisv_instrument import mark_hydrated
+
+        mark_hydrated(monitor)
         return True
     except Exception as e:
         monitor._cold_start_confirmation_lineage_status = "hydration_uncertain"

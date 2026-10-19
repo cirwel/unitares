@@ -28,14 +28,21 @@ each rest point:
                    (the ODE-fallback case — new agents without a behavioral
                    baseline; mature agents read manifold off the *behavioral*
                    EISV and are unaffected by the setpoint)
-  - basin          governance_core.check_basin (I axis — setpoint is S-only, so
-                   this is an invariance check, expected UNCHANGED)
+  - basin          config.classify_basin, the live decision-path consumer
+                   (HIGH needs S <= 0.25), called with the same σ Φ detrends by.
+                   Until 2026-10-15 this check called governance_core.check_basin,
+                   which reads only I and so could not see the S conjunct that
+                   pinned the live action (contract row 50). The I-only
+                   check_basin is still printed for continuity.
 
 Acceptance (healthy agents must not degrade under the flag):
   A1  verdict stays "safe" for every class at rest (no band crossing)
   A2  risk_score stays in the healthy band (< RISK_REVISE_THRESHOLD=0.7; ideally
       < risk_healthy_max≈0.45) and does not increase across a status boundary
-  A3  basin unchanged (S-only setpoint must not move the I-basin)
+  A3  live basin (config.classify_basin) unchanged between the OFF rest and
+      the deployed ON coupling (ON attractor, Φ and basin both detrended by σ).
+      Coherence is held at the HIGH region's coherence_min so only E/I/S/V and
+      risk decide; risk is each rest point's own Φ-mapped risk.
   A4  manifold@rest (ODE-fallback) clears the COHERENCE_CRITICAL_THRESHOLD=0.40
       line AFTER the flag (it should rise; the addendum's blocker was that it
       read ~0.16 < 0.40 today)
@@ -107,22 +114,33 @@ def status_band(risk: float) -> str:
     return "critical"
 
 
+# Coherence held at the HIGH bound itself, so the live basin check isolates the
+# E/I/S/V and risk conjuncts the setpoint can move.
+BASIN_COHERENCE = cfg.BASIN_HIGH.coherence_min
+
+
 def evaluate(state: State, agent_class: str, s_detrend: float = 0.0) -> dict:
     """Evaluate control signals at a rest state.
 
-    s_detrend>0 models the proposed remedy: Φ penalizes entropy ABOVE the
+    s_detrend>0 models the deployed coupling: Φ penalizes entropy ABOVE the
     setpoint (`-wS·(S-σ)`) instead of absolute entropy (`-wS·S`). Implemented by
     evaluating phi_objective on an S shifted down by σ, so the S-penalty at the
-    new healthy rest equals the penalty at the old rest (Φ stays ~0.26).
+    new healthy rest equals the penalty at the old rest (Φ stays ~0.26). The
+    live basin is classified with the same σ (``classify_basin(s_setpoint=σ)``),
+    as the decision path does.
     """
     phi_state = State(E=state.E, I=state.I, S=state.S - s_detrend, V=state.V)
     phi = phi_objective(phi_state, delta_eta=[], weights=DEFAULT_WEIGHTS)
     verdict = verdict_from_phi(phi)
     risk = phi_to_risk(phi)
     manifold = _compute_manifold(state.E, state.I, state.S, agent_class=agent_class).value
-    basin = check_basin(state)
+    basin = cfg.classify_basin(
+        E=state.E, I=state.I, S=state.S, V=state.V,
+        coherence=BASIN_COHERENCE, risk_score=risk, s_setpoint=s_detrend,
+    )
     return {"phi": phi, "verdict": verdict, "risk": risk,
-            "manifold": manifold, "basin": basin, "S": state.S, "E": state.E, "I": state.I}
+            "manifold": manifold, "basin": basin, "basin_i_only": check_basin(state),
+            "S": state.S, "E": state.E, "I": state.I}
 
 
 def run_equilibrium_panel() -> bool:
@@ -164,9 +182,9 @@ def run_equilibrium_panel() -> bool:
         if on["risk"] >= RISK_REVISE:
             flags.append("RISK≥revise")
             ok = False
-        # A3 basin invariant
-        if on["basin"] != off["basin"]:
-            flags.append(f"BASIN {off['basin']}→{on['basin']}")
+        # A3 live basin invariant under the deployed coupling (σ to Φ and basin)
+        if on_fixed["basin"] != off["basin"]:
+            flags.append(f"BASIN {off['basin']}→{on_fixed['basin']}")
             ok = False
         # A4 manifold@rest clears critical AFTER flag
         if on["manifold"] < COH_CRIT:
@@ -204,6 +222,18 @@ def run_equilibrium_panel() -> bool:
         print(f"  {klass:<18}{on['phi']:>8.3f}{fx['phi']:>9.3f}"
               f"{fx['verdict']:>11}{fx['risk']:>11.3f}{'' if not bad else '  ⚠'}")
     print(f"  remedy keeps all classes safe + healthy-risk: {remedy_ok}")
+
+    print("\nA3 live basin (config.classify_basin, coherence held at "
+          f"{BASIN_COHERENCE}): OFF vs ON with σ to Φ and basin, and ON un-detrended")
+    print(f"  {'class':<18}{'off':>9}{'on(σ)':>9}{'on(raw S)':>11}{'I-only off/on':>15}")
+    for klass, sigma, off, on, fx in rows:
+        raw = cfg.classify_basin(
+            E=fx["E"], I=fx["I"], S=fx["S"], V=0.0,
+            coherence=BASIN_COHERENCE, risk_score=fx["risk"],
+        )
+        print(f"  {klass:<18}{off['basin']:>9}{fx['basin']:>9}{raw:>11}"
+              f"{off['basin_i_only'] + '/' + fx['basin_i_only']:>15}"
+              f"{'' if fx['basin'] == off['basin'] else '  ⚠'}")
     return ok
 
 

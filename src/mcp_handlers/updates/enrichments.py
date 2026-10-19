@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from config.governance_config import GovernanceConfig
+from src.knowledge_authority import is_imported_context
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 from src.thread_identity import (
@@ -647,7 +648,7 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
                 scored = [
                     (len(agent_tags_set & set(d.tags)), d)
                     for d in tag_matches
-                    if agent_tags_set & set(d.tags)
+                    if agent_tags_set & set(d.tags) and not is_imported_context(d)
                 ]
                 scored.sort(reverse=True, key=lambda x: x[0])
                 relevant_discoveries = [
@@ -1056,7 +1057,9 @@ def enrich_saturation_diagnostics(ctx: UpdateContext) -> None:
         theta = getattr(monitor.state, 'unitaires_theta', None) or DEFAULT_THETA
 
         if unitares_state:
-            sat_diag = compute_saturation_diagnostics(unitares_state, theta)
+            from src.monitor_setpoint import setpoint_for_monitor
+            sat_diag = compute_saturation_diagnostics(
+                unitares_state, theta, s_setpoint=setpoint_for_monitor(monitor))
             ctx.response_data['saturation_diagnostics'] = {
                 'sat_margin': sat_diag['sat_margin'],
                 'dynamics_mode': sat_diag['dynamics_mode'],
@@ -1798,6 +1801,12 @@ async def _search_kg_by_checkin_text(
                 disc, score = item
             else:
                 disc, score = item, 0
+            # A surfaced entry carries only id, summary, writer and relevance,
+            # so an unpromoted import would arrive as "build on this" with
+            # nothing to mark it as one harness's unreviewed claim. Leave it to
+            # explicit search, where it is labelled and down-ranked.
+            if is_imported_context(disc):
+                continue
 
             if isinstance(disc, dict):
                 relevance = score or disc.get("relevance", disc.get("score", 0))

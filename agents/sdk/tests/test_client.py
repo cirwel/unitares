@@ -353,7 +353,8 @@ class TestToolMapping:
         }))
         client = make_client_with_session(session)
 
-        await client.call_model("test prompt")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            await client.call_model("test prompt")
         args = session.call_tool.call_args[0][1]
         assert "provider" not in args
         assert "model" not in args
@@ -378,13 +379,109 @@ class TestToolMapping:
         }))
         client = make_client_with_session(session)
 
-        result = await client.call_model("test prompt", host_id="ollama:local")
+        with pytest.warns(DeprecationWarning, match="consult"):
+            result = await client.call_model("test prompt", host_id="ollama:local")
 
         args = session.call_tool.call_args[0][1]
         assert args["host_id"] == "ollama:local"
         assert result.model_used == "gemma4:latest"
         assert result.inference is not None
         assert result.inference.host_id == "ollama:local"
+
+    @pytest.mark.asyncio
+    async def test_consult_maps_tool_args_and_timeout(self):
+        client = make_client_with_session(AsyncMock())
+        client.call_tool = AsyncMock(return_value={
+            "success": True,
+            "status": "completed",
+            "advice": "checkin",
+            "consultation_id": "c-1",
+            "completion": {"state": "complete"},
+        })
+
+        result = await client.consult("classify this")
+
+        tool_name, args = client.call_tool.call_args[0]
+        assert tool_name == "consult"
+        assert args == {
+            "brief": "classify this",
+            "purpose": "answer",
+            "privacy": "local",
+            "allow_degraded": False,
+            "response_mode": "compact",
+        }
+        # effort/host_id omitted so the server infers effort from host_id.
+        assert client.call_tool.call_args.kwargs["timeout"] > 480
+        assert result.success is True
+        assert result.advice == "checkin"
+        assert result.consultation_id == "c-1"
+
+    @pytest.mark.asyncio
+    async def test_consult_passes_effort_and_host(self):
+        client = make_client_with_session(AsyncMock())
+        client.call_tool = AsyncMock(return_value={"success": True, "advice": "ok"})
+
+        await client.consult(
+            "review", effort="thorough", privacy="cloud_allowed",
+            host_id="codex:host-adapter",
+        )
+
+        args = client.call_tool.call_args[0][1]
+        assert args["effort"] == "thorough"
+        assert args["host_id"] == "codex:host-adapter"
+        assert args["privacy"] == "cloud_allowed"
+        assert client.call_tool.call_args.kwargs["retry"] is False
+
+    @pytest.mark.asyncio
+    async def test_consult_refusal_raises_through_real_call_tool(self):
+        """success:false raises in call_tool, as for every SDK call."""
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": False,
+            "error": "host unavailable",
+            "error_code": "INFERENCE_HOST_UNAVAILABLE",
+        }))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceToolRefused, match="host unavailable"):
+            await client.consult("review")
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exc", [TimeoutError(), ConnectionError("reset")])
+    async def test_consult_is_sent_once_on_timeout_or_transport_error(self, exc):
+        """A consultation may still be running after a timeout; never re-send it."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=exc)
+        client = make_client_with_session(session)
+
+        with pytest.raises((GovernanceTimeoutError, GovernanceConnectionError)):
+            await client.consult("classify this")
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exc", [TimeoutError(), ConnectionError("reset")])
+    async def test_delegate_inference_is_sent_once_on_timeout_or_transport_error(self, exc):
+        """A timed-out delegation's child may still be running; never spawn a second."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=exc)
+        client = make_client_with_session(session)
+
+        with pytest.raises((GovernanceTimeoutError, GovernanceConnectionError)):
+            await client.delegate_inference("review this", timeout_s=60)
+        session.call_tool.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_default_call_tool_still_retries_once(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=ConnectionError("reset"))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceConnectionError):
+            await client.call_tool("health_check", {})
+        assert session.call_tool.call_count == 2
 
     @pytest.mark.asyncio
     async def test_delegate_inference_maps_tool_and_timeout(self):

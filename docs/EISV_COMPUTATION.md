@@ -30,7 +30,8 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) is
+The dynamical-systems model (`governance_core/`, the ODE; "thermodynamic model"
+in older docs is a historical name, not a claim about physical quantities) is
 **not the direct verdict owner** by default: behavioral assessment owns the
 post-warmup assessment. The final decision also uses ODE state for structural
 basin, void and coherence checks (`src/monitor_decision.py`). The behavioral sensor
@@ -43,6 +44,8 @@ changes the E/I distribution and every downstream baseline.
 ## Step 1 — Observations (`src/behavioral_sensor.py`)
 
 For non-embodied agents (the common case), three observations are computed from governance observables. On the MCP check-in path the sensor actually runs in the handler (`src/mcp_handlers/updates/phases.py`), which injects the result as `sensor_eisv` with `sensor_eisv_source="behavioral"`; the monitor recomputes it internally only as a fallback. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py`, the `sensor_eisv` intake path).
+
+**Timing on the live path.** The handler computes the observation before the monitor processes the check-in (`prepare_unlocked_inputs`). It reads `drift_norm`, `complexity_divergence` and the continuity E/I/S inputs from what the monitor stored at the previous check-in, so those inputs lag by one check-in. Tool-usage statistics, recent outcomes and the calibration scalar are read at the current check-in. The monitor-internal fallback reads the current check-in's drift and continuity instead. A check-in's own complexity report and response structure therefore first reach E, I and S at the next check-in (contract ledger row 54).
 
 **E_obs** — decision, controller-level and complexity blend (`_compute_E`):
 ```

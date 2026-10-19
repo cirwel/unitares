@@ -1,7 +1,9 @@
 """
 UNITARES Governance Core - Dynamics Engine
 
-Canonical implementation of UNITARES v5 thermodynamic dynamics.
+Canonical implementation of the UNITARES v5 dynamics: a hand-set ODE
+controller. Earlier docs called it a "thermodynamic" model; that name is
+historical and the quantities are not physical.
 
 This module contains the differential equations that govern the evolution
 of the UNITARES state (E, I, S, V). This is the single source of truth
@@ -17,8 +19,10 @@ Mathematical Framework:
 where:
     E: Energy (exploration/productive capacity) [0,1]
     I: Information integrity [0,1]
-    S: Semantic uncertainty [0.001,1] (bounds: parameters.DynamicsParams)
-    V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-1,1]
+    S: Entropy coordinate; here a decaying accumulator driven by drift and
+        complexity (see dS/dt), not a measured entropy [0.001,1] (bounds: parameters.DynamicsParams)
+    V: E-I imbalance integral (damped accumulator) [-1,1]. An earlier comparison
+        to Helmholtz free energy is an analogy only.
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
         Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
         An embodied agent's sensor layer submits a signed E-I imbalance in the
@@ -34,6 +38,7 @@ where:
 
 from __future__ import annotations
 from dataclasses import dataclass
+import math
 from typing import List, Optional
 
 from .parameters import DynamicsParams, Theta
@@ -133,6 +138,10 @@ def _derivatives(
             measured-healthy operating point (see config.get_s_setpoint).
             Gated by UNITARES_S_SETPOINT at the call site, which defaults ON;
             this signature's 0.0 is the disabled-path value, not the deployed one.
+            The E and I equations read S through the same detrend, ``S - σ``,
+            so moving the S rest by σ leaves the E, I and V rests where σ = 0
+            puts them (contract row 50), while S - σ stays clear of S's floor;
+            the floor and its barrier are entropy's own bound and read raw S.
 
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple
@@ -146,15 +155,21 @@ def _derivatives(
 
     E, I, S, V = state.E, state.I, state.S, state.V
 
-    # E dynamics: Ė = α(I - E) - βₑES + γₑ‖Δη‖²
+    # S as the E and I equations read it: entropy above the setpoint σ, the
+    # detrend Φ and the basin apply. With σ = 0 this is S itself. Reading raw S
+    # here lowered the I rest by k·σ/(γ_I + k_anchor) and the E rest with it
+    # once σ went live.
+    S_excess = S - s_setpoint
+
+    # E dynamics: Ė = α(I - E) - βₑE(S - σ) + γₑ‖Δη‖²
     dE_dt = (
         params.alpha * (I - E)
-        - params.beta_E * E * S
+        - params.beta_E * E * S_excess
         + params.gamma_E * d_eta_sq
     )
 
     # I dynamics
-    A = params.beta_I * C - params.k * S
+    A = params.beta_I * C - params.k * S_excess
     from .parameters import get_i_dynamics_mode
     i_mode = get_i_dynamics_mode()
     if i_mode == "linear":
@@ -179,8 +194,9 @@ def _derivatives(
     )
 
     # Sensor anchoring: spring coupling to observed sensor state.
-    # Only reached when coupling is opt-in enabled — compute_dynamics passes
-    # sensor_eisv=None here by default (compare, don't couple).
+    # Reached whenever compute_dynamics passes a sensor. Coupling is ON by
+    # default (parameters.sensor_coupling_enabled); disabling it makes
+    # compute_dynamics pass sensor_eisv=None here (compare, don't couple).
     if sensor_eisv is not None:
         E_range = params.E_max - params.E_min
         S_range = params.S_max - params.S_min
@@ -289,6 +305,76 @@ def _integrate_rk4(
     return State(E=E_new, I=I_new, S=S_new, V=V_new)
 
 
+def _integration_substeps(
+    params: DynamicsParams, theta: Theta, dt: float, sensor_coupled: bool,
+    s_setpoint: float = 0.0,
+) -> int:
+    """Resolve the fastest frozen-input slope over the entire state box.
+
+    L bounds the absolute Jacobian row sums (the infinity norm). Using
+    n=ceil(dt*L) keeps h*L <= 1, resolving stiff cubic barriers even when
+    the starting point is outside their active margin. This is a numerical
+    stiffness safeguard, not a nonlinear contraction certificate.
+
+    ``s_setpoint`` must be the σ the derivatives run with: dE carries
+    -β_E·E·(S - σ), so the E row's ∂/∂E term is bounded by max|S - σ| over
+    the box, not by max|S|.
+    """
+    from .parameters import get_i_dynamics_mode
+
+    if not math.isfinite(dt) or dt < 0:
+        raise ValueError("dt must be finite and nonnegative")
+    bounds = (
+        (params.E_min, params.E_max), (params.I_min, params.I_max),
+        (params.S_min, params.S_max), (params.V_min, params.V_max),
+    )
+    if any(not math.isfinite(v) for pair in bounds for v in pair):
+        raise ValueError("state bounds must be finite")
+    widths = [hi - lo for lo, hi in bounds]
+    if any(width <= 0 or not math.isfinite(width) for width in widths):
+        raise ValueError("state bounds must have positive finite widths")
+    if not math.isfinite(s_setpoint):
+        raise ValueError("s_setpoint must be finite")
+    margin = params.barrier_margin
+    if not math.isfinite(margin) or margin < 0:
+        raise ValueError("barrier_margin must be finite and nonnegative")
+
+    # Each active cubic has |b'| <= 3*|strength|/margin in the box.
+    # If the two margins overlap, sum both bounds conservatively.
+    margins = (margin, margin, margin * widths[2], margin * widths[3])
+    barriers = [
+        (3 * abs(params.barrier_strength) / m * (2 if 2*m > width else 1))
+        if m > 0 else 0.0
+        for m, width in zip(margins, widths)
+    ]
+    e_abs = max(abs(params.E_min), abs(params.E_max))
+    s_abs = max(abs(params.S_min - s_setpoint), abs(params.S_max - s_setpoint))
+    i_slope = abs(params.gamma_I)
+    if get_i_dynamics_mode() != "linear":
+        i_slope *= max(abs(1 - 2*params.I_min), abs(1 - 2*params.I_max))
+    q = abs(params.Cmax * theta.C1) / 2
+    rows = [
+        2*abs(params.alpha) + abs(params.beta_E)*(s_abs + e_abs),
+        i_slope + abs(params.k) + abs(params.beta_I)*q,
+        abs(params.mu) + abs(lambda2(theta, params))*q,
+        2*abs(params.kappa) + abs(params.delta),
+    ]
+    # Match _derivatives: the I spring uses the E width, too.
+    spring_widths = (widths[0], widths[0], widths[2], widths[3])
+    rows = [
+        row + b + (abs(params.k_anchor)/width if sensor_coupled else 0.0)
+        for row, b, width in zip(rows, barriers, spring_widths)
+    ]
+    if any(not math.isfinite(row) for row in rows):
+        raise ValueError("dynamics slope bound must be finite")
+    work = dt * max(rows)
+    # Do not silently cap n: that would discard the h*L bound. Refuse
+    # pathological configurations instead of running an unbounded loop.
+    if not math.isfinite(work) or work > 10000:
+        raise ValueError("dynamics update requires more than 10000 substeps")
+    return max(1, math.ceil(work))
+
+
 def compute_dynamics(
     state: State,
     delta_eta: List[float],
@@ -308,8 +394,14 @@ def compute_dynamics(
     function for state evolution.
 
     Supports two integration methods:
-    - RK4 (default): 4th-order Runge-Kutta, O(dt^4) error
-    - Euler: Forward Euler, O(dt) error (legacy, for backward compat)
+    - RK4 (default): classical 4th-order Runge-Kutta
+    - Euler: Forward Euler (legacy)
+
+    Both subdivide dt using a global frozen-input Jacobian bound to resolve
+    stiff barriers. The full elapsed dt and forcing are preserved. Initial
+    and intermediate states are projected onto the configured box; the
+    complexity entropy floor is applied only after the complete update.
+    The usual smooth-ODE orders need not hold where projection activates.
 
     Set via UNITARES_INTEGRATOR env var ('rk4' or 'euler').
 
@@ -318,7 +410,7 @@ def compute_dynamics(
         delta_eta: Ethical drift vector (list of floats)
         theta: Control parameters (C1, eta1)
         params: Dynamics parameters (alpha, beta, etc.)
-        dt: Time step for integration
+        dt: Finite nonnegative elapsed time for integration
         noise_S: Optional noise term for S dynamics
         complexity: Task complexity [0, 1] - increases entropy S (default: 0.5)
         sensor_eisv: Optional sensor-derived EISV state (from a physical sensor, or
@@ -330,6 +422,9 @@ def compute_dynamics(
 
     Returns:
         New state after dt time evolution
+
+    Raises:
+        ValueError: Invalid timestep/bounds or an excessive substep budget.
     """
     # SECURITY: Clip complexity to valid range [0,1] as defense-in-depth
     complexity = max(0.0, min(1.0, complexity))
@@ -349,13 +444,22 @@ def compute_dynamics(
     # Select integrator
     integrator = get_integrator_mode()
 
-    if integrator == "euler":
-        new_state = _integrate_euler(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
-        )
-    else:
-        new_state = _integrate_rk4(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
+    steps = _integration_substeps(
+        params, theta, dt, coupling_sensor is not None, s_setpoint,
+    )
+    step_dt = dt / steps
+    # Apply the same box at the first derivative evaluation as at later
+    # stages, so the global slope bound also covers out-of-range inputs.
+    new_state = State(
+        E=clip(state.E, params.E_min, params.E_max),
+        I=clip(state.I, params.I_min, params.I_max),
+        S=clip(state.S, params.S_min, params.S_max),
+        V=clip(state.V, params.V_min, params.V_max),
+    )
+    integrate = _integrate_euler if integrator == "euler" else _integrate_rk4
+    for _ in range(steps):
+        new_state = integrate(
+            new_state, d_eta_sq, theta, params, step_dt, noise_S, complexity, coupling_sensor, s_setpoint,
         )
 
     # Post-integration: complexity-proportional entropy floor
@@ -567,21 +671,24 @@ def compute_saturation_diagnostics(
     state: State,
     theta: Theta,
     params: Optional[DynamicsParams] = None,
+    s_setpoint: float = 0.0,
 ) -> dict:
     """
     Compute I-channel saturation diagnostics.
-    
+
     This is the "pressure gauge" for understanding boundary saturation behavior.
     Critical for monitoring system stability and validating dynamics mode choice.
-    
+
     Args:
         state: Current UNITARES state
         theta: Control parameters
         params: Dynamics parameters (uses DEFAULT_PARAMS if None)
-    
+        s_setpoint: The S setpoint σ the dynamics run with, so the forcing term
+            reads S - σ as dI/dt does. 0.0 is the un-detrended form.
+
     Returns:
         dict with:
-        - A: Forcing term (β_I·C - k·S)
+        - A: Forcing term (β_I·C - k·(S - σ))
         - gamma_over_4: Maximum logistic damping (γ_I/4)
         - sat_margin: A - γ_I/4 (positive = push-to-boundary in logistic mode)
         - I_equilibrium_linear: Predicted equilibrium under linear damping (A/γ_I)
@@ -599,7 +706,7 @@ def compute_saturation_diagnostics(
     C = control_feedback(state.V, theta, params)
     
     # Forcing term (isolated input)
-    A = params.beta_I * C - params.k * state.S
+    A = params.beta_I * C - params.k * (state.S - s_setpoint)
     
     # Logistic damping maximum
     gamma_over_4 = params.gamma_I / 4.0

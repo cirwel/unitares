@@ -32,6 +32,7 @@ from collections.abc import Iterator
 from typing import Literal
 
 from . import (
+    AcquireEffectInProgress,
     AcquireHeldByOther,
     AcquireOk,
     AcquirePermissionDenied,
@@ -68,6 +69,7 @@ AdvisoryOutcome = Literal[
     "acquired_new",
     "acquired_idempotent",
     "held_by_other",
+    "effect_in_progress",
     "service_unavailable",
     "permission_denied",
     "schema_invalid",
@@ -413,6 +415,10 @@ def _classify_acquire(
             result.expires_at.isoformat(),
         )
         return "held_by_other", None
+
+    if isinstance(result, AcquireEffectInProgress):
+        logger.info("lease_advisory: effect_in_progress surface=%s", request.surface_id)
+        return "effect_in_progress", None
 
     if isinstance(result, AcquireServiceUnavailable):
         logger.info(

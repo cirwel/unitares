@@ -275,6 +275,8 @@ CREATE TABLE IF NOT EXISTS core.dialectic_sessions (
     topic                   TEXT,                       -- exploration topic / root cause summary
     max_synthesis_rounds    INTEGER,
     synthesis_round         INTEGER DEFAULT 0,
+    transcript_revision     BIGINT NOT NULL DEFAULT 0,
+    resolution_saga_revision BIGINT NOT NULL DEFAULT 0,
     paused_agent_state_json JSONB,                      -- state snapshot at session creation
     trigger_source          TEXT,                       -- circuit_breaker, manual, loop_detection, etc.
 
@@ -287,6 +289,10 @@ CREATE TABLE IF NOT EXISTS core.dialectic_sessions (
     quorum_result           JSONB,                      -- voting results
 
     -- Constraints
+    CONSTRAINT dialectic_sessions_transcript_revision_nonnegative
+        CHECK (transcript_revision >= 0),
+    CONSTRAINT dialectic_sessions_resolution_saga_revision_nonnegative
+        CHECK (resolution_saga_revision >= 0),
     CHECK (phase IN ('awaiting_thesis', 'thesis', 'antithesis', 'synthesis',
                      'resolved', 'escalated', 'failed', 'quorum_voting')),
     CHECK (status IN ('active', 'resolved', 'escalated', 'failed', 'quorum_voting'))

@@ -16,15 +16,23 @@ than behavioral-alone is one the flag would de-escalate.
 No outcome labels (that's the anchor bridge). This characterises the verdict
 delta and surfaces any high-risk→safe drops for eyeballing — it does not certify
 that every de-escalation was correct.
+
+The window is the last ``--days`` days up to now. A window that crosses an EISV
+instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-sys.path.insert(0, ".")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 from src.agent_behavioral_baseline import WelfordStats  # noqa: E402
 from src.behavioral_state import BehavioralEISV  # noqa: E402
 from src.behavioral_assessment import assess_behavioral_state  # noqa: E402
@@ -59,26 +67,41 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db-url", default="postgresql://postgres:postgres@localhost:5432/governance")
     ap.add_argument("--days", type=int, default=7)
+    eisv_eras.add_cross_era_argument(ap)
     args = ap.parse_args()
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.days)
+    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        return 2
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
 
     transitions = {}   # (floored -> behavioral) -> count
     deescalated = 0
     examined = 0
     severe_drops = []  # high-risk floored -> safe behavioral (eyeball these)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s"), (start, end))
+        id_counts = {r["instrument_id"]: r["n"] for r in cur.fetchall()}
+        provenance = eisv_eras.check_window(
+            start, end, allow_cross=args.allow_cross_era, id_counts=id_counts)
+        if provenance is None:
+            conn.close()
+            return 2
         cur.execute(
             """
             SELECT i.metadata->>'label' AS label,
                    s.state_json->'behavioral_eisv' AS beisv,
                    s.state_json->>'verdict' AS floored
             FROM core.agent_state s JOIN core.identities i USING(identity_id)
-            WHERE s.recorded_at > now() - (%s::int * interval '1 day')
+            WHERE s.recorded_at > %s AND s.recorded_at < %s
               AND s.state_json ? 'behavioral_eisv'
               AND s.state_json->'behavioral_eisv'->'warmup'->>'is_baselined' = 'true'
               AND s.state_json ? 'verdict'
             """,
-            (args.days,),
+            (start, end),
         )
         for r in cur:
             beisv = r["beisv"]
@@ -105,6 +128,8 @@ def main():
     conn.close()
 
     print(f"=== Φ→telemetry red-team (last {args.days}d, confident baselined) ===")
+    for line in provenance:
+        print(line)
     print(f"examined={examined}  would de-escalate under flag={deescalated} "
           f"({100*deescalated/examined:.1f}%)" if examined else "examined=0")
     print("\nverdict transitions (floored → behavioral-authoritative):")

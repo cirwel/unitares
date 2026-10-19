@@ -42,7 +42,7 @@ class DynamicsParams:
 
     # V dynamics
     kappa: float = 0.3           # (E-I) → V coupling
-    delta: float = 0.4           # V decay rate (reverted from 0.25 — caused coherence spiral)
+    delta: float = 0.4           # V decay rate (reverted from 0.25 — caused coherence spiral). On the check-in path the AdaptiveGovernor's delta (starts 0.25, adapts in [0.15, 0.50]) replaces this value, so the revert does not take effect there (contract ledger row 53)
 
     # Sensor anchoring (for agents that publish a physical sensor reading)
     k_anchor: float = 0.1        # Spring coupling to sensor-derived EISV (0 = no anchoring)

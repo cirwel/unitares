@@ -41,6 +41,9 @@ defmodule UnitaresLeasePlane.Application do
   end
 
   defp start_full do
+    # First, so the cookie variable is gone before anything else runs.
+    UnitaresLeasePlane.NodeDistribution.start_from_env()
+
     # Bearer token must be sourced from env at boot. Fails closed (HTTPAuth
     # returns 503) if absent — never silently open.
     if token = System.get_env("LEASE_PLANE_BEARER_TOKEN") do
@@ -191,8 +194,8 @@ defmodule UnitaresLeasePlane.Application do
         UnitaresLeasePlane.DialecticLivenessSupervisor,
         # Governed-effect EXECUTE crash recovery (§5b). Runs its orphan scan in
         # init/1 synchronously — placed AFTER Postgrex and BEFORE the HTTP
-        # listener so no new effect is accepted while a prior crash's orphans are
-        # unresolved. Fail-soft: a missing effects.* schema (pre-migration-052) or
+        # listener. Reserved effects remain fenced for operator recovery;
+        # unrelated surfaces may serve requests. Fail-soft: a missing effects.* schema (pre-migration-052) or
         # a DB error is logged and skipped, never crashes boot.
         UnitaresLeasePlane.EffectRecovery
       ] ++ worker_children() ++ http_children()

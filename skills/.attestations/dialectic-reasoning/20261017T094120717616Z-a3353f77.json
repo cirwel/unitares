@@ -1,0 +1,33 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-17T09:41:20Z",
+  "verified_date": "2026-10-17",
+  "verifier": "Codex (PR #2836 resolution-cache fix re-check)",
+  "source_digests": {
+    "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
+    "unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql": "c74d05125d80f7b2",
+    "unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql": "62319aa203b4ae8d",
+    "unitares/src/dialectic_db.py": "55b5616a68103966",
+    "unitares/src/dialectic_protocol.py": "8b3f9fada75619f4",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "4612264644a5a512",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "4f696cec434805a2",
+    "unitares/src/mcp_handlers/dialectic/resolution.py": "7fea651cb6043b42",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "9958fa1924098d8a",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "3f8b53739824b0fc",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "d15d705f81fb5a16",
+    "unitares/src/mcp_handlers/tool_stability.py": "e80cdc5e28bc6bc0"
+  },
+  "skill_digest": "8ff33f0244de1008",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/dialectic/resolution.py": [
+      "6de61a0f5fe6a5f2"
+    ]
+  }
+}

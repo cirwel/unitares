@@ -64,11 +64,36 @@ mix deps.get >&2 || echo "[lease-plane] WARN: mix deps.get failed (offline?) —
 # listener to 127.0.0.1, matching the lease plane's localhost trust boundary.
 NODE_SNAME="${LEASE_PLANE_NODE_SNAME:-unitares-lease-plane}"
 
+# The cookie never goes on a command line: `elixir --cookie`, `-args_file` and
+# ERL_AFLAGS all end up in beam.smp's argv, where any process listing reads it.
+# Erlang reads .erlang.cookie from the VM's boot-time HOME when distribution
+# starts, so the cookie goes into a private file (dir 0700, file 0400) and the
+# VM boots with HOME pointing there. NodeDistribution restores the real HOME
+# (passed in LEASE_PLANE_NODE_REAL_HOME) before anything else runs, then starts the
+# named node; children inherit the real HOME. MIX_HOME and HEX_HOME are pinned
+# so mix still finds its archives and cache during boot.
 if [[ -n "${LEASE_PLANE_NODE_COOKIE:-}" ]]; then
+    COOKIE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/unitares/beam/lease-plane"
+    mkdir -p "$COOKIE_HOME"
+    chmod 700 "$COOKIE_HOME"
+    COOKIE_FILE="$COOKIE_HOME/.erlang.cookie"
+    [[ -f "$COOKIE_FILE" ]] && chmod 600 "$COOKIE_FILE"
+    (umask 077; printf '%s' "$LEASE_PLANE_NODE_COOKIE" > "$COOKIE_FILE")
+    chmod 400 "$COOKIE_FILE"
+    unset LEASE_PLANE_NODE_COOKIE
+
     export ERL_EPMD_ADDRESS="127.0.0.1"
-    exec elixir \
-        --sname "$NODE_SNAME" \
-        --cookie "$LEASE_PLANE_NODE_COOKIE" \
+    # A clean environment: epmd is long-lived and must not inherit anything the
+    # secrets file put into this shell. Node.start registers with a running
+    # epmd but never launches one, which --sname used to do.
+    env -i PATH="$PATH" ERL_EPMD_ADDRESS="$ERL_EPMD_ADDRESS" \
+        ${ERL_EPMD_PORT:+ERL_EPMD_PORT="$ERL_EPMD_PORT"} epmd -daemon
+
+    export MIX_HOME="${MIX_HOME:-$HOME/.mix}"
+    export HEX_HOME="${HEX_HOME:-$HOME/.hex}"
+    export LEASE_PLANE_NODE_SNAME="$NODE_SNAME"
+    export LEASE_PLANE_NODE_REAL_HOME="$HOME"
+    HOME="$COOKIE_HOME" exec elixir \
         --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
         -S mix run --no-halt
 else

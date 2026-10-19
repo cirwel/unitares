@@ -28,6 +28,7 @@ from src.mcp_handlers.dialectic.session import (
     _SESSION_LOCKS,
     ACTIVE_SESSIONS,
 )
+from tests.helpers import successful_dialectic_message_append
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +86,10 @@ class TestSynthesisHandlerSerializesPhaseTransition:
             paused_agent_id="agent-paused",
             reviewer_agent_id="agent-reviewer",
             session_type="recovery",
+            paused_agent_state={
+                "pause_effect_required": True,
+                "pause_token": "pause-test",
+            },
         )
         session.phase = DialecticPhase.SYNTHESIS
         session.synthesis_round = 1
@@ -138,7 +143,10 @@ class TestSynthesisHandlerSerializesPhaseTransition:
                  patch("src.mcp_handlers.shared.get_mcp_server", return_value=self._mock_server()), \
                  patch(f"{self.DIALECTIC}.load_session", new_callable=AsyncMock,
                        return_value=session), \
-                 patch(f"{self.DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+                 patch(
+                     f"{self.DIALECTIC}.pg_add_message",
+                     new=AsyncMock(side_effect=successful_dialectic_message_append),
+                 ), \
                  patch(f"{self.DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
                  patch(f"{self.DIALECTIC}.save_session", new_callable=AsyncMock), \
                  patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
@@ -188,7 +196,10 @@ class TestSynthesisHandlerSerializesPhaseTransition:
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=self._mock_server()), \
              patch(f"{self.DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{self.DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(
+                 f"{self.DIALECTIC}.pg_add_message",
+                 new=AsyncMock(side_effect=successful_dialectic_message_append),
+             ), \
              patch(f"{self.DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
              patch(f"{self.DIALECTIC}.pg_resolve_session", new_callable=AsyncMock), \
              patch(f"{self.DIALECTIC}.save_session", new_callable=AsyncMock), \

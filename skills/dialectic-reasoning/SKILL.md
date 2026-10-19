@@ -8,6 +8,11 @@ last_verified: "2026-09-23"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
+  - unitares/src/dialectic_db.py
+  - unitares/src/dialectic_reviewed_work.py
+  - unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql
+  - unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql
+  - unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql
   - unitares/src/mcp_handlers/dialectic/handlers.py
   # Added 2026-09-14: participant resolution and the same-bound-caller gate
   # for thesis, antithesis, and synthesis live here.
@@ -16,6 +21,7 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/responses.py
   - unitares/src/mcp_handlers/dialectic/auto_resolve.py
   - unitares/src/mcp_handlers/dialectic/reviewer.py
+  - unitares/src/mcp_handlers/dialectic/resolution.py
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/schemas/dialectic.py
   - unitares/src/mcp_handlers/tool_stability.py
@@ -82,6 +88,20 @@ position should be distinct from the subject. Pass `use_brief_as_thesis=false`
 for a neutral request that deliberately waits for a later thesis. The raw
 `dialectic(action="request")` path preserves that two-call default unless you
 pass thesis fields or `use_brief_as_thesis=true`.
+
+When you file the request as a proxy for work authored by another UNITARES
+agent, pass every known author UUID in
+`reviewed_work_author_agent_ids=["<canonical-agent-uuid>"]`. The declaration is
+requester-supplied, not proof of authorship, and it can only remove authority:
+those agents cannot be selected, claim the open slot, be assigned or reassigned,
+or provide the independent verdict. Omit the field when authorship is unknown;
+an explicit empty list is refused. The session response reports
+`reviewed_work_authorship.status` as `declared`, `not_supplied`, or `invalid`.
+A malformed stored marker fails closed for independent assignment. Explicit
+self-review remains visibly self-review and never counts as an independent
+seat. It may support reflection on an active agent, but a session bound to a
+pause cannot be closed by that same identity; it routes to facilitation for an
+independent reviewer or operator instead.
 
 For a session already waiting in the thesis phase, reuse what the server saved
 instead of copying it back:
@@ -290,7 +310,7 @@ before concluding it is late. Use
 latest timeout/facilitation state; note that `check_timeout` is a write (it can
 auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase
 is an invitation, not a stall — an eligible agent other than the paused agent
-may claim it.
+may claim it, unless that agent was declared as an author of the reviewed work.
 
 ## Facilitation and Reviewer Recovery
 
@@ -355,6 +375,38 @@ like any ordinary failed session.
 `escalate` and `cooldown` exist in the `ResolutionAction` enum but no live path
 produces them; they survive only as recommendation labels in the model-assisted
 tool.
+
+Each accepted thesis, antithesis, or synthesis advances a durable transcript
+revision. If a submission reports `DIALECTIC_TRANSCRIPT_CHANGED`, or a terminal
+attempt reports `SESSION_RESOLUTION_IN_PROGRESS`, reload the session before
+acting. Do not assume that a retry owns the same reviewer slot or transcript;
+these refusals mean another durable writer moved or currently owns the state.
+
+### Interrupted resolution effects (operators)
+
+A terminal decision and its runtime mutation are joined by a durable
+resolution-effect record. If a response says the effect is pending, applying,
+unknown-partial, or needs reconciliation, do not repeat participant moves or
+assume the pause was lifted. Hand the session to an authenticated operator.
+
+The operator inspects with
+`dialectic(action="reconcile_effect", session_id="...")`. `apply_pending` may
+claim an untouched pending effect. An `applying` effect is never replayed
+automatically: first confirm its worker stopped, then fence the exact
+`effect_owner_token` with `mark_uncertain`. After inspecting and repairing live
+state, use `mark_applied` with a reason and the exact `effect_updated_at` copied
+from that `unknown_partial` inspect response. An already-applied retry is
+idempotent. `mark_applied` compare-and-sets that caller-supplied row version; if
+the record changed, inspect again. The acknowledgement does not erase the
+original execution result or uncertainty evidence.
+The durable effect row is authoritative; outcome, calibration and lifecycle
+signals are best-effort, and their attempted delivery never makes an applied
+effect replayable.
+
+A session created before pause-generation binding closes with
+`legacy_unbound_session` as an applied no-op. That result never resumes the
+agent's current pause or adds conditions, because the current pause may be a
+newer generation. Open a fresh review to act on the current pause.
 
 A resolved session read also carries an `attestation` block saying what party
 signatures the record actually holds: `bilateral`, `single_signer`, `unsigned`,
