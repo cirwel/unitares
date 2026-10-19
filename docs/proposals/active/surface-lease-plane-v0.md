@@ -1328,11 +1328,11 @@ Each row below is a Phase A blocker. All tests live under `tests/test_lease_plan
 - [ ] **§7.12.4** v1 RFC opening: weigh option (a) new scheme `file-inode://` vs option (b) modifier `?canon=inode` explicitly with the asymmetric-cost framing v0.8 surfaces. v0.8 explicitly does NOT add `?`-banning CHECK in migration 026 — both options remain viable for v1.
 - [ ] **§7.13** Migration 034 ships (substrate_state + substrate_state_observed_at columns + pair-coherence CHECK + freshness index). Required before any resident port. Tracks v0.11 RFC convergence; no code lands until council passes.
 
-## 10. Runway tradeoff (operator decision, not technical)
+## 10. Scheduling tradeoff (operator decision, not technical)
 
 This is a 4-8 week spike. It trades against:
 
-- Fellowship deadline / Anthropic application
+- Other operator commitments with fixed deadlines
 - Paper v6.9.x polish and v7 corpus-maturity work
 - Public plugin / discord-bridge community work
 - KG/UX maintenance and dogfood-driven fixes
