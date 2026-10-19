@@ -1,0 +1,5 @@
+# Leave internal planning records out of `git archive` release archives.
+/docs/plans export-ignore
+/docs/plans/** export-ignore
+/docs/proposals/archive export-ignore
+/docs/proposals/archive/** export-ignore
