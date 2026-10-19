@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Launchd entrypoint for the Wave 3a BEAM handler app (Elixir/OTP).
 #
-# Sources WAVE_3A_BEAM_TOKEN + WAVE_3A_PROBE_TOKEN from
-# ~/.config/cirwel/secrets.env (mode 600 — not keychain), then execs
+# Sources WAVE_3A_BEAM_TOKEN + WAVE_3A_PROBE_TOKEN from the secrets env
+# file (mode 600 — not keychain; resolved below: $UNITARES_SECRETS_ENV,
+# default ~/.config/unitares/secrets.env, legacy ~/.config/cirwel/secrets.env
+# still read), then execs
 # `mix run --no-halt`. Bind defaults to 127.0.0.1:8770; override via
 # the :wave3a_handlers runtime config or env (see config/config.exs).
 #

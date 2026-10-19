@@ -270,7 +270,8 @@ def _git_commit_short() -> str:
     process startup — long-running services that survive across deploys will
     still report their original startup SHA, which is the correct attribution
     semantics (the running binary IS that SHA, regardless of what's checked
-    out on disk now). Per memory `feedback_running-process-vs-master-commit`.
+    out on disk now). Attribute by the running process, never by the latest
+    commit on the default branch.
     """
     try:
         repo_root = Path(__file__).resolve().parent.parent
