@@ -454,6 +454,69 @@ def test_invoke_still_running_on_await_timeout(monkeypatch):
     assert r["agent_id"] == "ag-2"
 
 
+def test_a_call_longer_than_one_await_window_re_awaits_until_it_finishes(monkeypatch):
+    """The orchestrator clamps one await to 120s. A 240s call used to end at
+    the first window as still_running; it now waits out its own deadline."""
+    _enable(monkeypatch)
+    now = {"t": 1000.0}
+    monkeypatch.setattr(ha.time, "monotonic", lambda: now["t"])
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-long"}),
+        _FakeResp(504, {}),
+        _FakeResp(200, {"result": {"exit_status": 1, "output": ["late but done"]}}),
+    ])
+    import httpx
+
+    fake = httpx.AsyncClient
+
+    def advancing(*a, **k):
+        client = fake(*a, **k)
+        post = client.post
+
+        async def timed_post(url, **kw):
+            resp = await post(url, **kw)
+            if url.endswith("/await"):
+                now["t"] += kw["json"]["timeout_ms"] / 1000  # the window elapses
+            return resp
+
+        client.post = timed_post
+        return client
+
+    monkeypatch.setattr(httpx, "AsyncClient", advancing)
+    r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=240))
+    awaits = [kw["json"]["timeout_ms"] for url, kw in state["calls"] if url.endswith("/await")]
+    assert awaits == [120_000, 120_000]  # two clamped windows cover the 240s deadline
+    assert r["dispatch_phase"] == "terminal" and r["exit_status"] == 1
+
+
+def test_re_awaiting_stops_at_the_call_deadline(monkeypatch):
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-slow"}),
+        _FakeResp(504, {}),
+        _FakeResp(504, {}),
+        _FakeResp(504, {}),
+    ])
+    r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=240))
+    awaits = [url for url, _ in state["calls"] if url.endswith("/await")]
+    # An orchestrator answering 504 at once cannot make it spin: two windows
+    # cover 240s, then it reports still_running as before.
+    assert len(awaits) == 2
+    assert r["status"] == "still_running" and r["execution_id"] == "ag-slow"
+
+
+def test_a_call_within_one_window_awaits_once(monkeypatch):
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-short"}),
+        _FakeResp(504, {}),
+    ])
+    r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=60))
+    awaits = [kw["json"]["timeout_ms"] for url, kw in state["calls"] if url.endswith("/await")]
+    assert len(awaits) == 1 and 59_000 <= awaits[0] <= 60_000
+    assert r["status"] == "still_running"
+
+
 def test_invoke_nonzero_exit(monkeypatch):
     _enable(monkeypatch)
     _patch_httpx(monkeypatch, [
