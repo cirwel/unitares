@@ -33,8 +33,10 @@ aliases ``store_finding``, ``update_finding`` and ``record_result`` omit the
 repeated canonical payload and advertise an explicit full-response escape
 hatch; the write aliases first lift the ids and warnings a caller needs next.
 A plain fresh ``start_session`` omits it too, without a hint, because the only
-way to act on one would be another mint. Other state-changing aliases retain
-it. The documented full mode restores it explicitly (``verbosity="full"`` on
+way to act on one would be another mint. A routine ``request_review`` (the
+review opened and waits on a known move) omits it with a hint naming the
+session read; one that carries the review itself retains it. The documented
+full mode restores it explicitly (``verbosity="full"`` on
 ``check_working_state``, ``response_mode="full"`` elsewhere), except on the
 finding writes, whose route to the stored record is a
 ``knowledge(action="details")`` read. That read returns the record as stored, not the ack: write-time warnings
@@ -246,11 +248,13 @@ _COMPACT_READ_ALIASES = frozenset({
 # Write aliases whose acknowledgement omits the repeated canonical payload by
 # default. Each one lifts the identifiers a caller needs next (and the warnings
 # a writer must see) before the omission, so the ack stays self-sufficient.
-# request_review is deliberately absent: its ack carries the review itself
-# (resolution conditions, reviewer dispatch, thesis-failure flags), which the
-# envelope does not project, and it declares no response_mode on /mcp/.
-# start_session is absent too: its ack shape is decided separately, with the
-# rest of the identity/onboarding surface.
+# request_review is not one of them: an ack that carries the review itself
+# (antithesis, synthesis, recommendation, recusal, facilitation, reviewer-host
+# limits) keeps its payload, and only a routine ack omits it
+# (_review_ack_raw_policy, #2443). A thesis that was not recorded comes back
+# with success=false and passes through whole. start_session is absent too:
+# its ack shape is decided separately, with the rest of the identity/onboarding
+# surface.
 _COMPACT_WRITE_ALIASES = frozenset({
     "store_finding",
     "update_finding",
@@ -1688,6 +1692,92 @@ def _write_ack_raw_policy(
     return discovery_id is None, hint
 
 
+# The keys a request_review ack carries when the review opened as asked and its
+# next move is a known one: the reviewer's (assigned, dispatched, or an open
+# slot awaiting a claim) or the caller's own thesis call (the two-call shape,
+# whose next_call becomes next_action). Each actionable value among them is
+# lifted (session_id, phase, whose_move, one_call_review, thesis_source,
+# reviewer_agent_id, orchestrated_review, reviewer_dispatch, next_call or
+# next_step) or is the caller's own request echoed back (reason, session_type,
+# trigger_source, paused_agent_id, reviewed_work_authorship); the attribution in
+# agent_signature is lifted as agent_uuid/written_as. `note` restates
+# whose_move in prose. An allowlist, not a blocklist, so a key the handler adds
+# later keeps the whole payload until someone decides it is routine: the same
+# positive-evidence rule as a routine start_session (#2437).
+_ROUTINE_REVIEW_KEYS = frozenset({
+    "success",
+    "server_time",
+    "agent_signature",
+    "session_id",
+    "phase",
+    "whose_move",
+    "next_call",
+    "next_step",
+    "one_call_review",
+    "thesis_source",
+    "reviewer_agent_id",
+    "awaiting_reviewer",
+    "orchestrated_review",
+    "reviewer_dispatch",
+    "reviewed_work_authorship",
+    "paused_agent_id",
+    "session_type",
+    "reason",
+    "trigger_source",
+    "message",
+    "note",
+})
+# Phases in which the review has not happened yet: the thesis is owed (two-call)
+# or recorded and awaiting the reviewer (one-call). A resolved, failed or
+# escalated review is the review's own content and keeps the payload.
+_ROUTINE_REVIEW_PHASES = frozenset({"thesis", "antithesis"})
+
+
+def _review_ack_blockers(payload: Dict[str, Any]) -> List[str]:
+    """What keeps a request_review ack from being routine, in a stable order.
+
+    Empty means routine: positive evidence of an open review waiting on a
+    known move, and nothing else. A missing session_id or phase is a blocker,
+    so a producer regression cannot be trimmed into the routine shape.
+    """
+    blockers = sorted(key for key in payload if key not in _ROUTINE_REVIEW_KEYS)
+    if not payload.get("session_id"):
+        blockers.append("no_session_id")
+    phase = str(payload.get("phase") or "").strip().lower()
+    if phase not in _ROUTINE_REVIEW_PHASES:
+        blockers.append(f"phase:{phase or 'missing'}")
+    if payload.get("success") is not True:
+        blockers.append("success_not_true")
+    return blockers
+
+
+def _review_ack_raw_policy(
+    payload: Dict[str, Any],
+) -> tuple[bool, Optional[str]]:
+    """Decide whether a request_review ack repeats its canonical payload.
+
+    A routine ack (see _ROUTINE_REVIEW_KEYS) omits it: the envelope already
+    lifts the session id, phase, whose move it is and the next call, and the
+    rest was the caller's request echoed back plus the agent signature, about
+    2 KB of a 3 KB response measured live (#2443). Anything else keeps it.
+
+    request_review declares no response_mode on /mcp/, so there is no full
+    request to honour; the canonical dialectic(action='request') still returns
+    the whole payload. The hint names the read that returns the session as it
+    stands now. It is not this ack, so raw_governance_available is not set,
+    and it never tells the caller to repeat request_review, which refuses with
+    SESSION_EXISTS while this review is open.
+    """
+    include_raw = bool(_review_ack_blockers(payload))
+    session_id = payload.get("session_id") or "..."
+    hint = (
+        f"dialectic(action='get', session_id='{session_id}') reads this "
+        "review as it stands now (not this ack's payload); do not repeat "
+        "request_review to see it."
+    )
+    return include_raw, hint
+
+
 def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
     """Whether a mint's identity_assurance block says something to act on.
 
@@ -1999,7 +2089,8 @@ def _raw_governance_policy(
     Canonical tools are unchanged. Read aliases, bounded ``sync_state`` modes
     and the write aliases in ``_COMPACT_WRITE_ALIASES`` default to their
     bounded experience envelope and retain an explicit full-response escape
-    hatch. Other state-changing aliases still repeat their payload.
+    hatch. A routine ``start_session`` or ``request_review`` omits its payload
+    and any other one keeps it.
     """
     if friendly_name == "sync_state":
         arguments = arguments or {}
@@ -2027,6 +2118,9 @@ def _raw_governance_policy(
 
     if friendly_name in _COMPACT_WRITE_ALIASES:
         return _write_ack_raw_policy(friendly_name, arguments or {}, payload or {})
+
+    if friendly_name == "request_review":
+        return _review_ack_raw_policy(payload or {})
 
     if friendly_name == "start_session":
         # A mint that went as asked is fully described by the lifted fields,
@@ -3187,7 +3281,22 @@ def build_experience_envelope(
             "one_call_review",
             "thesis_source",
             "review_verdict",
+            # Who is reviewing when an independent reviewer process was
+            # spawned. A routine ack omits raw_governance, and these were
+            # only there (the dialectic canary records orchestrated_review).
+            "orchestrated_review",
+            "reviewer_dispatch",
         )
+        if friendly_name == "request_review":
+            # routine: the payload was omitted because the review opened as
+            # asked (_review_ack_raw_policy). full: it was kept, and the
+            # reason names what kept it, so "absent by design" and "absent
+            # by a bug" read differently.
+            envelope["response_shape"] = "full" if include_raw else "routine"
+            if include_raw:
+                blockers = _review_ack_blockers(source_payload)
+                if blockers:
+                    envelope["response_shape_reason"] = ", ".join(blockers)
         session_id = state_summary.get("session_id", "...")
         next_action = payload.get("next_call") or payload.get("next_step")
         if not next_action:
@@ -3299,15 +3408,17 @@ def build_experience_envelope(
     if hint:
         envelope["recovery_hint"] = hint
 
-    if friendly_name in _COMPACT_WRITE_ALIASES and not include_raw:
+    if (
+        friendly_name in _COMPACT_WRITE_ALIASES or friendly_name == "request_review"
+    ) and not include_raw:
         # A handler-side identity warning (e.g. record_result's
         # ephemeral_writer) must not vanish with the omitted payload. The
         # identity-warning step runs after this one and appends to this list.
         warnings = source_payload.get("identity_warnings")
         if isinstance(warnings, list) and warnings:
             envelope["identity_warnings"] = list(warnings)
-        # Who the write was recorded under. The finding and outcome payloads
-        # carry no top-level uuid: their attribution is success_response's
+        # Who the write was recorded under. The finding, outcome and review
+        # payloads carry no top-level uuid: their attribution is success_response's
         # agent_signature, which rode only under raw_governance. A caller that
         # bound weakly (no client_session_id, a transport-fingerprint pin) has
         # to be able to see which identity it wrote as, and how well that
@@ -3345,7 +3456,9 @@ def build_experience_envelope(
         # back is a repeat of the write, which replays instead of writing only
         # for an identical prediction-bound outcome while the binding is
         # retained; a bare flag cannot carry those conditions, so the hint
-        # states them (see _write_ack_raw_policy).
+        # states them (see _write_ack_raw_policy). A routine request_review's
+        # read (dialectic get) returns the session as it stands later, not
+        # this ack.
         # An unbound metrics read (no tier hint) has nothing more to fetch
         # at any tier until the caller binds.
         if friendly_name in _COMPACT_READ_ALIASES and not (
@@ -3353,8 +3466,9 @@ def build_experience_envelope(
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:
-            # A finding write's hint names a knowledge(action='details') read;
-            # route it like next_action so it names a reachable call.
+            # A finding write's hint names a knowledge(action='details') read
+            # and a review's a dialectic(action='get') read; route it like
+            # next_action so it names a reachable call.
             envelope["raw_governance_hint"] = _friendly_action_hint(raw_hint)
     if routine_sync and _is_routine_proceed(envelope):
         _drop_routine_proceed_duplicates(envelope)
