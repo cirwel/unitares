@@ -17,7 +17,7 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 |---|---|
 | [`2026-06-24-wave-3-gate-framing.md`](2026-06-24-wave-3-gate-framing.md) | **Closed** · **Read first for the gate.** Framing note (2026-06-22) — two separate decisions: (A) freeze the orchestrator cluster (demand empty) vs (B) Wave-3 dispatch on its own merits. Measured 2026-06-22: p50 floor closed, but p99 coordination tail LIVE (`process_agent_update` p99 4740ms, math ~1.3%) |
 | [`beam-governed-effects-dossier-2026-06-18.md`](beam-governed-effects-dossier-2026-06-18.md) | **Parked (since 2026-06-19)** · Draft dossier + phased plan — narrows current evidence to BEAM as dual-mode record/execute governed-effect runtime custody, not whole-governance rewrite |
-| [`beam-proprioception-case-v0.md`](beam-proprioception-case-v0.md) | **Parked (since 2026-06-19)** · Draft v0.2 — conceptual companion behind A′ (council-folded). Epistemic claim: honest, provenance-tagged runtime introspection is privileged self-evidence (`external_signal`→`externally_verified`; #846 `harness_lane`); build governance on the layer that introspects honestly. Orthogonal to latency; non-relitigating; moves no boundary |
+| [`beam-proprioception-case-v0.md`](beam-proprioception-case-v0.md) | **Parked (since 2026-06-19)** · Draft v0.2 — conceptual companion behind A′ (review findings folded in). Epistemic claim: honest, provenance-tagged runtime introspection is privileged self-evidence (`external_signal`→`externally_verified`; #846 `harness_lane`); build governance on the layer that introspects honestly. Orthogonal to latency; non-relitigating; moves no boundary |
 | [`wave-3-go-decision-2026-08-16.md`](wave-3-go-decision-2026-08-16.md) | **Closed** · SIGNED 2026-08-22 — GO-WITH-REDUCED-SCOPE. The decision record under which Wave 3 now proceeds |
 | [`beam-wave-3-gamma-hybrid-v0.md`](beam-wave-3-gamma-hybrid-v0.md) | **Closed** · v0 wide cut REJECTED (§0a); the (γ) narrow cut was set aside 2026-06-28 per the handler-dispatch RFC. Retained as a negative design record |
 
@@ -74,8 +74,8 @@ Completed, parked, superseded, negative-result and dated records. **Archive plac
 | [`onboard-bootstrap-checkin.filter-audit.md`](onboard-bootstrap-checkin.filter-audit.md) | SHIPPED — retained as historical control surface for the parent doc |
 | [`refined-phase-5-evidence-contract.md`](refined-phase-5-evidence-contract.md) | SHIPPED — paired with `onboard-bootstrap-checkin.md` (PR #188) |
 | [`path1-sync-fingerprint-check.md`](path1-sync-fingerprint-check.md) | SHIPPED — `sync_fingerprint` lives in `src/mcp_handlers/identity/shared.py` |
-| [`s19-attestation-mechanism.md`](s19-attestation-mechanism.md) | Mechanism selection council-passed 2026-04-25; implementation correctness gated separately |
-| [`section-129-measurement-fix-2026-06-03.md`](section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
+| [`s19-attestation-mechanism.md`](s19-attestation-mechanism.md) | Mechanism selection passed review 2026-04-25; implementation correctness gated separately |
+| [`section-129-measurement-fix-2026-06-03.md`](section-129-measurement-fix-2026-06-03.md) | Reviewed fix restoring the Wave 1 condition-1 measurement gate |
 | [`eisv-basin-health-gating-v0.md`](eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
 | [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22. The code was removed the next day when #1012 retired the classic dashboard |
 | [`docs-consolidation-v0.md`](docs-consolidation-v0.md) | SHIPPED — contested-claim lint, audience-split index, shorter README, and thin compatibility/manual routes landed by 2026-08-11 |
