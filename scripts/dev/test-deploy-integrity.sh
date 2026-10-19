@@ -132,6 +132,10 @@ mkdir -p "$SB/mcp"
 # Substitute only the host-specific plist path; execute the real deploy flow.
 sed 's|^PLIST=.*|PLIST="$TEST_PLIST"|' "$ROOT/scripts/ops/deploy-mcp.sh" > "$SB/mcp/deploy-mcp.sh"
 cp "$LIB" "$SB/mcp/deploy-lib.sh"
+cp "$ROOT/scripts/ops/apply_plist_env_overlay.py" "$SB/mcp/"
+: > "$SB/reviewed.env"
+export UNITARES_MCP_ENV_OVERLAY="$SB/reviewed.env"
+export UNITARES_MCP_ENV_OVERLAY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 for scenario in '0 0' '0 1' '1 0' '1 1'; do
 read -r apply_status check_status <<< "$scenario"
 export TEST_CHECK_STATUS="$check_status"
@@ -143,6 +147,7 @@ set +e
   python3() {
     printf 'python3 %s\n' "$*" >> "$TEST_TRACE"
     case " $* " in
+      *' --validate-overlay '*) command python3 "$@"; return $? ;;
       *' --print-db-version '*) printf '76\n'; return 0 ;;
       *' --check '*)
         git -C "$TEST_DEPLOY" merge --ff-only -q "$TEST_NEW_SHA"
@@ -178,6 +183,7 @@ EOS
 chmod +x "$AP/deploy-status.sh"
 out=$(bash "$AP/deploy-apply.sh" --capabilities)
 [[ "$out" == *'expected-revision-v1'* ]] || fail 'handshake missing'
+[[ " $out " == *' requested-service-v1 '* ]] || fail 'requested-service handshake missing'
 ok 'capability handshake runs without status or deploy'
 for pair in 'unknown STALE(1)' 'governance-mcp BEHIND(1)' 'governance-mcp DOWN'; do
   read -r name verdict <<< "$pair"
@@ -252,4 +258,107 @@ out=$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1); rc=$?
 set -e
 [ "$rc" = 1 ] || fail 'incomplete result hid a deployment failure'
 ok 'actual deployment failure takes precedence over incomplete result'
+
+# Explicit config-only requests enter the same dispatcher as code drift. All
+# deploy scripts here are stubs; only the revision verifier uses fixture Git.
+export TEST_APPLY_TRACE="$SB/request-trace" TEST_APPLY_LIB="$LIB"
+export TEST_APPLY_REPO="$REPO" TEST_FAIL_SCRIPT="" TEST_VERIFY_PIN=0
+for script in deploy-mcp.sh deploy-gateway.sh deploy-bridge.sh deploy-dispatch-beam.sh; do
+  cat > "$AP/$script" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$TEST_VERIFY_PIN" = 1 ]; then
+  . "$TEST_APPLY_LIB"
+  deploy_lib_verify_expected_revision fixture "$TEST_APPLY_REPO" HEAD
+fi
+name="$(basename "$0")"
+printf '%s\n' "$name" >> "$TEST_APPLY_TRACE"
+[ "$name" != "$TEST_FAIL_SCRIPT" ]
+EOS
+  chmod +x "$AP/$script"
+done
+assert_apply_exit() {
+  expected="$1"; shift
+  rc=0
+  out=$(bash "$AP/deploy-apply.sh" --no-fetch "$@" 2>&1) || rc=$?
+  [ "$rc" = "$expected" ] || fail "request $* returned $rc, expected $expected"
+}
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"CURRENT","checkout":"/fixture/shared"}]'
+: > "$TEST_APPLY_TRACE"
+assert_apply_exit 0
+[ ! -s "$TEST_APPLY_TRACE" ] || fail 'CURRENT service deployed without a request'
+assert_apply_exit 0 --request-service=governance-mcp --request-service=governance-mcp
+[ "$(cat "$TEST_APPLY_TRACE")" = deploy-mcp.sh ] || fail 'duplicate CURRENT request did not dispatch exactly once'
+ok 'CURRENT services remain opt-in and repeated requests dispatch once'
+
+export TEST_STATUS='[{"name":"gateway-mcp","verdict":"CURRENT","checkout":"/fixture/shared"},{"name":"governance-mcp","verdict":"CURRENT","checkout":"/fixture/shared"},{"name":"discord-bridge","verdict":"STALE(1)","checkout":"/fixture/bridge"}]'
+: > "$TEST_APPLY_TRACE"
+assert_apply_exit 0 --request-service=governance-mcp --request-service=gateway-mcp --request-service=governance-mcp
+[ "$(cat "$TEST_APPLY_TRACE")" = $'deploy-gateway.sh\ndeploy-mcp.sh\ndeploy-bridge.sh' ] || fail 'requests changed status-table order or omitted drift'
+ok 'multiple requests preserve status-table order alongside ordinary drift'
+: > "$TEST_APPLY_TRACE"
+assert_apply_exit 0 --dry-run --request-service=governance-mcp --request-service=gateway-mcp
+[ ! -s "$TEST_APPLY_TRACE" ] && [[ "$out" == *'DRY   would deploy governance-mcp (CURRENT)'* ]] || fail 'dry-run executed or omitted requested CURRENT service'
+ok 'dry-run reports requested CURRENT services without dispatch'
+
+for verdict in 'STALE(1)' 'BEHIND(1)'; do
+  export TEST_STATUS="[{\"name\":\"governance-mcp\",\"verdict\":\"$verdict\",\"checkout\":\"/fixture/shared\"}]"
+  : > "$TEST_APPLY_TRACE"
+  assert_apply_exit 0 --request-service=governance-mcp --request-service=governance-mcp
+  [ "$(cat "$TEST_APPLY_TRACE")" = deploy-mcp.sh ] || fail "requested $verdict dispatched more than once"
+done
+ok 'requests do not duplicate STALE or BEHIND deployments'
+
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"STALE(1)","checkout":"/fixture/shared"}]'
+for request in missing-service '' 'bad/name' $'governance-mcp\nmissing-service'; do
+  : > "$TEST_APPLY_TRACE"
+  assert_apply_exit 1 "--request-service=$request"
+  [ ! -s "$TEST_APPLY_TRACE" ] || fail 'invalid request allowed partial deployment'
+done
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"CURRENT"},{"name":"governance-mcp","verdict":"DOWN"}]'
+assert_apply_exit 1 --request-service=governance-mcp
+[ ! -s "$TEST_APPLY_TRACE" ] || fail 'ambiguous requested status allowed deployment'
+ok 'missing, malformed and ambiguous requests fail before any deployment'
+
+for verdict in DOWN GHOST 'HOT-RELOAD(?)' UNKNOWN; do
+  export TEST_STATUS="[{\"name\":\"governance-mcp\",\"verdict\":\"$verdict\",\"checkout\":\"/fixture/shared\"}]"
+  for mode in '' '--dry-run'; do
+    assert_apply_exit 3 --request-service=governance-mcp $mode
+    [ ! -s "$TEST_APPLY_TRACE" ] || fail "request restarted $verdict service"
+  done
+done
+ok 'requests leave DOWN and unconfirmed services pending in real and dry-run modes'
+
+export TEST_STATUS='[{"name":"mystery","verdict":"CURRENT","checkout":"/fixture/other"}]'
+assert_apply_exit 3 --request-service=mystery
+export TEST_STATUS='[{"name":"lease-plane","verdict":"CURRENT","checkout":"/fixture/shared"}]'
+assert_apply_exit 3 --request-service=lease-plane
+export TEST_STATUS='[{"name":"gateway-mcp","verdict":"CURRENT","checkout":"/fixture/shared"}]'
+chmod -x "$AP/deploy-gateway.sh"
+assert_apply_exit 3 --request-service=gateway-mcp
+chmod +x "$AP/deploy-gateway.sh"
+[ ! -s "$TEST_APPLY_TRACE" ] || fail 'unavailable deployment automation executed'
+ok 'requested services without registered, present or executable automation remain pending'
+
+export TEST_STATUS='[{"name":"dispatch-beam","verdict":"CURRENT","checkout":"/fixture/dispatch"},{"name":"dispatch-beam-codex","verdict":"DOWN","checkout":"/fixture/dispatch"}]'
+assert_apply_exit 3 --request-service=dispatch-beam
+[ ! -s "$TEST_APPLY_TRACE" ] && [[ "$out" == *'also controls a DOWN service'* ]] || fail 'request restarted a DOWN sibling'
+ok 'requested CURRENT paired service respects its DOWN sibling'
+
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"STALE(1)","checkout":"/fixture/shared"},{"name":"gateway-mcp","verdict":"CURRENT","checkout":"/fixture/shared"},{"name":"discord-bridge","verdict":"CURRENT","checkout":"/fixture/bridge"}]'
+export TEST_FAIL_SCRIPT=deploy-mcp.sh
+assert_apply_exit 1 --request-service=gateway-mcp --request-service=discord-bridge
+[ "$(cat "$TEST_APPLY_TRACE")" = $'deploy-mcp.sh\ndeploy-bridge.sh' ] && [[ "$out" == *'HOLD  gateway-mcp'* ]] || fail 'requested service bypassed shared-checkout hold'
+ok 'failed deployment holds requested siblings while unrelated requested services continue'
+
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"CURRENT","checkout":"/fixture/shared"}]'
+export TEST_FAIL_SCRIPT="" TEST_VERIFY_PIN=1
+export UNITARES_DEPLOY_EXPECTED_REPO="$REPO" UNITARES_DEPLOY_EXPECTED_REVISION="$NEW"
+: > "$TEST_APPLY_TRACE"
+assert_apply_exit 1 --request-service=governance-mcp
+[ ! -s "$TEST_APPLY_TRACE" ] && [[ "$out" == *'revision changed since migration review'* ]] || fail 'CURRENT request bypassed reviewed revision'
+export UNITARES_DEPLOY_EXPECTED_REVISION="$UNREVIEWED"
+assert_apply_exit 0 --request-service=governance-mcp
+[ "$(cat "$TEST_APPLY_TRACE")" = deploy-mcp.sh ] || fail 'matching reviewed CURRENT request did not deploy'
+ok 'requested CURRENT deployment inherits and enforces the reviewed revision pin'
 printf '%s passed, 0 failed\n' "$PASS"

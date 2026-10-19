@@ -1,7 +1,7 @@
 ---
 status: v0.2 — counter-note / companion to surface-lease-plane-v0.md (NOT a replacement). Consolidates the duplicate #584 (worktree-isolation-as-default-2026-06-03.md, written in parallel) into this doc; the duplication is itself analyzed in §8.
 authored: 2026-06-03
-author_session: dispatch thread-1511767523715055857 (claude_code, opus-4-8); consolidation by a second parallel session (claude_code, opus-4-8) folding #584
+author_session: an agent session; consolidation by a second parallel agent session folding #584
 relates_to:
   - docs/proposals/active/surface-lease-plane-v0.md (the canonical Surface Lease Plane / Plexus contract; SHIPPED)
   - docs/proposals/active/plexus-scope.md (boundary doc; names repo file paths as the initial forcing function)
@@ -71,8 +71,8 @@ Two clauses in `surface-lease-plane-v0.md` make the case for us:
 
 ## 3. Advisory-on-a-shared-filesystem cannot bind the unaware actor
 
-Advisory coordination only helps callers who opt in. Live evidence from this very
-thread: an agent (me) edited the operator's live `~/projects/unitares` checkout
+Advisory coordination only helps callers who opt in. Live evidence from the authoring
+session: an agent edited the operator's live shared `unitares` checkout
 directly, acquired no lease, and only discovered the collision after a concurrent
 commit landed mid-session. No lease infrastructure prevents that, because an advisory
 HTTP service cannot stop a POSIX `write()`. The only real enforcement for the file

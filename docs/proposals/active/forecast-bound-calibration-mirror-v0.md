@@ -59,8 +59,8 @@ Proper scoring is incentive-compatible only when these conditions all hold:
 | C7 | The score has some value to the forecaster | **Deliberately not met**: nothing rides on calibration |
 
 **C2 is the binding constraint here.** The only external producer is the
-harness outcome hook (`~/scripts/hooks/outcome-tracker.sh`, operator
-fleet-ops, not this repo). It reads `UNITARES_OPERATOR_TOKEN` from a file
+harness outcome hook (an operator-side `outcome-tracker.sh` in the
+operator's fleet tooling, not this repo). It reads `UNITARES_OPERATOR_TOKEN` from a file
 owned by the same OS user every agent process runs as, and agents routinely
 edit that directory. `POST /v1/harness/outcome` accepts a caller-chosen
 `agent_uuid`, `verification_source`, and `detail`

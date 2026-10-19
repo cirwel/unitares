@@ -20,7 +20,7 @@
 #                                  kickstart reuses the cached service
 #                                  definition, so plist env edits silently
 #                                  never load (bit live 2026-08-27)
-#   deploy_lib_apply_env_overlay   write a tracked env overlay into the live
+#   deploy_lib_apply_env_overlay   write a deployment env overlay into the live
 #                                  plist so the restart above reloads it
 #
 # CONTRACT (enforced by scripts/dev/check-deploy-lib.sh):
@@ -433,7 +433,7 @@ _deploy_lib_env_keys_loaded() {
 }
 
 # ── Environment overlay ──────────────────────────────────────────────────────
-# Write this deployment's tracked environment overlay into the live plist
+# Write this deployment's external environment overlay into the live plist
 # (apply_plist_env_overlay.py) ahead of deploy_lib_restart_service, so that a
 # changed value is RELOADED, not only written. The restart reloads only on a
 # hash MISMATCH; with no baseline yet it adopts the current hash and
@@ -455,9 +455,14 @@ _deploy_lib_env_keys_loaded() {
 #
 # A required overlay failure aborts the deploy. Before mutation, record and
 # verify the old hash so a failed reload remains detectable on the next run.
-# usage: deploy_lib_apply_env_overlay TAG LABEL PLIST OVERLAY APPLIER
+# The optional expected digest is passed to every read, including recovery
+# checks, so an overlay replaced during deployment cannot inherit prior review.
+# usage: deploy_lib_apply_env_overlay TAG LABEL PLIST OVERLAY APPLIER [EXPECTED_SHA256]
 deploy_lib_apply_env_overlay() {
   local tag="$1" label="$2" plist="$3" overlay="$4" applier="$5"
+  local expected_sha256="${6:-}"
+  local digest_args=()
+  [[ -z "$expected_sha256" ]] || digest_args=(--expected-sha256 "$expected_sha256")
   local state_dir sidecar before after before_sum after_sum status
   if [[ ! -f "$overlay" ]]; then
     echo "[$tag] ERROR: required environment overlay is missing or not a file ($overlay)." >&2
@@ -468,7 +473,8 @@ deploy_lib_apply_env_overlay() {
   before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   before_sum="$(cksum < "$plist" 2>/dev/null || true)"
   status=0
-  python3 "$applier" --plist "$plist" --overlay "$overlay" --check || status=$?
+  python3 "$applier" --plist "$plist" --overlay "$overlay" \
+    "${digest_args[@]+"${digest_args[@]}"}" --check || status=$?
   if [[ "$status" != 0 && "$status" != 3 ]]; then
     echo "[$tag] ERROR: cannot validate the required environment overlay." >&2
     return 1
@@ -486,10 +492,12 @@ deploy_lib_apply_env_overlay() {
   # A failure is reported, but the plist is compared either way: the applier
   # can fail after its write (a dead stdout pipe, an interrupt), and a written
   # change must still be reloaded.
-  if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --backup-dir "$state_dir"; then
+  if ! python3 "$applier" --plist "$plist" --overlay "$overlay" \
+    "${digest_args[@]+"${digest_args[@]}"}" --backup-dir "$state_dir"; then
     # A stdout failure after a complete write is harmless only when a
     # second read proves all required values are present.
-    if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --check; then
+    if ! python3 "$applier" --plist "$plist" --overlay "$overlay" \
+      "${digest_args[@]+"${digest_args[@]}"}" --check; then
       echo "[$tag] ERROR: the required environment overlay was not applied." >&2
       return 1
     fi

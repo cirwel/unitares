@@ -37,6 +37,9 @@
 # Flags:
 #   --dry-run   show what would be deployed; run nothing
 #   --no-fetch  use cached remotes (default refreshes them for accurate verdicts)
+#   --request-service=SERVICE  also deploy this CURRENT service (repeatable)
+# Requests use the same safety checks as drift-driven deployments. They do not
+# restart DOWN services or bypass a held checkout or reviewed-revision pin.
 # Exit 1: deployment/inspection failed. Exit 3: incomplete (skipped or DOWN).
 set -uo pipefail
 
@@ -46,17 +49,29 @@ STATUS="$OPS_DIR/deploy-status.sh"
 # Read-only handshake for wrappers: older tooling must not silently ignore a
 # caller's reviewed-revision pin. Kept in this script so no status/deploy runs.
 if [[ "$#" = 1 && "$1" = --capabilities ]]; then
-  echo 'expected-revision-v1 incomplete-exit-v1'
+  echo 'expected-revision-v1 incomplete-exit-v1 requested-service-v1'
   exit 0
 fi
 
 DRY_RUN=0
 FETCH=1
+requested_services=""
 for a in "$@"; do
   case "$a" in
     --dry-run)  DRY_RUN=1 ;;
     --no-fetch) FETCH=0 ;;
-    -h|--help)  sed -n '2,21p' "$0"; exit 0 ;;
+    --request-service=*)
+      service="${a#--request-service=}"
+      if [[ ! "$service" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+        echo "[apply] invalid requested service: $service" >&2
+        exit 1
+      fi
+      requested_services="$(printf '%s\n%s' "$requested_services" "$service")"
+      ;;
+    -h|--help)
+      sed -n '2,21p' "$0"
+      sed -n '/^# Flags:/,/^# Exit /p' "$0"
+      exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
@@ -109,23 +124,35 @@ echo "[apply] reading deploy-status.sh ($([ "$FETCH" = 1 ] && echo fetched || ec
 # shellcheck disable=SC2086
 status_json="$("$STATUS" $status_args)" || { echo "[apply] deploy-status.sh failed" >&2; exit 1; }
 
-# Emit one TAB-separated "name<TAB>verdict<TAB>checkout<TAB>pickup" line per STALE/BEHIND
-# service. deploy-status.sh --json is valid JSON; parse it with python3
+# Emit one TAB-separated "name<TAB>verdict<TAB>checkout<TAB>pickup" line per
+# STALE/BEHIND/DOWN or requested service, in status-table order. A request only
+# selects an existing row, so repeated flags never dispatch a service twice.
+# Validate every request before dispatching anything. deploy-status.sh --json
+# is valid JSON; parse it with python3
 # (tolerant of the verdict's optional " [DEV]" suffix). `checkout` is the git
 # worktree the service's deploy script fast-forwards -- the field the shared-tree
 # hold below is keyed on.
 needs="$(
   printf '%s' "$status_json" | python3 -c '
 import json, sys
-for svc in json.load(sys.stdin):
+services = json.load(sys.stdin)
+requested = set(sys.argv[1].splitlines()) - {""}
+for name in sorted(requested):
+    matches = sum(svc.get("name") == name for svc in services)
+    if matches != 1:
+        reason = "unknown" if matches == 0 else "ambiguous"
+        print("[apply] %s requested service: %s" % (reason, name), file=sys.stderr)
+        sys.exit(1)
+for svc in services:
     v = svc.get("verdict", "")
-    if v.startswith("STALE") or v.startswith("BEHIND") or v.startswith("DOWN"):
+    if (v.startswith("STALE") or v.startswith("BEHIND") or v.startswith("DOWN")
+            or svc.get("name") in requested):
         print("%s\t%s\t%s\t%s" % (
             svc.get("name", ""), v, svc.get("checkout", ""),
             svc.get("pickup", "unknown"),
         ))
-'
-)" || { echo "[apply] could not parse deploy-status --json" >&2; exit 1; }
+' "$requested_services"
+)" || { echo "[apply] could not validate deploy-status --json and service requests" >&2; exit 1; }
 
 if [ -z "$needs" ]; then
   echo "[apply] nothing to deploy — no service is STALE, BEHIND or DOWN."
@@ -164,6 +191,12 @@ while IFS=$'\t' read -r name verdict checkout pickup; do
     DOWN*)
       echo "[apply] DOWN  $name — not restarted automatically; inspect why the service stopped" >&2
       down="$down $name"
+      continue
+      ;;
+    CURRENT*|STALE*|BEHIND*) ;;
+    *)
+      echo "[apply] SKIP  $name ($verdict) — requested service is not confirmed CURRENT, STALE or BEHIND" >&2
+      skipped="$skipped $name"
       continue
       ;;
   esac
@@ -227,7 +260,13 @@ echo "  held:    ${held:-  none}"
 echo "  failed:  ${failed:-  none}"
 echo "  down:    ${down:-  none}"
 [ -n "$held" ] && echo "  (held = not attempted: shares a checkout with a failed deploy. Fix that failure, then re-run.)"
-[ -n "$skipped" ] && echo "  (skipped = drift remains; no deploy automation ran for those services.)"
+if [ -n "$skipped" ]; then
+  if [ -n "$requested_services" ]; then
+    echo "  (skipped = drift or requested work remains; no deploy automation ran for those services.)"
+  else
+    echo "  (skipped = drift remains; no deploy automation ran for those services.)"
+  fi
+fi
 
 # Preserve an actual deploy failure; otherwise distinguish an incomplete
 # update from success, including dry runs that cannot cover every service.

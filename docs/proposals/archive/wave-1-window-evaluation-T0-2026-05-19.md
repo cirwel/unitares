@@ -63,8 +63,8 @@ Per the prior doc's "What this evaluation supports":
 
 ## What this doc deliberately does not do
 
-- Does not redraft Wave 3 RFC. Per
-  `feedback_redraft-cycle-bias-trap.md`, the 2026-05-09 v0.3.2 pause is
+- Does not redraft Wave 3 RFC. A paused design is measured before it is
+  redrafted, so the 2026-05-09 v0.3.2 pause is
   measure-first; this doc IS the measurement track, not a fresh
   redraft.
 - Does not re-litigate the destination. v0.3 RESOLUTION's A′ commitment
