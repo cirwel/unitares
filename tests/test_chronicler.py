@@ -949,7 +949,7 @@ class TestGithubTrafficScrapers:
             if cmd[:3] == ["gh", "repo", "list"]:
                 return CompletedProcess(cmd, 0, stdout=json.dumps(repos), stderr="")
             if cmd[:2] == ["gh", "api"]:
-                # cmd shape: ["gh", "api", "repos/example/<name>/traffic/<kind>"]
+                # cmd shape: ["gh", "api", "repos/<org>/<name>/traffic/<kind>"]
                 path = cmd[2]
                 _, _, repo_name, _, kind = path.split("/")
                 count, uniques = traffic[repo_name][kind]

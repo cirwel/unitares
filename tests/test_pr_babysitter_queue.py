@@ -140,7 +140,7 @@ def _timeline(labelled_min_ago: float | None = 10, pushed_min_ago: float | None 
     events: list[dict] = []
     if pushed_min_ago is not None:
         events.append(
-            {"event": "committed", "committer": {"name": "Kenny", "date": _iso(pushed_min_ago)}, "message": "fix: x"}
+            {"event": "committed", "committer": {"name": "alice", "date": _iso(pushed_min_ago)}, "message": "fix: x"}
         )
     if updater_min_ago is not None:
         # GitHub's updater / `gh pr update-branch`: never counts as a push.

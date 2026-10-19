@@ -204,9 +204,11 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
     """
     from scripts.dev.lease_plane_deprecate import _read_force_release_token
 
-    # Isolate from the operator's real ~/.config/cirwel/secrets.env by
-    # repointing HOME at an empty tmp dir.
+    # Isolate from the developer's real secrets env file by repointing HOME
+    # at an empty tmp dir, and drop UNITARES_SECRETS_ENV so an exported value
+    # cannot point the resolver back at a real file.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
     monkeypatch.delenv("LEASE_FORCE_RELEASE_TOKEN", raising=False)
 
     # Case 1: GOVERNANCE_TOKEN in env, nothing else.
@@ -215,22 +217,49 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
         "GOVERNANCE_TOKEN in env must not satisfy LEASE_FORCE_RELEASE_TOKEN"
     )
 
-    # Case 2: GOVERNANCE_TOKEN in secrets.env (no LEASE_FORCE_RELEASE_TOKEN).
+    # Case 2: even an explicitly selected file cannot use GOVERNANCE_TOKEN
+    # for force-release. Cover both a legacy deployment path and the neutral
+    # template location; neither path is discovered automatically.
     monkeypatch.delenv("GOVERNANCE_TOKEN", raising=False)
-    secrets_dir = tmp_path / ".config" / "cirwel"
-    secrets_dir.mkdir(parents=True)
-    (secrets_dir / "secrets.env").write_text(
-        'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
-        "OTHER_VAR=irrelevant\n"
-    )
-    assert _read_force_release_token() is None, (
-        "GOVERNANCE_TOKEN in secrets.env must not satisfy "
-        "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
-    )
+    for directory in ("cirwel", "unitares"):
+        selected = tmp_path / ".config" / directory / "secrets.env"
+        selected.parent.mkdir(parents=True)
+        selected.write_text(
+            'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
+            "OTHER_VAR=irrelevant\n"
+        )
+        monkeypatch.setenv("UNITARES_SECRETS_ENV", str(selected))
+        assert _read_force_release_token() is None, (
+            "GOVERNANCE_TOKEN in the selected file must not satisfy "
+            "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
+        )
 
-    # Sanity: the function CAN find a real LEASE_FORCE_RELEASE_TOKEN —
-    # otherwise the negative cases above would pass for the wrong reason.
-    monkeypatch.setenv("LEASE_FORCE_RELEASE_TOKEN", "real-force-release-token")
-    assert _read_force_release_token() == "real-force-release-token", (
-        "positive control: env LEASE_FORCE_RELEASE_TOKEN must still be read"
-    )
+        # Positive control: selection reaches this file, so the negative case
+        # establishes the credential boundary rather than a missed file.
+        selected.write_text(
+            'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
+            'LEASE_FORCE_RELEASE_TOKEN="file-force-release-token"\n'
+        )
+        assert _read_force_release_token() == "file-force-release-token", (
+            "LEASE_FORCE_RELEASE_TOKEN in an explicitly selected file must be read"
+        )
+
+    # Direct environment credentials need no file selection.
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
+    monkeypatch.setenv("LEASE_FORCE_RELEASE_TOKEN", "fixture-env-force-release-token")
+    assert _read_force_release_token() == "fixture-env-force-release-token"
+
+
+@pytest.mark.parametrize("directories", [("unitares",), ("cirwel",), ("unitares", "cirwel")])
+def test_force_release_ignores_unselected_home_files(monkeypatch, tmp_path, directories):
+    """A valid token in a home file does not make that file a selected source."""
+    from scripts.dev.lease_plane_deprecate import _read_force_release_token
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
+    monkeypatch.delenv("LEASE_FORCE_RELEASE_TOKEN", raising=False)
+    for directory in directories:
+        path = tmp_path / ".config" / directory / "secrets.env"
+        path.parent.mkdir(parents=True)
+        path.write_text('LEASE_FORCE_RELEASE_TOKEN="unselected-file-token"\n')
+    assert _read_force_release_token() is None

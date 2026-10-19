@@ -2641,7 +2641,7 @@ class TestHandleOnboardV2:
         mock_db.find_agent_by_label.return_value = None
         mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
 
-        parent_uuid = "da300b4a-5320-480d-bac3-d029cd062842"
+        parent_uuid = "4389d62d-383f-505d-b0e4-b30bd97a768d"
         spawn_reason = "new_session"
 
         result = await handle_onboard_v2({
@@ -2689,7 +2689,7 @@ class TestHandleOnboardV2:
         mock_db.find_agent_by_label.return_value = None
         mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
 
-        parent_uuid = "da300b4a-5320-480d-bac3-d029cd062842"
+        parent_uuid = "4389d62d-383f-505d-b0e4-b30bd97a768d"
         parent_thread_id = "t-parent-thread"
 
         async def thread_info(agent_id):

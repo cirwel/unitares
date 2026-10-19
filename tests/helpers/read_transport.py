@@ -29,9 +29,9 @@ from starlette.requests import Request
 from src.mcp_handlers.context import SessionSignals
 from tests.helpers import parse_result
 
-AGENT_UUID = "1856bb5c-2553-4523-809b-a5d26bbd58d1"
+AGENT_UUID = "100bc788-d559-5672-b12d-f432057387a5"
 OTHER_UUID = "5a0e3c1d-77b2-4f10-9c3e-0d9a1b2c3d4e"
-AGENT_SESSION = "agent-1856bb5c-255"
+AGENT_SESSION = "agent-100bc788-d55"
 FINGERPRINT = "127.0.0.1:abc123"
 USER_AGENT = "claude-code/2.1.0 (cli)"
 CONNECTION = "conn-7f3a"

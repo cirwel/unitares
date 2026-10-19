@@ -16,7 +16,7 @@ import pytest
 
 AUTH = "src.mcp_handlers.dialectic.auth"
 
-PAUSED_UUID = "3b531b97-a39d-4b95-aeb3-91a1003c9685"
+PAUSED_UUID = "3c4e02db-67b8-5111-af6c-e10d7b0e8227"
 PAUSED_HANDLE = "Claude_Opus_5_20260730"
 OTHER_UUID = "1f0c9e2a-7b44-4d6e-9c31-5aa8e0d21bb7"
 

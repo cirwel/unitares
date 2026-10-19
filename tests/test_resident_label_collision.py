@@ -10,7 +10,7 @@ being a candidate at all and the ghost was presented and audited in its place.
 Measured 2026-08-26 over the full identity table: 201 suffixed
 resident-prefixed labels, 199 of them ghosts correctly taking the suffix —
 the mechanism working. Only 2 were the inverse. It is rare, and it is silent
-and long-lived when it happens: `Watcher_7bf970d4` carried `persistent` under
+and long-lived when it happens: `Watcher_0e6d210c` carried `persistent` under
 a suffixed label from 2026-04-19 to 2026-06-14.
 """
 from __future__ import annotations
@@ -33,13 +33,13 @@ class _Meta:
 
 
 RESIDENT = ("persistent", "autonomous")
-GHOST_UUID = "dc94fa70-6186-4862-aeb6-3fc9801263c8"
-REAL_UUID = "7dea7dcb-e887-4c90-8c8a-4f3433da102b"
+GHOST_UUID = "81b264c8-7406-5fcc-8b34-2e742952e4ee"
+REAL_UUID = "5b9575cc-8423-5268-85ce-b8c9757a5ca8"
 
 
 class TestLabelClaim:
     def test_own_uuid8_suffix_is_recognised(self):
-        assert _resident_label_claim("Doctor_7dea7dcb", REAL_UUID) == "Doctor"
+        assert _resident_label_claim("Doctor_5b9575cc", REAL_UUID) == "Doctor"
 
     def test_the_longer_collision_suffixes_are_this_rows_rename(self):
         """The rename falls back to uuid[:13], then the whole uuid, when the
@@ -50,7 +50,7 @@ class TestLabelClaim:
 
     def test_a_different_uuid_suffix_is_not_this_rows_rename(self):
         """⛔Only the row's OWN uuid8 counts — that is how the rename builds it."""
-        assert _resident_label_claim("Doctor_7dea7dcb", GHOST_UUID) is None
+        assert _resident_label_claim("Doctor_5b9575cc", GHOST_UUID) is None
 
     def test_deliberate_underscore_names_are_left_alone(self):
         """⛔Stripping any trailing _xxxxxxxx would merge two real agents.
@@ -61,9 +61,9 @@ class TestLabelClaim:
         assert _resident_label_claim("Sentinel", REAL_UUID) is None
 
     def test_degenerate_labels_do_not_claim_anything(self):
-        assert _resident_label_claim("_7dea7dcb", REAL_UUID) is None
+        assert _resident_label_claim("_5b9575cc", REAL_UUID) is None
         assert _resident_label_claim(None, REAL_UUID) is None
-        assert _resident_label_claim("Doctor_7dea7dcb", None) is None
+        assert _resident_label_claim("Doctor_5b9575cc", None) is None
 
 
 class TestPreference:
@@ -75,7 +75,7 @@ class TestPreference:
         is exactly what the rename took away.
         """
         ghost = _Meta("Doctor", tags=["ephemeral"])
-        real = _Meta("Doctor_7dea7dcb", tags=RESIDENT)
+        real = _Meta("Doctor_5b9575cc", tags=RESIDENT)
         assert _resident_meta_preference_key(real, exact_label=False) > \
             _resident_meta_preference_key(ghost, exact_label=True)
 
@@ -88,14 +88,14 @@ class TestPreference:
 
     def test_active_outranks_tags(self):
         """An archived resident must never displace a live row."""
-        archived_real = _Meta("Doctor_7dea7dcb", tags=RESIDENT, status="archived")
+        archived_real = _Meta("Doctor_5b9575cc", tags=RESIDENT, status="archived")
         active_ghost = _Meta("Doctor", tags=["ephemeral"])
         assert _resident_meta_preference_key(active_ghost, exact_label=True) > \
             _resident_meta_preference_key(archived_real, exact_label=False)
 
     def test_partial_tags_do_not_count_as_a_resident(self):
-        """`persistent` alone is the Watcher_7bf970d4 shape — still a gap."""
-        partial = _Meta("Watcher_7bf970d4", tags=["persistent"])
+        """`persistent` alone is the Watcher_0e6d210c shape — still a gap."""
+        partial = _Meta("Watcher_0e6d210c", tags=["persistent"])
         tagged = _Meta("Watcher", tags=RESIDENT)
         assert _resident_meta_preference_key(tagged, exact_label=True) > \
             _resident_meta_preference_key(partial, exact_label=False)

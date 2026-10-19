@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -259,13 +261,15 @@ def test_repo_scope_register_phrases_match_both_guards():
 
 
 def test_register_check_flags_three_lane_council_claimed_for_pr_bodies():
-    # origin/master REPO_SCOPE.md:28-34 before the audit correction.
+    # origin/master REPO_SCOPE.md:28-34 before the audit correction, less its
+    # operator-local path phrase: the home-path check has since moved out of
+    # Rule 5 into Rule 8 and is documented in its own bullet.
     stale = (
         "- **Chat-session / AI-deliberation register** — committed docs, code comments,\n"
         "  and PR descriptions should read as product engineering. The guard flags, in changed\n"
         # The guard's own phrases are split across literals so this file does
         # not trip the guard it is checking.
-        "  files and in PR bodies: operator-local paths (`/Users/" "cirwel`), second-person\n"
+        "  files and in PR bodies: second-person\n"
         "  address of the operator (`per " "your guidance`, `your " "overlay`, `you " "flagged`,\n"
         "  `questions " "for Kenny`), and exposed AI-review process (`council " "pass`,\n"
         "  `council " "fold`, `live" "-verifier`, `three-lane " "council`). It deliberately does\n"
@@ -277,6 +281,66 @@ def test_register_check_flags_three_lane_council_claimed_for_pr_bodies():
     assert len(failures) == 1, failures
     assert "`three-lane " "council`" in failures[0]
     assert f"{_SCOPE_DOC}:6:" in failures[0]
+
+
+# --- (b2) repo-scope home-path and webmail patterns are general -------------
+
+_SHELL_ASSIGN = r"^\s*{name}='([^']*)'\s*$"
+
+
+def _assigned(rel: str, name: str) -> str:
+    found = re.findall(_SHELL_ASSIGN.format(name=name), (REPO_ROOT / rel).read_text(), re.M)
+    assert len(found) == 1, f"{rel}: expected one {name}='...' assignment, found {found}"
+    return found[0]
+
+
+@pytest.mark.parametrize("name", ["HOME_PATH_RE", "HOME_PLACEHOLDER_RE"])
+def test_pr_body_home_path_patterns_match_file_guard(name):
+    assert _assigned(_REPO_SCOPE_WF, name) == _assigned(_REPO_SCOPE_SH, name)
+
+
+def _run_guard(tmp_path: Path, content: str) -> subprocess.CompletedProcess:
+    """Run the guard against one file in a throwaway repo, not this checkout."""
+    (tmp_path / "scripts" / "dev").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / _REPO_SCOPE_SH, tmp_path / _REPO_SCOPE_SH)
+    runtime_guard = Path("scripts/dev/check_operator_defaults.py")
+    shutil.copy(REPO_ROOT / runtime_guard, tmp_path / runtime_guard)
+    (tmp_path / "probe.md").write_text(content)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    return subprocess.run(
+        ["bash", _REPO_SCOPE_SH, "--files", "probe.md"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+
+
+# Literals are split so this file does not trip the guard it is checking.
+@pytest.mark.parametrize(
+    "content",
+    [
+        "see /Users/" "somebody/projects/app/main.py\n",
+        "file:///Users/" "jane.doe/x.py\n",
+        "contact jane" "@gmail.com\n",
+        "Jane" "@ProtonMail.com\n",
+        "j" "@proton.me.\n",
+    ],
+)
+def test_repo_scope_guard_flags_any_contributors_leak(tmp_path, content):
+    result = _run_guard(tmp_path, content)
+    assert result.returncode == 1, result.stdout
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "/Users/" "you/projects/app and /Users/" "x/.claude and /Users/" "testuser/a\n",
+        "ends at /Users/" "you.\n",
+        "/Users/<name>/projects, /Users/$USER/projects, /Users/" "Shared/x\n",
+        "user" "@example.com, noreply" "@github.com, a" "@outlook.company.org\n",
+    ],
+)
+def test_repo_scope_guard_passes_placeholders(tmp_path, content):
+    result = _run_guard(tmp_path, content)
+    assert result.returncode == 0, result.stdout
 
 
 # --- (d) secrets / vars named in docs must be read by some workflow ---------

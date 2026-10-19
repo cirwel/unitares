@@ -8,7 +8,7 @@ hyphenated identifiers and `slug-*` tags match without this migration. These
 tests pin that fact so a future change cannot quietly break it while
 "fixing hyphens".
 
-The actual cause is the slash. `cirwel/unitares-paper-v7` is parsed as a single
+The actual cause is the slash. `acmeco/unitares-paper-v7` is parsed as a single
 `file` token and indexed as ONE lexeme, unreachable by its own segments.
 Migration 065 indexes slash-joined spans a second time in decomposed form.
 """
@@ -73,17 +73,17 @@ async def test_slash_joined_identifier_reachable_by_its_own_segment():
     try:
         discovery_id = await _insert(
             conn,
-            summary="v7 paper skeleton LIVE in private repo cirwel/unitares-paper-v7",
+            summary="v7 paper skeleton LIVE in private repo acmeco/unitares-paper-v7",
             details="see docs/ontology/identity.md for the contract",
             tags=["slug-paper-v7-skeleton"],
         )
         assert await _matches(conn, discovery_id, "unitares-paper-v7")
-        assert await _matches(conn, discovery_id, "cirwel")
+        assert await _matches(conn, discovery_id, "acmeco")
         # A path segment in details, and a nested path's inner segment.
         assert await _matches(conn, discovery_id, "identity.md")
         assert await _matches(conn, discovery_id, "ontology")
         # The full undecomposed span must still match — 065 adds, never replaces.
-        assert await _matches(conn, discovery_id, "cirwel/unitares-paper-v7")
+        assert await _matches(conn, discovery_id, "acmeco/unitares-paper-v7")
     finally:
         await conn.execute("DELETE FROM knowledge.discoveries WHERE id LIKE 'test-065-%'")
         await conn.close()
@@ -101,7 +101,7 @@ async def test_multi_term_and_query_containing_a_path_segment():
     try:
         discovery_id = await _insert(
             conn,
-            summary="v7 paper skeleton LIVE in private repo cirwel/unitares-paper-v7",
+            summary="v7 paper skeleton LIVE in private repo acmeco/unitares-paper-v7",
             details="outline plus claims ledger",
             tags=["slug-paper-v7-skeleton"],
         )

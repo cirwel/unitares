@@ -3,8 +3,9 @@
 #
 # Sources AGENT_ORCHESTRATOR_BEARER_TOKEN, the lease-plane bearer, and the
 # shared Postgres URL (AGENT_ORCHESTRATOR_DATABASE_URL, GOVERNANCE_DATABASE_URL,
-# or DB_POSTGRES_URL) from the explicit UNITARES_SECRETS_ENV file (mode 600), then execs
-# `mix run --no-halt`. The HTTP control surface binds 127.0.0.1:8789 by default;
+# or DB_POSTGRES_URL) from the explicit UNITARES_SECRETS_ENV file (mode 600),
+# then execs `mix run --no-halt`. The HTTP control surface binds
+# 127.0.0.1:8789 by default;
 # override via AGENT_ORCHESTRATOR_HTTP_PORT or the :agent_orchestrator runtime
 # config (see application.ex / config.exs).
 #

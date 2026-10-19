@@ -105,11 +105,12 @@ from the census.
    governance server's environment (e.g. `UNITARES_ROUTE_PACKS=automation-census`).
    The shipped default mounts no route packs, so without this `/api/automations`
    answers 404. See "Route packs" in `docs/operations/resident-roster.md`.
-   The endpoint (`/api/automations`) serves `last.json` from its default
-   location (`~/.local/state/unitares-automations/last.json`). It does not read
-   `UNITARES_AUTOMATION_STATE_DIR`: if you moved the snapshot, set
-   `UNITARES_AUTOMATION_CENSUS_PATH` to that `last.json` in the governance
-   server's environment.
+   The endpoint (`/api/automations`) serves `last.json` from
+   `$UNITARES_AUTOMATION_STATE_DIR` when that is set in the governance server's
+   environment, else from `~/.local/state/unitares-automations/last.json`. Set
+   the same `UNITARES_AUTOMATION_STATE_DIR` for the census writer and the
+   server, or set `UNITARES_AUTOMATION_CENSUS_PATH` to the full path of
+   `last.json`; when set, it takes precedence over the state dir.
 
 ## The escape hatch — declare anything
 

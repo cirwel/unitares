@@ -15,8 +15,9 @@ defmodule UnitaresSentinel.ConfigEnvTest do
   `first_boot_lookback_seconds` shares the same helper and shared the hazard.
 
   The BOOLEAN helper next to it raised for the same reason and had a worse blast
-  radius. `scripts/start.sh` sources `~/.config/cirwel/secrets.env` and then
-  exports all NINE boolean knobs from `${VAR:-default}`, so both the launchd
+  radius. `scripts/start.sh` sources the secrets env file
+  only when `$UNITARES_SECRETS_ENV` explicitly selects it, and then exports
+  all NINE boolean knobs from `${VAR:-default}`, so both the launchd
   plist and secrets.env can set them — and `UNITARES_SENTINEL_EMIT_FINDINGS` is
   one an operator reaches for mid-incident, where `y` is the obvious wrong
   guess. It used to kill the resident outright instead of leaving findings on.

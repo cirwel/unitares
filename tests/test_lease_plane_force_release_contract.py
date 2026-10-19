@@ -68,9 +68,19 @@ if not _router_reachable():
 # ---------- helpers ----------
 
 def _secrets_path() -> Path | None:
-    """Integration credentials must be explicitly provisioned."""
-    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
-    return Path(override) if override else None
+    """Use the doctor's explicit-only selector; never discover credentials."""
+    import importlib.util
+
+    name = "_force_release_contract_unitares_doctor"
+    doctor = sys.modules.get(name)
+    if doctor is None:
+        script = project_root / "scripts" / "dev" / "unitares_doctor.py"
+        spec = importlib.util.spec_from_file_location(name, script)
+        assert spec and spec.loader
+        doctor = importlib.util.module_from_spec(spec)
+        sys.modules[name] = doctor  # dataclasses need the module registered
+        spec.loader.exec_module(doctor)
+    return doctor.resolve_secrets_file()
 
 
 def _read_secrets_var(var_name: str) -> str | None:
@@ -79,7 +89,7 @@ def _read_secrets_var(var_name: str) -> str | None:
     if tok:
         return tok
     secrets_path = _secrets_path()
-    if secrets_path is None or not secrets_path.exists():
+    if secrets_path is None or not secrets_path.is_absolute() or not secrets_path.exists():
         return None
     prefix = f"{var_name}="
     for line in secrets_path.read_text().splitlines():

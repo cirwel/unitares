@@ -11,7 +11,11 @@
 #   KG_HYGIENE_PYTHON      interpreter with psycopg2 (default: python3). For the
 #                          launchd job set this to the same python the
 #                          governance-mcp service runs.
-#   UNITARES_ROOT          checkout root (default: this script's checkout)
+#   UNITARES_ROOT          checkout root (default: the checkout holding this
+#                          script, two directories above scripts/ops/). A copy
+#                          run from a deploy worktree, a linked dev worktree or
+#                          a tooling install uses THAT checkout's code, not a
+#                          fixed dev checkout; set UNITARES_ROOT to pin one.
 #   KG_HYGIENE_LOG         digest log (default: ~/Library/Logs/unitares-kg-hygiene.log)
 #   KG_HYGIENE_APPLY       1 = cool the safe batch, 0 = report only (default: 0)
 #   KG_HYGIENE_COOL_LIMIT  max rows cooled per run, oldest first (default: 20).

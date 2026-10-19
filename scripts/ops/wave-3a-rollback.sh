@@ -14,8 +14,8 @@
 #   -h | --help                 Print this banner.
 #
 # Auth: requires UNITARES_OPERATOR_TOKEN in the environment (single token,
-# matched against the server's UNITARES_OPERATOR_TOKENS allowlist). For
-# an explicitly selected UNITARES_SECRETS_ENV file may supply it instead.
+# matched against the server's UNITARES_OPERATOR_TOKENS allowlist).
+# An explicitly selected UNITARES_SECRETS_ENV file may supply it instead.
 #
 # Endpoint discovery: defaults to http://127.0.0.1:8767. Override via
 # UNITARES_GOVERNANCE_MCP_URL.

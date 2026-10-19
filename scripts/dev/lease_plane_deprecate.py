@@ -99,18 +99,23 @@ DEFAULT_DB_URL = os.environ.get(
 )
 
 
+def _secrets_env_path() -> Path | None:
+    """Return only the explicitly selected source, like the doctor resolver.
+
+    A template created by the installer is not an implicit credential source.
+    tests/test_secrets_env_resolver_parity.py pins selection across helpers.
+    """
+    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
+    return Path(override) if override else None
+
+
 def _read_force_release_token() -> str | None:
     """Read LEASE_FORCE_RELEASE_TOKEN from env or the secrets env file."""
     tok = os.environ.get("LEASE_FORCE_RELEASE_TOKEN")
     if tok:
         return tok
-    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
-    if not override:
-        return None
-    secrets_path = Path(override)
-    if not secrets_path.is_absolute():
-        return None
-    if not secrets_path.exists():
+    secrets_path = _secrets_env_path()
+    if secrets_path is None or not secrets_path.is_absolute() or not secrets_path.exists():
         return None
     for line in secrets_path.read_text().splitlines():
         line = line.strip()

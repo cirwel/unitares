@@ -29,7 +29,7 @@ from src.mcp_handlers.identity import resolution as resolution_mod
 from src.substrate.verification import SubstrateClaim
 
 
-def _make_claim(agent_id: str = "f92dcea8-4786-412a-a0eb-362c273382f5") -> SubstrateClaim:
+def _make_claim(agent_id: str = "02e168be-4264-527b-9643-9c737dd309e4") -> SubstrateClaim:
     return SubstrateClaim(
         agent_id=agent_id,
         expected_launchd_label="com.unitares.sentinel",
@@ -114,7 +114,7 @@ async def test_http_path_substrate_token_is_refused_even_with_live_session() -> 
             new=AsyncMock(return_value=None),
         ):
             result = await resolution_mod.resolve_session_identity(
-                "agent-f92dcea8-478",
+                "agent-02e168be-478",
                 persist=False,
                 resume=True,
                 token_agent_uuid=claim.agent_id,
