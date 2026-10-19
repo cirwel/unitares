@@ -46,18 +46,58 @@ def test_other_conditions_keep_their_grade():
     assert ddd.finding_severity(diag("version_lag"), None, NOW) == "critical"
 
 
-def test_escalate_uses_first_seen_from_the_open_finding(tmp_path, monkeypatch):
-    """The second alert for the same lag, a day after first sight, is critical."""
-    posted: list = []
-    monkeypatch.setattr(ddd, "COOLDOWN_SECONDS", 0)
-    doc = ddd.Doctor(io={"post_finding": lambda p: (posted.append(p), ddd.DELIVERED)[1]})
-    d = diag("behind_origin", behind=1)
-    open_findings: dict = {}
+def _doctor(posted: list) -> "ddd.Doctor":
+    return ddd.Doctor(io={"post_finding": lambda p: (posted.append(p), ddd.DELIVERED)[1]})
 
-    monkeypatch.setattr(ddd.time, "time", lambda: NOW)
-    doc._escalate(d, "fp", open_findings)
-    monkeypatch.setattr(ddd.time, "time", lambda: NOW + ddd.BEHIND_CRITICAL_AGE_SECONDS)
-    doc._escalate(d, "fp", open_findings)
+
+def _at(monkeypatch, t: float) -> None:
+    monkeypatch.setattr(ddd.time, "time", lambda: t)
+
+
+def test_escalate_uses_first_seen_from_the_open_finding(monkeypatch):
+    """With the real cooldown: a small lag alerts as a warning, re-warns after the
+    cooldown, and is critical once it has stayed open a day."""
+    posted: list = []
+    doc, open_findings = _doctor(posted), {}
+    d = diag("behind_origin", behind=1)
+
+    for t in (NOW, NOW + 3600, NOW + ddd.COOLDOWN_SECONDS, NOW + ddd.BEHIND_CRITICAL_AGE_SECONDS):
+        _at(monkeypatch, t)
+        doc._escalate(d, "fp", open_findings)
+
+    assert [p["severity"] for p in posted] == ["warning", "warning", "critical"]
+    assert open_findings["fp"]["first_seen"] == NOW
+    assert open_findings["fp"]["severity"] == "critical"
+
+
+def test_warning_that_becomes_critical_bypasses_the_cooldown(monkeypatch):
+    """A lag that jumps past the commit limit an hour after a warning alerts at once."""
+    posted: list = []
+    doc, open_findings = _doctor(posted), {}
+
+    _at(monkeypatch, NOW)
+    doc._escalate(diag("behind_origin", behind=1), "fp", open_findings)
+    _at(monkeypatch, NOW + 3600)
+    doc._escalate(diag("behind_origin", behind=ddd.BEHIND_CRITICAL_COMMITS + 1), "fp", open_findings)
 
     assert [p["severity"] for p in posted] == ["warning", "critical"]
-    assert open_findings["fp"]["first_seen"] == NOW
+
+
+def test_repeated_critical_stays_under_the_cooldown(monkeypatch):
+    """Only a rise in severity bypasses the cooldown; an unchanged critical does not,
+    and neither does a record written before severity was stored."""
+    posted: list = []
+    doc = _doctor(posted)
+    big = diag("behind_origin", behind=ddd.BEHIND_CRITICAL_COMMITS + 5)
+
+    open_findings: dict = {}
+    _at(monkeypatch, NOW)
+    doc._escalate(big, "fp", open_findings)
+    _at(monkeypatch, NOW + 3600)
+    doc._escalate(big, "fp", open_findings)
+    assert [p["severity"] for p in posted] == ["critical"]
+
+    legacy = {"fp2": {"surface": "s", "condition": "behind_origin",
+                      "first_seen": NOW, "last_alert": NOW}}
+    doc._escalate(big, "fp2", legacy)
+    assert len(posted) == 1

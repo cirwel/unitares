@@ -502,15 +502,21 @@ class Doctor:
     def _escalate(self, d: Diagnosis, fp: str, open_findings: Dict[str, Any]) -> None:
         now = time.time()
         prev = open_findings.get(fp)
-        if prev and (now - prev.get("last_alert", 0)) < COOLDOWN_SECONDS:
+        # Severity reflects consequence, not novelty (see finding_severity): a
+        # long or old lag means a merged fix is not actually running. It is
+        # graded BEFORE the cooldown so a warning that becomes critical (a lag
+        # that jumps past BEHIND_CRITICAL_COMMITS, or crosses the age limit) is
+        # alerted at once instead of waiting out the warning's cooldown. A
+        # record from before severity was stored was graded critical.
+        severity = finding_severity(d, (prev or {}).get("first_seen"), now)
+        escalated = bool(prev) and prev.get("severity", "critical") == "warning" \
+            and severity == "critical"
+        if prev and not escalated and (now - prev.get("last_alert", 0)) < COOLDOWN_SECONDS:
             log(f"  finding suppressed (cooldown active for {fp})")
             return
         if self.dry_run:
             log(f"  dry-run: would post finding {fp}")
             return
-        # Severity reflects consequence, not novelty (see finding_severity): a
-        # long or old lag means a merged fix is not actually running.
-        severity = finding_severity(d, (prev or {}).get("first_seen"), now)
         outcome = self.io["post_finding"]({
             "event_type": FINDING_KIND,
             "severity": severity,
@@ -534,6 +540,7 @@ class Doctor:
         open_findings[fp] = {
             "surface": d.surface, "condition": d.condition,
             "first_seen": (prev or {}).get("first_seen", now), "last_alert": now,
+            "severity": severity,
         }
 
     def _resolve(self, fp: str, rec: Dict[str, Any]) -> None:
