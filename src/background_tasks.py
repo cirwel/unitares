@@ -1585,6 +1585,11 @@ async def _silence_check_iteration() -> None:
             if _proxy_alive(meta.label, now, threshold_seconds=interval * 2):
                 if agent_id not in _silence_alerted:
                     _silence_alerted.add(agent_id)
+                    if await _silence_episode_already_alerted(
+                        agent_id, last, _SILENCE_ANY_ALERT_EVENTS
+                    ):
+                        # Same episode, already announced by a previous process.
+                        continue
                     logger.warning(
                         f"[SILENCE] {meta.label or agent_id[:12]} check-in path silent for {silence_minutes:.0f}m "
                         f"(expected every {interval // 60}m) — proxy alive, suppressing CRITICAL"

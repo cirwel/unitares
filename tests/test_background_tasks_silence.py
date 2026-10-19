@@ -861,6 +861,26 @@ async def test_restart_does_not_repeat_warning_for_same_episode(audit_store):
 
 
 @pytest.mark.asyncio
+async def test_restart_does_not_repeat_proxy_alive_warning(audit_store, monkeypatch):
+    """Past 5x with a live proxy, the WARNING is de-duplicated across restarts too."""
+    broadcaster, store = audit_store
+    monkeypatch.setattr(background_tasks, "_proxy_alive", lambda *_a, **_kw: True)
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert broadcaster.broadcast_event.await_count == 1
+    assert broadcaster.broadcast_event.await_args.kwargs["payload"]["proxy_alive"] is True
+
+    for _ in range(3):
+        _simulate_restart(started_ago=timedelta(hours=2))
+        await background_tasks._silence_check_iteration()
+
+    assert broadcaster.broadcast_event.await_count == 1
+    assert _critical_calls(broadcaster) == []
+
+
+@pytest.mark.asyncio
 async def test_alert_lookup_failure_fails_open(isolated_silence_state, monkeypatch):
     """An unreadable audit store must not suppress a CRITICAL."""
     import src.audit_db as audit_module
