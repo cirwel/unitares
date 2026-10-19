@@ -17,8 +17,12 @@ from src.mcp_handlers.support.codex_app_server_client import lane_config_overrid
 
 
 @pytest.fixture(autouse=True)
-def _confinement_verified(monkeypatch):
+def _confinement_verified(monkeypatch, request):
     monkeypatch.setattr(reviewer, "codex_confinement_verified", lambda cli: True)
+    # Tests that spawn must not depend on the host having no administrator
+    # codex configuration; the refusal tests set their own.
+    if "admin" not in request.node.name:
+        monkeypatch.setattr(reviewer, "codex_admin_config_conflict", lambda: None)
 
 
 class _Proc:
@@ -92,3 +96,68 @@ def test_reviewer_codex_call_refuses_an_unconfining_cli(monkeypatch):
     monkeypatch.setattr(reviewer, "codex_confinement_verified", lambda cli: False)
     monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
     assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+
+
+def test_reviewer_codex_call_gets_no_secret_and_its_own_process_group(monkeypatch):
+    """The reviewer runs under the orchestrator, whose environment holds
+    bearers and metered API keys (OPENAI_API_KEY would move codex onto
+    metered billing). The CLI gets an allowlist, and a timeout kills its
+    whole process group, sandboxed children included."""
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AGENT_ORCHESTRATOR_BEARER_TOKEN",
+                 "DIALECTIC_TEST_CANARY"):
+        monkeypatch.setenv(name, "secret-value")
+    seen = {}
+
+    async def fake_exec(*argv, env=None, cwd=None, **kwargs):
+        seen.update(env=env, kwargs=kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_mcp_disable_overrides", lambda cli, base, cwd: [])
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    asyncio.run(reviewer.call_codex_reviewer("review this"))
+    assert "secret-value" not in seen["env"].values()
+    assert seen["env"]["HOME"] == os.environ["HOME"]
+    assert seen["kwargs"]["start_new_session"] is True
+
+
+def test_reviewer_codex_timeout_kills_the_process_group(monkeypatch):
+    groups = []
+
+    class _Slow(_Proc):
+        pid = 5151
+
+        async def communicate(self):
+            # Until its group is killed, as a hung CLI would; then it exits.
+            while 5151 not in groups:
+                await asyncio.sleep(0.01)
+            return b"", b""
+
+    async def fake_exec(*argv, **kwargs):
+        return _Slow()
+
+    monkeypatch.setenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_mcp_disable_overrides", lambda cli, base, cwd: [])
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    from agents.dialectic_reviewer import host_backends
+
+    monkeypatch.setattr(host_backends.os, "killpg", lambda pid, sig: groups.append(pid))
+    assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+    assert groups == [5151]
+
+
+def test_the_cli_allowlist_matches_the_review_gate_reviewer_allowlist():
+    """Both run the same subscription CLIs; the lists must not drift."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    from agents.dialectic_reviewer import host_backends
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py"
+    spec = importlib.util.spec_from_file_location("_rg_allowlist_parity", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    assert set(host_backends._CLI_ENV_ALLOWLIST) == set(module.REVIEWER_ENV_ALLOWLIST)
