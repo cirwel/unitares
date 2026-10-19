@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploy every dispatch_beam instance (com.cirwel.dispatch-beam and
-# com.cirwel.dispatch-beam-codex, plus com.cirwel.dispatch-beam-agy once its
-# LaunchAgent is installed) from a DEDICATED worktree pinned to origin/master —
-# never the shared dev checkout.
+# com.cirwel.dispatch-beam-codex, plus each further bot such as
+# com.cirwel.dispatch-beam-agy once its LaunchAgent is installed) from a
+# DEDICATED worktree pinned to origin/master — never the shared dev checkout.
 #
 # Why this exists: deploy-bridge.sh's own header already named this gap —
 # "dispatch-beam and dispatch-beam-codex also have COMPONENTS rows with no
@@ -65,15 +65,75 @@ INSTANCES=(
 ENV_FILES=(.env .env.codex)
 
 # --- optional instances (BEGIN) ---------------------------------------------
-# The agy (Antigravity) bot, dispatch_beam#90, exists only once its LaunchAgent
-# is installed. Until then it is not an instance at all: no plist preflight, no
-# .env.agy requirement, no restart, and no rollback kickstart. Installing the
-# plist makes it a full instance, held to the same checks as the other two.
-AGY_PLIST="$HOME/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist"
-if [ -f "$AGY_PLIST" ]; then
-  INSTANCES+=("com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log")
-  ENV_FILES+=(.env.agy)
-fi
+# Every other bot (agy today, dispatch_beam#90) is DISCOVERED from its installed
+# LaunchAgent, com.cirwel.dispatch-beam-<name>.plist, rather than listed here.
+# Until that plist is installed it is not an instance at all: no plist
+# preflight, no .env.<name> requirement, no restart, and no rollback kickstart.
+# Installing it makes a full instance, held to the same checks as the other two,
+# with the files named the way the claude/codex/agy ones already are:
+# boot_witness_<name>.bin, presence_<name>.bin, dispatch-beam-<name>.log and
+# .env.<name>. Discovery reads ~/Library/LaunchAgents and launchd only — never
+# anything in $DEPLOY, which has not been fast-forwarded yet at this point.
+# deploy-status.sh discovers the same plists for its rows; keep the two in step.
+#
+# The same prefix also names helper jobs that are not bots (logrotate, and any
+# later scheduled job). Kickstarting one of those and waiting for a boot witness
+# it never writes would roll back a good deploy, so a plist counts as a bot only
+# if its EnvironmentVariables pin DISPATCH_BOOT_WITNESS_PATH or
+# DISPATCH_PRESENCE_PATH. Those keys come from the bot's own plist (agy's from
+# its install in dispatch_beam; migrate-dispatch-beam-deploy.sh pins them only
+# for claude and codex), so nothing guarantees a new bot plist carries them: a
+# plist with neither is named on stderr and skipped, not deployed.
+#
+# A discovered bot is then held to two more rules here and one in the preflight:
+#   - not loaded in launchd: skipped, named on stderr. `launchctl kickstart -k`
+#     on an unloaded label fails, and under set -e that stops this script
+#     mid-restart with no rollback. deploy-status.sh still gives it a DOWN row,
+#     which makes deploy-apply.sh hold. `launchctl list`, not `print`: print
+#     would write the job's environment into the deploy log.
+#   - pinned paths other than the files this script polls
+#     ($STATE_DIR/boot_witness_<name>.bin, $STATE_DIR/presence_<name>.bin):
+#     REFUSE. The bot would write its real witness while this script waited on
+#     another file, then rolled back a good deploy.
+#   - no $STATE_DIR/.env.<name>: REFUSE in the preflight, before the worktree
+#     is touched.
+# The name set is spelled out rather than a-z: bash 3.2 matches a range by
+# locale, and under en_US.UTF-8 [a-z] admits capitals.
+dispatch_label_loaded() {
+  launchctl list 2>/dev/null | awk -v l="$1" '$3 == l { f = 1 } END { exit !f }'
+}
+for plist in "$HOME"/Library/LaunchAgents/com.cirwel.dispatch-beam-*.plist; do
+  [ -f "$plist" ] || continue # no match leaves the pattern itself
+  name="${plist##*/com.cirwel.dispatch-beam-}"
+  name="${name%.plist}"
+  label="com.cirwel.dispatch-beam-$name"
+  case "$name" in
+    codex | logrotate) continue ;; # codex is listed above; logrotate is no bot
+    "" | *[!abcdefghijklmnopqrstuvwxyz0123456789_]*)
+      echo "[$TAG] skipping $plist: '$name' is not a usable instance name (a-z, 0-9, _)" >&2
+      continue
+      ;;
+  esac
+  bw_path="$(plutil -extract EnvironmentVariables.DISPATCH_BOOT_WITNESS_PATH raw -o - "$plist" 2>/dev/null || true)"
+  pres_path="$(plutil -extract EnvironmentVariables.DISPATCH_PRESENCE_PATH raw -o - "$plist" 2>/dev/null || true)"
+  if [ -z "$bw_path" ] && [ -z "$pres_path" ]; then
+    echo "[$TAG] skipping $label: its plist pins no DISPATCH_BOOT_WITNESS_PATH or DISPATCH_PRESENCE_PATH, so it is not a dispatch bot" >&2
+    continue
+  fi
+  if ! dispatch_label_loaded "$label"; then
+    echo "[$TAG] skipping $label: installed but not loaded in launchd, so there is nothing to restart" >&2
+    continue
+  fi
+  if [ "$bw_path" != "$STATE_DIR/boot_witness_$name.bin" ] || [ "$pres_path" != "$STATE_DIR/presence_$name.bin" ]; then
+    echo "[$TAG] REFUSING: $label does not pin its boot witness and presence files at" >&2
+    echo "[$TAG]   $STATE_DIR/boot_witness_$name.bin and $STATE_DIR/presence_$name.bin," >&2
+    echo "[$TAG] which is where this script waits for them, so a good deploy would be rolled" >&2
+    echo "[$TAG] back. Fix that plist (or remove a stray copy) and reload it first." >&2
+    exit 1
+  fi
+  INSTANCES+=("$label|boot_witness_$name.bin|presence_$name.bin|dispatch-beam-$name.log")
+  ENV_FILES+=(".env.$name")
+done
 # --- optional instances (END) -----------------------------------------------
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -110,6 +170,17 @@ for entry in "${INSTANCES[@]}"; do
     --recipe "[$TAG]   $(dirname "$0")/migrate-dispatch-beam-deploy.sh"
 done
 
+# Every instance's env file must already be in $STATE_DIR (it is linked into the
+# worktree below). Checked here, before the fast-forward, so a refusal leaves the
+# deploy worktree on the code the running bots are serving, not ahead of it.
+for env_name in "${ENV_FILES[@]}"; do
+  if [ ! -f "$STATE_DIR/$env_name" ]; then
+    echo "[$TAG] REFUSING: no $env_name at $STATE_DIR/$env_name — the bot would boot with an" >&2
+    echo "[$TAG] empty DISCORD_BOT_TOKEN and never connect. Run migrate-dispatch-beam-deploy.sh." >&2
+    exit 1
+  fi
+done
+
 # --- fast-forward -----------------------------------------------------------
 # --detach is mandatory: git allows one checkout of a branch per repo and the
 # dev checkout at $REPO is itself sitting ON master, so branch-mode `worktree
@@ -123,14 +194,10 @@ HEAD_SHA="$(git -C "$DEPLOY" rev-parse HEAD)"
 # scripts/run.sh sources $DISPATCH_ENV_FILE relative to its working directory,
 # and .env* is gitignored, so a fresh worktree carries none. Symlink, never
 # copy: two real token files would drift and nobody could tell which one the
-# live bot actually read. Same reasoning as deploy-bridge.sh.
+# live bot actually read. Same reasoning as deploy-bridge.sh. Each source was
+# checked to exist in the preflight, before the fast-forward.
 for env_name in "${ENV_FILES[@]}"; do
   src="$STATE_DIR/$env_name"
-  if [ ! -f "$src" ]; then
-    echo "[$TAG] REFUSING: no $env_name at $src — the bot would boot with an empty" >&2
-    echo "[$TAG] DISCORD_BOT_TOKEN and never connect. Run migrate-dispatch-beam-deploy.sh." >&2
-    exit 1
-  fi
   # -L not -e: -e is false for a DANGLING symlink, so a link left pointing at an
   # old location would fall through to `ln -s` on an existing path and fail.
   if [ ! -L "$DEPLOY/$env_name" ] || [ ! -e "$DEPLOY/$env_name" ]; then

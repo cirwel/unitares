@@ -14,6 +14,32 @@ pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 
+# The dispatch-bot discovery blocks read plists with macOS plutil. The CI smoke
+# job runs on Linux, which has none, so stand in for the one form they call,
+# `plutil -extract KEY.PATH raw -o - FILE`, with plistlib: same parse, same exit
+# status (non-zero when the key path is missing or not a string). On macOS the
+# real plutil runs.
+if ! command -v plutil >/dev/null 2>&1; then
+  plutil() {
+    [ "$#" = 6 ] && [ "$1" = -extract ] && [ "$3" = raw ] && [ "$4" = -o ] && [ "$5" = - ] || return 64
+    python3 -I -c '
+import plistlib, sys
+try:
+    with open(sys.argv[2], "rb") as f:
+        v = plistlib.load(f)
+except Exception:
+    sys.exit(1)
+for k in sys.argv[1].split("."):
+    if not isinstance(v, dict) or k not in v:
+        sys.exit(1)
+    v = v[k]
+if not isinstance(v, str):
+    sys.exit(1)
+print(v)
+' "$2" "$6"
+  }
+fi
+
 # ── executing the lib directly must refuse ──
 if bash "$LIB" >/dev/null 2>&1; then bad "lib refuses direct execution"; else ok "lib refuses direct execution"; fi
 
@@ -900,8 +926,10 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   ds_block=$(sed -n '/^# --- optional components (BEGIN)/,/^# --- optional components (END)/p' "$OPS_DIR/deploy-status.sh")
   [ -n "$ddb_block" ] && [ -n "$ds_block" ] || exit 2
 
-  instances() { (HOME="$FH"; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
-  components() { (H="$FH"; DISPATCH_TREE=/fixture/dispatch; COMPONENTS=(); eval "$ds_block"; printf '%s\n' "${COMPONENTS[@]}"); }
+  # launchd is stubbed: the bot is loaded once its plist is installed.
+  launchctl() { printf -- '-\t0\tcom.cirwel.dispatch-beam-agy\n'; }
+  instances() { (HOME="$FH"; TAG=t; STATE_DIR=/s; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
+  components() { (H="$FH"; DISPATCH_TREE=/fixture/dispatch; COMPONENTS=(); eval "$ds_block"; printf '%s\n' ${COMPONENTS[@]+"${COMPONENTS[@]}"}); }
 
   # Not installed: exactly today's two instances and two env files, no row.
   out=$(instances)
@@ -911,7 +939,8 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   [ -z "$(components)" ] || exit 6
 
   # Installed: a third instance with its own state files, its env file, a row.
-  : > "$plist"
+  # A bot plist pins its boot witness and presence files; that marks it a bot.
+  printf '<plist><dict><key>EnvironmentVariables</key><dict><key>DISPATCH_BOOT_WITNESS_PATH</key><string>/s/boot_witness_agy.bin</string><key>DISPATCH_PRESENCE_PATH</key><string>/s/presence_agy.bin</string></dict></dict></plist>\n' > "$plist"
   out=$(instances)
   printf '%s\n' "$out" | grep -qx 'com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log' || exit 7
   printf '%s\n' "$out" | grep -qx '.env.agy' || exit 8
@@ -923,9 +952,125 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   grep -q 'for env_name in "${ENV_FILES\[@\]}"; do' "$ddb" || exit 10
   ! grep -q 'for env_name in .env' "$ddb" || exit 11
   [ "$(grep -c 'for e2 in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 12
-  grep -q 'dispatch-beam|dispatch-beam-codex|dispatch-beam-agy)' "$OPS_DIR/deploy-apply.sh" || exit 13
+  grep -q 'dispatch-beam|dispatch-beam-\*)' "$OPS_DIR/deploy-apply.sh" || exit 13
 ) && ok "agy dispatch bot is absent until its plist is installed, then a full instance" \
   || bad "optional agy dispatch instance"
+
+# ── further dispatch bots are discovered from their installed LaunchAgents ──
+# deploy-dispatch-beam.sh no longer names the optional bots: each installed
+# com.cirwel.dispatch-beam-<name>.plist whose EnvironmentVariables pin the boot
+# witness or presence path is an instance, if launchd has it loaded and the
+# pinned paths are the files the script polls. Helper jobs sharing the prefix
+# (logrotate, a later doctor job) must never be kickstarted and waited on as
+# bots, codex must not be listed twice, discovery must not read the deploy
+# worktree (not fast-forwarded yet when the block runs), and deploy-status.sh
+# must give a row to every bot the deploy script would discover.
+(
+  set -euo pipefail
+  OPS_DIR="$(dirname "$LIB")"
+  ddb="$OPS_DIR/deploy-dispatch-beam.sh"
+  FH="$SB/discover-home"; LA="$FH/Library/LaunchAgents"; mkdir -p "$LA"
+  # bot NAME [BOOT_WITNESS_PATH [PRESENCE_PATH]]: a bot plist pinning its files.
+  bot() {
+    printf '<plist><dict><key>EnvironmentVariables</key><dict><key>DISPATCH_BOOT_WITNESS_PATH</key><string>%s</string><key>DISPATCH_PRESENCE_PATH</key><string>%s</string></dict></dict></plist>\n' \
+      "${2:-/s/boot_witness_$1.bin}" "${3:-/s/presence_$1.bin}"
+  }
+  helper='<plist><dict><key>Label</key><string>helper</string></dict></plist>'
+  # Names the key, but only as an argument: not an EnvironmentVariables pin.
+  mention='<plist><dict><key>ProgramArguments</key><array><string>echo</string><string>DISPATCH_BOOT_WITNESS_PATH</string></array></dict></plist>'
+  presence_only='<plist><dict><key>EnvironmentVariables</key><dict><key>DISPATCH_PRESENCE_PATH</key><string>/s/presence_solo.bin</string></dict></dict></plist>'
+
+  ddb_block=$(sed -n '/^INSTANCES=(/,/^# --- optional instances (END)/p' "$ddb")
+  ds_block=$(sed -n '/^# --- optional components (BEGIN)/,/^# --- optional components (END)/p' "$OPS_DIR/deploy-status.sh")
+  [ -n "$ddb_block" ] && [ -n "$ds_block" ] || exit 2
+  # launchd is stubbed. Every fixture bot is loaded except "sleepy". The
+  # locale is the one the reviewer found [a-z] admitting capitals under.
+  launchctl() {
+    local l
+    for l in com.cirwel.dispatch-beam com.cirwel.dispatch-beam-codex com.cirwel.dispatch-beam-agy \
+      com.cirwel.dispatch-beam-gemini com.cirwel.dispatch-beam-solo com.cirwel.dispatch-beam-Bot \
+      com.cirwel.dispatch-beam-wrongpath com.cirwel.dispatch-beam-logrotate; do
+      printf -- '-\t0\t%s\n' "$l"
+    done
+  }
+  run_ddb() { (export LC_ALL=en_US.UTF-8; HOME="$1"; TAG=t; STATE_DIR=/s; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
+  instances() { run_ddb "$FH" 2>/dev/null; }
+  components() { (H="$FH"; DISPATCH_TREE=/d; COMPONENTS=(); eval "$ds_block"; printf '%s\n' ${COMPONENTS[@]+"${COMPONENTS[@]}"}); }
+
+  bot claude /s/boot_witness.bin /s/presence.bin > "$LA/com.cirwel.dispatch-beam.plist"
+  bot codex > "$LA/com.cirwel.dispatch-beam-codex.plist"
+  bot agy > "$LA/com.cirwel.dispatch-beam-agy.plist"
+  bot gemini > "$LA/com.cirwel.dispatch-beam-gemini.plist"
+  bot sleepy > "$LA/com.cirwel.dispatch-beam-sleepy.plist"
+  bot codex > "$LA/com.cirwel.dispatch-beam-codex.plist.bak-sec-20261005"
+  printf '%s\n' "$helper" > "$LA/com.cirwel.dispatch-beam-logrotate.plist"
+  printf '%s\n' "$helper" > "$LA/com.cirwel.dispatch-beam-doctor.plist"
+  printf '%s\n' "$mention" > "$LA/com.cirwel.dispatch-beam-mention.plist"
+  bot Bad.Name > "$LA/com.cirwel.dispatch-beam-Bad.Name.plist"
+  bot Bot > "$LA/com.cirwel.dispatch-beam-Bot.plist"
+
+  out=$(instances)
+  expected='com.cirwel.dispatch-beam|boot_witness.bin|presence.bin|dispatch-beam.log
+com.cirwel.dispatch-beam-codex|boot_witness_codex.bin|presence_codex.bin|dispatch-beam-codex.log
+com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log
+com.cirwel.dispatch-beam-gemini|boot_witness_gemini.bin|presence_gemini.bin|dispatch-beam-gemini.log
+--
+.env
+.env.codex
+.env.agy
+.env.gemini'
+  [ "$out" = "$expected" ] || { printf 'got:\n%s\n' "$out" >&2; exit 3; }
+
+  # Every skip is named on stderr, not silently dropped: a helper (and a plist
+  # that only mentions the key), a name outside a-z0-9_ (capitals included,
+  # under a locale where bash's [a-z] admits them), and a bot launchd has not
+  # loaded, which a kickstart would fail on with no rollback.
+  err=$(run_ddb "$FH" 2>&1 >/dev/null)
+  printf '%s\n' "$err" | grep -q 'skipping com.cirwel.dispatch-beam-doctor: .*not a dispatch bot' || exit 4
+  printf '%s\n' "$err" | grep -q 'skipping com.cirwel.dispatch-beam-mention: .*not a dispatch bot' || exit 5
+  printf '%s\n' "$err" | grep -q "'Bot' is not a usable instance name" || exit 6
+  printf '%s\n' "$err" | grep -q "'Bad.Name' is not a usable instance name" || exit 7
+  printf '%s\n' "$err" | grep -q 'skipping com.cirwel.dispatch-beam-sleepy: installed but not loaded' || exit 8
+  ! printf '%s\n' "$err" | grep -q 'logrotate' || exit 9
+
+  # deploy-status.sh rows every installed bot, the unloaded one included (its
+  # DOWN row is what makes deploy-apply.sh hold), and nothing the deploy script
+  # treats as a helper or a bad name; deploy-apply.sh routes every such row.
+  expected_rows='dispatch-beam-agy|com.cirwel.dispatch-beam-agy|/d||restart|
+dispatch-beam-gemini|com.cirwel.dispatch-beam-gemini|/d||restart|
+dispatch-beam-sleepy|com.cirwel.dispatch-beam-sleepy|/d||restart|'
+  rows=$(export LC_ALL=en_US.UTF-8; components)
+  [ "$rows" = "$expected_rows" ] || { printf 'got rows:\n%s\n' "$rows" >&2; exit 10; }
+
+  # A loaded bot whose pinned files are not the ones the script polls is a
+  # REFUSAL, before anything is touched: waiting on the wrong file would roll
+  # back a good deploy. Same for a bot that pins only its presence file.
+  for case_ in wrongpath solo; do
+    H2="$SB/discover-$case_"; mkdir -p "$H2/Library/LaunchAgents"
+    p2="$H2/Library/LaunchAgents/com.cirwel.dispatch-beam-$case_.plist"
+    if [ "$case_" = wrongpath ]; then bot wrongpath /elsewhere/boot_witness_wrongpath.bin > "$p2"
+    else printf '%s\n' "$presence_only" > "$p2"; fi
+    if err2=$(run_ddb "$H2" 2>&1); then exit 11; fi
+    printf '%s\n' "$err2" | grep -q "REFUSING: com.cirwel.dispatch-beam-$case_ does not pin" || exit 12
+  done
+
+  # Discovery reads ~/Library/LaunchAgents and launchd only, never the
+  # unpulled worktree.
+  ! printf '%s\n' "$ddb_block" | grep -v '^[[:space:]]*#' | grep -q 'DEPLOY' || exit 13
+
+  # The preflight, restart and both rollback loops iterate INSTANCES, so a
+  # discovered bot is held to every check the listed ones are.
+  [ "$(grep -c 'for entry in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 14
+  [ "$(grep -c 'for e2 in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 15
+
+  # A missing .env.<name> refuses BEFORE the fast-forward, so the deploy
+  # worktree is never left ahead of the running bots.
+  env_check=$(grep -n 'REFUSING: no $env_name at' "$ddb" | cut -d: -f1)
+  ff=$(grep -n '^deploy_lib_ff_worktree ' "$ddb" | cut -d: -f1)
+  [ "$(printf '%s\n' "$env_check" | wc -l | tr -d ' ')" = 1 ] && [ -n "$ff" ] || exit 16
+  [ "$env_check" -lt "$ff" ] || exit 17
+) && ok "dispatch bots are discovered from installed plists; helpers, bad names, unloaded and mispinned bots are not deployed" \
+  || bad "dispatch instance discovery"
 
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
