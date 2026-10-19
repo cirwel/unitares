@@ -585,7 +585,8 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
         return False
     if state.get("verdict_provisional") or envelope.get("verdict_caveat"):
         return False
-    if envelope.get("recovery_hint"):
+    if envelope.get("recovery_hint") or envelope.get("warnings"):
+        # A warning is the formatter's own reason to expand auto to mirror.
         return False
     if envelope.get("review_suggested") or "request_review" in str(
         envelope.get("next_action") or ""
@@ -2945,6 +2946,16 @@ def build_experience_envelope(
         outcomes_in_e = payload.get("outcomes_in_e")
         if isinstance(outcomes_in_e, dict) and not include_raw:
             envelope["outcomes_in_e"] = outcomes_in_e
+        # This check-in's non-fatal warnings (update_response_service mints
+        # them, e.g. "confidence dampened" on a weak binding or a failed
+        # evidence write; the tool description says to inspect them for
+        # silent calibration loss). They are what makes auto resolve to
+        # mirror, every bounded formatter passes them through, and no later
+        # read returns them, so a bounded shape lifts them; full mode carries
+        # them under raw_governance (#2125).
+        warnings = payload.get("warnings")
+        if isinstance(warnings, list) and warnings and not include_raw:
+            envelope["warnings"] = list(warnings)
         if state_summary.get("action") == "pause":
             # The generic continuation text below was emitted on pause verdicts
             # too, telling a paused agent to "keep working". Match recovery_hint.
@@ -3207,6 +3218,11 @@ def build_experience_envelope(
             "created_after",
             "created_before",
             "recency_half_life_days",
+            # The limit the caller asked for, present only when the server
+            # clamped it to its maximum. The handler keeps it in the lean
+            # projection so a clamped caller can tell truncation from "that
+            # was all"; count alone cannot (#2125).
+            "limit_clamped_from",
         )
         # `confidence_note` is not copied here: the envelope lifts it to the
         # top level for every alias (next to search_degraded_message), and a
