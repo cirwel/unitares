@@ -648,7 +648,7 @@ A Read B port is roughly 30× the lease plane's volume *by raw LOC*, with the ca
 3. **Identity / onboarding coupling.** CLAUDE.md flags this as a single coupled writer surface across `src/mcp_handlers/identity/`, middleware, schemas, and shared docs. Porting without breaking the live agent fleet is delicate.
 4. **REST surface preservation (reviewer council finding the original draft missed).** Watcher, Sentinel, Vigil, the SDK, and external partners all hit governance MCP via REST endpoints (e.g. `post_finding` → `/api/findings`). Read B must replicate that REST surface byte-for-byte at the boundary, or every Python agent silently breaks. This is a contract the doc must preserve regardless of the runtime underneath, and the work is not free.
 5. **Test corpus.** 330 test files, much of it pytest-fixture-shaped. ExUnit equivalents must be rebuilt before declaring the port "done." A meaningful fraction of the port effort.
-6. **Runway opportunity cost.** Realistic timeline 3–6 months of focused work. Paper v6 / v7 corpus accumulation, Lumen evolution, dispatch refinement, fellowship, fleet maintenance all slow during the window.
+6. **Operator-time opportunity cost.** Realistic timeline 3–6 months of focused work. Paper v6 / v7 corpus accumulation, Lumen evolution, dispatch refinement, other scheduled commitments, fleet maintenance all slow during the window.
 
 ### Reversibility and cognitive surface area (architect council findings)
 
@@ -807,7 +807,7 @@ After Wave 3 closes, what's left in Python is genuinely compute (governance_core
 - **Chronicler** — substrate uniformity for the daily metrics agent.
 - **MCP transport layer** — only if §"MCP SDK gate" closes.
 - **A new BEAM service that fills a gap discovered during Waves 1-3** — only if real.
-- **Pause.** Solo-founder runway is finite; closing A′ at Wave-3-exit and stabilizing is a real option.
+- **Pause.** Single-operator time is finite; closing A′ at Wave-3-exit and stabilizing is a real option.
 
 The decision belongs to the operator at Wave 3 exit, with Wave 0's accumulated incident-rate data and Wave 2-3's parity evidence in hand.
 
@@ -833,7 +833,7 @@ What *would* be a full-Read-B trigger (kept here so the question is honestly ope
 1. Wave 0 incident-rate instrumentation runs for ≥ 60 days post-A′-completion (i.e., post-Wave-3) and shows the coordination-class bug rate is *not* zero in the remaining Python compute surfaces. (Under A′ the remaining Python surfaces are stateless compute — `governance_core/` math, LLM SDK calls, pattern analysis — so a non-zero rate at the BEAM↔Python boundary itself would be the signal that the boundary tax is unbounded after all.)
 2. The §"MCP SDK gate" closes (Anthropic ships an Elixir SDK, OR a community library reaches production maturity, OR a credible hand-roll spike completes).
 3. A second runtime consumer materializes that wants OTP-native APIs (a non-Python harness, a partner integration).
-4. Operator runway permits the additional port effort without sacrificing paper / fellowship / Lumen / dispatch.
+4. Operator availability permits the additional port effort without sacrificing paper / Lumen / dispatch / other scheduled commitments.
 
 Two or more triggers → operator decides whether to amend the kernel doc non-goal "Do not rewrite UNITARES in Elixir" (which A′ does NOT amend, but full Read B does). Single trigger → re-evaluate the roadmap, not the kernel doc.
 

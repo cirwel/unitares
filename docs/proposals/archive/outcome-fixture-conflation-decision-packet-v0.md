@@ -279,7 +279,7 @@ appended to the stop-rule document's deviation record in this PR.
   is not forecast here.
 - **Inventory and telemetry health** report the attrition honestly and count 5
   strict outcomes in 21 days.
-- **The revenue-engine pilot.** If its label ingestion posts `external_signal`
+- **The pilot in a private repository.** If its label ingestion posts `external_signal`
   rows without a confidence, those rows are dropped by the same instruments.
   Not verified here; the pilot owners should check before the first episode.
 - **The README claim table** cites the frozen 2026-08-09 read for predictive
