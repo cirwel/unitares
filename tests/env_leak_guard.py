@@ -145,9 +145,13 @@ class EnvLeakGuard:
             return (yield)
         finally:
             self._setup_stack.pop()
-            delta = diff_env(before, os.environ)
+            # A credited key is compared with the value the nested setup left,
+            # not with this fixture's entry snapshot: setting it back to the
+            # entry value is still an override of the nested fixture's value,
+            # even though it shows no net change against ``before``.
+            touched = diff_env(before, os.environ).keys | credited.keys()
             span = _FixtureSpan(fixturedef.argname, fixturedef.scope)
-            for key in delta.keys:
+            for key in touched:
                 if key in credited:
                     if os.environ.get(key) == credited[key]:
                         continue
@@ -164,7 +168,7 @@ class EnvLeakGuard:
                 self._spans.setdefault(id(fixturedef), []).append(span)
             if self._setup_stack:
                 parent = self._setup_stack[-1]
-                for key in delta.keys:
+                for key in touched:
                     parent[key] = os.environ.get(key)
 
     def pytest_fixture_post_finalizer(self, fixturedef, request):

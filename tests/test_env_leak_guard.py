@@ -45,7 +45,13 @@ def test_describe_names_keys_never_values():
 # --- the plugin, in a real pytest run --------------------------------------------
 
 
-def _run(tmp_path: Path, files: dict[str, str], known_leaks: str = "{}"):
+def _run(
+    tmp_path: Path,
+    files: dict[str, str],
+    known_leaks: str = "{}",
+    conftest_extra: str = "",
+    extra_env: dict[str, str] | None = None,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "pytest.ini").write_text("[pytest]\naddopts =\n")
     (tmp_path / "conftest.py").write_text(textwrap.dedent(f"""
@@ -55,13 +61,14 @@ def _run(tmp_path: Path, files: dict[str, str], known_leaks: str = "{}"):
             config.pluginmanager.register(
                 EnvLeakGuard(known_leaks={known_leaks}), "env-leak-guard"
             )
-    """))
+    """) + conftest_extra)
     for name, body in files.items():
         (tmp_path / name).write_text(textwrap.dedent(body))
     env = {
         k: v for k, v in os.environ.items()
         if not k.startswith(("LEAK_", "PYTEST_"))
     }
+    env.update(extra_env or {})
     env["PYTHONPATH"] = str(REPO)
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "no:cov",
@@ -272,3 +279,81 @@ def test_a_nested_session_fixture_is_still_checked_at_its_own_teardown(tmp_path)
     )
     assert "module-scoped fixture 'module_env'" not in out
     assert "PASSED test_b.py::test_session_value_survives_the_module_teardown" in out
+
+
+_SHARED_SESSION_FIXTURE = """
+import pytest
+
+@pytest.fixture(scope="session")
+def session_env():
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEAK_SHARED", "session")
+    yield
+    mp.undo()
+"""
+
+_SHARED_KEY = """
+    import os
+    import pytest
+
+    @pytest.fixture(scope="module")
+    def module_env(request):
+        request.getfixturevalue("session_env")
+        found = os.environ["LEAK_SHARED"]
+        # Back to the value the run started with: no net change against
+        # this fixture's own entry snapshot, but an override of the session
+        # fixture's value all the same.
+        os.environ["LEAK_SHARED"] = "original"
+        yield
+        MODULE_TEARDOWN
+
+    def test_one(module_env):
+        assert os.environ["LEAK_SHARED"] == "original"
+
+    def test_two(module_env):
+        assert os.environ["LEAK_SHARED"] == "original"
+"""
+
+_SHARED_KEY_LATER = """
+    import os
+
+    def test_session_value_is_back(session_env):
+        assert os.environ["LEAK_SHARED"] == "session"
+"""
+
+
+def _run_shared_key(tmp_path, module_teardown):
+    return _run(
+        tmp_path,
+        {
+            "test_a.py": _SHARED_KEY.replace("MODULE_TEARDOWN", module_teardown),
+            "test_b.py": _SHARED_KEY_LATER,
+        },
+        conftest_extra=_SHARED_SESSION_FIXTURE,
+        extra_env={"LEAK_SHARED": "original"},
+    )
+
+
+def test_an_outer_override_back_to_the_entry_value_is_tracked(tmp_path):
+    """original -> nested session fixture sets 'session' -> the module fixture
+    sets it back to 'original'. The module's value is live configuration while
+    its tests run, not a test leak, and its teardown owes back 'session'."""
+    result = _run_shared_key(
+        tmp_path, 'os.environ["LEAK_SHARED"] = found'
+    )
+    out = result.stdout
+    assert result.returncode == 0, out
+    assert "left os.environ changed" not in out
+    assert "3 passed" in out
+
+
+def test_an_outer_override_not_given_back_is_named(tmp_path):
+    result = _run_shared_key(tmp_path, "pass")
+    out = result.stdout
+    assert result.returncode == 1, out
+    assert (
+        "module-scoped fixture 'module_env' left os.environ changed: "
+        "changed: LEAK_SHARED" in out
+    )
+    assert "test test_a.py::test_one left" not in out
+    assert "PASSED test_b.py::test_session_value_is_back" in out
