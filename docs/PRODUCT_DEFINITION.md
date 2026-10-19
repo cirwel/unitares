@@ -1,170 +1,120 @@
 # What UNITARES is
 
-One page, plain language. The architecture docs describe the parts; this page
-states the product. When wording here and in a canonical reference disagree,
-the canonical reference wins — this page trades precision for clarity on
-purpose and links to the precise version at every step.
-
 ## The product in one sentence
 
 **UNITARES is a self-hosted, single-operator federation kernel for agent
-identity, claims and evidence, review, outcomes, and reconstruction.** Different
-harnesses retain their own execution loops while sharing an attributed record
-through MCP/HTTP.
+identity, claims and evidence, review, outcomes, and reconstruction.** Agents
+carry findings, corrections, and review decisions across sessions and vendors;
+a successor or operator can retrieve the record and inspect its sources.
 
-Agents use that record to carry findings, corrections, and review decisions
-across sessions and vendors. A successor can search earlier work before acting;
-the human working with it can inspect what was established and what still needs
-review.
+“Federation” here means independent runtimes sharing one operator-controlled
+server and authority domain. Each runtime keeps its own models, tools, and
+execution loop, and communicates with peers through its own transport or A2A.
+Nothing in UNITARES replicates state across independent servers.
 
-A Markdown handoff may be all a task needs. An agent can also reference that
-document in a UNITARES finding alongside code, logs, and test results. The
-document gives a successor a concise starting point; the shared record keeps
-attribution, corrections, review decisions, and reported outcomes available
-around it. Git, handoff documents, and UNITARES can support the same workflow.
+The shared record answers five questions:
 
-Here federation means many independent runtimes and harnesses sharing one
-operator-controlled server and authority domain; that is what single-operator
-means. The sense with several operators or authority domains is
-cross-operator or multi-principal. “Kernel” describes that shared
-accountability boundary. Runtimes interoperate with each other over their own
-transports or an agent-to-agent protocol such as A2A; UNITARES is the record
-behind them, not the transport between them. Its current mechanisms map to
-five questions:
+| Question | Deployed mechanism |
+|---|---|
+| **Who said it?** | Process identity and explicit lineage attribute work and handoffs. Platform workload identity supplies credentials; lineage grants no authority. |
+| **What supports it?** | Durable findings retain claims, corrections, and provenance. The original `sync_state` report text is transient; durable claims require a finding. |
+| **Who challenged it?** | Structured review preserves positions, objections, conditions, and resolution. Requesting review does not complete it. |
+| **What happened?** | Typed outcome events preserve reported results and evidence grades, with prediction binding when supplied. |
+| **What can a successor recover?** | Knowledge search, review reads, history export, and authorized outcome-evidence reads let a client reconstruct the work from available records. |
 
-| Question | Deployed mechanism | Boundary |
-|---|---|---|
-| **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. A process identity is an attribution record, not a credential; workload-identity systems remain the credential layer. |
-| **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. |
-| **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
-| **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
-| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and reduced operator effort remain unmeasured. |
+Git and Markdown handoffs fit alongside this record: a finding can reference
+code, logs, test results, or a handoff document while retaining attribution and
+later corrections. See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md)
+for tool names, service prerequisites, and retention and authorization boundaries.
 
-What the word does not claim: UNITARES does not own execution, and nothing in it
-replicates state across independent servers.
+## Interfaces and integration
 
-See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
-tool names and service prerequisites. Behavioral state estimation, policy,
-recovery, and calibration remain part of the system. They interpret the record
-and gate governed operations; they are not substitutes for evidence.
+MCP is the primary agent interface. REST, the public SDK, host adapters, and
+the dashboard expose the same Core. Claude Code, Codex, Hermes, custom runtimes,
+and residents retain their own reasoning loops and interaction surfaces.
 
-## MCP-native, not MCP-only
-
-MCP is the primary agent-facing contract: it is the narrow waist through which
-different agent runtimes can use the same identity, state, policy, review, and
-memory capabilities. It is not the product's outer boundary. REST, the public
-SDK, host adapters, and the dashboard expose the same Core for clients whose
-lifecycle cannot be expressed by a direct MCP connection alone.
-
-The versioned [interface contract](INTERFACE_CONTRACT.md) names that narrow
-waist precisely. It guarantees advertised, callable capability names across
-MCP, REST discovery, and local stdio. Lifecycle hooks and policy actuation are
-separate host-integration capabilities; connecting an MCP client does not imply
-that its host will onboard, check in, or stop automatically.
-
-This makes UNITARES **harness-agnostic**. Claude Code, Codex, Hermes, custom
-runtimes, and resident agents keep their own reasoning loops, model choices,
-tools, and interaction surfaces. UNITARES observes and governs their declared
-checkpoints without requiring them to become one kind of agent.
+The [interface contract](INTERFACE_CONTRACT.md) defines callable capabilities
+across MCP, REST discovery, and local stdio. Automatic onboarding, check-ins,
+and policy actuation require host integration beyond connecting an MCP client.
 
 ## Core and Resident are different products
 
-This repository ships UNITARES Core and several specialized reference
-residents. UNITARES Resident is a separate repository.
+This repository ships **UNITARES Core** and specialized reference residents.
+Core owns identity, shared knowledge, review, outcomes, audit, coordination,
+and behavioral state and policy. Agents own their reasoning and execution.
 
-| Product surface | Owns | Boundary |
-|---|---|---|
-| **UNITARES Core** | Identity, provenance, state estimation, policy and recovery, audit, shared knowledge, dialectic review, and coordination. | Does not own the agent's reasoning or tool-execution loop. |
-| **UNITARES Resident** | A first-party agent experience: persistent conversations, provider and tool adapters, scheduling, task queues, memory participation, and operator-facing interfaces. | Lives outside Core and uses the same public MCP/SDK contract as any other harness. Its repository and runtime skeleton are shipped; the usable agent product is not yet shipped. |
-
-Keeping that boundary prevents the system from grading an execution loop it
-privately controls. UNITARES Resident may become the easiest way to run a
-governed agent, but it must remain ordinary userland: no direct database access,
-no imports from Core internals, and no privileged measurement or policy path.
+**UNITARES Resident** is a separate first-party agent project for persistent
+conversations, provider and tool adapters, scheduling, task queues, and operator
+interfaces. Its repository and runtime skeleton are shipped; the usable agent
+product is not yet shipped. It uses the same public MCP/SDK contract as any
+other harness, with no direct database access, Core-internal imports, or
+privileged measurement or policy path.
 
 ## One task across agents
 
-A coding agent investigates a failed test, asks for review, and hands the work
-to a new process. The record connects the parts of that task:
+A coding agent investigates a failed test, requests review, and hands work to
+a new process:
 
-1. **Bind the process.** The agent calls `start_session(force_new=true)` and
-   passes the returned `client_session_id` on later writes, so each is
-   attributable to that process.
-2. **Search earlier findings.** Before changing the code, it searches shared
-   memory and reads relevant findings, including corrections and their sources.
-3. **Keep the finding and its evidence.** It stores the diagnosis with references
-   to the code and test results. Important claims need an explicit durable
-   finding; a `sync_state` report alone does not preserve its original text.
-4. **Ask for review and join the result.** A participating reviewer records an
-   objection or a resolution. The agent addresses the objection, and the review
-   preserves the disagreement and any conditions rather than treating the
-   request itself as approval.
-5. **Record what happened.** The agent reports the bounded test outcome through
-   `record_result`. If it previously made a prediction, the outcome can bind to
-   that prediction for calibration; confidence is optional.
-6. **Hand off the work.** The successor starts with its own process identity and
-   declares lineage for a real handoff from an exited predecessor. It searches
-   the stored findings and reads the review and available outcome evidence.
-   The operator can inspect those same records. Recovery depends on what was
-   captured and what the caller is authorized to read.
+1. **Bind and search.** Call `start_session(force_new=true)`, thread the returned
+   `client_session_id` on later calls, and search earlier findings before
+   repeating work. Authorized reads can also precede binding.
+2. **Keep the evidence.** Store the diagnosis as a finding with code and test
+   references. Use `sync_state` after meaningful work.
+3. **Join the review.** Request review, read the participating reviewer's
+   response, and address objections. Preserve unresolved conditions.
+4. **Record the result.** Use `record_result` with outcome provenance, adding the
+   intended `prediction_id` when grading a prediction. Confidence is optional;
+   a reported result retains its evidence grade.
+5. **Close and hand off.** Record the finding's closure and evidence. A successor
+   starts fresh, declares lineage only for a real handoff from an exited
+   predecessor, and retrieves the findings, review, and available outcomes.
 
-Meaningful `sync_state` check-ins also return an EISV behavioral state estimate
-and a policy action: proceed, guide, or pause. A pause holds governed writes
-until recovery, review, an operator, or expiry lifts it; it does not stop the
-agent's execution loop. The [computation reference](EISV_COMPUTATION.md)
-describes the instrument; its move to an optional module follows the
-[staged plan](proposals/active/eisv-core-boundary-v0.md).
+Check-ins return an EISV behavioral state estimate and `proceed`, `guide`, or
+`pause`. A pause holds governed writes until recovery, review, an operator,
+or expiry lifts it. Enforcement outside those writes requires host integration.
+EISV still ships in the core path; its move to an optional module follows the
+[staged plan](proposals/active/eisv-core-boundary-v0.md). The
+[computation reference](EISV_COMPUTATION.md) defines the deployed instrument.
 
 ## Who it is for, and what "done" looks like
 
-Agents are direct users of the shared record. **One operator running several
-long-lived agents** controls the deployment and its authority boundary. The
-agents use tools and work through multi-step tasks over hours or days; the
-operator chooses their runtimes and infrastructure.
+Agents are direct users. One operator running several long-lived agents
+controls the deployment and chooses their runtimes and infrastructure. The
+goal is a retrievable record of claims, evidence, reviews, outcomes, and policy
+decisions that lets a later process continue the work. UNITARES connects those
+records alongside the outputs of evals, guardrails, and sandboxes.
 
-The operational goal is an attributable record of claims, reported outcomes,
-reviews, and policy decisions that a later process or operator can inspect.
-Configured identity gates enforce accountable writes, and policy can interrupt
-governed operations.
+## Provenance
 
-UNITARES runs alongside **evals**, **guardrails**, and **sandboxes**, preserving
-attribution, evidence, review, and reported outcomes across the work they
-assess. Its shared record lets agents and operators inspect those outputs
-together over time.
-
-## Provenance and honest failure
-
-The [trust contract](trust-contract.md) requires the system to distinguish
-measured observations, derived values, priors, and unknowns. CI enforces parts
-of that requirement on the governance-metrics read surface: registered fields
-must retain their provenance labels, uninitialized assessments must report
-ignorance, and specified fleet-calibration blocks must identify their scope.
-The current lint covers selected fields (`src/trust_contract_lint.py`); it is
-not a universal validator for every emitted value. The contract's
-[enforcement status](trust-contract.md#7-enforcement) names the implemented
-coverage and remaining work.
+The [trust contract](trust-contract.md) distinguishes measured observations,
+derived values, priors, and unknowns. CI checks selected governance-metrics
+fields for provenance labels, uninitialized assessments, and fleet-calibration
+scope. The contract's [enforcement status](trust-contract.md#7-enforcement)
+defines that coverage and the remaining work.
 
 ## Evidence and limits
 
-The deployed product provides an attributed record of findings, review, and
-reported outcomes. Its usefulness depends on agents and integrations capturing
-the relevant evidence; it does not verify every claim automatically or establish
-complete reconstruction. Its effect on coordination effort and task outcomes
-has not yet been measured, and agent preference has not been established.
+The [captured two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md)
+shows attribution, outcome binding, closure, and successor retrieval using
+real server responses for an illustrative task. The
+[review retrospective](evaluations/review-correction-traces-2026-09-21.md)
+traces findings to fixes that preserve evidence grades, prevent formatting
+repair from manufacturing approval, and keep unresolved findings visible.
+It also records a review condition implemented ten days after its originating
+review opened.
 
-The policy instrument has separate limits. Apart from the pause gate on
-governed write surfaces, enforcement is advisory: the server returns an action
-and the client decides whether to honor it. The frozen 2026-08-09 outcome-lift
-evaluation detected no predictive lift and demonstrates no prevention — a
-non-detection whose preserved record cannot establish read-specific power
-([power audit](operations/falsifiability-power-audit-2026-08-23.md)), so weak
-predictive lift is unresolved rather than ruled out — and calibrated
-concealment by a motivated agent is a documented structural blind spot. The
-pause gate demonstrably actuates; protection remains untested. Producing a pause
-and delivering it are separate events: at the 2026-08-06 audit a cadence
-window suppressed 195 of 218 recorded pauses (89.4%) before they reached the
-agent. Delivery is live (a governed pause landed 2026-08-09); the rate has not
-been re-measured since that audit. The precise boundary is
-the [scope and threat model](SCOPE_AND_THREAT_MODEL.md); the evidence status
-is the [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) and the
-[Reviewer Guide](REVIEWER_GUIDE.md).
+These demonstrate working mechanisms and specific corrections. Comparative
+coordination benefit, complete reconstruction, and task-outcome improvement
+remain unmeasured. Agent preference has not been established. Reconstruction
+depends on captured evidence,
+retention, and caller authorization; reported claims need independent evidence
+to establish correctness.
+
+A governed pause has been delivered; its benefit remains untested. The frozen
+outcome evaluation did not establish predictive lift, and unresolved
+read-specific power leaves weak lift open. The [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries)
+preserves the dated pause-delivery audit, evaluation results, and registered
+read conditions. The [scope and threat model](SCOPE_AND_THREAT_MODEL.md)
+covers motivated agents concealing or gaming signals. Use the
+[Reviewer Guide](REVIEWER_GUIDE.md) to inspect and exercise the demonstrated
+workflow.
