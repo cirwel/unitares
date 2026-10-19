@@ -17,9 +17,14 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # date-context-mcp is a separate repo; set DATE_CONTEXT_MCP_ROOT to point at
-# your local checkout. Defaults to ~/projects/date-context-mcp.
+# your local checkout. Defaults to a sibling of this checkout:
+# $UNITARES_PROJECTS_ROOT/date-context-mcp, where UNITARES_PROJECTS_ROOT
+# defaults to the parent directory of this repo.
+_PROJECTS_ROOT = Path(
+    os.environ.get("UNITARES_PROJECTS_ROOT") or Path(__file__).resolve().parents[3]
+)
 DATE_CONTEXT_MCP_ROOT = Path(
-    os.environ.get("DATE_CONTEXT_MCP_ROOT", Path.home() / "projects" / "date-context-mcp")
+    os.environ.get("DATE_CONTEXT_MCP_ROOT") or _PROJECTS_ROOT / "date-context-mcp"
 )
 
 try:

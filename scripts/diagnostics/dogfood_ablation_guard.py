@@ -23,7 +23,19 @@ from typing import Any, Sequence
 
 DEFAULT_HTTP_URL = "http://127.0.0.1:8767"
 DEFAULT_REPO = Path(__file__).resolve().parents[2]
-DEFAULT_PYTHON = "/usr/local/bin/python3"
+LEGACY_PYTHON = "/usr/local/bin/python3"
+
+
+def default_python(legacy: str = LEGACY_PYTHON) -> str:
+    """Interpreter for the repo probes when neither --python nor UNITARES_PYTHON
+    is given: the conventional /usr/local/bin/python3 where it exists (existing
+    installs keep running their probes under it), else the running interpreter.
+    """
+
+    return legacy if os.path.exists(legacy) else sys.executable
+
+
+DEFAULT_PYTHON = default_python()
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_DOGFOOD_OUTPUT_DIR = (
     Path.home() / ".hermes" / "cron" / "output" / "ea2e3655cee4"

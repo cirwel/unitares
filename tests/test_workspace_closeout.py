@@ -368,6 +368,25 @@ def test_classify_deploy_worktree_by_name(closeout_module, git_repo, tmp_path):
     assert iso.shared is True
 
 
+@pytest.mark.parametrize("var", ["UNITARES_DEPLOY", "UNITARES_MCP_DEPLOY"])
+def test_classify_deploy_worktree_by_env_path(
+    closeout_module, git_repo, tmp_path, monkeypatch, var
+):
+    for other in ("UNITARES_DEPLOY", "UNITARES_MCP_DEPLOY", "UNITARES_LIVE_CHECKOUT_NAMES"):
+        monkeypatch.delenv(other, raising=False)
+    live = _add_worktree(git_repo, tmp_path / "live-tree", "livebr")
+    sibling = _add_worktree(git_repo, tmp_path / "live-tree-feature", "featbr")
+    monkeypatch.setenv(var, str(live))
+
+    iso = closeout_module.classify_workspace(live)
+    assert iso.kind == "deploy_worktree"
+    assert iso.shared is True
+    assert var in iso.detail
+
+    # Path match, not substring: a sibling whose name starts the same is not live.
+    assert closeout_module.classify_workspace(sibling).kind == "agent_worktree"
+
+
 def test_classify_non_repo_is_unknown_not_shared(closeout_module, tmp_path):
     plain = tmp_path / "not_a_repo"
     plain.mkdir()

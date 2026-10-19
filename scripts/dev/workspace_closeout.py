@@ -139,15 +139,31 @@ def repo_root(cwd: Path) -> Path:
 
 # Names whose presence in the workspace path marks a live/shared checkout that is
 # linked-but-not-agent-owned (the deploy worktree). Override via env (comma-sep).
-# The main dev checkout is detected structurally (git_dir == git_common_dir) and
-# needs no name match.
+# The default is the deploy worktree name the scripts/ops/deploy-*.sh scripts
+# fall back to. The main dev checkout is detected structurally
+# (git_dir == git_common_dir) and needs no name match.
 _DEFAULT_LIVE_CHECKOUT_NAMES = ("unitares-deploy",)
+
+# Env vars the deploy scripts read for the deploy worktree's path. When one is
+# set, a workspace at or under that path is also a live checkout, whatever its
+# directory is called. Matched by resolved path, never by substring, so a
+# deploy worktree with a generic name cannot capture unrelated worktrees.
+_LIVE_CHECKOUT_PATH_ENV_VARS = ("UNITARES_DEPLOY", "UNITARES_MCP_DEPLOY")
 
 
 def _live_checkout_names() -> tuple[str, ...]:
     raw = os.getenv("UNITARES_LIVE_CHECKOUT_NAMES", "")
     names = tuple(n.strip() for n in raw.split(",") if n.strip())
     return names or _DEFAULT_LIVE_CHECKOUT_NAMES
+
+
+def _live_checkout_paths() -> tuple[tuple[str, Path], ...]:
+    paths: list[tuple[str, Path]] = []
+    for var in _LIVE_CHECKOUT_PATH_ENV_VARS:
+        raw = os.getenv(var, "").strip()
+        if raw:
+            paths.append((var, Path(raw).expanduser().resolve()))
+    return tuple(paths)
 
 
 def classify_workspace(root: Path) -> "WorkspaceIsolation":
@@ -182,6 +198,14 @@ def classify_workspace(root: Path) -> "WorkspaceIsolation":
                 kind="deploy_worktree", shared=True,
                 git_dir=str(git_dir), common_dir=str(common_dir),
                 detail=f"path matches a live checkout name ({name!r})",
+            )
+    resolved_root = root.resolve()
+    for var, live_path in _live_checkout_paths():
+        if resolved_root == live_path or live_path in resolved_root.parents:
+            return WorkspaceIsolation(
+                kind="deploy_worktree", shared=True,
+                git_dir=str(git_dir), common_dir=str(common_dir),
+                detail=f"path is the live checkout named by ${var}",
             )
     return WorkspaceIsolation(
         kind="agent_worktree", shared=False,

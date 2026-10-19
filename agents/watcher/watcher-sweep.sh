@@ -17,7 +17,10 @@
 #
 # Config (env):
 #   UNITARES_WATCHER_SWEEP_ROOTS  colon-separated roots to walk
-#                                 (default: $HOME/projects)
+#                                 (default: $UNITARES_PROJECTS_ROOT, which
+#                                 defaults to the parent of the main checkout
+#                                 this script belongs to; linked worktrees
+#                                 resolve through the shared git dir)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
 #
@@ -29,7 +32,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-$HOME/projects}"
+# Default projects root: the directory that holds the MAIN checkout, found via
+# the shared git dir. A linked worktree (e.g. <projects>/wt/<repo>-<topic>, a
+# deploy worktree, or a tooling install created with `git worktree add`)
+# therefore still sweeps <projects>, not its own parent. Outside git, or for a
+# bare/unusual git dir, fall back to the parent of this checkout.
+_main_checkout="${REPO_ROOT}"
+_common_dir="$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "${_common_dir}" && "$(basename "${_common_dir}")" == ".git" ]]; then
+    _main_checkout="$(dirname "${_common_dir}")"
+fi
+ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-${UNITARES_PROJECTS_ROOT:-$(dirname "${_main_checkout}")}}"
 MAX_FILES="${UNITARES_WATCHER_SWEEP_MAX:-40}"
 MAX_CONCURRENT=3
 LOCK_DIR="/tmp/unitares-watcher-locks"

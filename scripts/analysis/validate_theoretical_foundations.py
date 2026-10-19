@@ -16,8 +16,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# governance_core is now a compiled package (unitares-core).
-# Source validation (reading .py files) requires a local source checkout.
+# governance_core lives at the top level of this repo. Source validation
+# (reading its .py files) needs that directory, so run from a source checkout.
 GOVERNANCE_CORE_SOURCE = project_root / "governance_core"
 HAS_SOURCE = GOVERNANCE_CORE_SOURCE.is_dir() and (GOVERNANCE_CORE_SOURCE / "dynamics.py").exists()
 
@@ -350,9 +350,9 @@ def check_objective_function(result: ValidationResult):
 def main():
     """Run all validation checks"""
     if not HAS_SOURCE:
-        print("governance_core source not available (compiled package installed).")
-        print("To run source validation, symlink unitares-core/governance_core:")
-        print("  ln -sf ~/projects/unitares-core/governance_core governance_core")
+        print(f"governance_core source not found at {GOVERNANCE_CORE_SOURCE}.")
+        print("governance_core/ ships at the top level of the unitares repo; run this")
+        print("script from a full source checkout, where that directory is present.")
         return 1
 
     result = ValidationResult()
