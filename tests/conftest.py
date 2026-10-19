@@ -919,7 +919,7 @@ def temp_db(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def live_postgres_backend():
+async def live_postgres_backend(monkeypatch):
     """
     Provide a real PostgresBackend connected to governance_test.
 
@@ -940,11 +940,13 @@ async def live_postgres_backend():
 
     await ensure_test_database_schema()
 
-    import os
-    os.environ["DB_POSTGRES_URL"] = TEST_DB_URL
-    os.environ["DB_POSTGRES_MIN_CONN"] = "1"
-    os.environ["DB_POSTGRES_MAX_CONN"] = "3"
-    os.environ["DB_AGE_GRAPH"] = "governance_graph"
+    # monkeypatch, not os.environ: these outlived the test before, and a
+    # later session-scoped server fixture copied the pool bounds into its
+    # subprocess (tests/env_leak_guard.py).
+    monkeypatch.setenv("DB_POSTGRES_URL", TEST_DB_URL)
+    monkeypatch.setenv("DB_POSTGRES_MIN_CONN", "1")
+    monkeypatch.setenv("DB_POSTGRES_MAX_CONN", "3")
+    monkeypatch.setenv("DB_AGE_GRAPH", "governance_graph")
 
     from src.db.postgres_backend import PostgresBackend
 
