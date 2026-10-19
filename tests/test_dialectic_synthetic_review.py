@@ -1274,6 +1274,153 @@ async def test_orchestrated_dispatch_failure_falls_back_to_in_process(server_pat
     assert data["resolved"] is True
 
 
+async def _append_refusing_the_synthetic_antithesis(*args, **kwargs):
+    """The thesis append commits; the in-process antithesis append loses the
+    open-slot CAS because the spawned reviewer's antithesis landed first."""
+    if kwargs.get("message_type") == "antithesis":
+        return 0
+    return await successful_dialectic_message_append(*args, **kwargs)
+
+
+# What the database holds once the spawned reviewer's antithesis has landed.
+_REVIEWER_CLAIMED_ROW = {
+    "session_id": "unused",
+    "status": "active",
+    "phase": "synthesis",
+    "reviewer": "reviewer-orchestrated",
+    "awaiting_facilitation": False,
+    "transcript_revision": 2,
+    "resolution_saga_revision": 0,
+    "resolution_effect_state": None,
+}
+
+
+async def _submit_thesis_while_reviewer_claims_slot(
+    *, dispatch, crashed_fast, readback
+):
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    append = AsyncMock(side_effect=_append_refusing_the_synthetic_antithesis)
+    mark = AsyncMock(return_value=False)
+    emit = AsyncMock()
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(f"{DIALECTIC}.pg_add_message", new=append))
+        stack.enter_context(
+            patch(f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark)
+        )
+        stack.enter_context(
+            patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=readback))
+        )
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("refine"))))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
+        stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=crashed_fast))
+        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r",
+        })
+
+    return session, parse_result(result), append, mark, emit
+
+
+def _assert_recorded_thesis_with_reviewer_in_charge(session, data, append, mark, emit, dispatch):
+    assert data["success"] is True, data
+    assert data["thesis_recorded"] is True
+    assert data["session_advanced"] is True
+    assert data["reviewer_agent_id"] == "reviewer-orchestrated"
+    assert data["phase"] == "synthesis"
+    assert data["awaiting_facilitation"] is False
+    assert "state_reload_required" not in data
+    assert "synthetic_review" not in data
+    assert "error" not in data
+    # One dispatch, one thesis append, one refused antithesis attempt; the
+    # in-process reviewer wrote nothing over the spawned reviewer's claim.
+    dispatch.assert_awaited_once()
+    assert [c.kwargs["message_type"] for c in append.await_args_list] == [
+        "thesis", "antithesis",
+    ]
+    mark.assert_awaited_once()
+    assert "dialectic_facilitation_needed" not in [
+        c.args[0] for c in emit.await_args_list
+    ]
+    # The stale snapshot is evicted and left without a facilitation request.
+    from src.mcp_handlers.dialectic.handlers import ACTIVE_SESSIONS
+    assert session.session_id not in ACTIVE_SESSIONS
+    assert session.awaiting_facilitation is False
+
+
+@pytest.mark.asyncio
+async def test_reviewer_that_claims_slot_then_crashes_fast_leaves_thesis_recorded(server_patch):
+    """#2905, crash trigger: the spawned reviewer records its antithesis and
+    then exits non-zero inside the fast-crash wait. The in-process fallback
+    finds the slot taken and the facilitation compare-and-set is refused. The
+    thesis and the reviewer's antithesis are both on record, so the caller
+    must hear that, not 'thesis NOT recorded'."""
+    dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-claim-then-crash"})
+    crashed_fast = AsyncMock(return_value=True)
+
+    session, data, append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
+        dispatch=dispatch, crashed_fast=crashed_fast, readback=dict(_REVIEWER_CLAIMED_ROW),
+    )
+
+    _assert_recorded_thesis_with_reviewer_in_charge(session, data, append, mark, emit, dispatch)
+    crashed_fast.assert_awaited_once_with("ex-claim-then-crash")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_timeout_after_spawn_leaves_thesis_recorded(server_patch):
+    """#2905, timeout trigger: the dispatch call times out on our side after
+    the orchestrator spawned the reviewer, so it returns None and the
+    fast-crash check never runs. The spawned reviewer's claim lands before the
+    in-process antithesis, and the outcome must be the same truthful report."""
+    dispatch = AsyncMock(return_value=None)
+    crashed_fast = AsyncMock(return_value=False)
+
+    session, data, append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
+        dispatch=dispatch, crashed_fast=crashed_fast, readback=dict(_REVIEWER_CLAIMED_ROW),
+    )
+
+    _assert_recorded_thesis_with_reviewer_in_charge(session, data, append, mark, emit, dispatch)
+    crashed_fast.assert_not_awaited()
+    assert "orchestrated_review" not in data
+
+
+@pytest.mark.asyncio
+async def test_refused_facilitation_without_visible_advance_needs_reload(server_patch):
+    """If the facilitation mark is refused but the re-read shows no other
+    writer (or cannot be read), the slot may still be open with no request on
+    record. That is not a success, but the thesis is still recorded."""
+    dispatch = AsyncMock(return_value=None)
+    crashed_fast = AsyncMock(return_value=False)
+    unchanged = dict(
+        _REVIEWER_CLAIMED_ROW, phase="antithesis", reviewer=None, transcript_revision=1,
+    )
+
+    for readback in (unchanged, None):
+        session, data, _append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
+            dispatch=dispatch, crashed_fast=crashed_fast, readback=readback,
+        )
+        assert data["success"] is False
+        assert data["thesis_recorded"] is True
+        assert data["state_reload_required"] is True
+        assert "session_advanced" not in data
+        assert "error" not in data
+        assert "Reload" in data["next_step"]
+        mark.assert_awaited_once()
+        assert "dialectic_facilitation_needed" not in [
+            c.args[0] for c in emit.await_args_list
+        ]
+
+
 @pytest.mark.asyncio
 async def test_live_reviewer_is_not_preempted(server_patch):
     """A session with an assigned reviewer keeps the multi-agent path: no

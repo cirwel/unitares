@@ -400,6 +400,65 @@ class TestOneCallIdentityForwarding:
         assert data["session_id"] in data["next_call"]
 
     @pytest.mark.asyncio
+    async def test_recorded_thesis_with_advanced_session_reads_reviewers_move(self, env):
+        """#2905: a reviewer took the session while the fallback ran. The
+        nested payload says the thesis is recorded, so request_review must not
+        say it was not, nor hand back a retry call."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({
+                "success": True,
+                "thesis_recorded": True,
+                "session_advanced": True,
+                "reviewer_agent_id": "reviewer-orchestrated",
+                "phase": "synthesis",
+            }),
+        ):
+            result = await handle_request_dialectic_review({
+                "issue_description": "Review my decision to ship X",
+                "reasoning": "I chose X because Y",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["thesis_recorded"] is True
+        assert data["whose_move"].startswith("the reviewer's")
+        assert "NOT recorded" not in data["whose_move"]
+        assert "next_call" not in data
+
+    @pytest.mark.asyncio
+    async def test_recorded_thesis_needing_reload_is_not_called_unrecorded(self, env):
+        """#2905: the facilitation mark was refused and the re-read could not
+        say who moved the session. The call is not a success, but the thesis
+        is on record, so the #1414 'NOT recorded' retry must not fire."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({
+                "success": False,
+                "thesis_recorded": True,
+                "state_reload_required": True,
+                "phase": "antithesis",
+            }),
+        ):
+            result = await handle_request_dialectic_review({
+                "issue_description": "Review my decision to ship X",
+                "reasoning": "I chose X because Y",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["thesis_recorded"] is True
+        assert data["whose_move"].startswith("unknown")
+        assert "NOT recorded" not in data["whose_move"]
+        assert "next_call" not in data
+
+    @pytest.mark.asyncio
     async def test_issue_description_reaches_the_session_row(self, env):
         """Pydantic `model_dump()` materializes `reason` as an explicit None, so
         `arguments.get("reason", <default>)` returned None, not the default —

@@ -2693,7 +2693,12 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         # a failed payload fall through to the `else` branch below and be
         # labelled "thesis recorded". This must stay ABOVE the resolution read
         # so no later branch can reach a failed payload.
-        if payload.get("success") is False:
+        # A payload that itself says thesis_recorded=True (the facilitation
+        # mark was refused after the thesis committed, #2905) is not this case.
+        if (
+            payload.get("success") is False
+            and payload.get("thesis_recorded") is not True
+        ):
             payload["thesis_recorded"] = False
             payload["session_created"] = True
             payload["whose_move"] = (
@@ -2712,6 +2717,19 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "the reviewer's — an independent reviewer was spawned; poll "
                 f"dialectic(action='get', session_id='{session.session_id}') "
                 "for its antithesis/synthesis"
+            )
+        elif payload.get("session_advanced"):
+            payload["whose_move"] = (
+                "the reviewer's — thesis recorded and a reviewer has already "
+                "taken the session; poll "
+                f"dialectic(action='get', session_id='{session.session_id}')"
+            )
+        elif payload.get("state_reload_required"):
+            payload["whose_move"] = (
+                "unknown — thesis recorded, but the session changed before its "
+                "state could be confirmed; reload with "
+                f"dialectic(action='get', session_id='{session.session_id}') "
+                "before another write"
             )
         else:
             payload["whose_move"] = (
@@ -3975,6 +3993,96 @@ async def _run_synthetic_review(
     }
 
 
+def _thesis_session_advanced(
+    session: DialecticSession, persisted: Optional[Dict[str, Any]]
+) -> bool:
+    """Whether the durable row moved past the post-thesis state held in memory.
+
+    Any of a claimed reviewer slot, a different phase or a later transcript
+    revision means another writer, usually a reviewer that claimed the slot,
+    acted after the thesis was recorded.
+    """
+    if not persisted:
+        return False
+    persisted_phase = str(persisted.get("phase") or "").lower()
+    return bool(
+        persisted.get("reviewer") is not None
+        or (persisted_phase and persisted_phase != session.phase.value)
+        or int(persisted.get("transcript_revision") or 0)
+        > int(getattr(session, "transcript_revision", 0))
+    )
+
+
+async def _thesis_recorded_after_facilitation_refused(
+    session: DialecticSession, result: Dict[str, Any]
+) -> Sequence[TextContent]:
+    """Report a recorded thesis whose facilitation request was refused.
+
+    The facilitation mark is a compare-and-set against the post-thesis snapshot.
+    It is refused when the session moved on while the automated review paths
+    ran: an orchestrated reviewer that claimed the slot and then exited inside
+    the fast-crash wait, or one spawned by a dispatch call that timed out on
+    its side (#2905). The thesis append committed before any of that, so the
+    refusal is never evidence that the thesis is missing. Re-read the row and
+    report what is there instead of failing the whole call.
+    """
+    session_id = session.session_id
+    try:
+        persisted = await load_session_as_dict(session_id)
+    except Exception as exc:
+        logger.warning(
+            "Could not reload %s after a refused facilitation mark: %s",
+            session_id[:16],
+            type(exc).__name__,
+        )
+        persisted = None
+
+    result["thesis_recorded"] = True
+    result["awaiting_facilitation"] = bool(
+        (persisted or {}).get("awaiting_facilitation", False)
+    )
+    poll = f"dialectic(action='get', session_id='{session_id}')"
+    if _thesis_session_advanced(session, persisted):
+        persisted_phase = str(persisted.get("phase") or "").lower()
+        persisted_reviewer = persisted.get("reviewer")
+        result["success"] = True
+        result["session_advanced"] = True
+        result["reviewer_agent_id"] = persisted_reviewer
+        result["phase"] = persisted_phase
+        if persisted.get("resolution"):
+            result["resolution"] = persisted["resolution"]
+        holder = (
+            f"reviewer {persisted_reviewer} holds the slot"
+            if persisted_reviewer
+            else "another writer changed it"
+        )
+        result["note"] = (
+            "The thesis is recorded. The session moved on while the automated "
+            f"fallback ran ({holder}; phase is now '{persisted_phase}'), so no "
+            "facilitation request was needed."
+        )
+        result["next_step"] = f"Follow the review with {poll}."
+        logger.info(
+            "[DIALECTIC] session %s advanced during the thesis fallback "
+            "(phase=%s); reporting the recorded thesis",
+            session_id[:16],
+            persisted_phase,
+        )
+    else:
+        # The refusal is real but the re-read cannot say who moved the row (or
+        # the re-read failed). The slot may still be open with no facilitation
+        # request on record, so this is not a clean success either.
+        result["success"] = False
+        result["state_reload_required"] = True
+        result["note"] = (
+            "The thesis is recorded, but the session changed before the request "
+            "for facilitation could be recorded. Reload the session before "
+            "another write."
+        )
+        result["next_step"] = f"Reload with {poll}."
+    return success_response(result)
+
+
 # register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 @mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=False)
@@ -4569,9 +4677,19 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # declined, crashed, timed out, or was disabled. This is the first
             # point at which a human-facilitation request is truthful.
             if session.reviewer_agent_id is None:
-                await _set_awaiting_facilitation(
-                    session, True, reason=review_path_failure_reason
-                )
+                try:
+                    await _set_awaiting_facilitation(
+                        session, True, reason=review_path_failure_reason
+                    )
+                except _TranscriptAppendRefused:
+                    # The local snapshot says nobody claimed the slot, but the
+                    # durable row moved on: typically an orchestrated reviewer
+                    # that claimed it and then exited inside the fast-crash
+                    # wait, or one spawned by a dispatch call that timed out
+                    # after the spawn (#2905). The thesis is recorded either way.
+                    return await _thesis_recorded_after_facilitation_refused(
+                        session, result
+                    )
                 result["awaiting_facilitation"] = True
                 result["note"] = (
                     "The thesis is recorded, but no automated reviewer could take "
