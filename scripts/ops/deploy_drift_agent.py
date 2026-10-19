@@ -35,6 +35,7 @@ manufactured to look governed; a cycle that finds nothing says so, and
 confidence reflects whether every surface could actually be read (a checkout
 that has vanished or a process that could not be inspected lowers it).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,7 +50,6 @@ for p in (str(REPO_ROOT), str(REPO_ROOT / "agents" / "sdk" / "src")):
         sys.path.insert(0, p)
 
 from scripts.ops.deploy_drift_doctor import (  # noqa: E402
-    DEFAULT_SURFACES,
     Doctor,
     diagnose,
 )
@@ -65,7 +65,7 @@ def _build_agent_cls():
         def __init__(self, dry_run: bool = False, **kwargs):
             super().__init__(
                 name="deploy-drift-doctor",
-                persistent=True,          # stamps RESIDENT_TAGS; avoids orphan sweep
+                persistent=True,  # stamps RESIDENT_TAGS; avoids orphan sweep
                 spawn_reason="new_session",
                 **kwargs,
             )
@@ -87,13 +87,12 @@ def _build_agent_cls():
                     readable += 1
                     drifts.extend(diagnose(surface, doctor.io))
                 doctor.run()
-                return readable, drifts
+                return readable, len(doctor.surfaces), drifts
 
-            readable, drifts = await asyncio.get_running_loop().run_in_executor(
+            readable, total, drifts = await asyncio.get_running_loop().run_in_executor(
                 None, _work
             )
 
-            total = len(DEFAULT_SURFACES)
             if not readable:
                 # Nothing could be inspected — say so plainly rather than
                 # reporting a clean fleet we did not actually observe.
@@ -122,21 +121,30 @@ def _build_agent_cls():
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run the deploy-drift doctor under a governed identity so "
-                    "its finding resolutions carry EISV.",
+        "its finding resolutions carry EISV.",
     )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="diagnose and check in; post no findings, write no state")
-    parser.add_argument("--once", action="store_true", default=True,
-                        help="single cycle (default; launchd owns the schedule)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="diagnose and check in; post no findings, write no state",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        default=True,
+        help="single cycle (default; launchd owns the schedule)",
+    )
     args = parser.parse_args()
 
     try:
         agent_cls = _build_agent_cls()
     except ImportError as exc:
         # The plain doctor still works without the SDK — say which one to run.
-        print(f"[deploy-drift-agent] SDK unavailable ({exc}); "
-              f"run scripts/ops/deploy_drift_doctor.py for ungoverned diagnosis",
-              file=sys.stderr)
+        print(
+            f"[deploy-drift-agent] SDK unavailable ({exc}); "
+            f"run scripts/ops/deploy_drift_doctor.py for ungoverned diagnosis",
+            file=sys.stderr,
+        )
         return 2
 
     agent = agent_cls(dry_run=args.dry_run)

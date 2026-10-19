@@ -17,11 +17,11 @@
 #
 # Config (env):
 #   UNITARES_WATCHER_SWEEP_ROOTS  colon-separated roots to walk
-#                                 (default: $HOME/projects)
+#                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
 #
-# Install: see scripts/ops/com.unitares.watcher-sweep.plist.template
+# Host schedulers and their selected scan roots belong in deployment config.
 
 set -u
 
@@ -29,7 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-$HOME/projects}"
+ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-}"
+if [[ -z "$ROOTS" ]]; then
+    echo 'watcher-sweep: set UNITARES_WATCHER_SWEEP_ROOTS to explicit scan roots' >&2
+    exit 2
+fi
 MAX_FILES="${UNITARES_WATCHER_SWEEP_MAX:-40}"
 MAX_CONCURRENT=3
 LOCK_DIR="/tmp/unitares-watcher-locks"

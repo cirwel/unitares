@@ -5,7 +5,7 @@ Vigil — The First Resident
 A persistent agent that runs every 30 minutes via launchd, checks system health,
 and checks in to governance. Builds the longest-running EISV trajectory in the
 system. Leaves notes in the knowledge graph when something changes, creating
-continuity between ephemeral Claude Code sessions.
+continuity between interactive agent sessions.
 
 Usage:
     python3 agents/vigil/agent.py              # Health checks only (default)
@@ -75,7 +75,7 @@ CYCLE_TIMEOUT = int(os.getenv("HEARTBEAT_CYCLE_TIMEOUT", "120"))
 # "X recovered" / "X unreachable for N cycles" notes: `github` going unhealthy
 # means "a stalled draft PR exists", not "GitHub is unreachable", and those
 # notes land in the shared KG tagged `outage` where other residents read them.
-CONDITION_SERVICE_KEYS = {"github"}
+CONDITION_SERVICE_KEYS = {"github", "plugin_hooks", "resident_tags"}
 
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
@@ -146,7 +146,7 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
     notes: List[Dict[str, str]] = []
 
     # Health status transitions — for EVERY monitored service, not just a
-    # hardcoded (governance, lumen) pair. Services are discovered from the
+    # fixed pair. Services are discovered from the
     # `{svc}_healthy` keys that _collect_health_state emits for each
     # registered check, so a deployment's own health-check plugins get
     # outage/recovery notes automatically.
@@ -221,57 +221,23 @@ def _collect_health_state(
     check_results: List[Tuple[Any, Any]],
     prev_state: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Turn check results into Vigil's state-dict fragments.
+    """Track only configured services, preserving each plugin's state keys.
 
-    Preserves the existing state file keys (``governance_healthy``,
-    ``lumen_healthy``, ``gov_up_cycles``, ``lumen_up_cycles``,
-    ``lumen_down_streak``, ``lumen_last_ok_url``) so the refactor is
-    invisible to the persisted .vigil_state format. Plugin-persistent
-    fields are pulled from ``result.detail``.
+    ``gov_up_cycles`` remains a compatibility alias for governance uptime.
+    Every other service uses the same service-key-derived state schema.
     """
     state: Dict[str, Any] = {}
     by_key = {c.service_key: r for c, r in check_results}
-
-    gov_r = by_key.get("governance")
-    gov_healthy = gov_r.ok if gov_r else True
-    state["governance_healthy"] = gov_healthy
-    state["governance_detail"] = gov_r.summary if gov_r else "no check"
-    state["gov_up_cycles"] = prev_state.get("gov_up_cycles", 0) + (1 if gov_healthy else 0)
-
-    lumen_r = by_key.get("lumen")
-    anima_healthy = lumen_r.ok if lumen_r else True
-    state["lumen_healthy"] = anima_healthy
-    state["lumen_detail"] = lumen_r.summary if lumen_r else "not configured"
-    state["lumen_up_cycles"] = prev_state.get("lumen_up_cycles", 0) + (1 if anima_healthy else 0)
-
-    lumen_down_streak = 0
-    if lumen_r and not anima_healthy:
-        lumen_down_streak = prev_state.get("lumen_down_streak", 0) + 1
-    state["lumen_down_streak"] = lumen_down_streak
-
-    if lumen_r and lumen_r.detail:
-        state.update(lumen_r.detail)
-
-    # Any other registered checks (deployment-specific health-check plugins)
-    # get the same per-service bookkeeping — {svc}_healthy / _detail /
-    # _up_cycles / _down_streak — so detect_changes emits outage/recovery
-    # notes for them too. governance and lumen keep their bespoke keys above
-    # (governance's uptime counter is `gov_up_cycles`, not
-    # `governance_up_cycles`, and lumen is always present even when absent).
     for svc, r in by_key.items():
-        if svc in ("governance", "lumen"):
-            continue
-        healthy = r.ok if r else True
+        healthy = r.ok
         state[f"{svc}_healthy"] = healthy
-        state[f"{svc}_detail"] = r.summary if r else "not configured"
-        state[f"{svc}_up_cycles"] = (
-            prev_state.get(f"{svc}_up_cycles", 0) + (1 if healthy else 0)
+        state[f"{svc}_detail"] = r.summary
+        counter = "gov_up_cycles" if svc == "governance" else f"{svc}_up_cycles"
+        state[counter] = prev_state.get(counter, 0) + int(healthy)
+        state[f"{svc}_down_streak"] = (
+            0 if healthy else prev_state.get(f"{svc}_down_streak", 0) + 1
         )
-        svc_streak = 0
-        if r and not healthy:
-            svc_streak = prev_state.get(f"{svc}_down_streak", 0) + 1
-        state[f"{svc}_down_streak"] = svc_streak
-        if r and r.detail:
+        if r.detail:
             state.update(r.detail)
 
     return state
@@ -1083,13 +1049,6 @@ class VigilAgent(GovernanceAgent):
             if not result.ok:
                 issues += 1
 
-        gov_healthy = health_state["governance_healthy"]
-        gov_detail = health_state["governance_detail"]
-        anima_healthy = health_state["lumen_healthy"]
-        anima_detail = health_state["lumen_detail"]
-        anima_ok_url = health_state.get("lumen_last_ok_url")
-        lumen_down_streak = health_state["lumen_down_streak"]
-
         # --- Transition-emit: page once on healthy -> unhealthy per service ---
         for check, result in check_results:
             svc = check.service_key
@@ -1276,7 +1235,11 @@ class VigilAgent(GovernanceAgent):
 
         confidence = 0.90
         confidence -= issues * 0.12
-        if lumen_down_streak == 1:
+        if any(
+            health_state.get(f"{check.service_key}_down_streak") == 1
+            for check, _ in check_results
+            if check.service_key not in CONDITION_SERVICE_KEYS
+        ):
             confidence -= 0.05
         if total_failed > 0:
             confidence -= 0.10
@@ -1396,12 +1359,13 @@ class VigilAgent(GovernanceAgent):
             except (KeyError, TypeError, ValueError):
                 eisv = "EISV=?"
             total_cycles = self._cycle_state.get("total_cycles", 0)
-            gov_up = self._cycle_state.get("gov_up_cycles", 0)
-            lumen_up = self._cycle_state.get("lumen_up_cycles", 0)
-            uptime = (
-                f" | uptime: gov={gov_up/total_cycles:.0%} lumen={lumen_up/total_cycles:.0%}"
-                if total_cycles > 0 else ""
-            )
+            uptimes = []
+            for key, value in self._cycle_state.items():
+                if total_cycles > 0 and key.endswith("_up_cycles"):
+                    service = key.removesuffix("_up_cycles")
+                    if service not in CONDITION_SERVICE_KEYS:
+                        uptimes.append(f"{service}={value/total_cycles:.0%}")
+            uptime = " | uptime: " + " ".join(uptimes) if total_cycles > 0 else ""
             log(f"{verdict or '?'} | {eisv} | {cycle_result.summary}{uptime}")
 
     async def run_archive_review(

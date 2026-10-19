@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.52.0",
+  "version": "2.0.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "e8ae32e68394193b26e93311167c27bd3ac769ed51d3879e1f3ec559f99957e4",
+  "surface_sha256": "77c2d531f71796be4323a3c41a28d0619aa3d5f2c135031804255cf74cdf42b6",
   "capabilities": [
     {
       "name": "start_session",
@@ -356,7 +356,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "ef9dcf3896b578362ae05942e67b40d4a5338af77d2b02131337fd684ee88937",
+      "input_schema_sha256": "62c79418764479946baf98659e9b3c160e302f45f331b8601df6a77f49375614",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",

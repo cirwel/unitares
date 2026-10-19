@@ -11,9 +11,9 @@ registry (PORTS) and:
   * cross-checks each in-repo port against its cited source file (so the registry
     cannot silently disagree with the code).
 
-Ports that live outside this repo (anima on the Pi) or only in a tracked plist
-template are recorded descriptively; everything with an in-repo literal is
-verified.
+Only services implemented in this repository belong in this registry. External
+service probes are explicit deployment configuration. Every cited in-repo
+literal is verified.
 
 Interpreter constraint: ``scripts/ops/health_watchdog.sh`` shells out to this
 module via bare ``python3``, which under launchd's minimal PATH is the system
@@ -41,19 +41,6 @@ OUT = REPO / "docs" / "operations" / "DEFINITIVE_PORTS.md"
 # Single source of truth for service ports. `verify` is the in-repo file whose
 # literal must contain the port (None = external / not verifiable from this repo).
 PORTS = [
-    {
-        "port": 8766,
-        "service": "Anima MCP (physical edge testbed)",
-        "host": "edge host (Raspberry Pi)",
-        "source": "`anima-mcp` service config (external repo)",
-        "verify": None,
-        # No roster probe. Anima runs on a separate host, so health_watchdog.sh
-        # checks it directly via ANIMA_HEALTH_URL rather than through this
-        # registry — see the anima block there. Declaring a `scope: "edge"`
-        # entry here would read as monitored while nothing emitted it, which
-        # masks the very gap this registry exists to close.
-        "health": None,
-    },
     {
         "port": 8767,
         "service": "UNITARES governance MCP",
@@ -218,12 +205,13 @@ The lease/effect plane (`8788`) is bearer-gated (`LEASE_PLANE_BEARER_TOKEN`).
 ## Verification
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | grep -E '87(6[67]|88|89|90)'
+lsof -nP -iTCP -sTCP:LISTEN | grep -E '87(67|68|70|88|89|90)'
 curl -s http://127.0.0.1:8767/health
 ```
 
-Anima (`8766`) is an external service on the Pi — verify it against the running
-anima-mcp deployment, not this repo.
+External services are configured by the deployment operator. The optional
+watchdog reads additional probes from `UNITARES_HEALTH_EXTRA_PROBES`; the
+server registry does not select an external host or agent.
 
 ## Read Next
 

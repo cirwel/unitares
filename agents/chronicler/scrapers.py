@@ -20,9 +20,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-# Default matches the server's DSN (see .claude/CLAUDE.md — one Postgres
-# instance, one database). Overridable so a reflash or remote scrape can
-# point somewhere else without code changes.
+# Local development DSN; deployments can select their own database.
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/governance"
 
 
@@ -198,7 +196,7 @@ def governance_sentinel_findings_7d(_repo_root: Path) -> float:
 
 
 # ---------------------------------------------------------------------------
-# GitHub traffic (CIRWEL org, non-archived repos, rolling 14-day window)
+# GitHub traffic (explicitly configured owner, rolling 14-day window)
 # ---------------------------------------------------------------------------
 #
 # One process-lifetime fetch backs all four traffic scrapers — Chronicler is
@@ -207,18 +205,18 @@ def governance_sentinel_findings_7d(_repo_root: Path) -> float:
 # (all four series read the same underlying response) and keeps the GitHub
 # API call count to one repo-list + 2N traffic calls per day.
 #
-# Repo set is resolved live via `gh repo list CIRWEL` so the metric tracks
+# Repo set is resolved live via `gh repo list <configured owner>` so the metric tracks
 # "current non-archived org surface" — adding a new public repo automatically
 # folds it into the next day's snapshot, and archiving one drops it.
 
-# Org whose traffic this Chronicler scrapes. Override per deployment via
-# GITHUB_SCRAPE_ORG; the metric *names* below stay `github.cirwel.*` as stable
-# keys (renaming them would break stored-metric continuity).
-GITHUB_ORG = os.getenv("GITHUB_SCRAPE_ORG", "CIRWEL")
+# Traffic scraping is optional. No owner means no GitHub calls and no traffic
+# series. A deployment can retain an existing series namespace explicitly.
+GITHUB_ORG = os.getenv("GITHUB_SCRAPE_ORG", "").strip()
+GITHUB_METRIC_PREFIX = os.getenv("CHRONICLER_GITHUB_METRIC_PREFIX", "github").strip()
 
 
 @functools.lru_cache(maxsize=1)
-def _fetch_cirwel_traffic() -> dict[str, int]:
+def _fetch_github_traffic(owner: str | None = None) -> dict[str, int]:
     """Fetch + aggregate GitHub traffic for non-archived ``GITHUB_ORG`` repos.
 
     Returns a dict with keys ``views``, ``views_uniques``, ``clones``,
@@ -231,8 +229,11 @@ def _fetch_cirwel_traffic() -> dict[str, int]:
     or unauthenticated, ``subprocess.run`` raises and Chronicler emits the
     paired ``.error`` metric.
     """
+    owner = GITHUB_ORG if owner is None else owner
+    if not owner:
+        raise ValueError("GITHUB_SCRAPE_ORG must be configured for traffic scraping")
     list_proc = subprocess.run(
-        ["gh", "repo", "list", GITHUB_ORG, "--limit", "200", "--json", "name,isArchived"],
+        ["gh", "repo", "list", owner, "--limit", "200", "--json", "name,isArchived"],
         check=True, capture_output=True, text=True,
     )
     repos = [r for r in json.loads(list_proc.stdout) if not r.get("isArchived")]
@@ -245,7 +246,7 @@ def _fetch_cirwel_traffic() -> dict[str, int]:
             ("clones", "clones", "clones_uniques"),
         ):
             proc = subprocess.run(
-                ["gh", "api", f"repos/{GITHUB_ORG}/{name}/traffic/{kind}"],
+                ["gh", "api", f"repos/{owner}/{name}/traffic/{kind}"],
                 check=True, capture_output=True, text=True,
             )
             data = json.loads(proc.stdout)
@@ -254,20 +255,20 @@ def _fetch_cirwel_traffic() -> dict[str, int]:
     return totals
 
 
-def github_cirwel_traffic_views_14d(_repo_root: Path) -> float:
-    return float(_fetch_cirwel_traffic()["views"])
+def github_traffic_views_14d(_repo_root: Path, *, owner: str | None = None) -> float:
+    return float(_fetch_github_traffic(owner)["views"])
 
 
-def github_cirwel_traffic_views_uniques_14d(_repo_root: Path) -> float:
-    return float(_fetch_cirwel_traffic()["views_uniques"])
+def github_traffic_views_uniques_14d(_repo_root: Path, *, owner: str | None = None) -> float:
+    return float(_fetch_github_traffic(owner)["views_uniques"])
 
 
-def github_cirwel_traffic_clones_14d(_repo_root: Path) -> float:
-    return float(_fetch_cirwel_traffic()["clones"])
+def github_traffic_clones_14d(_repo_root: Path, *, owner: str | None = None) -> float:
+    return float(_fetch_github_traffic(owner)["clones"])
 
 
-def github_cirwel_traffic_clones_uniques_14d(_repo_root: Path) -> float:
-    return float(_fetch_cirwel_traffic()["clones_uniques"])
+def github_traffic_clones_uniques_14d(_repo_root: Path, *, owner: str | None = None) -> float:
+    return float(_fetch_github_traffic(owner)["clones_uniques"])
 
 
 # Registry: metric name → scrape callable. Chronicler iterates this on each run.
@@ -279,7 +280,7 @@ def github_cirwel_traffic_clones_uniques_14d(_repo_root: Path) -> float:
 # its GitHub org, its reference residents) go in metrics_catalog.json next to
 # this file, which the server loads only when UNITARES_METRICS_CATALOG_EXTRA
 # names it.
-SCRAPERS: dict[str, Callable[[Path], float]] = {
+BASE_SCRAPERS: dict[str, Callable[[Path], float]] = {
     "tokei.unitares.src.code": tokei_unitares_src_code,
     "tests.unitares.count": tests_unitares_count,
     "agents.active.7d": agents_active_7d,
@@ -290,8 +291,28 @@ SCRAPERS: dict[str, Callable[[Path], float]] = {
     "governance.guide.7d": governance_guide_7d,
     "governance.pause.7d": governance_pause_7d,
     "governance.sentinel.findings.7d": governance_sentinel_findings_7d,
-    "github.cirwel.traffic.views.14d": github_cirwel_traffic_views_14d,
-    "github.cirwel.traffic.views.uniques.14d": github_cirwel_traffic_views_uniques_14d,
-    "github.cirwel.traffic.clones.14d": github_cirwel_traffic_clones_14d,
-    "github.cirwel.traffic.clones.uniques.14d": github_cirwel_traffic_clones_uniques_14d,
 }
+
+
+def build_scrapers(
+    owner: str = GITHUB_ORG, prefix: str = GITHUB_METRIC_PREFIX,
+) -> dict[str, Callable[[Path], float]]:
+    """Register traffic only for an explicit owner; names are deployment data."""
+    import re
+
+    scrapers = dict(BASE_SCRAPERS)
+    if not owner.strip():
+        return scrapers
+    if not re.fullmatch(r"[a-zA-Z0-9]+(?:[._-][a-zA-Z0-9]+)*", prefix):
+        raise ValueError("CHRONICLER_GITHUB_METRIC_PREFIX must be a metric namespace")
+    for suffix, scraper in (
+        ("views", github_traffic_views_14d),
+        ("views.uniques", github_traffic_views_uniques_14d),
+        ("clones", github_traffic_clones_14d),
+        ("clones.uniques", github_traffic_clones_uniques_14d),
+    ):
+        scrapers[f"{prefix}.traffic.{suffix}.14d"] = functools.partial(scraper, owner=owner)
+    return scrapers
+
+
+SCRAPERS = build_scrapers()

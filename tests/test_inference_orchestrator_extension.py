@@ -92,7 +92,7 @@ async def test_listing_says_the_extension_is_on_when_configured(default_install,
 
 @pytest.mark.asyncio
 async def test_delegate_inference_names_the_missing_extension(default_install):
-    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello", "host_id": "claude:host-adapter"}))
     assert parsed["success"] is False
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
     assert parsed["execution_started"] is False
@@ -114,7 +114,7 @@ async def test_a_configured_lane_keeps_the_setup_recovery(default_install, monke
         "src.mcp_handlers.support.host_adapter.resolve_host_cli",
         lambda _host_id: None,
     )
-    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello", "host_id": "claude:host-adapter"}))
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
     assert "agent orchestrator extension" not in parsed["error"]
     assert "UNITARES_CLAUDE_CLI" in parsed["recovery"]["action"]
@@ -139,10 +139,9 @@ async def test_thorough_consult_on_a_default_install_points_at_standard(
     }))
 
     assert parsed["success"] is False
-    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
-    assert parsed["failure"]["upstream"]["reason"] == "extension_not_configured"
-    assert "effort='standard'" in parsed["recovery"]["action"]
-    assert "Restore" not in parsed["recovery"]["action"]
+    assert parsed["error_code"] == "CONSULT_HOST_SELECTION_REQUIRED"
+    assert "consult.thorough.prefer" in parsed["recovery"]["action"]
+    assert "standard local answer" in parsed["recovery"]["action"]
     standard.assert_not_awaited()
 
 

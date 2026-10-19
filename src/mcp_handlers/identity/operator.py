@@ -28,9 +28,9 @@ Design:
 
 Token storage:
 
-- Tokens are deployment secrets. Recommended location:
-  ``~/.config/cirwel/secrets.env`` (mode 600) per
-  ``project_secrets-location`` memory.
+- Tokens are deployment secrets. Store them in your deployment secret
+  manager or an owner-readable env file (mode 600), and supply them through
+  the service environment.
 - Bridge/dashboard/ollama plists or systemd units load the token
   into the client process and pass it on every request.
 - Rotation is operator action: update the env var in

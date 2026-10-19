@@ -25,7 +25,7 @@ def test_resident_tag_hygiene_identity():
 
     check = ResidentTagHygiene()
     assert check.name == "resident_tag_hygiene"
-    assert check.service_key == "governance"
+    assert check.service_key == "resident_tags"
 
 
 def test_hygiene_ok_when_no_tags_missing(monkeypatch):

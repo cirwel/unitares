@@ -317,7 +317,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.50.0 (2026-10-17): search_knowledge_graph's discovery_type filter description lists the values search accepts, generated from DiscoveryType plus topic_rollup, and its tool description stops hand-listing a drifted set that named an invalid answer type. Nothing is added, removed, retyped or renamed.
 # 1.51.0 (2026-10-18): consult accepts an optional host_ids: a council of 2 or 3 distinct CLI hosts asked the same brief in parallel, each an ordinary pinned consultation with its own record (tagged council_id), returned side by side under members with no synthesis. Requires privacy='cloud_allowed'; omitted effort becomes thorough. Calls without host_ids are unchanged.
 # 1.52.0 (2026-10-18): consult's host_ids schema drops its size bounds, so a wrong size reaches the handler's INVALID_CONSULT_COUNCIL refusal with the valid hosts; host_ids accepts JSON text on every transport and a lone host id on REST and use_tool; its brief names cloud_allowed and effort's brief covers host_ids. A council refused member by member reports validation_error, records are written once the council returns, and a cancelled council keeps no hashes in any member's record.
-INTERFACE_CONTRACT_VERSION = "1.52.0"
+# 2.0.0 (2026-10-19): Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default.
+INTERFACE_CONTRACT_VERSION = "2.0.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

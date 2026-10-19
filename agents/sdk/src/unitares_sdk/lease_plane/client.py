@@ -62,9 +62,9 @@ from .models import (
 class LeasePlaneClientConfig:
     base_url: str = "http://127.0.0.1:8788"
     bearer_token: str | None = None
-    # §7.10: force-release requires a separate elevated token, sourced from
-    # ~/.config/cirwel/secrets.env as LEASE_FORCE_RELEASE_TOKEN. Used only by
-    # force_release(); release() rejects release_reason='forced' regardless.
+    # §7.10: force-release requires a separate elevated token, supplied
+    # explicitly here by the caller (the server uses LEASE_FORCE_RELEASE_TOKEN).
+    # Used only by force_release(); release() rejects release_reason='forced'.
     force_release_token: str | None = None
     timeout_s: float = 1.0
     # Effect-binding (#1252): grants are minted at gov-mcp's REST surface, not

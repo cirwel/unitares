@@ -67,18 +67,10 @@ if not _router_reachable():
 
 # ---------- helpers ----------
 
-def _secrets_path() -> Path:
-    """The secrets env file, resolved the way every launcher resolves it:
-    UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-    pre-2026-09 ~/.config/cirwel path when only that one exists."""
+def _secrets_path() -> Path | None:
+    """Integration credentials must be explicitly provisioned."""
     override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    default = Path.home() / ".config" / "unitares" / "secrets.env"
-    legacy = Path.home() / ".config" / "cirwel" / "secrets.env"
-    if not default.exists() and legacy.exists():
-        return legacy
-    return default
+    return Path(override) if override else None
 
 
 def _read_secrets_var(var_name: str) -> str | None:
@@ -87,7 +79,7 @@ def _read_secrets_var(var_name: str) -> str | None:
     if tok:
         return tok
     secrets_path = _secrets_path()
-    if not secrets_path.exists():
+    if secrets_path is None or not secrets_path.exists():
         return None
     prefix = f"{var_name}="
     for line in secrets_path.read_text().splitlines():

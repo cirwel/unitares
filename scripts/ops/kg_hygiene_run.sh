@@ -11,9 +11,9 @@
 #   KG_HYGIENE_PYTHON      interpreter with psycopg2 (default: python3). For the
 #                          launchd job set this to the same python the
 #                          governance-mcp service runs.
-#   UNITARES_ROOT          checkout root (default: $HOME/projects/unitares)
+#   UNITARES_ROOT          checkout root (default: this script's checkout)
 #   KG_HYGIENE_LOG         digest log (default: ~/Library/Logs/unitares-kg-hygiene.log)
-#   KG_HYGIENE_APPLY       1 = cool the safe batch, 0 = report only (default: 1)
+#   KG_HYGIENE_APPLY       1 = cool the safe batch, 0 = report only (default: 0)
 #   KG_HYGIENE_COOL_LIMIT  max rows cooled per run, oldest first (default: 20).
 #                          Bounds the sweep so the tail drains gradually.
 #   KG_HYGIENE_COLD_AGE    age threshold in days for cooling (default: 30)
@@ -21,9 +21,10 @@
 set -u
 
 PY=${KG_HYGIENE_PYTHON:-python3}
-ROOT=${UNITARES_ROOT:-$HOME/projects/unitares}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT=${UNITARES_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}
 LOG=${KG_HYGIENE_LOG:-$HOME/Library/Logs/unitares-kg-hygiene.log}
-APPLY=${KG_HYGIENE_APPLY:-1}
+APPLY=${KG_HYGIENE_APPLY:-0}
 LIMIT=${KG_HYGIENE_COOL_LIMIT:-20}
 COLD_AGE=${KG_HYGIENE_COLD_AGE:-30}
 TS=$(date '+%Y-%m-%d %H:%M:%S %Z')

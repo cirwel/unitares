@@ -102,7 +102,7 @@ eventually delete them.
 
 Re-land onto a fresh branch off the default branch (cherry-pick the
 post-merge commits) and open a fresh PR; do not keep pushing to the dead
-branch. `python3 scripts/dev/stranded_work_audit.py` classifies the exact
+branch. `python3 scripts/dev/stranded_work_audit.py --repo {repo}` classifies the exact
 orphan set.
 
 _Filed by merge-content-check.yml, routed to the orphan-push finding —

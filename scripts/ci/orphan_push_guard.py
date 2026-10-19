@@ -229,7 +229,7 @@ def main() -> int:
             return 0
 
     if err is not None:
-        commit_list = f"({err} — treat as INDETERMINATE: verify by content diff before re-landing, do not blind cherry-pick; `python3 scripts/dev/stranded_work_audit.py` gives the full classification)"
+        commit_list = f"({err} — treat as INDETERMINATE: verify by content diff before re-landing, do not blind cherry-pick; `python3 scripts/dev/stranded_work_audit.py --repo {repo}` gives the full classification)"
         pick = "<verify shas first>"
     else:
         commit_list = "\n".join(

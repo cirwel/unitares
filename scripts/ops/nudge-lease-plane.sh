@@ -28,10 +28,14 @@
 # acquire-healthcheck auto-restart remains the backstop).
 set -euo pipefail
 
-DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
+DEPLOY="${UNITARES_MCP_DEPLOY:?set the shared deployment worktree path}"
 LABEL="com.unitares.lease-plane"
 UID_NUM="$(id -u)"
 PORT="${UNITARES_LEASE_PLANE_PORT:-8788}"
+PLIST="${UNITARES_LEASE_PLANE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+
+# shellcheck source=deploy-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
 
 REASON=""
 CHECK_RANGE=()
@@ -65,19 +69,21 @@ if ! launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1; then
   exit 0
 fi
 
+deploy_lib_require_loaded_secrets_env nudge-lease-plane "$PLIST" "gui/$UID_NUM/$LABEL"
+
 echo "[nudge-lease-plane] restarting $LABEL (${REASON:-shared-worktree disturbance}); start.sh re-runs deps.get + compiles at boot"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-# Bounded wait for the listener: any HTTP status (200/401/...) means the BEAM
-# is up and serving fresh-compiled code; 000 means not yet accepting.
+# Bounded wait for readiness. Auth challenges are expected on secured installs;
+# 503 means a serving but unavailable plane and must not be reported as success.
 for _ in $(seq 1 30); do
   sleep 2
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/v1/health" 2>/dev/null || echo 000)"
-  if [[ "$code" != "000" ]]; then
+  if [[ "$code" == 200 || "$code" == 401 || "$code" == 403 ]]; then
     echo "[nudge-lease-plane] plane answering (HTTP $code) on :$PORT"
     exit 0
   fi
 done
 
-echo "[nudge-lease-plane] WARNING: plane not answering on :$PORT within 60s of restart — check ~/Library/Logs/unitares-lease-plane.log (acquire-healthcheck auto-restart remains the backstop)" >&2
+echo "[nudge-lease-plane] WARNING: plane not ready on :$PORT within 60s of restart — check ~/Library/Logs/unitares-lease-plane.log (acquire-healthcheck auto-restart remains the backstop)" >&2
 exit 1

@@ -25,7 +25,7 @@
         > ~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist
     launchctl load ~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist
 
-  Verify (with $AGENT_ORCHESTRATOR_BEARER_TOKEN sourced from ~/.config/cirwel/secrets.env):
+  Verify (with AGENT_ORCHESTRATOR_BEARER_TOKEN supplied in your shell environment):
     launchctl list | grep com.unitares.agent-orchestrator
     tail -f ~/Library/Logs/unitares-agent-orchestrator.log
     curl -s -H "Authorization: Bearer $AGENT_ORCHESTRATOR_BEARER_TOKEN" \

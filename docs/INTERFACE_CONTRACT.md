@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.52.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.0.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -110,7 +110,9 @@ parameters through `describe_tool(tool_name=..., action=...)`.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new
-major schema contract or an explicit deprecation window. Raw implementation
+major negotiated interface release or an explicit deprecation window. The
+document schema family changes only when the contract document’s shape breaks
+compatibility, as distinguished below. Raw implementation
 names may remain callable for compatibility even when the preferred workflow
 alias is the documented integration name.
 
@@ -979,3 +981,47 @@ adversarial review after it merged.
 - **Client action:** none. The Python SDK's `consult()` gains `host_ids`, and
   `ConsultResult` gains `council_id`, `answered`, `asked` and `members`.
   Before this release the SDK dropped every council answer.
+
+## 2.0.0 (2026-10-19)
+
+Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default.
+
+This is a major negotiated interface release because omitted-host requests
+can now select a different host or refuse where the old default selected a
+particular vendor. The document shape is unchanged, so its schema remains
+`unitares.interface-contract.v1`. No capability or argument is removed.
+
+- **Affected:** `delegate_inference.host_id` defaults to `null` (unselected),
+  replacing `claude:host-adapter`. The Python async and sync SDKs leave an
+  omitted host out of the request. `consult(effort='thorough')` also stops
+  using a built-in vendor preference order when no host is supplied.
+- **Selection:** an explicit `host_id` is retained. Otherwise the operator’s
+  `UNITARES_INFERENCE_HOSTS_FILE` may define `jobs.consult.thorough.prefer`.
+  Raw delegation chooses the first supported, enabled entry and makes one
+  attempt; it does not silently retry another provider. Thorough consultation
+  retains the configured job’s failover policy, eligible-peer checks and
+  caller-family exclusion. Without a preference, automatic selection requires
+  exactly one enabled, configured and available eligible host (a peer of another
+  family for thorough consultation). Merely naming a host in config does not
+  authorize its use.
+- **Compatibility:** explicit host pins and `consult(host_ids=[...])` councils
+  retain their existing validation, membership, privacy, authentication,
+  enablement, provenance and egress rules. Standard local consultation is
+  unchanged. Old SDKs that send their historical default as an explicit
+  `host_id` keep making that pinned request; upgraded SDKs no longer add it.
+  An ambiguous or unconfigured omitted-host request now reports
+  `INFERENCE_HOST_SELECTION_REQUIRED` for delegation, or
+  `CONSULT_HOST_SELECTION_REQUIRED` for thorough consultation (an explicitly
+  configured job with no eligible peer reports `CONSULT_NO_ELIGIBLE_HOST`).
+  Consultation uses a standard local fallback only when the caller permits
+  degradation; none of these choices creates a metered default.
+- **Client/operator action:** to preserve a fixed provider, pass `host_id`
+  explicitly. To delegate selection, install an explicit preference order
+  before upgrading, or provision only one eligible host. Inspect
+  `list_inference_hosts` and the refusal’s recovery details when selection is
+  unresolved. A caller expecting the old omitted-host behavior must migrate;
+  this is not a claim of unchanged behavior for those calls.
+- **Schema digests:** only `delegate_inference`’s input-schema digest changes,
+  together with `surface_sha256`. `consult`’s schema digest is unchanged;
+  its routing change is recorded in the negotiated release. Hash-pinning
+  clients should inspect the new schema and refresh that pin.
