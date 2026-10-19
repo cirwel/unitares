@@ -17,7 +17,7 @@ than add features.
 This note does not revise either one.
 
 **Method.** Each factual claim in the brief was checked against the primary
-source where this session's egress policy allowed. Each recommendation was then
+source where the author's network access allowed. Each recommendation was then
 compared with what the repository already has. `arxiv.org`, `openai.com`,
 `robocurve.org` and `the-decoder.com` were blocked. The Anthropic page and the
 WorkWorlds and RoboHarm GitHub READMEs could be opened. The cells below say which
@@ -93,7 +93,7 @@ must be re-opened before anyone cites it elsewhere.
 | Once evidence was accessed, success was 84.2% vs 82.7% | 82.7% curated vs 84.2% full | README | Confirmed. The brief gives the pair without saying which condition is which. |
 | Frozen manifests, sealed verifier, append-only events, released sanitized evidence; production implementation restricted | De-identified ledgers, statistical code and an illustrative implementation are released under CC BY 4.0; the production implementation and organizational data are restricted | README | Confirmed |
 | RoboHarm, Sept 18: three policies, five harmful tasks, 100 trials each; Astra 2 refused / 60 completed; Fable 5.1 20 refused / 34 completed; all Fable refusals on the baby-doll task | Same figures, 20 trials per task cell | secondary press snippets only; `robocurve.org` blocked | Consistent across several outlets; primary not opened. **The brief also omits the third policy:** MolmoAct2 (a VLA model) refused 0 and completed 6. |
-| RoboHarm released code, videos, transcripts and trial data | The repo README says it provides "the benchmark and collection tools; it is not a frozen results dataset" | [robocurve/roboharm README](https://github.com/robocurve/roboharm) | **Partly unverified.** The code is released. The trial data may be published elsewhere, but this session did not find it. |
+| RoboHarm released code, videos, transcripts and trial data | The repo README says it provides "the benchmark and collection tools; it is not a frozen results dataset" | [robocurve/roboharm README](https://github.com/robocurve/roboharm) | **Partly unverified.** The code is released. The trial data may be published elsewhere, but the author did not find it. |
 | No frontier lab disclosed a new RLHF, reward-model or data-curation recipe this week | — | not checked | Not checked; an absence claim across all labs is out of scope for this note |
 
 ---
@@ -316,14 +316,15 @@ the intended target. Say so in its claim.
 
 The five open questions this note raised (in §1–§3 and *Not done here,
 deliberately*) were put to the operator after this note merged
-(#2400). The operator answered "idk" to each, asked whether a council could
-settle them, and then delegated them in these words: *"proceed best for the
-federation's future."* On resolver identity specifically, the operator said:
-*"im thinking human is operator but maybe so can ai, idk."*
+(#2400). The operator left each one open, asked whether a panel of reviewers
+could settle them, and then delegated them to the authoring session with the
+instruction to proceed as is best for the federation's future. On resolver
+identity specifically, the operator leaned towards the human operator as the
+resolver while leaving open that an AI agent could also be one.
 
 This section records that delegation and how the authoring session used it.
-The session drew on a three-member subagent council (architect, adversarial
-reviewer, live verifier), advisory local consults, and one governed dialectic
+The session drew on three subagent reviewers (architect, adversarial
+reviewer, live verification), advisory local consults, and one governed dialectic
 (session `5039af21a55b7d9f`). **None of these is independent review, and
 agreement among them is not operator authorization.** The delegation above is
 the only authority for the dispositions below, and it covers only these five
@@ -331,7 +332,7 @@ items. The operator can reverse any of them.
 
 | # | Question | Disposition | What it does not do |
 |---|---|---|---|
-| 1 | Starting context in the coordination ablation (§3) | **Deferred until an enrollment is scheduled.** Recommended under the delegation, and to be confirmed or reversed when enrollment starts: fix the context regime by a logged pre-enrollment amendment, not by an enrollment digest alone. This departs from §3, which left open whether option (a) needs an amendment at all and did not propose an evidence-access measure. The amendment would also fix matched non-treatment retrieval tools across arms, a frozen truncation policy recorded for each run, evidence access as a descriptive outcome only, and a disclosure that the regime was chosen after the WorkWorlds numbers were read. The council leaned towards full role-visible state; keeping curated context and disclosing it remains a legitimate choice to make then. | It does not amend or re-register `accountable-coordination-ablation-v0`, enroll a cohort, or choose the regime now. |
+| 1 | Starting context in the coordination ablation (§3) | **Deferred until an enrollment is scheduled.** Recommended under the delegation, and to be confirmed or reversed when enrollment starts: fix the context regime by a logged pre-enrollment amendment, not by an enrollment digest alone. This departs from §3, which left open whether option (a) needs an amendment at all and did not propose an evidence-access measure. The amendment would also fix matched non-treatment retrieval tools across arms, a frozen truncation policy recorded for each run, evidence access as a descriptive outcome only, and a disclosure that the regime was chosen after the WorkWorlds numbers were read. The reviewers leaned towards full role-visible state; keeping curated context and disclosing it remains a legitimate choice to make then. | It does not amend or re-register `accountable-coordination-ablation-v0`, enroll a cohort, or choose the regime now. |
 | 2 | First assurance case (§2) | **Adopted.** Drafted as [`docs/evaluations/assurance-cases/outcome-binding-v0.md`](../evaluations/assurance-cases/outcome-binding-v0.md). The claim is scoped to the canonical outcome record within the retention window, and #2247 is disclosed as a limit. | It does not fix #2247, seek outside assessment, or create a runtime `AssuranceCase` object. |
 | 3 | Oversight summary (§1) | **No summary is built.** One principle is recorded for whenever a resolver class is designed: *record who resolved a review truthfully by kind: operator (authenticated by operator credential or passkey), other authenticated human, or AI agent or model. An AI's decision is never recorded as the operator's.* A metric then chooses which kinds count; for now "human-resolved" means operator only. This matches the Sentinel path, where model verdicts stay separate from operator labels. The escalation stream and its denominator stay open. | It does not change the schema or any code, and adds no metric, threshold or dashboard. |
 | 4 | Positioning wording | **Held** until the assurance case in row 2 has been assessed by someone other than the authoring session. | It makes no edit to the README or `PRODUCT_DEFINITION.md`. |

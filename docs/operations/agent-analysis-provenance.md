@@ -1,6 +1,6 @@
 # Agent analysis: say where each claim came from
 
-**Applies to** any agent-authored analysis of this system — council reviews, the
+**Applies to** any agent-authored analysis of this system — independent multi-reviewer reviews, the
 dispatched-reviewer pattern recorded in
 `docs/proposals/active/open-decisions-packet-v0.md` (§ *Council review*), a `consult`
 critique, or a single session's own diagnosis.
@@ -31,8 +31,8 @@ alone — but a reader must not treat the specific historical numbers as
 independently checked by this document, and this document must not, and does
 not, invent a current health check as if it were evidence for a past reading.
 
-On 2026-09-13 a four-reviewer council was dispatched to attack a diagnosis of
-intermittent MCP disconnects. It did its job: it refuted both the diagnosis and
+On 2026-09-13 four independent reviewers were dispatched to attack a diagnosis of
+intermittent MCP disconnects. The review did its job: it refuted both the diagnosis and
 the proposed fix, with file:line citations, and caught a shipped commit whose
 stated premise was false.
 
@@ -102,14 +102,14 @@ re-run, or reinterpreted.
 ## When the system is unreachable
 
 Say so, in those words, and mark every claim that would have needed it
-**UNVERIFIED** — not REFUTED and not VERIFIED. The 2026-09-12 council recorded
+**UNVERIFIED** — not REFUTED and not VERIFIED. The 2026-09-12 review recorded
 its own instrument outage exactly this way and that record is the model. An
 analysis written without system access is an analysis of the repository; label
 it as one.
 
 ## Relation to the measurement-authority rules
 
-`CLAUDE.md` § *Measurement authority* requires naming which of the four states a
+The shared agent contract (`AGENTS.md` / `CLAUDE.md`) § *Measurement authority* requires naming which of the four states a
 zero rules out, and states a deciding standard must be declared as a choice
 before it is applied. This rule is the same discipline one level down: the
 provenance of a reading is part of what the reading establishes, and a tree

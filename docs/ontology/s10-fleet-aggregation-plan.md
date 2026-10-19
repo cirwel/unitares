@@ -74,7 +74,7 @@ Three options on the table:
 
 **Chosen: (a).** S10.1 ships the tracker plumbing with the `class_tag` parameter ready to receive. S10.2 wires the fetch at the outcome_events call site.
 
-**Verification corrections (2026-05-19 council pass):**
+**Verification corrections (2026-05-19 review round):**
 - Class is stored in `metadata.tags` JSONB array, not as a column. `classify_agent(meta)` reads `meta.tags` to resolve one of: `embodied` / `engaged_ephemeral` / `ephemeral` / `persistent`+`autonomous`. Live distribution: ephemeral=218, engaged_ephemeral=202, persistent variants ~10, embodied=1, untagged=8 (~2% over 437 active agents).
 - `session_like` is a derived class (not a literal tag) — `classify_agent` returns it as a fallback when no other tag fires. S10.2's `classify_agent(meta)` call returns the right string regardless.
 
@@ -101,7 +101,7 @@ Three options on the table:
 
 `global` retained for backward compatibility and as the all-bucket sum. Removing it is S10-deferred follow-up.
 
-**Anytime-validity scope (S10 council finding).** Class-scope envelopes deliberately omit `log_evidence`, `capped_alarm`, `last_alt_probability`, `last_e_value`. A class bucket under live writes is its own e-process — valid in isolation, not multipliable against `global`/`agent` (same rule the module docstring at `src/sequential_calibration.py:42-45` already states for the global × per-agent product). After `rebucket_from_agent_states` runs, `class_states` is a sum of per-agent `log_e_values` across different `q`-trajectories, which has no martingale interpretation. Rather than expose a field that is sometimes anytime-valid and sometimes not, the class envelope is restricted to descriptive statistics that survive aggregation. Operators reading e-process alarms should read the `global` (or per-agent) envelope, not class.
+**Anytime-validity scope (S10 review finding).** Class-scope envelopes deliberately omit `log_evidence`, `capped_alarm`, `last_alt_probability`, `last_e_value`. A class bucket under live writes is its own e-process — valid in isolation, not multipliable against `global`/`agent` (same rule the module docstring at `src/sequential_calibration.py:42-45` already states for the global × per-agent product). After `rebucket_from_agent_states` runs, `class_states` is a sum of per-agent `log_e_values` across different `q`-trajectories, which has no martingale interpretation. Rather than expose a field that is sometimes anytime-valid and sometimes not, the class envelope is restricted to descriptive statistics that survive aggregation. Operators reading e-process alarms should read the `global` (or per-agent) envelope, not class.
 
 **Bootstrap labeling.** `by_class.bootstrapped` is `false` until the first `rebucket_from_agent_states` run; this surfaces honestly to consumers during the gap between S10.1 deploy and S10.2 sweeper wire-up. Pre-S10 state files restored at server start retain prior `global` and `agent_states` history but have an empty `class_states` until rebucket runs. Dashboards should render a "by-class data sparse: bootstrap in progress" banner when `bootstrapped=false`.
 
@@ -129,14 +129,14 @@ Each PR independently shippable. S10.1 leaves the by-class data available but un
 
 ---
 
-## 6. Council review (fired 2026-05-19, S10.1 revised)
+## 6. Review round (fired 2026-05-19, S10.1 revised)
 
-Three-agent parallel adversarial pass per memory ("Council also for load-bearing implementation" + "Council prompts must invite adversarial bug-hunting"). Three findings, all addressed in the revised S10.1.
+Three independent reviewers in a parallel adversarial pass: load-bearing implementation gets review, not only design docs, and review prompts invite adversarial bug-hunting. Three findings, all addressed in the revised S10.1.
 
 | Lane | Finding | Resolution |
 |---|---|---|
 | `dialectic-knowledge-architect` | Summing `log_e_value` across agents via `_merge_state` is **not** a valid e-process — same forbidden product the module docstring already warns against for `global × per-agent`. Class-scope `capped_alarm` would look anytime-valid but isn't. | Class envelope omits `log_evidence`, `capped_alarm`, `last_alt_probability`, `last_e_value` unconditionally (not just post-rebucket). `_state_to_metrics(scope="class", ...)` enforces. Tests pin the contract. |
 | `feature-dev:code-reviewer` | (a) `except Exception` in rebucket silently swallows classifier bugs. (b) Pre-S10 files leave class_states sparse vs global with no honest labeling. (c) `last_alt_probability` on class envelope is single-agent provenance. | (a) Classifier exceptions log to stderr with type + agent_id + message, and increment a `classifier_errors` field in telemetry. (b) `class_states_bootstrapped: bool` added to serialized state + envelope; defaults `False` for pre-S10 files with non-empty `agents`; flipped to `True` on first rebucket. (c) Covered by architect's finding. |
-| `live-verifier` | Verifier REFUTED two plan assumptions: no `class_tag` column on `core.identities`, and `outcome_events.py:332` has no `meta` in scope. | Cross-checked: class actually lives in `metadata.tags` JSONB array, classifier reads `meta.tags`. 99% of active agents have a recognized tag. Verifier read the wrong state file (worktree's `data/` was contaminated by test runs). Master's production tracker has 95 agents, 5525 global samples, no `classes` key — confirmed pre-S10 state. §3.3 updated: S10.2 fetches meta at the call site (verifier was right about no meta in scope there). |
+| live verification | Verifier REFUTED two plan assumptions: no `class_tag` column on `core.identities`, and `outcome_events.py:332` has no `meta` in scope. | Cross-checked: class actually lives in `metadata.tags` JSONB array, classifier reads `meta.tags`. 99% of active agents have a recognized tag. Verifier read the wrong state file (worktree's `data/` was contaminated by test runs). Master's production tracker has 95 agents, 5525 global samples, no `classes` key — confirmed pre-S10 state. §3.3 updated: S10.2 fetches meta at the call site (verifier was right about no meta in scope there). |
 
-**Memo lesson** (added to memory candidates): Pre-flagging a concern in the architect's prompt got it confirmed *and* extended (architect went beyond the rebucket case to the live-write case, which I hadn't fully thought through). Worth doing again when I sense a math/ontology issue at the boundary of the change.
+**Process lesson:** Pre-flagging a concern in the architect's prompt got it confirmed *and* extended (the architect went beyond the rebucket case to the live-write case, which the author had not fully thought through). Worth repeating when a math/ontology issue sits at the boundary of the change.

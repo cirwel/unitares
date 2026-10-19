@@ -97,13 +97,13 @@ not confirmed data.
    → allow, same posture as #720).
 3. **Nudge surfaces** (stop steering clients to declare new_session lineage):
    - plugin SessionStart hook (`unitares-governance-plugin`)
-   - `~/.claude/hooks/prompt-onboarding-nudge.sh` (local)
+   - an operator-side prompt-onboarding nudge hook (local)
    - server onboard-response lineage hint
 4. **Docs** (the coupled single-writer surface): `CLAUDE.md`/`AGENTS.md` shared
    contract (Minimal Agent Workflow + Identity rules), `docs/ontology/identity.md`,
    `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`.
 
-## Open questions for council — RESOLVED by what shipped
+## Open questions — RESOLVED by what shipped
 
 - **Does dropping new_session edges break R2 / trajectory-genesis seeding for
   the legitimate serial-handoff case?** Moot — we did **not** drop new_session

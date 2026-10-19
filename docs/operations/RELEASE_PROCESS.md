@@ -40,8 +40,9 @@ refused and the App could only read workflow runs. Publishing the release
 page also archives the tagged tree on Zenodo, which mints a permanent software
 DOI, so publish only the reviewed release commit.
 
-1. Start from current `master` with a clean named branch and no active surface
-   claim. Run `git prepr --scope "release vX.Y.Z"` before the release PR.
+1. Start from current `master` with a clean named branch, and check that no
+   open PR is already preparing this release
+   (`gh pr list --search "release vX.Y.Z" --state open`).
 2. First fold the pending changelog fragments into `## [Unreleased]`, before
    any version header exists: review
    `python3 scripts/dev/changelog_assemble.py --preview`, then run

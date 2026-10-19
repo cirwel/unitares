@@ -50,7 +50,7 @@ The parent §10 requires every pause-triggering counter to name its trusted
 source. For BEAM, that source is BEAM-internal supervision state, not any
 adapter-supplied field and not the resident's self-report.
 
-> **Verified against `unitares-deploy/elixir` source, 2026-06-20.** Findings that
+> **Verified against the deployed `elixir` source, 2026-06-20.** Findings that
 > reshape the design:
 >
 > - **OTP restart-intensity is not queryable.** All supervisors are
@@ -172,7 +172,7 @@ re-deriving identity per process.
 ## 6. Findings and recommendation (was: open questions)
 
 The three questions this note opened with were resolved against the
-`unitares-deploy/elixir` source on 2026-06-20. None requires an operator answer;
+deployed `elixir` source on 2026-06-20. None requires an operator answer;
 they are engineering facts. Summary:
 
 | Question | Finding | Status |

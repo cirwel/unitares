@@ -41,7 +41,7 @@ let them collide identities, entangle lineage, and read each other's KG.
 ### Model 0 — Hosted, isolated-per-adopter (recommended first)
 
 Each adopter gets their **own** deployment instance (container + DB), provisioned
-behind a per-adopter URL (`https://<org>.gov.cirwel.org/mcp/`). Isolation is at
+behind a per-adopter URL (`https://<org>.<your-host>/mcp/`). Isolation is at
 the **infrastructure boundary**, not the schema. This sidesteps *all five* gaps
 above because there is no cross-tenant surface — the global namespace is fine
 when the fleet *is* the tenant.
