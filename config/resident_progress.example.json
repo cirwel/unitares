@@ -1,27 +1,13 @@
 {
-  "_comment": "Canonical resident-progress manifest for the reference fleet. Point UNITARES_RESIDENT_PROGRESS_MANIFEST at this file (or a deployment-specific copy) to enable progress probing. Unset => no residents probed. 'source' must match a source registered in src/background_tasks.py (kg_writes, watcher_findings, eisv_sync_rows, metrics_series, sentinel_pulse, agent_checkins). See docs/operations/resident-roster.md.",
-  "vigil": {
+  "_comment": "Synthetic resident-progress example. Copy into your deployment configuration and replace the labels, sources, windows, thresholds, and cadences before setting UNITARES_RESIDENT_PROGRESS_MANIFEST to that copy. Unset => no residents probed. Labels are lowercase onboarding names. Sources must be registered by the server or a progress-source plugin. See docs/operations/resident-roster.md.",
+  "examplewriter": {
     "source": "kg_writes",
     "metric": "rows_written",
     "window_seconds": 3600,
     "threshold": 1,
     "expected_cadence_s": 1800
   },
-  "watcher": {
-    "source": "watcher_findings",
-    "metric": "rows_any",
-    "window_seconds": 21600,
-    "threshold": 1,
-    "expected_cadence_s": null
-  },
-  "chronicler": {
-    "source": "metrics_series",
-    "metric": "rows_written",
-    "window_seconds": 93600,
-    "threshold": 1,
-    "expected_cadence_s": 86400
-  },
-  "sentinel": {
+  "examplemonitor": {
     "source": "agent_checkins",
     "metric": "checkin_count",
     "window_seconds": 1800,

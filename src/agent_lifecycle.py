@@ -99,7 +99,6 @@ def _agent_update_count(meta: AgentMetadata) -> int:
 _UUID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I,
 )
-_EPHEMERAL_LABEL = re.compile(r'^claude_\w+_\d{8}', re.I)
 _PROTECTED_TIERS = frozenset({"verified", "established", "trusted"})
 _SYSTEM_AGENT_IDS: frozenset[str] = frozenset()
 _AUTO_ARCHIVAL_ENV = "UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL"
@@ -159,12 +158,13 @@ def classify_for_archival(
     Agents that have never checked in (``updates == 0``) are treated as
     *initializing*, not orphaned — they stay visible as ghosts rather than
     being swept under the rug, which used to hide onboarding bugs behind
-    an aggressive 1h UUID auto-archive.
+    an aggressive 1h UUID auto-archive. Ephemeral classification comes from
+    the explicit lifecycle tag; a display label does not establish it.
     """
     label = getattr(meta, 'label', None) or getattr(meta, 'display_name', None) or ""
     has_label = bool(label)
     is_uuid_named = bool(_UUID_PATTERN.match(agent_id))
-    is_ephemeral = bool(_EPHEMERAL_LABEL.match(label))
+    is_ephemeral = "ephemeral" in (getattr(meta, "tags", None) or ())
 
     age_hours = _agent_age_hours(meta)
     if age_hours is None:

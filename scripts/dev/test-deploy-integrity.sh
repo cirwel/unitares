@@ -132,6 +132,10 @@ mkdir -p "$SB/mcp"
 # Substitute only the host-specific plist path; execute the real deploy flow.
 sed 's|^PLIST=.*|PLIST="$TEST_PLIST"|' "$ROOT/scripts/ops/deploy-mcp.sh" > "$SB/mcp/deploy-mcp.sh"
 cp "$LIB" "$SB/mcp/deploy-lib.sh"
+cp "$ROOT/scripts/ops/apply_plist_env_overlay.py" "$SB/mcp/"
+: > "$SB/reviewed.env"
+export UNITARES_MCP_ENV_OVERLAY="$SB/reviewed.env"
+export UNITARES_MCP_ENV_OVERLAY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 for scenario in '0 0' '0 1' '1 0' '1 1'; do
 read -r apply_status check_status <<< "$scenario"
 export TEST_CHECK_STATUS="$check_status"
@@ -143,6 +147,7 @@ set +e
   python3() {
     printf 'python3 %s\n' "$*" >> "$TEST_TRACE"
     case " $* " in
+      *' --validate-overlay '*) command python3 "$@"; return $? ;;
       *' --print-db-version '*) printf '76\n'; return 0 ;;
       *' --check '*)
         git -C "$TEST_DEPLOY" merge --ff-only -q "$TEST_NEW_SHA"

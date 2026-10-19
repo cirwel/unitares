@@ -1,0 +1,31 @@
+{
+  "_comment": "Historical reference-resident test fixture. Loaded only by tests/conftest.py to preserve existing regression coverage; not an installation manifest or default fleet. The installer-facing schema example is config/resident_progress.example.json.",
+  "vigil": {
+    "source": "kg_writes",
+    "metric": "rows_written",
+    "window_seconds": 3600,
+    "threshold": 1,
+    "expected_cadence_s": 1800
+  },
+  "watcher": {
+    "source": "watcher_findings",
+    "metric": "rows_any",
+    "window_seconds": 21600,
+    "threshold": 1,
+    "expected_cadence_s": null
+  },
+  "chronicler": {
+    "source": "metrics_series",
+    "metric": "rows_written",
+    "window_seconds": 93600,
+    "threshold": 1,
+    "expected_cadence_s": 86400
+  },
+  "sentinel": {
+    "source": "agent_checkins",
+    "metric": "checkin_count",
+    "window_seconds": 1800,
+    "threshold": 1,
+    "expected_cadence_s": 300
+  }
+}

@@ -163,9 +163,16 @@ dispatch key. Behavior is discriminated by capability — `embodied`, `persisten
   `tests/test_residentless_install.py` for the empty roster — the path every
   adopter runs and the one nothing else exercises.
 
-`agents/` (the reference residents) and `scripts/ops/` (this operator's fleet
-control plane) are deliberately NOT agnostic and are outside the guard. The
-boundary is the shipped artifact, not the repo.
+**Neutrality applies to the whole repository**, including `agents/`,
+`scripts/ops/`, documentation, examples, and configuration templates. The guard's
+current scan roots are enforcement coverage, not exemptions. Optional reference
+implementations and supported vendor integrations may remain, but must not
+silently select an operator's residents, hosts, workspace, or personal workflow.
+Keep actual fleet manifests, schedules, and workstation procedures in the
+operator's separate deployment repository (fleet-ops for the maintainer).
+Synthetic test fixtures, dated empirical evidence, project attribution, and
+repository contributor policy retain their provenance; neutrality is not a
+reason to rewrite history or remove supported integrations.
 
 ## Agents are the users: who decides, how to describe, where memory lives
 
@@ -225,18 +232,23 @@ EISV is one instrument inside it, not its definition: each check-in returns a be
 ## Stack
 
 - Python 3.14+, asyncio
-- PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) + pgvector via Homebrew (the Docker image `db/postgres/Dockerfile.age-vector` ships PG18; both are supported)
+- PostgreSQL 17 or 18 with Apache AGE and pgvector (the supplied Docker image uses PG18)
 - Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/archive/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
 - MCP (Model Context Protocol) server
 
 ## Setup
 
-1. Install PostgreSQL@17 with the AGE and pgvector extensions
-2. Create a `governance` database
-3. Install dependencies: `pip install -e ".[full]" -c constraints.txt`
-4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
-5. Start: `python src/mcp_server.py --port 8767`
+Use the installation route in `README.md` that fits the environment. The
+provided Docker Compose stack supplies the server, database, and Redis. For
+source development, install dependencies with
+`pip install -e ".[full]" -c constraints.txt`, configure services using
+`.env.example`, and start `python src/mcp_server.py --port 8767`.
+
+A particular service manager, desktop client, or local agent is not required.
+The LaunchAgent examples under `scripts/ops/` are optional macOS deployment
+recipes. Choose isolated test services or existing deployment services
+explicitly; never infer permission to mutate a live database from this guide.
 
 ## Before Starting Work on a Single-Writer Surface
 
@@ -278,10 +290,10 @@ This section protects against wasted parallel work across agents, not just mista
 
 ## Database
 
-- PostgreSQL@17 on port 5432 with AGE graph extension
-- Requires `brew services start postgresql@17`
-- Check connectivity: `pg_isready -h localhost -p 5432`
-- Do NOT create additional PostgreSQL instances, databases, or migration layers
+- Use the configured PostgreSQL service with Apache AGE and pgvector; host and port are deployment inputs.
+- Check connectivity against that service, not an assumed localhost instance.
+- Use the repository's migration tooling. Do not create competing migration layers or mutate a live deployment database without authorization.
+- Unit tests and isolated integration fixtures must not depend on the maintainer's running services.
 
 ## Git Rules
 
