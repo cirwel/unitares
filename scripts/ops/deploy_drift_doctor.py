@@ -95,6 +95,14 @@ FINDING_KIND = "deploy_drift_finding"
 # A surface left un-deployed deliberately (waiting on a review, staged rollout)
 # must not re-alert every cycle. One finding per surface+condition per window.
 COOLDOWN_SECONDS = int(os.environ.get("DEPLOY_DRIFT_COOLDOWN_SECONDS", str(12 * 3600)))
+# A checkout a few merged commits behind for a few hours is the normal state of
+# a manual deploy cadence, not an emergency: it is a warning until it is either
+# far behind or has stayed behind for a day. Grading every lag as critical sent
+# 20 of 23 findings in one window to the operator's urgent channel, mostly the
+# plugin skill mirror trailing by a commit or two (2026-10-19 Discord audit).
+BEHIND_CRITICAL_COMMITS = int(os.environ.get("DEPLOY_DRIFT_BEHIND_CRITICAL_COMMITS", "20"))
+BEHIND_CRITICAL_AGE_SECONDS = int(
+    os.environ.get("DEPLOY_DRIFT_BEHIND_CRITICAL_AGE_SECONDS", str(24 * 3600)))
 # Extensions the interpreter actually loads. A pull that changes only these is
 # the one that leaves a stale module in memory; anything else (markdown, skills
 # content, CI config) is live on disk the moment it lands.
@@ -278,6 +286,23 @@ class Diagnosis:
     @property
     def fingerprint_parts(self) -> List[str]:
         return ["deploy-drift", self.surface, self.condition]
+
+
+def finding_severity(d: Diagnosis, first_seen: Optional[float], now: float) -> str:
+    """Grade a diagnosis by consequence.
+
+    A pending restart is a warning. Being behind origin is a warning until the
+    lag exceeds BEHIND_CRITICAL_COMMITS or the finding has stayed open for
+    BEHIND_CRITICAL_AGE_SECONDS; then a merged fix has plausibly been missed and
+    it is critical. Every other condition (a checkout on the wrong branch, a
+    pinned checkout behind its declared version) is critical at once.
+    """
+    if d.condition == "restart_pending":
+        return "warning"
+    if d.condition == "behind_origin":
+        aged = first_seen is not None and (now - first_seen) >= BEHIND_CRITICAL_AGE_SECONDS
+        return "critical" if (d.behind > BEHIND_CRITICAL_COMMITS or aged) else "warning"
+    return "critical"
 
 
 def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagnosis]:
@@ -483,9 +508,9 @@ class Doctor:
         if self.dry_run:
             log(f"  dry-run: would post finding {fp}")
             return
-        # Severity reflects consequence, not novelty: a live-from-checkout
-        # surface behind origin means a merged fix is not actually running.
-        severity = "warning" if d.condition == "restart_pending" else "critical"
+        # Severity reflects consequence, not novelty (see finding_severity): a
+        # long or old lag means a merged fix is not actually running.
+        severity = finding_severity(d, (prev or {}).get("first_seen"), now)
         outcome = self.io["post_finding"]({
             "event_type": FINDING_KIND,
             "severity": severity,
