@@ -18,6 +18,8 @@ or [User Manual](../manual/README.md).
 
 - [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — server, SDK, container, and
   deployment release checklist.
+- [`deployment-env-overlay.md`](deployment-env-overlay.md) — external reviewed
+  environment configuration required by the managed MCP deploy.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
 - [`merge-automation-plan.md`](merge-automation-plan.md) — SUPERSEDED

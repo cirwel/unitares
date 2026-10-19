@@ -58,8 +58,24 @@ TAG="deploy-mcp"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# Deployment values are owned outside this repository. Pin the exact reviewed
+# bytes before acquiring a lock, moving the checkout, or touching DB/services.
+# An empty reviewed file is valid; an absent selection is never a no-op.
+MCP_OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
+MCP_ENV_OVERLAY="${UNITARES_MCP_ENV_OVERLAY:-}"
+MCP_ENV_OVERLAY_SHA256="${UNITARES_MCP_ENV_OVERLAY_SHA256:-}"
+if [[ -z "$MCP_ENV_OVERLAY" || -z "$MCP_ENV_OVERLAY_SHA256" ]]; then
+  echo "[deploy-mcp] REFUSING: set UNITARES_MCP_ENV_OVERLAY and UNITARES_MCP_ENV_OVERLAY_SHA256 to an external reviewed overlay and its expected digest." >&2
+  exit 1
+fi
+if ! python3 "$MCP_OPS_DIR/apply_plist_env_overlay.py" --overlay "$MCP_ENV_OVERLAY" \
+  --expected-sha256 "$MCP_ENV_OVERLAY_SHA256" --validate-overlay; then
+  echo "[deploy-mcp] REFUSING: the required reviewed environment overlay did not validate; no deployment effects started." >&2
+  exit 1
+fi
+
 # shellcheck source=deploy-lib.sh
-. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
+. "$MCP_OPS_DIR/deploy-lib.sh"
 
 deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
@@ -191,13 +207,12 @@ fi
 # checkout that moved while the checker ran. Recover before any restart.
 verify_migration_revision
 
-# This deployment's environment overlay (scripts/ops/governance-mcp.env, from
-# the worktree just fast-forwarded, so reviewed values only) into the live
-# plist: deployment-specific settings the product does not ship as defaults,
-# without hand edits. deploy_lib_apply_env_overlay makes sure a change is
-# RELOADED by the restart below, including on a host with no plist baseline.
+# Apply the owner's external overlay, checking the captured reviewed digest
+# again against the same bytes the applier parses. A file changed after the
+# early preflight must not gain authority from the earlier validation.
+# deploy_lib_apply_env_overlay preserves backups and ensures changes RELOAD.
 if ! deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
-  "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"; then
+  "$MCP_ENV_OVERLAY" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py" "$MCP_ENV_OVERLAY_SHA256"; then
   echo "[deploy-mcp] FAILED — required overlay did not apply." >&2
   recover_or_hold_forward "the required environment overlay failed" || :
   exit 1
