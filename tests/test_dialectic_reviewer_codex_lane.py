@@ -128,7 +128,9 @@ def test_reviewer_codex_timeout_kills_the_process_group(monkeypatch):
         pid = 5151
 
         async def communicate(self):
-            await asyncio.sleep(10)
+            # Until its group is killed, as a hung CLI would; then it exits.
+            while 5151 not in groups:
+                await asyncio.sleep(0.01)
             return b"", b""
 
     async def fake_exec(*argv, **kwargs):
