@@ -50,11 +50,13 @@ from .host_backends import (
     call_antigravity_backend,
     call_claude_backend,
     call_openai_compat_backend,
+    cli_env,
     codex_admin_config_conflict,
     codex_confinement_verified,
     codex_lane_config_overrides,
     codex_lane_workdir,
     codex_mcp_disable_overrides,
+    reap_group,
     resolve_host_cli,
 )
 
@@ -745,30 +747,26 @@ async def _run_codex_review(
             "-c",
             f'exec "$DR_CLI" exec --ephemeral {slots} '
             '--skip-git-repo-check "$DR_PROMPT" </dev/null',
-            env={
-                **os.environ,
-                "DR_CLI": cli_path,
-                "DR_PROMPT": prompt,
+            env=cli_env(
+                DR_CLI=cli_path,
+                DR_PROMPT=prompt,
                 **{f"DR_CODEX_C{i}": value for i, value in enumerate(overrides, start=1)},
-            },
+            ),
             cwd=workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            # Own process group, so a timeout reaches codex's sandboxed children.
+            start_new_session=True,
         )
     except Exception:  # noqa: BLE001 - selected-host failure falls back locally
         return None
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+        await reap_group(proc)
         return None
     except Exception:  # noqa: BLE001 - selected-host failure falls back locally
-        try:
-            proc.kill()
-            await proc.communicate()
-        except Exception:
-            pass
+        await reap_group(proc)
         return None
     if proc.returncode != 0:
         return None
