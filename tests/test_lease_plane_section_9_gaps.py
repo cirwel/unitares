@@ -204,9 +204,11 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
     """
     from scripts.dev.lease_plane_deprecate import _read_force_release_token
 
-    # Isolate from the operator's real ~/.config/cirwel/secrets.env by
-    # repointing HOME at an empty tmp dir.
+    # Isolate from the developer's real secrets env file by repointing HOME
+    # at an empty tmp dir, and drop UNITARES_SECRETS_ENV so an exported value
+    # cannot point the resolver back at a real file.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
     monkeypatch.delenv("LEASE_FORCE_RELEASE_TOKEN", raising=False)
 
     # Case 1: GOVERNANCE_TOKEN in env, nothing else.
@@ -215,7 +217,9 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
         "GOVERNANCE_TOKEN in env must not satisfy LEASE_FORCE_RELEASE_TOKEN"
     )
 
-    # Case 2: GOVERNANCE_TOKEN in secrets.env (no LEASE_FORCE_RELEASE_TOKEN).
+    # Case 2: GOVERNANCE_TOKEN in secrets.env (no LEASE_FORCE_RELEASE_TOKEN),
+    # at the legacy ~/.config/cirwel path. Only the legacy file exists, so
+    # the resolver's pre-2026-09 fallback branch reads it.
     monkeypatch.delenv("GOVERNANCE_TOKEN", raising=False)
     secrets_dir = tmp_path / ".config" / "cirwel"
     secrets_dir.mkdir(parents=True)
@@ -226,6 +230,31 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
     assert _read_force_release_token() is None, (
         "GOVERNANCE_TOKEN in secrets.env must not satisfy "
         "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
+    )
+
+    # Case 2b: the same negative case at the neutral default
+    # ~/.config/unitares/secrets.env (the path a fresh install gets; it wins
+    # over the legacy file once both exist).
+    neutral_dir = tmp_path / ".config" / "unitares"
+    neutral_dir.mkdir(parents=True)
+    (neutral_dir / "secrets.env").write_text(
+        'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
+        "OTHER_VAR=irrelevant\n"
+    )
+    assert _read_force_release_token() is None, (
+        "GOVERNANCE_TOKEN in the neutral secrets.env must not satisfy "
+        "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
+    )
+
+    # File-path positive control: the neutral file IS read, so Case 2b's
+    # None came from the credential boundary, not from a missed file.
+    (neutral_dir / "secrets.env").write_text(
+        'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
+        'LEASE_FORCE_RELEASE_TOKEN="file-force-release-token"\n'
+    )
+    assert _read_force_release_token() == "file-force-release-token", (
+        "positive control: LEASE_FORCE_RELEASE_TOKEN in the secrets env "
+        "file must be read"
     )
 
     # Sanity: the function CAN find a real LEASE_FORCE_RELEASE_TOKEN —

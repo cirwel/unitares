@@ -15,7 +15,9 @@
 #
 # Auth: requires UNITARES_OPERATOR_TOKEN in the environment (single token,
 # matched against the server's UNITARES_OPERATOR_TOKENS allowlist). For
-# convenience, ~/.config/cirwel/secrets.env is sourced if present.
+# convenience, the secrets env file ($UNITARES_SECRETS_ENV, default
+# ~/.config/unitares/secrets.env, legacy ~/.config/cirwel/secrets.env still
+# read) is sourced if present.
 #
 # Endpoint discovery: defaults to http://127.0.0.1:8767. Override via
 # UNITARES_GOVERNANCE_MCP_URL.

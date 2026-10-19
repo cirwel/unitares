@@ -2,7 +2,8 @@
 # plane (127.0.0.1:8788) using the REAL LeasePlaneClient, prove acquire-on-spawn
 # and release-on-exit end to end.
 #
-#   source ~/.config/cirwel/secrets.env
+#   source "${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+#   (an older install may still keep it at ~/.config/cirwel/secrets.env)
 #   LEASE_PLANE_BEARER_TOKEN=$LEASE_PLANE_BEARER_TOKEN mix run scripts/live_smoke.exs
 #
 # Acquires a remote_heartbeat lease on a novel `agent:<id>` surface (pure DB TTL
