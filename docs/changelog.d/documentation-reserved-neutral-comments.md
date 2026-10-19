@@ -1,0 +1,1 @@
+- **Auth and identity comments:** Comments in the operator-identity resolver and the lease plane's HTTP auth and router modules describe the secrets-file lookup chain instead of one operator's path, and no longer cite private harness memory. No code changed.
