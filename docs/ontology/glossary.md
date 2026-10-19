@@ -343,7 +343,7 @@ The first two are both reversible in practice but reached through separate paths
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `orphan (agent)` | Is this stale, unlabeled or ephemeral-named agent eligible for archival? (a pure predicate over update count and age; an agent with zero updates is a *ghost*, deliberately excluded) | `src/agent_lifecycle.py::classify_for_archival` · `src/agent_lifecycle.py::auto_archive_orphan_agents` (the mutation is separately gated by `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`) |
+| `orphan (agent)` | Is this stale, unlabeled or explicitly `archive-eligible`-tagged agent an archival candidate? (a pure predicate over update count and age; an agent with zero updates is a *ghost*, deliberately excluded; names and automatic class tags do not opt an agent in) | `src/agent_lifecycle.py::classify_for_archival` · `src/agent_lifecycle.py::auto_archive_orphan_agents` (protections are checked before classification; mutation is separately gated by `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`) |
 | `orphan (knowledge-graph discovery)` | Does this discovery have no inbound edges, i.e. nothing references it? (structural; the query may add an age cutoff) | `src/storage/knowledge_graph_age.py::get_orphan_discoveries` |
 | `orphan (lineage claim)` | Is this provisional lineage claim unsupported, and so demotable? (`orphan_candidate` / `orphan_demoted` / `orphan_demote_failed` in the R1 sweep) | `src/identity/r1_maintenance.py::sweep_provisional_lineage` · `r1-verify-lineage-claim.md` |
 

@@ -141,9 +141,16 @@ dispatch key. Behavior is discriminated by capability — `embodied`, `persisten
   `tests/test_residentless_install.py` for the empty roster — the path every
   adopter runs and the one nothing else exercises.
 
-`agents/` (the reference residents) and `scripts/ops/` (this operator's fleet
-control plane) are deliberately NOT agnostic and are outside the guard. The
-boundary is the shipped artifact, not the repo.
+**Neutrality applies to the whole repository**, including `agents/`,
+`scripts/ops/`, documentation, examples, and configuration templates. The guard's
+current scan roots are enforcement coverage, not exemptions. Optional reference
+implementations and supported vendor integrations may remain, but must not
+silently select an operator's residents, hosts, workspace, or personal workflow.
+Keep actual fleet manifests, schedules, and workstation procedures in the
+operator's separate deployment repository (fleet-ops for the maintainer).
+Synthetic test fixtures, dated empirical evidence, project attribution, and
+repository contributor policy retain their provenance; neutrality is not a
+reason to rewrite history or remove supported integrations.
 
 ## Agents are the users: who decides, how to describe, where memory lives
 

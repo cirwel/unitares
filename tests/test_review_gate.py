@@ -961,7 +961,7 @@ def test_status_mapping(verdict, disposed, state):
 def test_reviewer_is_the_other_model():
     assert rg.default_reviewer("codex/fix-x") == "codex"
     assert rg.default_reviewer("claude/fix-x") == "codex"
-    assert rg.default_reviewer("kenny/fix-x") == "codex"
+    assert rg.default_reviewer("alice/fix-x") == "codex"
 
 
 @pytest.mark.parametrize("text,n,ok", [
@@ -1117,14 +1117,14 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
     assert "bad-" in rg.diff_text("master", "HEAD")
 
 
-def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
+def _pr(n, login="owner", draft=False, updated="2026-09-19T00:00:00Z"):
     return {"labels": [{"name": "review-requested"}] if draft else [],
             "number": n, "isDraft": draft, "author": {"login": login}, "sameRepository": True,
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
 def _rest_pr(n=7, state="open", **extra):
-    return {"number": n, "state": state, "draft": False, "user": {"login": "cirwel"},
+    return {"number": n, "state": state, "draft": False, "user": {"login": "owner"},
             "updated_at": "2026-10-03T00:00:00Z", "labels": [{"name": "x", "id": 1}],
             "head": {"sha": "abc", "ref": "claude/topic", "repo": {"id": 10}},
             "base": {"ref": "master", "repo": {"id": 10}}, **extra}
@@ -1143,7 +1143,7 @@ def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, 
     info = rg.pr_fields(_rest_pr(state=state, **extra))
     assert info == {"number": 7, "headRefOid": "abc", "headRefName": "claude/topic",
                     "baseRefName": "master", "state": expected, "isDraft": False,
-                    "author": {"login": "cirwel"}, "updatedAt": "2026-10-03T00:00:00Z",
+                    "author": {"login": "owner"}, "updatedAt": "2026-10-03T00:00:00Z",
                     "labels": [{"name": "x"}], "trustedReviewApp": False,
                     "routedAuthorApp": False, "sameRepository": True}
 
@@ -1189,8 +1189,8 @@ def _fake_git(config):
      ("contributor", "their-topic")),
     ({("config", "branch.topic.remote"): "origin",
       ("config", "branch.topic.merge"): "refs/heads/topic",
-      ("remote", "get-url", "--push", "origin"): "https://github.com/cirwel/unitares"},
-     ("cirwel", "topic")),
+      ("remote", "get-url", "--push", "origin"): "https://github.com/owner/unitares"},
+     ("owner", "topic")),
     # A local tracking branch, or a remote URL with no owner/repo shape.
     ({("config", "branch.topic.remote"): ".",
       ("config", "branch.topic.merge"): "refs/heads/master"}, ("{owner}", "master")),
@@ -1202,7 +1202,7 @@ def test_head_ref_finds_the_owner_of_the_pushed_head(monkeypatch, config, expect
 
 @pytest.mark.parametrize("setup,expected", [
     ([], ("{owner}", "topic")),
-    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic"], ("cirwel", "topic")),
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic"], ("owner", "topic")),
     # Triangular: tracks upstream/master, pushes to the fork. Under the
     # default push.default=simple, @{push} refuses this; the fork still wins.
     (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
@@ -1221,7 +1221,7 @@ def test_head_ref_follows_git_push_destination(tmp_path, monkeypatch, setup, exp
     _git(tmp_path, "init", "-q", "-b", "master")
     _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
          "--allow-empty", "-m", "x")
-    _git(tmp_path, "remote", "add", "origin", "https://github.com/cirwel/unitares.git")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/owner/unitares.git")
     _git(tmp_path, "remote", "add", "fork", "git@github.com:contributor/unitares.git")
     _git(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
     _git(tmp_path, "checkout", "-q", "-b", "topic")
@@ -1268,7 +1268,7 @@ def test_sweep_covers_quiet_drafts_but_respects_trust_and_explicit_holds():
         {**_pr(7), "labels": [{"name": "no-auto-review"}]},
         _pr(8, draft=True, updated="2026-09-19T00:55:00Z"),
     ]
-    got = [p["number"] for p in rg.sweep_candidates(prs, "cirwel", now, 15 * 60)]
+    got = [p["number"] for p in rg.sweep_candidates(prs, "owner", now, 15 * 60)]
     assert got == [1, 2, 3]
 
 
@@ -1329,9 +1329,9 @@ def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch,
 
 def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeypatch, capsys):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     def listing(repo):
-        assert repo == "cirwel/repo"
+        assert repo == "owner/repo"
         return [_pr(3, draft=True)]
     monkeypatch.setattr(rg, "open_prs", listing)
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
@@ -1351,7 +1351,7 @@ def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
     # registering the base-merge equivalents that pr_comments reads through.
     monkeypatch.setattr(rg, "_CARRY", {})
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
@@ -1360,7 +1360,7 @@ def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
     monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
     assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=True)) == 0
-    assert rg._CARRY[("cirwel/repo", 3)] == ("k", [("old", "c0ffee")])
+    assert rg._CARRY[("owner/repo", 3)] == ("k", [("old", "c0ffee")])
 
 
 def test_local_commands_read_a_prs_records_as_ci_does(monkeypatch):
@@ -1650,7 +1650,7 @@ def test_a_native_disposition_never_consumes_a_different_same_count_finding(nati
     # Codex P1 on #2407: an earlier local FINDINGS(1) plus a native
     # FINDINGS(1); disposing the native one must leave the local one open,
     # whether or not a base merge has since hidden the native evidence.
-    review_url = "https://github.com/cirwel/unitares/pull/9#pullrequestreview-77"
+    review_url = "https://github.com/owner/unitares/pull/9#pullrequestreview-77"
     local = _comment(full_record("k", "FINDINGS", 1, False, "claude"), url="local")
     local["created_at"] = "2026-09-24T08:00:00Z"
     native = []
@@ -1843,7 +1843,7 @@ def test_native_receipt_write_racing_a_push_cannot_complete_an_old_diff(monkeypa
 
 def test_sweep_records_native_clean_without_starting_another_review(repo, monkeypatch):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
@@ -3543,7 +3543,7 @@ def test_the_codex_receipt_posts_even_when_another_family_is_clean(monkeypatch):
 
 
 def test_the_sweep_does_not_report_a_left_to_author_pr_as_a_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
@@ -3961,7 +3961,7 @@ def test_draft_sweep_requires_explicit_request():
     now = rg.timestamp('2026-09-19T01:00:00Z')
     prs = [{**_pr(1,draft=True),'labels':[]}, _pr(2,draft=True), _pr(3),
            {**_pr(4,draft=True),'labels':[{'name':'review-requested'},{'name':'no-auto-review'}]}]
-    assert [p['number'] for p in rg.sweep_candidates(prs,'cirwel',now,0)] == [2,3]
+    assert [p['number'] for p in rg.sweep_candidates(prs,'owner',now,0)] == [2,3]
 
 
 @pytest.mark.parametrize("login,actor_id,actor_type,eligible", [
@@ -3976,7 +3976,7 @@ def test_sweep_app_eligibility_uses_github_metadata_not_name(login, actor_id, ac
     raw = _rest_pr(user={"login": login, "id": actor_id, "type": actor_type},
                    author_association="COLLABORATOR")
     pr = rg.pr_fields(raw)
-    assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+    assert bool(rg.sweep_candidates([pr], "owner", rg.time.time(), 0)) is eligible
 
 
 @pytest.mark.parametrize("actor_id,actor_type,eligible", [
@@ -3987,7 +3987,7 @@ def test_sweep_app_eligibility_uses_github_metadata_not_name(login, actor_id, ac
 def test_sweep_routes_relay_authored_prs(actor_id, actor_type, eligible):
     raw = _rest_pr(user={"login": "unitares-pr-relay[bot]", "id": actor_id, "type": actor_type})
     pr = rg.pr_fields(raw)
-    assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+    assert bool(rg.sweep_candidates([pr], "owner", rg.time.time(), 0)) is eligible
 
 
 def test_relay_app_comments_are_not_review_evidence():
@@ -4002,7 +4002,7 @@ def test_relay_app_comments_are_not_review_evidence():
 @pytest.mark.parametrize("head_repo", [{"id": 99}, None, {}, {"id": True}])
 def test_sweep_refuses_forks_and_unknown_repository_identity(head_repo):
     raw = _rest_pr(head={"sha": "abc", "ref": "topic", "repo": head_repo})
-    assert rg.sweep_candidates([rg.pr_fields(raw)], "cirwel", rg.time.time(), 0) == []
+    assert rg.sweep_candidates([rg.pr_fields(raw)], "owner", rg.time.time(), 0) == []
 
 
 @pytest.mark.parametrize("verdict,requested,providers,waiver,expected", [
@@ -4016,7 +4016,7 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
         monkeypatch, tmp_path, verdict, requested, providers, waiver, expected):
     pr = _pr(3)
     pr["labels"] = [{"name": "review-requested"}] if requested else []
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")

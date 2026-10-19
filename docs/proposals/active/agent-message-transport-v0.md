@@ -178,7 +178,7 @@ mail to another while writing a warning about it.
 they are worth recording because each is a trap for the next person:**
 
 1. **Dead on arrival.** The live plane runs `:log`
-   (`~/Library/LaunchAgents/com.unitares.lease-plane.plist`, verified
+   (the operator's `com.unitares.lease-plane` LaunchAgent, verified
    2026-08-28), so both routes would have returned
    `503 identity_binding_not_enforced` on every call, forever.
 2. **The documented remedy was fail-OPEN.** The obvious fix —

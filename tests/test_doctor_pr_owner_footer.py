@@ -18,7 +18,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "unitares_doctor.py"
 
-KNOWN = "6359a70d-8849-4608-a82d-435db1520fe8"
+KNOWN = "d7522561-42a7-534f-bae4-7032468f9820"
 UNMINTED = "00000000-0000-4000-8000-000000000000"
 
 
@@ -108,7 +108,7 @@ def test_unreadable_identities_is_a_warning_not_a_pass(monkeypatch, doctor):
 def test_uuids_reach_sql_only_after_the_strict_pattern(monkeypatch, doctor):
     queries = _wire(monkeypatch, doctor, [
         {"number": 1, "headRefName": "claude/a",
-         "body": "UNITARES agent: 6359a70d-8849-4608-a82d-435db1520fe8'); drop"},
+         "body": "UNITARES agent: d7522561-42a7-534f-bae4-7032468f9820'); drop"},
     ])
     _run(doctor)
     assert queries and "drop" not in queries[0]

@@ -34,7 +34,7 @@ assert _spec.loader is not None
 _spec.loader.exec_module(pdi)
 
 
-UUID = "dc94fa70-6186-4862-aeb6-3fc9801263c8"
+UUID = "81b264c8-7406-5fcc-8b34-2e742952e4ee"
 
 
 def _rest_mint(uuid: str = UUID) -> dict:
@@ -45,7 +45,7 @@ def _rest_mint(uuid: str = UUID) -> dict:
         "result": {
             "success": True,
             "tool": "start_session",
-            "client_session_id": "agent-dc94fa70-618",
+            "client_session_id": "agent-81b264c8-618",
             "agent_uuid": uuid,
             "raw_governance": {"uuid": uuid, "display_name": "Doctor", "is_new": True},
         },

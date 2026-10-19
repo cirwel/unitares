@@ -4,10 +4,9 @@
 The product ships neutral defaults: a setting that only makes sense on one
 deployment (a tailnet range the auth bypass should trust, the markers one's
 own substrate runtime writes) is read from the environment, empty by default.
-This operator's deployment keeps its values in a tracked overlay file beside
-this script (``governance-mcp.env``) instead of in hand edits to the live
-plist, so nothing has to be set by hand and a fresh machine gets the same
-values.
+The deployment owner keeps its values in an external configuration repository
+and supplies the reviewed file and its expected SHA-256 digest to the deploy
+command. No operator's overlay is shipped in the product repository.
 
 The overlay is ``KEY=VALUE`` lines; blank lines and ``#`` comment lines are
 ignored. A comment after a value is refused, not stored as part of it. Each key is written into the plist's ``EnvironmentVariables`` when
@@ -27,12 +26,19 @@ written.
 Only key names are printed, never values: the plist carries tokens, and a
 future overlay entry might too.
 
+With ``--expected-sha256``, the digest is checked against the same byte buffer
+that is parsed and applied. ``--validate-overlay`` checks only the overlay,
+before the deploy acquires a lock or changes a checkout, database, or service.
+The digest is optional for other callers that use this as a generic applier.
+
 usage: apply_plist_env_overlay.py --plist PATH --overlay PATH [--dry-run]
+       apply_plist_env_overlay.py --overlay PATH --expected-sha256 HASH --validate-overlay
 exit:  0 applied or already in place; 2 on a bad overlay or plist.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import plistlib
 import re
@@ -179,15 +185,25 @@ def _validate_backup(path: Path) -> None:
         raise OverlayError("existing backup is not a dict plist")
 
 
-def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
-                  backup_dir: Path | None = None) -> list[str]:
-    """Write the overlay's values into ``plist``; return the keys changed."""
+def read_overlay(overlay_path: Path, *, expected_sha256: str | None = None) -> dict[str, str]:
+    """Read once, verify the reviewed digest if provided, then parse those bytes."""
+    if expected_sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+        raise OverlayError("expected SHA-256 must contain exactly 64 hexadecimal characters")
+    content = overlay_path.read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(content).hexdigest() != expected_sha256.lower():
+        raise OverlayError("overlay SHA-256 does not match the reviewed expected digest")
     try:
-        text = overlay_path.read_bytes().decode("utf-8")
+        text = content.decode("utf-8")
     except UnicodeDecodeError:
         # The decoder's message quotes the offending byte: say where, not what.
         raise OverlayError(f"{overlay_path} is not UTF-8") from None
-    overlay = parse_overlay(text)
+    return parse_overlay(text)
+
+
+def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
+                  backup_dir: Path | None = None, expected_sha256: str | None = None) -> list[str]:
+    """Write the overlay's values into ``plist``; return the keys changed."""
+    overlay = read_overlay(overlay_path, expected_sha256=expected_sha256)
     plist = plist.resolve()  # write the file a symlink points at, keep the link
     try:
         with plist.open("rb") as handle:
@@ -209,16 +225,28 @@ def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--plist", type=Path, required=True)
+    parser.add_argument("--plist", type=Path)
     parser.add_argument("--overlay", type=Path, required=True)
+    parser.add_argument("--expected-sha256", help="reviewed digest of the exact overlay bytes")
+    parser.add_argument("--validate-overlay", action="store_true",
+                        help="validate overlay bytes only, without reading or changing a plist")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--check", action="store_true", help="do not write; exit 3 when changes are pending")
     parser.add_argument("--backup-dir", type=Path,
                         help="copy the plist's original bytes here before changing it")
     args = parser.parse_args(argv)
+    if args.validate_overlay:
+        if args.plist or args.dry_run or args.check or args.backup_dir:
+            parser.error("--validate-overlay cannot be combined with plist options")
+    elif args.plist is None:
+        parser.error("--plist is required unless --validate-overlay is selected")
     try:
+        if args.validate_overlay:
+            read_overlay(args.overlay, expected_sha256=args.expected_sha256)
+            print("[env-overlay] overlay validated")
+            return 0
         changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run or args.check,
-                                backup_dir=args.backup_dir)
+                                backup_dir=args.backup_dir, expected_sha256=args.expected_sha256)
     except (OverlayError, OSError) as exc:
         print(f"[env-overlay] cannot apply {args.overlay}: {exc}", file=sys.stderr)
         return 2

@@ -192,7 +192,7 @@ def _draft(
         "state": pr_state,
         "isDraft": True,
         "headRefName": head,
-        "headRepositoryOwner": {"login": "cirwel"},
+        "headRepositoryOwner": {"login": "acmeco"},
         "baseRefName": base,
         "mergeStateStatus": state,
         "labels": [{"name": label} for label in labels],
@@ -227,7 +227,7 @@ def _run_refresh(tmp_path, *, prs, runs=(), env=None, push_exit=0, api_exit=0, d
     full_env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-        "GITHUB_REPOSITORY": "cirwel/unitares",
+        "GITHUB_REPOSITORY": "acmeco/unitares",
         "GH_TOKEN": "fake",
         "DRY_RUN": "false",
         "PR_NUMBER": requested_pr,

@@ -33,7 +33,7 @@ def _claim(label="com.unitares.sentinel"):
     return SimpleNamespace(expected_launchd_label=label)
 
 
-SUBSTRATE_UUID = "f92dcea8-4786-412a-a0eb-362c273382f5"
+SUBSTRATE_UUID = "02e168be-4264-527b-9643-9c737dd309e4"
 
 
 class TestSubstrateHttpRejectHelper:
