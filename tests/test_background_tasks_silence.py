@@ -687,22 +687,53 @@ def _critical_calls(broadcaster):
             if c.args[0] == "lifecycle_silent_critical"]
 
 
-@pytest.mark.asyncio
-async def test_restart_does_not_realert_same_silence_episode(audit_store, monkeypatch):
-    """The 2026-10-18 shape: one outage, several restarts, one CRITICAL."""
+class _FakeKG:
+    """Stateful KG stand-in: filed rows come back from later open-row queries."""
+
+    def __init__(self):
+        self.rows: list = []
+        self.add_calls = 0
+        self.fail_adds = False
+
+    async def query(self, status=None, agent_id=None, tags=None, limit=100, **_kw):
+        rows = [
+            r for r in self.rows
+            if (status is None or r.status == status)
+            and (agent_id is None or r.agent_id == agent_id)
+            and (not tags or set(r.tags or []) & set(tags))
+        ]
+        return rows[:limit]
+
+    async def add_discovery(self, note):
+        self.add_calls += 1
+        if self.fail_adds:
+            raise RuntimeError("kg down")
+        self.rows.append(note)
+
+
+@pytest.fixture
+def fake_kg(monkeypatch):
     import src.knowledge_graph as kg_module
 
+    kg = _FakeKG()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+    return kg
+
+
+def _silence_rows(kg, agent_id):
+    return [r for r in kg.rows if r.agent_id == agent_id and "resident-silence" in r.tags]
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_realert_same_silence_episode(audit_store, fake_kg):
+    """The 2026-10-18 shape: one outage, several restarts, one CRITICAL, one finding."""
     broadcaster, store = audit_store
     stale = datetime.now(timezone.utc) - timedelta(hours=30)
     agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
 
     await background_tasks._silence_check_iteration()
     assert len(_critical_calls(broadcaster)) == 1
-
-    kg = AsyncMock()
-    kg.query = AsyncMock(return_value=[])
-    kg.add_discovery = AsyncMock()
-    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+    assert len(_silence_rows(fake_kg, "sentinel-uuid")) == 1
 
     # Three restarts, each running long enough to cross the 5x threshold again.
     for _ in range(3):
@@ -715,7 +746,66 @@ async def test_restart_does_not_realert_same_silence_episode(audit_store, monkey
     assert broadcaster.broadcast_event.await_count == 1
     assert "sentinel-uuid" in background_tasks._silence_critical_alerted
     assert "sentinel-uuid" in background_tasks._silence_alerted
-    kg.add_discovery.assert_not_awaited()
+    # Each adopting restart re-ensures the finding; the open row dedupes it.
+    assert len(_silence_rows(fake_kg, "sentinel-uuid")) == 1
+    assert fake_kg.add_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_adopted_alert_retries_failed_kg_finding(audit_store, fake_kg):
+    """CRITICAL persisted but its KG write failed: a restart files the finding.
+
+    Only the broadcast is suppressed on adoption. The finding is the durable
+    record a later reader sees, so losing it to one failed write would leave
+    the outage unrecorded for good.
+    """
+    broadcaster, store = audit_store
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    fake_kg.fail_adds = True
+    await background_tasks._silence_check_iteration()
+    assert len(_critical_calls(broadcaster)) == 1
+    assert fake_kg.add_calls == 1
+    assert _silence_rows(fake_kg, "sentinel-uuid") == []
+
+    # KG recovers; governance restarts.
+    fake_kg.fail_adds = False
+    _simulate_restart(started_ago=timedelta(hours=2))
+    await background_tasks._silence_check_iteration()
+
+    assert len(_critical_calls(broadcaster)) == 1  # no second broadcast
+    assert fake_kg.add_calls == 2  # the write was attempted again
+    assert len(_silence_rows(fake_kg, "sentinel-uuid")) == 1  # and landed
+
+    # A further restart finds the open row and files nothing new.
+    _simulate_restart(started_ago=timedelta(hours=2))
+    await background_tasks._silence_check_iteration()
+    assert len(_critical_calls(broadcaster)) == 1
+    assert fake_kg.add_calls == 2  # open row found, no write attempted
+    assert len(_silence_rows(fake_kg, "sentinel-uuid")) == 1
+
+
+@pytest.mark.asyncio
+async def test_silence_finding_dedupe_sees_row_behind_many_open_rows(
+    isolated_silence_state, fake_kg
+):
+    """The open-row check filters by tag, so >50 newer open notes cannot hide it."""
+    from src.knowledge_graph import DiscoveryNode
+
+    fake_kg.rows.append(_silence_row("sentinel-uuid", rid="old-silence"))
+    for i in range(60):
+        fake_kg.rows.append(DiscoveryNode(
+            id=f"n{i}", agent_id="sentinel-uuid", type="note", summary="unrelated",
+            details="", tags=["note"], severity="low", status="open",
+        ))
+    # Newest first, as the real query orders: the silence row is oldest.
+    fake_kg.rows.reverse()
+
+    meta = _make_meta("sentinel-uuid", "Sentinel", datetime.now(timezone.utc).isoformat())
+    await background_tasks._log_resident_silence_finding("sentinel-uuid", meta, 300.0, 600)
+
+    assert fake_kg.add_calls == 0
 
 
 @pytest.mark.asyncio

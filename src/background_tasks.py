@@ -1366,7 +1366,13 @@ async def _log_resident_silence_finding(
         from src.knowledge_graph import get_knowledge_graph, DiscoveryNode
 
         graph = await get_knowledge_graph()
-        existing = await graph.query(status="open", agent_id=agent_id, limit=50)
+        # Filter by tag in the query, as the close path does: a plain newest-50
+        # open-rows read could miss this outage's row behind many unrelated
+        # open findings and file a duplicate. One open row per agent is one
+        # outage, because the close path resolves it once the agent is healthy.
+        existing = await graph.query(
+            status="open", agent_id=agent_id, tags=["resident-silence"], limit=500
+        )
         if any("resident-silence" in (d.tags or []) for d in existing):
             return  # already filed and still open
 
@@ -1605,6 +1611,11 @@ async def _silence_check_iteration() -> None:
                     f"[SILENCE] {meta.label or agent_id[:12]} still silent; CRITICAL "
                     "already recorded for this episode, not re-alerting"
                 )
+                # Only the broadcast is suppressed. The durable KG finding is
+                # still ensured: if the earlier process persisted the event but
+                # its KG write failed, this is the retry. The write skips when
+                # an open resident-silence row already exists for this agent.
+                await _log_resident_silence_finding(agent_id, meta, silence_minutes, interval)
             else:
                 _silence_critical_alerted.add(agent_id)
                 _silence_close_checked.discard(agent_id)
