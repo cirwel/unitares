@@ -206,11 +206,11 @@ lineage. A named mint keeps its `resident_registration` verdict at the top
 level in compact form (`status`, `on_roster`, and for `not_on_roster` (and,
 briefly, `caller_supplied_tags`) a short `detail`: what that costs, that this
 identity cannot gain the tags, and the fix: add the name to the roster,
-restart, mint fresh). Anything unusual (a guide, a pause, a resume miss, a
-reactivated identity, a declared lineage, a spawn reason other than
-`new_session`, a sibling whose earlier nodes were pruned, a label rename)
-keeps the full shape; on `start_session`, `response_shape_reason` then names
-the field that kept it.
+restart, mint fresh). Anything unusual (a guide, a pause, a check-in
+carrying `warnings` (lifted to the top level), a resume miss, a reactivated
+identity, a declared lineage, a spawn reason other than `new_session`, a sibling whose earlier nodes were pruned, a label rename)
+keeps the full shape; on `start_session` and `request_review`,
+`response_shape_reason` then names the field that kept it.
 
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`
