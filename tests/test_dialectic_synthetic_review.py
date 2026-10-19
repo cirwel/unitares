@@ -1129,6 +1129,89 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
 
 
 @pytest.mark.asyncio
+async def test_orchestrated_dispatch_survives_reviewer_claiming_slot_first(server_patch):
+    """The spawned reviewer can claim the slot during the fast-crash wait. Its
+    antithesis moves the phase, reviewer and transcript revision, so a
+    compare-and-set against the pre-dispatch snapshot is refused. The thesis is
+    recorded and the reviewer owns the slot, so the caller must hear success,
+    not ``state_reload_required`` (dialectic canary, 2026-10-18)."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-review-fast"})
+    # What the database answers once the reviewer's antithesis has landed.
+    refused = AsyncMock(return_value=False)
+    emit = AsyncMock()
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=refused)
+        )
+        stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r",
+        })
+
+    data = parse_result(result)
+    assert data["success"] is True
+    assert "state_reload_required" not in data
+    assert data["reviewer_dispatch"]["execution_id"] == "ex-review-fast"
+    assert "dialectic_reviewer_dispatched" in [
+        call.args[0] for call in emit.await_args_list
+    ]
+    refused.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_dispatch_clears_a_stale_flag_with_the_thesis(server_patch):
+    """A session can arrive carrying a creation-time facilitation flag. The
+    thesis append clears it atomically, so the dispatch path has nothing left to
+    reconcile and must not attempt the snapshot compare-and-set that a fast
+    reviewer would refuse."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id=None)
+    session.awaiting_facilitation = True
+    ACTIVE_SESSIONS[session.session_id] = session
+    append = AsyncMock(side_effect=successful_dialectic_message_append)
+    refused = AsyncMock(return_value=False)
+    dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-review-stale"})
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(f"{DIALECTIC}.pg_add_message", new=append))
+        stack.enter_context(
+            patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=refused)
+        )
+        stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r",
+        })
+
+    data = parse_result(result)
+    assert data["success"] is True
+    assert append.await_args.kwargs["next_awaiting_facilitation"] is False
+    refused.assert_not_awaited()
+    assert session.awaiting_facilitation is False
+
+
+@pytest.mark.asyncio
 async def test_orchestrated_reviewer_fast_crash_falls_back_to_in_process(server_patch):
     """Dispatch succeeds but the spawned reviewer crashes fast (exits non-zero
     before claiming the slot) → fall back to in-process inline so the session
