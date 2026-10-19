@@ -44,7 +44,8 @@ Report:
   pushed-but-not-proven-merged, or synced with default upstream
 - any staged, unstaged, or untracked files
 - any repo-rooted processes still running
-- whether a remaining process is managed by a LaunchAgent label
+- whether a remaining process is managed by a LaunchAgent label (macOS only;
+  other platforms report no labels)
 - the `branch hygiene:` line when requested, including cleanup candidates,
   safe deletions performed, held branches, and sweep errors
 
@@ -70,7 +71,8 @@ whose intended work is already committed/stashed, run:
 
 - `python3 scripts/dev/workspace_closeout.py --stash-dirty --stop-repo-processes --bootout-launch-agents --branch-hygiene-live`
 
-`--branch-hygiene-live` reuses the Vigil branch-hygiene safety contract in
+`--bootout-launch-agents` applies only on macOS LaunchAgent installs.
+`--branch-hygiene-live` reuses the branch-hygiene safety contract in
 `docs/operations/branch-hygiene-runbook.md`: patch-equivalent or empty stale
 branches may be pruned, clean stale worktrees may be removed, and branches with
 unique commits, dirty worktrees, or a protected checkout are held for review
