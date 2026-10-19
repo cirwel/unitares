@@ -2350,12 +2350,13 @@ def base_house_rules(out_dir: Path, base_oid: str) -> str:
     applies. Without an AGENTS.md at the base, the prompt says so.
     """
     path = (out_dir / "house-rules-base.md").resolve()
-    try:
-        rules = git("show", f"{base_oid}:AGENTS.md")
-    except SystemExit:  # git(): no AGENTS.md at the base
+    # ls-tree succeeds with empty output for an absent file, so only a real
+    # absence reads as "none"; any git failure stops the review (git()
+    # raises), as it does for the diff itself.
+    if not git("ls-tree", "--name-only", base_oid, "--", "AGENTS.md").strip():
         path.unlink(missing_ok=True)
         return "(none: the base has no AGENTS.md)"
-    path.write_text(rules)
+    path.write_text(git("show", f"{base_oid}:AGENTS.md"))
     return str(path)
 
 

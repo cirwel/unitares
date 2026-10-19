@@ -3034,6 +3034,9 @@ def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
                                  "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}).stdout.strip()
     assert rg.base_house_rules(out, orphan).startswith("(none")
     assert not (out / "house-rules-base.md").exists()
+    # A git failure is not an absence: it stops the review.
+    with pytest.raises(SystemExit):
+        rg.base_house_rules(out, "0" * 40)
     assert "{rules_path}" in rg.REVIEW_PROMPT and "AGENTS.md as it was at the" in rg.REVIEW_PROMPT
     assert "{checkout}" in rg.REVIEW_PROMPT
 
