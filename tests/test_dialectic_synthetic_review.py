@@ -1295,24 +1295,15 @@ _REVIEWER_CLAIMED_ROW = {
 }
 
 
-def _reviewer_claimed_session():
-    """The re-read session once the spawned reviewer's antithesis landed."""
-    fresh = _make_session(
-        reviewer_id="reviewer-orchestrated", phase=DialecticPhase.SYNTHESIS
-    )
-    fresh.transcript_revision = 2
-    return fresh
-
-
 async def _submit_thesis_while_reviewer_claims_slot(
-    *, dispatch, crashed_fast, readback, mark=None, fresh_session=None
+    *, dispatch, crashed_fast, readback
 ):
     from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
 
     session = _make_session(reviewer_id=None)
     ACTIVE_SESSIONS[session.session_id] = session
     append = AsyncMock(side_effect=_append_refusing_the_synthetic_antithesis)
-    mark = mark or AsyncMock(return_value=False)
+    mark = AsyncMock(return_value=False)
     emit = AsyncMock()
 
     import contextlib
@@ -1325,18 +1316,6 @@ async def _submit_thesis_while_reviewer_claims_slot(
         )
         stack.enter_context(
             patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=readback))
-        )
-        async def _load(_session_id):
-            # The cached snapshot serves the thesis; only the re-read after the
-            # refused antithesis append sees the reviewer's claim.
-            refused = any(
-                c.kwargs.get("message_type") == "antithesis"
-                for c in append.await_args_list
-            )
-            return fresh_session if refused else None
-
-        stack.enter_context(
-            patch(f"{DIALECTIC}.load_session", new=AsyncMock(side_effect=_load))
         )
         stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("refine"))))
         stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
@@ -1385,80 +1364,22 @@ async def test_reviewer_that_claims_slot_then_crashes_fast_leaves_thesis_recorde
     then exits non-zero inside the fast-crash wait. The in-process fallback
     finds the slot taken and the facilitation compare-and-set is refused. The
     thesis and the reviewer's antithesis are both on record, so the caller
-    must hear that, not 'thesis NOT recorded'. The reviewer that holds the
-    slot has exited and will not act again, so the facilitation request is
-    recorded against the re-read row instead of reporting it in charge."""
+    must hear that, not 'thesis NOT recorded'. Nothing links the exited
+    execution to the identity now holding the slot, so the call says the
+    holder may be the exited reviewer instead of naming it as next to move,
+    and marks nothing on a guess (reviews of deefdaf3f and cc49696f5)."""
     dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-claim-then-crash"})
     crashed_fast = AsyncMock(return_value=True)
-    mark = AsyncMock(side_effect=[False, True])
-    fresh = _reviewer_claimed_session()
 
     session, data, append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
         dispatch=dispatch, crashed_fast=crashed_fast, readback=dict(_REVIEWER_CLAIMED_ROW),
-        mark=mark, fresh_session=fresh,
     )
 
-    assert data["success"] is True, data
-    assert data["thesis_recorded"] is True
-    assert data["session_advanced"] is True
-    assert data["reviewer_exited"] is True
-    assert data["reviewer_agent_id"] == "reviewer-orchestrated"
-    assert data["awaiting_facilitation"] is True
-    assert "state_reload_required" not in data
-    assert "no facilitation request was needed" not in data["note"]
-    assert "replacement reviewer" in data["next_step"]
+    _assert_recorded_thesis_with_reviewer_in_charge(session, data, append, mark, emit, dispatch)
     crashed_fast.assert_awaited_once_with("ex-claim-then-crash")
-    dispatch.assert_awaited_once()
-    assert [c.kwargs["message_type"] for c in append.await_args_list] == [
-        "thesis", "antithesis",
-    ]
-    # The stale snapshot's mark is refused; the re-read session's mark is
-    # made against the reviewer that now holds the slot.
-    assert mark.await_count == 2
-    assert mark.await_args_list[1].kwargs["expected_reviewer"] == "reviewer-orchestrated"
-    assert mark.await_args_list[1].kwargs["expected_phase"] == "synthesis"
-    assert mark.await_args_list[1].kwargs["expected_transcript_revision"] == 2
-    needed = [
-        c for c in emit.await_args_list if c.args[0] == "dialectic_facilitation_needed"
-    ]
-    assert len(needed) == 1
-    assert needed[0].kwargs["reason"] == "reviewer_crashed_fast"
-    assert fresh.awaiting_facilitation is True
-
-
-@pytest.mark.asyncio
-async def test_exited_reviewer_whose_session_moves_again_needs_reload(server_patch):
-    """If the re-read session also changes before its facilitation mark (or
-    cannot be loaded), the call cannot say who holds the session: not a
-    success, and never the exited reviewer's move. A session reassigned to a
-    replacement reviewer in between is never marked on the exited reviewer's
-    behalf (review of 68d26e28a)."""
-    dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-claim-then-crash"})
-    reassigned = _reviewer_claimed_session()
-    reassigned.reviewer_agent_id = "reviewer-replacement"
-    advanced = _reviewer_claimed_session()
-    advanced.transcript_revision = 3
-
-    for fresh, marks in (
-        (_reviewer_claimed_session(), 2),  # the mark itself is refused
-        (reassigned, 1),
-        (advanced, 1),
-        (None, 1),
-    ):
-        session, data, _append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
-            dispatch=dispatch, crashed_fast=AsyncMock(return_value=True),
-            readback=dict(_REVIEWER_CLAIMED_ROW), fresh_session=fresh,
-        )
-        assert data["success"] is False, data
-        assert data["thesis_recorded"] is True
-        assert data["reviewer_exited"] is True
-        assert data["state_reload_required"] is True
-        assert data["awaiting_facilitation"] is False
-        assert "Reload" in data["next_step"]
-        assert mark.await_count == marks
-        assert "dialectic_facilitation_needed" not in [
-            c.args[0] for c in emit.await_args_list
-        ]
+    assert data["spawned_reviewer_exited"] is True
+    assert "may be that reviewer" in data["note"]
+    assert "reassign" in data["next_step"]
 
 
 @pytest.mark.asyncio
@@ -1477,6 +1398,7 @@ async def test_dispatch_timeout_after_spawn_leaves_thesis_recorded(server_patch)
     _assert_recorded_thesis_with_reviewer_in_charge(session, data, append, mark, emit, dispatch)
     crashed_fast.assert_not_awaited()
     assert "orchestrated_review" not in data
+    assert "spawned_reviewer_exited" not in data
 
 
 @pytest.mark.asyncio

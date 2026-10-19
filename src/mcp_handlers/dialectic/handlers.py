@@ -2750,11 +2750,12 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 f"dialectic(action='get', session_id='{session.session_id}') "
                 "before another write"
             )
-        elif payload.get("reviewer_exited"):
+        elif payload.get("spawned_reviewer_exited"):
             payload["whose_move"] = (
-                "an operator's or a replacement reviewer's — thesis recorded; "
-                "the reviewer that took the session exited, and a request for "
-                "facilitation is recorded"
+                "unknown — thesis recorded; the reviewer this request spawned "
+                "exited, and the reviewer now holding the slot may be that one; "
+                f"check dialectic(action='get', session_id='{session.session_id}') "
+                "and reassign or request facilitation if it does not move"
             )
         elif payload.get("session_advanced"):
             payload["whose_move"] = (
@@ -4142,48 +4143,11 @@ def _thesis_session_advanced(
     )
 
 
-async def _request_facilitation_for_exited_reviewer(
-    session_id: str, observed: Dict[str, Any], reason: str
-) -> bool:
-    """Record the facilitation request against the re-read session row.
-
-    Used when the reviewer that took the session has already exited: nothing
-    else will mark the session, and a synthesis-phase session is reassigned
-    only once it awaits facilitation (check_reviewer_stuck). The mark is bound
-    to the ``observed`` row (its reviewer, phase and transcript revision), so a
-    session reassigned or otherwise moved since is never marked on the exited
-    reviewer's behalf. False when the row cannot be loaded or moved again
-    before the mark.
-    """
-    try:
-        fresh = await load_session(session_id)
-        if fresh is None:
-            return False
-        if (
-            fresh.reviewer_agent_id != observed.get("reviewer")
-            or fresh.phase.value != str(observed.get("phase") or "").lower()
-            or int(fresh.transcript_revision)
-            != int(observed.get("transcript_revision") or 0)
-        ):
-            return False
-        await _set_awaiting_facilitation(fresh, True, reason=reason)
-    except _TranscriptAppendRefused:
-        return False
-    except Exception as exc:
-        logger.warning(
-            "Could not request facilitation for %s after its reviewer exited: %s",
-            session_id[:16],
-            type(exc).__name__,
-        )
-        return False
-    return True
-
-
 async def _thesis_recorded_after_facilitation_refused(
     session: DialecticSession,
     result: Dict[str, Any],
     *,
-    reviewer_exited: bool = False,
+    spawned_reviewer_exited: bool = False,
 ) -> Sequence[TextContent]:
     """Report a recorded thesis whose facilitation request was refused.
 
@@ -4227,8 +4191,8 @@ async def _thesis_recorded_after_facilitation_refused(
         )
         result["note"] = (
             "The thesis is recorded. The session moved on while the automated "
-            f"fallback ran ({holder}; phase is now '{persisted_phase}'), so no "
-            "facilitation request was needed."
+            f"fallback ran ({holder}; phase is now '{persisted_phase}'), so the "
+            "fallback stood down."
         )
         # The other writer may already have committed a terminal decision. A
         # terminal failure, or a decision whose durable effect is not confirmed
@@ -4246,40 +4210,26 @@ async def _thesis_recorded_after_facilitation_refused(
             _terminal_readback_next_step(readback, session_id)
             or f"Follow the review with {poll}."
         )
-        if (
-            reviewer_exited
-            and persisted_reviewer
-            and not readback.terminal
-        ):
-            # The reviewer that took the slot exited inside the fast-crash
-            # wait, so it will not act again and nobody else will mark the
-            # session. Record the facilitation request on the re-read row.
-            result["reviewer_exited"] = True
-            if await _request_facilitation_for_exited_reviewer(
-                session_id, persisted, "reviewer_crashed_fast"
-            ):
-                result["awaiting_facilitation"] = True
-                result["note"] = (
-                    "The thesis is recorded. Reviewer "
-                    f"{persisted_reviewer} took the session (phase is now "
-                    f"'{persisted_phase}') and then exited, so it will not act "
-                    "again. A request for facilitation is recorded."
-                )
-                result["next_step"] = (
-                    "Assign a replacement reviewer or facilitate this session "
-                    f"as operator; follow it with {poll}."
-                )
-            else:
-                result["success"] = False
-                result["state_reload_required"] = True
-                result["note"] = (
-                    "The thesis is recorded. Reviewer "
-                    f"{persisted_reviewer} took the session and then exited, "
-                    "and the session changed again before a request for "
-                    "facilitation could be recorded. Reload the session before "
-                    "another write."
-                )
-                result["next_step"] = f"Reload with {poll}."
+        if spawned_reviewer_exited and persisted_reviewer and not readback.terminal:
+            # The reviewer this call spawned exited inside the fast-crash wait.
+            # Nothing here links that execution to the identity now holding
+            # the slot, so the holder may be the exited reviewer or a live one
+            # that claimed it since. Say so rather than naming the holder as
+            # the next to move or marking the session on a guess; a stalled
+            # synthesis is raised for facilitation by the timeout sweep.
+            result["spawned_reviewer_exited"] = True
+            result["note"] = (
+                "The thesis is recorded. Reviewer "
+                f"{persisted_reviewer} holds the slot (phase is now "
+                f"'{persisted_phase}'), but the reviewer this call spawned "
+                "exited inside the fast-crash wait, and the holder may be that "
+                "reviewer. If the session does not move, reassign the reviewer "
+                "or ask for facilitation."
+            )
+            result["next_step"] = (
+                f"Check the session with {poll}; if the reviewer does not "
+                "act, use dialectic(action='reassign') or request facilitation."
+            )
         logger.info(
             "[DIALECTIC] session %s advanced during the thesis fallback "
             "(phase=%s); reporting the recorded thesis",
@@ -4859,7 +4809,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     return await _thesis_recorded_after_facilitation_refused(
                         session,
                         result,
-                        reviewer_exited=orchestrated_reviewer_exited,
+                        spawned_reviewer_exited=orchestrated_reviewer_exited,
                     )
                 result["awaiting_facilitation"] = True
                 result["note"] = (
