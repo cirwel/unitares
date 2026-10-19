@@ -158,13 +158,14 @@ def classify_for_archival(
     Agents that have never checked in (``updates == 0``) are treated as
     *initializing*, not orphaned — they stay visible as ghosts rather than
     being swept under the rug, which used to hide onboarding bugs behind
-    an aggressive 1h UUID auto-archive. Ephemeral classification comes from
-    the explicit lifecycle tag; a display label does not establish it.
+    an aggressive 1h UUID auto-archive. Named agents enter the low-activity
+    branch only with an explicit ``archive-eligible`` tag. The automatically
+    assigned ``ephemeral`` class and display labels do not opt an agent in.
     """
     label = getattr(meta, 'label', None) or getattr(meta, 'display_name', None) or ""
     has_label = bool(label)
     is_uuid_named = bool(_UUID_PATTERN.match(agent_id))
-    is_ephemeral = "ephemeral" in (getattr(meta, "tags", None) or ())
+    archive_eligible = "archive-eligible" in (getattr(meta, "tags", None) or ())
 
     age_hours = _agent_age_hours(meta)
     if age_hours is None:
@@ -181,8 +182,8 @@ def classify_for_archival(
         return True, f"unlabeled agent, {updates} updates, {age_hours:.1f}h old"
     if is_uuid_named and not has_label and updates >= 2 and age_hours >= unlabeled_hours:
         return True, f"stale UUID agent, {updates} updates, {age_hours:.1f}h old"
-    if is_ephemeral and updates <= ephemeral_max_updates and age_hours >= ephemeral_hours:
-        return True, f"ephemeral session agent '{label}', {updates} updates, {age_hours:.1f}h old"
+    if archive_eligible and updates <= ephemeral_max_updates and age_hours >= ephemeral_hours:
+        return True, f"archive-eligible agent '{label}', {updates} updates, {age_hours:.1f}h old"
     return False, ""
 
 
@@ -198,7 +199,7 @@ async def auto_archive_orphan_agents(
     _monitors: dict | None = None,
 ) -> list[dict]:
     """
-    Identify orphan and ephemeral agents without archiving by default.
+    Identify orphan and explicitly archive-eligible agents without archiving by default.
 
     Delegates classification to ``classify_for_archival`` and protection
     checks to ``is_agent_protected``. Automatic mutation is disabled unless

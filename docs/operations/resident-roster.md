@@ -64,12 +64,27 @@ exemption. The grant happens in `src/grounding/onboard_classifier.py`, which
 stamps `RESIDENT_DEFAULT_TAGS` at mint time when the onboarding `name` matches
 the roster **exactly**.
 
-So a resident onboarded under a name that is not in the roster comes up
-untagged, and the orphan sweep archives it — silently, later, after anything
-anchored to it has started attributing to a ghost. If you are adding a resident,
-add it to the roster and restart the governance server *before* it first
-onboards. `scripts/ops/provision_doctor_identity.py` is the worked example: it
-refuses to write its anchor when the read-back shows the tags were not granted.
+A resident onboarded under a name that is not in the roster instead receives
+the `ephemeral` class tag and lacks those resident protections. That class tag
+does not authorize archival. If you are adding a resident, add it to the roster
+and restart the governance server *before* it first onboards.
+`scripts/ops/provision_doctor_identity.py` is the worked example: it refuses to
+write its anchor when the read-back shows the tags were not granted.
+
+### Optional automated agent archival
+
+To opt a named agent into the low-activity archival candidate check, explicitly
+add `archive-eligible` to its metadata tags, preserving its other tags. Remove
+that tag to withdraw the opt-in. Neither its display name nor the automatically
+assigned `ephemeral` / `engaged_ephemeral` class tags opt it in; class promotion
+does not add or remove the archival marker.
+
+The existing limits still apply: at least one and at most five updates, and at
+least six hours since last activity by default. Zero-update agents are excluded;
+the sweep still protects `persistent`, `protected`, and `pioneer` agents and
+verified, established, or trusted tiers. The separate stale-unlabeled checks
+remain unchanged. Automatic mutation is off unless the deployment explicitly
+sets `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=1`; a dry run never archives.
 
 ### Anchoring a resident that was minted without the SDK
 
