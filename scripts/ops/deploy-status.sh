@@ -127,14 +127,30 @@ COMPONENTS=(
 )
 
 # --- optional components (BEGIN) ---------------------------------------------
-# The third dispatch bot (agy, dispatch_beam#90) is opt-in. Until its LaunchAgent
-# is installed it has no row: a row would read DOWN, and deploy-apply.sh holds
-# every component whose deploy script also controls a DOWN one, so a bot nobody
-# has installed would freeze deploys of the other two. deploy-dispatch-beam.sh
-# applies the same rule.
-if [ -f "$H/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist" ]; then
-  COMPONENTS+=("dispatch-beam-agy|com.cirwel.dispatch-beam-agy|$DISPATCH_TREE||restart|")
-fi
+# Dispatch bots beyond claude and codex (agy today, dispatch_beam#90) are opt-in
+# and discovered from their installed LaunchAgents, by the same rule
+# deploy-dispatch-beam.sh uses (keep the two in step): a
+# com.cirwel.dispatch-beam-<name>.plist with a lowercase name whose
+# EnvironmentVariables pin DISPATCH_BOOT_WITNESS_PATH or DISPATCH_PRESENCE_PATH.
+# Helper jobs on the same prefix (logrotate) pin neither and get no row.
+# Until a bot's plist is installed it has no row: a row would read DOWN, and
+# deploy-apply.sh holds every component whose deploy script also controls a DOWN
+# one, so a bot nobody has installed would freeze deploys of the others. An
+# installed bot that is not loaded DOES get its row, and its DOWN is that hold:
+# deploy-dispatch-beam.sh skips an unloaded bot rather than kickstarting it.
+for _plist in "$H"/Library/LaunchAgents/com.cirwel.dispatch-beam-*.plist; do
+  [ -f "$_plist" ] || continue
+  _name="${_plist##*/com.cirwel.dispatch-beam-}"
+  _name="${_name%.plist}"
+  case "$_name" in
+    codex | logrotate | "" | *[!abcdefghijklmnopqrstuvwxyz0123456789_]*) continue ;;
+  esac
+  plutil -extract EnvironmentVariables.DISPATCH_BOOT_WITNESS_PATH raw -o - "$_plist" >/dev/null 2>&1 ||
+    plutil -extract EnvironmentVariables.DISPATCH_PRESENCE_PATH raw -o - "$_plist" >/dev/null 2>&1 ||
+    continue
+  COMPONENTS+=("dispatch-beam-$_name|com.cirwel.dispatch-beam-$_name|$DISPATCH_TREE||restart|")
+done
+unset _plist _name
 # --- optional components (END) -----------------------------------------------
 
 # --- git helpers (operate on the repo containing repo_path; worktrees ok) -----

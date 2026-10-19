@@ -17,7 +17,7 @@ Contract surfaces:
   "non-determinism added later" regressions at probe scope, not just at
   handler scope).
 
-Council folds addressed in this module:
+Review findings addressed in this module:
 
 - FIND-R2 (``list_all_aliases`` lazy state). ``tool_stability.list_all_aliases``
   returns a copy of a module-level dict that is populated at import time;

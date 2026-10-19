@@ -485,8 +485,8 @@ def test_poll_sync_forced_release_returns_same_tuple_shape_when_no_events():
     """`_poll_sync_forced_release` must return the same `(alarms, new_cursor)`
     tuple shape as the async `poll_forced_release_alarms` it wraps. Sync
     callable so the GovernanceAgent SDK's anyio task group can dispatch it
-    via `loop.run_in_executor` without crossing event loops (per memory
-    `feedback_asyncpg-loop-binding.md`).
+    via `loop.run_in_executor` without crossing event loops (asyncpg connections are bound
+    to the loop that created them).
     """
     from agents.sentinel.agent import _poll_sync_forced_release
 
@@ -524,7 +524,7 @@ def test_poll_sync_forced_release_callable_via_run_in_executor():
     time from the same outer loop to verify no asyncpg loop-binding leak
     between consecutive executor invocations.
 
-    Live-verifier confirmed this empirically pre-merge; this test pins the
+    This was confirmed against the live server before merge; this test pins the
     behavior so a future refactor of `_poll_sync_forced_release` (e.g.,
     accidentally capturing the outer loop reference) breaks loud.
     """
