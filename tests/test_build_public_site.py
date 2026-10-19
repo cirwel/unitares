@@ -75,8 +75,8 @@ def test_build_generates_viewer_from_glossary_markdown(tmp_path):
 
 
 def test_build_writes_normalized_cname(tmp_path):
-    build(tmp_path, " unitares.cirwel.org ")
+    build(tmp_path, " docs.example.org ")
 
     assert (tmp_path / "CNAME").read_text(encoding="utf-8") == (
-        "unitares.cirwel.org\n"
+        "docs.example.org\n"
     )

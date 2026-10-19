@@ -34,7 +34,7 @@ _spec.loader.exec_module(enroll_resident)
 
 
 def test_validate_uuid_accepts_canonical_form() -> None:
-    canonical = "f92dcea8-4786-412a-a0eb-362c273382f5"
+    canonical = "02e168be-4264-527b-9643-9c737dd309e4"
     assert enroll_resident._validate_uuid(canonical) == canonical
 
 
@@ -175,7 +175,7 @@ def test_dry_run_user_writable_returns_one(tmp_path: Path) -> None:
         [
             sys.executable,
             str(CLI_PATH),
-            "--agent-id", "f92dcea8-4786-412a-a0eb-362c273382f5",
+            "--agent-id", "02e168be-4264-527b-9643-9c737dd309e4",
             "--launchd-label", "com.unitares.sentinel",
             "--executable", str(binary),
             "--dry-run",
@@ -198,7 +198,7 @@ def test_dry_run_user_writable_with_allow_returns_zero(tmp_path: Path) -> None:
         [
             sys.executable,
             str(CLI_PATH),
-            "--agent-id", "f92dcea8-4786-412a-a0eb-362c273382f5",
+            "--agent-id", "02e168be-4264-527b-9643-9c737dd309e4",
             "--launchd-label", "com.unitares.sentinel",
             "--executable", str(binary),
             "--dry-run",
