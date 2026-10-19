@@ -1363,13 +1363,12 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
 
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
-    # taxonomy of continuity". Parallels _s13_freshness_gate in
-    # handle_onboard_v2 (checking continuity_token, client_session_id,
-    # agent_uuid, and non-inferred agent_id), except that here cosmetic `name`
-    # alone is not counted as a proof signal (#2708): `identity(name="X")`
-    # without session/UUID/token proof mints fresh and applies the label to the
-    # new agent, whereas a caller with an explicit header session (X-Session-ID
-    # or Mcp-Session-Id) can still rename its bound agent through STEP 1.
+    # taxonomy of continuity". Here `continuity_token`, `client_session_id`,
+    # `agent_uuid`, and non-inferred `agent_id` count as proof signals, whereas
+    # cosmetic `name` alone does not (#2708): `identity(name="X")` without
+    # session/UUID/token proof mints fresh and applies the label to the new
+    # agent, while a caller with an explicit header session (X-Session-ID or
+    # Mcp-Session-Id) can still resume and rename its bound agent through STEP 1.
     # Middleware-injected `agent_id` from a server_inferred sticky/fingerprint
     # binding does not count unless accompanied by an explicit header session.
     _has_proof_signal = bool(
