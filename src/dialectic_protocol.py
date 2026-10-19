@@ -146,7 +146,6 @@ if result.get("converged"):
 
 funk (governance agent)
 Created: 2025-11-25
-Origin: Ticket from opus_hikewa_web_20251125 x hikewa
 
 ## Related Files
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Launchd entrypoint for the Surface Lease Plane (Elixir/OTP).
 #
-# Sources LEASE_PLANE_BEARER_TOKEN + LEASE_FORCE_RELEASE_TOKEN from
-# ~/.config/cirwel/secrets.env (mode 600 — not keychain), then execs
+# Sources LEASE_PLANE_BEARER_TOKEN + LEASE_FORCE_RELEASE_TOKEN from the
+# secrets env file (mode 600 — not keychain; resolved below:
+# $UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env, legacy
+# ~/.config/cirwel/secrets.env still read), then execs
 # `mix run --no-halt`. Bind defaults to 127.0.0.1:8788; override via
 # the :lease_plane runtime config or env (see application.ex).
 #
