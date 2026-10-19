@@ -750,16 +750,16 @@ EXAMPLE RESPONSE:
 - **Timeout:** 30s
 - **Related:** `agent`, `agent(action='list')`
 
-Classify agents fleet-wide as orphan or ephemeral-session archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, non-ephemeral labels, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
+Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
 
-TARGETS (classified as candidates):
+TARGETS (classified as candidates; agents with more than max_updates updates, default 3, are skipped first):
 - Unlabeled agents with 1 update after 3 hours
 - Unlabeled UUID agents with 2+ updates after 6 hours
-- Ephemeral session-labeled agents after 6 hours
+- Agents tagged archive-eligible, labeled or not, with at most 5 updates, after 6 hours
 
 NEVER AUTO-ARCHIVED:
 - Agents with 0 updates (still initializing - never checked in)
-- Agents with labels/display names
+- Labeled agents without the archive-eligible tag
 - Agents with "pioneer" / "persistent" / "protected" tags
 - Agents with verified/established/trusted trust_tier
 
