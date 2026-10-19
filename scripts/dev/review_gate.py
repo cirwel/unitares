@@ -2418,6 +2418,11 @@ def _git_dirs(checkout: str) -> list[str]:
                    for line in proc.stdout.split("\n") if line.strip()})
 
 
+def _codex_cli() -> str | None:
+    """The codex binary on PATH, or None."""
+    return shutil.which("codex")
+
+
 def _codex_lane_client():
     """The consult lane's codex confinement module, loaded from this tree.
 
@@ -2472,7 +2477,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         # review, its git directories and the toolchain git loads from, with
         # .env files still denied.
         lane = _codex_lane_client()
-        cli = shutil.which("codex")
+        cli = _codex_cli()
         if cli is None:
             codex_dir.cleanup()
             # Same wording as a failed launch, so the provider cooldown applies.

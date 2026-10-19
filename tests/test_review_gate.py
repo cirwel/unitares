@@ -48,6 +48,8 @@ def confined_codex_available(monkeypatch):
         lane_config_overrides=_REAL_CODEX_LANE.lane_config_overrides,
     ))
     monkeypatch.setattr(rg, "_git_dirs", lambda checkout: ["/repo/.git"])
+    # CI has no codex installed; the fake Popen stands in for it.
+    monkeypatch.setattr(rg, "_codex_cli", lambda: "/usr/local/bin/codex")
 
 
 def full_record(*args, **kwargs):
@@ -3066,7 +3068,7 @@ def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tm
 
 
 def test_a_missing_codex_is_a_startup_failure_not_a_sandbox_one(monkeypatch, tmp_path):
-    monkeypatch.setattr(rg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(rg, "_codex_cli", lambda: None)
     calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
     text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
     assert calls == []
