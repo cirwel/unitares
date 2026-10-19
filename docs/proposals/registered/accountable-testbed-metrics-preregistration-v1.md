@@ -336,3 +336,22 @@ evidence cases, and a measured price of decentralization.
   expanded freeze list; plus SPIFFE/SPIRE prior-art positioning. No threshold
   was relaxed and no registered rule was weakened. Frozen at the merge of
   this amendment's pull request.
+- **2026-10-19 (editorial, no protocol change; not an amendment, no version
+  bump):** discloses two post-freeze edits that were not logged when they were
+  made. This entry records them on the date they were found; it does not make
+  them contemporaneous. (1) `8e7884434` (#1679, 2026-08-16) inserted the line
+  beginning "Demotion review (2026-08-16)" directly under the Status
+  paragraph. It came from a repository-wide documentation-health review that
+  decided which proposal documents stay active, and it records that review's
+  outcome for this file: retained as the active preregistration, with
+  "merged" meaning the protocol merge rather than completed benchmark runs.
+  It is an index note, not protocol text, and it stays in place. (2)
+  `49143add` (#2350, 2026-09-23) moved this file and v0 from
+  `docs/proposals/` to `docs/proposals/registered/`; the original paths
+  remain as compatibility locators. The move left this file's text
+  unchanged. In v0 it changed one cited repository path (the
+  individuality-v2 preregistration, relocated by the same pull request), so
+  the Status sentence "preserving v0 unchanged" holds for v0's protocol but
+  not for that one line; v0's deviation log records it. Neither edit changed
+  a metric, threshold, oracle, sample size, arm, decision rule, or freeze-list
+  item. The protocol version remains v1.1.

@@ -237,8 +237,11 @@ receipts as of the 2026-09-25 decision record. The
 [federation trust decisions](proposals/active/federation-trust-decisions-2026-09-25.md)
 and [receipt proposal](proposals/active/dialectic-resolution-receipt-v0.md)
 preserve the signing history and conditions for further work. The
-multi-principal trust track is not scheduled; its wake condition is an outside
-party with its own administrative root asking to verify a deployment record.
+multi-principal trust track is not scheduled without external funding or an
+outside principal; its wake conditions are an outside party with its own
+administrative root asking to verify a deployment record, or external funding
+for, or an outside principal joining, the multi-principal testbed (the
+decision record's 2026-10-19 addendum).
 
 #### Identity binding and the lease plane
 

@@ -121,3 +121,13 @@ rather than reworked — is the practice already in this repository's history.
   corrected to "is being submitted" — the original phrasing was anachronistic at
   freeze time (submission window closes 2026-08-08). No metric, threshold,
   oracle, sample size, or decision rule is touched by this edit.
+- **2026-10-19 (editorial, no protocol change; recorded late):** `49143add`
+  (#2350, 2026-09-23) moved this file from `docs/proposals/` to
+  `docs/proposals/registered/` (the original path remains as a compatibility
+  locator) and changed one path in "Demonstrated practice": the
+  individuality-v2 preregistration, which the same pull request relocated, is
+  now cited at `docs/proposals/archive/eisv-individuality-v2-preregistration.md`
+  instead of `docs/proposals/eisv-individuality-v2-preregistration.md`. The
+  edit was not logged when it was made; this entry records it on the date it
+  was found. No metric, threshold, oracle, sample size, or decision rule is
+  touched by this edit.
