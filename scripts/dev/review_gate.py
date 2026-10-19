@@ -1477,6 +1477,17 @@ AGY_ENV_ALLOWLIST = (
 )
 
 
+# The claude and codex reviewers keep the real HOME: their subscription
+# logins live under it and in the keychain. Beyond the agy list they may read
+# their own config-location variables. Nothing else passes: ship.sh sources
+# the operator's secrets file before it runs a review, so an inherited
+# environment carried every bearer token and metered API key into the model
+# process (2026-10-18 council-consolidation map).
+REVIEWER_ENV_ALLOWLIST = AGY_ENV_ALLOWLIST + (
+    "CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS",
+)
+
+
 def agy_env(home: str | None = None) -> dict[str, str]:
     env = {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
     if home is not None:
@@ -2363,11 +2374,17 @@ def base_house_rules(out_dir: Path, base_oid: str) -> str:
 def reviewer_environment(github_config: str, agy_home: str | None = None) -> dict[str, str]:
     """Keep fetch/publication credentials in the parent, never in the model.
 
-    An empty gh config and disabled Git credential helpers also prevent a
-    stripped token from falling back to the operator's configured login.
-    This is credential hygiene, not isolation from other same-user files.
+    Every reviewer gets an allowlisted environment (AGY_ENV_ALLOWLIST with an
+    isolated HOME for antigravity, REVIEWER_ENV_ALLOWLIST otherwise), so no
+    token or API key the parent holds reaches the model process. An empty gh
+    config and disabled Git credential helpers also prevent a GitHub token
+    from falling back to the operator's configured login. This is credential
+    hygiene, not isolation from other same-user files.
     """
-    env = agy_env(agy_home) if agy_home is not None else os.environ.copy()
+    if agy_home is not None:
+        env = agy_env(agy_home)
+    else:
+        env = {k: os.environ[k] for k in REVIEWER_ENV_ALLOWLIST if k in os.environ}
     for name in list(env):
         if (name.startswith(("GH_", "GITHUB_", "UNITARES_GITHUB_", "GIT_CONFIG_"))
                 or name in ("GIT_CONFIG", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND")):
