@@ -4242,17 +4242,13 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 "agent_id": execution_id_spawned,
                                 "via": "agent-orchestrator",
                             }
-                            try:
-                                await _set_awaiting_facilitation(session, False)
-                            except Exception:
-                                result["success"] = False
-                                result["state_reload_required"] = True
-                                result["note"] = (
-                                    "The independent reviewer was dispatched, but "
-                                    "the facilitation flag could not be reconciled. "
-                                    "Reload the session before another write."
-                                )
-                                return success_response(result)
+                            # No facilitation reconcile here. The thesis append
+                            # above already cleared any stale flag, so a
+                            # compare-and-set against the pre-dispatch snapshot
+                            # could not change state, only fail: it was refused
+                            # whenever the session moved on during the wait,
+                            # usually because the spawned reviewer had already
+                            # claimed the slot (dialectic canary, 2026-10-18).
                             await _emit_dialectic_event(
                                 "dialectic_reviewer_dispatched",
                                 session,

@@ -43,7 +43,7 @@ When a branch is held:
 
 1. Inspect `git cherry master <branch>` and `git show --stat <sha>`.
 2. Check whether the touched surface is single-writer locked in `AGENTS.md`.
-3. If useful work remains, create a fresh `codex/*` branch from `master` and
+3. If useful work remains, create a fresh `<author>/*` branch from `master` and
    cherry-pick or manually port only the live hunks.
 4. Run focused tests, then `./scripts/dev/test-cache.sh --staged`.
 5. Open a PR and let CI finish before merging.

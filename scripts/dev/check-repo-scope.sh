@@ -133,7 +133,10 @@ while IFS= read -r f; do
       if grep -nIE 'per your guidance|your overlay|you flagged|questions for [Kk]enny' "$f" >/dev/null 2>&1; then
         report "$f" "Addresses the operator in second person (chat-session register) — product docs/PRs are third-person/imperative, not a reply to one operator."
       fi
-      if grep -nIE 'live-verifier|council pass|council fold|three-lane council' "$f" >/dev/null 2>&1; then
+      # Leading capitals and hyphen-or-space, so "Council pass", "Live-verifier"
+      # and "council-folded" match too. Character classes rather than -i keep
+      # these alternatives in the form tests/test_doc_contract_ci_wiring.py parses.
+      if grep -nIE '[Ll]ive[- ]verifier|[Cc]ouncil[- ]pass|[Cc]ouncil[- ]fold|three-lane council' "$f" >/dev/null 2>&1; then
         report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes in ~/projects/_notes-archive and ship clean docs."
       fi
       ;;
@@ -163,6 +166,20 @@ while IFS= read -r f; do
     *.py|*.sh|*.bash|*.yml|*.yaml|*.toml)
       if grep -nIE 'api\.(openai|anthropic)\.com' "$f" >/dev/null 2>&1; then
         report "$f" "Hardcodes a metered model cloud endpoint (api.openai.com / api.anthropic.com) — that forces a paid API on every installer. Make base_url config-driven (env) so metered stays opt-in, or allowlist a deliberate opt-in backend."
+      fi
+      ;;
+  esac
+
+  # Rule 7: harness-memory file names (feedback_*.md / project_*.md) cited as
+  # authority. That memory is machine-local; cite the repo artifact or the KG
+  # entry instead. Same exemption as Rule 5.
+  case "$f" in
+    src/data/*) ;;
+    *)
+      # A bare name, or any path through a memory/ directory. Other paths are
+      # not flagged, so a repo file such as docs/project_layout.md passes.
+      if grep -nIE '(^|[^A-Za-z0-9/_])(feedback|project)_[a-z0-9_-]+\.md|memory/(feedback|project)_[a-z0-9_-]+\.md' "$f" >/dev/null 2>&1; then
+        report "$f" "Cites a harness-memory file (feedback_*/project_*.md) — that memory is machine-local. Cite the repo artifact or the knowledge-graph entry instead."
       fi
       ;;
   esac

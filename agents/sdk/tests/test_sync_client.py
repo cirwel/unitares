@@ -265,6 +265,26 @@ class TestSyncToolMapping:
         assert captured["retry"] is False
         assert result.advice == "search"
 
+    def test_consult_council_keeps_every_member(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured.update(arguments)
+            return {"success": True, "status": "completed", "council_id": "k-1",
+                    "answered": 2, "asked": 2,
+                    "members": [{"host_id": "codex:host-adapter", "advice": "A"},
+                                {"host_id": "claude:host-adapter", "advice": "B"}]}
+
+        client.call_tool = fake_call
+        result = client.consult(
+            "review", privacy="cloud_allowed",
+            host_ids=("codex:host-adapter", "claude:host-adapter"),
+        )
+        assert captured["host_ids"] == ["codex:host-adapter", "claude:host-adapter"]
+        assert [m["advice"] for m in result.members] == ["A", "B"]
+        assert result.answered == 2
+
     def test_rest_consult_is_sent_once_on_503(self, monkeypatch):
         """retry=False also stops the REST 503 retry: a proxy may have
         forwarded the first request."""
