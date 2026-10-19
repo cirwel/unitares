@@ -4,8 +4,8 @@
 # that otherwise has to be re-derived by hand every time someone asks "what's live?".
 #
 # Stakeholders: an operator reads the table; an agent reads `--json` and verifies
-# against it instead of assuming. Driven by the topology documented in
-# ~/.claude .../memory/project_deploy-topology.md — keep the two in sync.
+# against it instead of assuming. The service rows below are the deploy
+# topology; keep them in sync with what launchd actually runs.
 #
 # Verdicts:
 #   CURRENT      running, and its code is not older than the checkout HEAD
