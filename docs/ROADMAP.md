@@ -117,16 +117,21 @@ than a freeze: a change lands once its PR records the instrument-change time
 ## Later — only after independent evidence
 
 - **Multi-principal trust, including multi-operator and mutually
-  distrustful-governor experiments: not scheduled** (decided 2026-09-25). It
+  distrustful-governor experiments: not scheduled without external funding or
+  an outside principal** (decided 2026-09-25; funding condition added
+  2026-10-19). It
   is a separate claim: whether identity, attestation, and enforcement survive a
   principal who does not share this authority. The validation cohort under
   "Now" does not establish it, and it does not gate the cohort. As of
   2026-09-25 no second principal and no external verifier exist, and a second
-  host run by the same operator is not a second principal. **Wake condition:**
+  host run by the same operator is not a second principal. **Wake conditions:**
   a real outside party, a person or organisation with its own administrative
-  root, asks to verify a record from this deployment. The evidence path would
+  root, asks to verify a record from this deployment; or external funding for
+  the multi-principal testbed is awarded, or an outside principal commits to
+  take part in it. On unfunded single-operator time the evidence path would
   be outreach, not engineering; outreach is not scheduled either. See the
   [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+  (and its 2026-10-19 addendum)
   and [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
 - Broader policy enforcement or efficacy claims.
 - Stabilization commitments for a 1.0 server/API surface.

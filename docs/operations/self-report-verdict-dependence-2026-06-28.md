@@ -247,7 +247,7 @@ checker," that is the load-bearing question, and this is a clean, reproducible i
 
 ## Reproduce it
 
-1. Connect the UNITARES MCP server (`gov.cirwel.org/mcp`).
+1. Connect your UNITARES MCP server (its `/mcp` endpoint; the capture above used the reference deployment's).
 2. Mint agent A: `onboard(force_new=true)`; echo the returned `continuity_token` on its
    check-in to reach `strong` identity assurance. Submit Run A.
 3. Mint agent B: a *second* `onboard(force_new=true)`; echo its token. Submit Run B.

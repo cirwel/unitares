@@ -31,7 +31,7 @@ def doc_mod(tmp_path, monkeypatch):
 
 
 NOW = 1_800_000_000.0
-LUMEN = "69a1a4f7-a30f-4f4a-bcf9-2de8606fb819"
+LUMEN = "9613c89c-836e-59db-a213-80fe60f25986"
 
 
 def iso(epoch: float) -> str:
@@ -109,7 +109,7 @@ def test_frozen_with_dns_journal_is_dns_freeze(doc_mod):
     s = signals(
         doc_mod,
         central={"status": "active", "last_update": iso(NOW - 4000)},
-        journal="Jul 26 anima[123]: Cannot connect to host unitares.tail76aee6.ts.net:8767"
+        journal="Jul 26 anima[123]: Cannot connect to host unitares.tail0example.ts.net:8767"
                 " [Name or service not known]",
     )
     cls, evidence = doc_mod.classify(s)

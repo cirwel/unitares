@@ -50,7 +50,7 @@ PR #700 (merged) appended a `uuid8` fragment to **future auto-generated** handle
 
 ## 3. Blast radius
 
-(From `plan.md` A2 + this session's grep; a fuller per-line map should be regenerated before Phase 1.)
+(From `plan.md` A2 + the author's grep; a fuller per-line map should be regenerated before Phase 1.)
 
 - **Schema / migrations** — `core.agents` (PK, `parent_agent_id` FK, `idx_agents_parent`), `core.identities` (`agent_id` UNIQUE FK, `parent_agent_id` FK), the Wave 3 **shadow tables** `043_identities_shadow` / `044_agents_shadow` (paired update + `db/postgres/schema_drift_check.sh`), and every table that stores an `agent_id`-as-handle (audit rows, `agent_state`, baselines, `outcome_events`, `metrics.series`, knowledge discoveries provenance, `042_lease_plane_agent_scheme`).
 - **AGE graph** — `src/db/age_queries.py` (`create_agent_node`, `create_spawned_edge`, `create_authored_edge`); `src/storage/knowledge_graph_age.py` node keys.

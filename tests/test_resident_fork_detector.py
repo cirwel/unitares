@@ -17,8 +17,8 @@ from src.mcp_handlers.identity import persistence
 async def test_unlineaged_collision_on_persistent_agent_emits_event():
     """Fresh onboard collides with a persistent-tagged existing agent and
     declares NO parent_agent_id — S5 unlineaged-fork case fires the event."""
-    existing_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
-    new_uuid = "7bf970d4-5713-4184-a6f8-58e798275f3f"
+    existing_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
+    new_uuid = "0e6d210c-5828-5513-aafa-b325829beba3"
     label = "Watcher"
 
     mock_broadcaster = AsyncMock()
@@ -51,8 +51,8 @@ async def test_unlineaged_collision_on_persistent_agent_emits_event():
 async def test_lineage_declared_collision_no_event_metadata_source():
     """S5 honest-restart path: new agent declares parent_agent_id=<existing>
     via identity metadata — rename happens, event does NOT fire."""
-    existing_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
-    new_uuid = "7bf970d4-5713-4184-a6f8-58e798275f3f"
+    existing_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
+    new_uuid = "0e6d210c-5828-5513-aafa-b325829beba3"
     label = "Watcher"
 
     mock_broadcaster = AsyncMock()
@@ -77,8 +77,8 @@ async def test_lineage_declared_collision_no_event_metadata_source():
 async def test_lineage_declared_collision_no_event_inmemory_source():
     """S5 honest-restart path when parent lives only in mcp_server.agent_metadata
     (identity record has no metadata yet) — event must still stay silent."""
-    existing_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
-    new_uuid = "7bf970d4-5713-4184-a6f8-58e798275f3f"
+    existing_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
+    new_uuid = "0e6d210c-5828-5513-aafa-b325829beba3"
     label = "Watcher"
 
     mock_broadcaster = AsyncMock()
@@ -104,9 +104,9 @@ async def test_mismatched_lineage_collision_emits_event():
     """If parent_agent_id points at some *other* UUID (not the colliding
     existing holder), the lineage claim doesn't cover this role — still
     an unlineaged fork relative to the existing persistent agent."""
-    existing_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
+    existing_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
     other_parent = "11111111-2222-3333-4444-555555555555"
-    new_uuid = "7bf970d4-5713-4184-a6f8-58e798275f3f"
+    new_uuid = "0e6d210c-5828-5513-aafa-b325829beba3"
     label = "Watcher"
 
     mock_broadcaster = AsyncMock()

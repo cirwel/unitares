@@ -35,37 +35,37 @@ def _u(*repos):
 class TestCoverageExitCode:
     def test_full_coverage_is_green(self, triage):
         assert triage.coverage_exit_code([], set()) == 0
-        assert triage.coverage_exit_code([], {"CIRWEL/unitares-pi-plugin"}) == 0
+        assert triage.coverage_exit_code([], {"EXAMPLE/private-repo"}) == 0
 
     def test_allowlisted_unreachable_is_green(self, triage):
         assert triage.coverage_exit_code(
-            _u("CIRWEL/unitares-pi-plugin"), {"CIRWEL/unitares-pi-plugin"}
+            _u("EXAMPLE/private-repo"), {"EXAMPLE/private-repo"}
         ) == 0
 
     def test_unexpected_unreachable_is_red(self, triage):
-        assert triage.coverage_exit_code(_u("cirwel/unitares"), set()) == 1
+        assert triage.coverage_exit_code(_u("example/server"), set()) == 1
         assert triage.coverage_exit_code(
-            _u("cirwel/unitares"), {"CIRWEL/unitares-pi-plugin"}
+            _u("example/server"), {"EXAMPLE/private-repo"}
         ) == 1
 
     def test_mixed_set_is_red_even_with_partial_allowlist(self, triage):
         assert triage.coverage_exit_code(
-            _u("CIRWEL/unitares-pi-plugin", "cirwel/anima-mcp"),
-            {"CIRWEL/unitares-pi-plugin"},
+            _u("EXAMPLE/private-repo", "example/client"),
+            {"EXAMPLE/private-repo"},
         ) == 1
 
     def test_empty_allowlist_keeps_the_original_contract(self, triage):
         # With no allowlist the gate is byte-equivalent to the old behavior:
         # any unreachable repo fails.
-        assert triage.coverage_exit_code(_u("CIRWEL/unitares-pi-plugin"), set()) == 1
+        assert triage.coverage_exit_code(_u("EXAMPLE/private-repo"), set()) == 1
 
     def test_repo_matching_is_case_insensitive(self, triage):
         # GitHub repo names are case-insensitive; spelling must not decide.
         assert triage.coverage_exit_code(
-            _u("cirwel/unitares-pi-plugin"), {"CIRWEL/unitares-pi-plugin"}
+            _u("example/private-repo"), {"EXAMPLE/private-repo"}
         ) == 0
         assert triage.coverage_exit_code(
-            _u("CIRWEL/Unitares-PI-Plugin"), {"cirwel/unitares-pi-plugin"}
+            _u("EXAMPLE/Private-Repo"), {"example/private-repo"}
         ) == 0
 
 
@@ -77,17 +77,17 @@ class TestMarkdownCaveat:
 
     def test_partial_by_policy_banner_present_when_allowed(self, triage):
         md = triage.render_markdown(
-            self._report(triage, _u("CIRWEL/unitares-pi-plugin")),
+            self._report(triage, _u("EXAMPLE/private-repo")),
             allowed_partial=True,
         )
         assert "Partial-by-policy" in md
         # The honesty contract's original warning must survive alongside it.
         assert "Do not read this report as fleet-wide" in md
-        assert "CIRWEL/unitares-pi-plugin" in md
+        assert "EXAMPLE/private-repo" in md
 
     def test_no_banner_on_a_real_coverage_failure(self, triage):
         md = triage.render_markdown(
-            self._report(triage, _u("cirwel/unitares")), allowed_partial=False,
+            self._report(triage, _u("example/server")), allowed_partial=False,
         )
         assert "Partial-by-policy" not in md
         assert "Do not read this report as fleet-wide" in md
@@ -96,3 +96,75 @@ class TestMarkdownCaveat:
         md = triage.render_markdown(self._report(triage, []))
         assert "Partial-by-policy" not in md
         assert "All target repos were read successfully" in md
+
+
+class TestRepositorySelection:
+    @pytest.mark.parametrize("arguments", [[], ["--repos", ""], ["--repos", "  "],
+                                            ["--repos", ",,"], ["--repos", "example/server,"],
+                                            ["--repos", "server"]])
+    def test_missing_or_invalid_selection_fails_before_reads(self, triage, monkeypatch, arguments):
+        monkeypatch.setattr(sys, "argv", [str(SCRIPT), *arguments])
+        monkeypatch.setattr(triage, "triage_repo", lambda *args, **kwargs: pytest.fail("unexpected GitHub read"))
+        with pytest.raises(SystemExit) as error:
+            triage.main()
+        assert error.value.code == 2
+
+    def test_only_explicit_repositories_are_read(self, triage, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--repos", " example/server , other/client ", "--json"])
+        requested = []
+        monkeypatch.setattr(triage, "triage_repo", lambda repo, report, **kwargs: requested.append(repo))
+        assert triage.main() == 0
+        assert requested == ["example/server", "other/client"]
+        assert '"unreachable": []' in capsys.readouterr().out
+
+    def test_repository_workflow_has_explicit_local_scope(self):
+        import yaml
+
+        workflow = yaml.load((REPO_ROOT / ".github/workflows/dependabot-triage.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        assert set(workflow["on"]) == {"workflow_dispatch"}
+        step = next(step for step in workflow["jobs"]["triage"]["steps"] if step.get("id") == "triage")
+        assert '--repos "$GITHUB_REPOSITORY"' in step["run"]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+
+
+class TestGitHubExecutable:
+    def test_custom_reader_receives_original_argv_for_every_read(self, triage, monkeypatch):
+        from types import SimpleNamespace
+
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stdout='[]', stderr='')
+
+        monkeypatch.setattr(triage.subprocess, "run", run)
+        monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--repos", "example/server",
+                                         "--gh-executable", "/private tools/reader"])
+        assert triage.main() == 0
+        assert calls == [
+            ["/private tools/reader", "repo", "view", "example/server", "--json", "name"],
+            ["/private tools/reader", "pr", "list", "--repo", "example/server", "--author",
+             "app/dependabot", "--state", "open", "--limit", "50", "--json",
+             "number,title,mergeable,statusCheckRollup"],
+        ]
+
+    @pytest.mark.parametrize("missing", [False, True])
+    def test_reader_failure_is_reported_without_fallback(self, triage, monkeypatch, missing):
+        from types import SimpleNamespace
+
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            if missing:
+                raise FileNotFoundError("reader missing")
+            return SimpleNamespace(returncode=2, stdout='', stderr='reader refused')
+
+        monkeypatch.setattr(triage.subprocess, "run", run)
+        report = triage.Report()
+        triage.triage_repo("example/server", report, gh_executable="configured-reader")
+        assert len(calls) == 1
+        assert calls[0][0] == "configured-reader"
+        assert report.repos_scanned == []
+        assert report.unreachable[0]["repo"] == "example/server"

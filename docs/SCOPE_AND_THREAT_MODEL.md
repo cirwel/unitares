@@ -235,11 +235,13 @@ therefore which verification semantics a multi-principal deployment requires;
 what key material that implies follows from it, and is not settled here. No
 multi-principal trust work is scheduled to settle it: D3a of the
 [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
-records it as not scheduled, because as of 2026-09-25 no second principal and
-no external verifier exist. The recorded wake condition is a real outside
-party, a person or organisation with its own administrative root, asking to
-verify a record from this deployment. Custody for the receipt key is deferred
-behind that wake (D3b).
+records it as not scheduled without external funding or an outside principal,
+because as of 2026-09-25 no second principal and no external verifier exist.
+The recorded wake conditions are a real outside party, a person or
+organisation with its own administrative root, asking to verify a record from
+this deployment, or, per the record's 2026-10-19 addendum, external funding
+for, or an outside principal joining, the multi-principal testbed. Custody for
+the receipt key is deferred behind D3a waking (D3b).
 
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant

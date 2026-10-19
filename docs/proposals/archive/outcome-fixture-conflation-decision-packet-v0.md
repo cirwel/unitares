@@ -11,9 +11,9 @@ engineering items.
 **Blast radius:** `fleet`. Two pre-registered contracts are touched (the
 2026-12-01 read and the legacy-coherence dependency shadow), and the README
 claim table cites the frozen slice the December read is read against.
-**Raised by:** `da6974df-ca2a-4119-b26d-2311a3151d32` (a Claude Code session,
+**Raised by:** `da6974df-ca2a-4119-b26d-2311a3151d32` (an agent session,
 2026-09-02).
-**Review provenance:** the same day, a three-seat council (code review, an
+**Review provenance:** the same day, three independent reviewers (code review, an
 adversarial pass, a live re-verification of every number against the
 deployment database) and a Codex review. The recommendation below is sourced
 from the adversarial seat's finding that the stop rule already supplies the
@@ -176,7 +176,7 @@ stop rules by name. R2 to R4 remain available with their costs stated.
   `record_result` caller with neither a confidence nor a resolvable registered
   prediction: in the 21-day window, 845 stamped
   `external_signal` rows came through `/v1/harness/outcome` (the machine-local
-  `~/scripts/hooks/outcome-tracker.sh` and `agents/watcher/agent.py`'s
+  operator-side `outcome-tracker.sh` hook and `agents/watcher/agent.py`'s
   resolution poster) and 5 through `record_result`. Issue #1790 was filed from
   an independent operator's fresh compose stack, so the trap is general.
 
@@ -279,7 +279,7 @@ appended to the stop-rule document's deviation record in this PR.
   is not forecast here.
 - **Inventory and telemetry health** report the attrition honestly and count 5
   strict outcomes in 21 days.
-- **The revenue-engine pilot.** If its label ingestion posts `external_signal`
+- **The pilot in a private repository.** If its label ingestion posts `external_signal`
   rows without a confidence, those rows are dropped by the same instruments.
   Not verified here; the pilot owners should check before the first episode.
 - **The README claim table** cites the frozen 2026-08-09 read for predictive

@@ -27,8 +27,8 @@ from mcp.types import TextContent
 
 from src.mcp_handlers.context import SessionSignals
 
-AGENT_UUID = "1856bb5c-2553-4523-809b-a5d26bbd58d1"
-HEADER = "agent-1856bb5c-255"
+AGENT_UUID = "100bc788-d559-5672-b12d-f432057387a5"
+HEADER = "agent-100bc788-255"
 FINGERPRINT = "127.0.0.1:abc123"
 
 SESSION_TOOLS = ["check_working_state", "get_governance_metrics", "sync_state", "process_agent_update"]

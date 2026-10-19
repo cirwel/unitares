@@ -37,8 +37,10 @@ policy language and evaluation engine, written in Rust, evaluating entirely
 locally — no service, no key, no metered API, so Rule 6 is satisfied. Python
 bindings exist ([cedarpy](https://github.com/k9securityio/cedar-py), PyPI
 wheels for Linux/mac/Windows). The one supply-chain caveat: the bindings are
-third-party-maintained. The dependency ships as an **optional extra**
-(`pip install unitares[cedar]`); the core install never imports it.
+third-party-maintained. The dependency would ship as an **optional extra**
+(a `cedar` extra in `pyproject.toml`, installed from a checkout with
+`pip install -e ".[cedar]"`; the server is not published on PyPI); the core
+install never imports it.
 
 ## 3. Position — one policy engine, not a third primitive
 

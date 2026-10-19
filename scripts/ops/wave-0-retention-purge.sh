@@ -23,7 +23,7 @@ fi
 RETENTION="${1:-90 days}"
 # This script issues DELETEs and interpolates $RETENTION into SQL — gate the
 # shape hard (operator-only surface today, but cheap insurance if automation
-# ever passes external input). Council fold, PR #599.
+# ever passes external input). Review finding, PR #599.
 if ! [[ "$RETENTION" =~ ^[0-9]+\ (minutes|hours|days|weeks|months|years)$ ]]; then
   echo "[wave0-purge] invalid retention '$RETENTION' — expected '<N> <unit>' (e.g. '90 days')" >&2
   exit 2

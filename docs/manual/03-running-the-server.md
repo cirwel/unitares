@@ -12,7 +12,7 @@ Within a few seconds you should see a log line ending like `Uvicorn running on h
 
 From a Docker checkout, `./scripts/unitares` wraps the same steps: `start` and `stop` bring the stack up and down, and `logs [service]` follows a service's log (the governance server by default). The same script picks the model (`model`, see [Choose a model](02-install.md#choose-a-model-optional)) and moves the install to a new release (`update`, see [Updating](02-install.md#updating)).
 
-**The server binds to `127.0.0.1` only by default** — it is not reachable from your LAN until you opt in (see [§3.5](#35-exposing-beyond-loopback)). That default is intentional: the threat model is internal fleet hygiene, not hostile external clients.
+**The server binds to `127.0.0.1` only by default** — it is not reachable from your LAN until you opt in (see [§3.5](#35-exposing-beyond-loopback)). That default is intentional: it assumes a single trusted operator network, and multi-tenant or internet-facing use needs a harder auth posture (see [`SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model)).
 
 ## 3.2 Ports and services
 

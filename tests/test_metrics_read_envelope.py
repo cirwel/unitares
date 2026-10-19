@@ -391,8 +391,8 @@ def test_start_session_size_receipt_never_suggests_another_mint(arguments):
     """Acting on a start_session size hint would mint a second identity."""
     payload = {
         "success": True,
-        "uuid": "54d62846-70bc-41e0-afcf-087d94b5d747",
-        "client_session_id": "agent-54d62846-70b",
+        "uuid": "71ed7caf-d3bc-568f-807b-27159040b3ee",
+        "client_session_id": "agent-71ed7caf-70b",
         "identity_resolution_outcome": "minted_force_new",
         "thread_context": {
             "position": 2,

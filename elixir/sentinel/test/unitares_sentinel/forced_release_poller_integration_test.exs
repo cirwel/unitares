@@ -124,7 +124,7 @@ defmodule UnitaresSentinel.ForcedReleasePollerIntegrationTest do
            "persist: false must not create the shadow file"
   end
 
-  # Council fold: reviewer Critical-1 (PR #376). persist_cursor was building
+  # Review finding (critical, PR #376): persist_cursor was building
   # from %{} on every tick, silently erasing the v0.1.2 §B3 runtime flag and
   # any other sibling keys. This test pins the contract: an existing
   # `runtime: "beam_canonical"` flag in the shadow file MUST survive a tick

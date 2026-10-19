@@ -1389,31 +1389,32 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
 
 
 def check_own_install_health(warnings: list[str]) -> None:
-    """This tool's own PATH entrypoint must stay a symlink to its canonical
-    source (this operator's `unitares-ops` checkout), never a hand-installed
-    copy. A copy silently drifts behind every fix landed here -- found
-    2026-08-22 at three commits / 89 changed lines behind, undetected for
-    days, with no measured symptom to trigger anyone noticing. A symlink
-    cannot drift the same way, so this is a one-time self-check rather than
-    a new watchdog: the census already runs on its own schedule and already
-    has a warnings channel, so a second automation to police this one would
-    be automating-about-automation for a problem the symlink itself
-    eliminates as long as it stays a symlink.
+    """Check a deployment's explicit symlink-install expectation, if supplied.
+
+    UNITARES_AUTOMATION_INSTALL_SOURCE names the maintained source file.
+    UNITARES_AUTOMATION_INSTALL_PATH optionally selects its installed symlink.
+    No install layout is required when the expected source is unset.
     """
-    installed = HOME / ".local/bin/unitares-automations"
-    if not installed.exists():
+    expected_source = os.getenv("UNITARES_AUTOMATION_INSTALL_SOURCE", "").strip()
+    if not expected_source:
         return
-    canonical = HOME / ".local/share/cirwel/unitares-ops/scripts/ops/unitares-automations"
-    if not installed.is_symlink():
-        warnings.append(
-            f"self: {short_path(installed)} is a hand-installed copy, not a symlink -- "
-            f"re-point with `ln -sfn {canonical} {installed}`"
-        )
-    elif installed.resolve() != canonical.resolve():
-        warnings.append(
-            f"self: {short_path(installed)} symlinks to {installed.resolve()}, "
-            f"not the canonical {short_path(canonical)}"
-        )
+    try:
+        expected = Path(expected_source).expanduser()
+        installed = Path(os.getenv("UNITARES_AUTOMATION_INSTALL_PATH") or
+                         HOME / ".local/bin/unitares-automations").expanduser()
+        if not expected.is_file():
+            warnings.append(f"self: configured install source {short_path(expected)} is not a file")
+        elif not installed.exists():
+            warnings.append(f"self: configured install {short_path(installed)} is missing or a broken symlink")
+        elif not installed.is_symlink():
+            warnings.append(f"self: {short_path(installed)} is a hand-installed copy, not the configured symlink")
+        elif installed.resolve() != expected.resolve():
+            warnings.append(
+                f"self: {short_path(installed)} symlinks to {short_path(installed.resolve())}, "
+                f"not the configured source {short_path(expected)}"
+            )
+    except (OSError, RuntimeError) as exc:
+        warnings.append(f"self: could not check configured install: {exc}")
 
 
 def pid_is_alive(raw_pid: Any) -> bool | None:

@@ -312,7 +312,7 @@ Decision: do not promote `affordance_state`, formal `locus`, `harness_id`, `epis
 
 ## Appendix: review provenance
 
-- v1 review pass 2026-05-02 (parallel three-agent: independent reviewers). All three returned "withhold pending v2." 5+ forcing items: enum partitioning failures, language-slip back to performative continuity, dead `continuation` value, build_fork_context call-site mismatch (silent), force_new path doesn't write thread_position, R6 v1's conflation of force_new and resume paths, has_child_uuid not derivable. Live-verifier specifically ground-truthed: 33-tool MCP catalogue, runtime spawn_reason vocabulary (5 distinct values), DB schema (thread_position NULL for all force_new agents), call-site signature mismatch verified by source comparison.
+- v1 review pass 2026-05-02 (parallel three-agent: independent reviewers). All three returned "withhold pending v2." 5+ forcing items: enum partitioning failures, language-slip back to performative continuity, dead `continuation` value, build_fork_context call-site mismatch (silent), force_new path doesn't write thread_position, R6 v1's conflation of force_new and resume paths, has_child_uuid not derivable. Runtime verification against the live server confirmed: 33-tool MCP catalogue, runtime spawn_reason vocabulary (5 distinct values), DB schema (thread_position NULL for all force_new agents), call-site signature mismatch verified by source comparison.
 
 - v2 (this revision) addresses every forcing item. Three remaining open questions surfaced for operator decision rather than silently defaulted.
 

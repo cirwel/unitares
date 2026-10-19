@@ -23,7 +23,9 @@
 # so they load the current disk version on first use anyway.
 #
 # Requires:
-#   - LEASE_PLANE_NODE_COOKIE in ~/.config/cirwel/secrets.env
+#   - LEASE_PLANE_NODE_COOKIE in the secrets env file ($UNITARES_SECRETS_ENV,
+#     default ~/.config/unitares/secrets.env, legacy ~/.config/cirwel/secrets.env
+#     still read; resolved below)
 #   - the node started named (start.sh with the cookie present)
 #
 # SCOPE — what reloads cleanly vs. what does not:

@@ -28,20 +28,22 @@ Operational guidance: do **not** create additional PostgreSQL instances, databas
 
 ## 6.2 Resident agents
 
-Several long-lived agents run alongside the server. They consume the **same public contract** as any external agent (the [`unitares-sdk`](../../agents/sdk/)) and double as reference implementations and operational hygiene. They are *not* load-bearing governance internals — the public contract is the SDK, not the residents.
+Residents are optional agents that an operator chooses to run alongside the
+server. A fresh install has **no configured resident fleet**. Use the public
+MCP, REST, or [`unitares-sdk`](../../agents/sdk/) contract to integrate a resident;
+its identity, capabilities, and schedule are deployment configuration.
 
-| Resident | Cadence | Role |
-|---|---|---|
-| **Vigil** | scheduled (~30 min) | Janitorial — health checks, KG groundskeeping, test triggers |
-| **Sentinel** | continuous (WebSocket) | Fleet monitor — anomaly detection on the live event stream |
-| **Watcher** | event-driven | Code-watcher — local-LLM pattern match, wired into Claude Code's PostToolUse hook |
-| **Chronicler** | daily | Longitudinal codebase metrics → `metrics.series` |
-
-The named set is configured via `UNITARES_RESIDENTS` ([`../operations/resident-roster.md`](../operations/resident-roster.md)), not hardcoded. Reference implementations: [`../../agents/README.md`](../../agents/README.md).
+The optional [`reference implementations`](../../agents/README.md) demonstrate
+health checks, event monitoring, code watching, and metrics collection. Their
+presence in a checkout does not enable those services. Configure the agents you
+deploy through `UNITARES_RESIDENTS` and, if needed, a progress manifest
+([`../operations/resident-roster.md`](../operations/resident-roster.md)). Keep
+actual names, hosts, schedules, and service-manager configuration in your
+deployment repository.
 
 ## 6.3 Security posture
 
-UNITARES has run continuously in production since November 2025 on a **single-operator fleet**. The threat model is "internal fleet hygiene + honest agent identity," **not** "hostile external clients."
+UNITARES has run in production since November 2025 on a **single-operator fleet**. The deployment defaults assume a single trusted operator network; multi-tenant and internet-facing use needs a harder auth posture. See [`SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model) for the adversarial boundaries and the open gap in sustained adversarial testing.
 
 - All services bind `127.0.0.1` by default; public exposure is an env-var-gated operator decision ([§3.5](03-running-the-server.md#35-exposing-beyond-loopback)).
 - The lease plane **fails closed** if `LEASE_PLANE_BEARER_TOKEN` is unset.

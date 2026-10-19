@@ -26,7 +26,8 @@ builds on it. All actions route through the consolidated `knowledge(...)` tool
    backend (`UNITARES_KNOWLEDGE_BACKEND=age`); on the default PostgreSQL
    backend only the relational `response_to_id` link exists.
 
-> Write discipline (see CLAUDE.md "Strict Identity"): **search before writing.**
+> Write discipline (see the shared agent contract, `AGENTS.md` / `CLAUDE.md`,
+> "Strict Identity"): **search before writing.**
 > If a related entry exists, prefer a linked correction or `supersede` over a
 > fresh note.
 

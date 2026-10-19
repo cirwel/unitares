@@ -10,9 +10,9 @@ identity is then carried only by a process-local session binding, and the first
 process boundary after ``UNITARES_IDENTITY_STRICT=strict`` /
 ``STRICT_IDENTITY_REQUIRED=true`` lands strands it: the bare resume is refused,
 and the two documented alternatives (``force_new=true``, ``parent_agent_id``)
-mint a successor rather than resume the identity. The revenue-engine run-up
-worker hit exactly this on 2026-09-03 after four successful binding-only
-sessions.
+mint a successor rather than resume the identity. A run-up worker in a
+private repository hit exactly this on 2026-09-03 after four successful
+binding-only sessions.
 
 This is the operator-side repair. It mints a continuity token whose ``aid``
 claim is the resident's UUID, signed with the same secret the governance server
@@ -60,15 +60,16 @@ carries a fresh token for the first check-in's rebind. Residents should write
 that fresh token back to the anchor at session end, as the SDK does.
 
     python3 scripts/ops/provision_resident_anchor.py \\
-        --agent-uuid <UUID> --name revenue-worker-1 --transport http   # dry run
+        --agent-uuid <UUID> --name example-worker-1 --transport http   # dry run
     python3 scripts/ops/provision_resident_anchor.py \\
-        --agent-uuid <UUID> --name revenue-worker-1 --transport http --apply
+        --agent-uuid <UUID> --name example-worker-1 --transport http --apply
 
 ``--transport`` names how the RESIDENT connects, and is required whenever
 UNITARES_UDS_SOCKET is set, which the server's environment always does. A
-harness session that resumes over MCP (the revenue-engine worker) is ``http``
-and gets a verified token; an SDK resident whose own environment sets the
-socket is ``uds`` and gets the uuid-only anchor the SDK itself would write.
+harness session that resumes over MCP (for example, a worker in a private
+repository) is ``http`` and gets a verified token; an SDK resident whose own
+environment sets the socket is ``uds`` and gets the uuid-only anchor the SDK
+itself would write.
 
 Run it under the governance server's interpreter, with the server's environment
 loaded, so the signing secret matches and the server modules import.
@@ -90,10 +91,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 GOV_URL = os.environ.get("UNITARES_GOV_URL", "http://127.0.0.1:8767")
-# NOTE: honored by src/identity/substrate.py but NOT by
-# src/resident_progress/registry.py or the SDK, both of which hardcode
-# ~/.unitares/anchors. It exists for tests; an operator who sets it gets an
-# anchor the resident will never read.
+# NOTE: honored by src/identity/substrate.py and src/resident_progress/registry.py,
+# but NOT by the SDK, which hardcodes ~/.unitares/anchors. An operator who sets it
+# for an SDK resident gets an anchor that resident will never read.
 ANCHOR_DIR = Path(os.environ.get(
     "UNITARES_ANCHORS_DIR", str(Path.home() / ".unitares" / "anchors")))
 
@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     # environment, which sets UNITARES_UDS_SOCKET to the socket the server
     # listens on, so reading it here chose uuid-only for every persistent
     # resident -- including one that resumes over MCP HTTP and needs the token
-    # (the revenue-engine worker, 2026-09-25). The resident's transport cannot
+    # (a worker in a private repository, 2026-09-25). The resident's transport cannot
     # be inferred from here, so an ambiguous environment must say it.
     transport = args.transport
     if transport is None:

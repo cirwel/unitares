@@ -31,7 +31,7 @@ The 17 joinable rows are *exactly* the `watcher_finding_*` outcomes (16 dismisse
 3. **Breadth across residents (power).** Watcher alone is low-volume. Wire the analogous exogenous channels, each attributed to the baselined resident's UUID, tiered per §7:
    - **Sentinel** finding adjudication (findings already durable in `audit.events`) — `external_signal`.
    - **Dialectic verdicts** — schema already lists these as exogenous (`schemas/core.py:415`); attribute the resolution outcome to the participating resident.
-   - **Operator corrections** — `gold` tier (highest informativeness), when Kenny overrides a resident's output.
+   - **Operator corrections** — `gold` tier (highest informativeness), when the operator overrides a resident's output.
    Invariant 4 holds throughout: every anchor is exogenous; never the loop validating its own trajectory (`server_observation` stays excluded).
 
 4. **Accrual honesty.** Even fully wired, this is forward-only and low-rate (~hundreds of bad labels, class-uneven). `stage_b_viability.py` will report overlap > 0 first, then a noisy AUC that tightens as labels accrue. Per-class power (esp. rare classes) is a ramp, not a switch — say so; don't claim B's justification before the labels support it.

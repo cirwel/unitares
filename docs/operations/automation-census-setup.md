@@ -27,11 +27,10 @@ and registered adaptive-versus-fixed evaluation, see
 [Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
 
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
-no dependencies). The operator's live install is a symlink on `PATH`
-(`~/.local/bin/unitares-automations`) into a checkout of this repo at
-`~/.local/share/cirwel/unitares-ops`. Each census run checks that entry and
-adds a `self:` warning if it is a copy or points anywhere else; that expected
-path is fixed in the tool, not env-overridable.
+no dependencies). Run it from a checkout or install it on `PATH`. No particular
+installation layout is required. A deployment can opt into a symlink integrity
+check by setting `UNITARES_AUTOMATION_INSTALL_SOURCE` to its maintained source
+file; failures appear as `self:` warnings in the census.
 
 ## What shows up automatically
 
@@ -81,17 +80,21 @@ from the census.
    ```bash
    ln -sfn "$PWD/scripts/ops/unitares-automations" ~/.local/bin/unitares-automations
    ```
-   Use a symlink, not a copy. Unless the checkout lives at
-   `~/.local/share/cirwel/unitares-ops`, the census still reports a `self:`
-   warning that the symlink is not the canonical path.
-2. **Point it at your world.** These locations are env-overridable (the
-   self-install check path above is not):
+   A symlink follows updates to the source checkout. To check that this link
+   still points at the intended source, set `UNITARES_AUTOMATION_INSTALL_SOURCE`
+   to the absolute source path in the environment that runs the census.
+   The check reports a missing source, missing or broken link, installed copy,
+   or a link to a different source. It does not repair or write the installation.
+   Leaving the source unset disables this check.
+2. **Point it at your world.** These locations are env-overridable:
    | Env var | Default | Purpose |
    |---|---|---|
    | `--projects-root` (flag) | `~/projects` | where to scan for GitHub Actions |
    | `UNITARES_AUTOMATION_STATE_DIR` | `~/.local/state/unitares-automations` | snapshot (`last.json`) |
    | `UNITARES_AUTOMATION_OVERRIDES` | `~/.local/share/unitares/automation-overrides.json` | your classifications |
    | `UNITARES_AUTOMATION_EXTERNAL` | `~/.local/share/unitares/automation-external.json` | hand-declared automations |
+   | `UNITARES_AUTOMATION_INSTALL_SOURCE` | unset (check disabled) | expected source file for the optional install check |
+   | `UNITARES_AUTOMATION_INSTALL_PATH` | `~/.local/bin/unitares-automations` | symlink to check when an expected source is supplied |
 3. **Generate the snapshot** the dashboard reads:
    ```bash
    unitares-automations census --write --quiet     # writes last.json
@@ -102,11 +105,12 @@ from the census.
    governance server's environment (e.g. `UNITARES_ROUTE_PACKS=automation-census`).
    The shipped default mounts no route packs, so without this `/api/automations`
    answers 404. See "Route packs" in `docs/operations/resident-roster.md`.
-   The endpoint (`/api/automations`) serves `last.json` from its default
-   location (`~/.local/state/unitares-automations/last.json`). It does not read
-   `UNITARES_AUTOMATION_STATE_DIR`: if you moved the snapshot, set
-   `UNITARES_AUTOMATION_CENSUS_PATH` to that `last.json` in the governance
-   server's environment.
+   The endpoint (`/api/automations`) serves `last.json` from
+   `$UNITARES_AUTOMATION_STATE_DIR` when that is set in the governance server's
+   environment, else from `~/.local/state/unitares-automations/last.json`. Set
+   the same `UNITARES_AUTOMATION_STATE_DIR` for the census writer and the
+   server, or set `UNITARES_AUTOMATION_CENSUS_PATH` to the full path of
+   `last.json`; when set, it takes precedence over the state dir.
 
 ## The escape hatch — declare anything
 

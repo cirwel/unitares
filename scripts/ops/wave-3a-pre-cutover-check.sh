@@ -125,7 +125,8 @@ print(
     f"ok: {tool_name!r} registered in TOOL_HANDLERS, "
     f"requires_identity={req!r}, routing row present for {env_flag}.\n"
     f"Safe to set {env_flag}=true in your secrets env file "
-    "($UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env) and "
+    "($UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else "
+    "legacy ~/.config/cirwel/secrets.env if only it exists) and "
     "restart the MCP."
 )
 PY

@@ -822,34 +822,65 @@ async def ensure_agent_persisted(
         except Exception:
             pass
 
+        _candidate_keys = [session_key]
+        try:
+            from .shared import make_client_session_id
+
+            _own_session_key = make_client_session_id(agent_uuid)
+            if _own_session_key and _own_session_key not in _candidate_keys:
+                _candidate_keys.append(_own_session_key)
+        except Exception:
+            pass
+
         if not public_agent_id or not label or not spawn_reason:
             session_cache = _get_redis()
             if session_cache:
-                try:
-                    cached = await session_cache.get(session_key)
-                    if isinstance(cached, dict):
-                        display_agent_id = cached.get("display_agent_id")
-                        if not public_agent_id and display_agent_id and display_agent_id != agent_uuid:
-                            public_agent_id = display_agent_id
-                        if not label:
-                            label = cached.get("label")
-                        if not spawn_reason:
-                            spawn_reason = cached.get("spawn_reason")
-                except Exception as e:
-                    logger.debug(f"Could not hydrate identity handles from session cache: {e}")
+                for _cand_key in _candidate_keys:
+                    if public_agent_id and label and spawn_reason:
+                        break
+                    try:
+                        cached = await asyncio.wait_for(
+                            session_cache.get(_cand_key),
+                            timeout=_REDIS_WRITE_TIMEOUT,
+                        )
+                        if isinstance(cached, dict):
+                            cached_owner = (
+                                cached.get("agent_uuid")
+                                or cached.get("bound_agent_id")
+                                or cached.get("agent_id")
+                            )
+                            if not cached_owner or cached_owner == agent_uuid:
+                                display_agent_id = cached.get("display_agent_id")
+                                if not public_agent_id and display_agent_id and display_agent_id != agent_uuid:
+                                    public_agent_id = display_agent_id
+                                if not label:
+                                    label = cached.get("label")
+                                if not spawn_reason:
+                                    spawn_reason = cached.get("spawn_reason")
+                    except Exception as e:
+                        logger.debug(f"Could not hydrate identity handles from session cache: {e}")
         if not public_agent_id or not label or not spawn_reason:
             try:
                 from .shared import _session_identities
 
-                cached = _session_identities.get(session_key)
-                if isinstance(cached, dict):
-                    display_agent_id = cached.get("display_agent_id") or cached.get("public_agent_id")
-                    if not public_agent_id and display_agent_id and display_agent_id != agent_uuid:
-                        public_agent_id = display_agent_id
-                    if not label:
-                        label = cached.get("agent_label") or cached.get("label")
-                    if not spawn_reason:
-                        spawn_reason = cached.get("spawn_reason")
+                for _cand_key in _candidate_keys:
+                    if public_agent_id and label and spawn_reason:
+                        break
+                    cached = _session_identities.get(_cand_key)
+                    if isinstance(cached, dict):
+                        cached_owner = (
+                            cached.get("agent_uuid")
+                            or cached.get("bound_agent_id")
+                            or cached.get("agent_id")
+                        )
+                        if not cached_owner or cached_owner == agent_uuid:
+                            display_agent_id = cached.get("display_agent_id") or cached.get("public_agent_id")
+                            if not public_agent_id and display_agent_id and display_agent_id != agent_uuid:
+                                public_agent_id = display_agent_id
+                            if not label:
+                                label = cached.get("agent_label") or cached.get("label")
+                            if not spawn_reason:
+                                spawn_reason = cached.get("spawn_reason")
             except Exception as e:
                 logger.debug(f"Could not hydrate identity handles from in-memory session cache: {e}")
 

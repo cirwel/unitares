@@ -63,6 +63,12 @@ case "$*" in
     else
       cat "$d/compare.json" 2>/dev/null || exit 1
     fi ;;
+  "api repos/"*"/pulls/"*"/commits?per_page=100&page="*)
+    [ -f "$d/pr_commits.fail" ] && exit 1
+    case "$*" in
+      *"page=1") cat "$d/pr_commits.json" 2>/dev/null || echo "[]" ;;
+      *) echo "[]" ;;
+    esac ;;
   "api repos/"*"/events?per_page=100&page=1")
     cat "$d/events_page1.json" 2>/dev/null || echo "[]" ;;
   "api repos/"*"/events?per_page=100&page="*) echo "[]" ;;
@@ -563,6 +569,142 @@ def test_content_check_degrades_visibly_outside_events_window(guard_env):
     assert proc.returncode == 0
     assert "DEGRADED" in summary.read_text()
     assert "content-unverified" in summary.read_text()
+
+
+# Branch reuse (#2384): one branch name carried seven PRs, and the branch's
+# newest push was the final head of the EARLIER, already-merged PR. Only
+# pushes from the merging PR's own lifetime may be compared.
+REUSE_OPENED_AT = "2026-08-01T11:00:00Z"
+
+
+def test_content_check_ignores_push_from_earlier_pr_on_reused_branch(guard_env):
+    # The #2384 shape: the only recorded push predates this PR's opening and
+    # is not among its commits, so it belongs to an earlier PR (which merged
+    # with exactly that head). Comparing against it would report a dropped
+    # push that was never this PR's.
+    env, data, summary = guard_env
+    (data / "events_page1.json").write_text(json.dumps(
+        [_push_event("claude/reused", "d" * 40, "2026-08-01T09:00:00Z")]  # earlier PR's head
+    ))
+    (data / "pr_commits.json").write_text(json.dumps([{"sha": "c" * 40}]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "diverged",
+        "html_url": "cmp",
+        "commits": [{"sha": "d" * 40, "commit": {"message": "earlier PR's work"}}],
+    }))
+    proc = run_guard(
+        "merge_content_check.py", env,
+        PR_NUMBER=2382, HEAD_BRANCH="claude/reused", HEAD_SHA="c" * 40,
+        PR_CREATED_AT=REUSE_OPENED_AT, MERGED_AT="2026-08-02T00:00:00Z",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log = calls(data)
+    assert "pulls/2382/commits" in log
+    assert "/compare/" not in log
+    assert "issue create" not in log and "issue comment" not in log
+    text = summary.read_text()
+    assert "CONTENT MISSING" not in text
+    assert "DEGRADED" in text  # nothing from this PR's lifetime was verified
+    assert "reused branch name" in text
+
+
+def test_content_check_verifies_own_pre_open_push_and_skips_earlier_prs(guard_env):
+    # Push-then-open on a reused branch: the newer push that is not among the
+    # PR's commits is ignored, and this PR's own pre-open push (in its commit
+    # list) is the one verified.
+    env, data, summary = guard_env
+    (data / "events_page1.json").write_text(json.dumps([
+        _push_event("claude/reused", "c" * 40, "2026-08-01T10:00:00Z"),  # this PR's head
+        _push_event("claude/reused", "d" * 40, "2026-08-01T10:30:00Z"),  # not in the PR
+    ]))
+    (data / "pr_commits.json").write_text(json.dumps([{"sha": "b" * 40}, {"sha": "c" * 40}]))
+    proc = run_guard(
+        "merge_content_check.py", env,
+        PR_NUMBER=2382, HEAD_BRANCH="claude/reused", HEAD_SHA="c" * 40,
+        PR_CREATED_AT=REUSE_OPENED_AT, MERGED_AT="2026-08-02T00:00:00Z",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "issue create" not in calls(data)
+    text = summary.read_text()
+    assert "no contradiction" in text
+    assert "ignored 1 push(es)" in text
+
+
+def test_content_check_still_fires_on_genuine_stale_head_with_branch_reuse(guard_env):
+    # The #1610 mode survives the lifetime filter: a push AFTER the PR opened
+    # that the merged head lacks still fires, even with an earlier PR's push
+    # on the same branch name in the feed. In-lifetime pushes are kept by
+    # timestamp alone; the PR's commit list (which lacks the dropped commit)
+    # must not be consulted for them.
+    env, data, summary = guard_env
+    (data / "events_page1.json").write_text(json.dumps([
+        _push_event("claude/reused", "d" * 40, "2026-08-01T08:00:00Z"),  # earlier PR
+        _push_event("claude/reused", "c" * 40, "2026-08-01T10:00:00Z"),  # pre-open, merged head
+        _push_event("claude/reused", "f" * 40, "2026-08-01T12:00:00Z"),  # final push, dropped
+    ]))
+    (data / "pr_commits.json").write_text(json.dumps([{"sha": "c" * 40}]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "html_url": "cmp",
+        "commits": [{"sha": "f" * 40, "commit": {"message": "the dropped commit"}}],
+    }))
+    proc = run_guard(
+        "merge_content_check.py", env,
+        PR_NUMBER=1610, HEAD_BRANCH="claude/reused", HEAD_SHA="c" * 40,
+        PR_CREATED_AT=REUSE_OPENED_AT, MERGED_AT="2026-08-02T00:00:00Z",
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    log = calls(data)
+    assert f"compare/{'c' * 40}...{'f' * 40}" in log
+    assert "pulls/1610/commits" not in log
+    assert "issue create" in log
+    assert "CONTENT MISSING" in summary.read_text()
+
+
+def test_content_check_degrades_when_pr_commit_list_unreadable(guard_env):
+    # Every push predates opening and the commit list cannot be read: the
+    # guard cannot attribute the pushes, so it reports DEGRADED, not a pass
+    # and not a finding.
+    env, data, summary = guard_env
+    (data / "events_page1.json").write_text(json.dumps(
+        [_push_event("claude/reused", "d" * 40, "2026-08-01T09:00:00Z")]
+    ))
+    (data / "pr_commits.fail").touch()
+    proc = run_guard(
+        "merge_content_check.py", env,
+        PR_NUMBER=2382, HEAD_BRANCH="claude/reused", HEAD_SHA="c" * 40,
+        PR_CREATED_AT=REUSE_OPENED_AT, MERGED_AT="2026-08-02T00:00:00Z",
+    )
+    assert proc.returncode == 0
+    assert "issue create" not in calls(data)
+    text = summary.read_text()
+    assert "DEGRADED" in text
+    assert "content-unverified" in text
+
+
+def test_content_check_post_merge_push_still_routes_with_lifetime_filter(guard_env):
+    env, data, summary = guard_env
+    (data / "events_page1.json").write_text(json.dumps(
+        [_push_event("claude/b", "d" * 40, "2026-08-02T01:00:00Z")]  # after merge
+    ))
+    proc = run_guard(
+        "merge_content_check.py", env,
+        PR_NUMBER=7, HEAD_BRANCH="claude/b", HEAD_SHA="c" * 40,
+        PR_CREATED_AT=REUSE_OPENED_AT, MERGED_AT="2026-08-02T00:00:00Z",
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "orphan-push-guard claude/b" in calls(data)
+    assert "POST-MERGE PUSH" in summary.read_text()
+
+
+def test_content_check_workflow_passes_pr_created_at():
+    # The lifetime filter depends on this env var; without it the guard falls
+    # back to the unfiltered newest push and the #2384 false positive returns.
+    parsed = yaml.safe_load((WORKFLOWS / "merge-content-check.yml").read_text())
+    step_envs = [step.get("env", {}) for step in parsed["jobs"]["verify"]["steps"]]
+    assert any(
+        env.get("PR_CREATED_AT") == "${{ github.event.pull_request.created_at }}" for env in step_envs
+    )
 
 
 # --- automerge_disarm_detector ----------------------------------------------

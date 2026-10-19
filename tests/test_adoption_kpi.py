@@ -35,6 +35,26 @@ def test_onboard_conversion_query_counts_beam_external_outcomes():
     assert "beam_converted" in sql
 
 
+@pytest.mark.parametrize(
+    "spawn_reason",
+    [
+        "dispatch_beam_harness",
+        "dispatch_beam_codex_harness",
+        "dispatch_beam_agy_harness",
+    ],
+)
+def test_onboard_conversion_excludes_every_dispatch_beam_harness(spawn_reason):
+    # dispatch_beam onboards one harness identity per backend bot (cirwel/
+    # dispatch_beam#95). A reason missing from the exclusion list would count
+    # each of those harness identities as an adopter.
+    from scripts.dev import adoption_kpi
+
+    sql = adoption_kpi._snapshot_queries()["onboard_conversion"]
+    exclusion = sql.split("a.spawn_reason NOT IN (", 1)[1].split(")", 1)[0]
+
+    assert f"'{spawn_reason}'" in exclusion
+
+
 def test_review_nudge_conversion_is_same_session_action_and_bounded():
     from scripts.dev import adoption_kpi
 

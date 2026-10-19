@@ -278,6 +278,11 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "search_degraded_message",
             "limit_clamped_from",
             "_more_available",
+            # A queryless listing that left unpromoted imported memory out
+            # says so, and how to read that lane; without these the lean
+            # digest showed the remainder as the whole set (#2125).
+            "imported_omitted",
+            "imported_omitted_hint",
             "sort_by",
             "created_after",
             "created_before",
