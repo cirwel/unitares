@@ -1391,7 +1391,7 @@ class IdentityMixin:
             return None
         # asyncpg here returns JSONB as a str (no custom codec is
         # registered on the pool — see src/db/postgres_backend.py).
-        # The PR 3 council live verifier called this dead code, but
+        # A PR 3 runtime check called this dead code, but
         # `test_read_class_tag_live_db_returns_first_tag` proves the
         # str branch is the live path. Decode defensively.
         if isinstance(metadata, str):
