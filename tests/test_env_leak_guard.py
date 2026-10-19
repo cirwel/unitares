@@ -46,6 +46,7 @@ def test_describe_names_keys_never_values():
 
 
 def _run(tmp_path: Path, files: dict[str, str], known_leaks: str = "{}"):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "pytest.ini").write_text("[pytest]\naddopts =\n")
     (tmp_path / "conftest.py").write_text(textwrap.dedent(f"""
         from tests.env_leak_guard import EnvLeakGuard
@@ -209,3 +210,65 @@ def test_an_allowlisted_leak_warns_instead_of_failing(tmp_path):
     assert "tracked in issue #0" in out
     assert "ERROR at teardown of test_known" not in out
     assert "ERROR at teardown of test_unlisted_key" in out
+
+
+_NESTED_SETUP = """
+    import os
+    import pytest
+
+    @pytest.fixture(scope="session")
+    def session_env():
+        os.environ["LEAK_SESSION"] = "1"
+        yield
+        SESSION_TEARDOWN
+
+    @pytest.fixture(scope="module")
+    def module_env(request):
+        request.getfixturevalue("session_env")
+        os.environ["LEAK_OUTER"] = "1"
+        yield
+        del os.environ["LEAK_OUTER"]
+
+    def test_uses_module_fixture(module_env):
+        assert os.environ["LEAK_SESSION"] == "1"
+"""
+
+_LATER_MODULE = """
+    import os
+
+    def test_session_value_survives_the_module_teardown():
+        assert os.environ.get("LEAK_SESSION") == "1"
+        assert "LEAK_OUTER" not in os.environ
+"""
+
+
+def test_a_nested_fixture_setup_is_credited_to_the_innermost_fixture(tmp_path):
+    """A module fixture that pulls in a session fixture with
+    ``request.getfixturevalue`` did not make the session fixture's change. Its
+    teardown must not be blamed for it, and must not strip the variable while
+    the session fixture is still alive."""
+    result = _run(tmp_path, {
+        "test_a.py": _NESTED_SETUP.replace(
+            "SESSION_TEARDOWN", 'del os.environ["LEAK_SESSION"]'
+        ),
+        "test_b.py": _LATER_MODULE,
+    })
+    out = result.stdout
+    assert result.returncode == 0, out
+    assert "left os.environ changed" not in out
+    assert "PASSED test_b.py::test_session_value_survives_the_module_teardown" in out
+
+
+def test_a_nested_session_fixture_is_still_checked_at_its_own_teardown(tmp_path):
+    result = _run(tmp_path, {
+        "test_a.py": _NESTED_SETUP.replace("SESSION_TEARDOWN", "pass"),
+        "test_b.py": _LATER_MODULE,
+    })
+    out = result.stdout
+    assert result.returncode == 1, out
+    assert (
+        "session-scoped fixture 'session_env' left os.environ changed: "
+        "set: LEAK_SESSION" in out
+    )
+    assert "module-scoped fixture 'module_env'" not in out
+    assert "PASSED test_b.py::test_session_value_survives_the_module_teardown" in out

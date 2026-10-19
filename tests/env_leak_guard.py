@@ -119,6 +119,7 @@ class EnvLeakGuard:
         self.known_leaks = dict(known_leaks)
         self.expected: dict[str, str] | None = None
         self._spans: dict[int, list[_FixtureSpan]] = {}
+        self._setup_stack: list[dict[str, str | None]] = []
         self._fixture_leaks: list[tuple[str, str, EnvDiff]] = []
 
     # -- baseline ---------------------------------------------------------
@@ -135,19 +136,36 @@ class EnvLeakGuard:
         if fixturedef.scope == "function" or self.expected is None:
             return (yield)
         before = dict(os.environ)
+        # Keys a fixture set up inside this one (``request.getfixturevalue``)
+        # changed, with the value each nested setup left. Those changes are
+        # the nested fixture's to give back, not this one's.
+        credited: dict[str, str | None] = {}
+        self._setup_stack.append(credited)
         try:
             return (yield)
         finally:
+            self._setup_stack.pop()
             delta = diff_env(before, os.environ)
-            if delta:
-                span = _FixtureSpan(fixturedef.argname, fixturedef.scope)
-                for key in delta.keys:
+            span = _FixtureSpan(fixturedef.argname, fixturedef.scope)
+            for key in delta.keys:
+                if key in credited:
+                    if os.environ.get(key) == credited[key]:
+                        continue
+                    # Changed again after the nested setup: this fixture owes
+                    # back what the nested one left, not what it found.
+                    span.prior[key] = credited[key]
+                else:
                     span.prior[key] = before.get(key)
-                    if key in os.environ:
-                        self.expected[key] = os.environ[key]
-                    else:
-                        self.expected.pop(key, None)
+                if key in os.environ:
+                    self.expected[key] = os.environ[key]
+                else:
+                    self.expected.pop(key, None)
+            if span.prior:
                 self._spans.setdefault(id(fixturedef), []).append(span)
+            if self._setup_stack:
+                parent = self._setup_stack[-1]
+                for key in delta.keys:
+                    parent[key] = os.environ.get(key)
 
     def pytest_fixture_post_finalizer(self, fixturedef, request):
         spans = self._spans.get(id(fixturedef))
