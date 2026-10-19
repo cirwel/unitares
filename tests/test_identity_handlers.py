@@ -2317,6 +2317,35 @@ class TestHandleOnboardV2:
             for record in caplog.records
         ), "identity(name=...) with no proof signal must fire the S13 fresh-instance gate (#2708)"
 
+        # Also verify the full-pipeline case where resolve_identity + inject_identity
+        # stamped proof_origin="server_inferred" (e.g. sticky IP:UA cache hit)
+        # and injected arguments["agent_id"] = existing_uuid without a session header.
+        from src.mcp_handlers.context import set_session_proof_origin
+        caplog.clear()
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident-2708-inferred", metadata={}),
+        ]
+        set_session_proof_origin("server_inferred")
+        try:
+            with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+                inferred_result = await handle_identity_adapter(
+                    {"name": "CosmeticOnlyInferred", "agent_id": existing_uuid}
+                )
+        finally:
+            set_session_proof_origin(None)
+
+        inferred_data = parse_result(inferred_result)
+        assert inferred_data["success"] is True
+        assert inferred_data["identity_status"] == "created"
+        assert inferred_data["uuid"] != existing_uuid
+        assert any(
+            "[FRESH_INSTANCE]" in record.getMessage()
+            and "identity()" in record.getMessage()
+            for record in caplog.records
+        ), "server_inferred middleware-injected agent_id must not bypass S13 gate for identity(name=...)"
+
     @pytest.mark.asyncio
     async def test_onboard_parent_agent_id_with_proof_signal_mints_fresh(
         self, patch_onboard_deps, mock_db, mock_redis, caplog

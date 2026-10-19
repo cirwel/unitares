@@ -1349,28 +1349,37 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     arguments = arguments or {}
     normalize_client_session_id_argument(arguments)
 
-    from ..context import get_session_signals, get_mcp_session_id
+    from ..context import (
+        get_session_signals,
+        get_mcp_session_id,
+        get_session_proof_origin,
+    )
     signals = get_session_signals()
     _has_header_session = bool(
         (signals and (signals.x_session_id or signals.mcp_session_id))
         or get_mcp_session_id()
     )
+    _proof_origin = get_session_proof_origin()
 
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
     # taxonomy of continuity". Parallels _s13_freshness_gate in
     # handle_onboard_v2 (checking continuity_token, client_session_id,
-    # agent_uuid, and agent_id — including middleware-injected agent_id from
-    # inject_identity), except that here cosmetic `name` alone is not counted
-    # as a proof signal (#2708): `identity(name="X")` without session/UUID/token
-    # proof mints fresh and applies the label to the new agent, whereas a caller
-    # with an explicit header session (X-Session-ID or Mcp-Session-Id) can still
-    # rename its bound agent through STEP 1.
+    # agent_uuid, and non-inferred agent_id), except that here cosmetic `name`
+    # alone is not counted as a proof signal (#2708): `identity(name="X")`
+    # without session/UUID/token proof mints fresh and applies the label to the
+    # new agent, whereas a caller with an explicit header session (X-Session-ID
+    # or Mcp-Session-Id) can still rename its bound agent through STEP 1.
+    # Middleware-injected `agent_id` from a server_inferred sticky/fingerprint
+    # binding does not count unless accompanied by an explicit header session.
     _has_proof_signal = bool(
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
-        or arguments.get("agent_id")
+        or (
+            arguments.get("agent_id")
+            and (_proof_origin != "server_inferred" or _has_header_session)
+        )
         or (arguments.get("name") and _has_header_session)
     )
     # Coerced once, before the S13 default and like handle_identity_v2's
