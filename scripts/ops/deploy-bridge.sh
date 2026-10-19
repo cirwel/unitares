@@ -88,7 +88,15 @@ PREV="$DEPLOY_LIB_PREV"
 # made the DEPLOY worktree depend on the DEV checkout still existing — delete or
 # move the dev tree and the live bridge dies at its next restart, for a reason
 # nothing in the deploy path would have explained.
-ENV_FILE="${BRIDGE_ENV_FILE:-$HOME/.config/cirwel/discord-bridge.env}"
+#
+# Resolution mirrors the secrets env file: BRIDGE_ENV_FILE, else
+# ~/.config/unitares/discord-bridge.env, else the pre-2026-09
+# ~/.config/cirwel/discord-bridge.env when only that one exists. Existing .env
+# symlinks may point at the legacy file, so it must keep being found.
+ENV_FILE="${BRIDGE_ENV_FILE:-$HOME/.config/unitares/discord-bridge.env}"
+if [ -z "${BRIDGE_ENV_FILE:-}" ] && [ ! -f "$ENV_FILE" ] && [ -f "$HOME/.config/cirwel/discord-bridge.env" ]; then
+  ENV_FILE="$HOME/.config/cirwel/discord-bridge.env"
+fi
 if [ ! -f "$ENV_FILE" ]; then
   echo "[$TAG] REFUSING: no secrets file at $ENV_FILE." >&2
   echo "[$TAG] The bot would boot with an empty DISCORD_BOT_TOKEN and never connect." >&2
@@ -101,7 +109,10 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 # -L, not -e: -e is false for a DANGLING symlink, so a link left pointing at an
 # old location would fall through to `ln -s` on an existing path and fail.
-if [ ! -L "$DEPLOY/.env" ] || [ ! -e "$DEPLOY/.env" ]; then
+# Relink when the target differs too: a link to the legacy file must follow
+# once the neutral file exists, or the restarted bot keeps reading the old one.
+if [ ! -L "$DEPLOY/.env" ] || [ ! -e "$DEPLOY/.env" ] \
+  || [ "$(readlink "$DEPLOY/.env")" != "$ENV_FILE" ]; then
   echo "[$TAG] linking .env -> $ENV_FILE"
   ln -sfn "$ENV_FILE" "$DEPLOY/.env"
 fi

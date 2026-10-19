@@ -3,7 +3,7 @@
 > **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
 
 **Companion to:** `docs/ontology/s8a-tag-discipline-audit.md` (Phase 1)
-**Status:** Prep diagnostic. Not a ratification artifact. Tomorrow's session (≥1-week-of-data trigger fires 2026-04-30) opens the actual Phase-2 PR using this as the data input.
+**Status:** Prep diagnostic. Not a ratification artifact. The day-7 follow-up (≥1-week-of-data trigger fires 2026-04-30) opens the actual Phase-2 PR using this as the data input.
 
 ## Why this exists
 
@@ -126,17 +126,17 @@ Three items, not two:
 
 3180 archived records. Same rule as (a-bis) + (c). One-shot pass after the live rules ship. Cheap once rules are agreed.
 
-## Open questions for tomorrow's session
+## Open questions
 
 1. **Threshold sensitivity.** Day-7 data may add or shift agents in the 1-2 bucket. If 5+ new agents arrive in 1-2 between now and ratification, revisit the cut.
-2. **Stamping-gap fix sequencing.** Bundle into the Phase-2 PR or ship a-bis first as a tiny standalone? My read: bundle. Council review covers both.
-3. **Council requirement.** Calibration-consequence territory — S6 thresholds depend on Phase 2's class composition. Per memory entry "Council also for load-bearing implementation," parallel independent review pre-merge.
+2. **Stamping-gap fix sequencing.** Bundle into the Phase-2 PR or ship a-bis first as a tiny standalone? Recommendation: bundle. One review round covers both.
+3. **Review requirement.** Calibration-consequence territory — S6 thresholds depend on Phase 2's class composition. Load-bearing implementation gets the same review as a design doc: parallel independent review pre-merge.
 
 ## What this prep is NOT
 
 - Not a threshold ratification (decision (b) gates on day 7)
-- Not the Phase-2 PR (separate session opens that tomorrow with this as input)
-- Not a full Phase-1 stamping-path audit — only what surfaced in the cohort sample. The actual onboard-path traces (claude_desktop / Codex) are tomorrow's investigation work.
+- Not the Phase-2 PR (a separate session opens it on day 7 with this as input)
+- Not a full Phase-1 stamping-path audit — only what surfaced in the cohort sample. The actual onboard-path traces (claude_desktop / Codex) are day-7 investigation work.
 
 ## Handoff to day-7 session
 
@@ -144,6 +144,6 @@ Three items, not two:
 Pick up: docs/ontology/s8a-phase2-prep.md (this file)
 Re-run the three queries above; check for shape drift in 24h.
 Open Phase-2 PR with three items: (a) class entry, (c) promotion rule, (a-bis) stamp gap fixes.
-Council review pre-merge.
+Independent review pre-merge.
 After merge: decision (d) backfill (one-shot pass).
 ```

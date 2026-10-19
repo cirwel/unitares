@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Classify open Dependabot PRs across the CIRWEL fleet. Report only.
+"""Classify open Dependabot PRs for explicitly selected repositories. Report only.
 
-Replaces a claude.ai cloud routine whose merge policy lived in a web form.
-The classification below is that policy, transcribed and made reviewable.
-
-REPORT ONLY: this never merges. It prints what a merger *would* do, so a
-week of output can be diffed against the routine before anything is granted
-merge rights.
+REPORT ONLY: this never merges. It prints a proposed classification for review;
+the caller decides what action to take.
 
 Honesty contract: an empty report must never be indistinguishable from a
 broken one. Every repo we could not read is listed under UNREACHABLE, and
@@ -15,7 +11,7 @@ is the failure mode this replaces (see the KG sweep that emitted an empty
 candidate list for five weeks).
 
 Usage:
-    python3 scripts/dev/dependabot_triage.py [--repos a,b] [--json] [--markdown]
+    python3 scripts/dev/dependabot_triage.py --repos owner/repo,owner/other [--json]
 """
 from __future__ import annotations
 
@@ -26,16 +22,6 @@ import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
-
-DEFAULT_REPOS = [
-    "CIRWEL/unitares",
-    "CIRWEL/unitares-core",
-    "CIRWEL/anima-mcp",
-    "CIRWEL/unitares-discord-bridge",
-    "CIRWEL/unitares-governance-plugin",
-    "CIRWEL/unitares-host-adapter",
-    "CIRWEL/cirwel-site",
-]
 
 # Verdicts
 MERGE = "WOULD-MERGE"
@@ -77,9 +63,12 @@ class Report:
     repos_scanned: list[str] = field(default_factory=list)
 
 
-def gh_json(args: list[str]) -> Any:
+def gh_json(args: list[str], *, executable: str = "gh") -> Any:
     """Run a gh command expecting JSON. Raises RuntimeError with stderr on failure."""
-    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run([executable, *args], capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"could not execute GitHub reader: {exc}") from exc
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "gh failed").strip().splitlines()[-1])
     return json.loads(proc.stdout or "[]")
@@ -161,13 +150,13 @@ def summarize_checks(rollup: Optional[list[dict[str, Any]]]) -> tuple[str, str]:
     return "pass", summary
 
 
-def triage_repo(repo: str, report: Report) -> None:
+def triage_repo(repo: str, report: Report, *, gh_executable: str = "gh") -> None:
     # Probe reachability explicitly. `gh pr list` against a repo the token
     # cannot see exits 0 and prints `[]` — indistinguishable from a genuinely
     # clean repo. Inferring access from an empty list is precisely the
     # silent-zero failure this report exists to avoid, so ask directly.
     try:
-        gh_json(["repo", "view", repo, "--json", "name"])
+        gh_json(["repo", "view", repo, "--json", "name"], executable=gh_executable)
     except RuntimeError as exc:
         report.unreachable.append({"repo": repo, "error": f"not readable: {exc}"})
         return
@@ -177,7 +166,7 @@ def triage_repo(repo: str, report: Report) -> None:
             "pr", "list", "--repo", repo, "--author", "app/dependabot",
             "--state", "open", "--limit", "50",
             "--json", "number,title,mergeable,statusCheckRollup",
-        ])
+        ], executable=gh_executable)
     except RuntimeError as exc:
         report.unreachable.append({"repo": repo, "error": str(exc)})
         return
@@ -269,9 +258,20 @@ def render_markdown(report: Report, *, allowed_partial: bool = False) -> str:
     return "\n".join(lines)
 
 
+def repository_selection(value: str) -> list[str]:
+    """Require a nonempty, explicit list before making any GitHub reads."""
+    repos = [repo.strip() for repo in value.split(",")]
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) for repo in repos):
+        raise argparse.ArgumentTypeError("expected a comma-separated owner/name list with no empty entries")
+    return repos
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repos", help="comma-separated owner/name list (default: the CIRWEL fleet)")
+    ap.add_argument("--repos", required=True, type=repository_selection,
+                    help="comma-separated owner/name list; no repositories are selected by default")
+    ap.add_argument("--gh-executable", default="gh",
+                    help="GitHub reader executable receiving unchanged gh arguments (default: gh)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     ap.add_argument(
         "--allow-unreachable",
@@ -282,11 +282,11 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    repos = [r.strip() for r in args.repos.split(",")] if args.repos else DEFAULT_REPOS
+    repos = args.repos
     allow = {r.strip() for r in args.allow_unreachable.split(",") if r.strip()}
     report = Report()
     for repo in repos:
-        triage_repo(repo, report)
+        triage_repo(repo, report, gh_executable=args.gh_executable)
 
     exit_code = coverage_exit_code(report.unreachable, allow)
     allowed_partial = bool(report.unreachable) and exit_code == 0

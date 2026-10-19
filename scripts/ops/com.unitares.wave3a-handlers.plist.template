@@ -29,7 +29,9 @@
         > ~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist
     launchctl load ~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist
 
-  Verify (with $WAVE_3A_BEAM_TOKEN sourced from ~/.config/cirwel/secrets.env):
+  Verify (with $WAVE_3A_BEAM_TOKEN sourced from the secrets env file:
+  $UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env, legacy
+  ~/.config/cirwel/secrets.env still read):
     launchctl list | grep com.unitares.wave3a-handlers
     tail -f ~/Library/Logs/unitares-wave3a-handlers.log
     curl -s "http://127.0.0.1:8770/health"

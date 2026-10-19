@@ -134,7 +134,7 @@ Translation: **the token is the current possession-proof mechanism** for bare-UU
 > 3. Wire same into HTTP onboard direct-tool path (`src/http_api.py`).
 > 4. Add clock-skew tolerance to `resolve_continuity_token` (currently zero drift accepted; the §7.2 clock-skew test requires this to exist first).
 > 5. Three regression tests per §7.2 (token-expiry-mid-call, clock-skew-near-boundary, concurrent-possessor-with-expired-token).
-> 6. Chronicler regression test asserting >1h-old-token resident gets force-re-onboarded correctly (the council found this gap).
+> 6. Chronicler regression test asserting >1h-old-token resident gets force-re-onboarded correctly (review found this gap).
 > 7. PR copy must use **hygiene framing** (operator decision 2026-04-25 — see §11.1 below) and pair with **rotating `UNITARES_CONTINUITY_TOKEN_SECRET`** at ship time (collapses §7.5 grace-window concern).
 >
 > The §4 sub-sections below are kept as historical-design context. Treat the inline "must update" line numbers as illustrative — read the code to confirm current state.
@@ -264,7 +264,7 @@ Recommendation: **let it propagate**, flag for S9, add a test asserting `bind_se
 
 ### 7.4. Token-in-logs cardinality
 
-Even under short TTL, tokens appear in: audit logs, dashboard event stream (`event-visibility-pipeline.md`), Discord bridge transcripts, MEMORY.md snippets, `.unitares/session.json` v1 files still on disk from pre-S11 era. Shortening TTL reduces the blast radius of any one captured token, but the emit-everywhere pattern is unchanged by Option A. **An ownership proof should probably not be emitted at the same cardinality as a UUID.** Out of scope for S1-a as a fix; flag for operator awareness and future hardening (separate ticket).
+Even under short TTL, tokens appear in: audit logs, dashboard event stream (`event-visibility-pipeline.md`), Discord bridge transcripts, harness memory snippets, `.unitares/session.json` v1 files still on disk from pre-S11 era. Shortening TTL reduces the blast radius of any one captured token, but the emit-everywhere pattern is unchanged by Option A. **An ownership proof should probably not be emitted at the same cardinality as a UUID.** Out of scope for S1-a as a fix; flag for operator awareness and future hardening (separate ticket).
 
 ### 7.5. Adversarial capture during grace
 
@@ -312,9 +312,9 @@ S1-a alone closes most of the ontology-hygiene concern without touching client c
 7. **Grace-period security posture: warning-only or early cutoff? — warning-only + secret rotation accepted.** Operator paired the warning-only grace with **rotating `UNITARES_CONTINUITY_TOKEN_SECRET` at S1-a ship**. Rotation invalidates all pre-S1-a 30d-TTL HMACs in one stroke, collapsing the §7.5 "attacker with stolen pre-S1-a token" window without requiring a philosophical claim about TTL math being security teeth. This is the cheap-and-honest path: hygiene framing in PR copy + actual security move via secret rotation.
 8. **Is "performative, narrowed" an acceptable ontology label? — accepted under hygiene framing.** §4.1's honest label stands. A is hygiene with a security-side-effect; the operator did not pick the security-claim framing. A→A′ remains the explicit security-upgrade path if PID/nonce binding is later wanted.
 
-**Implementation directive for next process-instance:** PR title and body for S1-a use hygiene language. Example: "narrow continuity_token's role to within-process-instance use; preserve PATH 0 anti-hijack with shorter-lived possession proof." Do **not** write "tighten ownership-proof TTL to reduce window of stolen-token replay" — that silently renegotiates §4.1's label into a security claim the operator did not pick.
+**Implementation directive:** PR title and body for S1-a use hygiene language. Example: "narrow continuity_token's role to within-process-instance use; preserve PATH 0 anti-hijack with shorter-lived possession proof." Do **not** write "tighten ownership-proof TTL to reduce window of stolen-token replay" — that silently renegotiates §4.1's label into a security claim the operator did not pick.
 
-## 12. Pointers for next process-instance executing this plan
+## 12. Pointers for executing this plan
 
 - Read this doc + `docs/ontology/identity.md` §Implications + `docs/CHANGELOG.md:35-43` (Part C context) first.
 - Check `plan.md` S1 row for `WIP-PR:` field before opening S1-a.
@@ -326,7 +326,7 @@ S1-a alone closes most of the ontology-hygiene concern without touching client c
 
 ## Appendix: Call-site quick reference
 
-> **2026-04-25 council audit refreshed the line numbers below.** Many citations in the 2026-04-24 draft were off by 20-60 lines because the implementation landed in parallel with doc-writing. Treat the line numbers as guidance; the implementer should grep for the symbol name to locate the current site.
+> **A 2026-04-25 review round refreshed the line numbers below.** Many citations in the 2026-04-24 draft were off by 20-60 lines because the implementation landed in parallel with doc-writing. Treat the line numbers as guidance; the implementer should grep for the symbol name to locate the current site.
 
 **Emit sites — already shipped (do NOT re-edit in S1-a):**
 - `src/mcp_handlers/identity/session.py:32` — `_CONTINUITY_TTL = 3600` (1h)
@@ -362,9 +362,9 @@ S1-a alone closes most of the ontology-hygiene concern without touching client c
   - Clock-skew-near-boundary (requires implementing tolerance first)
   - Concurrent-possessor with expired token (§7.2)
   - `bind_session` with short-TTL token (§7.3 — currently no test asserts `bind_session` honors any specific TTL)
-  - **Resident re-onboard regression:** assert that a resident with a >1h-old token correctly forces through re-onboard rather than erroring out. Council found this is a greenfield test gap; Chronicler is the structural example.
+  - **Resident re-onboard regression:** assert that a resident with a >1h-old token correctly forces through re-onboard rather than erroring out. Review found this is a greenfield test gap; Chronicler is the structural example.
 
 **Operational steps at S1-a ship (paired with code PR):**
 - **Rotate `UNITARES_CONTINUITY_TOKEN_SECRET`** (operator action — see decision #7). Triggers re-mint of all in-flight tokens; pre-rotation 30d-TTL HMACs become unverifiable.
-- Restart `com.unitares.governance-mcp` LaunchAgent to pick up the rotated secret.
+- Restart the governance server to pick up the rotated secret.
 - Note in PR body that pre-S1-a 30d tokens are invalidated by rotation; this is the operational form of §7.5's "early cutoff" without philosophical TTL claims.

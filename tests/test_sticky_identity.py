@@ -310,16 +310,16 @@ class TestStickyResolveIdentity:
                             with patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value="active") as status_spy:
                                 result = await resolve_identity(
                                     "identity",
-                                    {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4", "resume": True},
+                                    {"agent_uuid": "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a", "resume": True},
                                     ctx,
                                 )
                             _, _, out_ctx = result
-                            assert out_ctx.bound_agent_id == "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+                            assert out_ctx.bound_agent_id == "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"
                             assert out_ctx.identity_result["source"] == "agent_uuid_passthrough"
                             assert out_ctx.identity_result["core_agent_row_status"] == "active"
                             # resolve_session_identity should NOT have been called
                             mock_resolve.assert_not_called()
-                            status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
+                            status_spy.assert_awaited_once_with("b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a")
 
     @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
@@ -327,7 +327,7 @@ class TestStickyResolveIdentity:
         """PATH 0 passthrough carries core row status for downstream auth."""
         signals = FakeSignals(ip_ua_fingerprint="192.168.1.1:path0arch")
         ctx = DispatchContext()
-        uid = "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+        uid = "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"
         args = {"agent_uuid": uid, "resume": True}
 
         with patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
@@ -357,15 +357,15 @@ class TestStickyResolveIdentity:
                         with patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value=None) as status_spy:
                             await resolve_identity(
                                 "identity",
-                                {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"},
+                                {"agent_uuid": "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"},
                                 ctx,
                             )
 
         # Sticky cache should have the UUID
         cache_key = "sticky:192.168.1.1:path0cache"
         assert cache_key in _transport_identity_cache
-        assert _transport_identity_cache[cache_key].agent_uuid == "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
-        status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
+        assert _transport_identity_cache[cache_key].agent_uuid == "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"
+        status_spy.assert_awaited_once_with("b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a")
 
     @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
@@ -375,7 +375,7 @@ class TestStickyResolveIdentity:
 
         signals = FakeSignals(ip_ua_fingerprint="192.168.1.1:path0reject")
         ctx = DispatchContext()
-        uid = "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+        uid = "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"
         args = {"agent_uuid": uid, "resume": True}
 
         with patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
@@ -418,7 +418,7 @@ class TestStickyResolveIdentity:
                         with patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
                             result = await resolve_identity(
                                 "process_agent_update",
-                                {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"},
+                                {"agent_uuid": "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a"},
                                 ctx,
                             )
                             _, _, out_ctx = result
@@ -958,7 +958,7 @@ class TestMCPCrossProcessSiphoning:
         # mimicking the state left by an earlier Vigil cron run on this host.
         update_transport_binding(
             "sticky:127.0.0.1:hermes_ua",
-            "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4",
+            "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a",
             "sk-vigil",
             "redis",
         )
@@ -984,7 +984,7 @@ class TestMCPCrossProcessSiphoning:
              patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
             _, _, out_ctx = await resolve_identity("knowledge", {}, ctx)
 
-        assert out_ctx.bound_agent_id != "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4", (
+        assert out_ctx.bound_agent_id != "b4a8ccab-90ab-557c-9bc1-5bc5b6a8779a", (
             "MCP request without mcp_session_id must NOT siphon a pre-seeded "
             "fingerprint-only sticky entry (the Vigil-attribution bug)"
         )

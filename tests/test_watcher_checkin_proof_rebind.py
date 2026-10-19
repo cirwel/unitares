@@ -37,9 +37,9 @@ def _wire(monkeypatch, identity):
 
 def test_checkin_forwards_continuity_token(monkeypatch):
     identity = {
-        "client_session_id": "agent-907e3195-c64",
+        "client_session_id": "agent-8a930180-c64",
         "continuity_token": "v1.sometoken",
-        "agent_uuid": "907e3195-c649-49db-b753-1edc1a105f33",
+        "agent_uuid": "8a930180-9ef9-59c7-9267-fd7dd936dd58",
     }
     fake = _wire(monkeypatch, identity)
 
@@ -48,15 +48,15 @@ def test_checkin_forwards_continuity_token(monkeypatch):
     assert fake.checkin_kwargs is not None
     assert fake.checkin_kwargs.get("continuity_token") == "v1.sometoken"
     # session fields are still restored onto the client for SDK injection
-    assert fake.client_session_id == "agent-907e3195-c64"
-    assert fake.agent_uuid == "907e3195-c649-49db-b753-1edc1a105f33"
+    assert fake.client_session_id == "agent-8a930180-c64"
+    assert fake.agent_uuid == "8a930180-9ef9-59c7-9267-fd7dd936dd58"
 
 
 def test_checkin_omits_token_when_absent(monkeypatch):
     identity = {
-        "client_session_id": "agent-907e3195-c64",
+        "client_session_id": "agent-8a930180-c64",
         "continuity_token": "",
-        "agent_uuid": "907e3195-c649-49db-b753-1edc1a105f33",
+        "agent_uuid": "8a930180-9ef9-59c7-9267-fd7dd936dd58",
     }
     fake = _wire(monkeypatch, identity)
 

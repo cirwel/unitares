@@ -14,7 +14,7 @@ Claude-memory rows and one roughly 65 KB body in a full search response.
 These snapshots can outlive their useful context and overwhelm a reader.
 
 The writer is outside this server repository. The operator's inspected copy is
-`~/scripts/memory-tools/sync_kg.py`; the installed governance plugin contains
+an external memory-sync tool (`sync_kg.py`); the installed governance plugin contains
 retrieval consumers such as `scripts/kg_recall.py`, not that sync implementation.
 Check the owning maintenance project before proposing an implementation there.
 No private memory files were needed for this source inspection.

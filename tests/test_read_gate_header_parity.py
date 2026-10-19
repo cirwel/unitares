@@ -35,8 +35,8 @@ from tests.no_live_redis import no_live_redis  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("no_live_redis")
 
-AGENT_UUID = "1856bb5c-2553-4523-809b-a5d26bbd58d1"
-HEADER = "agent-1856bb5c-255"
+AGENT_UUID = "100bc788-d559-5672-b12d-f432057387a5"
+HEADER = "agent-100bc788-255"
 BODY_SESSION = "agent-5a0e3c1d-77b"
 USER_AGENT = "curl/8.7.1"
 

@@ -7,7 +7,7 @@ scripts/dev/review-local.sh --pr 2585
 scripts/dev/review-local.sh --pr 2585 --second-family --record
 ```
 
-Gemma4 is the validated default on this host. `--second-family` also selects Gemma4,
+Gemma4 is the validated default on the reference deployment. `--second-family` also selects Gemma4,
 which the existing review gate recognizes as Google family. Qwen currently has no
 recognized family credit. Both modes review the full diff with immutable repository
 read/search tools; neither is a targeted fix verifier. A second family only completes
@@ -34,7 +34,7 @@ common Git directory in `local-reviews/`. Source is sent only to a loopback Olla
 HTTP endpoint; proxies and redirects are disabled. One local review runs at a time
 across repositories to avoid simultaneous large-model loads.
 
-Default context is 131,072 tokens for both models on the 128 GiB review host with a conservative byte-based admission budget;
+Default context is 131,072 tokens for both models (sized for the reference deployment's 128 GiB review host) with a conservative byte-based admission budget;
 131,072 is also the maximum (further capped by the installed model's context length); `--context` can only lower it, down to 16,384.
 Default total generation budget is 1,800 seconds (`--budget`, maximum 3,600).
 Context overflow, missing source context/inspection, incomplete generation, malformed output,

@@ -6,7 +6,7 @@
   "notes": [
     "Spec §2.3 drops the gamma_E ||delta-eta||^2 drift term from the v6 E equation; prior has 9 params.",
     "gamma_I_linear (0.169) is the linear-mode value. Paper App A also lists gamma_I (logistic) = 0.25; the spec uses the linear form, so 0.169 is the binding value.",
-    "These values differ from config/governance_config.py (alpha=0.5, beta_I=0.05, gamma_I=0.3). Paper is source of truth per memory feedback_eisv-bounds-drift.md. Runtime config divergence should be reconciled separately."
+    "These values differ from config/governance_config.py (alpha=0.5, beta_I=0.05, gamma_I=0.3). The paper is the source of truth. Runtime config divergence should be reconciled separately."
   ],
   "parameters": {
     "alpha": 0.42,

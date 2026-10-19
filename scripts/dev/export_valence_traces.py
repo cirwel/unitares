@@ -17,8 +17,8 @@ Honest labeling (the gate gates the false-pause check on ``healthy``/``sentinel`
 
 USAGE
     python3 scripts/dev/export_valence_traces.py \
-        --data-dir ~/projects/unitares-deploy/data/agents \
-        --data-dir ~/projects/unitares/data/agents \
+        --data-dir <deploy-worktree>/data/agents \
+        --data-dir data/agents \
         --labels /tmp/agent_labels.tsv \
         --min-obs 10 --out /tmp/real_valence_traces.jsonl
 Stdlib only.

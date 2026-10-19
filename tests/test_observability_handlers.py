@@ -2548,7 +2548,7 @@ class TestHandleAuditEvents:
                 "event_type": "cross_device_call",
                 "since": "1d",
                 # Identity middleware-style injection: caller UUID lands here.
-                "agent_id": "43f5a089-e1e0-4048-be49-8229bd292dea",
+                "agent_id": "dafab7a3-da46-5827-9ac5-e84e71193680",
             })
 
         # `agent_id` must NOT be forwarded to the audit query.
@@ -2574,7 +2574,7 @@ class TestHandleAuditEvents:
                 "since": "1d",
                 "target_agent_id": "Hermes_Gpt_5_4_20260519",
                 # Identity-mixin auto-injected caller UUID; must be ignored.
-                "agent_id": "43f5a089-e1e0-4048-be49-8229bd292dea",
+                "agent_id": "dafab7a3-da46-5827-9ac5-e84e71193680",
             })
 
         assert captured["agent_id"] == "Hermes_Gpt_5_4_20260519"

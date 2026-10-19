@@ -67,8 +67,15 @@ The primary tools return a compact agent-facing envelope. Read aliases,
 bounded `sync_state` modes, and the write acknowledgements of `store_finding`,
 `update_finding` and `record_result` omit the repeated raw payload by default,
 as does a plain fresh `start_session` (pass `response_mode="full"` on the mint
-to keep it); other state-changing tools retain it. `raw_governance_hint` names
-where to read more. That is `response_mode="full"` on `sync_state`,
+to keep it) and a routine `request_review`: one whose review opened and now
+waits on a known move (`response_shape: "routine"`, with `state_summary`
+keeping `session_id`, `phase` and `whose_move`). A review ack that carries the
+review itself (a verdict, recusal, facilitation request or reviewer-host limit)
+keeps the raw payload, with `response_shape: "full"` and a
+`response_shape_reason` naming what kept it. Other state-changing tools retain
+it. `raw_governance_hint` names where to read more; on a routine
+`request_review` that is `dialectic(action="get", session_id=...)`, which
+returns the session as it stands later, not the ack. That is `response_mode="full"` on `sync_state`,
 `search_shared_memory` and `record_result`, and `verbosity="full"` on
 `check_working_state`. `record_result` has no read by outcome id. For an
 outcome recorded with a `prediction_id`, repeating the identical call under the

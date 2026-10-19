@@ -54,7 +54,7 @@ The paper cannot claim "we governed N agents at scale" or "the system demonstrat
 
 What the paper CAN honestly claim:
 
-1. **Feasibility:** The system has been running continuously for 120 days without catastrophic failure. The infrastructure works.
+1. **Feasibility:** The system has run in production for about 120 days without catastrophic failure (this is not an uptime measurement). The infrastructure works.
 2. **Lumen case study:** The embodied agent provides a single case study whose inputs (physical sensor readings) are independent of the governance layer. The governance-stability tension (contracting ODE vs. physically stable sensor state) is directly observable in the `eisv-sync-task` pause record.
 3. **Co-development disclosure:** The circular development context is documented here as an explicit disclosure. The deployment is evidence of the system surviving its own construction, not a benchmark of governance efficacy at scale.
 4. **Synthetic validation:** The 1,400 `test_stress` high-risk pauses confirm the system correctly identifies injected drift signals. This is a unit-level correctness check, not an operational deployment result.

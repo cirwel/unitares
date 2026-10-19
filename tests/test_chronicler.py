@@ -918,7 +918,7 @@ class TestChroniclerAgent:
 
 
 class TestGithubTrafficScrapers:
-    """Aggregate GitHub traffic across non-archived CIRWEL repos.
+    """Aggregate GitHub traffic across the scraped org's non-archived repos.
 
     The four scrapers share one process-lifetime fetch (Chronicler is a
     one-shot launchd job) so a single run hits the GitHub API once, not
@@ -946,7 +946,7 @@ class TestGithubTrafficScrapers:
             if cmd[:3] == ["gh", "repo", "list"]:
                 return CompletedProcess(cmd, 0, stdout=json.dumps(repos), stderr="")
             if cmd[:2] == ["gh", "api"]:
-                # cmd shape: ["gh", "api", "repos/CIRWEL/<name>/traffic/<kind>"]
+                # cmd shape: ["gh", "api", "repos/<org>/<name>/traffic/<kind>"]
                 path = cmd[2]
                 _, _, repo_name, _, kind = path.split("/")
                 count, uniques = traffic[repo_name][kind]

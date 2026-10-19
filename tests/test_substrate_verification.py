@@ -38,7 +38,7 @@ from src.substrate.verification import (
 
 
 def _make_claim(
-    agent_id: str = "f92dcea8-4786-412a-a0eb-362c273382f5",
+    agent_id: str = "02e168be-4264-527b-9643-9c737dd309e4",
     label: str = "com.unitares.sentinel",
     executable: str = "/opt/homebrew/bin/sentinel",
 ) -> SubstrateClaim:
@@ -154,7 +154,7 @@ def test_exec_mismatch_when_actual_path_differs() -> None:
     claim = _make_claim(executable="/opt/homebrew/bin/sentinel")
     pa = _fake_pa(
         label=claim.expected_launchd_label,
-        executable="$HOME/projects/unitares/agents/sentinel/agent.py",
+        executable="$HOME/repo/agents/sentinel/agent.py",
     )
     result = verify_substrate_claim(claim, peer_pid=1234, pa_module=pa)
     assert result.accepted is False

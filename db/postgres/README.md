@@ -26,8 +26,12 @@ If your Homebrew instance is not listening on `5432`, either reconfigure it or s
 
 #### 2. Build/install Apache AGE against the same PostgreSQL 17
 
+Point `PG_CONFIG` at the `pg_config` of the PostgreSQL 17 you installed — e.g.
+on Homebrew/macOS `$(brew --prefix postgresql@17)/bin/pg_config`; elsewhere,
+`command -v pg_config` (or your distribution's PostgreSQL 17 `bin/` directory).
+
 ```bash
-export PG_CONFIG=/opt/homebrew/opt/postgresql@17/bin/pg_config
+export PG_CONFIG=/opt/homebrew/opt/postgresql@17/bin/pg_config   # e.g. on Homebrew/macOS
 git clone https://github.com/apache/age.git
 cd age
 make PG_CONFIG="$PG_CONFIG"

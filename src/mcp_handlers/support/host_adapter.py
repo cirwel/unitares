@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import json
+import math
 import os
 import shutil
 import sys
@@ -691,6 +692,11 @@ def extract_cli_result(
 _extract_cli_result = extract_cli_result
 
 
+# The orchestrator's ceiling on one await (agent_orchestrator http_router.ex,
+# await_timeout/1). A call longer than this re-awaits; see invoke_host_adapter.
+_AWAIT_WINDOW_S = 120
+
+
 async def invoke_host_adapter(
     host_id: str,
     prompt: str,
@@ -906,12 +912,28 @@ async def invoke_host_adapter(
             }
 
         dispatch_phase = "spawned"
-        async with httpx.AsyncClient(timeout=timeout_s + 15.0) as client:
-            aw = await client.post(
-                f"{base}/v1/executions/{execution_id}/await",
-                json={"timeout_ms": int(timeout_s * 1000)},
-                headers=headers,
-            )
+        # The orchestrator clamps one await to _AWAIT_WINDOW_S (it holds a
+        # connection open for the duration), so a single await ended every
+        # call longer than that as still_running, whatever timeout_s said.
+        # Re-await in windows until this call's own deadline. The window count
+        # is bounded too, so an orchestrator that answers 504 at once cannot
+        # make this spin.
+        deadline = started + timeout_s
+        windows_left = max(1, math.ceil(timeout_s / _AWAIT_WINDOW_S))
+        async with httpx.AsyncClient() as client:
+            while True:
+                window_s = min(max(deadline - time.monotonic(), 1.0), _AWAIT_WINDOW_S)
+                aw = await client.post(
+                    f"{base}/v1/executions/{execution_id}/await",
+                    json={"timeout_ms": int(window_s * 1000)},
+                    headers=headers,
+                    # Per window, so a short call to an orchestrator that
+                    # never answers still gives up 15s after its window.
+                    timeout=window_s + 15.0,
+                )
+                windows_left -= 1
+                if aw.status_code != 504 or windows_left <= 0 or time.monotonic() >= deadline:
+                    break
         if aw.status_code == 504:
             return {
                 "ok": False,

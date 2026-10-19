@@ -90,6 +90,37 @@ class TestEvaluateReview:
         )
         assert ok
 
+    def test_routine_envelope_without_raw_governance(self):
+        """#2443: a routine ack (reviewer dispatched, review not yet run)
+        omits raw_governance. The canary must read the lifted state_summary,
+        not report 'no session_id' against a working review."""
+        from src.mcp_handlers.middleware.envelope_step import (
+            build_experience_envelope,
+        )
+
+        handler_payload = {
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "antithesis",
+            "one_call_review": True,
+            "thesis_source": "issue_description",
+            "orchestrated_review": True,
+            "reviewer_dispatch": {"execution_id": "x-1", "agent_id": "x-1",
+                                  "via": "agent-orchestrator"},
+            "whose_move": "the reviewer's — an independent reviewer was spawned",
+            "next_step": "An eligible reviewer should claim the session",
+        }
+        env = build_experience_envelope(
+            "request_review", "dialectic", handler_payload, {}
+        )
+        assert "raw_governance" not in env
+        ok, detail = canary.evaluate_review(env)
+        assert ok, detail
+        raw = canary.review_payload(env)
+        assert raw["session_id"] == "sess-1"
+        assert raw["phase"] == "antithesis"
+        assert raw["orchestrated_review"] is True
+
     def test_enveloped_failure_is_red(self):
         ok, detail = canary.evaluate_review(
             {
