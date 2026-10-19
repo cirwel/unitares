@@ -8,10 +8,11 @@ defmodule UnitaresLeasePlane.HTTPAuth do
     * everything else              → `:bearer_token`
       (sourced from `LEASE_PLANE_BEARER_TOKEN` env var)
 
-  Both tokens come from the process env, which `scripts/start.sh` populates
-  from the secrets env file. Lookup order: `$UNITARES_SECRETS_ENV`, then
-  `~/.config/unitares/secrets.env`, then a legacy fallback path documented
-  in `scripts/start.sh`. Per RFC §7.10 line 731
+  Both tokens come from the process env. Under Docker Compose,
+  `docker-compose.yml` sets them. A native install fills them through
+  `scripts/start.sh` from the secrets env file: `$UNITARES_SECRETS_ENV`, then
+  `~/.config/unitares/secrets.env`, then a legacy fallback described there.
+  Per RFC §7.10 line 731
   ("standard bearer must NOT permit force-release"), the regular bearer cannot
   authorize force-release, and the elevated force-release bearer cannot
   authorize anything else. Mutual exclusion lives at this auth layer (the

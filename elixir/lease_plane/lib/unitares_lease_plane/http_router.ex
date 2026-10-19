@@ -4,9 +4,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   Python client at `src/lease_plane/` is the conformance target.
 
   Bind is local-only (`127.0.0.1`); a single shared bearer token from the
-  process env (`LEASE_PLANE_BEARER_TOKEN`, populated by `scripts/start.sh`
-  from `$UNITARES_SECRETS_ENV`, default `~/.config/unitares/secrets.env`)
-  gates every
+  process env (`LEASE_PLANE_BEARER_TOKEN`, set by `docker-compose.yml` under
+  Compose, or by `scripts/start.sh` from the secrets env file on a native
+  install) gates every
   route except the single unauthenticated `GET /health` liveness probe
   (see the `:liveness` plug). Body shapes are validated by Pattern +
   JSON-decode errors map to
