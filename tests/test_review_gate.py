@@ -3067,6 +3067,17 @@ def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tm
     assert note.startswith("could not start codex") and reason in text
 
 
+def test_the_codex_reviewer_refuses_a_checkout_path_that_is_a_glob(monkeypatch, tmp_path):
+    """Its .env and .unitares denials are globs rooted at the checkout path."""
+    odd = tmp_path / "repo[1]"
+    odd.mkdir()
+    monkeypatch.chdir(odd)
+    calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+    text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    assert calls == []
+    assert note == "could not start codex: checkout path contains glob characters"
+
+
 def test_a_missing_codex_is_a_startup_failure_not_a_sandbox_one(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "_codex_cli", lambda: None)
     calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])

@@ -2491,6 +2491,13 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             return (f"codex reviewer refused: {refusal}",
                     "could not start codex: confinement unavailable")
         checkout = os.getcwd()
+        if any(ch in checkout for ch in "*?[]{}"):
+            # The deny entries below are globs rooted at the checkout path; a
+            # path that is itself a glob could stop them matching, so the
+            # lane refuses rather than run with denials that may not apply.
+            codex_dir.cleanup()
+            return (f"checkout path {checkout!r} contains glob characters",
+                    "could not start codex: checkout path contains glob characters")
         overrides = lane.lane_config_overrides(
             cli,
             extra_read=[checkout, *_git_dirs(checkout), *_existing(CODEX_TOOL_ROOTS)],
