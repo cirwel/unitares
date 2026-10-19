@@ -2491,7 +2491,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             return (f"codex reviewer refused: {refusal}",
                     "could not start codex: confinement unavailable")
         checkout = os.getcwd()
-        if any(ch in checkout for ch in "*?[]{}"):
+        if any(ch in checkout for ch in "*?[]{}\\"):  # glob syntax, and its escape
             # The deny entries below are globs rooted at the checkout path; a
             # path that is itself a glob could stop them matching, so the
             # lane refuses rather than run with denials that may not apply.
