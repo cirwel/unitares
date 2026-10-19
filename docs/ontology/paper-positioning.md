@@ -66,7 +66,7 @@ Five things v6 currently does not have and would benefit from:
 1. **Upstream, not adjacent.** The ontology is philosophically prior to v6's technical framework. Papering it as implementation detail would bury the thing that actually explains why v6 works.
 2. **Completes v6's implicit frame.** v6's "heterogeneity as differentiator" claim is stronger when grounded in a taxonomy of what heterogeneity means for identity. The ontology provides that taxonomy.
 3. **Publishes the Synthetic Life Axioms.** The axioms are canonical in the system (KG entry, tagged `foundational`, `critical` severity) but have never been formally published. v7 is the right vehicle. The axioms provide the normative frame the paper-series currently lacks.
-4. **Carries the corpus-maturity gap.** v7 empirical work blocks on the post-grounding audit corpus reaching maturity (~Q3 2026 per `project_paper-v7-corpus-maturity.md`). Reframing v7 around ontology + axioms gives the paper a substantial non-empirical contribution that can be written and submitted independently of corpus maturity, with empirical extensions landing in v7.1 or v8.
+4. **Carries the corpus-maturity gap.** v7 empirical work blocks on the post-grounding audit corpus reaching maturity (estimated ~Q3 2026). Reframing v7 around ontology + axioms gives the paper a substantial non-empirical contribution that can be written and submitted independently of corpus maturity, with empirical extensions landing in v7.1 or v8.
 5. **Differentiates from competing frameworks.** Other governance frameworks do not distinguish performative from earned continuity. An animating ontological contribution is harder to replicate than a technical one.
 
 ## Risks and mitigations

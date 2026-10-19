@@ -10,7 +10,7 @@ If GitHub PVR is unavailable to you (e.g., you don't have an account), open a pu
 
 ## Published advisories
 
-Fixed vulnerabilities are published as [GitHub security advisories](https://github.com/cirwel/unitares/security/advisories), with finders credited. Two were published on 2026-10-05, both fixed in 3.2.0; one came from an outside report.
+Fixed vulnerabilities are published as [GitHub security advisories](https://github.com/cirwel/unitares/security/advisories), with finders credited.
 
 ## What's in scope
 
@@ -67,4 +67,4 @@ window.
 
 ## Production deployment note
 
-UNITARES has been running continuously in production since November 2025 — but on a **single-operator fleet**. The threat model has been "internal fleet hygiene + honest agent identity," not "hostile external clients." Multi-tenant or public-facing deployment will benefit from harder auth posture than the current defaults (bearer tokens, loopback binding, schema-isolated Postgres). See [`docs/integration/MCP_CLIENTS.md`](../docs/integration/MCP_CLIENTS.md) and [`docs/operations/OPERATOR_RUNBOOK.md`](../docs/operations/OPERATOR_RUNBOOK.md).
+UNITARES has been running in production since November 2025 on a **single-operator fleet**. The deployment defaults (bearer tokens, loopback binding, schema-isolated Postgres) assume a single trusted operator network. Multi-tenant or internet-facing use needs a harder auth posture than those defaults. [`docs/SCOPE_AND_THREAT_MODEL.md`](../docs/SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model) sets out the adversarial boundaries and the open gap in sustained adversarial testing. See [`docs/integration/MCP_CLIENTS.md`](../docs/integration/MCP_CLIENTS.md) and [`docs/operations/OPERATOR_RUNBOOK.md`](../docs/operations/OPERATOR_RUNBOOK.md).

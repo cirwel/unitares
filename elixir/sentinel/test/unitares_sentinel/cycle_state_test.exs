@@ -3,7 +3,7 @@ defmodule UnitaresSentinel.CycleStateTest do
   Surface 1 binding spec — see `docs/proposals/archive/beam-wave-1-sentinel.md`
   v0.1.2 amendment block. Path resolution, max-on-boot semantics,
   string-key normalization, isinstance guard, and log-and-continue
-  exception contract are all council-folded BLOCKs/CONCERNs. These
+  exception contract all address blocking review findings. These
   tests are the regression bar.
   """
 
@@ -138,7 +138,7 @@ defmodule UnitaresSentinel.CycleStateTest do
              "2026-05-04T00:00:00.000000+00:00"
   end
 
-  # Council fold: reviewer Critical-1. Without the single-empty short-circuit,
+  # Review finding (critical): without the single-empty short-circuit,
   # `pick_max("" >= "")` was true and returned canonical (`%{}`), silently
   # dropping shadow's sibling keys when canonical was absent.
   test "max-on-boot: only shadow exists with empty cursor — sibling keys preserved", ctx do
@@ -286,7 +286,7 @@ defmodule UnitaresSentinel.CycleStateTest do
            ) == :ok
   end
 
-  # Council fold: reviewer Important-3. Encoding errors are caller-side bugs,
+  # Review finding (important): encoding errors are caller-side bugs,
   # NOT I/O errors — they MUST propagate. Python's save_state swallows only
   # around atomic_write; json.dumps would raise TypeError for non-serializable
   # values and that propagates. BEAM must match scope, not be broader.
@@ -355,5 +355,5 @@ defmodule UnitaresSentinel.CycleStateTest do
   # NOTE: The Application.put_env-based path-resolution test lives in a
   # SEPARATE non-async module (`cycle_state_config_test.exs`) — Application
   # env is global and races against other async tests in this module that
-  # call `save/1` / `load/0` with no opts. Council fold: reviewer Critical-2.
+  # call `save/1` / `load/0` with no opts. (Review finding, critical.)
 end

@@ -8,8 +8,8 @@ Collect time-series data on ethical drift measurements to enable:
 3. Baseline stability (are baselines converging appropriately?)
 4. Empirical validation (do drift measurements predict actual problems?)
 
-This data is essential for patent defensibility - it provides the
-"quantitative evidence of superiority" mentioned in the salvage roadmap.
+This data supports empirical evaluation of the drift signal: it is the
+quantitative record against which its usefulness can be checked.
 
 DATA COLLECTED:
 - Per-update drift vectors (all 4 components)

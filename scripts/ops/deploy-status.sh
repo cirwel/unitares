@@ -4,8 +4,8 @@
 # that otherwise has to be re-derived by hand every time someone asks "what's live?".
 #
 # Stakeholders: an operator reads the table; an agent reads `--json` and verifies
-# against it instead of assuming. Driven by the topology documented in
-# ~/.claude .../memory/project_deploy-topology.md — keep the two in sync.
+# against it instead of assuming. The service rows below are the deploy
+# topology; keep them in sync with what launchd actually runs.
 #
 # Verdicts:
 #   CURRENT      running, and its code is not older than the checkout HEAD
@@ -125,6 +125,33 @@ COMPONENTS=(
 "anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
 "anima-mcp||$H/projects/anima-mcp||pi-deploy|"
 )
+
+# --- optional components (BEGIN) ---------------------------------------------
+# Dispatch bots beyond claude and codex (agy today, dispatch_beam#90) are opt-in
+# and discovered from their installed LaunchAgents, by the same rule
+# deploy-dispatch-beam.sh uses (keep the two in step): a
+# com.cirwel.dispatch-beam-<name>.plist with a lowercase name whose
+# EnvironmentVariables pin DISPATCH_BOOT_WITNESS_PATH or DISPATCH_PRESENCE_PATH.
+# Helper jobs on the same prefix (logrotate) pin neither and get no row.
+# Until a bot's plist is installed it has no row: a row would read DOWN, and
+# deploy-apply.sh holds every component whose deploy script also controls a DOWN
+# one, so a bot nobody has installed would freeze deploys of the others. An
+# installed bot that is not loaded DOES get its row, and its DOWN is that hold:
+# deploy-dispatch-beam.sh skips an unloaded bot rather than kickstarting it.
+for _plist in "$H"/Library/LaunchAgents/com.cirwel.dispatch-beam-*.plist; do
+  [ -f "$_plist" ] || continue
+  _name="${_plist##*/com.cirwel.dispatch-beam-}"
+  _name="${_name%.plist}"
+  case "$_name" in
+    codex | logrotate | "" | *[!abcdefghijklmnopqrstuvwxyz0123456789_]*) continue ;;
+  esac
+  plutil -extract EnvironmentVariables.DISPATCH_BOOT_WITNESS_PATH raw -o - "$_plist" >/dev/null 2>&1 ||
+    plutil -extract EnvironmentVariables.DISPATCH_PRESENCE_PATH raw -o - "$_plist" >/dev/null 2>&1 ||
+    continue
+  COMPONENTS+=("dispatch-beam-$_name|com.cirwel.dispatch-beam-$_name|$DISPATCH_TREE||restart|")
+done
+unset _plist _name
+# --- optional components (END) -----------------------------------------------
 
 # --- git helpers (operate on the repo containing repo_path; worktrees ok) -----
 base_ref() { # echo origin/master or origin/main

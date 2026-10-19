@@ -41,7 +41,9 @@ either slips more than 25% of its original deadline window.
 | Item | Original target | Current target | Slip (% of original window) |
 |---|---|---|---|
 | Paper (v7 / arXiv track) | ~Dec 2026, gated on the pre-registered 2026-12-01 stop-rule read | Unchanged — the 12-01 read date has not moved | **0%** |
-| Fellowship | Schmidt Tier-1 2026-08-08 AoE; GovAI Scholar/Fellow 2026-08-16 AoE | Both closed — Schmidt submitted 2026-08-08, GovAI submitted 2026-08-15 | **0%** (each on or before its original date) |
+| Fellowship | [program names redacted] 2026-08-08 AoE; 2026-08-16 AoE | Both closed — submitted 2026-08-08 and 2026-08-15 | **0%** (each on or before its original date) |
+
+_Redaction note (2026-10-19): the program names in the Fellowship row were replaced with "[program names redacted]" after signing. The dates, slip figures and judgement are unchanged._
 
 **Removed from the named set by the 2026-08-22 amendment, not by this artifact:** HLH
 (opportunity cost **zero — the track is dead**; no window was ever recorded and the event
