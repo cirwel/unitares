@@ -14,8 +14,8 @@ from src.http_api import http_runtime_activity, http_runtime_observe
 from src.runtime_observations import summarize_runtime_activity
 
 
-AGENT_UUID = "86ae619f-87e0-4040-8f29-eacece0c7904"
-SESSION_ID = "agent-86ae619f-87e"
+AGENT_UUID = "6730cc35-f2a9-5759-850a-2e3d0811c326"
+SESSION_ID = "agent-6730cc35-87e"
 
 
 class _FakeDB:

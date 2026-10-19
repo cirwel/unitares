@@ -61,7 +61,7 @@ async def test_refuse_allows_when_first_run_set(tmp_path, monkeypatch):
 async def test_refuse_resumes_normally_when_anchor_present(tmp_path, monkeypatch):
     """Anchor present => UUID-direct resume, flag irrelevant."""
     anchor = tmp_path / "watcher.json"
-    anchor.write_text('{"agent_uuid": "907e3195-c649-49db-b753-1edc1a105f33"}')
+    anchor.write_text('{"agent_uuid": "8a930180-9ef9-59c7-9267-fd7dd936dd58"}')
     a = _Dummy(
         name="Watcher",
         mcp_url="stdio:test",
@@ -71,7 +71,7 @@ async def test_refuse_resumes_normally_when_anchor_present(tmp_path, monkeypatch
     monkeypatch.delenv("UNITARES_FIRST_RUN", raising=False)
     client = AsyncMock()
     client.identity = AsyncMock()
-    client.agent_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
+    client.agent_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
     client.client_session_id = "s"
     client.continuity_token = "t"
     await a._ensure_identity(client)

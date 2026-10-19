@@ -50,9 +50,9 @@ def test_non_browser_loopback_keeps_bypass():
 @pytest.mark.parametrize("host", [
     "governance-mcp:8767",  # Compose service name
     "localhost",
-    "192.168.1.151:8767",
-    "100.96.201.46:8767",
-    "[fd7a:115c:a1e0::d201:c996]:8767",
+    "192.168.50.10:8767",
+    "100.64.12.34:8767",
+    "[fd7a:115c:a1e0::1234:5678]:8767",
     "",
 ])
 def test_non_browser_non_rebindable_host_keeps_bypass(host):
@@ -61,9 +61,9 @@ def test_non_browser_non_rebindable_host_keeps_bypass(host):
 
 
 def test_dotted_hostname_must_be_listed(monkeypatch):
-    req = _Req(headers={"host": "unitares.tail76aee6.ts.net:8767"})
+    req = _Req(headers={"host": "unitares.tail0example.ts.net:8767"})
     assert _auth(req) is False
-    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "unitares.tail76aee6.ts.net:*")
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "unitares.tail0example.ts.net:*")
     assert _auth(req) is True
 
 
@@ -146,20 +146,20 @@ def test_localhost_navigation_keeps_bypass():
 
 
 def test_listed_lan_origin_and_host_keep_bypass(monkeypatch):
-    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "192.168.1.151:*")
-    monkeypatch.setenv("UNITARES_MCP_ALLOWED_ORIGINS", "http://192.168.1.151:*")
-    req = _Req(ip="192.168.1.20", headers={
-        "host": "192.168.1.151:8767",
-        "origin": "http://192.168.1.151:8767",
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "192.168.50.10:*")
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_ORIGINS", "http://192.168.50.10:*")
+    req = _Req(ip="192.168.50.20", headers={
+        "host": "192.168.50.10:8767",
+        "origin": "http://192.168.50.10:8767",
         "sec-fetch-site": "same-origin",
     })
     assert _auth(req) is True
 
 
 def test_unlisted_lan_origin_from_browser_loses_bypass():
-    req = _Req(ip="192.168.1.20", headers={
-        "host": "192.168.1.151:8767",
-        "origin": "http://192.168.1.151:8767",
+    req = _Req(ip="192.168.50.20", headers={
+        "host": "192.168.50.10:8767",
+        "origin": "http://192.168.50.10:8767",
         "sec-fetch-site": "same-origin",
     })
     assert _auth(req) is False

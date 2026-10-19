@@ -19,11 +19,11 @@ def _stable_default_webauthn_config(monkeypatch):
     """Keep this module deterministic when the host exports deployment flags."""
     monkeypatch.delenv("UNITARES_DASHBOARD_RP_ID", raising=False)
     monkeypatch.delenv("UNITARES_DASHBOARD_ORIGIN", raising=False)
-    monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "gov.cirwel.org")
+    monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "gov.example.org")
     monkeypatch.setattr(
         dashboard_auth,
         "DASHBOARD_EXPECTED_ORIGIN",
-        "https://gov.cirwel.org",
+        "https://gov.example.org",
     )
 
 
@@ -185,7 +185,7 @@ async def test_authentication_options_are_usernameless_uv_required_and_secure(mo
 
     assert response.status_code == 200
     payload = _body(response)
-    assert payload["rpId"] == "gov.cirwel.org"
+    assert payload["rpId"] == "gov.example.org"
     assert payload["allowCredentials"] == []
     assert payload["userVerification"] == "required"
     assert len(store.await_args.args[1]) == 32
@@ -319,8 +319,8 @@ async def test_assertion_verify_creates_hashed_session_and_audits(monkeypatch):
         _Request(body={"credential": {"id": "encoded"}})
     )
     assert response.status_code == 200
-    assert captured["expected_rp_id"] == "gov.cirwel.org"
-    assert captured["expected_origin"] == "https://gov.cirwel.org"
+    assert captured["expected_rp_id"] == "gov.example.org"
+    assert captured["expected_origin"] == "https://gov.example.org"
     assert captured["require_user_verification"] is True
     sql = "\n".join(item[0] for item in executed)
     assert "CASE WHEN $2 > 0 THEN $2 ELSE sign_count END" in sql
@@ -424,8 +424,8 @@ async def test_registration_verify_consumes_code_persists_credential_and_notifie
         _Request(body={"credential": {"id": "encoded"}, "nickname": "Phone"})
     )
     assert response.status_code == 200
-    assert captured["expected_rp_id"] == "gov.cirwel.org"
-    assert captured["expected_origin"] == "https://gov.cirwel.org"
+    assert captured["expected_rp_id"] == "gov.example.org"
+    assert captured["expected_origin"] == "https://gov.example.org"
     assert captured["require_user_verification"] is True
     assert any("INSERT INTO core.webauthn_credentials" in sql for sql, _ in executed)
     audit.assert_awaited_once()

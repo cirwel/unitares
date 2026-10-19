@@ -142,10 +142,10 @@ def test_the_identity_quick_reference_names_the_session():
     from src.services.identity_payloads import build_identity_response_data
 
     data = build_identity_response_data(
-        agent_uuid="1856bb5c-2553-4523-809b-a5d26bbd58d1",
+        agent_uuid="100bc788-d559-5672-b12d-f432057387a5",
         agent_id="Claude_Opus_5_5_20260926",
         display_name=None,
-        client_session_id="agent-1856bb5c-255",
+        client_session_id="agent-100bc788-255",
         continuity_source="explicit_client_session_id",
         continuity_support={"enabled": False},
         continuity_token=None,
