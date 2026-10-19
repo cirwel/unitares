@@ -176,7 +176,9 @@ while IFS= read -r f; do
   case "$f" in
     src/data/*) ;;
     *)
-      if grep -nIE '(^|[^A-Za-z0-9/])(feedback|project)_[a-z0-9-]+\.md' "$f" >/dev/null 2>&1; then
+      # A bare name, or any path through a memory/ directory. Other paths are
+      # not flagged, so a repo file such as docs/project_layout.md passes.
+      if grep -nIE '(^|[^A-Za-z0-9/_])(feedback|project)_[a-z0-9_-]+\.md|memory/(feedback|project)_[a-z0-9_-]+\.md' "$f" >/dev/null 2>&1; then
         report "$f" "Cites a harness-memory file (feedback_*/project_*.md) — that memory is machine-local. Cite the repo artifact or the knowledge-graph entry instead."
       fi
       ;;
