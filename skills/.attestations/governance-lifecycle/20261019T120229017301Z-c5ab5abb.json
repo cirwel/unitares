@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-10-19T10:24:22Z",
+  "verified_at": "2026-10-19T12:02:29Z",
   "verified_date": "2026-10-19",
   "verifier": "gemini:789650a0",
   "source_digests": {
@@ -13,8 +13,8 @@
     "unitares/src/interface_contract.py": "96169fa2dedb9d1f",
     "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
     "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
-    "unitares/src/mcp_handlers/dialectic/handlers.py": "5f4f8a492202e155",
-    "unitares/src/mcp_handlers/identity/handlers.py": "7d56bd8d5e508f06",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "a0583fb06928c05d",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4df92165a8969ee4",
     "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
     "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
     "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",

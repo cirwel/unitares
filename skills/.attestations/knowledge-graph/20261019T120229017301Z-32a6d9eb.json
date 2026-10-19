@@ -1,8 +1,8 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-10-18T23:14:23Z",
-  "verified_date": "2026-10-18",
+  "verified_at": "2026-10-19T12:02:29Z",
+  "verified_date": "2026-10-19",
   "verifier": "gemini:789650a0",
   "source_digests": {
     "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
@@ -25,14 +25,14 @@
     "unitares/src/mcp_handlers/schemas/knowledge.py": "72fffefa79ee8520",
     "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
     "unitares/src/mcp_handlers/tool_stability.py": "e80cdc5e28bc6bc0",
-    "unitares/src/storage/knowledge_graph_age.py": "90bf3d99b7ff8e96",
+    "unitares/src/storage/knowledge_graph_age.py": "61975bb24a6862be",
     "unitares/src/storage/knowledge_graph_postgres.py": "6a8cc06c6a2b65bf",
-    "unitares/src/tool_descriptions.json": "17f8e630c0921762"
+    "unitares/src/tool_descriptions.json": "467c705b3c3e4775"
   },
   "skill_digest": "d36662a3e0dc8532",
   "superseded_digests": {
     "unitares/src/tool_descriptions.json": [
-      "a5b71121013caa8f"
+      "737c9782d0a2fee2"
     ]
   }
 }

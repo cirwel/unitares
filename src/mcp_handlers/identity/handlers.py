@@ -665,6 +665,7 @@ async def _choose_fresh_persist_session_key(session_key: str, agent_uuid: str) -
         pass
 
     sk_pg_conflict = False
+    pg_owner = None
     try:
         db = get_db()
         if db is not None:
@@ -692,6 +693,8 @@ async def _choose_fresh_persist_session_key(session_key: str, agent_uuid: str) -
             isinstance(sk_entry, dict)
             and (sk_entry.get("bound_agent_id") or sk_entry.get("agent_uuid")) == agent_uuid
         ):
+            if sk_pg_conflict and not sk_redis_conflict and pg_owner:
+                await _cache_session(session_key, str(pg_owner), mint_guard=False)
             if sk_redis_conflict or sk_pg_conflict or sk_foreign_stable:
                 _session_identities.pop(session_key, None)
             if not own_bound:
