@@ -9,7 +9,9 @@ defmodule UnitaresLeasePlane.HTTPAuth do
       (sourced from `LEASE_PLANE_BEARER_TOKEN` env var)
 
   Both tokens come from the process env. Under Docker Compose,
-  `docker-compose.yml` sets them. A native install fills them through
+  `docker-compose.yml` sets only `LEASE_PLANE_BEARER_TOKEN`; it does not
+  forward `LEASE_FORCE_RELEASE_TOKEN`, so force-release stays unconfigured
+  there. A native install fills both through
   `scripts/start.sh` from the secrets env file: `$UNITARES_SECRETS_ENV`, then
   `~/.config/unitares/secrets.env`, then a legacy fallback described there.
   Per RFC §7.10 line 731
