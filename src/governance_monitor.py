@@ -1,6 +1,6 @@
 """
 UNITARES Governance Monitor v2.0 - Core Implementation
-Complete thermodynamic governance framework with all decision points implemented.
+Governance monitor: EISV state estimation and the decision points that act on it.
 
 Now uses governance_core module (canonical UNITARES Phase-3 implementation)
 while maintaining backward-compatible MCP interface.
@@ -187,7 +187,7 @@ class UNITARESMonitor:
     """
     UNITARES v1.0 Governance Monitor
 
-    Implements complete thermodynamic governance with:
+    Implements EISV state estimation and governance decisions with:
     - 4D state evolution (E, I, S, V)
     - Risk estimation from agent behavior
     - Adaptive λ₁ via PI controller
@@ -734,7 +734,7 @@ class UNITARESMonitor:
         ) else None
 
         # Store parameters for potential future use (deprecated - not used in coherence)
-        # Note: param_coherence removed in favor of pure thermodynamic signal
+        # Note: param_coherence removed in favor of the state-derived coherence signal C(V)
         self.prev_parameters = parameters.copy() if len(parameters) > 0 else None
 
         # Use governance_core step_state() to evolve state (CANONICAL DYNAMICS)
@@ -756,7 +756,7 @@ class UNITARESMonitor:
 
         # Calibration feedback: overconfidence raises entropy S
         # When agents claim high confidence but achieve low trajectory health,
-        # the calibration error becomes a thermodynamic price on S.
+        # the calibration error is charged to S.
         calibration_penalty = 0.0
         try:
             metrics = calibration_checker.compute_calibration_metrics()
@@ -1167,7 +1167,7 @@ class UNITARESMonitor:
         Args:
             agent_state: Agent state dict with parameters, ethical_drift, response_text, complexity
             confidence: Confidence level [0, 1] for this update. If None (default),
-                        confidence is derived from thermodynamic state (I, S, C, V).
+                        confidence is derived from the EISV state (I, S, C, V).
                         Pass explicit value to override derivation.
             task_type: Task type context ("convergent", "divergent", "mixed").
                       Affects S=0 interpretation: convergent S=0 is healthy (standardization),
