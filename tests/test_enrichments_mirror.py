@@ -304,7 +304,7 @@ class TestShouldSearchKgByCheckinText:
         assert _should_search_kg_by_checkin_text(ctx, signals=[], question="What unblocks you?") is True
 
     def test_stale_complexity_gap_skips_kg_search(self):
-        """Council fold (PR #603): a stable session-long complexity gap is
+        """Review finding (PR #603): a stable session-long complexity gap is
         novelty-gated out of the mirror line — the KG search it used to
         trigger on every check-in must respect the same gate."""
         ctx = _make_ctx(
