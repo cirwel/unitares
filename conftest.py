@@ -20,3 +20,14 @@ UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 if os.environ.get("UNITARES_TEST_LIVE_REDIS") != "1":
     os.environ["REDIS_URL"] = UNREACHABLE_REDIS_URL
     os.environ.pop("REDIS_SENTINEL_HOSTS", None)
+
+
+def pytest_configure(config):
+    """Fail the test whose teardown leaves os.environ changed (see
+    tests/env_leak_guard.py). Registered as a plugin object rather than as
+    hooks in this file so it also sees session-scoped fixtures, whose hooks
+    pytest routes past directory-scoped conftests."""
+    from tests.env_leak_guard import EnvLeakGuard
+
+    if not config.pluginmanager.has_plugin("unitares-env-leak-guard"):
+        config.pluginmanager.register(EnvLeakGuard(), "unitares-env-leak-guard")

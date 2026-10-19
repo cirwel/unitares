@@ -305,12 +305,16 @@ def _snapshot_queries() -> dict:
         # non-converters even though they emit externally verified outcome_event
         # rows under their governance UUID (#1055). Keep the ceremonial-only cut
         # as a separate continuity field, and make the headline conversion count
-        # the real BEAM check-in surface too.
+        # the real BEAM check-in surface too. dispatch_beam runs one harness per
+        # backend bot, each onboarding under its own spawn_reason (claude keeps
+        # the original `dispatch_beam_harness`); all of them are harnesses, not
+        # adopters.
         "onboard_conversion": """
             WITH a AS (
                 SELECT a.id,
                        (a.spawn_reason IS NULL OR a.spawn_reason NOT IN (
                            'dispatch_beam_harness','dispatch_beam_harness_wiring_test',
+                           'dispatch_beam_codex_harness','dispatch_beam_agy_harness',
                            'operator_credential','dialectic_reviewer','burnin_probe',
                            'perf_profile_load','scheduled_kg_audit','orchestrated_thread_anchor',
                            'auto_onboard_no_session','compaction','rename_from_anon')
