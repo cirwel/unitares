@@ -106,12 +106,44 @@ def test_claude_backend_timeout_kills_child_and_falls_back(monkeypatch):
             raise asyncio.TimeoutError
         return await original_wait_for(awaitable, timeout)
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    seen = {}
+
+    async def recording_spawn(*args, **kwargs):
+        seen.update(kwargs)
+        return await fake_spawn(*args, **kwargs)
+
+    process.pid = 4242
+    groups = []
+    monkeypatch.setattr(hb.os, "killpg", lambda pid, sig: groups.append(pid))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_spawn)
     monkeypatch.setattr(asyncio, "wait_for", timeout_once)
     result = asyncio.run(hb.call_claude_backend("review this"))
-    assert process.killed is True
+    # The CLI runs in its own process group and the whole group is killed.
+    assert seen["start_new_session"] is True
+    assert groups == [4242]
     assert result.text is None
     assert "exceeded 2s" in (result.error or "")
+
+
+def test_claude_backend_gets_no_secret_from_the_reviewer_process(monkeypatch):
+    """The reviewer runs under the orchestrator, whose environment holds
+    bearers and metered API keys; the subscription CLI gets none of them."""
+    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AGENT_ORCHESTRATOR_BEARER_TOKEN",
+                 "UNITARES_OPERATOR_TOKEN", "DIALECTIC_TEST_CANARY"):
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setattr(hb, "resolve_host_cli", lambda _host_id: "/bin/claude")
+    seen = {}
+
+    async def fake_spawn(*_args, **kwargs):
+        seen.update(kwargs)
+        return _FakeProcess(b"")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    asyncio.run(hb.call_claude_backend("review this"))
+    env = seen["env"]
+    assert "secret-value" not in env.values()
+    assert env["HOME"] == hb.os.environ["HOME"] and env["DR_CLI"] == "/bin/claude"
+    assert env.get("USER")  # claude's credential lookup keys on it
 
 
 def test_claude_backend_rejects_non_verdict_answer(monkeypatch):
