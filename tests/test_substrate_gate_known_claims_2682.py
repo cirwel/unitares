@@ -13,7 +13,7 @@ import pytest
 
 from src.substrate import verification
 
-RESIDENT = "f92dcea8-4786-412a-a0eb-362c273382f5"
+RESIDENT = "02e168be-4264-527b-9643-9c737dd309e4"
 ORDINARY = "11111111-2222-4333-8444-555555555555"
 
 
