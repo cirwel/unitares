@@ -984,12 +984,13 @@ adversarial review after it merged.
 
 ## 2.0.0 (2026-10-19)
 
-Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default.
+Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default. Workspace diagnostics check the server installation without discovering desktop clients or assuming a development checkout.
 
 This is a major negotiated interface release because omitted-host requests
 can now select a different host or refuse where the old default selected a
-particular vendor. The document shape is unchanged, so its schema remains
-`unitares.interface-contract.v1`. No capability or argument is removed.
+particular vendor, and workspace diagnostics report unperformed checks as
+`null` instead of implying success. The document shape is unchanged, so its
+schema remains `unitares.interface-contract.v1`. No tool or argument is removed.
 
 - **Affected:** `delegate_inference.host_id` defaults to `null` (unselected),
   replacing `claude:host-adapter`. The Python async and sync SDKs leave an
@@ -1021,6 +1022,28 @@ particular vendor. The document shape is unchanged, so its schema remains
   `list_inference_hosts` and the refusal’s recovery details when selection is
   unresolved. A caller expecting the old omitted-host behavior must migrate;
   this is not a claim of unchanged behavior for those calls.
+- **Workspace diagnostics:** `get_workspace_health` and
+  `admin(action='workspace_health')` check installed dependencies and server
+  module availability. They no longer probe desktop client configurations or
+  require checkout documents. Default `mcp_status.clients` is `{}`,
+  `cursor_servers` and `claude_desktop_servers` are `[]`, and both
+  `configured_count` and legacy `active_count` are `0`. These counts describe
+  distinct configured server names, not running servers. Client configuration
+  and workspace-file checks require paths supplied to the Python embedding
+  helpers; the MCP tools do not expose file-path arguments.
+- **Workspace response compatibility:** existing response blocks remain, but
+  unsupported checks are `null`: `security.exposed_secrets`,
+  `security.api_keys_secured`, `workspace_status.scripts_executable`,
+  `workspace_status.mcp_servers_responding`,
+  `documentation_coherence.server_counts_match`, and
+  `documentation_coherence.paths_current`. The default
+  `documentation_coherence.file_references_valid` is also `null` because no
+  files were requested. Client and documentation checks report
+  `status='not_requested'`; security reports `status='not_assessed'`. Clients
+  must accept these unknown/unrequested states and empty client lists rather
+  than interpret them as failed checks or proof that no clients are installed.
+  `health='healthy'` means the requested installation checks passed; use
+  `health_check` for running server subsystem health.
 - **Schema digests:** only `delegate_inference`’s input-schema digest changes,
   together with `surface_sha256`. `consult`’s schema digest is unchanged;
   its routing change is recorded in the negotiated release. Hash-pinning

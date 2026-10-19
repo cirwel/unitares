@@ -708,9 +708,10 @@ def main() -> int:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            rel = path.relative_to(REPO_ROOT).as_posix()
-            if "tests" in path.parts or path.name.startswith("test_"):
+            rel_path = path.relative_to(REPO_ROOT)
+            if "tests" in rel_path.parts or path.name.startswith("test_"):
                 continue  # Synthetic fixtures are not shipped runtime defaults.
+            rel = rel_path.as_posix()
             scanned += 1
             hits = scan_file(path)
             if not hits:
