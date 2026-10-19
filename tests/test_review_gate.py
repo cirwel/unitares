@@ -3040,6 +3040,7 @@ def test_the_codex_reviewer_runs_under_the_deny_by_default_profile(monkeypatch, 
     assert '":root"="deny"' in table
     assert f'"{checkout}"="read"' in table and '"/repo/.git"="read"' in table
     assert f'"{checkout}/**/.env*"="deny"' in table
+    assert f'"{checkout}/.unitares"="deny"' in table
     assert any(o.startswith("default_permissions=") for o in overrides)
     assert 'shell_environment_policy.set.GIT_CONFIG_NOSYSTEM="1"' in overrides
     include = next(o for o in overrides if o.startswith("shell_environment_policy.include_only="))
@@ -3084,7 +3085,10 @@ def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path):
     git("worktree", "add", "-q", str(tmp_path / "wt"))
     dirs = _REAL_GIT_DIRS(str(tmp_path / "wt"))
     assert str((repo / ".git").resolve()) in [str(Path(d).resolve()) for d in dirs]
-    assert _REAL_GIT_DIRS(str(tmp_path)) in ([], [str(tmp_path)])  # not a repo (tmp may sit in one)
+    # Outside a repository: nothing, or the enclosing repository's own git
+    # dir when the temporary directory happens to sit inside a checkout.
+    outside = _REAL_GIT_DIRS(str(tmp_path))
+    assert outside == [] or all(Path(d).name == ".git" or d.endswith(".git") for d in outside)
 
 
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):

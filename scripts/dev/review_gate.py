@@ -2459,8 +2459,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         # repo skills (.agents/skills, .codex/skills) into its context, so a
         # PR could steer its own reviewer, and no setting turns the skills
         # off (canary 2026-10-18). The prompt names the checkout by absolute
-        # path, which the read-only sandbox can read, and the base house
-        # rules arrive through the prompt.
+        # path, readable through the profile's extra_read grant below, and
+        # the base house rules arrive through the prompt.
         codex_dir = tempfile.TemporaryDirectory(prefix="review-codex-")
         if _under_project_config(codex_dir.name):
             codex_dir.cleanup()
@@ -2483,7 +2483,10 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         overrides = lane.lane_config_overrides(
             cli,
             extra_read=[checkout, *_git_dirs(checkout), *_existing(CODEX_TOOL_ROOTS)],
-            extra_deny=[f"{checkout}/**/.env*", f"{checkout}/**/*.env"],
+            # .env files and the local continuity cache (.unitares holds a
+            # client_session_id and short-lived proof material) stay denied.
+            extra_deny=[f"{checkout}/**/.env*", f"{checkout}/**/*.env",
+                        f"{checkout}/.unitares", f"{checkout}/**/.unitares"],
             # git reads its system and global config, which the profile denies.
             set_env={"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
         )
