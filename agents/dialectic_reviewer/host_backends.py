@@ -115,7 +115,8 @@ def _extract_verdict(text: str) -> Optional[str]:
 # process holds reaches them: it runs under the orchestrator, whose
 # environment carries service bearers and, from the secrets file, metered
 # API keys that would move a subscription CLI onto metered billing
-# (2026-10-18 lane map). Same list as scripts/dev/review_gate.py.
+# (2026-10-18 lane map). The same names as review_gate.py's
+# REVIEWER_ENV_ALLOWLIST (a test holds them equal); cli_env also fills USER.
 _CLI_ENV_ALLOWLIST = (*_AGY_ENV_ALLOWLIST, "CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS")
 
 
