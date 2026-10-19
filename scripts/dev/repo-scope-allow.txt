@@ -65,3 +65,10 @@ docs/proposals/archive/s19-attestation-mechanism.md
 docs/proposals/archive/section-129-measurement-fix-2026-06-03.md
 docs/proposals/archive/wave-0-step-2-call-site-scoping.md
 docs/proposals/archive/wave-1-window-evaluation-2026-05-18.md
+
+# Accountability-journey capture records — their rows quote recorded task and
+# PR text verbatim, including harness-memory file names, and several findings
+# are about exactly those strings. Editing the quotes would falsify the evidence
+# (2026-10-18).
+docs/evaluations/accountability-journey/capture-stage-2168-unitares-arm.md
+docs/evaluations/accountability-journey/capture-stage-2168-v0.md

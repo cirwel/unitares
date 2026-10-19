@@ -1,6 +1,6 @@
-# Governed-Effect §7 — Strong-Tier Re-Certification (design v0.2, council-folded)
+# Governed-Effect §7 — Strong-Tier Re-Certification (design v0.2, revised after review)
 
-**Status:** Design v0.2, council-folded. Its successor [`governed-effect-effect-binding-v0.md`](../active/governed-effect-effect-binding-v0.md) records this design as shipped — #1074, live 2026-06-26 — and names the residual it deliberately left open: §7 proves the proposer's identity strength, never per-effect authorization. That attribution is the successor document's; this file does not assert its own deployment state.
+**Status:** Design v0.2, revised after review. Its successor [`governed-effect-effect-binding-v0.md`](../active/governed-effect-effect-binding-v0.md) records this design as shipped — #1074, live 2026-06-26 — and names the residual it deliberately left open: §7 proves the proposer's identity strength, never per-effect authorization. That attribution is the successor document's; this file does not assert its own deployment state.
 
 Extends the live §6 governance veto (#1073) with the contract §2/§7 gate:
 **an `execute` agent_spawn commits only if the proposer's identity tier
@@ -63,7 +63,7 @@ No token, malformed token, expired token, bad signature, or `aid` mismatch →
 `tier_ok = false` → effect is **vetoed**. A weak/medium proposer is provably
 blocked. This is the non-negotiable gate — it can never be a silent no-op.
 
-### §7 dominates every allow path (council must-fix #1)
+### §7 dominates every allow path (review must-fix #1)
 
 The §6 endpoint had **two** allow exits, and §6 deliberately fails *open* for an
 unknown proposer (no governance state) via an early return — the bearer gates
@@ -73,7 +73,7 @@ So `tier_ok` is computed *before* the DB read, and the `row is None` branch
 returns `vetoed = not tier_ok` (not an unconditional `false`). An unknown
 proposer with **no token** is now blocked.
 
-### Intent (council must-fix #2)
+### Intent (review must-fix #2)
 
 The composition is: **§7 gates identity strength, §6 gates behavioral
 verdict.** A *strong, never-flagged* identity may spawn (§6 fails open, §7
@@ -81,7 +81,7 @@ passes); a *weak/unverified* identity may not, regardless of governance history.
 This is deliberate — requiring prior governance history would block every
 legitimate fresh proposer on an RCE surface that is already bearer-gated.
 
-## Encapsulated gate (council must-fix #4)
+## Encapsulated gate (review must-fix #4)
 
 The security invariant ("fresh HMAC AND `aid == proposer`") is single-sourced as
 `recertify_strong_tier(token, proposer_uuid) -> bool` in
@@ -90,7 +90,7 @@ REST call site (where a future edit could drop `exp` by using `extract_*` alone,
 or lose the `aid` binding by using `resolve_*` alone — note `resolve_*` returns
 `sid`, not `aid`).
 
-## Single proposer value — no veto/spawn TOCTOU (council must-fix #3)
+## Single proposer value — no veto/spawn TOCTOU (review must-fix #3)
 
 The lease plane derives the proposer identity **once** (`env.proposer_agent_uuid`
 from the envelope) and reuses that single value for (a) the veto's

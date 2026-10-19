@@ -38,6 +38,7 @@ problem one layer up.
 
 ## What is on the list, and why
 
+<!-- mirrors: scripts/dev/governance_sensitivity_manifest.tsv -->
 | Surface | Symbols | Leverage |
 |---|---|---|
 | `config/governance_config.py` | `GAP_RECOVERY_CYCLES`, `GAP_RECOVERY_ARM_SECONDS`, `DT_MAX` | The gap-suppress window. `GAP_RECOVERY_ARM_SECONDS` is the arming threshold itself; `DT_MAX` only seeds its default. The 2026-08-06 audit measured 195 of 218 recorded pauses (89.4%) downgraded once inter-check-in gaps crossed 150s — the highest-leverage single-constant change in the repo. |
@@ -55,4 +56,6 @@ problem one layer up.
 Add an entry when a new constant or pattern table materially gates
 pause/verdict behavior; remove one only with a stated reason in the PR body
 (that PR will flag itself, which is the point). Keep the manifest, this
-table, and the threat-model subsection telling the same story.
+table, and the threat-model subsection telling the same story;
+`tests/test_doc_contract_mirrors.py` fails when this table's paths and
+symbols differ from the manifest's.

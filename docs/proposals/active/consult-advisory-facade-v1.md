@@ -57,6 +57,7 @@ consult(
   allow_degraded=false,
   response_mode="compact",       # compact | full
   host_id=null,                   # omitted: automatic; supplied: pin existing host
+  host_ids=null,                  # 2-3 CLI hosts: a council, each member pinned
 )
 ```
 
@@ -70,6 +71,20 @@ match the host. Null is outside the advertised effort schema. External hosts
 require `cloud_allowed`. A pinned call requires
 `allow_degraded=false` and never tries another host. Selection grants no
 configuration or identity authority; own-family selection is advisory only.
+
+Amended 2026-10-18 (#2900, corrected in its follow-up): optional `host_ids` asks a council of 2 or 3
+distinct thorough hosts in parallel. Each member is a pinned call with the
+rules above (no failover, route enforced, own record and hash key), and the
+records share a `council_id`. A council needs `cloud_allowed` and
+`allow_degraded=false`, cannot be combined with `host_id`, and an omitted
+effort becomes thorough. The result, schema
+`unitares.consultation_council.v1`, has no top-level `advice`: it lists each
+member's result under `members`, with `answered` of `asked`, and status
+`completed` or `partial`; none answering fails as `CONSULT_COUNCIL_FAILED`.
+Nothing combines, ranks or votes on the answers. Records are written once
+the whole council returns. A cancelled council keeps no hashes in any
+member's record: a member that answered or was still running is recorded as
+cancelled, and one already refused keeps its refusal.
 
 Amended 2026-10-16: the bounded surface above stays bounded. `call_model` is
 deprecated in favour of `consult(effort='standard')` (#2847), and its model,
@@ -135,7 +150,7 @@ excluded from compact responses and the durable audit.
 
 ## Routing and degradation
 
-The table describes calls without `host_id`. Explicit selection bypasses
+The table describes calls without `host_id` or `host_ids`. Explicit selection bypasses
 automatic family selection and peer failover, with the constraints above.
 
 | Effort | Privacy | `allow_degraded` | Resolution |

@@ -1,207 +1,264 @@
-# Evidence and limits, in full
+# Evidence and limitations
 
-The root README states the product promise and links here for the measured
-record. This page carries the qualifications, provenance, deployment numbers,
-and evaluation boundaries in full so the landing page can remain a concise
-explanation of what UNITARES offers.
+UNITARES has a documented record of process attribution, shared findings,
+governed review, and recovery across sessions. Captured server responses show
+these mechanisms working; repository records show review findings becoming
+concrete fixes and a review condition surviving its original session.
 
-## Scope in brief
-
-UNITARES makes process identity, telemetry, evidence, and policy history
-inspectable, so claims of correctness, ethics, safety, or incident prevention can
-be tested rather than assumed; it does not itself prove them.
-
-The public operational record comes from one long-running maintainer
-deployment. External adoption remains unvalidated. Outside parties have
-examined and accepted parts of the work, which is recorded under
-[Outside review and acceptance](#outside-review-and-acceptance); that is not
-adoption. The frozen outcome-lift read
-did not establish predictive lift, and its preserved record lacks the cluster
-geometry needed to reconstruct read-specific power; the result is therefore
-inconclusive, not a demonstrated negative.
-
-The deployed policy path uses auditable behavioral state estimation. The
-mathematical formulation in the companion paper remains a research target and
-parallel diagnostic path, not the live decision mechanism. The `make demo`
-walkthrough establishes that the stack is wired, not predictive value or
-governance efficacy. Cross-operator trust, consensus, and enforcement are
-research goals, not deployed guarantees.
+This page brings those results together with their sources, dates, and scope.
 
 ## Claim ledger
 
-Every claim below carries an evidence class. A class says what a result
-supports; it is not a positive or negative judgement about the project. A
-registered operational `FAIL` can close a scheduled line of work without
-scientifically refuting the underlying capability, and a claim earns `REFUTED`
-only when target, counterfactual, independent unit, power, decision rule, and
-read protocol all support it — see the
-[inference-status contract](ontology/falsification-inference-containment-2026-08-22.md).
-
-| Evidence class | What it licenses |
-|---|---|
-| **Operational observation** | A named mechanism ran in the stated deployment. Not benefit, correctness, or generality. |
-| **Exercised path** | A code path ran and left countable, replayable records. Execution, not benefit. |
-| **Non-detection** | The test did not separate the candidate from its comparison. Without power, that is not absence. |
-| **Structural limit** | A boundary that follows from the design itself. More data does not move it. |
-| **Untested** | No suitable measurement has been made. |
-
-Three further classes — **Benchmark pass / fail**, **Unidentified /
-inconclusive**, and **Mismatch / path bound** — are available for result types
-this table does not currently hold.
-
 ### Current claim status
 
-| Question | Status | What the record supports |
+| Capability | Demonstrated or observed result | Evidence |
 |---|---|---|
-| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts below are rows, events, and configured residents. |
-| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
-| Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](ontology/eisv-proprioception-contract.md). |
-| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
-| Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
-| Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
-| Review-driven correction traces | **Operational observation** | A [retrospective audit](evaluations/review-correction-traces-2026-09-21.md) fixed a sample of 20 recently created, merged PRs before inspecting review findings. Eight contain a public finding-to-revision chain and two contain an author-recorded internal review with a matching revision. Another PR implements a condition retained from an earlier structured review. This establishes inspectable correction traces, not causality or comparative lift. |
-| Comparative benefit from review and coordination | **Untested** | The retrospective has no matched unreviewed or conventional-review control, and some records were author-relayed or filed under the same GitHub identity. Dialectic review, councils, external models, and ordinary repository review also have incomplete common instrumentation. No estimate of incident reduction, net productivity, or UNITARES's incremental contribution follows from the observed corrections. The registered prospective test (`accountable-coordination-ablation-v0`) was stopped on 2026-10-01, before any run, as infeasible for a single operator. |
-| Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md). |
+| Process attribution | Calls and stored findings are bound to the process that made them. | [Captured identity and write sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) |
+| Cross-session retrieval | A second process retrieves the first process's resolved finding, including its author and recorded closure. | [Captured successor sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) |
+| Governed review | A paused agent's submission cannot resolve its own review over a standing reviewer objection; the objection remains pending for facilitation. | [Review constraint implementation](../src/dialectic_protocol.py) |
+| Review-driven corrections | Published findings can be traced to fixes for evidence grading, approval handling, and preservation of unresolved findings. | [September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md) |
+| Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
 
-The outcome read carries a protocol qualification. After the frozen cutoff,
-recurring automation exposed live discrimination output: the ablation watchdog
-completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
-jobs are paused. The fixed
-[2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md) remains
-an operational decision rule, but it is not the only post-registration read and
-cannot be described as clean single-read blinding; its report must disclose the
-interim access and read-specific power.
+For predictive lift, pause benefit, and cross-operator verification, see the
+[evaluation boundaries](#evaluation-boundaries).
 
-The validation the system does claim — reliability, faithfulness under
-intervention, and calibration — is scoped and partly built; the
-[roadmap](ROADMAP.md) tracks it. The DOI identifies a
-[public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
-validation.
+The [two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) was captured
+on 2026-10-08 from a fresh Docker quickstart install. Its task is illustrative;
+the server responses are real. It demonstrates attribution, outcome binding,
+closure, retrieval, and declared successor lineage in one complete sequence.
+
+## Review findings that became fixes
+
+A [2026-09-21 audit](evaluations/review-correction-traces-2026-09-21.md) fixed a
+sample of 20 recently created, merged PRs before inspecting their review
+findings. Eight contain a public finding-to-revision chain; two more contain an
+author-recorded internal review with a matching revision. The corrections
+include:
+
+- **Preserving evidence grades during storage.** Review found that evidence
+  acknowledged at one grade was stored at a stronger grade. The revision
+  preserved the assigned grade and covered the database write path.
+  [Finding and correction](evaluations/review-correction-traces-2026-09-21.md#stored-evidence-became-stronger-than-the-acknowledged-evidence--pr-2316)
+- **Preventing a formatting repair from manufacturing approval.** Review found
+  that repairing an unparseable rejection could produce a recorded approval.
+  The revision refuses repaired approvals and adds regression coverage.
+  [Finding and correction](evaluations/review-correction-traces-2026-09-21.md#a-formatting-repair-could-manufacture-approval--pr-2321)
+- **Keeping unresolved findings visible.** Review found that a later clean
+  result could erase an earlier open finding. The corrected gate retains the
+  finding until it is addressed or explicitly disposed of.
+  [Finding and correction](evaluations/review-correction-traces-2026-09-21.md#a-later-clean-result-could-erase-an-open-finding--pr-2318)
+
+A separate PR implemented a condition from an earlier structured review **ten
+days after that review opened**. The condition remained recoverable after the
+original session ended. The public PR cites the review and contains the repair;
+the originating review transcript is operator-private.
+[Carried condition and patch](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317)
+
+These records establish specific, consequential corrections and continuity of
+review conditions. The sample is recent and non-random, with no matched
+unreviewed or conventional-review control; some reviews were author-relayed or
+filed under the same GitHub identity. It therefore supplies no estimate of
+incident reduction, net productivity, or UNITARES's incremental contribution.
+Dialectic review, councils, external models, and ordinary repository review
+have incomplete common instrumentation. The registered prospective comparison
+(`accountable-coordination-ablation-v0`) was stopped on 2026-10-01 before any
+run, as infeasible for a single operator.
+
+<details>
+<summary>Recorded exercise of the review constraint</summary>
+
+The [historical exercise record](CHANGELOG.md) reports 33 non-canary sessions
+with a submission after a reviewer's rejection. The
+[September 17 review audit](plans/competitive-survival-audit-review-2026-09-17.md)
+reports 81 non-canary verdicts since the 2026-07-02 reviewer-label split,
+77 carrying reviewer conditions. Of 42 recorded dissents, one is a parse
+failure recorded as disagreement rather than a reviewer's judgement. These
+are retained historical counts, not a current fleet rate.
+
+</details>
 
 ## Where the deployment numbers come from
 
-At the [2026-08-11 frozen snapshot](PRODUCTION_SNAPSHOT.md), the maintainer
-deployment provided operational evidence that the system runs at length under
-real load:
+The [2026-10-18 operational snapshot](PRODUCTION_SNAPSHOT.md) records sustained
+maintainer traffic. Its captured JSON and read-only SQL give the counts,
+event composition, and date ranges at one cutoff:
 
-| Evidence | Scope |
+| Record | Count and scope |
 |---|---|
-| **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28, the first identity record. Session-resolution observations and cross-device-call records make up 91.4%. Measures infrastructure load and uptime. |
-| **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`. The unit is the observation; the fleet producing them is the six residents below. |
-| **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the recovery path was exercised. |
-| **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). Window parameters, the real/synthetic split (a per-row `provenance` column), and the generating pipeline are documented on the dataset card and indexed in the [evaluation catalog](EVALUATION_INDEX.md#labelled-sets). The unit is the window; every real window comes from the single Raspberry Pi run named above. |
-| **6 long-running resident agents** | Configured and operating in the maintainer deployment at the snapshot date; one runs on separate hardware, the same Raspberry Pi that produced the labeled-window dataset. The same single-operator fleet as every number above. |
+| Audit and telemetry | **6,593,939 retained events**, including **52,264 in the preceding week**. Session-resolution observations and cross-device-call records make up 88.29% of the total. |
+| State observations | **102,728 stored EISV rows** in `core.agent_state`. These are observations, not independent agents or trials. |
+| Recovery | **20 recorded self-recoveries** among 27 non-automatic lifecycle-resume records in the snapshot’s broadcaster-form subset; direct fallback/test records without a `type` field are excluded. |
+| Shared findings | **2,129 retained discovery records** in the knowledge graph. |
+| Process registry | **8,677 retained process-instance records**; 287 distinct identities emitted audit events in the preceding week. |
 
-The maintainer deployment is **single-operator and co-development dogfood**: most
-agents governed by the system are also building the system. Read
-[`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) before citing
-a fleet number.
+This is a single-operator deployment whose agents also help build the system.
+The counts establish recorded activity and exercised paths. They include
+resident, ephemeral, development, and test/operational traffic; they are retained
+inventories, not lifetime totals, independent-user counts, or an uptime
+measurement. The [deployment data notes](operations/DEPLOYMENT_DATA_CAVEAT.md)
+explain the sampling and co-development context. The August snapshot remains
+available as a historical record on the same page.
+
+Separately, the published trajectory dataset contains **32,181 labeled
+windows**: 20,655 overlapping real windows from one 39-day Raspberry Pi run and
+11,526 synthetic windows. The [dataset card](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories)
+documents windowing, generation, and per-row provenance; the
+[evaluation catalog](EVALUATION_INDEX.md#labelled-sets) indexes the set. This
+published dataset was not regenerated for the October operational inventory.
+
+### What is built
+
+The repository includes automated tests, migration checks, and documentation
+checks alongside its callable interface. The following counts are **dated
+structural snapshots**; current capabilities and setup are described in
+[Capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md).
+
+<details>
+<summary>Repository counts and counting methods</summary>
+
+| Surface | Recorded size |
+|---|---|
+| Complete tool registry | **43 registered tools**, plus 8 workflow aliases; 8 routers over 52 actions and a 70-entry legacy alias table |
+| Test suite | **18,193 test functions** across 965 files |
+| Database migrations | **76** |
+| Python modules | **567** across `src/`, `governance_core/`, and reference residents |
+| Documents | **328** |
+| Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Ecosystem](../README.md#ecosystem) |
+
+The tool/router/alias counts were recorded 2026-09-20 at `76a68c02` from
+`src/tool_meta.py` and router `ACTION_FIELDS` declarations. The test, migration,
+module, and document counts were recorded 2026-10-18 from the committed tree at
+`dd793928ad5ebc136a35815fbfd510c666f2e982`; the
+[repository inventory](evaluations/production-snapshots/2026-10-18-repository.json)
+records the counting methods. Test counts include synchronous and asynchronous
+`test_*` definitions in tracked `tests/**/test_*.py` files, including nested
+definitions; they are source counts, not collected or passing test cases.
+Migration, module, and document counts use tracked paths in the stated tree.
+Companion repositories are listed in the linked ecosystem overview.
+
+The complete catalog is callable on every transport; the default initial
+listing is progressive, with omitted names accessible through `use_tool` after
+discovery.
+
+</details>
 
 ## Outside review and acceptance
 
-Every number in the previous section comes from one operator. Separately, the
-public record shows outside parties examining, accepting or installing the
-work. Each row is checkable at its link. None of it is adoption, and none of it
-bears on whether governance improves outcomes.
+**Hermes Agent accepted the UNITARES lifecycle plugin into its plugin catalog**
+on 2026-09-26, followed by version updates through 0.3.3 on 2026-10-06.
+[Catalog acceptance](https://github.com/NousResearch/hermes-agent/commit/5c72a58543)
+· [Recorded update](https://github.com/NousResearch/hermes-agent/commit/8d4e867b54)
 
-| Contact | What happened | Record |
-|---|---|---|
-| Outside security report | EQSTLab (credited finders EQSTLab and 2REBCat) privately reported an arbitrary file write through path traversal in export filenames. It was fixed in 3.2.0 and published as a high-severity advisory on 2026-10-05 after coordinated disclosure. | [GHSA-fgfh-wj4j-4xgj](https://github.com/cirwel/unitares/security/advisories/GHSA-fgfh-wj4j-4xgj) |
-| Maintainer-disclosed vulnerability | The trusted-network REST/WebSocket bypass was reachable from any browser page through CSRF or DNS rebinding. The maintainer found it, fixed it in 3.2.0 and published a high-severity advisory the same day. | [GHSA-mph4-qq2r-pc5v](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v) |
-| Upstream acceptance | Hermes Agent merged the UNITARES lifecycle plugin into its plugin catalog on 2026-09-26, and later version bumps through 0.3.3 on 2026-10-06. An unrelated Telegram fix from the maintainer was merged there on 2026-05-03. | [catalog entry](https://github.com/NousResearch/hermes-agent/commit/5c72a58543), [0.3.3 bump](https://github.com/NousResearch/hermes-agent/commit/8d4e867b54), [Telegram fix](https://github.com/NousResearch/hermes-agent/commit/222767e5e8) |
-| Public package | `unitares-sdk`, the agent-side contract, is published on PyPI from CI by trusted publisher. | [PyPI](https://pypi.org/project/unitares-sdk/) |
+The agent-side contract is also distributed as
+[`unitares-sdk` on PyPI](https://pypi.org/project/unitares-sdk/), published from
+CI through a trusted publisher. These records establish integration acceptance
+and package availability. External adoption remains unvalidated.
 
-## What is built
+### Security response
 
-One operator, since 2025-11-20. The counts below are structural facts about this
-repository and its companions, not a claim that any of it outperforms an
-alternative. They answer one question an evaluator reasonably asks first: is this
-a prototype or a system?
+Two high-severity advisories published on 2026-10-05 document fixes in 3.2.0:
 
-| | |
-|---|---|
-| **43 registered tools** | one complete catalog remains negotiable and callable on every transport; the default initial listing is progressive and omitted names run through `use_tool` after discovery (`UNITARES_TOOL_ADVERTISEMENT=full` restores every schema up front; legacy `GOVERNANCE_TOOL_MODE` is ignored). 8 tools are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
-| **13,614 test functions** | across 776 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
-| **67 database migrations** | slot-and-name drift is gated by the repo doctor |
-| **524 Python modules** | `src/`, `governance_core/`, and the reference residents |
-| **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
-| **7 companion repositories** | including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland; the main integrations are listed under [Ecosystem](../README.md#ecosystem) |
+- **External report and coordinated disclosure:** EQSTLab and 2REBCat reported
+  an arbitrary file write through path traversal in export filenames.
+  [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-fgfh-wj4j-4xgj)
+- **Maintainer-discovered vulnerability:** a trusted-network REST/WebSocket
+  bypass was reachable from a browser page through CSRF or DNS rebinding.
+  [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v)
 
-The registered-tool count was refreshed 2026-09-20 at `76a68c02` after adding
-`use_tool`; the remaining structural counts were recounted 2026-09-09 against
-tracked files at `e017c45e`, each with the command that produced it. Test files:
-`git ls-files tests/` filtered to `test_*.py`;
-test functions: an AST walk of those files for `def test_*`. Migrations:
-`git ls-files db/postgres/migrations/ | wc -l`. Python modules:
-`git ls-files src/ governance_core/ agents/ | grep -c '\.py$'`. Documents:
-`git ls-files docs/ | grep -c '\.md$'`. The tool, router, action, and alias
-figures are read from `src/tool_meta.py` and the routers' `ACTION_FIELDS`
-declarations, not from a directory count; that module carries one record per
-dispatch tool plus the eight workflow aliases, so the tool figure is its
-non-alias records.
+Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0.
+Neither credits an outside finder:
 
-## Local control and cross-operator trust
+- **Lifecycle actions on another agent:** any bound client could archive,
+  delete or unpause another agent, and an agent could give itself the operator
+  label. [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-r9q5-7j8h-82rr)
+- **Identity from a UUID:** an agent's identity could be assumed from its UUID
+  through the derived session id.
+  [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-6fqf-5ccj-vcc4)
+
+## Evaluation boundaries
+
+### Predictive lift
+
+The frozen 2026-08-09 outcome evaluation did not establish predictive lift:
+no slice cleared the selection-aware null (selective p = 0.070–0.567). The
+result is **inconclusive, not a demonstrated negative**. The first power
+characterisation was withdrawn for corrupted synthetic pairing and uncontrolled
+class-balance drift. The preserved record lacks the cluster geometry needed
+to reconstruct read-specific power, so the corrected
+[power audit](operations/falsifiability-power-audit-2026-08-23.md) sets no
+standing AUC ceiling.
+
+After the frozen cutoff, recurring automation exposed live discrimination
+output: the ablation watchdog completed 42 of 51 executions and the dogfood
+guard completed 43 of 52. Those jobs are paused. The
+[2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
+remains an operational decision rule, but it is not the only post-registration
+read and cannot be described as clean single-read blinding; its report must
+disclose the interim access and read-specific power.
+
+The read was amended on 2026-10-15, before any read in its registered units had
+run. It now admits only data recorded before `2026-10-15T13:45Z`, a boundary set
+no later than the first deployment of a change to the live EISV update path; that
+change deployed about 30 minutes afterwards. The
+[stop rule's instrument-change record](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)
+documents both times. The 2026-12-01 result must therefore be described as **amended after
+interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
+eligible as a result. The cluster threshold is not lowered, so a shortfall
+closes the read as inconclusive, not as a measured null.
+
+An operational `FAIL` can close a scheduled line of work without scientifically
+refuting the underlying capability. The
+[inference-status contract](ontology/falsification-inference-containment-2026-08-22.md)
+sets the requirements for scientific refutation: target, counterfactual,
+independent unit, power, decision rule, and read protocol.
+
+### Pause delivery and incident prevention
+
+A governed pause landed on 2026-08-09. The earlier 2026-08-06 audit found that a
+cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery;
+the current rate has not been re-measured. See
+[ledger rows 24, 27, and 28](ontology/eisv-proprioception-contract.md).
+Incident prevention and benefit from pausing remain untested: no
+governed-versus-ungoverned comparison has shown an incident prevented or an
+outcome improved by pausing.
+
+### Local control and cross-operator trust
 
 Identity, telemetry, evidence, and policy history stay on infrastructure the
-operator controls, with no outbound dependency on a vendor service.
+operator controls. Core storage has no required vendor-service dependency.
+The current trust boundary is one operator and its explicitly trusted issuer.
+Independent cross-operator verification, consensus, and enforcement remain
+research goals.
 
-The architecture exposes several of the seams a later cross-operator experiment
-would need: process-bound identity, evidence provenance, a
-[versioned telemetry envelope](ontology/eisv-telemetry-envelope-v1.md), and
-policy decisions with named reasons.
+Server-side Ed25519 lease attestations exist. Party-level HMAC signature minting
+is retired; new dialectic resolutions are unsigned by design. A separate
+server-countersigned resolution receipt is wired but dormant and has issued no
+receipts as of the 2026-09-25 decision record. The
+[federation trust decisions](proposals/active/federation-trust-decisions-2026-09-25.md)
+and [receipt proposal](proposals/active/dialectic-resolution-receipt-v0.md)
+preserve the signing history and conditions for further work. The
+multi-principal trust track is not scheduled; its wake condition is an outside
+party with its own administrative root asking to verify a deployment record.
 
-**The blocker is named, not unknown.** The party-level attestation scheme for
-dialectic resolutions, as written in the code, was HMAC keyed on each agent's
-api_key. That is symmetric: a verifier needs the signing key, and holding it
-would also let them forge a signature. At most it suited one operator attesting
-inside their own trust boundary, and it is explicitly not non-repudiation.
-Minting it is retired (decided 2026-09-25 as D5,
-[#2449](https://github.com/cirwel/unitares/issues/2449)), so new resolution
-records carry no party signature by design; historical rows are unchanged. As
-of 2026-09-25 no resolution record in the maintainer deployment carries a
-signature keyed on a party's api_key under the v2 scheme. The four 2026
-records that carry a signature used a key derived from the agent's uuid, which
-is forgeable from public data; that fallback was removed in #2155. The most
-recent records carrying two signatures are legacy v1 rows from 2025-12-13 (UTC),
-which cannot be verified. What was considered and shelved on 2026-04-19 was
-asymmetric (DPoP-style) keys for agent identity, which party-level
-non-repudiation would also need; that remains shelved (see
-[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). That record scopes the
-decision to agent identity and does not address server-side signing.
-Server-side Ed25519 signing exists: as of
-2026-09-25 the maintainer deployment's lease attestations use it, and a
-deployment-countersigned dialectic resolution receipt (`drr.v1`) is wired but
-dormant and has issued no receipts. A receipt would attest the deployment's
-stored record, not either party's intent; its
-[decision packet](proposals/active/dialectic-resolution-receipt-v0.md) names
-what has to exist before enabling it would be honest. So a record from this
-system cannot today be verified by an operator who does not already trust its
-issuer, which is the whole problem a cross-operator exchange has to solve.
-Whether the remaining records suffice to exchange cross-operator attestations
-without centralizing raw telemetry is not settled, and the **multi-principal
-trust** track that would settle it is not scheduled. That was decided on
-2026-09-25 (D3a in the
-[federation trust decision record](proposals/active/federation-trust-decisions-2026-09-25.md)):
-as of that date no second principal and no external verifier exist. The
-recorded wake condition is a real outside party, a person or organisation with
-its own administrative root, asking to verify a record from this deployment.
-The [roadmap](ROADMAP.md) carries the track as not scheduled. The same record
-decides to retire minting of party-level HMAC signatures while keeping existing
-ones readable (D5); that is implemented in
-[#2449](https://github.com/cirwel/unitares/issues/2449): new resolutions carry
-empty signature fields and read as `unsigned` by design.
+#### Identity binding and the lease plane
 
-## Identity binding and the lease plane
+The Docker quickstart enforces process-bound proofs for `maintenance:/` leases;
+other kinds remain staged until their producers carry proofs. Multi-issuer
+trust requires lease principals to retain both issuer and subject, and active
+leases must be drained before changing issuer. See the
+[architecture reference](UNIFIED_ARCHITECTURE.md) for proof modes and signing
+mechanics.
 
-Identity binding is what makes stored findings, reviews, and leases attributable
-to a process rather than to a display label. The Docker quickstart enforces this
-for `maintenance:/` leases; other kinds remain staged until all of their
-producers carry proofs. Governance keeps the continuity credential and private
-signing key; the lease plane verifies a short-lived token bound to a
-deployment-specific audience plus the exact method, path, and request-body hash,
-then consumes its nonce once. This version accepts one explicitly trusted issuer.
-Multi-issuer trust, which any cross-operator lease exchange would need, remains
-blocked until lease principals persist both issuer and subject; active leases
-must be drained before changing issuer.
-`legacy`, `hybrid`, and `attestation` proof modes support staged upgrades. The
-lease plane listens on `http://127.0.0.1:8788` with bearer auth.
+### Research and threat model
+
+The deployed policy path uses behavioral state estimation. The mathematical
+formulation in the companion paper remains a research target and parallel
+diagnostic path. The DOI identifies a
+[public preprint](https://doi.org/10.5281/zenodo.19647159). Reliability,
+faithfulness under intervention, and calibration work are tracked in the
+[roadmap](ROADMAP.md).
+
+A capable process can conceal or optimize behavior outside the monitored
+signals. Correctness, safety, and resistance to a motivated attacker require
+independent evidence and controls; the
+[scope and threat model](SCOPE_AND_THREAT_MODEL.md) defines that boundary.

@@ -10,9 +10,8 @@ contracts.
 ## Out of scope — do not commit here
 
 - **Career / personal artifacts** — resumes, cover letters, job-application
-  materials, portfolio demos built for a specific employer. These live in
-  `~/career/` (see the operator's workfolder convention), not in the product
-  repo. *(This is why the FRT sandbagging demo was removed from `demos/`.)*
+  materials, portfolio demos built for a specific employer. These live outside
+  the repo. *(This is why the FRT sandbagging demo was removed from `demos/`.)*
 - **Per-vendor agent/tool config** — `.claude/`, `.codex/`, `.cursor/`, etc.
   are machine-local state. The guard refuses tracked files under any of them
   and **never** lets `.gitignore` whitelist them back in; `.claude/` is also
@@ -32,7 +31,10 @@ contracts.
   `questions for Kenny`), and exposed AI-review process (`council pass`,
   `council fold`, `live-verifier`, and, in files only, `three-lane council`).
   It deliberately does **not** flag the real product vocabulary `operator`,
-  `council`, or `dialectic`, and does not scan gitignored runtime/session data. Working notes belong in
+  `council`, or `dialectic`, and does not scan gitignored runtime/session data.
+  In files it also flags a cited harness-memory file name (`feedback_*.md`,
+  `project_*.md`): that memory is machine-local, so cite the repo artifact or
+  the knowledge-graph entry instead. Working notes belong in
   `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
   discusses these patterns (this guard, a register cleanup, meta-docs) can skip
   the PR-body register check with the HTML comment

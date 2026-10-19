@@ -1,1 +1,0 @@
-- File-write execution now rechecks exact custody after the governance veto and commits a durable reservation before filesystem I/O. Release, handoff and expiry cannot admit a successor during a write or compensation; uncertain outcomes retain custody for operator recovery. Requires migration 076 and a drained upgrade of live-writing executors.

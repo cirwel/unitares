@@ -1,1 +1,0 @@
-- CIRS auto-emit runs again during check-ins. Since the 2026-03-09 handler reorganization, the void-alert, state-announce and resonance emitters imported a module path that did not exist, and the failure was logged at debug level, so none of them fired.

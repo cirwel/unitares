@@ -24,6 +24,7 @@ from unitares_sdk.errors import (
     parse_retry_after_header,
 )
 from unitares_sdk.models import (
+    _host_ids_list,
     ArchiveResult,
     AuditResult,
     CheckinResult,
@@ -409,13 +410,16 @@ class SyncGovernanceClient:
         host_id: str | None = None,
         allow_degraded: bool = False,
         response_mode: str = "compact",
+        host_ids: list[str] | None = None,
         **kwargs: Any,
     ) -> ConsultResult:
         """Ask a model for advice. Maps to server tool: consult.
 
         Advisory only, never an on-record verdict (use request_review for
         that). ``effort`` left as None lets the server infer it from
-        ``host_id`` (standard when none is pinned). The server forbids
+        ``host_id`` (standard when none is pinned). ``host_ids`` asks a
+        council of 2 or 3 CLI hosts in parallel (needs
+        privacy="cloud_allowed"); their answers are in ``members``. The server forbids
         unknown arguments, so extra kwargs are passed through as given and
         rejected by the server if it does not know them.
 
@@ -436,6 +440,10 @@ class SyncGovernanceClient:
             args["effort"] = effort
         if host_id is not None:
             args["host_id"] = host_id
+        if host_ids is not None:
+            # Always send a list: /mcp/ refuses a bare string before the
+            # server can read it as one host.
+            args["host_ids"] = _host_ids_list(host_ids)
         args.update(kwargs)
         raw = self.call_tool(
             "consult",

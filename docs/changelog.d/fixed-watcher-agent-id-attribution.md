@@ -1,1 +1,0 @@
-- **watcher:** `--resolve` and `--dismiss` now refuse an `--agent-id` that is not a UUID, before any state changes. Previously any string was stored verbatim as `resolved_by`, and confirmed rows feed pattern-floor calibration. Omitting `--agent-id` still works and records `None`; a well-formed UUID is not checked against the server.

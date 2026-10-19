@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.50.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.52.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -913,3 +913,69 @@ search_knowledge_graph's discovery_type filter description lists the values sear
   description changed); no other capability's digest moves.
 - **Client action:** none. A client that copied the old list should read the
   parameter description instead.
+
+## 1.51.0 (2026-10-18)
+
+`consult` accepts an optional `host_ids`: a council of 2 or 3 distinct CLI
+hosts (`claude:host-adapter`, `codex:host-adapter`,
+`antigravity:host-adapter`) asked the same brief in parallel. Each member is
+an ordinary pinned consultation: the same route postconditions, its own
+`consultation_id`, audit record and `hash_key`, and no failover. The records
+carry a shared `council_id`. The result (`unitares.consultation_council.v1`)
+lists the members side by side under `members`, with `answered` and `asked`;
+nothing combines, ranks or votes on the answers.
+
+- **Affected:** `consult`'s input schema (one added optional property, and
+  the `effort` default, which becomes `thorough` when `host_ids` is set) and
+  its tool description.
+- **Compatibility:** additive. A call without `host_ids` is unchanged. A
+  council needs `privacy='cloud_allowed'`, `effort='thorough'` (the default)
+  and `allow_degraded=false`, and cannot be combined with `host_id`; any
+  other combination, a size outside 2 or 3, a repeated host or a non-CLI host
+  is refused before any host is contacted, and is not recorded. A member the
+  operator's `consult.thorough` job excludes or switches off fails alone and
+  is recorded. The call succeeds with `status` `completed` or `partial` when
+  at least one member answered, and fails with `CONSULT_COUNCIL_FAILED`
+  when none did.
+- **Schema digests:** `consult` moves; `surface_sha256` moves with it.
+- **Client action:** none. A client that wants several families' advice
+  can make one `consult(host_ids=[...], privacy='cloud_allowed')` call
+  instead of one call per host.
+
+## 1.52.0 (2026-10-18)
+
+Corrections to the 1.51.0 council (`consult(host_ids=...)`), from an
+adversarial review after it merged.
+
+- **Affected:**
+  - `consult`'s `host_ids` schema loses its size bounds (2 to 3 items, 1 to
+    128 characters each). A wrong size now reaches the handler's
+    `INVALID_CONSULT_COUNCIL` refusal, which lists the valid hosts. It used
+    to fail schema validation with a generic `PARAMETER_ERROR` that also
+    blamed `effort`'s default.
+  - `host_ids` sent as JSON text (REST, `use_tool`) is parsed into a list.
+    `/mcp/` already did this. On REST and `use_tool`, a lone host id becomes
+    a one-item list, which the handler refuses with the valid hosts. `/mcp/`
+    refuses a bare string as a parameter error, because its advertised schema
+    has no string branch.
+  - The `host_ids` brief names the `cloud_allowed` requirement, and the
+    `effort` brief covers `host_ids`.
+  - `CONSULT_COUNCIL_FAILED` reports `validation_error` when every member
+    was refused for a validation reason, such as a host outside the
+    operator's job. Otherwise it reports `system_error`, as before.
+  - Council records are written once the whole council returns. When a
+    council is cancelled:
+    - a member that had already answered is recorded as `cancelled` without
+      hashes, because its answer and hash key never reached the caller;
+    - a member already refused or failed keeps that outcome, also without
+      hashes;
+    - a member still running is recorded as `cancelled`.
+  - A council's hosts-file refusal no longer suggests standard effort, which
+    a council cannot use.
+- **Compatibility:** additive or corrective. Every call 1.51.0 accepted is
+  still accepted. Calls with the wrong size are still refused, now with the
+  council's own code.
+- **Schema digests:** `consult` moves; `surface_sha256` moves with it.
+- **Client action:** none. The Python SDK's `consult()` gains `host_ids`, and
+  `ConsultResult` gains `council_id`, `answered`, `asked` and `members`.
+  Before this release the SDK dropped every council answer.

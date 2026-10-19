@@ -1,1 +1,0 @@
-- Interface contract 1.48.0: store_finding accepts an optional response_to {discovery_id, response_type}, the same typed link knowledge(action='store') already takes, so a linked finding is one call; its ack lifts the recorded link as state_summary.response_to.

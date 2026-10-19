@@ -1,0 +1,430 @@
+{
+    "cutoff": "2026-10-18T22:24:05.925104+00:00",
+    "captured_at": "2026-10-18T22:24:05.925104+00:00",
+    "audit_events": {
+        "rows_7d": 52264,
+        "emitters_7d": 287,
+        "emitters_21d": 883,
+        "latest_event": "2026-10-18T22:24:05.042384+00:00",
+        "retained_rows": 6593939,
+        "earliest_event": "2026-04-01T12:46:44.413713+00:00",
+        "self_recoveries": 20,
+        "non_auto_resumes": 27,
+        "session_and_call_rows": 5822063,
+        "legacy_reason_self_recoveries": 15
+    },
+    "agent_registry": {
+        "retained_rows": 8677,
+        "latest_created_at": "2026-10-18T15:40:13.921821+00:00",
+        "earliest_created_at": "2025-11-29T00:18:15.693081+00:00"
+    },
+    "schema_version": 1,
+    "event_composition": [
+        {
+            "rows": 4803867,
+            "event_type": "session_resolve_miss_observed"
+        },
+        {
+            "rows": 1018196,
+            "event_type": "cross_device_call"
+        },
+        {
+            "rows": 213353,
+            "event_type": "auto_attest"
+        },
+        {
+            "rows": 101919,
+            "event_type": "grounding_shadow"
+        },
+        {
+            "rows": 93202,
+            "event_type": "progress_flat_candidate"
+        },
+        {
+            "rows": 80130,
+            "event_type": "coherence_gate_shadow"
+        },
+        {
+            "rows": 56989,
+            "event_type": "knowledge_read"
+        },
+        {
+            "rows": 43654,
+            "event_type": "stuck_detected"
+        },
+        {
+            "rows": 37396,
+            "event_type": "verification_floor_shadow"
+        },
+        {
+            "rows": 34301,
+            "event_type": "eisv_sync"
+        },
+        {
+            "rows": 19062,
+            "event_type": "bridge.delivery"
+        },
+        {
+            "rows": 14232,
+            "event_type": "bridge.suppressed"
+        },
+        {
+            "rows": 9736,
+            "event_type": "lambda1_skip"
+        },
+        {
+            "rows": 9513,
+            "event_type": "identity_resolution_observed"
+        },
+        {
+            "rows": 6744,
+            "event_type": "dialectic_sweep_cycle"
+        },
+        {
+            "rows": 5302,
+            "event_type": "path0_token_accept_observed"
+        },
+        {
+            "rows": 5096,
+            "event_type": "identity_hijack_suspected"
+        },
+        {
+            "rows": 3375,
+            "event_type": "lifecycle_archived"
+        },
+        {
+            "rows": 2787,
+            "event_type": "mirror_signal.emit"
+        },
+        {
+            "rows": 2590,
+            "event_type": "runtime_observation.activity_rollup"
+        },
+        {
+            "rows": 2542,
+            "event_type": "concurrent_session_binding_observed"
+        },
+        {
+            "rows": 2226,
+            "event_type": "lifecycle_created"
+        },
+        {
+            "rows": 2008,
+            "event_type": "identity_drift"
+        },
+        {
+            "rows": 2008,
+            "event_type": "trajectory_drift"
+        },
+        {
+            "rows": 1703,
+            "event_type": "runtime_observation.heartbeat"
+        },
+        {
+            "rows": 1643,
+            "event_type": "sentinel_alarm_finding"
+        },
+        {
+            "rows": 1607,
+            "event_type": "agent_archived"
+        },
+        {
+            "rows": 1427,
+            "event_type": "knowledge_write"
+        },
+        {
+            "rows": 1285,
+            "event_type": "sentinel_finding"
+        },
+        {
+            "rows": 1143,
+            "event_type": "identity_assurance_change"
+        },
+        {
+            "rows": 1089,
+            "event_type": "lifecycle_silent_critical"
+        },
+        {
+            "rows": 1060,
+            "event_type": "coordination_failure.mcp_handler_timeout.tool_decorator"
+        },
+        {
+            "rows": 1055,
+            "event_type": "anomaly_detected"
+        },
+        {
+            "rows": 922,
+            "event_type": "basin_shadow"
+        },
+        {
+            "rows": 915,
+            "event_type": "agent_silent"
+        },
+        {
+            "rows": 886,
+            "event_type": "lifecycle_silent"
+        },
+        {
+            "rows": 683,
+            "event_type": "lineage_declared"
+        },
+        {
+            "rows": 670,
+            "event_type": "dialectic_session_write"
+        },
+        {
+            "rows": 594,
+            "event_type": "doctor_check_finding"
+        },
+        {
+            "rows": 508,
+            "event_type": "cold_start_risk_confirmation_evaluated"
+        },
+        {
+            "rows": 500,
+            "event_type": "lineage_grace_expired"
+        },
+        {
+            "rows": 485,
+            "event_type": "cold_start_epistemic_deferred"
+        },
+        {
+            "rows": 452,
+            "event_type": "dialectic_phase_changed"
+        },
+        {
+            "rows": 371,
+            "event_type": "lifecycle_paused"
+        },
+        {
+            "rows": 364,
+            "event_type": "bridge.delivery_failed"
+        },
+        {
+            "rows": 315,
+            "event_type": "governed_effect.execute"
+        },
+        {
+            "rows": 303,
+            "event_type": "lifecycle_loop_detected"
+        },
+        {
+            "rows": 278,
+            "event_type": "agent_deleted"
+        },
+        {
+            "rows": 278,
+            "event_type": "lifecycle_deleted"
+        },
+        {
+            "rows": 244,
+            "event_type": "watcher_finding"
+        },
+        {
+            "rows": 239,
+            "event_type": "attest_gap_suppressed"
+        },
+        {
+            "rows": 230,
+            "event_type": "dialectic_opened"
+        },
+        {
+            "rows": 211,
+            "event_type": "circuit_breaker_trip"
+        },
+        {
+            "rows": 204,
+            "event_type": "identity_drift_resolved"
+        },
+        {
+            "rows": 204,
+            "event_type": "trajectory_drift_resolved"
+        },
+        {
+            "rows": 174,
+            "event_type": "watcher_resolution_finding"
+        },
+        {
+            "rows": 138,
+            "event_type": "bridge_liveness_finding"
+        },
+        {
+            "rows": 138,
+            "event_type": "identity_claim"
+        },
+        {
+            "rows": 133,
+            "event_type": "coordination_failure.anyio_cancellation.background_task"
+        },
+        {
+            "rows": 132,
+            "event_type": "dialectic_reviewer_dispatched"
+        },
+        {
+            "rows": 125,
+            "event_type": "dialectic_resolved"
+        },
+        {
+            "rows": 111,
+            "event_type": "coordination_failure.asyncpg_connect_error.bootstrap"
+        },
+        {
+            "rows": 98,
+            "event_type": "dialectic_facilitation_needed"
+        },
+        {
+            "rows": 87,
+            "event_type": "deploy_drift_finding"
+        },
+        {
+            "rows": 81,
+            "event_type": "lumen_checkin_finding"
+        },
+        {
+            "rows": 65,
+            "event_type": "coordination_failure.asyncpg_connect_error.runtime"
+        },
+        {
+            "rows": 62,
+            "event_type": "lineage_coincidental_rejected"
+        },
+        {
+            "rows": 54,
+            "event_type": "dogfood_friction_finding"
+        },
+        {
+            "rows": 49,
+            "event_type": "coordination_failure.executor_pool_exhaustion.acquire_timeout"
+        },
+        {
+            "rows": 48,
+            "event_type": "lineage_cross_role_rejected"
+        },
+        {
+            "rows": 42,
+            "event_type": "lifecycle_resumed"
+        },
+        {
+            "rows": 40,
+            "event_type": "consultation"
+        },
+        {
+            "rows": 39,
+            "event_type": "lineage_promoted"
+        },
+        {
+            "rows": 37,
+            "event_type": "sentinel_build_finding"
+        },
+        {
+            "rows": 29,
+            "event_type": "vigil_finding"
+        },
+        {
+            "rows": 25,
+            "event_type": "lifecycle_stuck_detected"
+        },
+        {
+            "rows": 20,
+            "event_type": "knowledge_confidence_clamped"
+        },
+        {
+            "rows": 20,
+            "event_type": "watcher_capability_finding"
+        },
+        {
+            "rows": 19,
+            "event_type": "lease_plane_health_finding"
+        },
+        {
+            "rows": 16,
+            "event_type": "auto_resume"
+        },
+        {
+            "rows": 12,
+            "event_type": "lifecycle_unstuck"
+        },
+        {
+            "rows": 8,
+            "event_type": "finding_model_adjudicated"
+        },
+        {
+            "rows": 5,
+            "event_type": "dialectic_guarded_write"
+        },
+        {
+            "rows": 5,
+            "event_type": "sentinel_adjudication_abstained"
+        },
+        {
+            "rows": 4,
+            "event_type": "bridge.ack"
+        },
+        {
+            "rows": 4,
+            "event_type": "continuity_token_deprecated_accept"
+        },
+        {
+            "rows": 4,
+            "event_type": "lifecycle_response_completed"
+        },
+        {
+            "rows": 3,
+            "event_type": "device_health_check"
+        },
+        {
+            "rows": 3,
+            "event_type": "drawing_calibration_finding"
+        },
+        {
+            "rows": 2,
+            "event_type": "dialectic_recusal"
+        },
+        {
+            "rows": 2,
+            "event_type": "dialectic_reviewer_abstained"
+        },
+        {
+            "rows": 2,
+            "event_type": "warmup_structural_suppressed"
+        },
+        {
+            "rows": 1,
+            "event_type": "bridge_delivery_check_finding"
+        },
+        {
+            "rows": 1,
+            "event_type": "coordination_failure.wave_3a.fallback"
+        },
+        {
+            "rows": 1,
+            "event_type": "genesis_rebaselined"
+        },
+        {
+            "rows": 1,
+            "event_type": "governed_effect.record_only"
+        },
+        {
+            "rows": 1,
+            "event_type": "healthcheck_selftest_finding"
+        },
+        {
+            "rows": 1,
+            "event_type": "infrastructure.audit_write_read_canary.v1"
+        },
+        {
+            "rows": 1,
+            "event_type": "webauthn_enrolled"
+        }
+    ],
+    "state_observations": {
+        "retained_rows": 102728,
+        "latest_recorded_at": "2026-10-18T22:24:05.050947+00:00",
+        "earliest_recorded_at": "2025-12-13T04:22:08.261769+00:00"
+    },
+    "knowledge_discoveries": {
+        "retained_rows": 2129,
+        "latest_created_at": "2026-10-18T22:08:12.011382+00:00",
+        "earliest_created_at": "2025-11-28T11:10:24.346857+00:00"
+    }
+}

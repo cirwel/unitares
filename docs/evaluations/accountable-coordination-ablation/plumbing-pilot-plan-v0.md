@@ -37,12 +37,12 @@ only with known-good and known-bad reference patches.
 
 The first draft relied on environment variables, port checks and
 host-hook flags. A live agent with a shell, which a patching task needs, can
-bypass all of them on this host:
+bypass all of them on a shared operator host:
 
-- **Production Postgres trusts every local connection.**
-  `/opt/homebrew/var/postgresql@17/pg_hba.conf` is `trust` for local sockets,
-  127.0.0.1 and ::1. `psql -h localhost governance` reaches production
-  whatever `DB_POSTGRES_URL` says.
+- **Production Postgres may trust local connections.** A native install whose
+  `pg_hba.conf` allows local sockets and loopback without a password lets any
+  same-user process reach the production database whatever `DB_POSTGRES_URL`
+  says. Arms must not share a host with such a database.
 - **`gh` is authenticated for the host user**, so an agent can publish
   externally.
 - **Backend routes beyond MCP are reachable with curl.**
@@ -58,10 +58,11 @@ bypass all of them on this host:
   read the scorer copy and earlier episodes' raw output. A 0700 directory owned
   by the same user is not a boundary.
 - **Host agent configuration leaks into every arm.**
-  - `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` describe UNITARES and the
-    knowledge graph, so they would prime arms A and B.
-  - Claude.ai connectors, one of which reaches production UNITARES through a
-    tunnel, load unless MCP configuration is strict.
+  - User-level agent instruction files (Claude, Codex) on an operator host
+    typically describe UNITARES and the knowledge graph, so they would prime
+    arms A and B.
+  - Account-level MCP connectors, which may reach production UNITARES, load
+    unless MCP configuration is strict.
   - `scripts/dev/review_gate.py:1632-1640` runs `claude -p` with an allowed
     tool list only; nothing there disables hooks, plugins or user instructions.
   - `host_adapter.py:84-88` uses `--safe-mode --tools ""`, which leaves no

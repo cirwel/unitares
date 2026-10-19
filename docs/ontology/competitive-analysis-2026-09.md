@@ -17,13 +17,13 @@ keep, merge, or stop investing. This audit asks only which public claims
 survive contact with the substitutes. Read the two together.
 **Method:** every public claim was enumerated from six surfaces (the root
 README, `PRODUCT_DEFINITION.md`, the public site, the trust contract, the
-preprint's title, and the Mercor Expression of Interest draft). For each, the
+preprint's title, and an external grant application draft). For each, the
 strongest existing substitute was identified and its primary source opened
-from this session where the network policy allowed. Each claim is then typed
+where the author's network access allowed. Each claim is then typed
 (capability, uniqueness, or benefit) and classed (unique, differentiated,
 commodity, unsupported). A substitute existing refutes a uniqueness claim; it
 does not refute a capability claim, and it says nothing about benefit.
-**Scope caveat:** this session's egress policy blocked `docs.aws.amazon.com`,
+**Scope caveat:** the author's network access blocked `docs.aws.amazon.com`,
 `learn.microsoft.com`, `arxiv.org`, `zenodo.org`, `spiffe.io`,
 `datatracker.ietf.org`, `huggingface.co` (web) and `driftgate.ai` (DNS).
 Where a source could not be opened, the row says so and the entry is graded
@@ -100,7 +100,7 @@ to do X), **benefit** (X improves an outcome). Evidence classes are those of
 
 ## Substitute map
 
-Source status: **opened** = primary page fetched in this session; **impl** =
+Source status: **opened** = primary page fetched by the author; **impl** =
 verified through a conformant implementation's README; **snippet** = search
 result only, not byte-verified; **blocked** = the primary domain refused.
 
@@ -214,7 +214,7 @@ to gap 1.
 | 13 | "runs beside evals, guardrails, and sandboxes and replaces none of them" (public site) | scope | — | honest | — | Keep |
 | 14 | "Every value UNITARES emits carries provenance" (trust contract §1) | system guarantee | Not a competitive claim | — | Enforced by lint | Keep |
 | 15 | "UNITARES: Information-Theoretic Governance of Heterogeneous Agent Fleets" (preprint title, CITATION.cff) | theory framing | The repository's own `paper-positioning.md`: FEP grounding demoted 2026-04-23, EISV reframed as an engineering instance of interoceptive inference | **Unsupported as titled** | Zenodo blocked; the abstract was not opened here | The v7 title or abstract must state that the information-theoretic formulation is the research target, not the deployed decision path |
-| 16 | Mercor EoI: "public claim ledger with evidence classes", "preregistered protocols with stop rules", "named, reproduced blind spots" | process claims about the project | Few open projects publish preregistrations and negative results; none opened here do | Differentiated | Documented | Keep; these describe method, not product |
+| 16 | External grant application draft: "public claim ledger with evidence classes", "preregistered protocols with stop rules", "named, reproduced blind spots" | process claims about the project | Few open projects publish preregistrations and negative results; none opened here do | Differentiated | Documented | Keep; these describe method, not product |
 | 17 | Codex table item "tamper-evident agent audit" | not a UNITARES claim | AgentLens, IETF AAT, hash-chained ledgers | Commodity, and a gap: `audit.events` is not hash-chained | HMAC attestation is not non-repudiation (stated) | Do not claim it; add an AAT-conformant export (see gaps) |
 | 18 | Codex table item "durable long-running agents" | not a UNITARES claim as stated | Temporal, AgentCore Runtime | Commodity | — | Keep the README's narrower wording: records survive restarts; execution durability is the runtime's job |
 

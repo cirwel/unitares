@@ -12,7 +12,7 @@ fact, never the operator's disposition of a recommendation.
 — options, recommendation, reversibility and blast radius, default-if-silent.
 Worked precedent for the same form:
 `docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`.
-**Raised by:** a Claude Code session, branch `claude/operator-decision-packet-9ddfuq`.
+**Raised by:** an agent session.
 **Evidence provenance:** the original packet and the Codex review are
 agent-authored analyses of the cited repository sources and command results.
 Review recommendations are attributed separately from observations and policy.
@@ -84,7 +84,7 @@ establishing that it is complete.
 
 ## Council review — recorded 2026-09-12
 
-Seven independent reviewers, one per entry, dispatched from a Claude Code
+Seven independent reviewers, one per entry, dispatched from an agent
 session. Each read its entry, the framing above, and the repository sources the
 entry cites, and each was instructed to attack the entry rather than ratify it,
 on the ground that this packet already carries one agreeing pass and a second

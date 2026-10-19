@@ -81,9 +81,9 @@ evidence, mirroring the outcome-event labeling philosophy. The deeper axis — m
 and [`continuous-verdict-blending-v0.md`](../proposals/archive/continuous-verdict-blending-v0.md).
 
 > **Gate guardrail (read before extending).** This grading is **presentation-only** and
-> is *not* council-gated: it sits in the same class as the outcome-event corroboration
+> is *not* gated on independent review: it sits in the same class as the outcome-event corroboration
 > labeling (`claim_only` / `evidence_weight`), which grades the confidence of a surfaced
-> claim without touching the actuator. The council gate protects `resolve_verdict_risk`,
+> claim without touching the actuator. The independent-review gate protects `resolve_verdict_risk`,
 > the one-sided blend invariant, and *enabling* `GOVERNANCE_VERIFICATION_FLOOR` — i.e.
 > anything that can change **what verdict/decision/enforcement fires**. The moment an
 > `evidence: provisional` grade is allowed to gate enforcement, de-escalate risk, or
