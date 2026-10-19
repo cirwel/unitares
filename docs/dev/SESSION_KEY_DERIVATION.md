@@ -36,7 +36,8 @@ ones are absent.
 
 Resolving a key is not the same as trusting it. Each resolution is tagged
 `caller_asserted` or `server_inferred` (`set_session_proof_origin`). This is the
-gate behind "strict identity is a write gate" (see CLAUDE.md): **writes require
+gate behind "strict identity is a write gate" (see the shared agent contract,
+`AGENTS.md` / `CLAUDE.md`): **writes require
 a caller-asserted binding; reads may run without one, but a pre-onboard read
 never shows a server-inferred binding's state.** A pre-onboard read
 (`check_working_state`, `get_governance_metrics`, a knowledge search) resolves

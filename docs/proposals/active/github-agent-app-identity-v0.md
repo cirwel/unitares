@@ -1,14 +1,14 @@
 # Separate GitHub automation identity from the operator
 
-**Status:** Attribution-first direction approved by Kenny on 2026-10-13.
+**Status:** Attribution-first direction approved by the operator on 2026-10-13.
 The private App is registered and installed on this repository; the local
-command runner authenticates as `unitares-agents[bot]`. Kenny subsequently
+command runner authenticates as `unitares-agents[bot]`. The operator subsequently
 authorized registration, credential setup and local-client rollout. Bot write
 and CI evidence belongs in the rollout PR. Actor-based authorization is deferred.
 
 ## Problem
 
-Agents and Kenny currently write through the same GitHub account. The PR-body
+Agents and the operator currently write through the same GitHub account. The PR-body
 ownership footer identifies the UNITARES process but cannot prove that a
 GitHub action was performed by the human. The KG audit addendum explicitly asks
 for one App identity while the operator remains `cirwel`.
@@ -131,6 +131,7 @@ is installed as a stable executable outside agent worktrees. It requests an
 explicit single-repository installation token for each command, supplies only
 that expiring token to the child, and revokes it on completion. Its default
 permissions match the table; `--read-only` downgrades every permission.
+On the reference deployment, the operator's runner wraps commands like this:
 
 ```sh
 unitares-github --read-only -- gh pr list

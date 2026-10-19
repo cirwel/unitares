@@ -1,7 +1,7 @@
 # Cross-agent knowledge archival: operator decision
 
 **Status:** Operator decision recorded 2026-10-13: retain collaborative low/medium
-curation. Kenny approved the recommendation with “proceed” in the KG-audit
+curation. The operator approved the recommendation with “proceed” in the KG-audit
 follow-through. This records policy; it changes no runtime permissions.
 **Evidence checked:** 2026-10-13.
 
