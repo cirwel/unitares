@@ -791,9 +791,27 @@ async def invoke_host_adapter(
             "dispatch_phase": dispatch_phase,
             "error": f"CLI '{cli}' not found or not executable; set {override}",
         }
-    if host_id == "codex:host-adapter" and not await asyncio.to_thread(
-        codex_confinement_verified, cli_path
-    ):
+    if host_id == "codex:host-adapter":
+        # A cold probe runs codex subprocesses with their own 20s timeouts, so
+        # it is clipped to the call's deadline like every later step. The
+        # thread cannot be cancelled; it finishes in the background and
+        # caches its verdict for the next call.
+        probe = asyncio.to_thread(codex_confinement_verified, cli_path)
+        try:
+            if deadline is None:
+                confined = await probe
+            else:
+                confined = await asyncio.wait_for(
+                    probe, timeout=max(0.0, deadline - time.monotonic())
+                )
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": "call deadline reached during the codex sandbox probe",
+            }
+    if host_id == "codex:host-adapter" and not confined:
         return {
             "ok": False,
             "host_id": host_id,

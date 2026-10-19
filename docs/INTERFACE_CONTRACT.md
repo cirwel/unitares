@@ -993,8 +993,8 @@ default (#2285).
     spawn request and the response, so by default the structured
     `DELEGATED_INFERENCE_TIMEOUT` reaches the caller.
   - The tool's own work ends within `timeout_s` + 10s. That is one
-    wall-clock deadline: host resolution, the spawn request, each await and
-    the bookkeeping after the answer (provider-cooldown writes, Energy
+    wall-clock deadline: host resolution, the codex lane's sandbox probe, the
+    spawn request, each await and the bookkeeping after the answer (provider-cooldown writes, Energy
     accounting) are clipped to the time left before it rather than adding
     their own timeouts on top. Bookkeeping that cannot finish by then
     completes in the background, and the response names it in
