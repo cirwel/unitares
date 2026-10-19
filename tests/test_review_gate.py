@@ -31,6 +31,30 @@ _REAL_READ_NATIVE = rg.read_native  # no_cloud_reads stubs it; carry tests opt i
 shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
+_REAL_CODEX_LANE = rg._codex_lane_client()
+_REAL_GIT_DIRS = rg._git_dirs
+_REAL_GLOB_UNSAFE = rg._glob_unsafe
+
+
+@pytest.fixture(autouse=True)
+def confined_codex_available(monkeypatch):
+    """Tests fake subprocess.Popen, so the codex sandbox probe and the git-dir
+    lookup would hit the fake: stand in a lane whose confinement is verified,
+    keeping the real override builder. Tests of the refusals override it."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rg, "_codex_lane_client", lambda: SimpleNamespace(
+        admin_config_conflict=lambda: None,
+        confinement_verified=lambda cli: True,
+        lane_config_overrides=_REAL_CODEX_LANE.lane_config_overrides,
+    ))
+    monkeypatch.setattr(rg, "_git_dirs", lambda checkout: ["/repo/.git"])
+    # CI has no codex installed; the fake Popen stands in for it.
+    monkeypatch.setattr(rg, "_codex_cli", lambda: "/usr/local/bin/codex")
+    # The tests run in the checkout, whose path may hold glob characters.
+    monkeypatch.setattr(rg, "_glob_unsafe", lambda path: False)
+
+
 def full_record(*args, **kwargs):
     """These fixtures represent full reviews with explicit object evidence."""
     kwargs.setdefault("head", "a" * 40)
@@ -3008,6 +3032,96 @@ def test_the_codex_reviewer_does_not_load_the_checkouts_agents_md(monkeypatch, t
     assert not Path(start).exists()  # removed after the run
 
 
+def test_the_codex_reviewer_runs_under_the_deny_by_default_profile(monkeypatch, tmp_path):
+    """Not --sandbox read-only (whole-disk read): the consult lane's profile,
+    widened to the checkout, its git dirs and toolchain, with .env denied."""
+    calls = _fake_agy(monkeypatch, [""])
+    rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    cmd = calls[0]["cmd"]
+    assert "--sandbox" not in cmd
+    overrides = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-c"]
+    table = next(o for o in overrides if ".filesystem=" in o)
+    checkout = os.getcwd()
+    key = lambda path: json.dumps(path)  # how the table writes each path, escapes included
+    assert '":root"="deny"' in table
+    assert f'{key(checkout)}="read"' in table and '"/repo/.git"="read"' in table
+    assert f'{key(checkout + "/**/.env*")}="deny"' in table
+    assert f'{key(checkout + "/.unitares")}="deny"' in table
+    assert any(o.startswith("default_permissions=") for o in overrides)
+    assert 'shell_environment_policy.set.GIT_CONFIG_NOSYSTEM="1"' in overrides
+    include = next(o for o in overrides if o.startswith("shell_environment_policy.include_only="))
+    assert "GIT_CONFIG_NOSYSTEM" in include and "GIT_CONFIG_GLOBAL" in include
+
+
+@pytest.mark.parametrize("lane, reason", [
+    ({"admin_config_conflict": lambda: "/etc/codex/config.toml",
+      "confinement_verified": lambda cli: True}, "/etc/codex/config.toml"),
+    ({"admin_config_conflict": lambda: None,
+      "confinement_verified": lambda cli: False}, "sandbox probe"),
+])
+def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tmp_path, lane, reason):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rg, "_codex_lane_client", lambda: SimpleNamespace(
+        lane_config_overrides=_REAL_CODEX_LANE.lane_config_overrides, **lane))
+    calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+    text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    assert calls == []  # never launched
+    # Worded as a startup failure, so remember_unavailable backs the provider off.
+    assert note.startswith("could not start codex") and reason in text
+
+
+def test_the_codex_reviewer_refuses_a_checkout_path_that_is_a_glob(monkeypatch, tmp_path):
+    """Its .env and .unitares denials are globs rooted at the checkout path."""
+    monkeypatch.setattr(rg, "_glob_unsafe", _REAL_GLOB_UNSAFE)
+    for name in ("repo[1]", "repo\\x"):
+        odd = tmp_path / name
+        odd.mkdir()
+        monkeypatch.chdir(odd)
+        calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+        text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+        assert calls == []
+        assert note == "could not start codex: checkout path contains glob characters"
+
+
+def test_a_missing_codex_is_a_startup_failure_not_a_sandbox_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "_codex_cli", lambda: None)
+    calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+    text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    assert calls == []
+    assert note == "could not start codex: not found on PATH"
+    assert "sandbox" not in text
+
+
+def test_codex_lane_client_loads_the_consult_lane_module():
+    module = _REAL_CODEX_LANE  # loaded at import, before the fixture stubs the loader
+    assert module.PERMISSION_PROFILE_PREFIX
+    overrides = module.lane_config_overrides("codex", "p", extra_read=["/x"], extra_deny=["/x/**/.env*"],
+                                             set_env={"A": "1"})
+    assert '"/x"="read"' in overrides[1] and '"/x/**/.env*"="deny"' in overrides[1]
+    assert overrides.count('shell_environment_policy.set.A="1"') == 1
+    # The defaults the consult lane uses are unchanged in length.
+    assert len(module.lane_config_overrides("codex", "p")) == module.LANE_CONFIG_OVERRIDE_COUNT
+
+
+def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                    capture_output=True, text=True)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+    git("worktree", "add", "-q", str(tmp_path / "wt"))
+    dirs = _REAL_GIT_DIRS(str(tmp_path / "wt"))
+    assert str((repo / ".git").resolve()) in [str(Path(d).resolve()) for d in dirs]
+    # Outside a repository: nothing. The ceiling stops git from finding a
+    # repository the temporary directory may sit inside.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    assert _REAL_GIT_DIRS(str(plain)) == []
+
+
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -5267,3 +5381,9 @@ def test_severity_comes_from_the_title_not_the_explanation():
             for i in range(3)]
     rounds = rg.count_review_cycles(runs)
     assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")
+
+
+def test_glob_unsafe_names_every_glob_character():
+    for path in ("/a/[b]", "/a/b*", "/a/b?", "/a/{b}", "/a/b\\c"):
+        assert _REAL_GLOB_UNSAFE(path)
+    assert not _REAL_GLOB_UNSAFE("/Users/me/projects/wt/unitares-review")
