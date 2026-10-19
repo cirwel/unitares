@@ -15,7 +15,7 @@ Background: on 2026-04-11, immediately after shipping the Watcher agent
 
 Both fixes shipped in the same commit as these tests, per the project
 standing rule "every behavioral change ships with tests covering the new
-behavior" (see ~/.claude memory feedback_tests-with-fixes.md).
+behavior".
 """
 
 from __future__ import annotations
