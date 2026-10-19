@@ -580,6 +580,166 @@ class TestAddDiscovery:
         assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
         assert "disc-s-refresh" in debugs[0].getMessage()
 
+    @staticmethod
+    def _warnings_naming(caplog, discovery_id: str) -> list:
+        import logging
+        return [
+            rec for rec in caplog.records
+            if rec.name == kg_age_module.__name__
+            and rec.levelno == logging.WARNING
+            and discovery_id in rec.getMessage()
+        ]
+
+    @staticmethod
+    def _available_embeddings(monkeypatch, *, embed):
+        """Embeddings reported available, with a service whose embed() is
+        ``embed`` (an AsyncMock), so no model is ever loaded."""
+        import src.embeddings as embeddings_module
+
+        svc = MagicMock()
+        svc.embed = embed
+        svc.model_name = "fake-model"
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: True)
+        monkeypatch.setattr(
+            embeddings_module, "get_embeddings_service", AsyncMock(return_value=svc)
+        )
+        monkeypatch.setattr(
+            embeddings_module, "get_active_table_name",
+            lambda: "core.discovery_embeddings",
+        )
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_add_discovery_embed_failure_warns_per_discovery(
+        self, caplog, monkeypatch
+    ):
+        """#2293: with embeddings available, an embed that raises leaves the
+        row without a vector. That is a fault, so each one logs at WARNING
+        with the discovery id and the backfill, not at debug, and is not
+        swallowed by the once-only unavailable flag."""
+        import logging
+
+        self._available_embeddings(
+            monkeypatch, embed=AsyncMock(side_effect=RuntimeError("model OOM"))
+        )
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-f1"))
+            await kg.add_discovery(make_discovery(discovery_id="disc-f2"))
+
+        for did in ("disc-f1", "disc-f2"):
+            recs = self._warnings_naming(caplog, did)
+            assert len(recs) == 1, [r.getMessage() for r in caplog.records]
+            assert "model OOM" in recs[0].getMessage()
+            assert "reembed_corpus.py" in recs[0].getMessage()
+        # The once-only skip flag belongs to the unavailable case alone.
+        assert kg_age_module._embedding_skip_warned is False
+
+    @pytest.mark.asyncio
+    async def test_add_discovery_none_embedding_warns(self, caplog, monkeypatch):
+        """A None embedding stores the row without a vector: WARNING, with id."""
+        import logging
+
+        self._available_embeddings(monkeypatch, embed=AsyncMock(return_value=None))
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg._store_embedding = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-none"))
+
+        recs = self._warnings_naming(caplog, "disc-none")
+        assert len(recs) == 1, [r.getMessage() for r in caplog.records]
+        assert "without a vector" in recs[0].getMessage()
+        kg._store_embedding.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_store_embedding_insert_failure_level(self, caplog, monkeypatch):
+        """An insert failure logs at WARNING by default (store and refresh),
+        and at the caller's level for the search path's opportunistic cache,
+        which can touch dozens of rows per query."""
+        import logging
+
+        self._available_embeddings(monkeypatch, embed=AsyncMock())
+        kg, mock_db = make_kg_with_mock_db()
+        conn = AsyncMock()
+        conn.execute = AsyncMock(side_effect=RuntimeError("relation does not exist"))
+        acquire_cm = MagicMock()
+        acquire_cm.__aenter__ = AsyncMock(return_value=conn)
+        acquire_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_db.acquire = MagicMock(return_value=acquire_cm)
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg._store_embedding("disc-ins", [0.1, 0.2])
+            await kg._store_embedding(
+                "disc-cache", [0.1, 0.2], failure_level=logging.DEBUG
+            )
+
+        recs = self._warnings_naming(caplog, "disc-ins")
+        assert len(recs) == 1, [r.getMessage() for r in caplog.records]
+        assert "relation does not exist" in recs[0].getMessage()
+        assert "core.discovery_embeddings" in recs[0].getMessage()
+        assert self._warnings_naming(caplog, "disc-cache") == []
+        assert any(
+            r.levelno == logging.DEBUG and "disc-cache" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_refresh_embedding_failure_warns_with_rebuild_hint(
+        self, caplog, monkeypatch
+    ):
+        """A failed refresh leaves the old vector in place, which the default
+        backfill skips, so its WARNING names --rebuild."""
+        import logging
+
+        self._available_embeddings(
+            monkeypatch, embed=AsyncMock(side_effect=RuntimeError("encode failed"))
+        )
+        kg, _ = make_kg_with_mock_db()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg.get_discovery = AsyncMock(return_value=make_discovery(discovery_id="disc-rf"))
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg._refresh_embedding("disc-rf")
+
+        recs = self._warnings_naming(caplog, "disc-rf")
+        assert len(recs) == 1, [r.getMessage() for r in caplog.records]
+        assert "encode failed" in recs[0].getMessage()
+        assert "--rebuild" in recs[0].getMessage()
+
+    def test_store_task_failure_callback(self, caplog):
+        """The store task's done-callback warns on an exception raised before
+        the insert, and ignores a cancelled task instead of raising from
+        task.exception() (the old lambda did)."""
+        import asyncio
+        import logging
+
+        failed = MagicMock()
+        failed.cancelled.return_value = False
+        failed.exception.return_value = RuntimeError("no table")
+        cancelled = MagicMock()
+        cancelled.cancelled.return_value = True
+        cancelled.exception.side_effect = asyncio.CancelledError()
+        ok = MagicMock()
+        ok.cancelled.return_value = False
+        ok.exception.return_value = None
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            kg_age_module._log_store_task_failure("disc-cb", failed)
+            kg_age_module._log_store_task_failure("disc-cancel", cancelled)
+            kg_age_module._log_store_task_failure("disc-ok", ok)
+
+        recs = self._warnings_naming(caplog, "disc-cb")
+        assert len(recs) == 1
+        assert "no table" in recs[0].getMessage()
+        assert self._warnings_naming(caplog, "disc-cancel") == []
+        assert self._warnings_naming(caplog, "disc-ok") == []
+
     @pytest.mark.asyncio
     async def test_add_discovery_with_tags(self):
         """Should create TAGGED edges for each tag."""
