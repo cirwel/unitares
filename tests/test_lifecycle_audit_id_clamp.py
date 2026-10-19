@@ -28,7 +28,7 @@ import pytest
 from src.agent_metadata_model import _joinable_audit_agent_id
 
 
-UUID = "99cbe2ad-008b-429f-bf43-9e466ea5dff2"
+UUID = "1c21191c-31a2-5aeb-8410-e85df86714fd"
 
 
 def test_uuid_passes_through_as_the_joinable_key():

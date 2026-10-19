@@ -144,12 +144,12 @@ async def test_ghost_holding_the_clean_name_does_not_shadow_the_real_resident(au
     Vigil alarms on, every cycle, with no way to distinguish a real gap from a
     shadowed one.
 
-    `Watcher_7bf970d4` sat in that shape from 2026-04-19 to 2026-06-14.
+    `Watcher_0e6d210c` sat in that shape from 2026-04-19 to 2026-06-14.
     """
     server = SimpleNamespace(agent_metadata={
-        "dc94fa70-6186-4862-aeb6-3fc9801263c8": _meta("Watcher", ["ephemeral"]),
-        "7bf970d4-0000-4000-8000-000000000000": _meta(
-            "Watcher_7bf970d4", ["persistent", "autonomous"]),
+        "81b264c8-7406-5fcc-8b34-2e742952e4ee": _meta("Watcher", ["ephemeral"]),
+        "0e6d210c-0000-4000-8000-000000000000": _meta(
+            "Watcher_0e6d210c", ["persistent", "autonomous"]),
     })
     resp = await _run(server, audit_request)
     import json as _json
@@ -166,7 +166,7 @@ async def test_a_renamed_resident_is_still_audited_when_no_ghost_exists(audit_re
     resident with a real tag gap could go unreported indefinitely.
     """
     server = SimpleNamespace(agent_metadata={
-        "7bf970d4-0000-4000-8000-000000000000": _meta("Watcher_7bf970d4", ["persistent"]),
+        "0e6d210c-0000-4000-8000-000000000000": _meta("Watcher_0e6d210c", ["persistent"]),
     })
     resp = await _run(server, audit_request)
     import json as _json

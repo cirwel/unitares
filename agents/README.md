@@ -2,6 +2,11 @@
 
 Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, `chronicler/`, and `watcher/` as examples of how to build a resident agent, not as load-bearing governance internals.
 
+These implementations are optional. Installing the server does not select a
+resident fleet or enable a scheduler. Configure names, capabilities, endpoints,
+and schedules for the agents you deploy; keep actual fleet configuration in a
+separate deployment repository.
+
 These specialized agents are also distinct from a general-purpose **UNITARES
 Resident** product. If that first-party conversational runtime is built, it
 belongs in a separate `unitares-resident` repository and must depend only on
@@ -37,11 +42,11 @@ for the tag-driven release path.
 
 Declare the resident to a deployment with `UNITARES_RESIDENTS` (names and calibration class) and the `UNITARES_RESIDENT_PROGRESS_MANIFEST` (progress probing). If you want the progress probe to track a metric of your own, ship a source in the `unitares.resident_progress_sources` entry-point group — no change to this repo is required. See [`docs/operations/resident-roster.md`](../docs/operations/resident-roster.md).
 
-## LaunchAgents (Mac)
+## Scheduling optional residents
 
-- `com.unitares.vigil` — runs `vigil/agent.py --once` every 30 min
-- `com.unitares.sentinel-beam` — active BEAM Sentinel cutover slot
-- `com.unitares.sentinel` — Python Sentinel reference / rollback slot
-- `com.unitares.chronicler` — runs `chronicler/agent.py` daily
-
-Plist templates: `scripts/ops/`.
+Choose a supervisor appropriate to the resident's lifecycle: a timer for a
+bounded invocation or a service manager for a continuous process. macOS
+LaunchAgent templates are available under `scripts/ops/`; adapt only those you
+intend to use. A template is not a default fleet or an instruction to enable a
+particular resident. Store the configured services and their schedules with
+your deployment, and keep `UNITARES_RESIDENTS` consistent with the server.

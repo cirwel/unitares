@@ -1,11 +1,6 @@
-"""Tests for the census's self-check on its own PATH install.
+"""The census checks only a deployment's explicit install expectation.
 
-`~/.local/bin/unitares-automations` must stay a symlink to this repo's
-`scripts/ops/unitares-automations`, never a hand-installed copy -- a copy
-silently drifts behind every fix landed here with no measured symptom to
-surface it (found 2026-08-22, three commits / 89 changed lines behind,
-undetected for days). The check lives in the tool's own collection pass
-rather than a separate watchdog, so these tests exercise it directly.
+These tests call the read-only check directly, never the real census collectors.
 """
 from __future__ import annotations
 
@@ -18,7 +13,9 @@ import pytest
 
 
 @pytest.fixture()
-def census_mod():
+def census_mod(monkeypatch, tmp_path):
+    for name in ("UNITARES_AUTOMATION_INSTALL_SOURCE", "UNITARES_AUTOMATION_INSTALL_PATH"):
+        monkeypatch.delenv(name, raising=False)
     module_path = (
         Path(__file__).resolve().parent.parent / "scripts" / "ops" / "unitares-automations"
     )
@@ -28,55 +25,96 @@ def census_mod():
     module = importlib.util.module_from_spec(spec)
     sys.modules["unitares_automations"] = module
     loader.exec_module(module)
+    monkeypatch.setattr(module, "HOME", tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
     return module
 
 
-def test_no_install_present_is_silent(census_mod, tmp_path, monkeypatch):
-    monkeypatch.setattr(census_mod, "HOME", tmp_path / "empty-home")
+def _source(tmp_path):
+    source = tmp_path / "checkout" / "unitares-automations"
+    source.parent.mkdir()
+    source.write_text("#!/usr/bin/env python3\n")
+    return source
+
+
+def _installed(tmp_path):
+    installed = tmp_path / ".local/bin/unitares-automations"
+    installed.parent.mkdir(parents=True)
+    return installed
+
+
+def _warnings(census_mod):
     warnings: list[str] = []
     census_mod.check_own_install_health(warnings)
-    assert warnings == []
+    return warnings
 
 
-def test_hand_installed_copy_is_flagged(census_mod, tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    installed = home / ".local/bin/unitares-automations"
-    installed.parent.mkdir(parents=True)
-    installed.write_text("#!/usr/bin/env python3\n")
-    installed.chmod(0o755)
-    monkeypatch.setattr(census_mod, "HOME", home)
-    warnings: list[str] = []
-    census_mod.check_own_install_health(warnings)
-    assert any("hand-installed copy, not a symlink" in w for w in warnings), warnings
+@pytest.mark.parametrize("kind", ["missing", "copy", "symlink", "broken"])
+def test_no_expectation_accepts_any_install_layout(census_mod, tmp_path, kind):
+    installed = _installed(tmp_path)
+    if kind == "copy":
+        installed.write_text("#!/usr/bin/env python3\n")
+    elif kind == "symlink":
+        installed.symlink_to(_source(tmp_path))
+    elif kind == "broken":
+        installed.symlink_to(tmp_path / "missing")
+    assert _warnings(census_mod) == []
 
 
-def test_symlink_to_canonical_is_silent(census_mod, tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    canonical = home / ".local/share/cirwel/unitares-ops/scripts/ops/unitares-automations"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_text("#!/usr/bin/env python3\n")
-    canonical.chmod(0o755)
-    installed = home / ".local/bin/unitares-automations"
-    installed.parent.mkdir(parents=True)
-    installed.symlink_to(canonical)
-    monkeypatch.setattr(census_mod, "HOME", home)
-    warnings: list[str] = []
-    census_mod.check_own_install_health(warnings)
-    assert warnings == []
+def test_install_path_alone_does_not_enable_check(census_mod, tmp_path, monkeypatch):
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_PATH", str(tmp_path / "missing"))
+    assert _warnings(census_mod) == []
 
 
-def test_symlink_to_somewhere_else_is_flagged(census_mod, tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    canonical = home / ".local/share/cirwel/unitares-ops/scripts/ops/unitares-automations"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_text("#!/usr/bin/env python3\n")
-    wrong_target = home / "elsewhere" / "unitares-automations"
-    wrong_target.parent.mkdir(parents=True)
-    wrong_target.write_text("#!/usr/bin/env python3\n")
-    installed = home / ".local/bin/unitares-automations"
-    installed.parent.mkdir(parents=True)
+def test_copy_is_flagged_when_symlink_is_required(census_mod, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    installed = _installed(tmp_path)
+    installed.write_bytes(source.read_bytes())
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", str(source))
+    assert any("hand-installed copy" in warning for warning in _warnings(census_mod))
+    assert installed.read_bytes() == source.read_bytes()
+    assert not installed.is_symlink()
+
+
+def test_expected_symlink_is_silent(census_mod, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    _installed(tmp_path).symlink_to(source)
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", str(source))
+    assert _warnings(census_mod) == []
+
+
+def test_different_target_is_flagged_without_repair(census_mod, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    wrong_target = tmp_path / "old-tool"
+    wrong_target.write_text("old tool\n")
+    installed = _installed(tmp_path)
     installed.symlink_to(wrong_target)
-    monkeypatch.setattr(census_mod, "HOME", home)
-    warnings: list[str] = []
-    census_mod.check_own_install_health(warnings)
-    assert any("symlinks to" in w and "not the canonical" in w for w in warnings), warnings
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", str(source))
+    assert any("not the configured source" in warning for warning in _warnings(census_mod))
+    assert installed.resolve() == wrong_target
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_missing_or_broken_expected_install_is_flagged(census_mod, tmp_path, monkeypatch, broken):
+    source = _source(tmp_path)
+    installed = _installed(tmp_path)
+    if broken:
+        installed.symlink_to(tmp_path / "absent-source")
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", str(source))
+    assert any("missing or a broken symlink" in warning for warning in _warnings(census_mod))
+    assert not installed.exists()
+
+
+def test_missing_expected_source_is_flagged(census_mod, tmp_path, monkeypatch):
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", str(tmp_path / "absent"))
+    assert any("configured install source" in warning for warning in _warnings(census_mod))
+
+
+def test_custom_install_paths_expand_home(census_mod, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    installed = tmp_path / "bin" / "census"
+    installed.parent.mkdir()
+    installed.symlink_to(source)
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_SOURCE", "~/checkout/unitares-automations")
+    monkeypatch.setenv("UNITARES_AUTOMATION_INSTALL_PATH", "~/bin/census")
+    assert _warnings(census_mod) == []

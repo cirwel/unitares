@@ -7,6 +7,19 @@ agent (or no agent) against it. Agent reasoning loops and user-facing harnesses
 belong outside Core and integrate through its public MCP, REST, and SDK
 contracts.
 
+This boundary covers the **whole repository**, including optional reference
+implementations under `agents/`, operations tools, documentation, examples, and
+configuration templates. A directory outside a guard's scan roots is not exempt.
+Reusable tools and supported client integrations belong here when their defaults
+work without a particular user's fleet, workstation, or personal workflow.
+Actual deployment manifests, schedules, and local procedures belong in the
+operator's separate deployment repository (fleet-ops for the maintainer).
+
+Keep project authorship, repository contributor policy, dated empirical records,
+and scientific provenance intact. They identify who built or observed something;
+they do not configure an install. Illustrative configuration should use synthetic
+residents and explicit deployment inputs.
+
 ## Out of scope — do not commit here
 
 - **Career / personal artifacts** — resumes, cover letters, job-application
@@ -22,24 +35,35 @@ contracts.
   `~/.claude` (or the adapter **plugin** repo, which is the canonical
   vendor-specific surface), not in this agnostic repo.
 - **Personal contact info** — personal emails / identifiers. Use the project's
-  public contact surfaces only.
+  public contact surfaces only. In changed files the guard flags any personal
+  webmail address (Gmail/Googlemail, Yahoo, Hotmail, Outlook, Live, iCloud,
+  Proton/ProtonMail at `.com` or `.me`). Examples use `user@example.com`.
+- **Machine-absolute home paths** — `/Users/<name>/...` names one contributor's
+  account and works on nobody else's machine; use `~`, `$HOME`, an environment
+  variable or a repo-relative path. The guard flags such a path in changed files
+  and in PR bodies for any account name except an illustrative placeholder:
+  a single letter, `you`, `me`, `user`, `username`, `name`, `alice`, `bob`,
+  `example`, `test`, `testuser`, `foo`, `runner`, `operator`, `op`, `someone`,
+  and macOS's own `Shared`. A templated `/Users/<name>` or `/Users/$USER` is
+  never flagged. On PR bodies the match ignores case, so a lowercase
+  `/users/<name>/...` is flagged too; in files it is case-sensitive. The check
+  names no particular contributor.
 - **Chat-session / AI-deliberation register** — committed docs, code comments,
   and PR descriptions should read as product engineering, not as a continued
   personal chat session or an AI-review scratchpad. The guard flags, in changed
-  files and in PR bodies: operator-local paths (`/Users/cirwel`), second-person
-  address of the operator (`per your guidance`, `your overlay`, `you flagged`,
-  `questions for Kenny`), and exposed AI-review process (`council pass`,
+  files and in PR bodies: second-person address of the operator
+  (`per your guidance`, `your overlay`, `you flagged`, `questions for Kenny`), and exposed AI-review process (`council pass`,
   `council fold`, `live-verifier`, and, in files only, `three-lane council`).
   It deliberately does **not** flag the real product vocabulary `operator`,
   `council`, or `dialectic`, and does not scan gitignored runtime/session data.
   In files it also flags a cited harness-memory file name (`feedback_*.md`,
   `project_*.md`): that memory is machine-local, so cite the repo artifact or
-  the knowledge-graph entry instead. Working notes belong in
-  `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
-  discusses these patterns (this guard, a register cleanup, meta-docs) can skip
+  the knowledge-graph entry instead. Personal working notes belong outside the
+  product checkout; ship clean docs. A PR that legitimately discusses these
+  patterns (this guard, a register cleanup, meta-docs) can skip
   the PR-body register check with the HTML comment
-  `<!-- scope-guard: allow-register -->`; the operator-local path check on the
-  PR body always runs.
+  `<!-- scope-guard: allow-register -->`; the home-path check on the PR body
+  always runs.
 ## Metered model-cloud dependencies
 
 The execution-cost policy (`CLAUDE.md` → *Execution-cost policy*) keeps the repo
@@ -66,8 +90,8 @@ reliably prevent leakage — and they only reach the agent that reads them.
   `scripts/ops/install_git_hooks.sh`).
 - **`.github/workflows/repo-scope.yml`** — CI, which catches cloud/web agent
   sessions that bypass local hooks. Beyond changed files it lints one surface a
-  file guard cannot see: the **PR body**, for operator-local paths and chat
-  register.
+  file guard cannot see: the **PR body**, for machine-absolute home paths and
+  chat register.
 
 If the guard flags something that genuinely belongs here, add the path to
 `scripts/dev/repo-scope-allow.txt` (prefer moving the file out instead).

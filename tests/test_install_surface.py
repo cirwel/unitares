@@ -111,6 +111,30 @@ def test_plist_template_uses_placeholders(relpath: str) -> None:
     )
 
 
+# Templates whose install instructions were moved off one operator's layout
+# (a ~/projects/<checkout> render root, a pinned framework interpreter). They
+# must keep rendering through placeholders and caller-supplied values only.
+LAYOUT_NEUTRAL_TEMPLATES = [
+    "scripts/ops/com.unitares.chronicler.plist.template",
+    "scripts/ops/com.unitares.dep-sweep.plist.template",
+    "scripts/ops/com.unitares.deploy-drift-doctor.plist.template",
+    "scripts/ops/com.unitares.gateway-mcp.plist.template",
+    "scripts/ops/com.unitares.kg-hygiene.plist.template",
+]
+LAYOUT_PATTERN = r"(?:\$HOME|~)/projects|/Library/Frameworks/Python\.framework"
+
+
+@pytest.mark.parametrize("relpath", LAYOUT_NEUTRAL_TEMPLATES)
+def test_plist_template_install_example_is_layout_neutral(relpath: str) -> None:
+    matches = re.findall(LAYOUT_PATTERN, _read(relpath))
+    assert not matches, (
+        f"plist template bakes in an operator layout: {matches}\n"
+        f"  file: {relpath}\n"
+        f"  render with $UNITARES_DEPLOY, $(git rev-parse --show-toplevel) or "
+        f"$(command -v python3) instead"
+    )
+
+
 def test_beam_sentinel_launchd_entrypoint_is_cutover_ready() -> None:
     relpath = "elixir/sentinel/scripts/start.sh"
     content = _read(relpath)

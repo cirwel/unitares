@@ -25,11 +25,12 @@
 
     Before installing, substitute the placeholder:
       __UNITARES_ROOT__ -> absolute path to the deploy checkout
-                           (e.g. $HOME/projects/unitares-deploy)
+                           ($UNITARES_DEPLOY, the path the deploy-*.sh
+                           scripts read)
 
-    Example:
-      mkdir -p "$HOME/projects/unitares-deploy/data/logs"
-      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+    Example (with UNITARES_DEPLOY set to that absolute path):
+      mkdir -p "${UNITARES_DEPLOY:?set UNITARES_DEPLOY to the deploy worktree path}/data/logs"
+      sed -e "s|__UNITARES_ROOT__|${UNITARES_DEPLOY:?set UNITARES_DEPLOY to the deploy worktree path}|g" \
           scripts/ops/com.unitares.deploy-drift-doctor.plist.template \
           > ~/Library/LaunchAgents/com.unitares.deploy-drift-doctor.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.deploy-drift-doctor.plist

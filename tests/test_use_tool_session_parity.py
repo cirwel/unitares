@@ -42,14 +42,14 @@ from tests.no_live_redis import no_live_redis  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("no_live_redis")
 
-AGENT_UUID = "1856bb5c-2553-4523-809b-a5d26bbd58d1"
+AGENT_UUID = "100bc788-d559-5672-b12d-f432057387a5"
 # Not in the agent-<uuid> form and sent with a Claude user agent, so an id
 # copied into client_session_id would also be model-scoped (":claude") and
 # land on a different session key from the header's own.
 HEADER = "proc-7f3a-session"
 USER_AGENT = "claude-code/2.1.0 (cli)"
 FINGERPRINT = "127.0.0.1:abc123"
-PINNED_SESSION = "agent-1856bb5c-255"
+PINNED_SESSION = "agent-100bc788-255"
 EXPLICIT = "agent-5a0e3c1d-77b"
 
 

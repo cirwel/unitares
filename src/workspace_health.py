@@ -1,279 +1,174 @@
-"""
-Workspace Health Check Module
+"""Installation diagnostics with optional, explicitly supplied workspace checks.
 
-Provides comprehensive workspace validation for onboarding new agents.
-Consolidates validation logic from various scripts into a single MCP tool.
+The default MCP call checks this server's installed Python environment. Client
+configuration and workspace files belong to a deployment, so the Python helpers
+inspect them only when a caller supplies their paths. No client home directories
+or development-checkout layout are assumed.
 """
 
-import json
-import os
-from pathlib import Path
-from typing import Dict, Any
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
+import importlib
+import importlib.util
+import json
+from pathlib import Path
+from typing import Any
 
 
 def get_project_root() -> Path:
-    """Get the project root directory."""
+    """Return the source installation root for explicit checkout diagnostics."""
     return Path(__file__).parent.parent
 
 
-def check_mcp_status() -> Dict[str, Any]:
+def check_mcp_status(
+    config_paths: Mapping[str, str | Path] | None = None,
+) -> dict[str, Any]:
+    """Read supplied JSON MCP client configurations; never discover clients.
+
+    Keys are arbitrary deployment-defined client labels. Each file uses the
+    ``mcpServers`` object. Configured server names are not liveness evidence.
     """
-    Check MCP server configuration status.
-    
-    Returns:
-        Dict with MCP status information
-    """
-    project_root = get_project_root()
-    
-    # Standard MCP config locations (check primary location first)
-    cursor_config_paths = [
-        Path.home() / ".cursor" / "mcp.json",  # Primary location (shown in Cursor UI)
-        Path.home() / "Library/Application Support/Cursor/User/globalStorage/mcp.json",  # macOS alternative
-        Path.home() / ".config/Cursor/User/globalStorage/mcp.json",  # Linux alternative
-        Path(os.environ.get("APPDATA", "")) / "Cursor/User/globalStorage/mcp.json",  # Windows alternative
-    ]
-    
-    claude_config_paths = [
-        Path.home() / "Library/Application Support/Claude/claude_desktop_config.json",  # macOS
-        Path.home() / ".config/Claude/claude_desktop_config.json",  # Linux
-        Path(os.environ.get("APPDATA", "")) / "Claude/claude_desktop_config.json",  # Windows
-    ]
-    
-    cursor_servers = []
-    claude_servers = []
-    
-    # Check Cursor config
-    cursor_config = None
-    for path in cursor_config_paths:
-        if path.exists():
-            try:
-                with open(path, 'r') as f:
-                    cursor_config = json.load(f)
-                    break
-            except Exception:
-                pass
-    
-    if cursor_config:
-        mcp_servers = cursor_config.get("mcpServers", {})
-        cursor_servers = list(mcp_servers.keys())
-    
-    # Check Claude Desktop config
-    claude_config = None
-    for path in claude_config_paths:
-        if path.exists():
-            try:
-                with open(path, 'r') as f:
-                    claude_config = json.load(f)
-                    break
-            except Exception:
-                pass
-    
-    if claude_config:
-        mcp_servers = claude_config.get("mcpServers", {})
-        claude_servers = list(mcp_servers.keys())
-    
-    # Count active servers (based on what we can detect)
-    # Note: This is an approximation - actual server status requires runtime checks
-    active_count = len(set(cursor_servers + claude_servers))
-    
+    clients = {}
+    configured_servers: set[str] = set()
+    for name, raw_path in (config_paths or {}).items():
+        path = Path(raw_path).expanduser()
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(config, dict):
+                raise ValueError("MCP client configuration must be a JSON object")
+            servers = config.get("mcpServers", {})
+            if not isinstance(servers, dict):
+                raise ValueError("mcpServers must be a JSON object")
+        except FileNotFoundError:
+            clients[name] = {"status": "missing", "servers": []}
+        except (OSError, ValueError) as exc:
+            clients[name] = {"status": "error", "servers": [], "error": str(exc)}
+        else:
+            clients[name] = {"status": "read", "servers": sorted(servers)}
+            configured_servers.update(servers)
+
     return {
-        "cursor_servers": cursor_servers,
-        "claude_desktop_servers": claude_servers,
-        "active_count": active_count,
-        "notes": "Count based on config files. Actual runtime status may vary."
+        "status": "checked" if config_paths else "not_requested",
+        "clients": clients,
+        "configured_count": len(configured_servers),
+        # Compatibility aliases for clients of the original diagnostic. These
+        # are populated only by explicitly supplied configurations, like any
+        # other client, and do not trigger vendor-specific path discovery.
+        "cursor_servers": clients.get("cursor", {}).get("servers", []),
+        "claude_desktop_servers": clients.get("claude_desktop", {}).get("servers", []),
+        "active_count": len(configured_servers),
+        "notes": (
+            "Only explicitly supplied client configurations are inspected. "
+            "configured_count and legacy active_count count distinct configured "
+            "server names, not running servers."
+        ),
     }
 
 
-def check_documentation_coherence() -> Dict[str, Any]:
+def check_documentation_coherence(
+    required_files: Iterable[str | Path] | None = None,
+    *,
+    workspace_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Check files an embedding caller explicitly requires for its workspace.
+
+    A packaged/headless install has no required checkout documents by default.
+    This checks file presence only, not document contents or server counts.
     """
-    Check documentation coherence and file references.
-    
-    Returns:
-        Dict with documentation coherence status
-    """
-    project_root = get_project_root()
-    issues = []
-    
-    # Check if key documentation files exist
-    key_docs = [
-        "README.md",
-        "docs/guides/START_HERE.md",
-        "docs/dev/CANONICAL_SOURCES.md",
-        "docs/UNIFIED_ARCHITECTURE.md",
-    ]
-    
-    missing_docs = []
-    for doc in key_docs:
-        if not (project_root / doc).exists():
-            missing_docs.append(doc)
-    
-    if missing_docs:
-        issues.append({
-            "type": "missing_documentation",
-            "files": missing_docs,
-            "severity": "low"
-        })
-    
-    # Check if key scripts exist
-    # Note: setup_mcp.sh was moved to ~/scripts/ (user utility, not project infrastructure)
-    key_scripts = [
-        "src/mcp_server_std.py",
-    ]
-    
-    missing_scripts = []
-    for script in key_scripts:
-        if not (project_root / script).exists():
-            missing_scripts.append(script)
-    
-    if missing_scripts:
-        issues.append({
-            "type": "missing_scripts",
-            "files": missing_scripts,
-            "severity": "high"
-        })
-    
-    # Check if config examples exist
-    config_examples = [
-        "config/mcp-config-cursor.json",
-        "config/mcp-config-claude-desktop.json",
-    ]
-    
-    missing_configs = []
-    for config in config_examples:
-        if not (project_root / config).exists():
-            missing_configs.append(config)
-    
-    if missing_configs:
-        issues.append({
-            "type": "missing_config_examples",
-            "files": missing_configs,
-            "severity": "low"
-        })
-    
-    # Basic validation: check if server counts match expectations
-    # This is a simplified check - full validation would require parsing all docs
-    server_counts_match = True  # Assume true unless we find evidence otherwise
-    file_references_valid = len(missing_docs + missing_scripts + missing_configs) == 0
-    paths_current = True  # Assume true - full path validation would be expensive
-    
+    expected = list(required_files or ())
+    missing = []
+    if expected:
+        root = Path(workspace_root) if workspace_root is not None else get_project_root()
+        missing = [str(path) for path in expected if not (root / path).is_file()]
+    details = ([{
+        "type": "missing_workspace_files",
+        "files": missing,
+        "severity": "low",
+    }] if missing else [])
     return {
-        "server_counts_match": server_counts_match,
-        "file_references_valid": file_references_valid,
-        "paths_current": paths_current,
-        "total_issues": len(issues),
-        "details": issues
+        "status": "checked" if expected else "not_requested",
+        "server_counts_match": None,
+        "file_references_valid": not missing if expected else None,
+        "paths_current": None,
+        "total_issues": len(details),
+        "details": details,
     }
 
 
-def check_security() -> Dict[str, Any]:
-    """
-    Check security status (basic checks).
-    
-    Returns:
-        Dict with security status
-    """
-    project_root = get_project_root()
-    
-    # Check for exposed secrets in common locations
-    exposed_secrets = False
-    api_keys_secured = True
-    
-    # Check if data directory exists and has proper structure
-    data_dir = project_root / "data"
-    if data_dir.exists():
-        # Check for agent metadata files in organized location (may contain API keys)
-        # Check both new location (agents/) and old location (root) for backward compatibility
-        agents_dir = data_dir / "agents"
-        metadata_files = []
-        if agents_dir.exists():
-            metadata_files.extend(list(agents_dir.glob("*_state.json")))
-        # Also check root for any files not yet migrated
-        metadata_files.extend(list(data_dir.glob("*_state.json")))
-        if metadata_files:
-            # API keys are stored in plain text by design (honor system)
-            # This is intentional, not a security flaw
-            api_keys_secured = True  # They're "secured" in the sense that the design is intentional
-    
+def check_security() -> dict[str, Any]:
+    """Retain the response block without claiming an unperformed security scan."""
     return {
-        "exposed_secrets": exposed_secrets,
-        "api_keys_secured": api_keys_secured,
-        "notes": "Plain text API keys by design (honor system). This is intentional, not a security flaw."
+        "status": "not_assessed",
+        "exposed_secrets": None,
+        "api_keys_secured": None,
+        "notes": "This installation diagnostic does not inspect secrets or assess their storage.",
     }
 
 
-def check_workspace_status() -> Dict[str, Any]:
+def check_workspace_status() -> dict[str, Any]:
+    """Check installed dependencies and discoverability of the server module.
+
+    The server is not imported or started, and no network or runtime-health
+    probe is performed. Use ``health_check`` for cached subsystem health.
     """
-    Check workspace operational status.
-    
-    Returns:
-        Dict with workspace status
-    """
-    project_root = get_project_root()
-    
-    # Check if scripts are executable
-    # Note: setup_mcp.sh was moved to ~/scripts/ (user utility, not project infrastructure)
-    scripts_executable = True
-    # Check project infrastructure scripts instead
-    mcp_server = project_root / "src/mcp_server_std.py"
-    if mcp_server.exists():
-        if not os.access(mcp_server, os.R_OK):
-            scripts_executable = False
-    
-    # Check if dependencies are installed (basic check)
-    dependencies_installed = True
+    missing_dependencies = []
+    for dependency in ("mcp", "numpy"):
+        try:
+            importlib.import_module(dependency)
+        except ImportError:
+            missing_dependencies.append(dependency)
     try:
-        import mcp  # noqa: F401 — availability probe
-        import numpy  # noqa: F401 — availability probe
-    except ImportError:
-        dependencies_installed = False
-    
-    # Check if MCP server can be imported
-    mcp_servers_responding = True
-    try:
-        # Try to import the server module
-        from src._imports import ensure_project_root
-        ensure_project_root()
-    except Exception:
-        mcp_servers_responding = False
-    
+        server_module_available = importlib.util.find_spec("src.mcp_server_std") is not None
+    except (ImportError, ValueError):
+        server_module_available = False
     return {
-        "scripts_executable": scripts_executable,
-        "dependencies_installed": dependencies_installed,
-        "mcp_servers_responding": mcp_servers_responding
+        "status": "checked",
+        "dependencies_installed": not missing_dependencies,
+        "missing_dependencies": missing_dependencies,
+        "server_module_available": server_module_available,
+        # Legacy keys remain present, but unknown checks must not read as a
+        # successful executable-permission test or live server ping.
+        "scripts_executable": None,
+        "mcp_servers_responding": None,
+        "notes": "Import availability only; no live server or executable-permission probe.",
     }
 
 
-def get_workspace_health() -> Dict[str, Any]:
-    """
-    Get comprehensive workspace health status.
-    
-    Returns:
-        Dict with complete workspace health information
+def get_workspace_health(
+    *,
+    client_config_paths: Mapping[str, str | Path] | None = None,
+    required_files: Iterable[str | Path] | None = None,
+    workspace_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Report installation health and any explicitly requested local checks.
+
+    The MCP handler calls this without arguments. Optional filesystem checks
+    are Python embedding hooks, not remote caller-controlled file access.
     """
     try:
-        mcp_status = check_mcp_status()
-        doc_coherence = check_documentation_coherence()
+        mcp_status = check_mcp_status(client_config_paths)
+        doc_coherence = check_documentation_coherence(
+            required_files, workspace_root=workspace_root
+        )
         security = check_security()
         workspace_status = check_workspace_status()
-        
-        # Determine overall health
         total_issues = (
-            doc_coherence.get("total_issues", 0) +
-            (0 if workspace_status.get("dependencies_installed") else 1) +
-            (0 if workspace_status.get("mcp_servers_responding") else 1)
+            doc_coherence["total_issues"]
+            + sum(client["status"] != "read" for client in mcp_status["clients"].values())
+            + (0 if workspace_status["dependencies_installed"] else 1)
+            + (0 if workspace_status["server_module_available"] else 1)
         )
-        
         if total_issues == 0:
             health = "healthy"
-            recommendation = "All systems operational. Workspace ready for development."
+            recommendation = (
+                "Installation checks passed. Use health_check for running server subsystem health."
+            )
         elif total_issues <= 2:
             health = "moderate"
-            recommendation = "Minor issues detected. Workspace functional but may need attention."
+            recommendation = "Review the reported installation or explicitly requested workspace issues."
         else:
             health = "unhealthy"
-            recommendation = "Multiple issues detected. Review and fix before proceeding."
-        
+            recommendation = "Multiple installation or requested workspace checks need attention."
         return {
             "mcp_status": mcp_status,
             "documentation_coherence": doc_coherence,
@@ -281,16 +176,15 @@ def get_workspace_health() -> Dict[str, Any]:
             "workspace_status": workspace_status,
             "last_validated": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "health": health,
-            "recommendation": recommendation
+            "recommendation": recommendation,
         }
-    except Exception as e:
-        # Return partial results even if some checks fail
+    except Exception as exc:
         return {
-            "mcp_status": {"error": str(e)},
-            "documentation_coherence": {"error": str(e)},
-            "security": {"error": str(e)},
-            "workspace_status": {"error": str(e)},
+            "mcp_status": {"error": str(exc)},
+            "documentation_coherence": {"error": str(exc)},
+            "security": {"error": str(exc)},
+            "workspace_status": {"error": str(exc)},
             "last_validated": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "health": "error",
-            "recommendation": f"Health check encountered an error: {str(e)}"
+            "recommendation": f"Health check encountered an error: {exc}",
         }

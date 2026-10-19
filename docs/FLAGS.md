@@ -41,11 +41,12 @@ additions merge cleanly. -->
 | `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
-| `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
+| `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
 | `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
+| `UNITARES_AUTOMATION_STATE_DIR` | `None (no reader fallback)` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |

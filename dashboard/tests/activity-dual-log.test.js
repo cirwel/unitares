@@ -100,7 +100,7 @@ describe("activity dual-log view", () => {
               slots_without_agent_report: 1,
             },
             processes: [{
-              agent_id: "86ae619f-87e0-4040-8f29-eacece0c7904",
+              agent_id: "6730cc35-f2a9-5759-850a-2e3d0811c326",
               agent_label: "Codex runtime",
               slot_hash: "abcdef123456",
               host_family: "codex",
