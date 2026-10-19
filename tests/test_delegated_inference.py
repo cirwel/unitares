@@ -834,3 +834,123 @@ async def test_a_host_switched_off_in_the_hosts_file_is_refused(monkeypatch, tmp
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
     assert "inference hosts file" in parsed["error"] or "inference hosts file" in json.dumps(parsed)
     inference_config._cache.update(key=None, result=None)
+
+
+# --- #2285: the default fits a ~60s per-tool MCP client timeout -------------
+
+
+def test_default_timeout_answers_inside_a_60s_client_with_headroom():
+    """The default await window leaves room for spawn and response under ~60s.
+
+    A client that gives up first receives a bare transport error and never the
+    execution id the recovery path depends on (#2285). Larger values remain
+    accepted for clients that wait longer.
+    """
+    from src.mcp_handlers.schemas.core import (
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
+        DelegateInferenceParams,
+    )
+
+    assert DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S + 15 <= 60
+    assert DelegateInferenceParams(prompt="x").timeout_s == (
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
+    )
+    assert di.DelegatedInferenceRequest(
+        prompt="x", requesting_agent_uuid=None
+    ).timeout_s == DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
+    assert DelegateInferenceParams(prompt="x", timeout_s=420).timeout_s == 420
+
+
+class _FakeOrchestratorResp:
+    def __init__(self, status, payload):
+        self.status_code = status
+        self._payload = payload
+        self.text = json.dumps(payload)
+
+    def json(self):
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_default_call_to_a_slow_child_returns_the_execution_id(monkeypatch):
+    """Through the real adapter, a still-running child yields a structured
+    timeout with the execution id inside the default window, and the child it
+    leaves behind is bounded by the orchestrator backstop."""
+    import httpx
+
+    from src.mcp_handlers.support import host_adapter as ha
+
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_ENABLED", "1")
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    monkeypatch.setattr(ha.shutil, "which", lambda c: "/usr/bin/" + c)
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    posts = []
+
+    class _Orchestrator:
+        """Accepts the child, then reports it still running on every await."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, **kwargs):
+            posts.append((url, kwargs.get("json")))
+            if url.endswith("/v1/agents"):
+                return _FakeOrchestratorResp(201, {"execution_id": "ex-slow"})
+            return _FakeOrchestratorResp(504, {"error": "await timeout"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Orchestrator)
+
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "long review"}))
+
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_TIMEOUT"
+    assert parsed["orchestrator_execution_id"] == "ex-slow"
+    assert parsed["dispatch_phase"] == "await_timeout"
+    assert parsed["execution_started"] is True
+    assert parsed["possibly_running"] is True
+    assert parsed["timeout_s"] == 45
+    assert parsed["orchestrator_backstop_s"] == 45 + ha.ORCHESTRATOR_BACKSTOP_GRACE_S
+    action = parsed["recovery"]["action"]
+    assert action.startswith("Do not retry yet.")
+    assert "reconcile or terminate" in action
+    assert f"{45 + ha.ORCHESTRATOR_BACKSTOP_GRACE_S}s" in action
+    assert "per-tool timeout" in action
+
+    spawn, awaited = posts
+    assert spawn[1]["max_runtime_ms"] == (45 + ha.ORCHESTRATOR_BACKSTOP_GRACE_S) * 1000
+    assert awaited[0].endswith("/v1/executions/ex-slow/await")
+    assert awaited[1]["timeout_ms"] <= 45_000
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_longer_timeout_is_still_honoured(monkeypatch):
+    """Clients that wait longer (the SDK) keep the full window they ask for."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    captured = {}
+
+    async def fake_invoke(host_id, prompt, **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False,
+            "status": "still_running",
+            "dispatch_phase": "await_timeout",
+            "execution_id": "ex-long",
+            "provenance": {},
+        }
+
+    monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "long review",
+        "timeout_s": 300,
+    }))
+
+    assert captured["timeout_s"] == 300
+    assert parsed["timeout_s"] == 300
+    assert parsed["orchestrator_backstop_s"] == 330
+    assert parsed["orchestrator_execution_id"] == "ex-long"

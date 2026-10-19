@@ -883,6 +883,17 @@ class CallModelParams(AgentIdentityMixin):
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
 
 
+#: delegate_inference's default timeout_s: the server-side await window, and
+#: the child's runtime budget, when the caller names none. Many MCP clients
+#: give one tool call about 60s (the client in #2285 did), and a client that
+#: gives up first receives a bare transport error with no execution id (#2285).
+#: 45s leaves about 15s of that for host resolution, the spawn request and the
+#: response, so by default the structured timeout, which carries the id,
+#: reaches the caller. A larger value stays accepted for clients that wait
+#: longer (the Python SDK sizes its transport timeout to timeout_s + 75).
+DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S = 45
+
+
 class DelegateInferenceParams(AgentIdentityMixin):
     """Parameters for long-running strong-model delegation."""
     prompt: str = Field(
@@ -918,14 +929,17 @@ class DelegateInferenceParams(AgentIdentityMixin):
         description="Advisory task classification.",
     )
     timeout_s: int = Field(
-        240,
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
         ge=5,
         le=420,
         description=(
-            "Server-side await window in seconds for the delegated CLI result. "
-            "Many MCP clients enforce their own per-tool timeout (often ~60s); "
-            "a client timeout returns no execution id, so keep this at or "
-            "below the client's limit when it is known."
+            "Seconds the server waits for the delegated CLI's answer; the "
+            "orchestrator stops the child 30s after that. The default 45 "
+            "fits an MCP client that gives one tool call ~60s, a common "
+            "limit: on timeout you get the structured failure with the "
+            "execution id. Set a larger value only when your client's own "
+            "per-tool timeout exceeds it by ~15s; otherwise the client gives "
+            "up first, sees no execution id, and the child runs on."
         ),
     )
 

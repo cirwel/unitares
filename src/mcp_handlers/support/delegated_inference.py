@@ -13,12 +13,14 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
+from ..schemas.core import DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
 from ..utils import error_response, require_argument, success_response
 from . import host_availability
 from src import inference_config
 from .host_adapter import (
     HOST_ADAPTER_EXTENSION,
     HOST_ADAPTER_EXTENSION_NOTE,
+    ORCHESTRATOR_BACKSTOP_GRACE_S,
     codex_answer_region_located,
     host_adapter_disabled_hosts,
     host_adapter_lane_configured,
@@ -40,7 +42,7 @@ class DelegatedInferenceRequest:
     host_id: str = "claude:host-adapter"
     model: str | None = None
     task_type: str = "reasoning"
-    timeout_s: int = 240
+    timeout_s: int = DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
 
 
 async def _track_energy(
@@ -373,6 +375,12 @@ async def run_delegated_inference(
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
                 "possibly_running": possibly_running,
+                # The window this call waited, and when the orchestrator
+                # stops a child nobody is waiting for any more.
+                "timeout_s": request.timeout_s,
+                "orchestrator_backstop_s": (
+                    request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S
+                ),
                 **(
                     {"provider_unavailable": provider_unavailable}
                     if provider_unavailable
@@ -383,8 +391,19 @@ async def run_delegated_inference(
             recovery={
                 "action": (
                     "Do not retry yet. The delegated execution may still be running; "
-                    "ask the operator to reconcile or terminate it using the "
-                    "orchestrator controls."
+                    "the orchestrator stops it about "
+                    f"{request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S}s after "
+                    "dispatch. Sooner than that, ask the operator to reconcile or "
+                    "terminate it using the orchestrator controls and "
+                    "orchestrator_execution_id."
+                    + (
+                        " When you do retry, raise timeout_s only to a value "
+                        "your own MCP client's per-tool timeout exceeds by "
+                        "~15s, or the client gives up first and the execution "
+                        "id never reaches you."
+                        if still_running
+                        else ""
+                    )
                     if possibly_running
                     else "Check the host adapter configuration and orchestrator logs"
                 ),
@@ -479,7 +498,9 @@ async def handle_delegate_inference(
         host_id=str(arguments.get("host_id") or "claude:host-adapter"),
         model=(str(arguments["model"]) if arguments.get("model") else None),
         task_type=str(arguments.get("task_type") or "reasoning"),
-        timeout_s=int(arguments.get("timeout_s", 240)),
+        timeout_s=int(
+            arguments.get("timeout_s", DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S)
+        ),
     )
     outcome = await run_delegated_inference(request)
     if not outcome.ok:

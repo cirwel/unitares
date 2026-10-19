@@ -696,6 +696,11 @@ _extract_cli_result = extract_cli_result
 # await_timeout/1). A call longer than this re-awaits; see invoke_host_adapter.
 _AWAIT_WINDOW_S = 120
 
+#: Seconds past the caller's timeout_s at which the orchestrator itself stops
+#: the child (the spawn spec's max_runtime_ms). A caller that stopped waiting
+#: can rely on the child being gone by timeout_s plus this.
+ORCHESTRATOR_BACKSTOP_GRACE_S = 30
+
 
 async def invoke_host_adapter(
     host_id: str,
@@ -861,7 +866,8 @@ async def invoke_host_adapter(
             "OPENAI_API_KEY": "",
         },
         "lease": False,  # read-only advisor lane, no presence/lineage
-        "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
+        # Orchestrator backstop.
+        "max_runtime_ms": int((timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S) * 1000),
     }
     if host_id == "codex:host-adapter":
         # The exec fallback's -c overrides; the app-server client computes the
