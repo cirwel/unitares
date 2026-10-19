@@ -548,6 +548,7 @@ class TestToolMapping:
 
         result = await client.delegate_inference(
             "review this",
+            host_id="claude:host-adapter",
             model="claude-opus-5",
             task_type="review",
             timeout_s=60,
@@ -1102,3 +1103,12 @@ class TestTransportYieldArity:
                 assert client._session is session_mock
             finally:
                 await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delegate_omits_unspecified_host_in_mcp_payload():
+    session = AsyncMock()
+    session.call_tool = AsyncMock(return_value=make_mcp_result({"success": True, "response": "answer"}))
+    client = make_client_with_session(session)
+    await client.delegate_inference("review this")
+    assert "host_id" not in session.call_tool.call_args.args[1]

@@ -5,24 +5,16 @@
 # origin). The composable answer to "reboot the things that need a restart to
 # pick up deploy changes."
 #
-# SAFE BY CONSTRUCTION: this never pulls or restarts a service itself. It only
-# dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-gateway.sh /
-# deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh /
-# deploy-orchestrator.sh / deploy-bridge.sh / deploy-openai-gov-proxy.sh /
-# deploy-gov-plugin.sh). Each of the process-backed ones deploys from a
-# trunk-pinned worktree and REFUSES if its LaunchAgent still loads from a shared
-# dev checkout. deploy-gov-plugin.sh is the exception and says so at length: its
-# target has no worktree and no LaunchAgent, so it pulls the checkout in place
-# behind its own refusal guards.
-# Any service NOT in the script_for() table below is REPORTED, never touched —
-# give it a deploy script to bring it into the sweep. Keep this list in sync
-# with that table.
+# It never pulls or restarts a service itself. It invokes only the deploy
+# script explicitly declared by the validated inventory. Each script owns its
+# process, migration, revision and rollback checks. Missing automation is
+# reported as incomplete, never guessed from a service name.
 #
-# Detection is delegated to deploy-status.sh (single source of truth for "what's
-# live vs on disk"), so this stays a thin, safe orchestrator.
+# Detection is delegated to deploy-status.sh. The inventory must come from
+# reviewed operator configuration; no fleet is selected by default.
 #
-# ONE TREE, MANY SERVICES: seven services deploy from the SAME worktree
-# ($HOME/projects/unitares-deploy). Each per-service script fast-forwards that
+# ONE TREE, MANY SERVICES: services may deploy from the SAME worktree
+# (as declared by the operator inventory). Each per-service script fast-forwards that
 # shared tree before restarting its own process. So when one of them REFUSES and
 # rolls the tree back -- deploy-mcp.sh does exactly this on a migration gap, to
 # keep disk from sitting ahead of a running process -- the next service in this
@@ -49,7 +41,7 @@ STATUS="$OPS_DIR/deploy-status.sh"
 # Read-only handshake for wrappers: older tooling must not silently ignore a
 # caller's reviewed-revision pin. Kept in this script so no status/deploy runs.
 if [[ "$#" = 1 && "$1" = --capabilities ]]; then
-  echo 'expected-revision-v1 incomplete-exit-v1 requested-service-v1'
+  echo 'expected-revision-v1 incomplete-exit-v1 requested-service-v1 inventory-v1'
   exit 0
 fi
 
@@ -76,44 +68,16 @@ for a in "$@"; do
   esac
 done
 
-# name -> deploy script. Extend this as services move off restart-DEV onto
-# dedicated deploy worktrees with their own deploy-*.sh. (case, not an
-# associative array, so this runs on macOS's stock bash 3.2 like the siblings.)
+# Dispatch metadata travels with the status snapshot. Inventory validation
+# happens before probes and no service-name dispatch table is built in.
 deploy_script_for() {
-  case "$1" in
-    governance-mcp)  echo "$OPS_DIR/deploy-mcp.sh" ;;
-    gateway-mcp)     echo "$OPS_DIR/deploy-gateway.sh" ;;
-    lease-plane)     echo "$OPS_DIR/deploy-lease-plane.sh" ;;
-    sentinel-beam)   echo "$OPS_DIR/deploy-sentinel.sh" ;;
-    wave3a-handlers) echo "$OPS_DIR/deploy-wave3a.sh" ;;
-    # Deploys from its own worktree, not unitares-deploy, and self-skips the
-    # restart when elixir/agent_orchestrator is unchanged — so sweeping it is
-    # safe even though its shared-history commit distance is always large.
-    agent-orchestrator) echo "$OPS_DIR/deploy-orchestrator.sh" ;;
-    # Different repo (cirwel/unitares-discord-bridge) and different trunk
-    # (`main`). It is the alert delivery path, so leaving it out of the sweep
-    # meant the alarm itself could go stale unnoticed.
-    discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh" ;;
-    dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh" ;;
-    # Different repo (cirwel/unitares-host-adapter). Its LaunchAgent used to
-    # import directly from the development checkout, so the deploy script
-    # refuses until migrate-openai-gov-proxy.sh moves it to its own worktree.
-    openai-gov-proxy) echo "$OPS_DIR/deploy-openai-gov-proxy.sh" ;;
-    # The one entry with no worktree and no LaunchAgent: the plugin checkout IS
-    # the deployed artifact, so its script pulls in place and there is nothing
-    # to restart. It was reachable only by hand until 2026-08-17, which meant
-    # `cirwel update` reported it BEHIND and then left it that way.
-    gov-plugin)      echo "$OPS_DIR/deploy-gov-plugin.sh" ;;
-    # Several components, ONE script: the claude, codex and (once installed) agy
-    # bots are the same code in one worktree under different tokens. This loop
-    # calls the script once per BEHIND component, so deploy-dispatch-beam.sh is
-    # idempotent per label — a later invocation finds that instance already
-    # running the target SHA and skips the restart rather than bouncing every
-    # bot again.
-    dispatch-beam|dispatch-beam-codex|dispatch-beam-agy)
-                     echo "$OPS_DIR/deploy-dispatch-beam.sh" ;;
-    *)               echo "" ;;
-  esac
+  printf '%s' "$status_json" | python3 -c '
+import json, sys
+for row in json.load(sys.stdin):
+    if row.get("name") == sys.argv[1]:
+        print(row.get("deploy_script", ""))
+        break
+' "$1"
 }
 
 status_args="--json"
@@ -124,6 +88,30 @@ status_args="--json"
 echo "[apply] reading deploy-status.sh ($([ "$FETCH" = 1 ] && echo fetched || echo cached) verdicts) ..."
 # shellcheck disable=SC2086
 status_json="$("$STATUS" $status_args)" || { echo "[apply] deploy-status.sh failed" >&2; exit 1; }
+
+# Group by physical targets, even if another status producer supplies aliases.
+# Resolve the entire snapshot before any dispatch: both checkout holds and
+# DOWN sibling protection must use the same stable identities throughout a run.
+status_json="$(printf '%s' "$status_json" | python3 -c '
+import json, os, subprocess, sys
+services = json.load(sys.stdin)
+for svc in services:
+    for key in ("checkout", "deploy_script"):
+        path = svc.get(key, "")
+        if not path:
+            continue
+        if not isinstance(path, str) or not os.path.isabs(path) or any(c in path for c in "|\t\r\n\0"):
+            raise SystemExit("[apply] invalid status path: " + key)
+        path = os.path.realpath(path)
+        if key == "checkout" and os.path.isdir(path):
+            probe = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
+            if probe.returncode == 0:
+                path = os.path.realpath(probe.stdout.rstrip("\n"))
+        if any(c in path for c in "|\t\r\n\0"):
+            raise SystemExit("[apply] invalid resolved status path: " + key)
+        svc[key] = path
+print(json.dumps(services))
+')" || { echo "[apply] could not resolve deployment identities" >&2; exit 1; }
 
 # Emit one TAB-separated "name<TAB>verdict<TAB>checkout<TAB>pickup" line per
 # STALE/BEHIND/DOWN or requested service, in status-table order. A request only

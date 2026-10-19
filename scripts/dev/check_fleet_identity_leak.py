@@ -74,7 +74,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # shipped artifact, and the half most obliged to be agnostic, since it is the
 # pure-Python core every deployment imports. It passes, but it was not being
 # checked. agents/sdk/src ships separately as the unitares-sdk PyPI package.
-DEFAULT_PATHS = ("src", "governance_core", "config", "agents/sdk/src")
+DEFAULT_PATHS = ("src", "governance_core", "config", "agents/sdk/src",
+                 "agents/common", "agents/dialectic_reviewer")
 
 # The operator fleet identities that must not appear in shipped source. This
 # list is the guard's own configuration — it is the single sanctioned mention.
@@ -708,6 +709,8 @@ def main() -> int:
             continue
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(REPO_ROOT).as_posix()
+            if "tests" in path.parts or path.name.startswith("test_"):
+                continue  # Synthetic fixtures are not shipped runtime defaults.
             scanned += 1
             hits = scan_file(path)
             if not hits:

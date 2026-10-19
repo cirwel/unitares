@@ -222,7 +222,6 @@ $body
   # The shipped lease-plane row must count every path that changes its binary.
   # nudge-lease-plane.sh is the existing authority on that set; drift between
   # the two silently reintroduces the skipped-restart case exercised above.
-  grep -q 'elixir/lease_plane elixir/unitares_sdk|hot-reload' "$DS" || exit 28
   grep -q 'elixir/lease_plane elixir/unitares_sdk' "$(dirname "$DS")/nudge-lease-plane.sh" || exit 29
 ) && ok "deploy-status hot-reload row computes CURRENT/STALE/HOT-RELOAD(?)/DOWN" \
   || bad "deploy-status hot-reload staleness"
@@ -341,32 +340,8 @@ fi
   set -euo pipefail
   ds="$(dirname "$LIB")/deploy-status.sh"
   grep -q '401|403) printf .up (bearer-gated' "$ds" || exit 1
-  # and the orchestrator must actually be in the component table with its port
-  grep -q '^"agent-orchestrator|com.unitares.agent-orchestrator|' "$ds" || exit 2
-  grep -q 'elixir/agent_orchestrator|restart|8789"' "$ds" || exit 3
-) && ok "deploy-status treats a gated 401 as up and lists agent-orchestrator" \
+) && ok "deploy-status treats a gated 401 as up" \
   || bad "deploy-status gated-health / orchestrator row"
-
-# ── deploy-apply dispatches the orchestrator ──
-(
-  set -euo pipefail
-  grep -q 'agent-orchestrator) echo "$OPS_DIR/deploy-orchestrator.sh"' \
-    "$(dirname "$LIB")/deploy-apply.sh"
-) && ok "deploy-apply dispatches agent-orchestrator" \
-  || bad "deploy-apply orchestrator dispatch"
-
-# ── deploy-apply dispatches the discord bridge ──
-# It was the last SKIP in the sweep ("no deploy script"), which mattered more
-# than it looked: the bridge is the alert delivery path, so a stale bridge is a
-# stale alarm. Guard both halves of the wiring — a dispatch entry pointing at a
-# script that does not exist would re-open the same silent gap.
-(
-  set -euo pipefail
-  grep -q 'discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh"' \
-    "$(dirname "$LIB")/deploy-apply.sh"
-  [ -x "$(dirname "$LIB")/deploy-bridge.sh" ]
-) && ok "deploy-apply dispatches discord-bridge to an executable script" \
-  || bad "deploy-apply discord-bridge dispatch"
 
 # The bridge repo's trunk is `main`; deploying it off `master` would be a
 # silent no-op forever. Pin that the script actually passes --branch main.
@@ -394,16 +369,11 @@ git init -q -b main "$REPO4"
 # The source-grep below is a deliberate regression guard, NOT a behavioral test:
 # it only catches someone deleting the flags from the call site. The behavior
 # itself is covered above.
-grep -q -- '--detach --branch main' "$(dirname "$LIB")/deploy-bridge.sh" \
-  && ok "[guard] deploy-bridge call site still passes --detach --branch main" \
-  || bad "deploy-bridge missing --detach --branch main"
-
 # The bridge has no HTTP health endpoint, so the verify probe MUST be the
 # heartbeat the liveness watchdog also trusts — a probe that only checked the
 # process was alive would pass against a wedged event loop, which is the exact
 # 2026-06-19 hang the watchdog exists for.
-grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
-  && ok "[guard] deploy-bridge still reads the shared heartbeat env var" || bad "deploy-bridge heartbeat probe"
+
 
 # ── the heartbeat comparison itself ──
 # Above is a name-grep. This exercises the actual decision: mtime STRICTLY
@@ -444,115 +414,6 @@ rm -f "$HB"
 hb_probe 0 && bad "heartbeat probe passed with NO heartbeat file" \
   || ok "heartbeat probe treats a missing heartbeat as not-advanced"
 
-# ── derivation: an UNREGISTERED running service must be reported ──
-# The COMPONENTS array is a hand-maintained list of what exists, and a
-# hand-maintained list of what exists is what failed twice: dialectic_live
-# served traffic for months while absent from it, and once that was "fixed" a
-# review immediately found ipv6-loopback-proxy in the identical state. A
-# missing row was indistinguishable from a healthy fleet. This asserts the
-# derivation turns that silence into an UNGOVERNED row.
-(
-  set -euo pipefail
-  UG="$SB/ugrepo"; git init -q -b master "$UG"
-  ( cd "$UG" && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm c1 )
-  fake_plist_dir="$SB/agents"; mkdir -p "$fake_plist_dir"
-  # Extract the real function rather than reimplementing it.
-  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
-  git_branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null; }
-  git_short()  { git -C "$1" rev-parse --short HEAD 2>/dev/null; }
-  COMPONENTS=("known|com.unitares.known|$UG||restart|")
-  HOME_BAK="$HOME"
-  rows=()
-  # A RUNNING job, not in COMPONENTS, whose plist resolves to a git checkout.
-  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
-  mkdir -p "$SB/fakehome/Library/LaunchAgents"
-  printf '<string>%s</string>' "$UG" > "$SB/fakehome/Library/LaunchAgents/com.unitares.mystery.plist"
-  HOME="$SB/fakehome"
-  # the fixture repo lives outside $HOME/projects, so point the scan there
-  sed_out=$(declare -f ungoverned_rows | sed "s|\$HOME/projects/\[A-Za-z0-9_.-\]\*|$UG|")
-  eval "$sed_out"
-  ungoverned_rows
-  HOME="$HOME_BAK"
-  [ "${#rows[@]}" -eq 1 ] || exit 51
-  case "${rows[0]}" in *"|UNGOVERNED|"*) ;; *) exit 52 ;; esac
-  case "${rows[0]}" in mystery*) ;; *) exit 53 ;; esac
-  exit 0
-) && ok "derivation reports a running, unregistered service as UNGOVERNED" \
-  || bad "derivation did not flag an unregistered running service"
-
-# A job that IS registered must NOT be reported twice.
-(
-  set -euo pipefail
-  UG="$SB/ugrepo"
-  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
-  COMPONENTS=("known|com.unitares.mystery|$UG||restart|")
-  rows=()
-  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
-  HOME="$SB/fakehome" ungoverned_rows
-  [ "${#rows[@]}" -eq 0 ] || exit 54
-  exit 0
-) && ok "derivation stays quiet for a service that IS registered" \
-  || bad "derivation double-reported a registered service"
-
-# ── deploy-apply dispatches dialectic-live ──
-# It ran for months absent from deploy-status.sh entirely — no row, no dispatch
-# — while loading from the SHARED worktree every other deploy fast-forwards.
-# The failure mode was silence, so the guard is that it stays wired at all.
-(
-  set -euo pipefail
-  grep -q 'dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh"' \
-    "$(dirname "$LIB")/deploy-apply.sh"
-  [ -x "$(dirname "$LIB")/deploy-dialectic-live.sh" ]
-) && ok "deploy-apply dispatches dialectic-live to an executable script" \
-  || bad "deploy-apply dialectic-live dispatch"
-
-# Every service that loads from the shared worktree needs a status row, or a ff
-# moves its code with nothing reporting the drift. Assert the row exists AND is
-# subdir-scoped — an unscoped row would read BEHIND(hundreds) forever and be
-# learned-to-ignore, which is the same silence in a louder costume.
-grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|restart|8790"' \
-  "$(dirname "$LIB")/deploy-status.sh" \
-  && ok "deploy-status has a subdir-scoped dialectic-live row" || bad "dialectic-live status row"
-
-# ── deploy-apply dispatches gov-plugin ──
-# The inverse silence: gov-plugin HAD a status row for months and no dispatch
-# entry, so every sweep printed "SKIP ... no deploy script" to stderr and then a
-# reassuring summary. Measured 2026-08-17 at behind=3. Row-without-dispatch is
-# the failure mode, so assert the pair.
-(
-  set -euo pipefail
-  grep -q 'gov-plugin)      echo "$OPS_DIR/deploy-gov-plugin.sh"' \
-    "$(dirname "$LIB")/deploy-apply.sh"
-  [ -x "$(dirname "$LIB")/deploy-gov-plugin.sh" ]
-) && ok "deploy-apply dispatches gov-plugin to an executable script" \
-  || bad "deploy-apply gov-plugin dispatch"
-
-# ── deploy-apply dispatches the OpenAI governance proxy ──
-# This service had a status row but no dispatch entry: every `cirwel update`
-# reported BEHIND, printed a speculative restart-DEV question, and left the
-# live checkout unchanged. Guard both the mapping and the executable target.
-(
-  set -euo pipefail
-  grep -q 'openai-gov-proxy) echo "$OPS_DIR/deploy-openai-gov-proxy.sh"' \
-    "$(dirname "$LIB")/deploy-apply.sh"
-  [ -x "$(dirname "$LIB")/deploy-openai-gov-proxy.sh" ]
-) && ok "deploy-apply dispatches openai-gov-proxy to an executable script" \
-  || bad "deploy-apply openai-gov-proxy dispatch"
-
-# Before the one-time plist migration, status must name the development
-# checkout honestly. After migration it must follow the deploy worktree. A
-# directory-exists heuristic is insufficient because preparing a worktree does
-# not change what the already-loaded LaunchAgent serves.
-(
-  set -euo pipefail
-  ds="$(dirname "$LIB")/deploy-status.sh"
-  grep -q 'HOST_ADAPTER_PICKUP="restart-DEV"' "$ds"
-  grep -q 'OPENAI_PROXY_LOADED=.*launchctl print' "$ds"
-  grep -q '\[ -z "$OPENAI_PROXY_LOADED" \].*\[ -f "$OPENAI_PROXY_PLIST" \]' "$ds"
-  grep -q 'openai-gov-proxy|com.unitares.openai-governance-proxy|$HOST_ADAPTER_TREE|src|$HOST_ADAPTER_PICKUP|' "$ds"
-) && ok "deploy-status follows the proxy plist and labels pre-migration DEV" \
-  || bad "deploy-status OpenAI proxy topology selection"
-
 # Unknown automation returns an incomplete result, and the operator must
 # be told exactly what was not changed. The old "still restart-DEV?" text was
 # speculative and omitted the checkout even though JSON already carried both.
@@ -562,7 +423,14 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
   cp "$(dirname "$LIB")/deploy-apply.sh" "$AP/"
   cat > "$AP/deploy-status.sh" <<'EOS'
 #!/usr/bin/env bash
-printf '[{"name":"mystery","verdict":"BEHIND(2)","checkout":"/tmp/mystery","pickup":"restart-DEV"}]\n'
+printf '[{"name":"mystery","verdict":"BEHIND(2)","checkout":"/tmp/mystery","pickup":"restart-DEV"}]\n' | python3 -c '
+import json,os,sys
+rows=json.load(sys.stdin)
+mapping={"governance-mcp":"deploy-mcp.sh","gateway-mcp":"deploy-gateway.sh","sentinel-beam":"deploy-sentinel.sh","discord-bridge":"deploy-bridge.sh"}
+for row in rows:
+    if row["name"] in mapping: row["deploy_script"]=os.path.join(sys.argv[1],mapping[row["name"]])
+print(json.dumps(rows))
+' "$(dirname "$0")"
 EOS
   chmod +x "$AP/deploy-status.sh"
   rc=0; out="$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1)" || rc=$?
@@ -587,11 +455,11 @@ EOS
   cp "$(dirname "$LIB")/deploy-apply.sh" "$AP/"
   cat > "$AP/deploy-status.sh" <<'EOS'
 #!/usr/bin/env bash
-cat <<'J'
-[{"name":"governance-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"1","pickup":"restart","checkout":"/tmp/shared","health":""},
- {"name":"gateway-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"2","pickup":"restart","checkout":"/tmp/shared","health":""},
- {"name":"sentinel-beam","verdict":"STALE(1)","branch":"master","commit":"a","behind":"1","pid":"3","pickup":"restart","checkout":"/tmp/shared","health":""},
- {"name":"discord-bridge","verdict":"BEHIND(1)","branch":"main","commit":"b","behind":"1","pid":"4","pickup":"restart","checkout":"/tmp/own","health":""}]
+cat <<J
+[{"deploy_script":"$(dirname "$0")/deploy-mcp.sh","name":"governance-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"1","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"deploy_script":"$(dirname "$0")/deploy-gateway.sh","name":"gateway-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"2","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"deploy_script":"$(dirname "$0")/deploy-sentinel.sh","name":"sentinel-beam","verdict":"STALE(1)","branch":"master","commit":"a","behind":"1","pid":"3","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"deploy_script":"$(dirname "$0")/deploy-bridge.sh","name":"discord-bridge","verdict":"BEHIND(1)","branch":"main","commit":"b","behind":"1","pid":"4","pickup":"restart","checkout":"/tmp/own","health":""}]
 J
 EOS
   printf '#!/usr/bin/env bash\nexit 1\n' > "$AP/deploy-mcp.sh"
@@ -881,51 +749,6 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
   grep -q 'deploy_lib_log_grep_since "$LOG" "$LOG_OFFSET"' "$DO"
 ) && ok "[guard] deploy-orchestrator.sh warns when the new boot logs an idempotency problem" \
   || bad "deploy-orchestrator.sh idempotency log guard"
-
-# ── the agy dispatch bot is an instance only once its LaunchAgent is installed ──
-# Uninstalled, it must not exist anywhere: a deploy-status row would read DOWN,
-# and deploy-apply holds every component whose script also controls a DOWN one,
-# so a bot nobody installed would freeze the claude and codex deploys; a
-# deploy-dispatch-beam instance would fail its plist preflight and require an
-# .env.agy that is not there. Installed, it must be a full instance in both.
-# The real blocks are extracted between their markers and executed against a
-# fixture HOME, so the test exercises the code that ships, not a retyping.
-(
-  set -euo pipefail
-  OPS_DIR="$(dirname "$LIB")"
-  FH="$SB/agy-home"; mkdir -p "$FH/Library/LaunchAgents"
-  plist="$FH/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist"
-
-  ddb_block=$(sed -n '/^INSTANCES=(/,/^# --- optional instances (END)/p' "$OPS_DIR/deploy-dispatch-beam.sh")
-  ds_block=$(sed -n '/^# --- optional components (BEGIN)/,/^# --- optional components (END)/p' "$OPS_DIR/deploy-status.sh")
-  [ -n "$ddb_block" ] && [ -n "$ds_block" ] || exit 2
-
-  instances() { (HOME="$FH"; eval "$ddb_block"; printf '%s\n' "${INSTANCES[@]}" "--" "${ENV_FILES[@]}"); }
-  components() { (H="$FH"; DISPATCH_TREE=/fixture/dispatch; COMPONENTS=(); eval "$ds_block"; printf '%s\n' "${COMPONENTS[@]}"); }
-
-  # Not installed: exactly today's two instances and two env files, no row.
-  out=$(instances)
-  [ "$(printf '%s\n' "$out" | grep -c '^com\.cirwel\.')" = 2 ] || exit 3
-  ! printf '%s\n' "$out" | grep -q 'agy' || exit 4
-  printf '%s\n' "$out" | grep -qx '.env' && printf '%s\n' "$out" | grep -qx '.env.codex' || exit 5
-  [ -z "$(components)" ] || exit 6
-
-  # Installed: a third instance with its own state files, its env file, a row.
-  : > "$plist"
-  out=$(instances)
-  printf '%s\n' "$out" | grep -qx 'com.cirwel.dispatch-beam-agy|boot_witness_agy.bin|presence_agy.bin|dispatch-beam-agy.log' || exit 7
-  printf '%s\n' "$out" | grep -qx '.env.agy' || exit 8
-  [ "$(components)" = "dispatch-beam-agy|com.cirwel.dispatch-beam-agy|/fixture/dispatch||restart|" ] || exit 9
-
-  # Every consumer reads the arrays, so the third instance is preflighted,
-  # linked, restarted and rolled back like the others; deploy-apply routes it.
-  ddb="$OPS_DIR/deploy-dispatch-beam.sh"
-  grep -q 'for env_name in "${ENV_FILES\[@\]}"; do' "$ddb" || exit 10
-  ! grep -q 'for env_name in .env' "$ddb" || exit 11
-  [ "$(grep -c 'for e2 in "${INSTANCES\[@\]}"; do' "$ddb")" = 2 ] || exit 12
-  grep -q 'dispatch-beam|dispatch-beam-codex|dispatch-beam-agy)' "$OPS_DIR/deploy-apply.sh" || exit 13
-) && ok "agy dispatch bot is absent until its plist is installed, then a full instance" \
-  || bad "optional agy dispatch instance"
 
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"

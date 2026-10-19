@@ -42,6 +42,7 @@ def _no_live_superseders(monkeypatch):
 def _no_live_github_or_awaiting(monkeypatch, tmp_path):
     """main() also asks GitHub for subject-PR states and reads the awaiting
     list; neither may reach the network or a real database from a test."""
+    monkeypatch.setattr(report, "DEFAULT_PR_REPO", "cirwel/unitares")
     monkeypatch.setattr(report, "_gh_pr_states", lambda keys: {})
     monkeypatch.setattr(report, "_gh_answering_prs", lambda sids: {})
     monkeypatch.setattr(report, "fetch_awaiting_operator", lambda dsn: [])
@@ -673,12 +674,13 @@ class TestSubjectPr:
     def test_a_bare_number_or_no_pr_is_not_a_subject(self, text):
         assert report.subject_pr(text) is None
 
-    def test_only_two_explicit_repos_can_disagree(self):
+    def test_references_match_only_with_same_resolved_repository(self):
         plugin = report.PrRef(146, "cirwel/unitares-governance-plugin")
         assert not plugin.same_as(report.PrRef(146, "cirwel/unitares"))
         # A fork's #42 is not upstream's #42 (review round 1 on #2511).
         assert not report.PrRef(42, "alice/unitares").same_as(report.PrRef(42, "bob/unitares"))
-        assert plugin.same_as(report.PrRef(146))
+        assert not plugin.same_as(report.PrRef(146))
+        assert report.PrRef(146, "cirwel/unitares").same_as(report.PrRef(146))
         assert not plugin.same_as(report.PrRef(147))
 
 
@@ -1223,3 +1225,49 @@ class TestTouching:
         paths = {r["session_id"]: r["subject_paths"] for r in json.loads(capsys.readouterr().out)["reviews"]}
         assert paths == {"17965f22c144bf18": ["agents/dialectic_reviewer/reviewer.py"],
                          "a9523875b15f4e2e": []}
+
+
+class TestExplicitRepositoryScope:
+    def test_missing_scope_leaves_bare_subject_and_answers_unresolved(self, monkeypatch):
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "")
+        def unexpected(*args, **kwargs):
+            pytest.fail("unconfigured PR scope read a cache or queried GitHub")
+        monkeypatch.setattr(report, "_load_pr_cache", unexpected)
+        monkeypatch.setattr(report, "_load_answer_cache", unexpected)
+        monkeypatch.setattr(report, "_gh_pr_states", unexpected)
+        monkeypatch.setattr(report, "_gh_answering_prs", unexpected)
+        rows = [_row(topic="PR #99")]
+        assert report.fetch_pr_states(rows) == {}
+        assert report.fetch_answers(rows) == {}
+        assert not report.PrRef(99).same_as(report.PrRef(99))
+        assert not report.PrRef(99).same_as(report.PrRef(99, "example/repo"))
+
+    def test_explicit_subject_still_resolves_without_a_default(self, monkeypatch):
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "")
+        seen = []
+        monkeypatch.setattr(report, "_gh_pr_states", lambda keys: seen.extend(keys) or {})
+        assert report.fetch_pr_states([_row(topic="example/selected#99")]) == {}
+        assert seen == [("example/selected", 99)]
+
+    def test_answer_cache_cannot_cross_repository_configuration(self, monkeypatch, tmp_path):
+        path = tmp_path / "answers.json"
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "example/one")
+        report._save_answer_cache(str(path), {"aaaa000011112222": [{"pr": "example/one#5", "merged_at": "2030-01-01T00:00:00Z"}]})
+        assert report._load_answer_cache(str(path))
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "example/two")
+        assert report._load_answer_cache(str(path)) == {}
+
+    def test_legacy_cache_only_retains_explicit_answers_in_selected_repo(self, monkeypatch, tmp_path):
+        import json
+        path = tmp_path / "legacy.json"
+        path.write_text(json.dumps({
+            "aaaa000011112222": [{"pr": "example/one#5", "merged_at": "2030-01-01T00:00:00Z"}],
+            "bbbb000011112222": [{"pr": "example/two#5", "merged_at": "2030-01-01T00:00:00Z"}],
+        }))
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "example/one")
+        assert set(report._load_answer_cache(str(path))) == {"aaaa000011112222"}
+
+    def test_no_default_does_not_run_unscoped_graphql_search(self, monkeypatch):
+        monkeypatch.setattr(report, "DEFAULT_PR_REPO", "")
+        monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: pytest.fail("unscoped GitHub query"))
+        assert _REAL_GH_ANSWERS(["aaaa000011112222"]) == {}

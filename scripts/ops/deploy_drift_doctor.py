@@ -153,14 +153,34 @@ class Surface:
         self.check_version = check_version
 
 
-DEFAULT_SURFACES: List[Surface] = [
-    # Adapter bundle, also live from its checkout.
-    Surface("unitares-governance-plugin", "~/projects/unitares-governance-plugin", "master",
-            "com.unitares.governance-mcp"),
-    # Pinned deploy worktree: lagging origin is deliberate, restart lag is not.
-    Surface("unitares-deploy", "~/projects/unitares-deploy", "master",
-            "com.unitares.governance-mcp", check_behind=False, check_version=True),
-]
+DEFAULT_SURFACES: List[Surface] = []
+
+
+def configured_surfaces() -> List[Surface]:
+    """Read explicit deployment policy; an unset configuration selects nothing."""
+    path = os.environ.get("UNITARES_DEPLOY_DRIFT_SURFACES", "")
+    if not path:
+        return DEFAULT_SURFACES
+    values = json.loads(Path(path).read_text())
+    if not isinstance(values, list):
+        raise ValueError("drift surfaces must be a JSON array")
+    surfaces = []
+    names = set()
+    allowed = {"name", "path", "branch", "launchd_label", "check_behind", "check_version"}
+    for item in values:
+        if not isinstance(item, dict) or set(item) - allowed:
+            raise ValueError("unexpected drift surface fields")
+        if any(not isinstance(item.get(key), str) or not item[key] for key in ("name", "path", "branch")):
+            raise ValueError("drift surfaces require name, path, and branch")
+        if item["name"] in names or not Path(os.path.expanduser(item["path"])).is_absolute():
+            raise ValueError("drift surface names must be unique and paths absolute")
+        if not (item.get("launchd_label") is None or isinstance(item["launchd_label"], str)):
+            raise ValueError("launchd_label must be a string or null")
+        if any(key in item and not isinstance(item[key], bool) for key in ("check_behind", "check_version")):
+            raise ValueError("drift check choices must be boolean")
+        names.add(item["name"])
+        surfaces.append(Surface(**{**item, "launchd_label": item.get("launchd_label")}))
+    return surfaces
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +438,7 @@ class Doctor:
     def __init__(self, surfaces: Optional[List[Surface]] = None,
                  io: Optional[Dict[str, Callable[..., Any]]] = None,
                  dry_run: bool = False):
-        self.surfaces = surfaces if surfaces is not None else DEFAULT_SURFACES
+        self.surfaces = surfaces if surfaces is not None else configured_surfaces()
         self.io = {**DEFAULT_IO, **(io or {})}
         self.dry_run = dry_run
         self.state = self._load_state()
@@ -447,6 +467,9 @@ class Doctor:
             return hashlib.sha256("|".join(d.fingerprint_parts).encode()).hexdigest()[:16]
 
     def run(self) -> int:
+        if not self.surfaces:
+            log("no deployment surfaces configured; no checks or resolutions performed")
+            return 2
         open_findings: Dict[str, Any] = self.state.setdefault("open", {})
         seen: set[str] = set()
         drift_count = 0
@@ -559,7 +582,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="diagnose and print; post no findings, write no state")
     args = parser.parse_args()
-    return Doctor(dry_run=args.dry_run).run()
+    try:
+        return Doctor(dry_run=args.dry_run).run()
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":

@@ -490,7 +490,7 @@ class SyncGovernanceClient:
     def delegate_inference(
         self,
         prompt: str,
-        host_id: str = "claude:host-adapter",
+        host_id: str | None = None,
         model: str | None = None,
         task_type: str = "reasoning",
         timeout_s: int = 240,
@@ -498,16 +498,18 @@ class SyncGovernanceClient:
     ) -> DelegatedInferenceResult:
         """Delegate to a strong host model. Maps to delegate_inference.
 
+        Omitted host selection is left to the deployment configuration.
         Sent once and never retried. On the MCP transport the HTTP client's
         own ``timeout`` (30s by default) bounds the call, so construct the
         client with a ``timeout`` above ``timeout_s`` for long delegations.
         """
         args: dict[str, Any] = {
             "prompt": prompt,
-            "host_id": host_id,
             "task_type": task_type,
             "timeout_s": timeout_s,
         }
+        if host_id is not None:
+            args["host_id"] = host_id
         if model is not None:
             args["model"] = model
         args.update(kwargs)

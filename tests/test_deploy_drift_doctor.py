@@ -8,6 +8,7 @@ old module.
 from __future__ import annotations
 
 import importlib.util
+import json
 import time
 from pathlib import Path
 
@@ -325,3 +326,27 @@ def test_deduped_escalation_is_recorded(tmp_path):
     doc = ddd.Doctor(io=io)
     doc.run()
     assert doc.state.get("open", {}) != {}, "dedup means it reached governance"
+
+
+def test_no_surface_configuration_does_not_resolve_existing_findings(tmp_path, monkeypatch):
+    monkeypatch.delenv('UNITARES_DEPLOY_DRIFT_SURFACES', raising=False)
+    monkeypatch.setattr(ddd, 'DEFAULT_SURFACES', [])
+    path = Path(ddd.STATE_FILE)
+    existing = '{"open":{"existing":{"surface":"old","condition":"behind_origin"}}}'
+    path.write_text(existing)
+    doctor = ddd.Doctor(io=make_io())
+    assert doctor.run() == 2
+    assert path.read_text() == existing
+    assert not posted and not outcomes
+
+
+def test_explicit_surface_configuration_selects_only_declared_paths(tmp_path, monkeypatch):
+    path = tmp_path / 'surfaces.json'
+    path.write_text(json.dumps([dict(name='custom', path=str(tmp_path), branch='main', launchd_label=None, check_behind=False)]))
+    monkeypatch.setenv('UNITARES_DEPLOY_DRIFT_SURFACES', str(path))
+    surfaces = ddd.configured_surfaces()
+    assert [s.name for s in surfaces] == ['custom']
+    assert surfaces[0].check_behind is False
+    path.write_text('[{"name":"custom","path":"relative","branch":"main"}]')
+    with pytest.raises(ValueError, match='absolute'):
+        ddd.configured_surfaces()

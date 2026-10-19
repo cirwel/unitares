@@ -28,7 +28,7 @@
 # acquire-healthcheck auto-restart remains the backstop).
 set -euo pipefail
 
-DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
+DEPLOY="${UNITARES_MCP_DEPLOY:?set the shared deployment worktree path}"
 LABEL="com.unitares.lease-plane"
 UID_NUM="$(id -u)"
 PORT="${UNITARES_LEASE_PLANE_PORT:-8788}"

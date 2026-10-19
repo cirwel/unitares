@@ -260,7 +260,9 @@ The redesign sends the read bearer token everywhere; core sections are
 read-only except one area. (Operator and model adjudication of findings, with
 its queue and verdict routes, was removed 2026-09-27. An extension that calls a
 route-pack route needs that pack enabled on the server via
-`UNITARES_ROUTE_PACKS`.)
+`UNITARES_ROUTE_PACKS`, with its installed handler declared by the trusted
+`UNITARES_ROUTE_PACKS_FILE` manifest. The registrar applies the existing REST
+credential gate to every extension handler; no fleet packs are built in.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the

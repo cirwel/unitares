@@ -70,8 +70,10 @@
 #     other than PR_QUEUE_BASE (a stacked PR runs no CI; arming it merges it).
 set -uo pipefail
 
-REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
-BASE="${PR_QUEUE_BASE:-master}"
+# The engine has no deployment selected. Host wrappers provide their own
+# repository/base and preserve any existing queue-state location.
+REPO="${PR_BABYSITTER_REPO:?Set PR_BABYSITTER_REPO to the repository this queue owns}"
+BASE="${PR_QUEUE_BASE:?Set PR_QUEUE_BASE to the protected base branch}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
@@ -109,7 +111,7 @@ operator_only() {  # <pr-json> -> why only the operator may merge it, if so
 }  # set it empty to require none
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
-STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
+STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queues/${REPO}/approvals}"
 
 log() { echo "$(date -u +%FT%TZ) $*"; }
 

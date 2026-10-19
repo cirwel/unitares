@@ -4,10 +4,12 @@ Deliberately does NOT onboard. Minting a governance identity is real fleet
 state; these tests exercise the cycle-reporting contract with the SDK's
 identity layer stubbed out.
 """
+
 from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -19,8 +21,22 @@ AGENT_PATH = REPO_ROOT / "scripts" / "ops" / "deploy_drift_agent.py"
 
 
 @pytest.fixture
-def agent_mod(monkeypatch):
+def agent_mod(monkeypatch, tmp_path):
     """Import the runner with a stub SDK so no server or identity is needed."""
+    surfaces = tmp_path / "surfaces.json"
+    surfaces.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "test-service",
+                    "path": str(tmp_path),
+                    "branch": "main",
+                    "launchd_label": "org.example.test-service",
+                }
+            ]
+        )
+    )
+    monkeypatch.setenv("UNITARES_DEPLOY_DRIFT_SURFACES", str(surfaces))
     captured: dict = {}
 
     class CycleResult:
@@ -50,6 +66,9 @@ def agent_mod(monkeypatch):
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
+    monkeypatch.setattr(
+        sys.modules[mod.Doctor.__module__], "STATE_FILE", str(tmp_path / "state.json")
+    )
     mod._captured = captured  # type: ignore[attr-defined]
     return mod
 
@@ -71,14 +90,16 @@ def test_reports_clean_fleet_honestly(agent_mod, monkeypatch):
     monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
     monkeypatch.setattr(agent_mod.os.path, "isdir", lambda p: True)
     res = asyncio.run(agent.run_cycle(None))
-    assert "running merged code" in res.summary
+    assert "1/1 surfaces running merged code" in res.summary
     assert res.confidence == 0.85
 
 
 def test_reports_drift_in_checkin(agent_mod, monkeypatch):
     """The check-in must state what was actually found, not a generic pulse."""
+
     class D:
         surface, condition = "live-thing", "behind_origin"
+
     cls = agent_mod._build_agent_cls()
     agent = cls()
     monkeypatch.setattr(agent_mod, "diagnose", lambda s, io: [D()])
@@ -126,15 +147,28 @@ def test_does_not_join_the_resident_roster():
     import ast
 
     tree = ast.parse(AGENT_PATH.read_text())
-    referenced = {
-        n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
-    } | {
-        n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
-    } | {
-        c.value for c in ast.walk(tree)
-        if isinstance(c, ast.Constant) and isinstance(c.value, str)
-        and c is not ast.get_docstring(tree, clean=False)
-        and c.value in {"UNITARES_RESIDENTS", "KNOWN_RESIDENT_LABELS"}
-    }
+    referenced = (
+        {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        | {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        | {
+            c.value
+            for c in ast.walk(tree)
+            if isinstance(c, ast.Constant)
+            and isinstance(c.value, str)
+            and c is not ast.get_docstring(tree, clean=False)
+            and c.value in {"UNITARES_RESIDENTS", "KNOWN_RESIDENT_LABELS"}
+        }
+    )
     assert "KNOWN_RESIDENT_LABELS" not in referenced
     assert "UNITARES_RESIDENTS" not in referenced
+
+
+def test_unconfigured_runner_does_not_claim_a_clean_fleet(agent_mod, monkeypatch):
+    monkeypatch.delenv("UNITARES_DEPLOY_DRIFT_SURFACES", raising=False)
+    cls = agent_mod._build_agent_cls()
+    agent = cls()
+    monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
+    res = asyncio.run(agent.run_cycle(None))
+    assert "no surfaces readable" in res.summary
+    assert "running merged code" not in res.summary
+    assert res.confidence == 0.2

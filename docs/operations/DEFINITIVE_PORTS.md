@@ -12,7 +12,6 @@ this table cannot silently disagree with the code.
 
 | Port | Service | Host | Canonical source |
 |------|---------|------|------------------|
-| `8766` | Anima MCP (physical edge testbed) | edge host (Raspberry Pi) | `anima-mcp` service config (external repo) |
 | `8767` | UNITARES governance MCP | governance host | `src/mcp_server.py` — `DEFAULT_PORT` |
 | `8768` | Gateway (weak external tier only) | governance host | `src/gateway/constants.py` — `GATEWAY_PORT` (`GATEWAY_PORT` env, default 8768) |
 | `8770` | Wave 3A handlers (BEAM) | governance host | `elixir/wave3a_handlers/config/config.exs` — `WAVE_3A_HANDLERS_PORT` default |
@@ -27,12 +26,13 @@ The lease/effect plane (`8788`) is bearer-gated (`LEASE_PLANE_BEARER_TOKEN`).
 ## Verification
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | grep -E '87(6[67]|88|89|90)'
+lsof -nP -iTCP -sTCP:LISTEN | grep -E '87(67|68|70|88|89|90)'
 curl -s http://127.0.0.1:8767/health
 ```
 
-Anima (`8766`) is an external service on the Pi — verify it against the running
-anima-mcp deployment, not this repo.
+External services are configured by the deployment operator. The optional
+watchdog reads additional probes from `UNITARES_HEALTH_EXTRA_PROBES`; the
+server registry does not select an external host or agent.
 
 ## Read Next
 

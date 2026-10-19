@@ -117,11 +117,5 @@ def test_surfaces_without_the_opt_in_are_unaffected():
     assert "version_lag" not in _conditions(found)
 
 
-def test_the_deploy_worktree_is_the_surface_that_opts_in():
-    """Pin the configuration, since the blind spot was a config decision."""
-    deploy = next(s for s in DEFAULT_SURFACES if s.name == "unitares-deploy")
-    assert deploy.check_behind is False, "commit-lag on the pin should stay suppressed"
-    assert deploy.check_version is True, (
-        "the pinned deploy worktree is exactly the surface whose version gap "
-        "nothing else would report"
-    )
+def test_no_deployment_surfaces_are_selected_by_default():
+    assert DEFAULT_SURFACES == []

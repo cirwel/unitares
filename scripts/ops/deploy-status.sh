@@ -4,8 +4,8 @@
 # that otherwise has to be re-derived by hand every time someone asks "what's live?".
 #
 # Stakeholders: an operator reads the table; an agent reads `--json` and verifies
-# against it instead of assuming. Driven by the topology documented in
-# ~/.claude .../memory/project_deploy-topology.md — keep the two in sync.
+# against it instead of assuming. An explicitly configured inventory supplies
+# the services and paths; an unconfigured installation selects no fleet.
 #
 # Verdicts:
 #   CURRENT      running, and its code is not older than the checkout HEAD
@@ -25,117 +25,37 @@
 #                       checkout, labeled so it cannot read as Pi truth
 #
 # Footgun flag: ⚠DEV = the service loads from the SHARED dev checkout
-# (~/projects/unitares); a restart deploys whatever branch is checked out there.
+# configured by the operator; a restart deploys its checked-out branch.
 #
 # Flags: --json (machine-readable), --fetch (refresh remotes first; slower).
 set -uo pipefail
 
-JSON=0; FETCH=0
+if [[ "$#" = 1 && "$1" = --capabilities ]]; then
+  echo inventory-v1
+  exit 0
+fi
+
+JSON=0; FETCH=0; LIST_CHECKOUTS=0
 for a in "$@"; do
   case "$a" in
     --json) JSON=1 ;;
+    --list-checkouts) LIST_CHECKOUTS=1 ;;
     --fetch) FETCH=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
 
-H="$HOME"
-
-# See the dispatch-beam rows below. Deliberately a fallback rather than a hard
-# path: this table is read by `cirwel status` on every invocation, and a row
-# pointing at a worktree that has not been created yet would report a confident
-# wrong verdict rather than an honest one.
-DISPATCH_TREE="$H/projects/dispatch_beam-deploy"
-[ -d "$DISPATCH_TREE" ] || DISPATCH_TREE="$H/projects/dispatch_beam"
-
-# The OpenAI proxy is migrating from a development checkout to a dedicated
-# deploy worktree. Follow the installed plist, not mere directory existence: a
-# prepared deploy tree is not live until launchd has actually been repointed.
-HOST_ADAPTER_DEV="$H/projects/unitares-host-adapter"
-HOST_ADAPTER_DEPLOY="$H/projects/unitares-host-adapter-deploy"
-HOST_ADAPTER_TREE="$HOST_ADAPTER_DEV"
-HOST_ADAPTER_PICKUP="restart-DEV"
-OPENAI_PROXY_PLIST="$H/Library/LaunchAgents/com.unitares.openai-governance-proxy.plist"
-OPENAI_PROXY_LOADED="$(launchctl print "gui/$(id -u)/com.unitares.openai-governance-proxy" 2>/dev/null || true)"
-if [[ "$OPENAI_PROXY_LOADED" == *"$HOST_ADAPTER_DEPLOY"* ]]; then
-  HOST_ADAPTER_TREE="$HOST_ADAPTER_DEPLOY"
-  HOST_ADAPTER_PICKUP="restart"
-elif [ -z "$OPENAI_PROXY_LOADED" ] && [ -f "$OPENAI_PROXY_PLIST" ] \
-  && grep -qF "$HOST_ADAPTER_DEPLOY" "$OPENAI_PROXY_PLIST"; then
-  # No loaded job to inspect (usually the service is intentionally stopped), so
-  # the on-disk plist is the best available statement of the next boot target.
-  HOST_ADAPTER_TREE="$HOST_ADAPTER_DEPLOY"
-  HOST_ADAPTER_PICKUP="restart"
+OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
+INVENTORY="$OPS_DIR/deployment_inventory.py"
+if [ "$LIST_CHECKOUTS" = 1 ]; then
+  exec python3 "$INVENTORY" --list-checkouts
 fi
-
-# name | launchd-label | repo_path | subdir | pickup | port
-# label "" = no launchd service. subdir "" = repo root. port "" = no health probe.
-COMPONENTS=(
-"governance-mcp|com.unitares.governance-mcp|$H/projects/unitares-deploy||restart|8767"
-"gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares-deploy||restart|8768"
-"sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
-"wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
-# Two pathspecs: elixir/unitares_sdk is a path dependency COMPILED INTO the
-# lease plane, so an SDK-only commit changes the running binary. nudge-lease-plane.sh
-# already checks both; counting only elixir/lease_plane here reported Δ0 for an
-# SDK change and skipped the restart that change actually needs.
-"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane elixir/unitares_sdk|hot-reload|8788"
-# Phoenix on :8790, loading from the SHARED deploy worktree. Was absent from
-# this table entirely until 2026-08-13, so every ff moved its source under a
-# running BEAM with no verdict row to report it. Scoped to its own subdir for
-# the same reason sentinel/wave3a are.
-"dialectic-live|com.unitares.dialectic-live|$H/projects/unitares-deploy|elixir/dialectic_live|restart|8790"
-# Its OWN dedicated worktree, deliberately NOT unitares-deploy: pinning it there
-# would couple every orchestrator restart to gov-mcp's migration cadence. Scoped
-# to elixir/agent_orchestrator so the verdict tracks ITS code, not the 200+
-# unrelated commits the shared tree accumulates — that subdir has not changed
-# since 2026-06-29, so this reads CURRENT*, which is the honest answer.
-"agent-orchestrator|com.unitares.agent-orchestrator|$H/projects/unitares-orchestrator-deploy|elixir/agent_orchestrator|restart|8789"
-# Its own repo (cirwel/unitares-discord-bridge) on `main`, and its own deploy
-# worktree — base_ref() below already resolves main-vs-master, so the row needs
-# no special casing. Pointed here rather than at the dev checkout so the verdict
-# describes what deploy-bridge.sh actually deploys.
-"discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge-deploy||restart|"
-# Both dispatch bots are the same code under two tokens. They serve from a
-# pinned deploy worktree once migrate-dispatch-beam-deploy.sh has run, and from
-# the dev checkout before that — resolved below so this row never describes a
-# path that does not exist on the machine reading it.
-"dispatch-beam|com.cirwel.dispatch-beam|$DISPATCH_TREE||restart|"
-"dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$DISPATCH_TREE||restart|"
-"gov-plugin||$H/projects/unitares-governance-plugin||live-from-checkout|"
-# Follow the plist-selected tree during the one-time migration window. Before
-# migration this truthfully prints [DEV] and deploy-openai-gov-proxy.sh refuses;
-# afterward it reports and deploys the isolated worktree. No health port here:
-# non-chat routes are passthrough, so an HTTP probe would certify Ollama, not
-# the proxy process. The deploy script verifies socket ownership instead.
-"openai-gov-proxy|com.unitares.openai-governance-proxy|$HOST_ADAPTER_TREE|src|$HOST_ADAPTER_PICKUP|"
-# Serves from the SHARED deploy worktree that every deploy fast-forwards —
-# the same hazard dialectic_live had, found by an adversarial review AFTER
-# that one was "fixed". Scoped to the single file it runs. No port: it proxies
-# to :8767, and probing that would report the governance MCP's health under
-# this proxy's name.
-"ipv6-loopback-proxy|com.unitares.ipv6-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
-# The same script, run a second time to listen on this host's Tailscale
-# address and forward to :8767, so tailnet peers reach the MCP without a
-# public route. Same shared-tree hazard and same reason for no port as the
-# row above. It printed UNGOVERNED until this row existed.
-"tailscale-loopback-proxy|com.unitares.tailscale-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
-"anima-noauth-proxy|com.unitares.anima-noauth-proxy|$H/projects/anima-mcp|scripts/mcp_noauth_proxy.py|restart|"
-"anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
-"anima-mcp||$H/projects/anima-mcp||pi-deploy|"
-)
-
-# --- optional components (BEGIN) ---------------------------------------------
-# The third dispatch bot (agy, dispatch_beam#90) is opt-in. Until its LaunchAgent
-# is installed it has no row: a row would read DOWN, and deploy-apply.sh holds
-# every component whose deploy script also controls a DOWN one, so a bot nobody
-# has installed would freeze deploys of the other two. deploy-dispatch-beam.sh
-# applies the same rule.
-if [ -f "$H/Library/LaunchAgents/com.cirwel.dispatch-beam-agy.plist" ]; then
-  COMPONENTS+=("dispatch-beam-agy|com.cirwel.dispatch-beam-agy|$DISPATCH_TREE||restart|")
-fi
-# --- optional components (END) -----------------------------------------------
+inventory="$(python3 "$INVENTORY")" || exit 2
+COMPONENTS=()
+while IFS= read -r component; do
+  [ -z "$component" ] || COMPONENTS+=("$component")
+done <<< "$inventory"
 
 # --- git helpers (operate on the repo containing repo_path; worktrees ok) -----
 base_ref() { # echo origin/master or origin/main
@@ -213,44 +133,9 @@ build_sha() { # port -> sha or ""
     | head -1
 }
 
-# --- Pi state: anima-mcp runs on the Pi, not on this Mac ---------------------
-# For pi-deploy rows the LOCAL checkout's branch@sha is a lie: this Mac's
-# ~/projects/anima-mcp sits on whatever working branch someone left there
-# while the Pi runs main. Measured 2026-08-28: the table rendered
-# codex/lumen-disk-retention@7086436 as the anima row while the Pi ran
-# main@0a7b8ea. So ask the Pi itself.
-#
-# Primary source is ~/.anima/deployed_ref.json — written by the anima server
-# at every process start, OUTSIDE the repo tree, because deploys reset/clean
-# the checkout there and the Pi's own `git log` is not trusted either. The
-# trailing rev-parse is only a fallback for the window before the marker
-# ships. One ssh, short timeout, cached for the run: this executes on every
-# `cirwel status`. The trailing sentinel makes "unreachable" distinguishable
-# from "reachable but no data".
-PI_SSH_HOST="${PI_SSH_HOST:-lumen}"
-PI_STATE_RAW="__unprobed__"
-# Sets PI_STATE_RAW (never echoes): callers must NOT use command substitution,
-# or the cache assignment dies in the subshell. ServerAlive* bounds the
-# post-connect phase too — ConnectTimeout alone lets a Pi whose sshd accepts
-# but whose filesystem is wedged (dying-SD-card mode) hang this tool, and the
-# deploy flow starts by running it, precisely when the Pi is sickest.
-# __pi_dirty__ reports a dirty tree for the pre-marker fallback window, where
-# HEAD alone would assert PI-CURRENT in the original defect's exact shape.
-pi_probe() { # -> PI_STATE_RAW = marker JSON (if any) + fallback short sha + sentinels, or ""
-  if [ "$PI_STATE_RAW" = "__unprobed__" ]; then
-    PI_STATE_RAW="$(ssh -o BatchMode=yes -o ConnectTimeout=2 \
-      -o ServerAliveInterval=2 -o ServerAliveCountMax=2 "$PI_SSH_HOST" \
-      'cat ~/.anima/deployed_ref.json 2>/dev/null; git -C ~/anima-mcp rev-parse --short HEAD 2>/dev/null; [ -n "$(git -C ~/anima-mcp status --porcelain 2>/dev/null | head -1)" ] && echo __pi_dirty__; echo __pi_ok__' \
-      2>/dev/null)" || PI_STATE_RAW=""
-  fi
-}
-pi_json_str() { # raw key -> string value or "" (marker is pretty-printed JSON)
-  printf '%s' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
-}
-
 rows=()
-for c in "${COMPONENTS[@]}"; do
-  IFS='|' read -r name label repo subdir pickup port <<< "$c"
+for c in ${COMPONENTS+"${COMPONENTS[@]}"}; do
+  IFS='|' read -r name label repo subdir pickup port deploy_script status_adapter <<< "$c"
   dir="$repo"; [ -n "$subdir" ] && dir="$repo/$subdir"
   [ "$FETCH" = 1 ] && git -C "$repo" fetch -q origin 2>/dev/null
 
@@ -268,52 +153,18 @@ for c in "${COMPONENTS[@]}"; do
   case "$pickup" in
     live-from-checkout) verdict="LIVE" ;;
     library)            verdict="n/a" ;;
-    pi-deploy)
-      # Never render this Mac's checkout branch@sha as if it were Pi state.
-      if [ "$name" = "anima-mcp" ]; then
-        pi_probe; praw="$PI_STATE_RAW"
-        if [[ "$praw" == *__pi_ok__* ]]; then
-          p_head="$(pi_json_str "$praw" head)"
-          p_branch="$(pi_json_str "$praw" branch)"
-          p_dirty="$(printf '%s' "$praw" | sed -nE 's/.*"dirty"[[:space:]]*:[[:space:]]*(true|false).*/\1/p' | head -1)"
-          if [ -z "$p_head" ]; then
-            # Marker not shipped yet — the Pi's own git HEAD is the fallback
-            # (truthful there since deploy.sh step 1b, PR anima-mcp#217),
-            # plus the live-tree dirty sentinel, which the marker's startup
-            # snapshot replaces once it ships.
-            p_head="$(printf '%s' "$praw" | sed -n 's/^\([0-9a-f]\{7,40\}\)$/\1/p' | tail -1)"
-            p_branch="?"
-            [[ "$praw" == *__pi_dirty__* ]] && p_dirty="true"
-          fi
-          if [ -n "$p_head" ]; then
-            br="$p_branch"; sha="${p_head:0:7}"
-            # Compare against the LOCAL repo's fetched origin/main tip.
-            # Empty delta = the local repo cannot resolve the Pi's sha
-            # (usually: needs --fetch) — say so instead of guessing.
-            delta=$(git -C "$repo" rev-list --count --full-history "$p_head..origin/main" 2>/dev/null)
-            # This row's behind column must describe the Pi, not this Mac's
-            # checkout — mixed provenance in one row is the defect this whole
-            # branch removes.
-            behind="${delta:--}"
-            if [ "$p_dirty" = "true" ]; then verdict="PI-DIRTY"
-            elif [ -z "$delta" ]; then verdict="PI-UNVERIFIED"
-            elif [ "$delta" = "0" ]; then verdict="PI-CURRENT"
-            else verdict="PI-STALE(Δ$delta)"; fi
-          else
-            br="pi:?"; sha="?"; behind="-"; verdict="PI-UNVERIFIED"
-          fi
-        else
-          # Degrade to the local checkout, labeled so it can never again be
-          # read as Pi truth (br/sha keep the local values computed above).
-          verdict="n/a(Pi:unreachable)"
-          hz="(local checkout, not Pi truth)"
-        fi
-      else
-        # pi-plugin has no on-Pi marker yet: printing the local branch@sha
-        # asserted a state this Mac cannot know. Wiring its own marker is a
-        # follow-up; until then, an honest blank.
-        br="-"; sha="-"; verdict="n/a(Pi)"
-      fi ;;
+    external)
+      external="$(python3 "$INVENTORY" --adapter-status "$status_adapter" "$repo" "$base")" || {
+        echo "[status] external status unavailable for $name" >&2
+        exit 2
+      }
+      IFS='|' read -r verdict br sha behind hz <<< "$external"
+      ;;
+    unregistered)
+      pid=$(proc_pid "$label")
+      verdict="UNGOVERNED"
+      hz="no deploy script"
+      ;;
     hot-reload)
       # ⛔This branch used to be `up => HOT-RELOAD, else DOWN` and computed no
       # staleness at all, so the lease plane — the ONLY hot-reload row — could
@@ -414,7 +265,7 @@ for c in "${COMPONENTS[@]}"; do
   # pi-deploy rows exempt: ghost describes the LOCAL checkout's branch, and
   # letting it overwrite a PI-* verdict would re-introduce exactly the lie
   # the Pi probe exists to fix (local-checkout state rendered as Pi state).
-  [ "$ghost" = "yes" ] && [ "$pickup" != "pi-deploy" ] && verdict="GHOST-BRANCH"
+  [ "$ghost" = "yes" ] && [ "$pickup" != "external" ] && verdict="GHOST-BRANCH"
   # BEHIND means "the checkout itself is behind origin — pull before anything
   # else", so it applies to every RUNNING/LIVE verdict, not just CURRENT.
   #
@@ -456,72 +307,28 @@ for c in "${COMPONENTS[@]}"; do
   # sharing will advance a tree that another service just refused to advance.
   # Kept BEFORE $hz so health remains the greedy tail of every `read` below —
   # a health body containing "|" must not shift a real field.
-  rows+=("$name|$verdict$devflag|$br|$sha|behind=$behind|pid=${pid:--}|$pickup|$repo|$hz")
+  rows+=("$name|$verdict$devflag|$br|$sha|behind=$behind|pid=${pid:--}|$pickup|$repo|$deploy_script|$hz")
 done
 
-# --- derivation: an unregistered service must be LOUD, not absent -----------
-# COMPONENTS above encodes INTENT. launchd knows what is actually RUNNING.
-# Joining them is the only way "nobody registered this service" becomes a
-# finding instead of a silence.
-#
-# The whole COMPONENTS array is a hand-maintained list of what EXISTS, and a
-# hand-maintained list of what exists is exactly the thing that was wrong:
-# dialectic_live served traffic for months while absent from this table, and
-# after that was "fixed" an adversarial review immediately found
-# ipv6-loopback-proxy in the identical state — running from the SHARED deploy
-# worktree, unlisted. Two instances of one class, found one at a time, because
-# a missing row is indistinguishable from a healthy fleet.
-#
-# So this pass asserts absence. A live launchd job whose code resolves into a
-# git checkout, with no COMPONENTS row, prints as UNGOVERNED. Registering it
-# is then a deliberate act, and forgetting is no longer quiet.
-#
-# Scope is deliberately narrow to stay signal: RUNNING only (a job with no PID
-# is periodic/cron, not a service), and only when the plist actually resolves
-# to a git work tree (Homebrew binaries and system paths resolve to nothing and
-# are skipped rather than becoming permanent noise you learn to ignore).
-# Stubbable so the derivation can be tested without launchd, the same way
-# bridge_liveness_watchdog.sh stubs its restart and PID probes. A guard nobody
-# can test is a guard nobody can trust — and this one exists precisely because
-# an untested absence went unnoticed for months.
-LAUNCHCTL_LIST_CMD="${LAUNCHCTL_LIST_CMD:-launchctl list}"
-
-ungoverned_rows() {
-  local known label pid st path
-  known="$(for c in "${COMPONENTS[@]}"; do IFS='|' read -r _ l _ <<< "$c"; [ -n "$l" ] && printf '%s\n' "$l"; done)"
-  while IFS=$'\t' read -r pid st label; do
-    case "$label" in com.unitares.*|com.cirwel.*) ;; *) continue ;; esac
-    [ "$pid" = "-" ] && continue
-    printf '%s\n' "$known" | grep -qxF "$label" && continue
-    [ -f "$HOME/Library/LaunchAgents/$label.plist" ] || continue
-    path=$(grep -o "$HOME/projects/[A-Za-z0-9_.-]*" "$HOME/Library/LaunchAgents/$label.plist" 2>/dev/null | head -1)
-    [ -n "$path" ] || continue
-    git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
-    rows+=("${label#com.*.}|UNGOVERNED|$(git_branch "$path")|$(git_short "$path")|behind=?|pid=$pid|unregistered|$path|no deploy script")
-  done < <(eval "$LAUNCHCTL_LIST_CMD" 2>/dev/null)
-}
-ungoverned_rows
-
-
 if [ "$JSON" = 1 ]; then
-  printf '['
-  first=1
-  for r in "${rows[@]}"; do
-    IFS='|' read -r name verdict br sha behindf pidf pickup checkout hz <<< "$r"
-    [ "$first" = 1 ] || printf ','; first=0
-    # behindf/pidf carry "behind=N"/"pid=X"; strip the prefixes so the JSON has
-    # real keys (the previous form emitted keyless values → invalid JSON, which
-    # broke any agent trying to parse --json as the header promises).
-    printf '{"name":"%s","verdict":"%s","branch":"%s","commit":"%s","behind":"%s","pid":"%s","pickup":"%s","checkout":"%s","health":"%s"}' \
-      "$name" "$verdict" "$br" "$sha" "${behindf#behind=}" "${pidf#pid=}" "$pickup" "$checkout" "$(echo "$hz" | tr -d '"\\')"
-  done
-  printf ']\n'
+  printf '%s\n' ${rows+"${rows[@]}"} | python3 -c '
+import json, sys
+keys = ("name", "verdict", "branch", "commit", "behind", "pid", "pickup", "checkout", "deploy_script", "health")
+rows=[]
+for line in sys.stdin:
+    if not line.strip(): continue
+    row=dict(zip(keys,line.rstrip("\n").split("|",9)))
+    row["behind"]=row["behind"].removeprefix("behind=")
+    row["pid"]=row["pid"].removeprefix("pid=")
+    rows.append(row)
+print(json.dumps(rows))
+'
 else
   printf '\n  UNITARES deploy status  (%s)\n' "$([ "$FETCH" = 1 ] && echo 'remotes fetched' || echo 'cached remotes — use --fetch to refresh')"
   printf '  %-20s %-16s %-34s %-9s %s\n' "SERVICE" "VERDICT" "BRANCH@COMMIT" "PID" "PICKUP / health"
   printf '  %s\n' "$(printf '%.0s-' {1..96})"
-  for r in "${rows[@]}"; do
-    IFS='|' read -r name verdict br sha behindf pidf pickup checkout hz <<< "$r"
+  for r in ${rows+"${rows[@]}"}; do
+    IFS='|' read -r name verdict br sha behindf pidf pickup checkout deploy_script hz <<< "$r"
     printf '  %-20s %-16s %-34s %-9s %s %s\n' \
       "$name" "$verdict" "$(echo "$br@$sha" | cut -c1-34)" "${pidf#pid=}" "$pickup" "$hz"
   done

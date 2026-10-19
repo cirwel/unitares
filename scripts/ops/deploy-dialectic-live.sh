@@ -19,8 +19,8 @@
 # commits, so raw distance is not evidence THIS app is stale.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.dialectic-live"
 PLIST="${UNITARES_DIALECTIC_LIVE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${UNITARES_DIALECTIC_LIVE_PORT:-8790}"

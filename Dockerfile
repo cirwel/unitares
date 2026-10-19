@@ -37,26 +37,12 @@ RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 # in 2026-04-24 (was previously a separate compiled wheel) — no wheel install.
 COPY src/ src/
 COPY governance_core/ governance_core/
-COPY agents/ agents/
-# The server imports unitares_sdk (src/lease_plane re-exports its lease-plane
-# client). It ships in agents/sdk; install it so the import resolves. Its
-# dependencies (httpx, mcp, pydantic) are already installed above.
-#
-# Narrowing this COPY to only the subpackages src/ imports directly looked
-# safe (agents/sdk, agents/common) but review caught a live regression each
-# of the first two times: agents.common.resolution_outcome (the
-# reference-residents route pack's POST /v1/sentinel/adjudicate) and, next
-# round, agents/chronicler/metrics_catalog.json — a path .env.example
-# documents mounting straight from inside this image via
-# UNITARES_METRICS_CATALOG_EXTRA. Both are real, supported, opt-in
-# integration points that a static import/grep sweep does not surface, and a
-# third pass is not a reason for confidence there isn't a fourth. Reference
-# residents genuinely aren't held to the fleet-neutrality bar (see
-# AGENTS.md/CLAUDE.md), so their defaults being in the image is an accepted
-# tradeoff, not a credential leak; re-attempt narrowing only with an
-# end-to-end test of every documented UNITARES_ROUTE_PACKS /
-# UNITARES_DIALECTIC_ORCHESTRATED_REVIEW / UNITARES_METRICS_CATALOG_EXTRA
-# path, not another static sweep.
+# Runtime SDK, shared helpers, and the opt-in orchestrated reviewer are supported
+# server dependencies. Reference residents and deployment extensions are installed
+# separately by the deployment that selects them.
+COPY agents/sdk/ agents/sdk/
+COPY agents/common/ agents/common/
+COPY agents/dialectic_reviewer/ agents/dialectic_reviewer/
 RUN pip install --no-cache-dir --no-deps ./agents/sdk
 COPY config/ config/
 COPY dashboard/ dashboard/

@@ -28,6 +28,7 @@ ALLOW_FILE="scripts/dev/repo-scope-allow.txt"
 is_self() {
   case "$1" in
     scripts/dev/check-repo-scope.sh|\
+    scripts/dev/check_operator_defaults.py|\
     scripts/dev/repo-scope-allow.txt|\
     docs/REPO_SCOPE.md|\
     .github/workflows/repo-scope.yml) return 0;;
@@ -233,3 +234,6 @@ if [ "$violations" -gt 0 ]; then
 fi
 
 echo "✅ Repo scope guard: clean"
+
+# Full runtime scan also covers unchanged files beyond Python package roots.
+python3 scripts/dev/check_operator_defaults.py || exit 1

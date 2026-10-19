@@ -313,9 +313,9 @@ deploy_lib_nudge_lease_plane() {
   local tag="$1" script_name="$2" deploy="$3" ops_dir
   ops_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [[ "${DEPLOY_LIB_FRESH:-0}" == 1 ]]; then
-    "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: deploy worktree re-created (deps/_build gone)" || true
+    UNITARES_MCP_DEPLOY="$deploy" "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: deploy worktree re-created (deps/_build gone)" || true
   else
-    "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: shared-worktree ff" \
+    UNITARES_MCP_DEPLOY="$deploy" "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: shared-worktree ff" \
       --if-changed "$DEPLOY_LIB_PREV" "$(git -C "$deploy" rev-parse HEAD)" || true
   fi
 }

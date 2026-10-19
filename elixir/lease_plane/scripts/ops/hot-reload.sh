@@ -23,7 +23,7 @@
 # so they load the current disk version on first use anyway.
 #
 # Requires:
-#   - LEASE_PLANE_NODE_COOKIE in ~/.config/cirwel/secrets.env
+#   - LEASE_PLANE_NODE_COOKIE in the environment or explicit UNITARES_SECRETS_ENV file
 #   - the node started named (start.sh with the cookie present)
 #
 # SCOPE — what reloads cleanly vs. what does not:
@@ -40,11 +40,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # scripts/ops/hot-reload.sh -> lease_plane root is two levels up
 LEASE_PLANE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials are inherited or loaded from an explicitly selected source.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -r "$SECRETS_FILE" || ! -f "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 # Colon-separated: the SDK path dep (unitares_sdk) compiles into its own ebin
 # in this _build — a changed SDK classifier must be scannable or --changed

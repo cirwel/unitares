@@ -47,8 +47,8 @@ for arg in "$@"; do
   esac
 done
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_MCP_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.governance-mcp"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"

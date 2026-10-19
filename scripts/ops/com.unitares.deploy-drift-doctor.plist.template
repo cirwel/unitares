@@ -23,7 +23,8 @@
     production for a day because the live checkout was never pulled. Found by a
     human asking "merged?", not by any detector.
 
-    Before installing, substitute the placeholder:
+    Before installing, substitute the placeholders:
+      __DEPLOY_DRIFT_SURFACES__ -> absolute path to reviewed surfaces JSON
       __UNITARES_ROOT__ -> absolute path to the deploy checkout
                            (e.g. $HOME/projects/unitares-deploy)
 
@@ -54,6 +55,11 @@
         <string>python3</string>
         <string>__UNITARES_ROOT__/scripts/ops/deploy_drift_doctor.py</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>UNITARES_DEPLOY_DRIFT_SURFACES</key>
+      <string>__DEPLOY_DRIFT_SURFACES__</string>
+    </dict>
     <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
     <key>StartInterval</key><integer>3600</integer>
     <key>RunAtLoad</key><false/>

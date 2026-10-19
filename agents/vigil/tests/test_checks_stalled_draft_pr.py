@@ -29,7 +29,9 @@ def _reset_registry():
 
 
 @pytest.fixture(autouse=True)
-def clean_registry():
+def clean_registry(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+    monkeypatch.setattr(mod, "OWNER", "example")
     _reset_registry()
     yield
     _reset_registry()
@@ -556,3 +558,17 @@ def test_empty_gh_output_is_unavailable_not_empty_list(monkeypatch):
     monkeypatch.setattr(mod, "GH_BIN", "/usr/bin/true")
     with pytest.raises(mod.GhUnavailable):
         asyncio.run(mod._gh_json(["anything"], 5.0))
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_owner_does_not_query_or_claim_recovery(monkeypatch):
+    from agents.vigil.checks import stalled_draft_pr as mod
+
+    monkeypatch.setattr(mod, "OWNER", "")
+    async def unexpected(*args, **kwargs):
+        pytest.fail("unconfigured owner must not query GitHub")
+    monkeypatch.setattr(mod, "gather", unexpected)
+    result = await mod.StalledDraftPR().run(prev_state={"github_healthy": False})
+    assert not result.ok
+    assert result.detail["stalled_pr_indeterminate"]
+    assert "not configured" in result.summary

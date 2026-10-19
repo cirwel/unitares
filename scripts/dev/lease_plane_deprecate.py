@@ -32,7 +32,7 @@ Usage:
 Authorization:
     `deprecation-sweep` and `deprecate-and-finalize` require
     LEASE_FORCE_RELEASE_TOKEN (RFC §7.10) — read from env or
-    `~/.config/cirwel/secrets.env`. GOVERNANCE_TOKEN does NOT authorize.
+    the file explicitly named by `UNITARES_SECRETS_ENV`. GOVERNANCE_TOKEN does NOT authorize.
 
 Phase ordering (RFC §7.11.2):
     Phase 0:  deprecate                  — INSERT into deprecated_schemes
@@ -104,15 +104,12 @@ def _read_force_release_token() -> str | None:
     tok = os.environ.get("LEASE_FORCE_RELEASE_TOKEN")
     if tok:
         return tok
-    # UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-    # pre-2026-09 ~/.config/cirwel path when only that one exists.
-    _env_override = os.environ.get("UNITARES_SECRETS_ENV")
-    secrets_path = Path.home() / ".config" / "unitares" / "secrets.env"
-    _legacy = Path.home() / ".config" / "cirwel" / "secrets.env"
-    if _env_override:
-        secrets_path = Path(_env_override).expanduser()
-    elif not secrets_path.exists() and _legacy.exists():
-        secrets_path = _legacy
+    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
+    if not override:
+        return None
+    secrets_path = Path(override)
+    if not secrets_path.is_absolute():
+        return None
     if not secrets_path.exists():
         return None
     for line in secrets_path.read_text().splitlines():
@@ -337,7 +334,7 @@ async def deprecation_sweep_cmd(
     if not token:
         print(
             "error: deprecation-sweep requires LEASE_FORCE_RELEASE_TOKEN "
-            "(env or ~/.config/cirwel/secrets.env). GOVERNANCE_TOKEN does NOT authorize.",
+            "(env or explicit UNITARES_SECRETS_ENV). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1
@@ -509,7 +506,7 @@ async def deprecate_and_finalize_cmd(
     if not token:
         print(
             "error: deprecate-and-finalize requires LEASE_FORCE_RELEASE_TOKEN "
-            "(env or ~/.config/cirwel/secrets.env). GOVERNANCE_TOKEN does NOT authorize.",
+            "(env or explicit UNITARES_SECRETS_ENV). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1

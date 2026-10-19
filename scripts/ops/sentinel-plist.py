@@ -6,15 +6,13 @@ it is never accepted as a command-line argument or written to stdout/stderr.
 The same utility also provides the deploy-time authenticated UDS probe and the
 rotation-time update used by ``rotate-secrets.sh``.
 
-A plist may instead launch through the operator's secrets wrapper
-(``with-cirwel-secrets --keys K1,K2 -- program ...``), which supplies the named
-keys from a secrets file at exec time so the plist holds no value. For such a
-plist the bearer is read exactly where the wrapper reads it: the job's
-``CIRWEL_SECRETS_FILE``, else ``~/.config/cirwel/secrets.env``. Rotation
-(``set-secret``) updates every secrets file a reader may use: the wrapper's,
-and the one ``elixir/sentinel/scripts/start.sh`` and ``deploy-lease-plane.sh``
-source (``UNITARES_SECRETS_ENV``, else ``~/.config/unitares/secrets.env``, else
-the cirwel file).
+A plist may launch through an explicitly configured secrets wrapper. Set
+``UNITARES_SECRETS_WRAPPER`` to its absolute executable path and
+``UNITARES_SECRETS_ENV`` to the absolute private file it reads. The supported
+wrapper protocol is ``--keys K1,K2 -- program ...``. No wrapper or credential
+file is discovered by name. Rotation updates explicitly selected source files
+in this process and installed job environments.
+
 """
 
 from __future__ import annotations
@@ -41,7 +39,8 @@ ENFORCED_KINDS_KEY = "LEASE_PLANE_ENFORCED_SURFACE_KINDS"
 TOKEN_PLACEHOLDER = "__UNITARES_HTTP_API_TOKEN__"
 PLACEHOLDER_RE = re.compile(r"__[A-Z0-9_]+__")
 INVALID_TOKENS = {TOKEN_PLACEHOLDER, "GENERATE_YOUR_OWN_TOKEN"}
-SECRETS_WRAPPER = "with-cirwel-secrets"
+SECRETS_WRAPPER_ENV = "UNITARES_SECRETS_WRAPPER"
+SECRETS_FILE_ENV = "UNITARES_SECRETS_ENV"
 SECRET_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -49,55 +48,36 @@ class PlistConfigError(ValueError):
     """An installed or source plist is unsafe or incomplete."""
 
 
-def _wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
-    """The file with-cirwel-secrets reads: ``CIRWEL_SECRETS_FILE`` from the
-    job's environment (a plist's EnvironmentVariables; this process's own
-    environment when no plist is given), else ~/.config/cirwel/secrets.env."""
-    source = os.environ if environment is None else environment
-    override = source.get("CIRWEL_SECRETS_FILE")
-    if isinstance(override, str) and override:
-        # Taken literally, as the wrapper takes it: no ~ expansion. A relative
-        # path would resolve against the job's cwd, so it is refused instead.
-        if not os.path.isabs(override):
-            raise PlistConfigError(f"CIRWEL_SECRETS_FILE must be an absolute path: {override!r}")
-        return Path(override)
-    # The wrapper resolves ~ in the launched job, so the job's HOME decides.
-    home = source.get("HOME")
-    base = Path(home) if isinstance(home, str) and home else _default_home()
-    return base / ".config/cirwel/secrets.env"
+def _selected_secrets_file(environment: dict[str, Any]) -> Path | None:
+    override = environment.get(SECRETS_FILE_ENV)
+    if override in (None, ""):
+        return None
+    if not isinstance(override, str) or not os.path.isabs(override):
+        raise PlistConfigError(f"{SECRETS_FILE_ENV} must be an absolute path")
+    return Path(override)
 
 
-def _sourced_secrets_file() -> Path:
-    """The file start.sh and deploy-lease-plane.sh source."""
-    explicit = os.environ.get("UNITARES_SECRETS_ENV")
-    if explicit:
-        return Path(explicit).expanduser()
-    home = _default_home()
-    path = home / ".config/unitares/secrets.env"
-    fallback = home / ".config/cirwel/secrets.env"
-    if not path.exists() and fallback.exists():
-        return fallback
+def _wrapper_secrets_file(environment: dict[str, Any]) -> Path:
+    path = _selected_secrets_file(environment)
+    if path is None:
+        raise PlistConfigError(f"a configured secrets wrapper requires {SECRETS_FILE_ENV}")
     return path
 
 
 def _rotation_files() -> list[Path]:
-    """Every existing secrets file a reader of the rotated keys may use: this
-    process's wrapper default, the file start.sh sources, and the file each
-    installed wrapped LaunchAgent's wrapper reads (its own override or HOME)."""
-    candidates = [_wrapper_secrets_file(), _sourced_secrets_file()]
+    """Existing files explicitly selected by this process or installed jobs."""
+    candidates = [_selected_secrets_file(dict(os.environ))]
     for plist in sorted((_default_home() / "Library/LaunchAgents").glob("*.plist")):
         try:
             payload = _load_plist(plist)
         except PlistConfigError:
             continue
         environment = payload.get("EnvironmentVariables")
-        if _wrapped_keys(payload) and isinstance(environment, dict):
-            candidates.append(_wrapper_secrets_file(environment))
-        elif _wrapped_keys(payload):
-            candidates.append(_wrapper_secrets_file({}))
+        if isinstance(environment, dict):
+            candidates.append(_selected_secrets_file(environment))
     found: list[Path] = []
     for path in candidates:
-        if path.exists() and not any(path.samefile(seen) for seen in found):
+        if path is not None and path.exists() and not any(path.samefile(seen) for seen in found):
             found.append(path)
     return found
 
@@ -225,15 +205,21 @@ def _replace_secret_line(path: Path, key: str, value: str) -> bool:
 def _wrapped_keys(payload: dict[str, Any]) -> set[str]:
     """Keys the secrets wrapper supplies at exec time, or an empty set."""
     arguments = payload.get("ProgramArguments")
+    environment = payload.get("EnvironmentVariables") or {}
+    wrapper = environment.get(SECRETS_WRAPPER_ENV)
+    if wrapper is None:
+        return set()
+    if not isinstance(wrapper, str) or not os.path.isabs(wrapper):
+        raise PlistConfigError(f"{SECRETS_WRAPPER_ENV} must be an absolute path")
     if (
         not isinstance(arguments, list)
         or len(arguments) < 5
         or not all(isinstance(argument, str) for argument in arguments[:4])
-        or Path(arguments[0]).name != SECRETS_WRAPPER
+        or arguments[0] != wrapper
         or arguments[1] != "--keys"
         or arguments[3] != "--"
     ):
-        return set()
+        raise PlistConfigError("configured secrets wrapper does not match ProgramArguments")
     return {key for key in arguments[2].split(",") if key}
 
 
@@ -377,8 +363,10 @@ def render_plist(
     # differs from the installed one cannot move the job's credential source.
     wrapper: list[str] = []
     wrapper_file = None
+    startup_file = _selected_secrets_file(dict(os.environ))
     if output.exists():
         installed = _load_plist(output)
+        startup_file = _selected_secrets_file(_environment(installed, output)) or startup_file
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
             wrapper_file = str(_wrapper_secrets_file(_environment(installed, output)))
@@ -399,9 +387,12 @@ def render_plist(
         },
     )
     environment = _environment(payload, template)
+    if startup_file is not None:
+        environment[SECRETS_FILE_ENV] = str(startup_file)
     if wrapper:
         environment.pop(HTTP_TOKEN_KEY, None)
-        environment["CIRWEL_SECRETS_FILE"] = wrapper_file
+        environment[SECRETS_FILE_ENV] = wrapper_file
+        environment[SECRETS_WRAPPER_ENV] = wrapper[0]
         payload["ProgramArguments"] = wrapper + list(payload.get("ProgramArguments") or [])
     else:
         environment[HTTP_TOKEN_KEY] = token

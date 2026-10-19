@@ -44,6 +44,9 @@ jobs:
       - name: Run fleet-identity guard
         run: python3 scripts/dev/check_fleet_identity_leak.py
 
+      - name: Check operator defaults across agents, ops and Elixir
+        run: python3 scripts/dev/check_operator_defaults.py
+
       # docs/proposals/ is over half of all documentation here, and what keeps
       # it navigable is its index, not the folder. The index is hand-maintained
       # and had already drifted within ten days of being written — a row added

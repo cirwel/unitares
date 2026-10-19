@@ -891,17 +891,16 @@ class DelegateInferenceParams(AgentIdentityMixin):
         max_length=100_000,
         description="Prompt to send to the operator-authorized strong model.",
     )
-    host_id: str = Field(
-        "claude:host-adapter",
+    host_id: Optional[str] = Field(
+        None,
         min_length=1,
         max_length=128,
         description=(
-            "Long-running host adapter to invoke. All three subscription-CLI "
-            "adapters are reachable here; each is opt-in and unavailable "
-            "until the operator enables it. Claude remains the compatibility "
-            "default; Codex app-server consults also report selected/effective "
-            "model identifiers, reroutes, and usage; Antigravity reports usage "
-            "but no model identifier."
+            "Optional long-running host adapter to invoke. Omission uses the "
+            "deployment's consult.thorough.prefer order, or the only enabled, "
+            "configured and available delegate host. Missing or ambiguous "
+            "selection refuses with setup guidance; no vendor is the default. "
+            "All supported subscription-CLI adapters remain opt-in."
         ),
     )
     model: Optional[str] = Field(

@@ -14,7 +14,7 @@
         > ~/Library/LaunchAgents/com.unitares.lease-plane.plist
     launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist
 
-  Verify (with $LEASE_PLANE_BEARER_TOKEN sourced from ~/.config/cirwel/secrets.env):
+  Verify (with $LEASE_PLANE_BEARER_TOKEN provisioned by your service environment or explicit UNITARES_SECRETS_ENV file):
     launchctl list | grep com.unitares.lease-plane
     tail -f ~/Library/Logs/unitares-lease-plane.log
     curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \

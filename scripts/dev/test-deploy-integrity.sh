@@ -178,7 +178,14 @@ AP="$SB/apply"; mkdir -p "$AP"
 cp "$ROOT/scripts/ops/deploy-apply.sh" "$AP/"
 cat > "$AP/deploy-status.sh" <<'EOS'
 #!/usr/bin/env bash
-printf '%s\n' "$TEST_STATUS"
+printf '%s\n' "$TEST_STATUS" | python3 -c '
+import json, os, sys
+rows=json.load(sys.stdin)
+mapping={"governance-mcp":"deploy-mcp.sh","gateway-mcp":"deploy-gateway.sh","discord-bridge":"deploy-bridge.sh","lease-plane":"deploy-lease-plane.sh","dispatch-beam":"deploy-dispatch-beam.sh","dispatch-beam-codex":"deploy-dispatch-beam.sh"}
+for row in rows:
+    if row["name"] in mapping: row["deploy_script"]=os.path.join(sys.argv[1],mapping[row["name"]])
+print(json.dumps(rows))
+' "$(dirname "$0")"
 EOS
 chmod +x "$AP/deploy-status.sh"
 out=$(bash "$AP/deploy-apply.sh" --capabilities)

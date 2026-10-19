@@ -47,8 +47,8 @@
 # service's alone, so there is nothing else to disturb.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:-$HOME/projects/unitares-orchestrator-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:?set the dedicated deployment worktree path}"
 APP_SUBDIR="elixir/agent_orchestrator"
 LABEL="com.unitares.agent-orchestrator"
 PLIST="${UNITARES_ORCHESTRATOR_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
