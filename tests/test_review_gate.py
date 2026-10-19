@@ -31,6 +31,25 @@ _REAL_READ_NATIVE = rg.read_native  # no_cloud_reads stubs it; carry tests opt i
 shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
+_REAL_CODEX_LANE = rg._codex_lane_client()
+_REAL_GIT_DIRS = rg._git_dirs
+
+
+@pytest.fixture(autouse=True)
+def confined_codex_available(monkeypatch):
+    """Tests fake subprocess.Popen, so the codex sandbox probe and the git-dir
+    lookup would hit the fake: stand in a lane whose confinement is verified,
+    keeping the real override builder. Tests of the refusals override it."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rg, "_codex_lane_client", lambda: SimpleNamespace(
+        admin_config_conflict=lambda: None,
+        confinement_verified=lambda cli: True,
+        lane_config_overrides=_REAL_CODEX_LANE.lane_config_overrides,
+    ))
+    monkeypatch.setattr(rg, "_git_dirs", lambda checkout: ["/repo/.git"])
+
+
 def full_record(*args, **kwargs):
     """These fixtures represent full reviews with explicit object evidence."""
     kwargs.setdefault("head", "a" * 40)
@@ -3006,6 +3025,66 @@ def test_the_codex_reviewer_does_not_load_the_checkouts_agents_md(monkeypatch, t
     assert calls[0]["cwd"] == start and calls[0]["cwd_exists"]
     assert "--skip-git-repo-check" in cmd
     assert not Path(start).exists()  # removed after the run
+
+
+def test_the_codex_reviewer_runs_under_the_deny_by_default_profile(monkeypatch, tmp_path):
+    """Not --sandbox read-only (whole-disk read): the consult lane's profile,
+    widened to the checkout, its git dirs and toolchain, with .env denied."""
+    calls = _fake_agy(monkeypatch, [""])
+    rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    cmd = calls[0]["cmd"]
+    assert "--sandbox" not in cmd
+    overrides = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-c"]
+    table = next(o for o in overrides if ".filesystem=" in o)
+    checkout = os.getcwd()
+    assert '":root"="deny"' in table
+    assert f'"{checkout}"="read"' in table and '"/repo/.git"="read"' in table
+    assert f'"{checkout}/**/.env*"="deny"' in table
+    assert any(o.startswith("default_permissions=") for o in overrides)
+    assert 'shell_environment_policy.set.GIT_CONFIG_NOSYSTEM="1"' in overrides
+    include = next(o for o in overrides if o.startswith("shell_environment_policy.include_only="))
+    assert "GIT_CONFIG_NOSYSTEM" in include and "GIT_CONFIG_GLOBAL" in include
+
+
+@pytest.mark.parametrize("lane, reason", [
+    ({"admin_config_conflict": lambda: "/etc/codex/config.toml",
+      "confinement_verified": lambda cli: True}, "/etc/codex/config.toml"),
+    ({"admin_config_conflict": lambda: None,
+      "confinement_verified": lambda cli: False}, "sandbox probe"),
+])
+def test_the_codex_reviewer_refuses_without_verified_confinement(monkeypatch, tmp_path, lane, reason):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rg, "_codex_lane_client", lambda: SimpleNamespace(
+        lane_config_overrides=_REAL_CODEX_LANE.lane_config_overrides, **lane))
+    calls = _fake_agy(monkeypatch, ["VERDICT: CLEAN\n"])
+    text, note = rg.run_reviewer("codex", "PROMPT", tmp_path, 30)
+    assert calls == []  # never launched
+    assert note.startswith("skipped:") and reason in text
+
+
+def test_codex_lane_client_loads_the_consult_lane_module():
+    module = _REAL_CODEX_LANE  # loaded at import, before the fixture stubs the loader
+    assert module.PERMISSION_PROFILE_PREFIX
+    overrides = module.lane_config_overrides("codex", "p", extra_read=["/x"], extra_deny=["/x/**/.env*"],
+                                             set_env={"A": "1"})
+    assert '"/x"="read"' in overrides[1] and '"/x/**/.env*"="deny"' in overrides[1]
+    assert overrides.count('shell_environment_policy.set.A="1"') == 1
+    # The defaults the consult lane uses are unchanged in length.
+    assert len(module.lane_config_overrides("codex", "p")) == module.LANE_CONFIG_OVERRIDE_COUNT
+
+
+def test_git_dirs_of_a_linked_worktree_include_the_common_dir(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                    capture_output=True, text=True)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+    git("worktree", "add", "-q", str(tmp_path / "wt"))
+    dirs = _REAL_GIT_DIRS(str(tmp_path / "wt"))
+    assert str((repo / ".git").resolve()) in [str(Path(d).resolve()) for d in dirs]
+    assert _REAL_GIT_DIRS(str(tmp_path)) in ([], [str(tmp_path)])  # not a repo (tmp may sit in one)
 
 
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):

@@ -2379,6 +2379,44 @@ def reviewer_environment(github_config: str, agy_home: str | None = None) -> dic
     return env
 
 
+#: Package trees git and other read-only tools load libraries from (Homebrew,
+#: Apple's command line tools): programs, not data. Same list as
+#: dispatch_beam's codex council lane.
+CODEX_TOOL_ROOTS = ("/opt/homebrew/Cellar", "/opt/homebrew/opt", "/usr/local/Cellar",
+                    "/usr/local/opt", "/Library/Developer/CommandLineTools")
+
+
+def _existing(paths) -> list[str]:
+    return [p for p in paths if os.path.isdir(p)]
+
+
+def _git_dirs(checkout: str) -> list[str]:
+    """The checkout's git directory and common directory (a linked worktree
+    keeps them outside the worktree), absolute; [] outside a repository."""
+    proc = _launch(["git", "-C", checkout, "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+                   text=True, capture_output=True)
+    if proc.returncode != 0:
+        return []
+    return sorted({os.path.abspath(os.path.join(checkout, line))
+                   for line in proc.stdout.split("\n") if line.strip()})
+
+
+def _codex_lane_client():
+    """The consult lane's codex confinement module, loaded from this tree.
+
+    review_gate runs standalone, so it loads the sibling source file by path
+    rather than importing the package; it is stdlib-only, and it comes from
+    the same tree as this script, so it carries the same trust."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "src/mcp_handlers/support/codex_app_server_client.py"
+    spec = importlib.util.spec_from_file_location("_review_codex_lane", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _under_project_config(path: str) -> bool:
     """True when a .git or .agents sits in an ancestor of ``path``: a CLI
     started there would discover project configuration by walking up."""
@@ -2411,11 +2449,33 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             codex_dir.cleanup()
             return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
                     "to a plain directory", "skipped: workspace not isolated")
+        # Not --sandbox read-only, which reads the whole disk: the same
+        # deny-by-default permission profile the consult lane runs under
+        # (codex_app_server_client), widened only to read the checkout under
+        # review, its git directories and the toolchain git loads from, with
+        # .env files still denied.
+        lane = _codex_lane_client()
+        cli = shutil.which("codex") or "codex"
+        refusal = lane.admin_config_conflict()
+        if refusal is None and not lane.confinement_verified(cli):
+            refusal = "this codex does not enforce the lane's permission profile (sandbox probe)"
+        if refusal is not None:
+            codex_dir.cleanup()
+            return (f"codex reviewer refused: {refusal}", "skipped: codex confinement unavailable")
+        checkout = os.getcwd()
+        overrides = lane.lane_config_overrides(
+            cli,
+            extra_read=[checkout, *_git_dirs(checkout), *_existing(CODEX_TOOL_ROOTS)],
+            extra_deny=[f"{checkout}/**/.env*", f"{checkout}/**/*.env"],
+            # git reads its system and global config, which the profile denies.
+            set_env={"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+        )
         cmd = ["codex", "exec", "--ignore-user-config", "--ephemeral",
                "--disable", "hooks", "--disable", "plugins", "--model", codex_model,
                "-c", f"model_reasoning_effort={codex_effort}",
                "-c", "project_doc_max_bytes=0",
-               "--sandbox", "read-only", "--skip-git-repo-check", "-C", codex_dir.name,
+               *[part for override in overrides for part in ("-c", override)],
+               "--skip-git-repo-check", "-C", codex_dir.name,
                "--output-last-message", str(last), prompt]
     elif reviewer == "antigravity":
         # A temporary workspace holding only the review material, not the
