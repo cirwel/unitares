@@ -1,7 +1,7 @@
 """A label the server assigned at mint reads as label_source "auto".
 
 agent_signature reported ``label_source: "claimed"`` for the label the mint
-assigns (``claude_code-opus_1856bb5c``, logged as [AUTO_NAME]): the old rule
+assigns (``claude_code-opus_100bc788``, logged as [AUTO_NAME]): the old rule
 called any label claimed unless it equalled the public_agent_id or the
 structured_id, and the auto label equals neither.
 
@@ -309,9 +309,9 @@ async def test_the_cold_start_loader_carries_the_record(monkeypatch):
     import src.agent_metadata_persistence as amp
     from src import agent_storage
 
-    label = "claude_code-opus_1856bb5c"
+    label = "claude_code-opus_100bc788"
     record = SimpleNamespace(
-        agent_id="1856bb5c-2553-4523-809b-a5d26bbd58d1",
+        agent_id="100bc788-d559-5672-b12d-f432057387a5",
         status="active",
         created_at=None,
         last_activity_at=None,
@@ -338,11 +338,11 @@ async def test_the_cold_start_loader_carries_the_record(monkeypatch):
 def test_label_source_rules():
     from src.services.identity_payloads import label_source_for
 
-    auto = "claude_code-opus_1856bb5c"
+    auto = "claude_code-opus_100bc788"
     common = {"public_agent_id": "Claude_Opus_5_5_20260926", "structured_id": None}
 
     assert label_source_for(auto, auto_label=auto, **common) == "auto"
-    assert label_source_for("worker_1856bb5c", auto_label=auto, **common) == "claimed"
+    assert label_source_for("worker_100bc788", auto_label=auto, **common) == "claimed"
     assert label_source_for("Claude_Opus_5_5_20260926", **common) == "auto"
     assert label_source_for(None, has_public_handle=True, **common) == "auto"
     assert label_source_for(None, public_agent_id=None, structured_id=None) == "uuid"
@@ -354,7 +354,7 @@ def test_label_source_rules():
 def test_knowledge_display_payload_uses_the_same_rule():
     from src.mcp_handlers.knowledge.handlers import _build_agent_display_payload
 
-    auto = "claude_code-opus_1856bb5c"
+    auto = "claude_code-opus_100bc788"
     meta = SimpleNamespace(
         public_agent_id="Claude_Opus_5_5_20260926",
         structured_id=None,
@@ -363,7 +363,7 @@ def test_knowledge_display_payload_uses_the_same_rule():
         auto_label=auto,
     )
     assert _build_agent_display_payload("u", meta, "h")["label_source"] == "auto"
-    meta.label = "worker_1856bb5c"
+    meta.label = "worker_100bc788"
     assert _build_agent_display_payload("u", meta, "h")["label_source"] == "claimed"
 
 

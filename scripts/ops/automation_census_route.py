@@ -20,8 +20,10 @@ from src.http_routes import access
 async def http_automations(request):
     """GET /api/automations — automation census snapshot for the dashboard.
 
-    Reads the snapshot written by `unitares-automations census --write` (path
-    overridable via UNITARES_AUTOMATION_CENSUS_PATH). Read-only and does NOT
+    Reads the snapshot written by `unitares-automations census --write`:
+    UNITARES_AUTOMATION_CENSUS_PATH if set, else
+    $UNITARES_AUTOMATION_STATE_DIR/last.json, else
+    ~/.local/state/unitares-automations/last.json. Read-only and does NOT
     shell out — freshness comes from the snapshot's mtime, surfaced as
     snapshot_age_seconds / stale so the panel can flag a stale census.
     """
@@ -30,7 +32,16 @@ async def http_automations(request):
         return access._http_unauthorized()
     import json as _json
     import time as _time
-    default_path = os.path.expanduser("~/.local/state/unitares-automations/last.json")
+    # Same state dir the writer (`unitares-automations`) uses, so moving it with
+    # UNITARES_AUTOMATION_STATE_DIR moves both ends. Like the writer, the value
+    # is used as given (no ~ expansion). An empty value counts as unset here
+    # (the writer would resolve "" to its working directory).
+    # UNITARES_AUTOMATION_CENSUS_PATH, when set, still names the file outright.
+    state_dir = os.getenv("UNITARES_AUTOMATION_STATE_DIR")
+    if state_dir:
+        default_path = os.path.join(state_dir, "last.json")
+    else:
+        default_path = os.path.expanduser("~/.local/state/unitares-automations/last.json")
     snapshot_path = os.getenv("UNITARES_AUTOMATION_CENSUS_PATH", default_path)
     if not os.path.exists(snapshot_path):
         return JSONResponse({

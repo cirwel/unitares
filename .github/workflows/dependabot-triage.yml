@@ -1,26 +1,10 @@
 name: dependabot-triage
 
-# Weekly Dependabot triage across the CIRWEL fleet. REPORT ONLY — this never
-# merges. The merge/triage policy lives in scripts/dev/dependabot_triage.py
-# where it can be diffed and tested.
-#
-# Coverage posture: every target repository is public, so the default
-# GITHUB_TOKEN reads all of them and ANY unreachable repo fails the run. The
-# authoritative fleet-wide run is launchd com.cirwel.dependabot-triage,
-# Mon 08:00 America/Denver. From 2026-08-21 to 2026-09-13 one target was
-# private (unitares-pi-plugin, since retired and archived) and no fleet PAT
-# exists by operator policy, so this job passed --allow-unreachable for that
-# repo: partial-by-policy, green with a caveat, instead of red by design. With
-# that target gone the allowlist went too. A DEPENDABOT_TRIAGE_TOKEN secret,
-# if configured, is used instead of the default token (an expired or
-# under-scoped token still reds).
+# On-demand Dependabot triage for this repository. REPORT ONLY — never merges.
+# Multi-repository targets and recurring schedules belong to the caller's
+# deployment. The classification and coverage gate are tested in the repo.
 
 on:
-  schedule:
-    # Mondays 14:00 UTC — aligned with the local launchd job's Monday-morning
-    # run (08:00 MDT / 07:00 MST). This leg is the public record + weekly
-    # smoke test of the triage script; the local leg is the fleet-complete one.
-    - cron: "0 14 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -41,22 +25,17 @@ jobs:
       - name: Triage open Dependabot PRs
         id: triage
         env:
-          # Fleet-scoped fine-grained PAT (pull-request read on all target
-          # repos incl. private ones). Falls back to the repo-scoped default
-          # token, under which private targets stay UNREACHABLE and the
-          # coverage gate below keeps the run red — that red is honest.
-          GH_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          python3 scripts/dev/dependabot_triage.py > triage.md
+          python3 scripts/dev/dependabot_triage.py --repos "$GITHUB_REPOSITORY" > triage.md
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           cat triage.md >> "$GITHUB_STEP_SUMMARY"
           cat triage.md
 
-      - name: Fail if fleet coverage was unexpectedly incomplete
+      - name: Fail if repository coverage was incomplete
         if: steps.triage.outputs.exit_code != '0'
         run: |
-          echo "::error::Dependabot triage could not read a repo OUTSIDE the" \
-               "declared allowlist. The report above is not fleet-wide and this" \
-               "is not the known private-repo gap. See the UNREACHABLE section."
+          echo "::error::Dependabot triage could not read this repository." \
+               "See the UNREACHABLE section."
           exit 1

@@ -750,16 +750,16 @@ EXAMPLE RESPONSE:
 - **Timeout:** 30s
 - **Related:** `agent`, `agent(action='list')`
 
-Classify agents fleet-wide as orphan or ephemeral-session archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, non-ephemeral labels, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
+Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
 
-TARGETS (classified as candidates):
+TARGETS (classified as candidates; agents with more than max_updates updates, default 3, are skipped first):
 - Unlabeled agents with 1 update after 3 hours
 - Unlabeled UUID agents with 2+ updates after 6 hours
-- Ephemeral session-labeled agents after 6 hours
+- Agents tagged archive-eligible, labeled or not, with at most 5 updates, after 6 hours
 
 NEVER AUTO-ARCHIVED:
 - Agents with 0 updates (still initializing - never checked in)
-- Agents with labels/display names
+- Labeled agents without the archive-eligible tag
 - Agents with "pioneer" / "persistent" / "protected" tags
 - Agents with verified/established/trusted trust_tier
 
@@ -1464,7 +1464,7 @@ System administration, health checks, and diagnostics
 - **Timeout:** 5s; not applied to a REST call by this exact name (see Timeouts above)
 - **Related:** `admin(action='server_info')`, `admin(action='telemetry')`
 
-Reads the last cached snapshot of this governance server's own subsystems. Nothing is probed at call time, so the answer lags the ~30s refresh, is flagged stale past 90s, and before the first probe lands the call returns an error instead of a snapshot. Needs no identity binding. For the host checkout and MCP config files use get_workspace_health; for one agent's governance state use get_governance_metrics.
+Reads the last cached snapshot of this governance server's own subsystems. Nothing is probed at call time, so the answer lags the ~30s refresh, is flagged stale past 90s, and before the first probe lands the call returns an error instead of a snapshot. Needs no identity binding. For installed Python dependencies and server-module availability use get_workspace_health; for one agent's governance state use get_governance_metrics.
 
 USE CASES:
 - Monitor system health and component status
@@ -1509,13 +1509,13 @@ SEE ALSO:
 - get_governance_metrics - Agent-specific metrics (EISV, risk, coherence)
 - admin(action='server_info') - Detailed server process information (PID, uptime, version)
 - admin(action='connections') - MCP connection status (transport-level)
-- get_workspace_health - Comprehensive workspace health (file system, dependencies)
+- get_workspace_health - Installation dependency and server-module checks
 
 ALTERNATIVES:
 - Want agent metrics? → Use get_governance_metrics() (agent-level, not system)
 - Want server details? → Use admin(action='server_info') (process info, PID, uptime)
 - Want connection status? → Use admin(action='connections') (MCP transport health)
-- Want workspace health? → Use get_workspace_health() (file system, dependencies)
+- Want workspace health? → Use get_workspace_health() (installation dependencies and server-module availability)
 
 RELATED TOOLS:
 - admin(action='server_info'): Get detailed server process information
@@ -1606,7 +1606,7 @@ Returns the server-authored governance skill bundle, read fresh from disk on eve
 - **Timeout:** 20s for the router; some actions stop sooner (table below)
 - **Related:** `health_check`, `observe`, `config`
 
-Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; admin(action='reset_monitor') drops just the in-memory monitor, which rebuilds from persisted state.
+Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health checks installed Python dependencies and server-module availability on the server, never the caller's machine; it does not discover desktop clients or require a development checkout. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; admin(action='reset_monitor') drops just the in-memory monitor, which rebuilds from persisted state.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
@@ -1631,93 +1631,31 @@ Workspace health and file validation
 - **Timeout:** 20s
 - **Related:** `health_check`, `admin(action='server_info')`
 
-Grades the checkout and MCP client config files on the machine the server runs on, reporting missing expected docs, scripts and config examples plus the server names found in the Cursor and Claude Desktop configs. It never sees the caller's own machine, mcp_servers_responding is an import probe rather than a live ping, and the security block is fixed by-design constants, not a scan. For the running server's subsystems use health_check.
+Checks this server installation's Python dependencies and server-module availability. The default call works in headless, container, and packaged installs: it does not discover desktop clients, read personal configuration files, or require development-checkout documents. It never sees the caller's own machine and does not probe live server responsiveness. Use health_check for cached running-subsystem health.
 
-USE CASES:
-- Get baseline workspace state before starting work
-- Validate MCP server configuration
-- Check documentation coherence
-- Verify workspace setup and dependencies
-- Onboarding new agents (run first to avoid confusion)
-
-~~~text
 RETURNS:
-{
-  "success": true,
-  "mcp_status": {
-    "cursor_servers": ["string"],
-    "claude_desktop_servers": ["string"],
-    "active_count": int,
-    "notes": "string"
-  },
-  "documentation_coherence": {
-    "server_counts_match": boolean,
-    "file_references_valid": boolean,
-    "paths_current": boolean,
-    "total_issues": int,
-    "details": []
-  },
-  "security": {
-    "exposed_secrets": boolean,
-    "api_keys_secured": boolean,
-    "notes": "string"
-  },
-  "workspace_status": {
-    "scripts_executable": boolean,
-    "dependencies_installed": boolean,
-    "mcp_servers_responding": boolean
-  },
-  "last_validated": "ISO timestamp",
-  "health": "healthy" | "moderate" | "critical",
-  "recommendation": "string"
-}
-~~~
+- health: healthy, moderate, unhealthy, or error; grades only the checks actually performed
+- workspace_status: dependencies_installed, missing_dependencies, server_module_available
+- mcp_status: status=not_requested and clients={} on a normal tool call
+- documentation_coherence: status=not_requested on a normal tool call
+- security: status=not_assessed; exposed_secrets and api_keys_secured are null
+- last_validated and recommendation
 
-RELATED TOOLS:
-- health_check: Quick system health overview (governance system)
-- admin(action='server_info'): Get detailed server process information
+COMPATIBILITY:
+The existing response blocks remain. Legacy scripts_executable, mcp_servers_responding, server_counts_match, paths_current, and unrequested file_references_valid are null because those facts were not checked. mcp_status retains cursor_servers and claude_desktop_servers as empty compatibility lists by default. active_count is the legacy alias of configured_count; neither is a running-server count.
+
+OPTIONAL LOCAL DIAGNOSTICS:
+Python embedding callers can explicitly supply client_config_paths (arbitrary client labels mapped to JSON files containing mcpServers) or required_files plus workspace_root. Results appear in mcp_status.clients and documentation_coherence, including missing or invalid files. These Python-only options are not remote tool parameters.
 
 ~~~text
 EXAMPLE REQUEST:
 {}
 ~~~
 
-~~~text
-EXAMPLE RESPONSE:
-{
-  "success": true,
-  "mcp_status": {
-    "cursor_servers": ["GitHub", "date-context", "unitares-governance"],
-    "claude_desktop_servers": ["date-context"],
-    "active_count": 3,
-    "notes": "Count based on config files. Actual runtime status may vary."
-  },
-  "documentation_coherence": {
-    "server_counts_match": true,
-    "file_references_valid": true,
-    "paths_current": true,
-    "total_issues": 0,
-    "details": []
-  },
-  "security": {
-    "exposed_secrets": false,
-    "api_keys_secured": true,
-    "notes": "Plain text API keys by design (honor system). This is intentional, not a security flaw."
-  },
-  "workspace_status": {
-    "scripts_executable": true,
-    "dependencies_installed": true,
-    "mcp_servers_responding": true
-  },
-  "last_validated": "2025-11-25T23:45:00Z",
-  "health": "healthy",
-  "recommendation": "All systems operational. Workspace ready for development."
-}
-~~~
-
-DEPENDENCIES:
-- No dependencies - safe to call anytime
-- Recommended: Run this tool first when onboarding to a new workspace
+RELATED TOOLS:
+- health_check: Cached server subsystem health
+- admin(action='server_info'): Server process and version details
+- admin(action='connections'): MCP transport connections
 
 ## Dialectic
 

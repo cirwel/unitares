@@ -53,7 +53,7 @@ async def test_archive_agent_writes_archived_at_to_core_agents():
 def test_archived_recovery_hint_routes_to_reclaim():
     from src.mcp_handlers.support import agent_auth
 
-    uuid = "1b4172bb-8d50-447c-8a68-51a75e20eb26"
+    uuid = "c4ae29ad-eeaf-5278-ad8c-b7c400da1c3b"
     srv = SimpleNamespace(agent_metadata={uuid: SimpleNamespace(status="archived")})
 
     with patch("src.mcp_handlers.shared.get_mcp_server", return_value=srv):
