@@ -61,7 +61,7 @@ monthly"). Four entries earned their rent:
 - `ode.numpy_step_ms.p50` / `.p99` — answers "is the numpy ODE step's
   wall-clock shrinking, stable, or growing?" The v0.3 RESOLUTION
   question. Renamed from the initial `ode.compute_ms` to make the
-  executor-queue-wait inclusion explicit (council architect-lane finding).
+  executor-queue-wait inclusion explicit (review architect-lane finding).
 - `lease_plane.client.v1.lease.acquire.p50` / `.p99` — answers "is the
   lease-boundary substrate-tax materializing?" The v0.3.2 amendment
   question. (Shared infra; persisted by this branch even though the
@@ -92,8 +92,8 @@ key somewhere in `src/`.
   `ode.numpy_step_ms` is the load-bearing slice. If yes, a follow-up
   branch decomposes governance_core's ODE solver (and adds executor
   queue-depth sampling to disambiguate numpy from queue-wait).
-- Does not redraft Wave 3 RFC. Per
-  `feedback_redraft-cycle-bias-trap.md`, this is measure-first.
+- Does not redraft Wave 3 RFC. A paused design is measured before it is
+  redrafted, so this is measure-first.
 - Does not change ODE behavior. Pure observation.
 
 ## Falsifier

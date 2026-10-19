@@ -6,12 +6,11 @@ silent* clause describes the current unimplemented state, which is a working
 system — this is a fidelity question, not an outage.
 **Shape:** follows `docs/proposals/archive/operator-decision-packet-v0.md` — options,
 recommendation, reversibility and blast radius, default-if-silent.
-**Raised by:** a Claude Code session, branch
-`claude/pruning-consolidation-refactor-5ta5ou`, from dogfooding the readiness
-gate on PR #2191.
+**Raised by:** an agent session, from dogfooding the readiness gate on PR
+#2191.
 **Evidence provenance:** agent-authored analysis of the cited repository sources
-and one live dialectic session. The recommendation is this session's lean, not a
-council finding and not a dialectic resolution.
+and one live dialectic session. The recommendation is the author's lean, not a
+review finding and not a dialectic resolution.
 **Related:** issue #2202 (the reviewer does not return after disagreement).
 That issue asks *how a stalled review should be rescued*; this packet asks *what
 the record should say when it is not*. They are separable and this one is

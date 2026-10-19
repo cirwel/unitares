@@ -79,9 +79,9 @@ python3 -m scripts.dev.calibration_harness.run_v1 --episodes 200
   and `calibration_guidance.failure_modes.tactical.ece` (the latter has a
   min-sample floor; it is `None` until enough samples).
 
-## What the harness validates (v1.1, after council review of PR #770)
+## What the harness validates (v1.1, after review of PR #770)
 
-A 3-agent adversarial council reviewed v1 and caught that it validated only the
+Three independent adversarial reviewers examined v1 and caught that it validated only the
 *binding*, not the *measurement* (outcomes were independent of confidence by
 construction). v1.1 closes that gap.
 

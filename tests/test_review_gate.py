@@ -2976,6 +2976,40 @@ def test_the_agy_env_allowlist_matches_the_consult_client():
     assert tuple(rg.AGY_ENV_ALLOWLIST) == tuple(client.ENV_ALLOWLIST)
 
 
+@pytest.mark.parametrize("reviewer", ["claude", "codex"])
+def test_claude_and_codex_reviewers_get_no_secret_from_the_parent(
+    monkeypatch, tmp_path, reviewer
+):
+    """ship.sh sources the operator's secrets file before it runs a review, so
+    the parent holds bearer tokens and metered API keys. None may reach the
+    model process; the reviewer keeps its real HOME for its login."""
+    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY",
+                 "AGENT_ORCHESTRATOR_BEARER_TOKEN", "UNITARES_OPERATOR_TOKEN",
+                 "CLOUDFLARE_API_TOKEN", "REVIEW_GATE_TEST_CANARY", "GITHUB_TOKEN"):
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
+    answer = "### Findings\n\nNone.\n\nVERDICT: CLEAN\n"
+    calls = _fake_agy(monkeypatch, [answer])
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    env = calls[0]["env"]
+    assert "secret-value" not in env.values()
+    assert env["HOME"] == os.environ["HOME"]
+    assert env["PATH"] == os.environ["PATH"]
+    assert env["CODEX_HOME"] == "/tmp/codex-home"
+    # Only the allowlist and the credential-hygiene settings remain.
+    assert set(env) <= set(rg.REVIEWER_ENV_ALLOWLIST) | {
+        "GH_CONFIG_DIR", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS",
+        "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+    }
+
+
+def test_reviewer_allowlist_extends_the_agy_list_with_cli_locations_only():
+    extra = set(rg.REVIEWER_ENV_ALLOWLIST) - set(rg.AGY_ENV_ALLOWLIST)
+    assert extra == {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS"}
+    assert not any(re.search(r"KEY|TOKEN|SECRET", name) for name in rg.REVIEWER_ENV_ALLOWLIST)
+
+
 def test_agy_isolated_home_links_only_the_keychain(monkeypatch, tmp_path):
     real = tmp_path / "real"
     (real / "Library" / "Keychains").mkdir(parents=True)

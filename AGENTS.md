@@ -90,9 +90,9 @@ A zero cannot distinguish four states, and only the last is "no value":
 3. **Not recorded** — the instrument was blind to the transport.
 4. Surfaced, reachable, recorded, and genuinely unused.
 
-Operator, 2026-08-01, on the #1387 adoption gate: *"i think our kill criterion
-too aggressive because frequently features are not wired up or buggy … id
-rather work and improve on things rather than killing everything."* That gate's
+On 2026-08-01 the operator ruled the #1387 adoption gate's kill criterion too
+aggressive: features are often unwired or buggy, so the default is to improve a
+capability rather than remove it. That gate's
 zero was produced three times in one month by surface defects — #1414 (auth
 rejected the caller while reporting `tier: strong`), #1424 (`audit.tool_usage`
 never recorded `/mcp` or `/sse` at all), #1442 (timeout) — and never once by
@@ -232,18 +232,20 @@ EISV is one instrument inside it, not its definition: each check-in returns a be
 ## Stack
 
 - Python 3.14+, asyncio
-- PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) + pgvector via Homebrew (the Docker image `db/postgres/Dockerfile.age-vector` ships PG18; both are supported)
+- PostgreSQL 17+ with AGE 1.7.0 (Apache Graph Extension) and pgvector: the Docker image `db/postgres/Dockerfile.age-vector` ships PG18, and a native install (for example Homebrew PostgreSQL@17, `docs/install/PLAYBOOK.md`) is also supported
 - Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/archive/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
 - MCP (Model Context Protocol) server
 
 ## Setup
 
-1. Install PostgreSQL@17 with the AGE and pgvector extensions
+On a fresh machine the quickest path is Docker: `docker compose up -d --wait --build` starts Postgres + AGE + pgvector, Redis, the lease plane and the server (`.github/CONTRIBUTING.md`). For a native install:
+
+1. Install PostgreSQL 17+ with the AGE and pgvector extensions
 2. Create a `governance` database
 3. Install dependencies: `pip install -e ".[full]" -c constraints.txt`
-4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
-5. Start: `python src/mcp_server.py --port 8767`
+4. Start: `python src/mcp_server.py --port 8767`
+5. Optional, to run it as a service: on macOS, copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments); elsewhere, use the host's service manager
 
 ## Before Starting Work on a Single-Writer Surface
 
@@ -285,8 +287,8 @@ This section protects against wasted parallel work across agents, not just mista
 
 ## Database
 
-- PostgreSQL@17 on port 5432 with AGE graph extension
-- Requires `brew services start postgresql@17`
+- PostgreSQL 17+ on port 5432 with AGE graph extension
+- Use the instance already running on the host (check below). Start one only on a fresh install: the compose `postgres-age` service, or a native service such as `brew services start postgresql@17`
 - Check connectivity: `pg_isready -h localhost -p 5432`
 - Do NOT create additional PostgreSQL instances, databases, or migration layers
 
