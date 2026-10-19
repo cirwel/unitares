@@ -436,6 +436,11 @@ def doc_site(site: str | None) -> str | None:
 def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     """Import the handler package and return the live registries.
 
+    Plugins are refused for the duration of the load, and the caller's
+    ``UNITARES_DISABLE_PLUGINS`` is put back afterwards: an in-process caller
+    (the test suite, ``generate_tool_docs``) must not come away with plugins
+    disabled for everything it does next.
+
     Walks every submodule under ``src.mcp_handlers`` so a tool registered by a
     module that ``__init__`` does not re-export is still counted. Import
     failures are collected, never swallowed — a module this generator could not
@@ -448,9 +453,20 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     # Entry-point plugins register into the same registries the shipped tools
     # use, and this index describes the repo, not the machine. Refuse them at
     # the loader before anything under src/ can import it (reproducibility
-    # factor 1 in the module docstring); the provenance filter below is the
-    # second fence, for a tool that reached the registry some other way.
+    # factor 1 in the module docstring); the provenance filter at the end of
+    # the load is the second fence, for a tool that reached the registry some other way.
+    prior = os.environ.get("UNITARES_DISABLE_PLUGINS")
     os.environ["UNITARES_DISABLE_PLUGINS"] = "1"
+    try:
+        return _load_registries_with_plugins_disabled()
+    finally:
+        if prior is None:
+            os.environ.pop("UNITARES_DISABLE_PLUGINS", None)
+        else:
+            os.environ["UNITARES_DISABLE_PLUGINS"] = prior
+
+
+def _load_registries_with_plugins_disabled() -> tuple[dict, dict, dict, list[str]]:
     sys.path.insert(0, str(REPO))
     try:
         import src.mcp_handlers as handlers_pkg  # noqa: E402
