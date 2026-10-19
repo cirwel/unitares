@@ -625,7 +625,7 @@ class TestObserveHandler:
         with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
             result = await handle_observe({
                 "action": "telemetry",
-                "agent_id": "deb879b6-4ff8-4dee-81ce-0683f4563dc5",
+                "agent_id": "2f6f8516-647c-5cd8-b98b-0f20462adad4",
             })
 
         data = _parse_response(result)

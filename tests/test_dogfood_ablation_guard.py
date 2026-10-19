@@ -59,7 +59,7 @@ def test_identity_neutrality_alerts_on_laundered_server_identity():
         "status": "🟡 moderate",
         "agent_id": "Chronicler",
         "display_name": "Chronicler",
-        "agent_uuid": "deb879b6-4ff8-4dee-81ce-0683f4563dc5",
+        "agent_uuid": "2f6f8516-647c-5cd8-b98b-0f20462adad4",
         "agent_signature": {"uuid": None},
     }
 

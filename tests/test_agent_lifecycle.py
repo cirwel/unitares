@@ -154,7 +154,7 @@ class TestAgentProtection:
         assert is_agent_protected("some-uuid", meta) is True
 
     def test_untagged_ephemeral_agent_is_not_protected(self):
-        meta = _protection_meta(label="claude_cirwel_20260412", tags=[])
+        meta = _protection_meta(label="claude_example_20260412", tags=[])
         assert is_agent_protected("some-uuid", meta) is False
 
     def test_pioneer_tag_still_protects(self):
@@ -255,7 +255,7 @@ class TestExpectedInterval:
         assert _get_expected_interval(meta) == 300
 
     def test_returns_none_for_ephemeral_untagged_agent(self):
-        meta = _protection_meta(label="claude_cirwel_20260412", tags=[])
+        meta = _protection_meta(label="claude_example_20260412", tags=[])
         assert _get_expected_interval(meta) is None
 
     def test_vigil_cadence_30min_tag_matches_legacy_default(self):

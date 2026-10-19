@@ -39,8 +39,8 @@ def _parse(result) -> dict:
     return json.loads(result[0].text)
 
 
-_UUID = "7750bf80-20ad-4108-a952-5271b73845b8"
-_SID = "agent-7750bf80-20a"
+_UUID = "660ba42a-baca-501c-ab2a-110f348bab92"
+_SID = "agent-660ba42a-20a"
 _TOKEN = "v1.payloadpayloadpayloadpayload.sigsignaturesignaturesignature"
 
 

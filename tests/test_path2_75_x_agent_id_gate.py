@@ -20,7 +20,7 @@ import pytest
 
 from src.mcp_handlers.middleware.identity_step import _maybe_recover_via_x_agent_id
 
-SUBSTRATE_UUID = "f92dcea8-4786-412a-a0eb-362c273382f5"
+SUBSTRATE_UUID = "02e168be-4264-527b-9643-9c737dd309e4"
 PLAIN_UUID = "00000000-1111-2222-3333-444444444444"
 
 _HANDLERS = "src.mcp_handlers.identity.handlers"
