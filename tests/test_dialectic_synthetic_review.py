@@ -1430,10 +1430,21 @@ async def test_reviewer_that_claims_slot_then_crashes_fast_leaves_thesis_recorde
 async def test_exited_reviewer_whose_session_moves_again_needs_reload(server_patch):
     """If the re-read session also changes before its facilitation mark (or
     cannot be loaded), the call cannot say who holds the session: not a
-    success, and never the exited reviewer's move."""
+    success, and never the exited reviewer's move. A session reassigned to a
+    replacement reviewer in between is never marked on the exited reviewer's
+    behalf (review of 68d26e28a)."""
     dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-claim-then-crash"})
+    reassigned = _reviewer_claimed_session()
+    reassigned.reviewer_agent_id = "reviewer-replacement"
+    advanced = _reviewer_claimed_session()
+    advanced.transcript_revision = 3
 
-    for fresh in (_reviewer_claimed_session(), None):
+    for fresh, marks in (
+        (_reviewer_claimed_session(), 2),  # the mark itself is refused
+        (reassigned, 1),
+        (advanced, 1),
+        (None, 1),
+    ):
         session, data, _append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
             dispatch=dispatch, crashed_fast=AsyncMock(return_value=True),
             readback=dict(_REVIEWER_CLAIMED_ROW), fresh_session=fresh,
@@ -1444,7 +1455,7 @@ async def test_exited_reviewer_whose_session_moves_again_needs_reload(server_pat
         assert data["state_reload_required"] is True
         assert data["awaiting_facilitation"] is False
         assert "Reload" in data["next_step"]
-        assert mark.await_count == (2 if fresh is not None else 1)
+        assert mark.await_count == marks
         assert "dialectic_facilitation_needed" not in [
             c.args[0] for c in emit.await_args_list
         ]

@@ -4143,18 +4143,28 @@ def _thesis_session_advanced(
 
 
 async def _request_facilitation_for_exited_reviewer(
-    session_id: str, reason: str
+    session_id: str, observed: Dict[str, Any], reason: str
 ) -> bool:
     """Record the facilitation request against the re-read session row.
 
     Used when the reviewer that took the session has already exited: nothing
     else will mark the session, and a synthesis-phase session is reassigned
-    only once it awaits facilitation (check_reviewer_stuck). False when the row
-    cannot be loaded or moved again before the mark.
+    only once it awaits facilitation (check_reviewer_stuck). The mark is bound
+    to the ``observed`` row (its reviewer, phase and transcript revision), so a
+    session reassigned or otherwise moved since is never marked on the exited
+    reviewer's behalf. False when the row cannot be loaded or moved again
+    before the mark.
     """
     try:
         fresh = await load_session(session_id)
         if fresh is None:
+            return False
+        if (
+            fresh.reviewer_agent_id != observed.get("reviewer")
+            or fresh.phase.value != str(observed.get("phase") or "").lower()
+            or int(fresh.transcript_revision)
+            != int(observed.get("transcript_revision") or 0)
+        ):
             return False
         await _set_awaiting_facilitation(fresh, True, reason=reason)
     except _TranscriptAppendRefused:
@@ -4246,7 +4256,7 @@ async def _thesis_recorded_after_facilitation_refused(
             # session. Record the facilitation request on the re-read row.
             result["reviewer_exited"] = True
             if await _request_facilitation_for_exited_reviewer(
-                session_id, "reviewer_crashed_fast"
+                session_id, persisted, "reviewer_crashed_fast"
             ):
                 result["awaiting_facilitation"] = True
                 result["note"] = (
