@@ -166,7 +166,7 @@ renders it). As of 2026-08-16:
 |-------------------|---------|---------|
 | `knowledge` | 12 | `knowledge(action='search')` |
 | `observe` | 9 | `observe(action='anomalies')` |
-| `admin` | 9 | `admin(action='health')` |
+| `admin` | 9 | `admin(action='server_info')` |
 | `dialectic` | 8 | `dialectic(action='list')` |
 | `agent` | 6 | `agent(action='list')` |
 | `calibration` | 4 | `calibration(action='check')` |
