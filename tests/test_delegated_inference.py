@@ -1080,3 +1080,119 @@ async def test_no_spawn_is_sent_once_the_deadline_has_passed(monkeypatch):
     assert posts == []
     assert result["ok"] is False
     assert result["dispatch_phase"] == "preflight"
+
+
+async def _cancel_deferred_bookkeeping():
+    import asyncio
+
+    pending = list(di._background_tasks)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    assert not di._background_tasks
+
+
+@pytest.mark.asyncio
+async def test_hung_accounting_after_a_late_answer_does_not_cost_the_answer(monkeypatch):
+    """#2285 review: an answer that arrives near the deadline is returned by
+    the deadline, with its execution id, even when Energy accounting hangs;
+    the accounting is deferred to a tracked task and the response says so."""
+    import asyncio
+    import time
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
+    accounting_started = asyncio.Event()
+
+    async def late_answer(host_id, prompt, **kwargs):
+        # Answer with a sliver of the deadline left.
+        await asyncio.sleep(max(0.0, kwargs["deadline"] - time.monotonic() - 0.1))
+        return {
+            "ok": True,
+            "host_id": host_id,
+            "text": "late but complete",
+            "exit_status": 0,
+            "execution_id": "ex-late",
+            "provenance": {"terminal_answer": {
+                "schema": "unitares.terminal_answer.v1", "status": "complete",
+            }},
+        }
+
+    async def hung_accounting(*_args, **_kwargs):
+        accounting_started.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(di, "invoke_host_adapter", late_answer)
+    monkeypatch.setattr(di, "_track_energy", hung_accounting)
+
+    started = time.monotonic()
+    try:
+        parsed = _payload(await di.handle_delegate_inference({
+            "prompt": "review",
+            "timeout_s": _SCALED_TIMEOUT_S,
+        }))
+        elapsed = time.monotonic() - started
+
+        assert elapsed <= _SCALED_TIMEOUT_S + _SCALED_OVERHEAD_S + _TIMING_SLACK_S
+        assert parsed["success"] is True
+        assert parsed["response"] == "late but complete"
+        assert parsed["inference"]["orchestrator_execution_id"] == "ex-late"
+        assert parsed["inference"]["accounting_deferred"] == ["energy"]
+        # Still running, and held, not dropped.
+        assert accounting_started.is_set()
+        assert len(di._background_tasks) == 1
+    finally:
+        await _cancel_deferred_bookkeeping()
+
+
+@pytest.mark.asyncio
+async def test_prompt_accounting_is_not_reported_deferred(monkeypatch):
+    async def ok_invoke(host_id, prompt, **kwargs):
+        return {"ok": True, "host_id": host_id, "text": "fine", "exit_status": 0,
+                "execution_id": "ex", "provenance": {"terminal_answer": {
+                    "schema": "unitares.terminal_answer.v1", "status": "complete"}}}
+
+    async def quick_track(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(di, "invoke_host_adapter", ok_invoke)
+    monkeypatch.setattr(di, "_track_energy", quick_track)
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid="requester"))
+
+    assert outcome.ok
+    assert "accounting_deferred" not in outcome.inference
+    assert not di._background_tasks
+
+
+@pytest.mark.asyncio
+async def test_hung_cooldown_record_does_not_hold_a_failure_past_the_deadline(monkeypatch):
+    """The failure path's provider-cooldown write is bounded the same way."""
+    import asyncio
+    import time
+
+    from src.mcp_handlers.support import host_availability
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter(
+        "Claude CLI reported an error result: Claude AI usage limit reached|4102444800"))
+
+    async def hung_record(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(host_availability, "record_unavailable_async", hung_record)
+
+    started = time.monotonic()
+    try:
+        outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+            prompt="hi", requesting_agent_uuid=None, timeout_s=_SCALED_TIMEOUT_S))
+        elapsed = time.monotonic() - started
+
+        assert elapsed <= _SCALED_TIMEOUT_S + _SCALED_OVERHEAD_S + _TIMING_SLACK_S
+        assert outcome.failure.details["orchestrator_execution_id"] == "ex-1"
+        assert outcome.failure.details["accounting_deferred"] == ["provider_cooldown"]
+        assert "provider_unavailable" not in outcome.failure.details
+    finally:
+        await _cancel_deferred_bookkeeping()

@@ -78,6 +78,58 @@ async def _track_energy(
         logger.warning("Could not track delegated-inference Energy: %s", exc)
 
 
+# Bookkeeping that outlived its call's deadline, held so it is not garbage
+# collected mid-flight (the src/agent_loop_detection.py pattern).
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _log_deferred_outcome(task: asyncio.Task, step: str) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        logger.warning("Deferred delegated-inference %s was cancelled", step)
+    elif task.exception() is not None:
+        logger.warning(
+            "Deferred delegated-inference %s failed: %r", step, task.exception()
+        )
+
+
+async def _finish_by_deadline(
+    coro: Any, deadline: float, *, step: str,
+) -> tuple[bool, Any]:
+    """Await ``coro`` until ``deadline``; return ``(finished, result)``.
+
+    Past the deadline the step keeps running as a tracked background task and
+    this returns ``(False, None)`` at once, so post-answer bookkeeping cannot
+    hold the reply past the caller's budget. The response headroom beyond the
+    deadline (DELEGATE_INFERENCE_RESPONSE_HEADROOM_S) covers building and
+    delivering the reply. A step that fails inside the deadline is logged and
+    counted as finished: bookkeeping is best-effort and never fails the call.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        result = await asyncio.wait_for(
+            asyncio.shield(task), timeout=max(0.0, deadline - time.monotonic()),
+        )
+    except asyncio.CancelledError:
+        # The call itself was cancelled; the shielded step still runs.
+        _background_tasks.add(task)
+        task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
+        raise
+    except TimeoutError:
+        _background_tasks.add(task)
+        task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
+        logger.warning(
+            "Delegated-inference %s did not finish by the call deadline; "
+            "it continues in the background",
+            step,
+        )
+        return False, None
+    except Exception as exc:  # noqa: BLE001 - bookkeeping is best-effort
+        logger.warning("Delegated-inference %s failed: %r", step, exc)
+        return True, None
+    return True, result
+
+
 # Truncation budget for the diagnostic excerpt below. Large enough to carry a
 # fence, a preamble, and the start of a JSON object; small enough that a runaway
 # CLI cannot flood an error payload.
@@ -360,12 +412,19 @@ async def run_delegated_inference(
         # Only a call the provider actually answered can say the provider is
         # out: a spawn rejection is our own orchestrator, not the account.
         provider_unavailable = None
+        accounting_deferred: list[str] = []
         if terminal_result:
             classified = host_availability.classify(str(adapter_result.get("error") or ""))
             if classified is not None:
-                provider_unavailable = await host_availability.record_unavailable_async(
-                    host_id, classified, detail=message,
+                finished, provider_unavailable = await _finish_by_deadline(
+                    host_availability.record_unavailable_async(
+                        host_id, classified, detail=message,
+                    ),
+                    deadline,
+                    step="provider_cooldown",
                 )
+                if not finished:
+                    accounting_deferred.append("provider_cooldown")
         return InferenceOutcome.failed(
             message,
             code=(
@@ -401,6 +460,11 @@ async def run_delegated_inference(
                     if provider_unavailable
                     else {}
                 ),
+                **(
+                    {"accounting_deferred": accounting_deferred}
+                    if accounting_deferred
+                    else {}
+                ),
                 **_raw_excerpt_details(adapter_result),
             },
             recovery={
@@ -428,7 +492,15 @@ async def run_delegated_inference(
             possibly_running=possibly_running,
         )
 
-    await host_availability.clear_async(host_id)
+    # The answer is in hand. Bookkeeping after this point must not cost the
+    # caller the answer: each step gets only what is left of the deadline,
+    # and one that cannot finish in it completes in the background instead.
+    accounting_deferred = []
+    finished, _ = await _finish_by_deadline(
+        host_availability.clear_async(host_id), deadline, step="cooldown_clear",
+    )
+    if not finished:
+        accounting_deferred.append("cooldown_clear")
     response_text = str(adapter_result.get("text") or "")
     models_used = [
         str(value) for value in (adapter_provenance.get("models_used") or [])
@@ -437,13 +509,19 @@ async def run_delegated_inference(
     # Strong external consultation gets a deliberately modest, fixed accounting
     # increment. Dollar cost remains provider-reported metadata, not an EISV proxy.
     energy_cost = 0.05
-    await _track_energy(
-        request.requesting_agent_uuid,
-        host_id=host_id,
-        models_used=models_used,
-        tokens_used=tokens_used,
-        energy_cost=energy_cost,
+    finished, _ = await _finish_by_deadline(
+        _track_energy(
+            request.requesting_agent_uuid,
+            host_id=host_id,
+            models_used=models_used,
+            tokens_used=tokens_used,
+            energy_cost=energy_cost,
+        ),
+        deadline,
+        step="energy",
     )
+    if not finished:
+        accounting_deferred.append("energy")
 
     inference = {
         "schema": "unitares.inference_result.v0",
@@ -481,6 +559,10 @@ async def run_delegated_inference(
         "configured_by": "operator",
         "warnings": adapter_provenance.get("warnings") or [],
     }
+    if accounting_deferred:
+        # Named steps still finishing after this response: the answer and its
+        # execution id are complete, the bookkeeping lands shortly after.
+        inference["accounting_deferred"] = accounting_deferred
 
     return InferenceOutcome(
         response=response_text,

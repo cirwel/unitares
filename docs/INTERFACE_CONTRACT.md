@@ -992,9 +992,15 @@ default (#2285).
     reconcile the child by. 45s leaves about 15s for host resolution, the
     spawn request and the response, so by default the structured
     `DELEGATED_INFERENCE_TIMEOUT` reaches the caller.
-  - Every call answers within `timeout_s` + 10s. That is one wall-clock
-    deadline: host resolution, the spawn request and each await are clipped
-    to the time left before it rather than adding their own timeouts on top.
+  - The tool's own work ends within `timeout_s` + 10s. That is one
+    wall-clock deadline: host resolution, the spawn request, each await and
+    the bookkeeping after the answer (provider-cooldown writes, Energy
+    accounting) are clipped to the time left before it rather than adding
+    their own timeouts on top. Bookkeeping that cannot finish by then
+    completes in the background, and the response names it in
+    `accounting_deferred` (`inference.accounting_deferred` on success,
+    alongside the complete answer and execution id; the failure details on
+    a failure). The field is absent when nothing was deferred.
     An orchestrator that accepts the child and then stalls the await now
     yields `DELEGATED_INFERENCE_TIMEOUT` with the execution id by that
     deadline (it used to wait out the window plus 15s of HTTP grace, and an
