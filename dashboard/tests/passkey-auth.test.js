@@ -136,7 +136,7 @@ describe("dashboard WebSocket auth order", () => {
       encodeURIComponent,
       unescape,
       btoa,
-      location: { host: "gov.cirwel.org", protocol: "https:" },
+      location: { host: "gov.example.org", protocol: "https:" },
       setTimeout: (fn) => { scheduled.push(fn); return scheduled.length; },
       window: { DATA: { apiToken: () => token } },
     };
@@ -148,13 +148,13 @@ describe("dashboard WebSocket auth order", () => {
   it("tries the implicit session cookie before offering the bearer as a subprotocol", () => {
     const context = socketContext("break-glass");
     context.window.GovSocket.make(vi.fn(), vi.fn());
-    expect(instances[0].url).toBe("wss://gov.cirwel.org/ws/eisv");
+    expect(instances[0].url).toBe("wss://gov.example.org/ws/eisv");
     expect(instances[0].protocols).toBeUndefined();
 
     instances[0].onerror();
     expect(instances).toHaveLength(2);
     // Never in the URL: the server logs handshake request lines verbatim.
-    expect(instances[1].url).toBe("wss://gov.cirwel.org/ws/eisv");
+    expect(instances[1].url).toBe("wss://gov.example.org/ws/eisv");
     expect(instances[1].protocols).toEqual([
       "unitares.bearer",
       "unitares.bearer.YnJlYWstZ2xhc3M", // base64url("break-glass")

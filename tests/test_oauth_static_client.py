@@ -458,9 +458,9 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
     message = auth_gate_refusal(
         provider_present=True, issuer_set=True, main_listener_ungated=True,
-        main_host="100.96.201.46",
+        main_host="100.64.12.34",
     )
-    assert message and "100.96.201.46" in message and "UNITARES_MCP_BEARER_TOKENS" in message
+    assert message and "100.64.12.34" in message and "UNITARES_MCP_BEARER_TOKENS" in message
     assert auth_gate_refusal(
         provider_present=True, issuer_set=True, main_listener_ungated=False
     ) is None
@@ -474,7 +474,7 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
     "up,host,tokens,expected",
     [
         (True, "0.0.0.0", "", True),
-        (True, "192.168.1.151", "", True),
+        (True, "192.168.50.10", "", True),
         (True, "127.0.0.1", "", False),
         (True, "localhost", "", False),
         (True, "0.0.0.0", "tok", False),   # a bearer allowlist gates main

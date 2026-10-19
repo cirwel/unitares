@@ -1,7 +1,7 @@
 """A collision rename must not be invisible to the agent it happened to.
 
 `set_agent_label` renames on collision — the caller asks for `Doctor` and the
-row becomes `Doctor_7dea7dcb` — but it returns only a bool, so the onboard
+row becomes `Doctor_5b9575cc` — but it returns only a bool, so the onboard
 handler read "success" as "I got the name I asked for" and echoed the
 REQUESTED label back. Verified against the live server on 2026-08-26: a second
 mint of the same name returned `display_name="ZzTestCollision"` while
@@ -21,8 +21,8 @@ import pytest
 from src.mcp_handlers.identity import persistence
 
 
-UUID = "7dea7dcb-e887-4c90-8c8a-4f3433da102b"
-OTHER = "dc94fa70-6186-4862-aeb6-3fc9801263c8"
+UUID = "5b9575cc-8423-5268-85ce-b8c9757a5ca8"
+OTHER = "81b264c8-7406-5fcc-8b34-2e742952e4ee"
 
 
 class _DB:
@@ -62,13 +62,13 @@ async def test_no_collision_applies_the_requested_label(monkeypatch):
 @pytest.mark.asyncio
 async def test_collision_returns_the_renamed_label_not_the_request(monkeypatch):
     """⛔The bug. The caller asked for `Doctor` and the row became
-    `Doctor_7dea7dcb`; returning the request is what let the mint response
+    `Doctor_5b9575cc`; returning the request is what let the mint response
     tell the agent it holds a label the database does not have."""
     db = _DB()
     _wire(monkeypatch, db, incumbent=OTHER)
     got = await persistence.set_agent_label_resolved(UUID, "Doctor")
-    assert got == "Doctor_7dea7dcb"
-    assert db.written == "Doctor_7dea7dcb", "the DB and the return must agree"
+    assert got == "Doctor_5b9575cc"
+    assert db.written == "Doctor_5b9575cc", "the DB and the return must agree"
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_resident_incumbent_still_renames_the_newcomer(monkeypatch):
     """A fork colliding with a live resident must still yield — unchanged."""
     db = _DB(incumbent_is_resident=True)
     _wire(monkeypatch, db, incumbent=OTHER)
-    assert await persistence.set_agent_label_resolved(UUID, "Vigil") == "Vigil_7dea7dcb"
+    assert await persistence.set_agent_label_resolved(UUID, "Vigil") == "Vigil_5b9575cc"
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_bool_wrapper_is_true_even_when_renamed():
     feed a response must use the resolved form.
     """
     with patch.object(persistence, "set_agent_label_resolved",
-                      AsyncMock(return_value="Doctor_7dea7dcb")):
+                      AsyncMock(return_value="Doctor_5b9575cc")):
         assert await persistence.set_agent_label("uuid", "Doctor") is True
 
 

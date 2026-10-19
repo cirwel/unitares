@@ -22,8 +22,8 @@ import json
 import pytest
 
 
-UNKNOWN_ID = "Claude_Code_20260805_33fcecfd"  # a display handle, not a UUID
-KNOWN_ID = "33fcecfd-291d-4407-b6c5-55b0dd040b72"
+UNKNOWN_ID = "Claude_Code_20260805_73599c68"  # a display handle, not a UUID
+KNOWN_ID = "73599c68-3cf1-5590-a9b2-e2ef866c6650"
 
 
 @pytest.fixture

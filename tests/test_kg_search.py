@@ -479,7 +479,7 @@ class TestSearchKnowledgeGraph:
     async def test_verbatim_hit_without_fts_anchor_is_not_low_confidence(self, patch_common):
         """Issue #1711: the note must not disavow a literal match.
 
-        PostgreSQL indexes some spans whole (`cirwel/unitares-paper-v7` is one
+        PostgreSQL indexes some spans whole (`acmeco/unitares-paper-v7` is one
         `file` lexeme), so a result can carry the caller's exact query string
         and still anchor nothing in the FTS arm. The old code read "no lexical
         anchor" as "no lexical match" and told the caller to treat a
@@ -490,7 +490,7 @@ class TestSearchKnowledgeGraph:
 
         disc = make_discovery(
             id="path-swallowed",
-            summary="v7 paper skeleton LIVE in private repo cirwel/unitares-paper-v7",
+            summary="v7 paper skeleton LIVE in private repo acmeco/unitares-paper-v7",
         )
         mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
         mock_graph.full_text_search = AsyncMock(return_value=[])
@@ -1213,7 +1213,7 @@ _LIVE_SUMMARY = (
 )
 _LIVE_TAGS = [
     "deploy", "migrations", "schema-migrations", "ops-gotcha", "lease-plane",
-    "cirwel-unitares", "for-future-agents",
+    "acmeco-unitares", "for-future-agents",
 ]
 
 

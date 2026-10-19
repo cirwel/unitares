@@ -216,16 +216,16 @@ class TestComputeAgentSignature:
         """Agent-chosen label (differs from public_agent_id/structured_id) → claimed."""
         mock_ctx.return_value = "uuid-1"
         mock_srv.return_value = _mock_server({
-            "uuid-1": _meta(label="hikewa", public_agent_id="Claude_Code_20260417", structured_id="mcp_20260417"),
+            "uuid-1": _meta(label="my-chosen-label", public_agent_id="Claude_Code_20260417", structured_id="mcp_20260417"),
         })
         sig = compute_agent_signature()
         # P1.3: the structured handle is surfaced in agent_id; the claimed
         # label is reported via display_name + label_source, not agent_id.
         assert sig["agent_id"] == "Claude_Code_20260417"
-        assert sig["display_name"] == "hikewa"
+        assert sig["display_name"] == "my-chosen-label"
         assert sig["label_source"] == "claimed"
         assert sig["identity_context"]["public_handle"]["agent_id"] == "Claude_Code_20260417"
-        assert sig["identity_context"]["label"]["display_name"] == "hikewa"
+        assert sig["identity_context"]["label"]["display_name"] == "my-chosen-label"
 
     @patch("src.mcp_handlers.context.get_context_agent_id")
     @patch("src.mcp_handlers.shared.get_mcp_server")

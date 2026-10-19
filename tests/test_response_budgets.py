@@ -109,14 +109,14 @@ def _onboard_payload(**assurance_overrides) -> dict:
         "success": True,
         "server_time": "2026-09-25T07:27:56.084524+00:00",
         "welcome": (
-            "Your session ID is `agent-54d62846-70b`. You are node 1 in thread "
+            "Your session ID is `agent-71ed7caf-70b`. You are node 1 in thread "
             "t-f3a8bb1ebd."
         ),
-        "uuid": "54d62846-70bc-41e0-afcf-087d94b5d747",
+        "uuid": "71ed7caf-d3bc-568f-807b-27159040b3ee",
         "agent_id": "Claude_Opus_5_5_20260925",
-        "display_name": "claude-code-opus_54d62846",
+        "display_name": "claude-code-opus_71ed7caf",
         "is_new": True,
-        "client_session_id": "agent-54d62846-70b",
+        "client_session_id": "agent-71ed7caf-70b",
         "identity_assurance": assurance,
         "next_step": (
             "Call process_agent_update with response_text describing your work and "
@@ -782,7 +782,7 @@ def _deprecation_block() -> dict:
         # is test_a_label_rename_keeps_the_whole_record_and_says_why.
         {"label_renamed": {
             "requested": "taken",
-            "applied": "taken_54d62846",
+            "applied": "taken_71ed7caf",
             "reason": "label_taken_by_active_agent",
             "detail": "'taken' is already held by another active agent.",
         }},

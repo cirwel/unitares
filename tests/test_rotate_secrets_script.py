@@ -11,9 +11,9 @@ def test_surgical_strip_preserves_uuid(tmp_path):
     and verify shape."""
     anchor = tmp_path / "watcher.json"
     anchor.write_text(json.dumps({
-        "client_session_id": "agent-907e3195-c64",
+        "client_session_id": "agent-8a930180-c64",
         "continuity_token": "v1.somelongtoken.sig",
-        "agent_uuid": "907e3195-c649-49db-b753-1edc1a105f33",
+        "agent_uuid": "8a930180-9ef9-59c7-9267-fd7dd936dd58",
     }))
 
     # The script's surgical block, verbatim.
@@ -35,7 +35,7 @@ os.replace(tmp, path)
     subprocess.check_call(["python3", "-c", script])
 
     result = json.loads(anchor.read_text())
-    assert result == {"agent_uuid": "907e3195-c649-49db-b753-1edc1a105f33"}
+    assert result == {"agent_uuid": "8a930180-9ef9-59c7-9267-fd7dd936dd58"}
     assert oct(anchor.stat().st_mode)[-3:] == "600"
 
 
