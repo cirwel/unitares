@@ -203,3 +203,14 @@ def test_render_alert_report_includes_signal_evidence_next_when_alerting():
     assert "Signal: no-session get_governance_metrics is not identity-neutral" in report
     assert "- no_session_metrics={...}" in report
     assert "Next: inspect identity proof-origin" in report
+
+
+def test_default_python_keeps_legacy_interpreter_when_present(tmp_path):
+    import sys
+
+    from scripts.diagnostics.dogfood_ablation_guard import default_python
+
+    legacy = tmp_path / "python3"
+    legacy.write_text("")
+    assert default_python(str(legacy)) == str(legacy)
+    assert default_python(str(tmp_path / "missing" / "python3")) == sys.executable
