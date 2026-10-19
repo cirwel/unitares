@@ -39,6 +39,9 @@ def isolated_silence_state(monkeypatch):
 
     monkeypatch.setattr(broadcaster_module, "broadcaster_instance", broadcaster)
     monkeypatch.setattr(audit_module, "append_audit_event_async", audit)
+    # Durable "already alerted this episode" lookup: default to an empty audit
+    # store so existing tests behave as a first-ever alert and never touch a DB.
+    monkeypatch.setattr(audit_module, "query_audit_events_async", AsyncMock(return_value=[]))
 
     # Label-based intervals are deployment-local now (UNITARES_CLASS_CALIBRATION
     # overlay); inject representative test values so the silence detector has a
@@ -614,3 +617,191 @@ async def test_old_silence_row_behind_many_open_rows_is_still_closed(
 
     kg.update_discovery.assert_awaited_once()
     assert kg.update_discovery.await_args.args[0] == "old-silence"
+
+
+# --- de-duplication that survives a governance restart -----------------------
+#
+# The in-memory alert sets are empty in every new process, and the silence clock
+# restarts at server start, so before this the same outage was re-announced on
+# every restart. "Already alerted" now comes from the alert events audit.events
+# already holds, compared against the agent's last real activity.
+
+
+class _FakeAuditStore:
+    """In-memory stand-in for audit.events with the query filters the probe uses."""
+
+    def __init__(self):
+        self.events: list[dict] = []
+
+    def record(self, agent_id, event_type, ts):
+        self.events.append({"agent_id": agent_id, "event_type": event_type, "ts": ts})
+
+    async def query(self, agent_id=None, event_types=None, start_time=None,
+                    limit=1000, order="asc", **_kw):
+        start = datetime.fromisoformat(start_time) if start_time else None
+        rows = [
+            e for e in self.events
+            if (agent_id is None or e["agent_id"] == agent_id)
+            and (not event_types or e["event_type"] in event_types)
+            and (start is None or e["ts"] >= start)
+        ]
+        rows.sort(key=lambda e: e["ts"], reverse=(order == "desc"))
+        return [{"timestamp": e["ts"].isoformat(), "agent_id": e["agent_id"],
+                 "event_type": e["event_type"], "details": {}} for e in rows[:limit]]
+
+
+@pytest.fixture
+def audit_store(isolated_silence_state, monkeypatch):
+    """Wire the broadcaster and the audit query to one fake durable store."""
+    import src.audit_db as audit_module
+
+    broadcaster, audit = isolated_silence_state
+    store = _FakeAuditStore()
+
+    async def _broadcast(event_type, agent_id=None, payload=None):
+        # The real broadcaster persists every typed event to audit.events.
+        store.record(agent_id, event_type, datetime.now(timezone.utc))
+
+    async def _append(entry):
+        store.record(entry.get("agent_id"), entry.get("event_type"),
+                     datetime.fromisoformat(entry["timestamp"]))
+        return True
+
+    broadcaster.broadcast_event.side_effect = _broadcast
+    audit.side_effect = _append
+    monkeypatch.setattr(audit_module, "query_audit_events_async", store.query)
+    return broadcaster, store
+
+
+def _simulate_restart(started_ago: timedelta) -> None:
+    """A fresh process: empty alert sets, silence clock restarted."""
+    background_tasks._silence_alerted.clear()
+    background_tasks._silence_critical_alerted.clear()
+    background_tasks._silence_duplicate_warned.clear()
+    background_tasks._silence_close_checked.clear()
+    background_tasks._silence_server_start = datetime.now(timezone.utc) - started_ago
+
+
+def _critical_calls(broadcaster):
+    return [c for c in broadcaster.broadcast_event.await_args_list
+            if c.args[0] == "lifecycle_silent_critical"]
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_realert_same_silence_episode(audit_store, monkeypatch):
+    """The 2026-10-18 shape: one outage, several restarts, one CRITICAL."""
+    import src.knowledge_graph as kg_module
+
+    broadcaster, store = audit_store
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert len(_critical_calls(broadcaster)) == 1
+
+    kg = AsyncMock()
+    kg.query = AsyncMock(return_value=[])
+    kg.add_discovery = AsyncMock()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+
+    # Three restarts, each running long enough to cross the 5x threshold again.
+    for _ in range(3):
+        _simulate_restart(started_ago=timedelta(hours=2))
+        await background_tasks._silence_check_iteration()
+        await background_tasks._silence_check_iteration()
+
+    assert len(_critical_calls(broadcaster)) == 1
+    # Adopted into the new process, so no downgrade WARNING follows either.
+    assert broadcaster.broadcast_event.await_count == 1
+    assert "sentinel-uuid" in background_tasks._silence_critical_alerted
+    assert "sentinel-uuid" in background_tasks._silence_alerted
+    kg.add_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_episode_after_activity_alerts_again(audit_store):
+    """Activity after the last alert ends the episode; the next silence is new."""
+    broadcaster, store = audit_store
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert len(_critical_calls(broadcaster)) == 1
+
+    # Backdate the recorded alert so the agent's later check-in falls after it.
+    store.events[-1]["ts"] = datetime.now(timezone.utc) - timedelta(hours=10)
+    checked_in = datetime.now(timezone.utc) - timedelta(hours=5)
+    agent_metadata["sentinel-uuid"].last_update = checked_in.isoformat()
+
+    _simulate_restart(started_ago=timedelta(hours=2))
+    await background_tasks._silence_check_iteration()
+
+    assert len(_critical_calls(broadcaster)) == 2
+
+
+@pytest.mark.asyncio
+async def test_prior_warning_does_not_hide_critical_after_restart(audit_store):
+    """A WARNING-only episode still escalates to CRITICAL in the next process."""
+    broadcaster, store = audit_store
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+    store.record("sentinel-uuid", "lifecycle_silent", datetime.now(timezone.utc) - timedelta(hours=3))
+    store.record("sentinel-uuid", "agent_silent", datetime.now(timezone.utc) - timedelta(hours=3))
+
+    _simulate_restart(started_ago=timedelta(hours=2))
+    await background_tasks._silence_check_iteration()
+
+    assert len(_critical_calls(broadcaster)) == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_repeat_warning_for_same_episode(audit_store):
+    """The WARNING tier is de-duplicated against durable state too."""
+    broadcaster, store = audit_store
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+    store.record("sentinel-uuid", "lifecycle_silent", datetime.now(timezone.utc) - timedelta(hours=3))
+
+    # Up 30 minutes: inside the 2x-5x WARNING band for a 600s cadence.
+    _simulate_restart(started_ago=timedelta(minutes=30))
+    await background_tasks._silence_check_iteration()
+
+    broadcaster.broadcast_event.assert_not_awaited()
+    assert "sentinel-uuid" in background_tasks._silence_alerted
+
+
+@pytest.mark.asyncio
+async def test_alert_lookup_failure_fails_open(isolated_silence_state, monkeypatch):
+    """An unreadable audit store must not suppress a CRITICAL."""
+    import src.audit_db as audit_module
+
+    broadcaster, _ = isolated_silence_state
+    monkeypatch.setattr(
+        audit_module, "query_audit_events_async", AsyncMock(side_effect=RuntimeError("db down"))
+    )
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    assert len(_critical_calls(broadcaster)) == 1
+
+
+@pytest.mark.asyncio
+async def test_alert_lookup_is_scoped_to_episode(isolated_silence_state, monkeypatch):
+    """The lookup asks for critical alerts for this agent since its last activity."""
+    import src.audit_db as audit_module
+
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(audit_module, "query_audit_events_async", query)
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    query.assert_awaited_once()
+    kwargs = query.await_args.kwargs
+    assert kwargs["agent_id"] == "sentinel-uuid"
+    assert kwargs["event_types"] == ["lifecycle_silent_critical"]
+    assert datetime.fromisoformat(kwargs["start_time"]) == stale
+    assert kwargs["limit"] == 1

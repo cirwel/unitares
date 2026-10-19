@@ -1469,6 +1469,56 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
         return False
 
 
+# Event types that record a silence alert in audit.events. The broadcaster
+# persists every ``broadcast_event`` there, and the WARNING tier also appends
+# ``agent_silent`` directly. Escalation checks only the critical type: a
+# previous process having sent the WARNING for an episode must not hide the
+# CRITICAL that episode has since earned.
+_SILENCE_CRITICAL_ALERT_EVENTS: tuple[str, ...] = ("lifecycle_silent_critical",)
+_SILENCE_ANY_ALERT_EVENTS: tuple[str, ...] = (
+    "lifecycle_silent",
+    "agent_silent",
+    "lifecycle_silent_critical",
+)
+
+
+async def _silence_episode_already_alerted(
+    agent_id: str, last_active: datetime, event_types: tuple[str, ...]
+) -> bool:
+    """True when this silence episode was already alerted, per durable state.
+
+    A silence episode starts at the agent's last real activity
+    (``last_active``, its uncapped ``last_update``). Any alert event of
+    ``event_types`` recorded for this agent at or after that moment means a
+    previous process already announced this same episode. The in-memory alert
+    sets cannot answer that: they are empty after every restart, and the
+    silence clock restarts at server start, so each restart used to announce
+    the same long outage again (three restarts on 2026-10-18 produced three
+    identical CRITICAL alerts for the same two agents).
+
+    An agent that becomes active after the alert moves ``last_active`` past
+    it, so the lookup comes back empty and the next silence is a new episode
+    that alerts normally.
+
+    Fails open: if the audit store cannot be read, return False so the alert
+    fires. A duplicate alert is recoverable; a suppressed one is not.
+    """
+    try:
+        from src.audit_db import query_audit_events_async
+
+        rows = await query_audit_events_async(
+            agent_id=agent_id,
+            event_types=list(event_types),
+            start_time=last_active.isoformat(),
+            limit=1,
+            order="desc",
+        )
+    except Exception as e:
+        logger.debug(f"[SILENCE] durable alert lookup failed for {agent_id[:12]}: {e}")
+        return False
+    return bool(rows)
+
+
 async def _silence_check_iteration() -> None:
     """Single pass of silence detection. Extracted for testability."""
     global _silence_server_start
@@ -1543,6 +1593,18 @@ async def _silence_check_iteration() -> None:
                             "proxy_alive": True,
                         },
                     )
+            elif await _silence_episode_already_alerted(
+                agent_id, last, _SILENCE_CRITICAL_ALERT_EVENTS
+            ):
+                # A previous process already raised CRITICAL for this episode
+                # and the agent has not been active since. Adopt that alert
+                # into this process's state instead of announcing it again.
+                _silence_critical_alerted.add(agent_id)
+                _silence_alerted.add(agent_id)  # prevent downgrade WARNING after CRITICAL
+                logger.info(
+                    f"[SILENCE] {meta.label or agent_id[:12]} still silent; CRITICAL "
+                    "already recorded for this episode, not re-alerting"
+                )
             else:
                 _silence_critical_alerted.add(agent_id)
                 _silence_close_checked.discard(agent_id)
@@ -1563,6 +1625,11 @@ async def _silence_check_iteration() -> None:
                 await _log_resident_silence_finding(agent_id, meta, silence_minutes, interval)
         elif silence_seconds >= interval * 2 and agent_id not in _silence_alerted:
             _silence_alerted.add(agent_id)
+            if await _silence_episode_already_alerted(
+                agent_id, last, _SILENCE_ANY_ALERT_EVENTS
+            ):
+                # Same episode, already announced by a previous process.
+                continue
             logger.warning(
                 f"[SILENCE] {meta.label or agent_id[:12]} silent for {silence_minutes:.0f}m "
                 f"(expected every {interval // 60}m)"
