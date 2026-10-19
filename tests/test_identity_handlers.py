@@ -2508,7 +2508,7 @@ class TestHandleOnboardV2:
             # In-memory unkeyed collision: when _session_identities[unkeyed_old_scoped]
             # already holds old_uuid and mint_guard refuses overwriting it, the
             # mirror under the new agent's own key must still record the new
-            # agent as owner, never copy old_uuid's entry.
+            # agent as owner (via _cache_session), never copy old_uuid's entry.
             _session_identities[unkeyed_old_scoped] = {
                 "bound_agent_id": old_uuid,
                 "agent_uuid": old_uuid,
@@ -2534,6 +2534,58 @@ class TestHandleOnboardV2:
             inmem_uuid = inmem_data["uuid"]
             assert _session_identities[unkeyed_old_scoped]["bound_agent_id"] == old_uuid
             assert _session_identities[f"agent-{inmem_uuid[:12]}"]["bound_agent_id"] == inmem_uuid
+
+            # PostgreSQL-only session collision: when Redis and _session_identities
+            # are cold (e.g. post-restart or Redis TTL expiry) and unkeyed_old_scoped
+            # is still bound to old_uuid in PostgreSQL core.sessions, force_new
+            # must not overwrite unkeyed_old_scoped in memory/Redis or collide on
+            # db.create_session(unkeyed_old_scoped); it must bind and persist
+            # under the new agent's own client_session_id.
+            _session_identities.clear()
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
+            mock_db.get_session.side_effect = (
+                lambda sk: SimpleNamespace(agent_id=old_uuid)
+                if sk in (unkeyed_old, unkeyed_old_scoped)
+                else None
+            )
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="pg-only-2707", metadata={}),
+            ]
+            pg_only_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            pg_only_data = parse_result(pg_only_res)
+            pg_only_uuid = pg_only_data["uuid"]
+            assert unkeyed_old not in _session_identities
+            assert unkeyed_old_scoped not in _session_identities
+            assert _session_identities[f"agent-{pg_only_uuid[:12]}"]["bound_agent_id"] == pg_only_uuid
+            pg_only_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert f"agent-{pg_only_uuid[:12]}" in pg_only_session_keys
+            assert unkeyed_old not in pg_only_session_keys
+            assert unkeyed_old_scoped not in pg_only_session_keys
+            mock_db.get_session.side_effect = None
+            mock_db.get_session.return_value = None
+
+            # Ordinary non-conflicting lazy mint (persist=False) only caches the
+            # transport key via _cache_session and does not add a second
+            # fingerprint-less entry under make_client_session_id(uuid).
+            from src.mcp_handlers.identity.resolution import resolve_session_identity
+
+            _session_identities.clear()
+            lazy_res = await resolve_session_identity("fresh-lazy-only-key", persist=False)
+            lazy_uuid = lazy_res["agent_uuid"]
+            assert "fresh-lazy-only-key" in _session_identities
+            assert f"agent-{lazy_uuid[:12]}" not in _session_identities
 
             # Plain arg-less identity() on a fresh transport must both bind the
             # fresh transport key (in memory and durable PG core.sessions) and

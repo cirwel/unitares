@@ -630,7 +630,7 @@ async def _choose_fresh_persist_session_key(session_key: str, agent_uuid: str) -
     that just bound to this agent, persist under ``session_key`` so the
     transport retains its durable PostgreSQL session row.
     """
-    from .persistence import _REDIS_WRITE_TIMEOUT, _get_redis
+    from .persistence import _REDIS_WRITE_TIMEOUT, _cache_session, _get_redis
     from .shared import _session_identities, make_client_session_id
     from .stable_session import classify as _csid_kind, verifies_for as _csid_verifies
 
@@ -664,12 +664,45 @@ async def _choose_fresh_persist_session_key(session_key: str, agent_uuid: str) -
     except Exception:
         pass
 
+    sk_pg_conflict = False
+    try:
+        db = get_db()
+        if db is not None:
+            pg_sess = await db.get_session(session_key)
+            pg_owner = getattr(pg_sess, "agent_id", None) if pg_sess else None
+            if pg_owner and pg_owner != agent_uuid:
+                sk_pg_conflict = True
+    except Exception:
+        pass
+
     sk_bound_to_new = (
         not sk_foreign_stable
         and not sk_redis_conflict
+        and not sk_pg_conflict
         and isinstance(sk_entry, dict)
         and (sk_entry.get("bound_agent_id") or sk_entry.get("agent_uuid")) == agent_uuid
     )
+    if not sk_bound_to_new:
+        own_entry = _session_identities.get(own_session_key)
+        own_bound = (
+            isinstance(own_entry, dict)
+            and (own_entry.get("bound_agent_id") or own_entry.get("agent_uuid")) == agent_uuid
+        )
+        if (
+            isinstance(sk_entry, dict)
+            and (sk_entry.get("bound_agent_id") or sk_entry.get("agent_uuid")) == agent_uuid
+        ):
+            if sk_redis_conflict or sk_pg_conflict or sk_foreign_stable:
+                _session_identities.pop(session_key, None)
+            if not own_bound:
+                await _cache_session(
+                    own_session_key,
+                    agent_uuid,
+                    display_agent_id=sk_entry.get("display_agent_id") or sk_entry.get("public_agent_id"),
+                    label=sk_entry.get("agent_label") or sk_entry.get("label"),
+                    spawn_reason=sk_entry.get("spawn_reason"),
+                    mint_guard=True,
+                )
     return session_key if sk_bound_to_new else own_session_key
 
 
