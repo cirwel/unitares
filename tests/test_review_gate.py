@@ -2999,6 +2999,13 @@ def test_the_codex_reviewer_does_not_load_the_checkouts_agents_md(monkeypatch, t
     cmd = calls[0]["cmd"]
     assert "project_doc_max_bytes=0" in cmd
     assert cmd[cmd.index("project_doc_max_bytes=0") - 1] == "-c"
+    # It starts in an empty directory outside the checkout: from the checkout
+    # it would load the PR's repo skills, which no setting turns off.
+    start = cmd[cmd.index("-C") + 1]
+    assert start != os.getcwd() and Path(start).name.startswith("review-codex-")
+    assert calls[0]["cwd"] == start and calls[0]["cwd_exists"]
+    assert "--skip-git-repo-check" in cmd
+    assert not Path(start).exists()  # removed after the run
 
 
 def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
@@ -3019,7 +3026,7 @@ def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
     path = rg.base_house_rules(out, base)
     assert Path(path).read_text() == "base rule: no secrets in logs\n"
     # No AGENTS.md at the base: the prompt says so instead of naming a file.
-    empty = run("hash-object", "-t", "tree", "--stdin")  # empty tree
+    empty = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree
     run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
     orphan = subprocess.run(["git", "-C", str(repo), "commit-tree", empty, "-m", "none"],
                             check=True, capture_output=True, text=True,
@@ -3028,6 +3035,7 @@ def test_house_rules_come_from_the_base_not_the_pr(tmp_path, monkeypatch):
     assert rg.base_house_rules(out, orphan).startswith("(none")
     assert not (out / "house-rules-base.md").exists()
     assert "{rules_path}" in rg.REVIEW_PROMPT and "AGENTS.md as it was at the" in rg.REVIEW_PROMPT
+    assert "{checkout}" in rg.REVIEW_PROMPT
 
 
 def test_agy_isolated_home_links_only_the_keychain(monkeypatch, tmp_path):
