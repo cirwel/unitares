@@ -22,7 +22,9 @@
 #     cookie would let any one compromised BEAM service pivot into all the
 #     others, including the orchestrator, whose entire job is spawning
 #     processes.
-#   * Cookies live in ~/.config/cirwel/secrets.env (mode 600) and in
+#   * Cookies live in the secrets env file (mode 600; $UNITARES_SECRETS_ENV,
+#     default ~/.config/unitares/secrets.env, legacy
+#     ~/.config/cirwel/secrets.env still read; resolved below) and in
 #     ~/.erlang.cookie (mode 400). Anything that can read those can already do
 #     this; the boundary is the filesystem, not this script.
 #

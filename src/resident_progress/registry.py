@@ -13,9 +13,15 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
+from src.identity.substrate import _default_anchors_dir
+
 logger = logging.getLogger(__name__)
 
-ANCHOR_DIR = Path.home() / ".unitares" / "anchors"
+# Explicit anchor-directory override (tests patch this). None means resolve at
+# call time through the same helper the identity substrate uses, so
+# UNITARES_ANCHORS_DIR relocates both readers together; unset, it is
+# ~/.unitares/anchors.
+ANCHOR_DIR: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -210,8 +216,13 @@ def is_event_driven_label(label: str | None) -> bool:
 
 
 def resolve_resident_uuid(label: str) -> str | None:
-    """Read ~/.unitares/anchors/<label>.json and return the agent_uuid, or None."""
-    path = ANCHOR_DIR / f"{label}.json"
+    """Read <anchors dir>/<label>.json and return the agent_uuid, or None.
+
+    The anchors dir is ``ANCHOR_DIR`` when set, else ``UNITARES_ANCHORS_DIR``,
+    else ~/.unitares/anchors.
+    """
+    anchor_dir = ANCHOR_DIR if ANCHOR_DIR is not None else _default_anchors_dir()
+    path = anchor_dir / f"{label}.json"
     try:
         with path.open() as f:
             doc = json.load(f)

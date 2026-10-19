@@ -88,7 +88,15 @@ PREV="$DEPLOY_LIB_PREV"
 # made the DEPLOY worktree depend on the DEV checkout still existing — delete or
 # move the dev tree and the live bridge dies at its next restart, for a reason
 # nothing in the deploy path would have explained.
-ENV_FILE="${BRIDGE_ENV_FILE:-$HOME/.config/cirwel/discord-bridge.env}"
+#
+# Resolution mirrors the secrets env file: BRIDGE_ENV_FILE, else
+# ~/.config/unitares/discord-bridge.env, else the pre-2026-09
+# ~/.config/cirwel/discord-bridge.env when only that one exists. Existing .env
+# symlinks may point at the legacy file, so it must keep being found.
+ENV_FILE="${BRIDGE_ENV_FILE:-$HOME/.config/unitares/discord-bridge.env}"
+if [ -z "${BRIDGE_ENV_FILE:-}" ] && [ ! -f "$ENV_FILE" ] && [ -f "$HOME/.config/cirwel/discord-bridge.env" ]; then
+  ENV_FILE="$HOME/.config/cirwel/discord-bridge.env"
+fi
 if [ ! -f "$ENV_FILE" ]; then
   echo "[$TAG] REFUSING: no secrets file at $ENV_FILE." >&2
   echo "[$TAG] The bot would boot with an empty DISCORD_BOT_TOKEN and never connect." >&2

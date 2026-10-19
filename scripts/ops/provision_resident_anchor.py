@@ -90,10 +90,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 GOV_URL = os.environ.get("UNITARES_GOV_URL", "http://127.0.0.1:8767")
-# NOTE: honored by src/identity/substrate.py but NOT by
-# src/resident_progress/registry.py or the SDK, both of which hardcode
-# ~/.unitares/anchors. It exists for tests; an operator who sets it gets an
-# anchor the resident will never read.
+# NOTE: honored by src/identity/substrate.py and src/resident_progress/registry.py,
+# but NOT by the SDK, which hardcodes ~/.unitares/anchors. An operator who sets it
+# for an SDK resident gets an anchor that resident will never read.
 ANCHOR_DIR = Path(os.environ.get(
     "UNITARES_ANCHORS_DIR", str(Path.home() / ".unitares" / "anchors")))
 
