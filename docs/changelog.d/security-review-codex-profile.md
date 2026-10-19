@@ -1,0 +1,5 @@
+- **review gate:** the Codex PR reviewer no longer reads the whole disk.
+  - **Before:** it ran under `--sandbox read-only`, which reads everything readable by the user, and the reviewer reads PR content.
+  - **Now:** it runs under the deny-by-default permission profile the `consult` Codex lane uses (`codex_app_server_client.lane_config_overrides`), widened only to read the checkout under review, its git directories and the toolchain git loads from. `.env` files and the local `.unitares` continuity cache in the checkout stay denied, and git runs with no system or global config.
+  - **Refusals:** it refuses to run, and the provider backs off as for a failed start, when Codex is not on `PATH`, when administrator Codex configuration exists, when the installed Codex fails the sandbox probe, or when the checkout path contains glob characters (`*?[]{}` or a backslash), which would make its deny rules unreliable. Each case is recorded as a failed review, never a clean one.
+  - **Live check:** a run read a checkout file and was denied a probe file elsewhere in the home directory and a planted `.env` file.

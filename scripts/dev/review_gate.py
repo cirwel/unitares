@@ -2396,6 +2396,55 @@ def reviewer_environment(github_config: str, agy_home: str | None = None) -> dic
     return env
 
 
+#: Package trees git and other read-only tools load libraries from (Homebrew,
+#: Apple's command line tools): programs, not data. Same list as
+#: dispatch_beam's codex council lane.
+CODEX_TOOL_ROOTS = ("/opt/homebrew/Cellar", "/opt/homebrew/opt", "/usr/local/Cellar",
+                    "/usr/local/opt", "/Library/Developer/CommandLineTools")
+
+
+def _existing(paths) -> list[str]:
+    return [p for p in paths if os.path.isdir(p)]
+
+
+def _git_dirs(checkout: str) -> list[str]:
+    """The checkout's git directory and common directory (a linked worktree
+    keeps them outside the worktree), absolute; [] outside a repository."""
+    proc = _launch(["git", "-C", checkout, "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+                   text=True, capture_output=True)
+    if proc.returncode != 0:
+        return []
+    return sorted({os.path.abspath(os.path.join(checkout, line))
+                   for line in proc.stdout.split("\n") if line.strip()})
+
+
+def _glob_unsafe(path: str) -> bool:
+    """Whether ``path`` holds glob syntax (or its escape), so a glob rooted
+    at it may not match what it names."""
+    return any(ch in path for ch in "*?[]{}\\")
+
+
+def _codex_cli() -> str | None:
+    """The codex binary on PATH, or None."""
+    return shutil.which("codex")
+
+
+def _codex_lane_client():
+    """The consult lane's codex confinement module, loaded from this tree.
+
+    review_gate runs standalone, so it loads the sibling source file by path
+    rather than importing the package; it is stdlib-only, and it comes from
+    the same tree as this script, so it carries the same trust."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "src/mcp_handlers/support/codex_app_server_client.py"
+    spec = importlib.util.spec_from_file_location("_review_codex_lane", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _under_project_config(path: str) -> bool:
     """True when a .git or .agents sits in an ancestor of ``path``: a CLI
     started there would discover project configuration by walking up."""
@@ -2421,18 +2470,56 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         # repo skills (.agents/skills, .codex/skills) into its context, so a
         # PR could steer its own reviewer, and no setting turns the skills
         # off (canary 2026-10-18). The prompt names the checkout by absolute
-        # path, which the read-only sandbox can read, and the base house
-        # rules arrive through the prompt.
+        # path, readable through the profile's extra_read grant below, and
+        # the base house rules arrive through the prompt.
         codex_dir = tempfile.TemporaryDirectory(prefix="review-codex-")
         if _under_project_config(codex_dir.name):
             codex_dir.cleanup()
             return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
                     "to a plain directory", "skipped: workspace not isolated")
+        # Not --sandbox read-only, which reads the whole disk: the same
+        # deny-by-default permission profile the consult lane runs under
+        # (codex_app_server_client), widened only to read the checkout under
+        # review, its git directories and the toolchain git loads from, with
+        # .env files still denied.
+        lane = _codex_lane_client()
+        cli = _codex_cli()
+        if cli is None:
+            codex_dir.cleanup()
+            # Same wording as a failed launch, so the provider cooldown applies.
+            return ("codex is not on PATH", "could not start codex: not found on PATH")
+        refusal = lane.admin_config_conflict()
+        if refusal is None and not lane.confinement_verified(cli):
+            refusal = "this codex does not enforce the lane's permission profile (sandbox probe)"
+        if refusal is not None:
+            codex_dir.cleanup()
+            # A startup failure: it will not clear by itself, so back off.
+            return (f"codex reviewer refused: {refusal}",
+                    "could not start codex: confinement unavailable")
+        checkout = os.getcwd()
+        if _glob_unsafe(checkout):
+            # The deny entries below are globs rooted at the checkout path; a
+            # path that is itself a glob could stop them matching, so the
+            # lane refuses rather than run with denials that may not apply.
+            codex_dir.cleanup()
+            return (f"checkout path {checkout!r} contains glob characters",
+                    "could not start codex: checkout path contains glob characters")
+        overrides = lane.lane_config_overrides(
+            cli,
+            extra_read=[checkout, *_git_dirs(checkout), *_existing(CODEX_TOOL_ROOTS)],
+            # .env files and the local continuity cache (.unitares holds a
+            # client_session_id and short-lived proof material) stay denied.
+            extra_deny=[f"{checkout}/**/.env*", f"{checkout}/**/*.env",
+                        f"{checkout}/.unitares", f"{checkout}/**/.unitares"],
+            # git reads its system and global config, which the profile denies.
+            set_env={"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+        )
         cmd = ["codex", "exec", "--ignore-user-config", "--ephemeral",
                "--disable", "hooks", "--disable", "plugins", "--model", codex_model,
                "-c", f"model_reasoning_effort={codex_effort}",
                "-c", "project_doc_max_bytes=0",
-               "--sandbox", "read-only", "--skip-git-repo-check", "-C", codex_dir.name,
+               *[part for override in overrides for part in ("-c", override)],
+               "--skip-git-repo-check", "-C", codex_dir.name,
                "--output-last-message", str(last), prompt]
     elif reviewer == "antigravity":
         # A temporary workspace holding only the review material, not the
