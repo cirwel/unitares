@@ -1422,6 +1422,102 @@ async def test_refused_facilitation_without_visible_advance_needs_reload(server_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["crash", "timeout"])
+async def test_reviewer_terminal_failure_during_fallback_is_not_success(server_patch, trigger):
+    """#2905 review (P1): the spawned reviewer can commit a terminal failure
+    (here a hard-limit block) before crashing or before the dispatch timeout
+    is observed. The recovery report keeps thesis_recorded but must carry the
+    failure exactly as the synthetic timeout path does, not success."""
+    dispatch = AsyncMock(
+        return_value={"ok": True, "execution_id": "ex-terminal"} if trigger == "crash" else None
+    )
+    failed_row = dict(
+        _REVIEWER_CLAIMED_ROW,
+        phase="failed",
+        status="failed",
+        resolution={"action": "block", "reason": "hard limit: unsafe resume"},
+        resolution_effect_state=None,
+    )
+
+    _session, data, _append, mark, emit = await _submit_thesis_while_reviewer_claims_slot(
+        dispatch=dispatch, crashed_fast=AsyncMock(return_value=True), readback=failed_row,
+    )
+
+    assert data["success"] is False
+    assert data["thesis_recorded"] is True
+    assert data["session_advanced"] is True
+    assert data["phase"] == "failed"
+    assert data["terminal_status"] == "failed"
+    assert data["terminal_committed"] is True
+    assert data["action"] == "block"
+    assert data["reason"] == "hard limit: unsafe resume"
+    assert data["hard_limit_blocked"] is True
+    assert data["hard_limit_violation"] == "hard limit: unsafe resume"
+    assert "terminal failure committed" in data["next_step"]
+    mark.assert_awaited_once()
+    assert "dialectic_facilitation_needed" not in [
+        c.args[0] for c in emit.await_args_list
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["crash", "timeout"])
+async def test_reviewer_resolution_with_unconfirmed_effect_is_not_success(server_patch, trigger):
+    """#2905 review (P1): a resolved row whose durable effect is
+    ``unknown_partial`` is not a successful operation yet. Report
+    effect_pending with reconciliation guidance, as the synthetic timeout
+    path does, while keeping thesis_recorded."""
+    dispatch = AsyncMock(
+        return_value={"ok": True, "execution_id": "ex-partial"} if trigger == "crash" else None
+    )
+    partial_row = dict(
+        _REVIEWER_CLAIMED_ROW,
+        phase="resolved",
+        status="resolved",
+        resolution={"action": "resume", "reason": "conditions agreed"},
+        resolution_effect_state="unknown_partial",
+    )
+
+    _session, data, _append, _mark, _emit = await _submit_thesis_while_reviewer_claims_slot(
+        dispatch=dispatch, crashed_fast=AsyncMock(return_value=True), readback=partial_row,
+    )
+
+    assert data["success"] is False
+    assert data["thesis_recorded"] is True
+    assert data["session_advanced"] is True
+    assert data["phase"] == "resolved"
+    assert data["terminal_committed"] is True
+    assert data["effect_pending"] is True
+    assert data["resolution_effect_state"] == "unknown_partial"
+    assert "reconcile_effect" in data["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_resolution_with_applied_effect_stays_success(server_patch):
+    """The control for the two cases above: a resolved row whose effect is
+    applied is a clean success with no effect pending."""
+    applied_row = dict(
+        _REVIEWER_CLAIMED_ROW,
+        phase="resolved",
+        status="resolved",
+        resolution={"action": "resume", "reason": "conditions agreed"},
+        resolution_effect_state="applied",
+    )
+
+    _session, data, _append, _mark, _emit = await _submit_thesis_while_reviewer_claims_slot(
+        dispatch=AsyncMock(return_value=None),
+        crashed_fast=AsyncMock(return_value=False),
+        readback=applied_row,
+    )
+
+    assert data["success"] is True
+    assert data["thesis_recorded"] is True
+    assert data["effect_pending"] is False
+    assert data["phase"] == "resolved"
+    assert data["resolution"]["action"] == "resume"
+
+
+@pytest.mark.asyncio
 async def test_live_reviewer_is_not_preempted(server_patch):
     """A session with an assigned reviewer keeps the multi-agent path: no
     synthetic antithesis is generated, phase stays at ANTITHESIS."""

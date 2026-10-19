@@ -2709,7 +2709,32 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             )
             return success_response(payload, arguments=arguments)
         resolution = payload.get("resolution") or {}
-        if payload.get("phase") == "resolved" or resolution:
+        if payload.get("thesis_recorded") is True and payload.get("effect_pending"):
+            # #2905 review: a terminal decision committed while the fallback
+            # ran, but its durable effect is not confirmed applied. Not
+            # "resolved in this call" until someone reconciles it.
+            payload["review_verdict"] = resolution.get("action") or payload.get(
+                "terminal_status"
+            )
+            payload["whose_move"] = (
+                "an operator's — thesis recorded and a terminal decision "
+                "committed, but its effect is not confirmed; reconcile with "
+                "dialectic(action='reconcile_effect', "
+                f"session_id='{session.session_id}')"
+            )
+        elif (
+            payload.get("thesis_recorded") is True
+            and payload.get("terminal_status") == "failed"
+        ):
+            payload["review_verdict"] = (
+                payload.get("action") or resolution.get("action") or "failed"
+            )
+            payload["whose_move"] = (
+                "nobody — thesis recorded; the review ended in a terminal "
+                "failure. Read the recorded reason before starting a "
+                "replacement review"
+            )
+        elif payload.get("phase") == "resolved" or resolution:
             payload["review_verdict"] = resolution.get("action") or "resolved"
             payload["whose_move"] = "nobody — review resolved in this call"
         elif payload.get("reviewer_dispatch"):
@@ -3993,6 +4018,104 @@ async def _run_synthetic_review(
     }
 
 
+@dataclass(frozen=True)
+class _TerminalReadback:
+    """Terminal-decision and durable-effect state read back from a session row."""
+
+    terminal: bool
+    terminal_status: Optional[str]
+    effect_state: Optional[str]
+    effect_pending: bool
+    resolution: Dict[str, Any]
+    hard_limit_blocked: bool
+
+
+def _read_terminal_readback(
+    persisted: Optional[Dict[str, Any]],
+) -> _TerminalReadback:
+    """Classify a re-read row (``load_session_as_dict``) for a caller that did
+    not itself observe the terminal write: a late synthetic commit after a
+    timeout, or another reviewer that finished while the fallback ran."""
+    row = persisted or {}
+    phase = str(row.get("phase") or "").lower()
+    status = str(row.get("status") or "").lower()
+    terminal_states = {"resolved", "failed"}
+    terminal_status = (
+        status if status in terminal_states
+        else phase if phase in terminal_states
+        else None
+    )
+    effect_state = row.get("resolution_effect_state")
+    resolution = row.get("resolution")
+    if not isinstance(resolution, dict):
+        resolution = {}
+    return _TerminalReadback(
+        terminal=terminal_status is not None,
+        terminal_status=terminal_status,
+        effect_state=effect_state,
+        effect_pending=(
+            effect_state in {"pending", "applying", "unknown_partial"}
+            or (terminal_status == "resolved" and effect_state != "applied")
+        ),
+        resolution=resolution,
+        hard_limit_blocked=(
+            terminal_status == "failed" and resolution.get("action") == "block"
+        ),
+    )
+
+
+def _terminal_readback_next_step(
+    readback: _TerminalReadback, session_id: str
+) -> Optional[str]:
+    """Guidance for a terminal readback, or None when the row is not terminal."""
+    if readback.terminal_status == "resolved":
+        return (
+            "The terminal decision committed. An operator should "
+            "inspect its durable effect with "
+            "dialectic(action='reconcile_effect', "
+            f"session_id='{session_id}')."
+        )
+    if readback.terminal_status == "failed":
+        return (
+            "The terminal failure committed. Review the durable "
+            "failure reason before starting any replacement review."
+        )
+    return None
+
+
+def _apply_terminal_readback(
+    result: Dict[str, Any],
+    readback: _TerminalReadback,
+    *,
+    default_failure_reason: str,
+) -> None:
+    """Copy terminal and effect state into a response without overstating it.
+
+    A terminal row whose durable runtime effect is not confirmed applied is not
+    a successful operation yet, and neither is a terminal failure.
+    """
+    result["terminal_committed"] = True if readback.terminal else None
+    result["terminal_status"] = readback.terminal_status
+    result["effect_pending"] = readback.effect_pending
+    result["resolution_effect_state"] = readback.effect_state
+    if readback.effect_pending:
+        result["success"] = False
+    if readback.terminal_status:
+        result["phase"] = readback.terminal_status
+    if readback.terminal_status == "failed":
+        result["success"] = False
+        result["action"] = readback.resolution.get("action", "failed")
+        result["reason"] = readback.resolution.get(
+            "reason", default_failure_reason
+        )
+        result["hard_limit_blocked"] = readback.hard_limit_blocked
+        result["hard_limit_violation"] = (
+            readback.resolution.get("reason")
+            if readback.hard_limit_blocked
+            else None
+        )
+
+
 def _thesis_session_advanced(
     session: DialecticSession, persisted: Optional[Dict[str, Any]]
 ) -> bool:
@@ -4061,7 +4184,22 @@ async def _thesis_recorded_after_facilitation_refused(
             f"fallback ran ({holder}; phase is now '{persisted_phase}'), so no "
             "facilitation request was needed."
         )
-        result["next_step"] = f"Follow the review with {poll}."
+        # The other writer may already have committed a terminal decision. A
+        # terminal failure, or a decision whose durable effect is not confirmed
+        # applied, is reported exactly as the synthetic timeout path reports
+        # it: unsuccessful, with reconciliation guidance. thesis_recorded stays.
+        readback = _read_terminal_readback(persisted)
+        _apply_terminal_readback(
+            result,
+            readback,
+            default_failure_reason=(
+                "The session's reviewer committed a terminal failure."
+            ),
+        )
+        result["next_step"] = (
+            _terminal_readback_next_step(readback, session_id)
+            or f"Follow the review with {poll}."
+        )
         logger.info(
             "[DIALECTIC] session %s advanced during the thesis fallback "
             "(phase=%s); reporting the recorded thesis",
@@ -4441,40 +4579,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     persisted_phase = str(
                         (persisted or {}).get("phase") or ""
                     ).lower()
-                    persisted_status = str(
-                        (persisted or {}).get("status") or ""
-                    ).lower()
                     persisted_reviewer = (persisted or {}).get("reviewer")
-                    effect_state = (persisted or {}).get(
-                        "resolution_effect_state"
-                    )
-                    terminal = (
-                        persisted_phase in {"resolved", "failed"}
-                        or persisted_status in {"resolved", "failed"}
-                    )
-                    terminal_status = (
-                        persisted_status
-                        if persisted_status in {"resolved", "failed"}
-                        else persisted_phase
-                        if persisted_phase in {"resolved", "failed"}
-                        else None
-                    )
-                    persisted_resolution = (persisted or {}).get("resolution")
-                    if not isinstance(persisted_resolution, dict):
-                        persisted_resolution = {}
-                    hard_limit_blocked = (
-                        terminal_status == "failed"
-                        and persisted_resolution.get("action") == "block"
-                    )
-                    readback_effect_pending = (
-                        effect_state in {
-                            "pending", "applying", "unknown_partial"
-                        }
-                        or (
-                            terminal_status == "resolved"
-                            and effect_state != "applied"
-                        )
-                    )
+                    readback = _read_terminal_readback(persisted)
+                    terminal = readback.terminal
                     facilitation_written = False
                     if (
                         persisted
@@ -4518,18 +4625,11 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 reason=synthetic_abort_reason,
                             )
 
-                    if terminal_status == "resolved":
-                        next_step = (
-                            "The terminal decision committed. An operator should "
-                            "inspect its durable effect with "
-                            "dialectic(action='reconcile_effect', "
-                            f"session_id='{session_id}')."
-                        )
-                    elif terminal_status == "failed":
-                        next_step = (
-                            "The terminal failure committed. Review the durable "
-                            "failure reason before starting any replacement review."
-                        )
+                    terminal_next_step = _terminal_readback_next_step(
+                        readback, session_id
+                    )
+                    if terminal_next_step:
+                        next_step = terminal_next_step
                     elif facilitation_written:
                         next_step = (
                             "The timed-out review is marked for facilitation. "
@@ -4545,37 +4645,22 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     result.update({
                         "synthetic_review": True,
                         "reviewer_agent_id": persisted_reviewer,
-                        "terminal_committed": True if terminal else None,
-                        "terminal_status": terminal_status,
-                        "effect_pending": readback_effect_pending,
-                        "resolution_effect_state": effect_state,
                         "awaiting_facilitation": facilitation_written,
                         "terminal_state_unknown": not terminal
                         and not facilitation_written,
                         "next_step": next_step,
                     })
-                    if result["effect_pending"] or result["terminal_state_unknown"]:
-                        # A terminal row without its durable runtime effect is
-                        # not a successful operation yet.  Neither is a lost
-                        # readback/CAS that proves no durable state at all.
+                    if result["terminal_state_unknown"]:
+                        # A lost readback/CAS proves no durable state at all,
+                        # so it is not a successful operation either.
                         result["success"] = False
-                    if terminal_status:
-                        result["phase"] = terminal_status
-                    if terminal_status == "failed":
-                        result["success"] = False
-                        result["action"] = persisted_resolution.get(
-                            "action", "failed"
-                        )
-                        result["reason"] = persisted_resolution.get(
-                            "reason",
-                            "The synthetic review committed a terminal failure.",
-                        )
-                        result["hard_limit_blocked"] = hard_limit_blocked
-                        result["hard_limit_violation"] = (
-                            persisted_resolution.get("reason")
-                            if hard_limit_blocked
-                            else None
-                        )
+                    _apply_terminal_readback(
+                        result,
+                        readback,
+                        default_failure_reason=(
+                            "The synthetic review committed a terminal failure."
+                        ),
+                    )
                     return success_response(result)
 
                 # The coroutine may have persisted its reviewer claim before a

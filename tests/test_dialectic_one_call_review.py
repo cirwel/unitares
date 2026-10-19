@@ -459,6 +459,76 @@ class TestOneCallIdentityForwarding:
         assert "next_call" not in data
 
     @pytest.mark.asyncio
+    async def test_recorded_thesis_with_unconfirmed_effect_is_not_resolved_in_call(self, env):
+        """#2905 review (P1): a reviewer's terminal decision whose effect is
+        unknown_partial must not read 'nobody — review resolved in this call'."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({
+                "success": False,
+                "thesis_recorded": True,
+                "session_advanced": True,
+                "phase": "resolved",
+                "terminal_status": "resolved",
+                "terminal_committed": True,
+                "effect_pending": True,
+                "resolution_effect_state": "unknown_partial",
+                "resolution": {"action": "resume"},
+            }),
+        ):
+            result = await handle_request_dialectic_review({
+                "issue_description": "Review my decision to ship X",
+                "reasoning": "I chose X because Y",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["thesis_recorded"] is True
+        assert data["whose_move"].startswith("an operator's")
+        assert "reconcile_effect" in data["whose_move"]
+        assert "resolved in this call" not in data["whose_move"]
+        assert "NOT recorded" not in data["whose_move"]
+        assert "next_call" not in data
+
+    @pytest.mark.asyncio
+    async def test_recorded_thesis_with_terminal_failure_reads_failure(self, env):
+        """#2905 review (P1): a reviewer's terminal block is a failure, not
+        'review resolved in this call', and the thesis is still recorded."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({
+                "success": False,
+                "thesis_recorded": True,
+                "session_advanced": True,
+                "phase": "failed",
+                "terminal_status": "failed",
+                "terminal_committed": True,
+                "action": "block",
+                "hard_limit_blocked": True,
+                "resolution": {"action": "block", "reason": "hard limit"},
+            }),
+        ):
+            result = await handle_request_dialectic_review({
+                "issue_description": "Review my decision to ship X",
+                "reasoning": "I chose X because Y",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["thesis_recorded"] is True
+        assert data["review_verdict"] == "block"
+        assert "terminal failure" in data["whose_move"]
+        assert "resolved in this call" not in data["whose_move"]
+        assert "NOT recorded" not in data["whose_move"]
+        assert "next_call" not in data
+
+    @pytest.mark.asyncio
     async def test_issue_description_reaches_the_session_row(self, env):
         """Pydantic `model_dump()` materializes `reason` as an explicit None, so
         `arguments.get("reason", <default>)` returned None, not the default —
