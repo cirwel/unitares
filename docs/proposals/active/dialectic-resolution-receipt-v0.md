@@ -15,8 +15,9 @@ the multi-principal trust-model commitment (per-principal governance, no shared
 administrative root, cross-principal interaction via verifiable attestation).
 **Decision record:**
 [`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md)
-records multi-principal trust work as not scheduled (D3a) and custody for this
-receipt's key as deferred behind it (D3b). It does not change the wake criteria
+records multi-principal trust work as not scheduled without external funding
+or an outside principal (D3a, with its 2026-10-19 addendum) and custody for
+this receipt's key as deferred behind it (D3b). It does not change the wake criteria
 below.
 
 ## The gap
@@ -150,10 +151,13 @@ resolution's standing.
    check a record; that party does not exist and this document does not
    schedule one. As of 2026-09-25 that is a recorded decision, not an omission:
    D3a of the [decision record](federation-trust-decisions-2026-09-25.md)
-   records multi-principal trust work as not scheduled. Its wake condition is a
-   real outside party, a person or organisation with its own administrative
-   root, asking to verify a record from this deployment. D3b defers custody for
-   the receipt key behind that wake; its framing is a preference for whoever
+   records multi-principal trust work as not scheduled without external
+   funding or an outside principal. Its wake conditions are a real outside
+   party, a person or organisation with its own administrative root, asking to
+   verify a record from this deployment, or, per the record's 2026-10-19
+   addendum, external funding for, or an outside principal joining, the
+   multi-principal testbed. D3b defers custody for the receipt key behind D3a
+   waking; its framing is a preference for whoever
    wakes it, not an amendment, so the five preconditions below stand, and
    citing the record does not satisfy the non-exportable custody criterion.
 5. **The upstream decision is still the operator's.** The threat model parks
