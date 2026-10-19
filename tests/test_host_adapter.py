@@ -515,6 +515,9 @@ def test_a_call_within_one_window_awaits_once(monkeypatch):
     awaits = [kw["json"]["timeout_ms"] for url, kw in state["calls"] if url.endswith("/await")]
     assert len(awaits) == 1 and 59_000 <= awaits[0] <= 60_000
     assert r["status"] == "still_running"
+    # The HTTP timeout follows the window, not the longest possible window.
+    await_kw = [kw for url, kw in state["calls"] if url.endswith("/await")][0]
+    assert 74.0 <= await_kw["timeout"] <= 75.0
 
 
 def test_invoke_nonzero_exit(monkeypatch):

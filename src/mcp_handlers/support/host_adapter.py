@@ -920,13 +920,16 @@ async def invoke_host_adapter(
         # make this spin.
         deadline = started + timeout_s
         windows_left = max(1, math.ceil(timeout_s / _AWAIT_WINDOW_S))
-        async with httpx.AsyncClient(timeout=_AWAIT_WINDOW_S + 15.0) as client:
+        async with httpx.AsyncClient() as client:
             while True:
                 window_s = min(max(deadline - time.monotonic(), 1.0), _AWAIT_WINDOW_S)
                 aw = await client.post(
                     f"{base}/v1/executions/{execution_id}/await",
                     json={"timeout_ms": int(window_s * 1000)},
                     headers=headers,
+                    # Per window, so a short call to an orchestrator that
+                    # never answers still gives up 15s after its window.
+                    timeout=window_s + 15.0,
                 )
                 windows_left -= 1
                 if aw.status_code != 504 or windows_left <= 0 or time.monotonic() >= deadline:
