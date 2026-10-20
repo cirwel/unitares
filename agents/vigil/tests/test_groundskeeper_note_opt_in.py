@@ -7,6 +7,16 @@ from unittest.mock import patch
 
 import pytest
 
+import agents.vigil.agent as vigil
+
+
+@pytest.fixture(autouse=True)
+def _isolate(tmp_path, monkeypatch):
+    """Keep these tests out of the operator's real Vigil log: agents/vigil/tests/
+    does not inherit the redirect in tests/conftest.py."""
+    monkeypatch.setattr(vigil, "LOG_FILE", tmp_path / "vigil-test.log", raising=False)
+    monkeypatch.setenv("VIGIL_LOG_FILE", str(tmp_path / "vigil-test.log"))
+
 
 class _Client:
     def __init__(self):
