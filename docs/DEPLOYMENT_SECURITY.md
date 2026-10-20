@@ -25,10 +25,12 @@ carries the detail; its known-gaps list is kept current.
 - **Credentials.** The MCP bearer allowlist is empty by default, and two
   development-only secrets ship as literal values in `docker-compose.yml`.
   Rotate them and set a real Postgres password before the stack is reachable
-  beyond your own loopback. What the boot path enforces is stated under
-  [known gaps](#what-this-pass-did-not-change-known-gaps).
-- **Browser pages.** The trusted-network bypass does not apply to a request
-  from a foreign browser `Origin` or an unlisted dotted `Host`.
+  beyond your own loopback. The boot path enforces none of this: nothing
+  refuses to start on a default credential, an unauthenticated Redis, or a
+  missing MCP bearer (see [known gaps](#what-this-pass-did-not-change-known-gaps)).
+- **Browser pages and unlisted hosts.** The trusted-network bypass does not
+  apply to a request from a foreign browser `Origin`, or to any caller (browser,
+  `curl` or SDK) that sends an unlisted dotted `Host`.
 - **Not covered.** No image/repo split, no data-loss-prevention layer, and the
   app connects to Postgres as its superuser role.
 
@@ -38,9 +40,9 @@ The sections below describe the pass that dropped container privileges and
 stopped publishing Postgres and Redis
 ([#2580](https://github.com/cirwel/unitares/pull/2580)). Later corrections are
 folded in: the browser-origin rule
-([#2658](https://github.com/cirwel/unitares/pull/2658)) and the generated
-continuity secret ([#2674](https://github.com/cirwel/unitares/pull/2674)),
-both 2026-10-05.
+([#2658](https://github.com/cirwel/unitares/pull/2658), 2026-10-05) and the generated
+continuity secret ([#2674](https://github.com/cirwel/unitares/pull/2674),
+2026-10-06).
 
 ### What this pass changed
 

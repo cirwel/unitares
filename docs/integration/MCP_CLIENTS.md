@@ -348,7 +348,8 @@ The identity rule every client follows is owned by
 substrate agents, and same-owner rebind with a `continuity_token`. This section
 covers only what a client sees in the responses. One identity response to
 expect: a succession claim naming a still-running parent is rejected
-(`lineage_coincidental_rejected`) and the declared parent is cleared.
+(`lineage_state: "rejected_coincidental"`, audited as
+`lineage_coincidental_rejected`) and the declared parent is cleared.
 
 ### Workflow response envelopes
 
