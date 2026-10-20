@@ -21,10 +21,10 @@ from src.mcp_handlers.support.llm_delegation import _get_default_model
 class TestGetDefaultModel:
 
     def test_default_model(self, monkeypatch):
-        """Without env var, should return gemma4:latest."""
+        """Without env var, no model is named: there is no built-in default."""
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
         model = _get_default_model()
-        assert model == "gemma4:latest"
+        assert model == ""
 
     def test_env_override(self, monkeypatch):
         """UNITARES_MODEL_ID env var should override default."""
@@ -42,4 +42,3 @@ class TestGetDefaultModel:
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
         result = _get_default_model()
         assert isinstance(result, str)
-        assert len(result) > 0
