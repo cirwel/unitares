@@ -11,14 +11,23 @@ The defaults are held as SHA-256 digests rather than literals, so a rotation of
 the compose defaults does not have one more copy to find.
 ``tests/test_insecure_defaults.py`` pins these digests to the compose file.
 
+A published default together with configuration that says the server is
+reached from beyond this host is refused at startup (``exposure_signals``,
+``published_default_refusal``). Docker's host port mapping is invisible to the
+process, so only configuration is judged: a plain local quickstart sets none
+of these signals and keeps the warning alone. ``UNITARES_ALLOW_PUBLISHED_DEFAULTS=1``
+downgrades the refusal to a warning for a deliberate demo.
+
 Stdlib only: this runs before bootstrap and must not import the web stack.
 """
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 # Environment variable -> sha256 of the default docker-compose.yml assigns it.
 PUBLISHED_DEFAULT_SHA256 = {
@@ -42,6 +51,135 @@ def running_in_container() -> bool:
     return os.path.exists("/.dockerenv")
 
 
+ALLOW_PUBLISHED_DEFAULTS_ENV = "UNITARES_ALLOW_PUBLISHED_DEFAULTS"
+
+
+def _csv(env: Mapping[str, str], name: str) -> list[str]:
+    return [item.strip() for item in (env.get(name) or "").split(",") if item.strip()]
+
+
+def _is_loopback_host(host: str) -> bool:
+    host = host.strip().strip("[]").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _allowed_host_entry_is_loopback(entry: str) -> bool:
+    """An UNITARES_MCP_ALLOWED_HOSTS entry: ``host``, ``host:port`` or ``[v6]:port``."""
+    if entry.startswith("["):
+        return _is_loopback_host(entry[1:].split("]", 1)[0])
+    if entry.count(":") == 1:
+        entry = entry.split(":", 1)[0]
+    return _is_loopback_host(entry)
+
+
+def _url_host_is_loopback(url: str) -> bool:
+    # A port given as "*" (as in the built-in origin allowlist) is not a valid
+    # port, so read the host from the netloc instead of urlsplit().hostname's
+    # port parsing, which would raise.
+    netloc = urlsplit(url if "//" in url else f"//{url}").netloc.rsplit("@", 1)[-1]
+    return _allowed_host_entry_is_loopback(netloc)
+
+
+def exposure_signals(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Variable names whose values say clients reach this server from beyond this host.
+
+    Each one is a configuration statement the server already acts on:
+
+    - ``UNITARES_MCP_BEARER_TOKENS``: any member turns on the hosted ``/mcp``
+      bearer gate and strict REST (src/mcp_listen_config.py).
+    - ``UNITARES_MCP_ALLOWED_HOSTS`` / ``UNITARES_MCP_ALLOWED_ORIGINS``: an entry
+      naming a host other than loopback admits ``/mcp`` requests addressed to it.
+      The opaque ``null`` origin is not a host and is ignored.
+    - ``UNITARES_DASHBOARD_RP_ID`` / ``UNITARES_DASHBOARD_ORIGIN``: a passkey
+      relying party on a host other than loopback. The origin counts only with
+      an RP id, because src/dashboard_auth.py ignores it otherwise.
+    - ``UNITARES_OAUTH_ISSUER_URL`` on a host other than loopback: OAuth is
+      configured for remote connectors. The public OAuth listener
+      (``UNITARES_OAUTH_PUBLIC_PORT``) needs an issuer, so this covers it.
+
+    The bind address is not a signal: inside the compose container the server
+    binds every interface by design and only the host port mapping, which the
+    process cannot see, decides reachability.
+    """
+    env = os.environ if environ is None else environ
+    signals = []
+    if _csv(env, "UNITARES_MCP_BEARER_TOKENS"):
+        signals.append("UNITARES_MCP_BEARER_TOKENS")
+    if any(not _allowed_host_entry_is_loopback(h) for h in _csv(env, "UNITARES_MCP_ALLOWED_HOSTS")):
+        signals.append("UNITARES_MCP_ALLOWED_HOSTS")
+    origins = [o for o in _csv(env, "UNITARES_MCP_ALLOWED_ORIGINS") if o.lower() != "null"]
+    if any(not _url_host_is_loopback(o) for o in origins):
+        signals.append("UNITARES_MCP_ALLOWED_ORIGINS")
+    rp_id = (env.get("UNITARES_DASHBOARD_RP_ID") or "").strip()
+    if rp_id:
+        if not _is_loopback_host(rp_id):
+            signals.append("UNITARES_DASHBOARD_RP_ID")
+        origin = (env.get("UNITARES_DASHBOARD_ORIGIN") or "").strip()
+        if origin and not _url_host_is_loopback(origin):
+            signals.append("UNITARES_DASHBOARD_ORIGIN")
+    issuer = (env.get("UNITARES_OAUTH_ISSUER_URL") or "").strip()
+    if issuer and not _url_host_is_loopback(issuer):
+        signals.append("UNITARES_OAUTH_ISSUER_URL")
+    return signals
+
+
+def published_defaults_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get(ALLOW_PUBLISHED_DEFAULTS_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def published_default_refusal(environ: Mapping[str, str] | None = None) -> str | None:
+    """The startup refusal, or None to serve.
+
+    Refuses only when a published default is in use AND configuration says the
+    server is reached from beyond this host, and the operator has not set the
+    override. Names variables, never values.
+    """
+    env = os.environ if environ is None else environ
+    defaults = names_at_published_default(env)
+    signals = exposure_signals(env)
+    if not defaults or not signals or published_defaults_allowed(env):
+        return None
+    return (
+        f"Refusing to start: {', '.join(defaults)} still set to the published "
+        "docker-compose.yml default, which anyone can read, while "
+        f"{', '.join(signals)} configure this server for clients beyond this host. "
+        "Set your own values first, for example `openssl rand -hex 32` for each, in "
+        "the server's process environment (the governance-mcp environment block or "
+        ".env for docker compose, the plist on a launchd install). "
+        "LEASE_PLANE_BEARER_TOKEN must match on the lease plane, so set it in both "
+        "services. For a deliberate demo, "
+        f"{ALLOW_PUBLISHED_DEFAULTS_ENV}=1 downgrades this refusal to a warning "
+        "(docs/DEPLOYMENT_SECURITY.md)."
+    )
+
+
+def insecure_defaults_status(environ: Mapping[str, str] | None = None) -> dict:
+    """The health-check entry: which published defaults are in use, by name only."""
+    env = os.environ if environ is None else environ
+    defaults = names_at_published_default(env)
+    if not defaults:
+        return {"status": "healthy", "insecure_defaults": []}
+    signals = exposure_signals(env)
+    entry = {
+        "status": "warning",
+        "insecure_defaults": defaults,
+        "exposure_signals": signals,
+        "override": bool(signals) and published_defaults_allowed(env),
+        "warning": (
+            f"{', '.join(defaults)} still set to the published docker-compose.yml "
+            "default, which anyone can read. Set your own values "
+            "(docs/DEPLOYMENT_SECURITY.md)."
+        ),
+    }
+    return entry
+
+
 def startup_warnings(
     *,
     rest_strict: bool,
@@ -61,6 +199,15 @@ def startup_warnings(
             "on native Linux the Compose bridge too (docs/DEPLOYMENT_SECURITY.md). "
             "Set your own values before sharing the host or exposing the server."
         )
+        signals = exposure_signals(env)
+        if signals and published_defaults_allowed(env):
+            warnings.append(
+                f"{ALLOW_PUBLISHED_DEFAULTS_ENV} is overriding a startup refusal: "
+                f"{', '.join(defaults)} are published defaults and "
+                f"{', '.join(signals)} configure this server for clients beyond this "
+                "host. Anyone who can reach it can use those credentials. Unset "
+                f"{ALLOW_PUBLISHED_DEFAULTS_ENV} once the demo is over."
+            )
 
     # docker-compose.yml used to give the continuity secret a published
     # default. The server now ignores that value and signs with a generated
