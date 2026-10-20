@@ -67,8 +67,8 @@ elsewhere. The Parliament page returned HTTP 403.
 The brief's central rule is that authority must be checked outside the model,
 immediately before the effect, and must not rest on the model's account of
 itself. The governed-effect plane does this for the effects it covers
-([`governed-effect-plane-v0.md`](../proposals/active/governed-effect-plane-v0.md),
-[`SECURITY.md`](../../.github/SECURITY.md)). An agent proposes; before commit,
+([`governed-effect-plane-v0.md`](../../proposals/active/governed-effect-plane-v0.md),
+[`SECURITY.md`](../../../.github/SECURITY.md)). An agent proposes; before commit,
 the lease plane calls `POST /v1/effect-veto` (`src/http_routes/effects.py`).
 At execute time the veto:
 
@@ -129,9 +129,9 @@ checklists:
 
 | Lease field | Where it would belong | State today |
 |---|---|---|
-| Issuer | Grant / lease attestation | One explicitly trusted issuer; multi-issuer is blocked ([`EVIDENCE_AND_LIMITS.md`](../EVIDENCE_AND_LIMITS.md)) |
+| Issuer | Grant / lease attestation | One explicitly trusted issuer; multi-issuer is blocked ([`EVIDENCE_AND_LIMITS.md`](../../EVIDENCE_AND_LIMITS.md)) |
 | Principal / organization | Veto input | `proposer_agent_uuid`; no organization (single operator) |
-| Purpose, delegation limits | Policy engine | None. [`cedar-delegation-authz-v0.md`](../proposals/active/cedar-delegation-authz-v0.md) is design only, decision pending |
+| Purpose, delegation limits | Policy engine | None. [`cedar-delegation-authz-v0.md`](../../proposals/active/cedar-delegation-authz-v0.md) is design only, decision pending |
 | Targets and operations | Grant | Bound per effect (surface, type, content hash) |
 | Model / checkpoint, safeguard profile | Receipt | Not bound. S22 `model` is populated on 3.3% of rows and is mostly caller-declared (10-05 note §2) |
 | Workspace, monitoring/retention | — | None |

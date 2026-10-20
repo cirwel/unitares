@@ -23,17 +23,30 @@ Prefixes correspond to row IDs in [`plan.md`](plan.md):
 | sub-letter (`s8a`, `s21b`) | Phase or sub-item of the parent row | |
 | `v7-*` | Paper v7 alignment specs | |
 
-So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-token-retirement.md` resolves row S1; `s8a-phase2-prep.md` is phase 2 of S8a.
+So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-token-retirement.md` resolves row S1; `s8a-tag-discipline-audit.md` is phase 1 of S8a (its phase 2 prep note is [archived](archive/s8a-phase2-prep.md)).
 
 ## Index by category
 
+Every current document in this folder has one entry below. Dated notes that no current document depends on are listed under [Archived](#archived).
+
 **Conceptual entries** (read these for the model):
 - [`eisv-proprioception-contract.md`](eisv-proprioception-contract.md) — EISV as proprioceptive telemetry, not an outcome oracle; separates measurement, diagnosis, policy, enforcement, and external labels
+- [`eisv-telemetry-envelope-v1.md`](eisv-telemetry-envelope-v1.md) — additive observability contract for the per-check-in `eisv_telemetry` envelope (measurement → derivation → policy evaluation → enforcement result); no policy effect
 - [`identity.md`](identity.md) — v2 ontology
 - [`paper-positioning.md`](paper-positioning.md) — Q3, ontology ↔ paper relationship
 - [`harness-substrate-plurality.md`](harness-substrate-plurality.md) — R6, identity across variable harness/model/transport
 - [`beam-coordination-kernel.md`](beam-coordination-kernel.md) — R7, lease-plane coordination primitive
-- [`v7-fhat-spec.md`](v7-fhat-spec.md) — paper v7 generative-model spike
+- [`glossary.md`](glossary.md) — question-keyed vocabulary glossary (see *Start here*)
+- [`plan.md`](plan.md) · [`plan-2026-06-14.md`](plan-2026-06-14.md) — locator and preserved June 14, 2026 resolution ledger (see *Start here*)
+
+**EISV claim governance** (how EISV claims may be stated and read):
+- [`falsification-inference-containment-2026-08-22.md`](falsification-inference-containment-2026-08-22.md) — initial correction for five EISV falsification claims: separates source consumption, estimand identification, sample adequacy, and a pre-fixed decision standard
+- [`falsification-design-system-audit-2026-08-23.md`](falsification-design-system-audit-2026-08-23.md) — authoritative inference and protocol correction for the tested-claim ledger, its recurring ablation reads, and the outcome-grounding stop rule
+
+**Paper v7 specs and staging**:
+- [`v7-fhat-spec.md`](v7-fhat-spec.md) — paper v7 generative-model spike (halted research hypothesis; cited by the S12 unblock condition and active proposals)
+- [`v7-fhat-spec-v5-amendment.md`](v7-fhat-spec-v5-amendment.md) — v5 amendment to v7 spec
+- [`v7-observer-self-loop-identification-boundary.md`](v7-observer-self-loop-identification-boundary.md) — why the registered v7 basin-flip/intervention question is unidentified by the proposed regression; what v7 may and may not report
 - [`v7-related-work-draft.md`](v7-related-work-draft.md) — staging draft for the paper v7 related-work section; synthesizes the ontology's prior-art boundaries for transfer to the paper repo
 
 **Research RFCs** (R-rows, *inventive* primitives):
@@ -43,28 +56,36 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 
 **System RFCs** (S-rows, *descriptive* cleanups):
 - [`s1-continuity-token-retirement.md`](s1-continuity-token-retirement.md) — token deprecation plan
-- [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) · [`s8a-phase2-prep.md`](s8a-phase2-prep.md) — tag discipline + phase 2
+- [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) — tag discipline (phase 1; the phase 2 prep note is archived)
 - [`s10-fleet-aggregation-plan.md`](s10-fleet-aggregation-plan.md) — fleet aggregation
 - [`s15-server-side-skills.md`](s15-server-side-skills.md) — server-side skills surface
 - [`s21-session-resolution-bypass-incident.md`](s21-session-resolution-bypass-incident.md) — S21 incident record
-- [`v7-fhat-spec-v5-amendment.md`](v7-fhat-spec-v5-amendment.md) — v5 amendment to v7 spec
 
-**External prior-art and competitive triage** (inputs to the paper's §10 spine):
+**External prior-art and competitive analysis** (inputs to the paper's §10 spine and to product scope):
 - [`trajectory-identity-prior-art-2026-06.md`](trajectory-identity-prior-art-2026-06.md) — foundational-theory anchors and their verdicts
-- [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer)
-- [`competitive-survival-audit-2026-09.md`](competitive-survival-audit-2026-09.md) — product-level keep/merge/stop audit against A2A, NeMo Relay, cloud control planes, and observability standards
-- [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
+- [`competitive-survival-audit-2026-09.md`](competitive-survival-audit-2026-09.md) — product-level keep/merge/stop audit against A2A, NeMo Relay, cloud control planes, and observability standards; its keep/interface/freeze list is a cited input to active proposals
 - [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) — claims falsification audit and market map: every public claim typed and classed against the strongest substitute opened (cloud agent platforms, A2A, NeMo Relay, AgentLens, the IETF audit-trail draft); supersedes the June map as the market map, the June paper-positioning verdicts stand
-- [`openshell-federation-fit-2026-10.md`](openshell-federation-fit-2026-10.md) — NVIDIA OpenShell read in full history: provenance check (no evidence of copying; first commits 2026-01-29 vs 2025-11-20), the enforcement-versus-record layer split, and four candidate opt-in federation seams (gateway `post_commit`, OCSF ingest, in-sandbox MCP, subagent lineage)
-- [`frontier-brief-2026-09-24.md`](frontier-brief-2026-09-24.md) — source check of an operator-supplied weekly frontier brief (Anthropic oversight metrics, OpenAI assessment principles, WorkWorlds, RoboHarm) and a mapping of its recommendations onto existing work; names the context-provisioning gap in the registered coordination ablation
+- [`openshell-federation-fit-2026-10.md`](openshell-federation-fit-2026-10.md) — NVIDIA OpenShell read in full history: the enforcement-versus-record layer split, and four candidate opt-in federation seams (gateway `post_commit`, OCSF ingest, in-sandbox MCP, subagent lineage)
 
-**Dated records**:
-- [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
-- [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md)
+**Dated records kept in place**:
+- [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md); cited by the glossary's audit trail and the drift ledger
+- [`glossary-drift-audit-2026-09-18.md`](glossary-drift-audit-2026-09-18.md) — semantic re-sweep of the glossary (ODE coupling correction; V / coherence / drift / entropy homonyms); the newest audit is published on the public site by `scripts/dev/build_public_site.py`
+
+## Archived
+
+Dated notes in [`archive/`](archive/README.md). Archive placement does not reject a finding or change a decision recorded in the note; it says that no current document depends on the note as a live reference.
+
+- [`archive/frontier-brief-2026-09-24.md`](archive/frontier-brief-2026-09-24.md) — source check of an operator-supplied weekly frontier brief (Anthropic oversight metrics, OpenAI assessment principles, WorkWorlds, RoboHarm) mapped onto existing work; records the operator disposition that produced the outcome-binding assurance case
+- [`archive/frontier-brief-2026-10-05.md`](archive/frontier-brief-2026-10-05.md) — source check of the 2026-09-28 to 10-05 brief: configuration manifest as a join over existing write-context fields; the coordination ablation stopped on feasibility
+- [`archive/frontier-brief-2026-10-12.md`](archive/frontier-brief-2026-10-12.md) — source check of the 2026-10-05 to 10-12 brief: evaluation envelope, capability lease and revoke-between-plan-and-execute mapped onto the governed-effect plane; basis for the file-write custody recheck
+- [`archive/competitive-analysis-2026-06.md`](archive/competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer); superseded as the market map by `competitive-analysis-2026-09.md`, its paper-positioning verdicts stand
+- [`archive/neohorse-1-triage-2026-09.md`](archive/neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
+- [`archive/ledger-triage-2026-06-11.md`](archive/ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
+- [`archive/s8a-phase2-prep.md`](archive/s8a-phase2-prep.md) — S8a Phase 2 prep (2026-04-29): day-6 class-tag distribution and the stamp-gap reframing of Phase 2
 
 ## Operator-archived docs
 
-Not every doc cited by a `plan.md` row is in this folder. On 2026-05-21 the internal-dialogue artifacts — council review notes, dated dogfood reports, implementation handoffs — were moved to the operator's private archive (commits `27642d1` / `4ad624a`); the load-bearing specs above were restored, the rest stayed archived. Archived from this folder: the R5 memory-deepening spec, the R6 dogfood/envelope evaluations, the S7 KG-provenance schema, S11-a skill-text drift, S20 cache-scope narrowing, and the S21 council-review series (`s21-fix-council-review`, `s21b-*`). `plan.md` still cites them by filename — that's intentional; the ledger is the historical record. `docs/handoffs/` is gitignored for the same reason (operator-local handoffs, cited from public docs as provenance).
+Not every doc cited by a `plan.md` row is in this repository. On 2026-05-21 the internal-dialogue artifacts — council review notes, dated dogfood reports, implementation handoffs — were moved to the operator's private archive (commits `27642d1` / `4ad624a`); the load-bearing specs above were restored, the rest stayed archived. Archived from this folder: the R5 memory-deepening spec, the R6 dogfood/envelope evaluations, the S7 KG-provenance schema, S11-a skill-text drift, S20 cache-scope narrowing, and the S21 council-review series (`s21-fix-council-review`, `s21b-*`). `plan.md` still cites them by filename — that's intentional; the ledger is the historical record. `docs/handoffs/` is gitignored for the same reason (operator-local handoffs, cited from public docs as provenance). The in-repository [`archive/`](archive/README.md) above is separate: its notes remain public and linked.
 
 ## How rows resolve
 
