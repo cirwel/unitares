@@ -11,7 +11,7 @@ const dataSource = read("../redesign/data.js");
 const sectionSource = read("../redesign/sections/knowledge-flow.js");
 const appHtml = read("../redesign/app.html");
 
-function boot(body) {
+function boot(body, status = 200) {
   const dom = new JSDOM('<div id="kflow-mount"></div>', {
     runScripts: "outside-only",
     url: "https://gov.example/dashboard",
@@ -19,7 +19,7 @@ function boot(body) {
   const calls = [];
   dom.window.fetch = async (url) => {
     calls.push(String(url));
-    return { ok: true, status: 200, json: async () => body, headers: { get: () => "application/json" } };
+    return { ok: status >= 200 && status < 300, status, json: async () => body, headers: { get: () => "application/json" } };
   };
   dom.window.eval(dataSource);
   dom.window.eval(sectionSource);
@@ -47,6 +47,17 @@ describe("knowledge flow panel", () => {
     const { dom } = boot({ success: true, graph_available: false, limit: 25, flows: [] });
     await dom.window.KnowledgeFlow.load();
     expect(dom.window.document.getElementById("kflow-mount").textContent).toContain("No graph backend");
+  });
+
+  it("shows a failed graph probe as an error, not as no graph backend", async () => {
+    // Regression (#2946 review): the route answers a probe failure with 503.
+    const { dom } = boot({ success: false, error: "knowledge graph unavailable" }, 503);
+    await dom.window.KnowledgeFlow.load();
+    const text = dom.window.document.getElementById("kflow-mount").textContent;
+    expect(text).toContain("Knowledge flow unavailable");
+    expect(text).toContain("unavailable");
+    expect(text).not.toContain("No graph backend");
+    expect(text).not.toContain("No finding links");
   });
 
   it("says an empty graph has no cross-agent links", async () => {

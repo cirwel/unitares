@@ -17,6 +17,14 @@ DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
 
 
+class GraphProbeError(RuntimeError):
+    """The graph backend is installed but its probe failed.
+
+    Distinct from an absent graph: the caller must report this as an error,
+    never as "no graph backend".
+    """
+
+
 def clamp_limit(raw: Any) -> int:
     try:
         value = int(raw)
@@ -30,10 +38,14 @@ async def query_knowledge_flow(db: Any, *, limit: int = DEFAULT_LIMIT) -> dict[s
 
     ``graph_available`` false means the backend has no AGE graph, which is a
     different finding from a graph with no cross-agent links; the response
-    keeps the two apart.
+    keeps the two apart. A graph probe that failed is neither: it raises
+    ``GraphProbeError`` so the route answers with an error.
     """
-    if not await db.graph_available():
+    status = await db.graph_status()
+    if status == "absent":
         return {"success": True, "graph_available": False, "limit": limit, "flows": []}
+    if status != "available":
+        raise GraphProbeError(f"knowledge graph probe returned {status!r}")
 
     cypher, params = query_cross_agent_knowledge_flow(limit=limit)
     rows = await db.graph_query(cypher, params)

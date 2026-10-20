@@ -59,11 +59,11 @@ class _Conn:
 
 
 class _DB:
-    def __init__(self, rows, labels=None, graph=True):
+    def __init__(self, rows, labels=None, graph="available"):
         self.rows, self.graph, self.conn = rows, graph, _Conn(labels or {})
         self.queries = []
 
-    async def graph_available(self):
+    async def graph_status(self):
         return self.graph
 
     async def graph_query(self, cypher, params):
@@ -108,10 +108,108 @@ async def test_malformed_rows_are_skipped():
 
 @pytest.mark.asyncio
 async def test_no_graph_is_reported_not_an_empty_graph():
-    db = _DB([], graph=False)
+    db = _DB([], graph="absent")
     out = await kf.query_knowledge_flow(db)
     assert out == {"success": True, "graph_available": False, "limit": 25, "flows": []}
     assert db.queries == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_graph_probe_raises_not_reports_no_graph():
+    db = _DB([], graph="error")
+    with pytest.raises(kf.GraphProbeError):
+        await kf.query_knowledge_flow(db)
+    assert db.queries == []
+
+
+# --- graph_status: absent vs probe failure -------------------------------------
+#
+# graph_available() folds every failure into False. The panel must not tell a
+# reader "no graph backend" when the backend exists and its probe failed, so
+# graph_status keeps the two apart. These run the real GraphMixin probe chain
+# against a fake connection.
+
+class _AgeConn:
+    def __init__(self, *, installed, probe_error=None, ext_error=None):
+        self.installed, self.probe_error, self.ext_error = installed, probe_error, ext_error
+
+    async def fetchval(self, sql, *args):
+        if "pg_extension" in sql:
+            if self.ext_error:
+                raise self.ext_error
+            return self.installed
+        if "ag_graph" in sql:
+            return True
+        raise AssertionError(f"unexpected fetchval: {sql}")
+
+    async def execute(self, sql, *args):
+        if not self.installed and "LOAD 'age'" in sql:
+            raise RuntimeError("could not access file \"age\"")
+        return None
+
+    async def fetch(self, sql, *args):
+        if "cypher(" in sql:
+            if self.probe_error:
+                raise self.probe_error
+            return [{"result": "1"}]
+        return [{"id": "b-1", "label": None}]
+
+
+def _mixin_db(**conn_kwargs):
+    from src.db.mixins.graph import GraphMixin
+
+    conn = _AgeConn(**conn_kwargs)
+
+    class _Backend(GraphMixin):
+        _age_graph = "governance_graph"
+
+        def acquire(self):
+            class _Ctx:
+                async def __aenter__(self):
+                    return conn
+
+                async def __aexit__(self, *a):
+                    return False
+            return _Ctx()
+
+        async def graph_query(self, cypher, params):
+            return []
+
+    return _Backend()
+
+
+@pytest.mark.asyncio
+async def test_graph_status_absent_when_age_is_not_installed():
+    assert await _mixin_db(installed=False).graph_status() == "absent"
+
+
+@pytest.mark.asyncio
+async def test_graph_status_error_when_the_probe_fails_on_an_installed_graph():
+    db = _mixin_db(installed=True, probe_error=RuntimeError("connection reset"))
+    assert await db.graph_available() is False  # the boolean cannot tell them apart
+    assert await db.graph_status() == "error"
+
+
+@pytest.mark.asyncio
+async def test_graph_status_error_when_the_extension_check_fails():
+    db = _mixin_db(installed=True, ext_error=RuntimeError("timeout"))
+    assert await db.graph_status() == "error"
+
+
+@pytest.mark.asyncio
+async def test_graph_status_available_when_the_probe_succeeds():
+    assert await _mixin_db(installed=True).graph_status() == "available"
+
+
+@pytest.mark.asyncio
+async def test_base_backend_without_graph_support_is_absent():
+    from src.db.base import DatabaseBackend
+
+    class _NoGraph:
+        graph_available = DatabaseBackend.graph_available
+        graph_status = DatabaseBackend.graph_status
+
+    assert await _NoGraph().graph_status() == "absent"
 
 
 @pytest.mark.asyncio
@@ -158,6 +256,27 @@ def test_route_failure_is_a_500_without_detail(_local_posture, monkeypatch):
     r = _client(("127.0.0.1", 50000)).get("/v1/knowledge/flow")
     assert r.status_code == 500
     assert "secret detail" not in r.text
+
+
+def test_route_probe_failure_is_an_error_not_no_graph(_local_posture, monkeypatch):
+    # Regression (#2946 review): a probe that raised on an installed graph used
+    # to come back as 200 success with graph_available false, and the panel
+    # said "No graph backend on this server".
+    db = _mixin_db(installed=True, probe_error=RuntimeError("secret detail"))
+    monkeypatch.setattr("src.db.get_db", lambda: db)
+    r = _client(("127.0.0.1", 50000)).get("/v1/knowledge/flow")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["success"] is False
+    assert "graph_available" not in body
+    assert "secret detail" not in r.text
+
+
+def test_route_absent_graph_stays_the_benign_empty_answer(_local_posture, monkeypatch):
+    monkeypatch.setattr("src.db.get_db", lambda: _mixin_db(installed=False))
+    r = _client(("127.0.0.1", 50000)).get("/v1/knowledge/flow")
+    assert r.status_code == 200
+    assert r.json() == {"success": True, "graph_available": False, "limit": 25, "flows": []}
 
 
 def test_route_is_registered():

@@ -28,7 +28,9 @@
     const r = await DATA.knowledgeFlow();
     const flows = (r.data && r.data.flows) || [];
     const max = flows.reduce((m, f) => Math.max(m, f.links || 0), 0);
-    const empty = r.source === "unavailable" ? "Server not answering — knowledge flow unavailable."
+    // "unavailable" covers a server that did not answer and one that answered
+    // with an error (a failed graph probe is a 503), so it never reads as "no graph".
+    const empty = r.source === "unavailable" ? "Knowledge flow unavailable — the server did not answer or could not read its graph."
       : r.data && r.data.graphAvailable === false ? "No graph backend on this server, so there is no flow to read."
       : "No finding links across agents yet.";
     mount.innerHTML = `<div class="panel" style="padding:var(--space-5);margin-bottom:var(--space-4)">

@@ -443,7 +443,8 @@
 
     // Who built on whose findings (/v1/knowledge/flow, AGE graph). A graph with
     // no cross-agent links is live and empty; `graphAvailable: false` means the
-    // backend has no graph at all, which the view says differently.
+    // backend has no graph at all, which the view says differently. A failed
+    // graph probe is a 503 and degrades to "unavailable", never to no-graph.
     async knowledgeFlow(limit) {
       const n = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.round(limit))) : 25;
       return withFallback(async () => {
