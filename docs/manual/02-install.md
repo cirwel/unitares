@@ -365,6 +365,19 @@ command: that writes new tokens and secrets and resets the database URL and
 any other setting you changed, so clients stop authenticating and the server
 can start against a database other than the one you just migrated.
 
+The lease plane runs from whatever checkout its plist's `WorkingDirectory`
+names, and the [lease-plane runbook](../operations/lease-plane-operator-runbook.md)
+uses a separate deploy checkout for it. If that is not this checkout, move it
+to the same release before you load the plist, or the previous release's
+lease plane starts over the migrated schema:
+
+```bash
+plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+LP=$(git -C "$(plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist)" rev-parse --show-toplevel)
+git -C "$LP" fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+git -C "$LP" checkout --detach "$TAG"
+```
+
 Then start what you stopped. The lease plane fetches its dependencies and
 compiles at boot, so its first start on a new release takes longer. Deep
 health should report `healthy` or `moderate`, and the lease plane's
@@ -375,7 +388,7 @@ launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or: 
 launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you stopped it
 ./scripts/unitares health
 curl -s http://localhost:8767/health/deep
-curl -s http://127.0.0.1:8788/health; git rev-parse --short HEAD           # if you run the lease plane
+curl -s http://127.0.0.1:8788/health; git rev-parse --short "$TAG^{commit}"   # if you run the lease plane
 ```
 
 If a migration fails, do not start the previous release over the database
