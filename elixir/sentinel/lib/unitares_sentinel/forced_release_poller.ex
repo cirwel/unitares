@@ -165,8 +165,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     end
   end
 
-  defp same_cursor?(nil, nil), do: true
-  defp same_cursor?(nil, _), do: false
+  # Both call sites guard `new_cursor != nil` first, so only the prior cursor
+  # can be nil here.
   defp same_cursor?(_, nil), do: false
 
   defp same_cursor?(%DateTime{} = a, %DateTime{} = b),
