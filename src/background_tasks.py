@@ -97,7 +97,12 @@ async def concept_extraction_background_task(interval_hours: float = 24.0):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.debug(f"[CONCEPT_EXTRACTION] Skipped: {e}")
+            # WARNING, not debug: a failure here used to be invisible, and the
+            # task produced zero Concept vertices for months without a trace.
+            logger.warning(
+                f"[CONCEPT_EXTRACTION] Run failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
         try:
             await asyncio.sleep(interval_hours * 3600)
         except asyncio.CancelledError:
