@@ -55,7 +55,7 @@ if [ "$TOTAL_MD" -gt "$MAX_MARKDOWN_FILES" ]; then
     echo "❌ MARKDOWN PROLIFERATION BLOCKED!"
     echo "   Total: $TOTAL_MD files (max: $MAX_MARKDOWN_FILES)"
     echo ""
-    echo "   Run: python3 scripts/audit_markdown_proliferation.py --stats"
+    echo "   Run: python3 scripts/diagnostics/audit_markdown_proliferation.py --stats"
     echo "   Then consolidate or delete before committing."
     exit 1
 fi
@@ -82,8 +82,6 @@ if [ -n "$NEW_MARKDOWN_FILES" ]; then
            [[ "$file" == "docs/CHANGELOG.md" ]] || \
            [[ "$file" == docs/changelog.d/* ]] || \
            [[ "$file" == "docs/README.md" ]] || \
-           [[ "$file" == "docs/QUICK_REFERENCE.md" ]] || \
-           [[ "$file" == "docs/DOC_MAP.md" ]] || \
            [[ "$file" == docs/MARKDOWN_*.md ]] || \
            [[ "$file" == docs/guides/*.md ]] || \
            [[ "$file" == docs/architecture/*.md ]] || \

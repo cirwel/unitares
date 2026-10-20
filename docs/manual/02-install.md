@@ -58,6 +58,11 @@ Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
 exercise self-relative scoring or establish predictive value.
 
+The quickstart leaves several capabilities off, among them graph edges in shared
+memory, semantic search, a model for `consult`, and cross-family review.
+[§2.4](#24-quickstart-defaults-and-a-full-setup) lists each one, how to turn it
+on, and what is missing without it.
+
 When it completes:
 
 - MCP: `http://localhost:8767/mcp/`
@@ -479,6 +484,42 @@ For a shared deployment, replace the Compose-only development Ed25519 seed in
 issuer-to-HTTPS `/v1/lease-holder/keys` entry in
 `UNITARES_LEASE_TRUSTED_ISSUERS`. Never copy a private seed or continuity token
 into the lease plane.
+
+To see what the quickstart leaves off and how to turn each part on, read
+[§2.4](#24-quickstart-defaults-and-a-full-setup).
+
+## 2.4 Quickstart defaults and a full setup
+
+The Docker quickstart runs the server, PostgreSQL (with the AGE and pgvector
+extensions installed), Redis and the lease plane. Several capabilities are off
+in it, either because they need something the stack does not start (a model
+server, the agent orchestrator, the embeddings package) or because they change
+live decisions and wait on an operator. Each row names what the quickstart
+does, how to turn the capability on, and what is missing while it is off. Set a
+variable in `.env` and recreate the service (`docker compose up -d
+governance-mcp`), or `--build` where the row says the image changes.
+
+| Capability | Quickstart default | How to enable | Without it | Source |
+|---|---|---|---|---|
+| Knowledge graph backend | `postgres`: findings and full-text search in relational tables | `UNITARES_KNOWLEDGE_BACKEND=age`. The quickstart database already has the AGE extension and graph schema | No graph edges (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`); a superseded finding is flagged in search but carries no `superseded_by` pointer; no semantic search | `docker-compose.yml`; `src/knowledge_graph.py` (`get_knowledge_graph`); `UNITARES_KNOWLEDGE_BACKEND` |
+| Semantic search | Off: the image omits `sentence-transformers` and no embedding model is named | Uncomment `sentence-transformers` in `requirements-docker.txt` and rebuild (`--build`); set `UNITARES_EMBEDDING_MODEL` (for example `bge-m3`) and the `age` backend. Findings stored before then have no vector until `scripts/migration/reembed_corpus.py` fills them | Search matches terms only; a query worded differently from the finding does not find it | `requirements-docker.txt`; `src/embeddings.py`; `src/storage/knowledge_graph_age.py` (`semantic_search`); `UNITARES_EMBEDDING_MODEL` |
+| Hybrid ranking | Off | `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
+| Cross-encoder reranker | Off | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed; `UNITARES_RERANKER_MODEL` picks the model | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
+| Search graph expansion | Off | `UNITARES_ENABLE_GRAPH_EXPANSION=1`. Read the `graph_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`graph_expansion_enabled`); `UNITARES_ENABLE_GRAPH_EXPANSION` |
+| Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_PROVIDER_UNAVAILABLE`; `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
+| CLI hosts for `consult(effort='thorough')` and `delegate_inference` | Not available: no Compose service starts the agent orchestrator | Run the agent orchestrator, then set `UNITARES_HOST_ADAPTER_ENABLED=1`, `AGENT_ORCHESTRATOR_BEARER_TOKEN`, and an authenticated Codex, Claude or Antigravity CLI | Those calls fail and say the extension is not configured; `list_inference_hosts` reports it under `extensions.agent_orchestrator` | `src/mcp_handlers/support/inference_registry.py`; `UNITARES_HOST_ADAPTER_ENABLED` |
+| Orchestrated and cross-family dialectic review | Off: reviews run in-process | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1` with the agent orchestrator reachable at `AGENT_ORCHESTRATOR_URL`; `UNITARES_DIALECTIC_REVIEWER_HOST` (or `_HOSTS`) picks the reviewer backend | Reviews come from the in-process reviewer (with a model) or a peer; no separately identified reviewer process from another model family. Any dispatch failure falls back to in-process | `src/mcp_handlers/dialectic/orchestrator_dispatch.py` (`orchestrated_review_enabled`); `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` |
+| Lease-holder attestations (Ed25519) | On, signed with a published development seed and issuer `unitares-local` | Set your own `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, a stable `UNITARES_LEASE_ATTESTATION_ISSUER`, and `UNITARES_LEASE_TRUSTED_ISSUERS` (see §2.3) | With the published seed, anyone holding the compose file can sign an attestation the stack accepts; it is for a loopback install only | `docker-compose.yml`; `docs/DEPLOYMENT_SECURITY.md`; `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` |
+| Grounded E/I/S shadow | Off | `UNITARES_GROUNDING_SHADOW=1` | No `grounding_shadow` audit events comparing grounded values with the heuristic ones | `config/governance_config.py`; `UNITARES_GROUNDING_SHADOW` |
+| Grounded E/I/S apply | Off | `UNITARES_GROUNDING_APPLY=1`. It changes coherence, E, I and S for every agent; its wake condition is in the [dormant-capability registry](../operations/dormant-capability-registry.md), Theme 6 | Canonical metrics come from the heuristic and ODE path | `config/governance_config.py` (`grounding_apply_enabled`); `UNITARES_GROUNDING_APPLY` |
+| Cold-start risk confirmation actuation | Shadow on, actuation off | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION=true`; the flag alone does not actuate until the registry's Theme 6 conditions are met (`actuation_ready=false`) | A fallback-owned `risk_pause` actuates without waiting for adjacent evidence; the shadow still counts what would have been deferred | `config/governance_config.py`; `GOVERNANCE_COLD_START_RISK_CONFIRMATION_*` |
+| Verification floor | Shadow on, floor off | `GOVERNANCE_VERIFICATION_FLOOR=true`; council-gated, see `docs/proposals/active/verification-weighted-verdict-v0.md` | The independent verification signal is recorded in shadow and does not change verdicts | `config/governance_config.py`; `src/verification_floor_shadow.py`; `GOVERNANCE_VERIFICATION_FLOOR` |
+
+Two related flags are on by default and need nothing: `UNITARES_PHI_TELEMETRY_ONLY`
+(the behavioral verdict is authoritative and Φ is telemetry) and
+`GOVERNANCE_NON_AUTHORED_COLD_START_GUARD`. Turning either off is a rollback, not
+a setup step; the registry's Theme 6 says what each does. The generated
+[flag catalog](../FLAGS.md) lists every variable the server reads.
 
 ---
 

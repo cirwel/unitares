@@ -187,7 +187,7 @@ v0.1.1 Surface 1 (line 211) said `~/.unitares/anchors/.sentinel_state`. **This i
 STATE_FILE = project_root / ".sentinel_state"
 ```
 
-where `project_root = Path(__file__).parent.parent.parent` resolves to `/Users/cirwel/projects/unitares/.sentinel_state`. Anchors directory at `~/.unitares/anchors/` holds `chronicler.json`, `sentinel.json`, `steward.json`, `vigil.json`, `watcher.json` — **not** `.sentinel_state`.
+where `project_root = Path(__file__).parent.parent.parent` resolves to `/path/to/unitares/.sentinel_state` (the checkout root). Anchors directory at `~/.unitares/anchors/` holds `chronicler.json`, `sentinel.json`, `steward.json`, `vigil.json`, `watcher.json` — **not** `.sentinel_state`.
 
 **Fold (binding):**
 
@@ -241,7 +241,7 @@ Reviewer Critical-2 (verifier-grounded): the existing Python Sentinel plist at `
 
 **Fold (binding):**
 
-- Surface 1 PR amends `scripts/ops/com.unitares.sentinel.plist` to add `<key>HOME</key><string>/Users/cirwel</string>` (matching lease-plane convention).
+- Surface 1 PR amends `scripts/ops/com.unitares.sentinel.plist` to add `<key>HOME</key><string>/Users/you</string>` (matching lease-plane convention).
 - The future BEAM Sentinel plist MUST set `HOME` explicitly. Include this in the PR that lands the BEAM plist.
 - This is preventive — Surface 1's `STATE_FILE` resolution per B1 above doesn't use `Path.expand("~")`, but Surface 5 (SESSION_FILE) does, and the `HOME` gap is a landmine for any code path that drifts toward tilde-expansion.
 

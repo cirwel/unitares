@@ -23,7 +23,7 @@ deployed Core component.
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ INTERFACES      MCP /mcp/ · REST /v1 · Dashboard · SDK · governance plugin      │  reach Core
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ EISV & GOVERNANCE   state vector → risk → verdict (proceed/guide/pause/reject)  │  state +
+│ EISV & GOVERNANCE   state vector → risk → action (proceed/pause + sub_action)   │  state +
 │ DIALECTIC ENGINE    independent review when state degrades or a verdict is      │  policy +
 │                     contested — reasoning, not a rubber stamp                    │  review
 ├──────────────────────────────────────────────────────────────────────────────┤
