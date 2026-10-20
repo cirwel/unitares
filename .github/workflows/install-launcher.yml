@@ -56,10 +56,12 @@ jobs:
           grep -Eq '^Deep health: (healthy|moderate)$' "$RUNNER_TEMP/launch-1.log" \
             || { echo "::error::launcher did not report deep health healthy/moderate"; exit 1; }
           test -d "$UNITARES_STACK_DIR/.git"
-          # The launcher reads PUBLISHED_VERSION from master, which this
-          # checkout matches. The release tree's own copy predates promotion
-          # (v3.4.0's says 3.3.0), so it cannot name the expected release.
-          release="v$(tr -d '[:space:]' < PUBLISHED_VERSION)"
+          # Read PUBLISHED_VERSION where the launcher does, from live master.
+          # Not this checkout's copy: a release-promotion PR changes it before
+          # master does. Not the release tree's copy either: it predates
+          # promotion (v3.4.0's says 3.3.0).
+          release="v$(curl -fsSL --max-time 30 \
+            https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION | tr -d '[:space:]')"
           test "$(git -C "$UNITARES_STACK_DIR" rev-parse HEAD)" = \
             "$(git -C "$UNITARES_STACK_DIR" rev-parse "refs/tags/$release^{commit}")" \
             || { echo "::error::managed checkout is not on $release"; exit 1; }
