@@ -27,7 +27,9 @@ file is not a credential.
 Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when this live process holds a matching token returned to it by the server.
 
 If no proof-owned UUID rebind is available, call `identity(client_session_id=<your client_session_id>)` to inspect current binding. Never call `identity()` with no arguments: with no proof argument the call is gated to a fresh mint and reports on an identity it just created, so read `identity_assurance.caller_proven` before trusting the result.
-<!-- /repo-specific --> If you have no `client_session_id`, report the identity as unknown and suggest `/governance-start`, which declares the cached uuid as a parent only for a deliberate handoff from an exited process.
+<!-- /repo-specific -->
+
+If you have no `client_session_id`, report the identity as unknown and suggest `/governance-start`, which declares the cached uuid as a parent only for a deliberate handoff from an exited process.
 
 Then call `get_governance_metrics` for the current agent using the same continuity data.
 
