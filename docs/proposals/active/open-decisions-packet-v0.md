@@ -1,7 +1,7 @@
 # Open decisions packet — seven operator calls, packaged
 
 **Status:** decision packet, raised 2026-09-09. All seven decisions remain
-open. The table below records Codex's review recommendations, relayed into this
+open, except D4, D5 and D6, which the decision index records as disposed (2026-09-23 and 2026-10-16). The table below records Codex's review recommendations, relayed into this
 packet on 2026-09-10; it does not record operator approval. **Nothing here is
 implemented.** No registered instrument, threshold or production gate changes.
 The operator's request to correct this packet authorizes these documentation
@@ -39,7 +39,7 @@ Around the entries: [Codex review recommendations](#codex-review-recommendations
 [Council review](#council-review--recorded-2026-09-12),
 [Why this packet exists](#why-this-packet-exists), [The order, and why](#the-order-and-why),
 [Reading the entries](#reading-the-entries), and after entry 7,
-[Evidence gaps and review observations](#evidence-gaps-and-review-observations). Other pending operator decisions (collected 2026-10-10) are in [`open-decisions-other-2026-10-10.md`](open-decisions-other-2026-10-10.md); this packet is at its length baseline.
+[Evidence gaps and review observations](#evidence-gaps-and-review-observations). Other pending operator decisions are listed under [Pending operator decisions](README.md#pending-operator-decisions) in the current proposals index, merged there 2026-10-20 from the archived [2026-10-10 collection](../archive/open-decisions-other-2026-10-10.md); this packet is at its length baseline.
 
 ---
 
