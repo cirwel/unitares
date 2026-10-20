@@ -77,9 +77,7 @@ veto by removing the label.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
   opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
   session's UNITARES identity: a later session finds the owner by it and can
-  check it against the server. A harness session link may sit beside it; the
-  guard that refused session links in bodies, commits and files was removed on
-  2026-10-14 at the operator's direction. Do not push commits to another session's PR branch, even to
+  check it against the server. Do not push commits to another session's PR branch, even to
   fix something small. The `claude/` prefix does not tell sessions apart, and
   neither does the commit author reliably: local sessions commit as the
   operator, web sessions as `Claude`, and two web sessions look identical.
