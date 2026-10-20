@@ -31,6 +31,8 @@ defmodule UnitaresLeasePlane.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     if Application.get_env(:lease_plane, :start_application, true) do
@@ -48,6 +50,15 @@ defmodule UnitaresLeasePlane.Application do
     # returns 503) if absent — never silently open.
     if token = System.get_env("LEASE_PLANE_BEARER_TOKEN") do
       Application.put_env(:lease_plane, :bearer_token, token)
+    end
+
+    for warning <-
+          published_default_warnings(
+            System.get_env("LEASE_PLANE_BEARER_TOKEN"),
+            System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+            File.exists?("/.dockerenv")
+          ) do
+      Logger.warning(warning)
     end
 
     # RFC §7.10 — separate elevated bearer for force-release (operator-only).
@@ -373,6 +384,68 @@ defmodule UnitaresLeasePlane.Application do
       end
 
     %{username: user, password: pass, host: host, port: port, database: database}
+  end
+
+  # sha256 of the LEASE_PLANE_BEARER_TOKEN default docker-compose.yml publishes.
+  # A digest, not the literal, as in src/insecure_defaults.py; both are pinned
+  # to the compose file by tests (tests/test_insecure_defaults.py and
+  # published_default_test.exs).
+  @published_bearer_sha256 "46378d16b298ff0b584fb7f7d9d11d74b36914788d9bf23c6426197bbff3322f"
+
+  @doc false
+  def published_bearer_sha256, do: @published_bearer_sha256
+
+  @doc """
+  Boot warnings for a bearer token still at its published compose default.
+
+  Names the variable, never its value. Warn-only: inside the compose container
+  the lease plane binds every interface by design and only Docker's host port
+  mapping, which this process cannot see, decides reachability, so the bind
+  address cannot justify a refusal there. Outside a container, a bind beyond
+  loopback adds a second, stronger warning. The governance server applies the
+  configuration-signalled refusal (src/insecure_defaults.py).
+  """
+  def published_default_warnings(token, http_ip, in_container?) do
+    if published_default_bearer?(token) do
+      base =
+        "LEASE_PLANE_BEARER_TOKEN is still set to the published docker-compose.yml " <>
+          "default, which anyone can read. That suits only a single-user local " <>
+          "evaluation. Set your own value, the same one in the lease plane and " <>
+          "the governance server (docs/DEPLOYMENT_SECURITY.md)."
+
+      if not in_container? and beyond_loopback?(http_ip) do
+        [
+          base,
+          "UNITARES_LEASE_PLANE_HTTP_IP binds the lease plane beyond loopback while " <>
+            "LEASE_PLANE_BEARER_TOKEN is the published default: anyone who can reach " <>
+            "this port can acquire and release leases."
+        ]
+      else
+        [base]
+      end
+    else
+      []
+    end
+  end
+
+  defp published_default_bearer?(token) when is_binary(token) do
+    trimmed = String.trim(token)
+
+    trimmed != "" and
+      Base.encode16(:crypto.hash(:sha256, trimmed), case: :lower) == @published_bearer_sha256
+  end
+
+  defp published_default_bearer?(_), do: false
+
+  defp beyond_loopback?(raw) when raw in [nil, ""], do: false
+
+  defp beyond_loopback?(raw) when is_binary(raw) do
+    case :inet.parse_address(String.to_charlist(raw)) do
+      {:ok, {127, _, _, _}} -> false
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> false
+      {:ok, _} -> true
+      {:error, _} -> false
+    end
   end
 
   @doc false
