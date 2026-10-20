@@ -31,6 +31,36 @@ class GraphMixin:
             except Exception:
                 return False
 
+    async def graph_status(self) -> str:
+        """Classify graph availability as ``available``, ``absent`` or ``error``.
+
+        ``graph_available()`` folds every failure into False. A caller that
+        reports to a reader has to keep two of those apart: a database without
+        the AGE extension has no graph by deployment (``absent``), while a
+        probe that raised on a database that has the extension, transient or
+        not, is a failure the reader should see as one (``error``) rather than
+        as a missing backend. An extension check that itself fails is
+        ``error`` too: unknown is not absent.
+        """
+        async with self.acquire() as conn:
+            try:
+                installed = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'age')"
+                )
+            except Exception as exc:
+                logger.warning(f"AGE extension check failed: {exc}")
+                return "error"
+            if not installed:
+                return "absent"
+            try:
+                await self._prepare_age_connection(conn)
+                await self._ensure_age_graph_exists(conn)
+                await self._probe_age_graph(conn)
+            except Exception as exc:
+                logger.warning(f"AGE graph probe failed: {exc}")
+                return "error"
+            return "available"
+
     async def _prepare_age_connection(self, conn) -> None:
         """Load AGE and configure the required search path on a connection."""
         await conn.execute("LOAD 'age'")

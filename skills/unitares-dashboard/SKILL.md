@@ -19,6 +19,7 @@ source_files:
   - unitares/dashboard/redesign/sections/eisv.js
   - unitares/dashboard/redesign/sections/landing.js
   - unitares/dashboard/redesign/sections/discoveries.js
+  - unitares/dashboard/redesign/sections/knowledge-flow.js
   - unitares/dashboard/redesign/sections/risk.js
   - unitares/dashboard/redesign/sections/security.js
   - unitares/dashboard/package.json
@@ -57,7 +58,13 @@ not needed for static edits. Entry HTML is `no-store`; relative assets receive
 an mtime version query to prevent stale browser bundles.
 
 A "section" is one nav tab. Each is a self-contained module that renders into
-its own mount and is wired in `app.html`.
+its own mount and is wired in `app.html`. A **panel** inside an existing tab
+uses the same module pattern with its own mount placed inside that tab's pane,
+and loads from the host tab's `lazyLoad` entry; it skips the nav, pane and
+`loaded[id]` rows of the checklist. The Knowledge flow panel
+(`sections/knowledge-flow.js`, `#kflow-mount` in the Discoveries pane) is the
+worked reference. It is still a core module for
+`tests/sections-unavailable.test.js`.
 
 ## Core or extension? Decide first
 
@@ -165,7 +172,11 @@ async riskTrend(days) {
 Returning `null` from `liveFn` triggers the fallback. Accessors must decide
 whether an empty array/object is valid live data, and map it to `null` only
 when it is not: a producer that ran and found nothing is live data, an outage
-is not. For headline cards where a stale snapshot under a
+is not. Keep "this server has no such backend" apart from "the backend failed":
+the first can be a live answer the view names (`/v1/knowledge/flow` returns
+`graph_available: false` when AGE is not installed), the second must reach the
+view as a failure (a failed graph probe is a 503, so the panel renders
+`unavailable`). For headline cards where a stale snapshot under a
 "live" badge would mislead, prefer returning `null` per-field and rendering "—"
 (see `data.js::stats`).
 

@@ -883,6 +883,29 @@ class CallModelParams(AgentIdentityMixin):
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
 
 
+#: The per-tool budget many MCP clients give one call (the client in #2285
+#: did). A client that gives up first receives a bare transport error with no
+#: execution id, so delegate_inference's default must answer inside it.
+DELEGATE_INFERENCE_CLIENT_BUDGET_S = 60
+#: Seconds of that budget kept free for serialising and delivering the reply.
+DELEGATE_INFERENCE_RESPONSE_HEADROOM_S = 5
+#: Seconds past timeout_s that one call may spend on host resolution, the
+#: spawn request and a stalled await before it answers anyway. Every call
+#: answers within timeout_s plus this: it is one wall-clock deadline that the
+#: per-request HTTP timeouts are clipped to, not added to.
+DELEGATE_INFERENCE_OVERHEAD_S = 10
+#: delegate_inference's default timeout_s: the server-side await window, and
+#: the child's runtime budget, when the caller names none. Derived so the
+#: whole default call, overhead included, ends inside the client budget with
+#: the headroom to spare. A larger value stays accepted for clients that wait
+#: longer (the Python SDK sizes its transport timeout to timeout_s + 75).
+DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S = (
+    DELEGATE_INFERENCE_CLIENT_BUDGET_S
+    - DELEGATE_INFERENCE_RESPONSE_HEADROOM_S
+    - DELEGATE_INFERENCE_OVERHEAD_S
+)
+
+
 class DelegateInferenceParams(AgentIdentityMixin):
     """Parameters for long-running strong-model delegation."""
     prompt: str = Field(
@@ -918,14 +941,17 @@ class DelegateInferenceParams(AgentIdentityMixin):
         description="Advisory task classification.",
     )
     timeout_s: int = Field(
-        240,
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
         ge=5,
         le=420,
         description=(
-            "Server-side await window in seconds for the delegated CLI result. "
-            "Many MCP clients enforce their own per-tool timeout (often ~60s); "
-            "a client timeout returns no execution id, so keep this at or "
-            "below the client's limit when it is known."
+            "Seconds the server waits for the delegated CLI's answer; the "
+            "orchestrator stops the child 30s after that. The default 45 "
+            "fits an MCP client that gives one tool call ~60s, a common "
+            "limit: on timeout you get the structured failure with the "
+            "execution id. Set a larger value only when your client's own "
+            "per-tool timeout exceeds it by ~15s; otherwise the client gives "
+            "up first, sees no execution id, and the child runs on."
         ),
     )
 

@@ -90,8 +90,14 @@ class KnowledgeGraphPostgres:
         exclude_cold: bool = False,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> List[DiscoveryNode]:
-        """Query discoveries with filters, newest first."""
+        """Query discoveries with filters, newest first.
+
+        A failed read always raises here; ``raise_on_error`` is accepted so a
+        caller can ask both backends for that behaviour (the AGE backend
+        returns no rows on a failed unwindowed read unless it is set).
+        """
         db = await self._get_db()
         # If exclude_archived and no explicit status filter, filter to non-archived
         effective_status = status
