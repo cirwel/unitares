@@ -287,6 +287,112 @@ protected migrations are applied (077 and 078 for v3.4.0), it restarts the
 stack from the checked-out Compose file; to run the previous release instead,
 check that release out and run `docker compose up -d --wait`.
 
+#### Updating a bare-metal or LaunchAgent install
+
+`update` manages only a Compose stack, so on a [bare-metal install](#22-bare-metal-installation)
+or a [LaunchAgent](03-running-the-server.md#37-run-at-login-macos-launchagent)
+you run the same steps by hand, from the checkout. Set `DB_POSTGRES_URL` to
+the URL your server uses (the playbook's is shown):
+
+```bash
+export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
+git status --porcelain --untracked-files=no     # must print nothing
+git ls-files --others --exclude-standard -- db/postgres   # must print nothing
+PREV=$(git rev-parse HEAD)                      # the release you are leaving
+TAG="v$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)"
+echo "$TAG"                                     # the newest release; set TAG yourself to pick another
+git fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+```
+
+The `db/postgres` check matters because the migration tool applies every
+`NNN_*.sql` file it finds under `db/postgres/migrations/`, so an untracked file
+there would reach the database even though the release does not ship it. Move
+or delete anything it lists first.
+
+Confirm this is not a downgrade. The first number is the database's schema,
+the second the newest migration the release ships; if the first is larger,
+stop, because moving to an older release is not supported:
+
+```bash
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --print-db-version
+git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
+  | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1 | sed 's/^0*//'
+```
+
+Stop the server, and the lease plane if you run one, so nothing writes while
+the schema changes. Then move the code and its Python dependencies:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or stop the foreground process
+curl -s --max-time 3 http://localhost:8767/health/live || echo stopped      # must print "stopped"
+git checkout --detach "$TAG"
+source .venv/bin/activate
+pip install -r requirements-full.txt -c constraints.txt
+```
+
+Back the database up, list the pending migrations, then apply them:
+
+```bash
+mkdir -p ~/.unitares/backups && chmod 700 ~/.unitares/backups
+( set -o pipefail; umask 077
+  pg_dump "$DB_POSTGRES_URL" | gzip > ~/.unitares/backups/unitares-$(date +%Y%m%d-%H%M%S)-before-$TAG.sql.gz ) \
+  && echo "backup ok"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --dialectic-writers-quiesced
+```
+
+Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
+statement that the server and lease plane are stopped; migrations 077 and 078
+refuse to apply without it, so pass it only once the check above printed
+`stopped`. The migration tool calls `psql`, which the Homebrew PostgreSQL
+install puts on your `PATH`.
+
+If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
+shows changes, carry them into your installed plist by hand before loading it.
+Do not render it again with the [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
+command: that writes new tokens and secrets and resets the database URL and
+any other setting you changed, so clients stop authenticating and the server
+can start against a database other than the one you just migrated. Then start the server and check deep health, which should
+report `healthy` or `moderate`:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+./scripts/unitares health
+curl -s http://localhost:8767/health/deep
+```
+
+If a migration fails, do not start the previous release over the database
+until you know where the schema stopped (`--print-db-version`). If it did not
+cross 077 or 078 during this update, you can go back with
+`git checkout --detach "$PREV"`, reinstall its dependencies and load the
+LaunchAgent again. If it crossed either one, or you cannot read the version,
+stay on the new release, fix the cause the error names and run the `--apply`
+line again; the backup is the way back.
+
+#### Updating the agent plugin
+
+The [governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+is installed into each agent client, not the server, so neither path above
+touches it. It publishes a new version alongside each server release, whose
+release notes name the server version its skills match; update it after the
+server. Claude Code
+does not auto-update third-party marketplaces unless you turn that on under
+`/plugin` > Marketplaces.
+
+```bash
+# Claude Code
+claude plugin marketplace update unitares-governance
+claude plugin update unitares-governance@unitares-governance
+
+# Codex
+codex plugin marketplace upgrade unitares-governance
+```
+
+In Codex, open `/plugins` and confirm the new version is installed, then open
+`/hooks` to review and trust any hooks that changed. In both clients, hooks
+load when a session starts: running sessions keep the old ones until you start
+a new session (or run `/reload-plugins` in Claude Code).
+
 ### Tool discovery (interface 1.13.0 and later)
 
 The current source negotiates one complete catalog, including installed plugin
