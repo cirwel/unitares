@@ -56,7 +56,9 @@ result = sync_state(
 action = result.get("action_summary", {}).get("action")
 
 if action == "pause":  # reject-severity verdicts arrive as pause with sub_action="reject"
-    stop_and_request_review(result)  # implement this in the host client
+    # Governed writes are held: surface result["next_action"] to a human, or
+    # call self_recovery(action="check") / request_review(...).
+    handle_pause(result)
 ```
 
 The agent reports **what it did** plus its self-reported `complexity` and `confidence`, and gets back a policy action it can act on using its own state estimate. That's it — no new vocabulary required to *use* it. The vocabulary below is for when you want to act on *why*, not just the action.
@@ -99,18 +101,17 @@ worked example.
 
 ## 1.5 The verdict
 
-The decision engine returns `proceed` or `pause`, qualified by a sub-action.
-Responses expose `guide` as a policy action; reject-severity decisions use
-`action="pause"` with `sub_action="reject"`:
+`action_summary.action` is always `proceed` or `pause`, qualified by
+`sub_action`:
 
-| Verdict | Meaning | What the agent should do |
+| `action` / `sub_action` | Meaning | What the agent should do |
 |---|---|---|
 | `proceed` | Policy permits continuation | Continue working normally |
-| `guide` | Continuation with guidance | Read the guidance text and adjust approach |
-| `pause` | A hard stop: check-ins and new shared-memory entries are refused, not queued | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
-| `reject` | Significant concern | Open a dialectic review to resolve/contest, or bring in a human |
+| `proceed` / `guide` | Continuation with guidance | Read the guidance text and adjust approach |
+| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | A hard stop: check-ins and new shared-memory entries are refused, not queued; `sub_action` names the cause | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
+| `pause` / `reject` | Legacy or review label for significant concern, normalized to `pause` | Request a dialectic review (`request_review`) to resolve or contest, or bring in a human |
 
-Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) indicating proximity to the nearest measurable *decision threshold* — risk, void, or coherence — which is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. Verdict definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py); the margin levels come from `GovernanceConfig.compute_proprioceptive_margin`.
+Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) indicating proximity to the nearest measurable *decision threshold* — risk, void, or coherence — which is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. Read `margin_scope` and `unmeasurable_edges` with it: under the legacy coherence producer the coherence edge is not assessed, so `comfortable` covers only the measured edges. Verdict definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py); the margin levels come from `GovernanceConfig.compute_proprioceptive_margin`.
 
 ## 1.6 Supporting concepts
 
@@ -122,7 +123,7 @@ Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warnin
   controls both channels, calibration can be forged. The calibration input
   currently blended into I on the handler path is a lifetime fleet aggregate of
   strategic confidence-versus-trajectory-health bins, not a current-claim check.
-- **Knowledge graph (KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
+- **Shared memory (knowledge graph, KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Search it with `search_shared_memory` (no identity needed), write with `store_finding`, and revise with `update_finding`; `supersede` links require the AGE backend. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
 - **Dialectic** — a structured recovery/review protocol (thesis → antithesis
   → synthesis) that an agent or operator can request after a disputed decision.
 - **Identity** — a fresh process mints a fresh agent UUID; cross-process

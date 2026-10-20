@@ -172,8 +172,8 @@ can be moved over as it is: a base with no path gets `/v1` added. Running
 `./scripts/unitares model` rewrites `.env` with the new names and removes the old
 `UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
 
-**Where the prompt goes.** `consult` and `call_model` default to
-`privacy='local'`, and the in-process reviewer, check-in coaching and
+**Where the prompt goes.** `consult` (and the deprecated `call_model`, removed
+no earlier than 2026-12-02) default to `privacy='local'`, and the in-process reviewer, check-in coaching and
 knowledge synthesis always count as local. The server sends those only to an
 endpoint it classifies as local, and it decides that from the URL alone,
 never from DNS:
@@ -196,8 +196,8 @@ until you add that range to `UNITARES_TRUSTED_NETWORKS`. On a source install
 that also lets callers from that network reach the REST API without a token;
 under Compose, callers arrive through the Docker bridge, so it changes only
 which model endpoints count as local.
-`consult(privacy='cloud_allowed')` and `call_model(privacy='auto')` may still
-use an external endpoint.
+`consult(privacy='cloud_allowed')` (or the deprecated
+`call_model(privacy='auto')`) may still use an external endpoint.
 
 ### Reinstalling and side-by-side installs
 

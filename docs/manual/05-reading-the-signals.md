@@ -8,19 +8,21 @@ This chapter is the interpretation guide: what the numbers mean, how they're pro
 
 ```
 observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
- calibration,    sensor.py)           state.py)       assessment.py)        guide/
- drift, tools)                                                               pause/reject
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
+ calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
+ drift, tools)                                                               pause
 ```
 
-The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`; older docs call it the "thermodynamic model", a historical name, not a claim that it computes physical quantities) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
+The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
 
 The current implementation has three stages: check-ins 1–2 use the Φ
 cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
 universal thresholds; and check-in 25 enables per-agent **Welford-baseline**
 z-scores against a 30-update target. Read the state as telemetry against the
-reference available in that stage, not as an outcome judgment. The exact gates
-are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
+reference available in that stage, not as an outcome judgment. During cold
+start the response marks `action_summary.verdict_confidence: "provisional"`,
+and a cold-start risk estimate does not hard-pause. The exact gates are in
+[EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ## 5.2 The four dimensions
 
@@ -39,24 +41,27 @@ Three things to internalize:
 
 ## 5.3 Verdict and margin
 
-The assessment emits an internal `safe` / `caution` / `high-risk` label, which becomes the action the agent reads back:
+The assessment emits an internal `safe` / `caution` / `high-risk` label, which becomes the action the agent reads back. `action_summary.action` is only ever `proceed` or `pause`; `sub_action` carries the rest:
 
-| Verdict | Internal sense | Agent action | Recovery path |
+| `action` / `sub_action` | Internal sense | Agent action | Recovery path |
 |---|---|---|---|
 | `proceed` | safe | Continue | — |
-| `guide` | slightly off | Read guidance, adjust | — |
-| `pause` | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.5](#55-recovery-self-recovery--dialectic)) |
-| `reject` | significant concern | Human input or dialectic | dialectic |
+| `proceed` / `guide` | slightly off | Read guidance, adjust | — |
+| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.5](#55-recovery-self-recovery--dialectic)) |
+| `pause` / `reject` | legacy or review label for significant concern | Human input or dialectic | dialectic |
 
-Behavioral assessment risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — with each contribution available for inspection ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
+Behavioral assessment risk is the **sum of named components** (`low_E`, `low_I`, `high_S`, `high_V`, `adversarial_rho`, `high_CE`), each with an explicit weight — with each contribution available for inspection ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
 
-**Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
+**Margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) rides along with the verdict, reporting the distance to the nearest *decision threshold* (risk, void or coherence), not to a basin boundary, even while the verdict is still `proceed`. Read `margin_scope` and `unmeasurable_edges` with it: under the legacy coherence producer the coherence edge is not assessed, so `comfortable` covers only the measured edges.
 
 ## 5.4 Calibration and its trust boundary
 
 The system records stated `confidence` and result evidence — test pass/fail,
 command exit codes, lint results, or review labels — through
 `record_result` / `outcome_event`. These records support calibration analysis.
+Pass the `prediction_id` returned by `sync_state` to `record_result`: it binds
+the outcome to that check-in's stated confidence, and without it the row is
+excluded from calibration.
 The calibration input currently blended into I on the handler path is a
 lifetime **fleet** aggregate of strategic confidence-versus-trajectory-health
 bins. It is not an accuracy reading for the current claim or just this agent;
@@ -79,7 +84,9 @@ When an agent is paused, recovery is a structured escalation:
 2. **LLM-assisted dialectic** — a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.
-3. **Peer dialectic** — another agent reviews via `dialectic`: thesis → antithesis → synthesis.
+3. **Peer dialectic** — request one with `request_review` (that is,
+   `dialectic(action="request")`); a peer reviews through thesis → antithesis →
+   synthesis.
 
 Federation comparisons follow the same rule. Peer-similarity scores use E/I/S/V,
 controller state, maturity, regime, and verdict where available; legacy
@@ -92,7 +99,7 @@ Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DI
 
 ## 5.6 The knowledge graph as a signal source
 
-The KG isn't just storage — searching it *before* acting is how agents avoid re-discovering known failures, and it's where closed mysteries and corrected conclusions live. Discipline (agent-facing): **search before writing**; prefer a linked correction or `supersede` over a fresh note; store something only when a future agent would search for it and not already find it. Operational runbooks belong in `docs/`, not KG notes. Full operating manual: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
+The KG isn't just storage — searching it *before* acting is how agents avoid re-discovering known failures, and it's where closed mysteries and corrected conclusions live. Discipline (agent-facing): **search before writing**; prefer a linked correction or `supersede` (which needs the AGE backend) over a fresh note; store something only when a future agent would search for it and not already find it. Operational runbooks belong in `docs/`, not KG notes. Full operating manual: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
 
 ## 5.7 Reading the instrument and evaluating its uses
 
