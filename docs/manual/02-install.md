@@ -363,12 +363,24 @@ does, how to turn the capability on, and what is missing while it is off. Set a
 variable in `.env` and recreate the service (`docker compose up -d
 governance-mcp`), or `--build` where the row says the image changes.
 
+Semantic search and hybrid ranking come together in an override file, which
+builds a local image with the embeddings package and sets both flags:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.full.yml up -d --wait --build
+```
+
+Pass both files on every later `docker compose` command, or set
+`COMPOSE_FILE=docker-compose.yml:docker-compose.full.yml` in `.env`. The file's
+header lists what it changes and the one-time re-embed for findings stored
+before it.
+
 | Capability | Quickstart default | How to enable | Without it | Source |
 |---|---|---|---|---|
-| Knowledge graph backend | `postgres`: findings and full-text search in relational tables | `UNITARES_KNOWLEDGE_BACKEND=age`. The quickstart database already has the AGE extension and graph schema | No graph edges (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`); a superseded finding is flagged in search but carries no `superseded_by` pointer; no semantic search | `docker-compose.yml`; `src/knowledge_graph.py` (`get_knowledge_graph`); `UNITARES_KNOWLEDGE_BACKEND` |
-| Semantic search | Off: the image omits `sentence-transformers` and no embedding model is named | Uncomment `sentence-transformers` in `requirements-docker.txt` and rebuild (`--build`); set `UNITARES_EMBEDDING_MODEL` (for example `bge-m3`) and the `age` backend. Findings stored before then have no vector until `scripts/migration/reembed_corpus.py` fills them | Search matches terms only; a query worded differently from the finding does not find it | `requirements-docker.txt`; `src/embeddings.py`; `src/storage/knowledge_graph_age.py` (`semantic_search`); `UNITARES_EMBEDDING_MODEL` |
-| Hybrid ranking | Off | `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
-| Cross-encoder reranker | Off | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed; `UNITARES_RERANKER_MODEL` picks the model | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
+| Knowledge graph backend | `age`: findings in relational tables, and the graph over them (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`) in AGE. An install that ran `postgres` rebuilds the graph from its rows on the first knowledge-graph access after the switch | On by default. `UNITARES_KNOWLEDGE_BACKEND=postgres` keeps the findings and full-text search without the graph | With `postgres`: no graph edges; a superseded finding is flagged in search but carries no `superseded_by` pointer; no semantic search | `docker-compose.yml`; `src/knowledge_graph.py` (`get_knowledge_graph`); `src/storage/knowledge_graph_age.py` (`load`); `UNITARES_KNOWLEDGE_BACKEND` |
+| Semantic search | Off: the image omits `sentence-transformers` and no embedding model is named | `docker-compose.full.yml` (above): it builds with `INSTALL_EMBEDDINGS=1` and sets `UNITARES_EMBEDDING_MODEL=bge-m3`; needs the `age` backend. Findings stored before then have no vector until `scripts/migration/reembed_corpus.py --only-missing` fills them | Search matches terms only; a query worded differently from the finding does not find it | `requirements-docker.txt`; `src/embeddings.py`; `src/storage/knowledge_graph_age.py` (`semantic_search`); `UNITARES_EMBEDDING_MODEL` |
+| Hybrid ranking | Off | `docker-compose.full.yml` sets `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
+| Cross-encoder reranker | Off, also in `docker-compose.full.yml` | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed (the full override's image has it); `UNITARES_RERANKER_MODEL` picks the model. It scores every candidate with a second model on each search | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
 | Search graph expansion | Off | `UNITARES_ENABLE_GRAPH_EXPANSION=1`. Read the `graph_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`graph_expansion_enabled`); `UNITARES_ENABLE_GRAPH_EXPANSION` |
 | Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_PROVIDER_UNAVAILABLE`; `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
 | CLI hosts for `consult(effort='thorough')` and `delegate_inference` | Not available: no Compose service starts the agent orchestrator | Run the agent orchestrator, then set `UNITARES_HOST_ADAPTER_ENABLED=1`, `AGENT_ORCHESTRATOR_BEARER_TOKEN`, and an authenticated Codex, Claude or Antigravity CLI | Those calls fail and say the extension is not configured; `list_inference_hosts` reports it under `extensions.agent_orchestrator` | `src/mcp_handlers/support/inference_registry.py`; `UNITARES_HOST_ADAPTER_ENABLED` |

@@ -84,7 +84,7 @@ DOI, so publish only the reviewed release commit.
    in the release PR's own diff, also run the documented Docker quickstart on a
    Docker-capable host and record the command/result in the release PR. Check
    the range with
-   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py .github/workflows/docker-quickstart.yml`.
+   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py scripts/ci/kg_graph_proof.py docker-compose.full.yml .github/workflows/docker-quickstart.yml`.
    This covers dependency resolution and stack wiring; application source is
    also copied into the image but deliberately does not trigger every rebuild.
    Delegating this check

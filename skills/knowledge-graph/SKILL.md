@@ -35,7 +35,7 @@ source_files:
 
 ## What It Is
 
-The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default store, and routing it through Apache AGE is opt-in (`UNITARES_KNOWLEDGE_BACKEND=age`). The AGE extension itself is still required by the server. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL: the relational rows are the canonical store. The Docker quickstart runs the AGE backend (`UNITARES_KNOWLEDGE_BACKEND=age`), which also writes the graph over those rows; a native install with the variable unset resolves to the `postgres` backend, which keeps the rows and full-text search without the graph. The AGE extension itself is required by the server either way. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
 
 ## Search Before Creating
 
