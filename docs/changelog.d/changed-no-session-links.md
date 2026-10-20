@@ -1,0 +1,1 @@
+- **contract:** agents no longer add harness session links (`claude.ai/code/session_…`, `Claude-Session:`) to PR bodies or commit messages; the `UNITARES agent: <uuid>` footer is the provenance pointer. This is a convention, not a check: the guard removed on 2026-10-14 stays removed.
