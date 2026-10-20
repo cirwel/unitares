@@ -66,6 +66,7 @@ def full_record(*args, **kwargs):
 @pytest.fixture(autouse=True)
 def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
+    monkeypatch.delenv("UNITARES_REVIEWER", raising=False)
     monkeypatch.setattr(rg, "_CARRY_BASES", {})
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
@@ -982,10 +983,87 @@ def test_status_mapping(verdict, disposed, state):
     assert full_record("k", verdict, 1, disposed, "codex").status()[0] == state
 
 
-def test_reviewer_is_the_other_model():
-    assert rg.default_reviewer("codex/fix-x") == "codex"
-    assert rg.default_reviewer("claude/fix-x") == "codex"
-    assert rg.default_reviewer("alice/fix-x") == "codex"
+def test_reviewer_choice_has_no_default_and_cli_overrides_host(monkeypatch):
+    assert rg.selected_reviewers() == []
+    monkeypatch.setenv("UNITARES_REVIEWER", "claude")
+    assert rg.selected_reviewers() == ["claude"]
+    assert rg.selected_reviewers("antigravity") == ["antigravity"]
+    assert rg.selected_reviewers(["codex", "claude", "codex"]) == ["codex", "claude"]
+    monkeypatch.setenv("UNITARES_REVIEWER", "unknown")
+    with pytest.raises(SystemExit, match="unknown reviewer"):
+        rg.selected_reviewers()
+    assert rg.selected_reviewers("codex") == ["codex"]
+
+
+def test_missing_choice_never_starts_native_or_local_review(repo, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    monkeypatch.setattr(rg, "join_native", lambda *a: pytest.fail("implicit native review"))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *a: pytest.fail("implicit local review"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=30)) == rg.UNREVIEWED
+    assert "choose a reviewer explicitly" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("provider", ["claude", "antigravity"])
+def test_host_choice_does_not_request_native_codex(repo, monkeypatch, provider):
+    monkeypatch.setenv("UNITARES_REVIEWER", provider)
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    monkeypatch.setattr(rg, "join_native", lambda *a: pytest.fail("wrong provider"))
+    calls = []
+    monkeypatch.setattr(rg, "review_with_fallback", lambda args, pr, key, p: calls.append(p) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=30)) == 0
+    assert calls == [provider]
+
+
+@pytest.mark.parametrize("explicit,expected", [(None, []), ("claude", ["claude"])])
+def test_host_configuration_preserves_proposal_advisory_shortcut(repo, monkeypatch, explicit, expected):
+    monkeypatch.setenv("UNITARES_REVIEWER", "claude")
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/proposal"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "proposal_advisory", lambda *a: True)
+    calls = []
+    monkeypatch.setattr(rg, "review_with_fallback", lambda args, pr, key, p: calls.append(p) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=explicit, fresh=False, budget=30)) == 0
+    assert calls == expected
+
+
+def test_unconfigured_sweep_does_not_touch_github_or_launch_a_model(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "repo_slug", lambda: pytest.fail("unconfigured sweep accessed GitHub"))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=None)) == rg.UNREVIEWED
+    assert "no reviewer selected" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("choices,disabled,cooldown,native,expected", [
+    (["claude", "codex"], {}, None, False, "claude"),
+    (["codex", "claude"], {"codex": "outage"}, None, False, "claude"),
+    (["codex", "claude"], {}, "codex", False, "claude"),
+    (["codex"], {}, "codex", True, "codex"),
+    (["codex"], {"codex": "outage"}, None, True, None),
+])
+def test_sweep_uses_only_callers_ordered_choices(monkeypatch, tmp_path, choices, disabled, cooldown, native, expected):
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [_pr(3)])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: None)
+    monkeypatch.setattr(rg, "disabled_providers", lambda: disabled)
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: "cooldown" if p == cooldown else None)
+    monkeypatch.setattr(rg, "native_enabled", lambda: native)
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=choices, quiet_minutes=0, dry_run=False,
+                                       worktree=str(tmp_path / "wt"))) == 0
+    if expected:
+        assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+        assert "--reviewer" not in calls[0][0]  # preserves the optional first-pass native route
+    else:
+        assert not calls
 
 
 @pytest.mark.parametrize("text,n,ok", [
@@ -1363,7 +1441,7 @@ def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeyp
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
-    args = SimpleNamespace(quiet_minutes=15, dry_run=True)
+    args = SimpleNamespace(reviewer=["codex", "antigravity"], quiet_minutes=15, dry_run=True)
     assert rg.cmd_sweep(args) == 0
     output = capsys.readouterr().out
     assert "PR #3" in output and "1 review candidate(s)" in output
@@ -1383,7 +1461,7 @@ def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
     monkeypatch.setattr(rg, "api_pages", lambda *a: [])
     monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
-    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=True)) == 0
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["codex", "antigravity"], quiet_minutes=15, dry_run=True)) == 0
     assert rg._CARRY[("owner/repo", 3)] == ("k", [("old", "c0ffee")])
 
 
@@ -1742,6 +1820,7 @@ def test_native_evidence_outage_does_not_replace_unread_findings(repo, monkeypat
 
 
 def test_late_native_findings_reach_author_after_local_fallback(repo, monkeypatch, capsys):
+    monkeypatch.setenv("UNITARES_REVIEWER", "codex")
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "native_enabled", lambda: False)
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
@@ -1877,7 +1956,7 @@ def test_sweep_records_native_clean_without_starting_another_review(repo, monkey
     posted = []
     monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(args))
     monkeypatch.setattr(rg.subprocess, "run", lambda *args, **kw: pytest.fail("started another review"))
-    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=False)) == 0
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["codex", "antigravity"], quiet_minutes=15, dry_run=False)) == 0
     assert len(posted) == 1 and posted[0][0] == 3
 
 
@@ -1967,6 +2046,7 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
 @pytest.mark.parametrize("budget", [30, 300, 600, 1800])
 @pytest.mark.parametrize("activity", ["missing", "running", "completed"])
 def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, budget, activity):
+    monkeypatch.setenv("UNITARES_REVIEWER", "codex")
     # Exercise the command through native polling into a real fallback attempt:
     # a missing/stuck native review used to exhaust short budgets completely.
     head = _git(repo, "rev-parse", "HEAD")
@@ -2267,6 +2347,7 @@ def test_switched_off_cap_shows_the_round_without_a_limit(monkeypatch):
 
 
 def _capped(repo, monkeypatch, verifier="", answers=()):
+    monkeypatch.setenv("UNITARES_REVIEWER", "codex")
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/change"))
     monkeypatch.setattr(rg, "native_enabled", lambda: True)
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
@@ -2465,10 +2546,9 @@ def test_dispose_emit_needs_the_open_record_named(tmp_path):
 # --------------------------------------------------------------------------
 # Repo-wide provider switch (scripts/dev/review_providers.json).
 
-def test_a_disabled_provider_is_not_the_default_or_native(monkeypatch):
+def test_a_disabled_provider_is_not_a_candidate_or_native(monkeypatch):
     monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
-    assert rg.default_reviewer("claude/fix-x") == "claude"
-    assert rg.default_reviewer("codex/fix-x") == "claude"
+    assert rg.reviewer_candidates("codex/fix-x") == ["claude"]
     monkeypatch.setattr(rg, "git", lambda *a, **k: "true")
     assert rg.native_enabled() is False
 
@@ -2539,11 +2619,10 @@ def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
 # agy 1.2.11 was verified by the operator: `agy -p ... --mode plan --sandbox
 # --output-format json` in an empty dir printed {"status":"SUCCESS","response":"OK\n",...}.
 
-def test_antigravity_is_preferred_cross_family_when_installed(monkeypatch):
+def test_candidates_are_alphabetical_not_author_or_provider_preferences(monkeypatch):
     monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
-    assert rg.reviewer_candidates("claude/x") == ["codex", "antigravity", "claude"]
+    assert rg.reviewer_candidates("claude/x") == ["antigravity", "claude", "codex"]
     monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
-    assert rg.default_reviewer("claude/x") == "antigravity"
     assert rg.reviewer_candidates("antigravity/x") == ["antigravity", "claude"]
 
 
@@ -3732,7 +3811,7 @@ def test_the_sweep_does_not_report_a_left_to_author_pr_as_a_failure(monkeypatch,
     monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
     monkeypatch.setattr(rg.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=rg.NEEDS_SECOND_FAMILY))
-    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["codex", "antigravity"], quiet_minutes=0, dry_run=False,
                                         worktree=str(tmp_path / "wt"))) == 0
 
 
@@ -4191,8 +4270,11 @@ def test_sweep_refuses_forks_and_unknown_repository_identity(head_repo):
     ("CLEAN", True, [], None, 0),
     ("CLEAN", True, ["antigravity"], "valid operator waiver", 0),
 ])
+@pytest.mark.parametrize("configured", [["codex", "antigravity"], ["codex"]])
 def test_requested_sweep_continues_required_family_without_bypassing_findings(
-        monkeypatch, tmp_path, verdict, requested, providers, waiver, expected):
+        monkeypatch, tmp_path, verdict, requested, providers, waiver, expected, configured):
+    if "antigravity" not in configured:
+        expected = 0
     pr = _pr(3)
     pr["labels"] = [{"name": "review-requested"}] if requested else []
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
@@ -4214,7 +4296,7 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
     monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
     calls = []
     monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
-    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=configured, quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
     assert len(calls) == expected
     if verdict == "CLEAN" and requested:
         assert waiver_calls == [([], "k", ["src/oauth_provider.py"],
