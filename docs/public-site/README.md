@@ -99,7 +99,7 @@ states the rule in its `EDITORIAL.md`; the social card's tagline constant in
 `scripts/dev/brand/render_social_preview.py` follows the README too. To change
 the sentence, change the README first, then this landing page, then the site.
 Ten different phrasings were live across these surfaces on 2026-09-16
-(`docs/plans/public-presentation-critique-2026-09-16.md`); this is what keeps it
+(`docs/proposals/archive/public-presentation-critique-2026-09-16.md`); this is what keeps it
 at one.
 
 The page is set in the CIRWEL house register (cream and oxblood, bistre and
