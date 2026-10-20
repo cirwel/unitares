@@ -36,6 +36,11 @@ that started it is gone.
   layer.
 - **Claims and evidence** — retain durable findings, corrections, and provenance
   outside any single context window, distinct from transient check-in text.
+- **Shared memory as a graph** — with the AGE backend, each finding links to the
+  process that wrote it, to findings that share its tags, and to any newer
+  finding that supersedes it, so search shows the correction beside the stale
+  claim. Search is full-text by default; [semantic, hybrid and reranked
+  search](docs/manual/03-running-the-server.md#search-and-retrieval-flags) are opt-in.
 - **Governed review** — preserve objections, conditions, and resolution on the
   work record rather than treating a review request as approval.
 - **Cross-vendor second opinions** — ask another connected model (Claude, Codex,
