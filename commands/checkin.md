@@ -2,7 +2,7 @@
 description: "Manual UNITARES governance check-in for the current turn"
 ---
 
-The canonical copy of this command lives in the companion `unitares-governance-plugin` repo (`commands/checkin.md`); this copy adapts helper paths to this repo.
+The canonical copy of this command lives in the companion `unitares-governance-plugin` repo (`commands/checkin.md`). This copy adapts helper paths to this repo's `scripts/client/session_cache.py` and deliberately keeps repo-specific guidance the plugin copy does not yet carry: the `response_mode="compact"` default, the explanation that an argless `identity()` is gated to a fresh mint, the cache-token rule, the `--json` payload on the slot stamp, and no `reset-milestone` step (this repo's helper has none). Sections marked `<!-- repo-specific: keep on plugin sync -->` must survive a future sync from the plugin.
 
 Before calling tools, check for slot-scoped session caches in the current workspace.
 
@@ -19,12 +19,16 @@ If a matching cache exists:
 - rely on the active session binding or `client_session_id` for ordinary check-ins
 - do not pass `continuity_token` to `process_agent_update`; it is reserved for explicit PATH 0 ownership rebinds
 
+<!-- repo-specific: keep on plugin sync -->
 If current binding is unclear, call `identity(client_session_id=<your client_session_id>)` to inspect the active binding. Never call `identity()` with no arguments: a call carrying no proof argument is gated to a fresh mint, so it reports on a newly created identity instead of yours. Trust the answer only when `identity_assurance.caller_proven` is true.
 
 If you must rebind to a cached UUID, include a matching live `continuity_token`
 from the same process response: `identity(agent_uuid=<uuid>,
-continuity_token=<token>, resume=true)`. Do not look for this token in the v2
-slot cache; it is not persisted there.
+continuity_token=<token>, resume=true)`. Never take a `continuity_token` from
+any cache file, whether a legacy v1/flat `session.json` or a v2 slot cache:
+only a token returned to this live process counts as proof. v2 slot caches do
+not persist it, and a token found in a legacy file is not a credential.
+<!-- /repo-specific -->
 
 If this is a fresh process and no ownership proof is available, use `/governance-start` to mint a fresh identity rather than bare UUID resume. A cached uuid is not a parent by default; `/governance-start` explains when a handoff justifies declaring it.
 
@@ -38,7 +42,7 @@ Inputs:
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: **optional, usually omit it.** Any value mints a tactical prediction that is scored into the fleet calibration curve, so pass one only when you are stating a genuine belief about how your work will hold up, never a habitual number
 - use the active session binding or `client_session_id`; do not auto-inject `continuity_token`
-- use `response_mode="compact"` by default for Codex; reserve `response_mode="mirror"` for drift, guide/pause verdicts, or diagnostic review
+- use `response_mode="compact"` by default for Codex; reserve `response_mode="mirror"` for drift, guide/pause verdicts, or diagnostic review <!-- repo-specific: keep on plugin sync -->
 
 Guidelines:
 
@@ -59,10 +63,16 @@ After the call:
 - if verdict is `pause` or `reject`, recommend `dialectic(action="request")`
 - if verdict is `guide`, summarize the guidance and adjust behavior
 
+<!-- repo-specific: keep on plugin sync -->
 For Codex, there is no client hook that automatically stamps the local cache
 after `process_agent_update`. When a check-in succeeds and you are maintaining
-slot-scoped continuity, update the current slot explicitly with
-`scripts/client/session_cache.py set session --slot=<client_session_id> --merge --stamp`.
+slot-scoped continuity, update the current slot explicitly, passing the identity
+fields as the payload (without `--json` the helper has nothing to write and
+refuses a new slot):
+`scripts/client/session_cache.py set session --slot=<client_session_id> --merge --stamp --json '{"uuid":"<uuid>","client_session_id":"<client_session_id>","schema_version":2}'`.
+This repo's helper has no milestone accumulator, so there is no
+`reset-milestone` step.
+<!-- /repo-specific -->
 
 Claude adapters may do this through hooks, but Codex should treat it as an
 explicit step unless a Codex-native lifecycle hook is added later.
