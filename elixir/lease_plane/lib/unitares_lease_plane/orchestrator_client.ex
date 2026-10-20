@@ -12,8 +12,6 @@ defmodule UnitaresLeasePlane.OrchestratorClient do
   unconfigured we fail closed.
   """
 
-  require Logger
-
   @doc """
   POST a spawn spec to `<orchestrator>/v1/agents`. Returns the orchestrator's
   assigned `execution_id` on 201, or a typed error. Never raises on transport
