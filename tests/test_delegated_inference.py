@@ -1201,3 +1201,32 @@ async def test_hung_cooldown_record_does_not_hold_a_failure_past_the_deadline(mo
         assert "orchestrator_backstop_s" not in outcome.failure.details
     finally:
         await _cancel_deferred_bookkeeping()
+
+
+@pytest.mark.parametrize("error", [RuntimeError("write lock"), TimeoutError("inner redis wait")])
+@pytest.mark.asyncio
+async def test_failed_cooldown_record_keeps_the_provider_classification(monkeypatch, error):
+    """A cooldown write that raises inside the deadline still reports the
+    classification, and is not reported as finishing in the background."""
+    from src.mcp_handlers.support import host_availability
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter(
+        "Claude CLI reported an error result: Claude AI usage limit reached|4102444800"))
+
+    async def failing_record(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(host_availability, "record_unavailable_async", failing_record)
+
+    try:
+        outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+            prompt="hi", requesting_agent_uuid=None, timeout_s=_SCALED_TIMEOUT_S))
+
+        assert outcome.failure.details["provider_unavailable"]["reason"] == "quota"
+        assert outcome.failure.details["provider_unavailable"]["cooldown_recorded"] is False
+        assert "provider_cooldown" not in outcome.failure.details.get("accounting_deferred", [])
+        assert not di._background_tasks
+    finally:
+        await _cancel_deferred_bookkeeping()

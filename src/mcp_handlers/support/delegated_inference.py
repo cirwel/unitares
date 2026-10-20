@@ -116,6 +116,14 @@ async def _finish_by_deadline(
         task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
         raise
     except TimeoutError:
+        if task.done() and not task.cancelled():
+            # The step ended on its own: it raised TimeoutError itself (an
+            # inner wait_for), or completed just as the deadline fell.
+            exc = task.exception()
+            if exc is None:
+                return True, task.result()
+            logger.warning("Delegated-inference %s failed: %r", step, exc)
+            return True, None
         _background_tasks.add(task)
         task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
         logger.warning(
@@ -425,11 +433,12 @@ async def run_delegated_inference(
                 )
                 if not finished:
                     accounting_deferred.append("provider_cooldown")
+                if provider_unavailable is None:
                     # The classification is already known even though the
-                    # cooldown record is still being written: consult's
-                    # failover reads provider_unavailable.reason, so a
-                    # deferred write must not turn a usage-limit or logged-out
-                    # answer into a terminal failure.
+                    # cooldown record is still being written or failed:
+                    # consult's failover reads provider_unavailable.reason, so
+                    # a write that did not land must not turn a usage-limit or
+                    # logged-out answer into a terminal failure.
                     provider_unavailable = {**classified, "cooldown_recorded": False}
         return InferenceOutcome.failed(
             message,
