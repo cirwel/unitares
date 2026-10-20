@@ -11,10 +11,20 @@ This module is the wire:
 
 * ``record_consolidation_hint`` puts the topics behind a fired hint on a small
   in-process queue. It is bounded and deduplicating, and it is lost on restart
-  on purpose: the next densest-topic sweep covers whatever a restart dropped,
-  so a durable queue would buy nothing a migration should pay for.
+  on purpose: the topic is hinted again the next time a store finds three open
+  copies, and dense topics are covered by the sweep regardless, so a durable
+  queue would buy nothing a migration should pay for. A hinted topic whose
+  synthesis fails goes back on the queue for the next cycle, up to
+  ``MAX_HINT_ATTEMPTS`` tries.
 * ``kg_synthesis_background_task`` drains that queue on a fixed cadence, then
-  runs a bounded sweep over the densest topics.
+  runs a bounded sweep over the densest topics, skipping the topics the hints
+  already covered so none is synthesized (or written) twice in one cycle.
+
+No ``asyncio.wait_for`` wraps a topic: graph reads and writes go through the
+ExecutorPool-backed asyncpg pool, whose ``command_timeout`` bounds every
+statement at the server, and the narrative LLM call carries its own timeout.
+A ``wait_for`` would abandon the awaiting coroutine without cancelling the
+statement on the executor loop (CPython #105836), and the house rule forbids it.
 
 Mode (``UNITARES_KG_SYNTHESIS_SCHEDULE``):
 
@@ -34,7 +44,7 @@ import asyncio
 import os
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.logging_utils import get_logger
 
@@ -52,13 +62,15 @@ STARTUP_DELAY_SECONDS = 900.0
 MAX_HINT_QUEUE = 50
 MAX_HINTED_TOPICS_PER_RUN = 10
 SWEEP_TOPIC_LIMIT = 10
-# Per-topic ceiling: the narrative LLM call has its own 30s timeout, so this
-# only trips on a stuck graph query.
-TOPIC_TIMEOUT_SECONDS = 90.0
+# A hinted topic that fails this many cycles in a row is dropped with a warning;
+# a fresh store that raises the hint again queues it anew.
+MAX_HINT_ATTEMPTS = 3
 
 # topic -> discovery ids whose store raised the hint (insertion-ordered so the
 # oldest hint is drained, and evicted, first).
 _hint_queue: "OrderedDict[str, List[str]]" = OrderedDict()
+# topic -> failed synthesis attempts so far, for topics requeued after a failure.
+_hint_failures: Dict[str, int] = {}
 _last_run: Optional[Dict[str, Any]] = None
 
 
@@ -127,11 +139,16 @@ def record_consolidation_hint(topics: Iterable[str], discovery_id: Optional[str]
                 ids.append(discovery_id)
             _hint_queue[topic] = ids[-5:]
             queued.append(topic)
-        while len(_hint_queue) > MAX_HINT_QUEUE:
-            _hint_queue.popitem(last=False)
+        _evict_overflow()
     except Exception as exc:  # pragma: no cover - defensive, store path
         logger.warning("[KG_SYNTHESIS] could not queue consolidation hint: %s", exc)
     return queued
+
+
+def _evict_overflow() -> None:
+    while len(_hint_queue) > MAX_HINT_QUEUE:
+        evicted, _ids = _hint_queue.popitem(last=False)
+        _hint_failures.pop(evicted, None)
 
 
 def pending_hints() -> Dict[str, List[str]]:
@@ -142,12 +159,32 @@ def last_run_report() -> Optional[Dict[str, Any]]:
     return dict(_last_run) if _last_run else None
 
 
-def _drain_hints(limit: int) -> List[str]:
-    topics: List[str] = []
-    while _hint_queue and len(topics) < limit:
-        topic, _ids = _hint_queue.popitem(last=False)
-        topics.append(topic)
-    return topics
+def _drain_hints(limit: int) -> List[Tuple[str, List[str]]]:
+    drained: List[Tuple[str, List[str]]] = []
+    while _hint_queue and len(drained) < limit:
+        drained.append(_hint_queue.popitem(last=False))
+    return drained
+
+
+def _requeue_failed_hint(topic: str, ids: List[str]) -> bool:
+    """Put a failed hinted topic back for the next cycle; False once it is out of tries."""
+    attempts = _hint_failures.get(topic, 0) + 1
+    if attempts >= MAX_HINT_ATTEMPTS:
+        _hint_failures.pop(topic, None)
+        logger.warning(
+            "[KG_SYNTHESIS] hinted topic %r failed %d times; dropping it until a store hints it again",
+            topic, attempts,
+        )
+        return False
+    _hint_failures[topic] = attempts
+    # A store may have hinted the topic again while this cycle ran; keep both.
+    merged = list(ids)
+    for did in _hint_queue.pop(topic, []):
+        if did not in merged:
+            merged.append(did)
+    _hint_queue[topic] = merged[-5:]
+    _evict_overflow()
+    return True
 
 
 async def run_synthesis_cycle(mode: Optional[str] = None, graph: Any = None) -> Dict[str, Any]:
@@ -162,15 +199,15 @@ async def run_synthesis_cycle(mode: Optional[str] = None, graph: Any = None) -> 
         from src.knowledge_graph import get_knowledge_graph
         graph = await get_knowledge_graph()
 
-    hinted = _drain_hints(MAX_HINTED_TOPICS_PER_RUN)
+    drained = _drain_hints(MAX_HINTED_TOPICS_PER_RUN)
+    hinted = [topic for topic, _ids in drained]
     rollups: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
-    for topic in hinted:
+    requeued: List[str] = []
+    for topic, ids in drained:
         try:
-            report = await asyncio.wait_for(
-                synthesize_topic(graph, topic, use_llm=use_llm, dry_run=dry_run),
-                timeout=TOPIC_TIMEOUT_SECONDS,
-            )
+            report = await synthesize_topic(graph, topic, use_llm=use_llm, dry_run=dry_run)
+            _hint_failures.pop(topic, None)
             if report:
                 rollups.append({**report, "trigger": "consolidation_hint"})
         except asyncio.CancelledError:
@@ -178,22 +215,24 @@ async def run_synthesis_cycle(mode: Optional[str] = None, graph: Any = None) -> 
         except Exception as exc:
             logger.warning("[KG_SYNTHESIS] hinted topic %r failed: %s", topic, exc)
             errors.append({"topic": topic, "error": str(exc) or type(exc).__name__})
+            if _requeue_failed_hint(topic, ids):
+                requeued.append(topic)
 
+    # Every hinted topic is left out of the sweep before it synthesizes
+    # anything: a success is already done, and a failure is retried next cycle.
     sweep: Dict[str, Any] = {}
     try:
-        sweep = await asyncio.wait_for(
-            synthesize_topics(graph, limit=SWEEP_TOPIC_LIMIT, use_llm=use_llm, dry_run=dry_run),
-            timeout=TOPIC_TIMEOUT_SECONDS * SWEEP_TOPIC_LIMIT,
+        sweep = await synthesize_topics(
+            graph, limit=SWEEP_TOPIC_LIMIT, use_llm=use_llm, dry_run=dry_run,
+            skip_topics=hinted,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.warning("[KG_SYNTHESIS] densest-topic sweep failed: %s", exc)
         errors.append({"topic": "*sweep*", "error": str(exc) or type(exc).__name__})
-    already = {r.get("topic") for r in rollups}
     for report in sweep.get("rollups", []):
-        if report.get("topic") not in already:
-            rollups.append({**report, "trigger": "sweep"})
+        rollups.append({**report, "trigger": "sweep"})
     errors.extend(sweep.get("errors", []))
 
     done = [r for r in rollups if r.get("action") in ("synthesized", "previewed")]
@@ -202,6 +241,7 @@ async def run_synthesis_cycle(mode: Optional[str] = None, graph: Any = None) -> 
         "dry_run": dry_run,
         "ran_at": datetime.now(timezone.utc).isoformat(),
         "hinted_topics": hinted,
+        "requeued_topics": requeued,
         "topics_considered": len(hinted) + int(sweep.get("topics_considered", 0)),
         "rollups_previewed": len(done) if dry_run else 0,
         "rollups_written": 0 if dry_run else len(done),
