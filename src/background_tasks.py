@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.background_task_health import record_failure, record_success
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -311,8 +312,11 @@ async def periodic_matview_refresh():
                 await conn.execute(
                     "REFRESH MATERIALIZED VIEW CONCURRENTLY core.mv_latest_agent_states"
                 )
+            record_success("matview_refresh", log=logger)
         except Exception as e:
-            logger.debug(f"Matview refresh skipped: {e}")
+            # Every 60s: record_failure warns on the first failure and on a
+            # changed error, not on each repeat.
+            record_failure("matview_refresh", e, log=logger)
         await asyncio.sleep(60)
 
 
@@ -330,8 +334,9 @@ async def periodic_partition_maintenance():
             async with db.acquire() as conn:
                 result = await conn.fetchval("SELECT audit.partition_maintenance()")
             logger.info(f"Partition maintenance completed: {result}")
+            record_success("partition_maintenance", log=logger)
         except Exception as e:
-            logger.debug(f"Partition maintenance skipped: {e}")
+            record_failure("partition_maintenance", e, log=logger)
         await asyncio.sleep(7 * 24 * 3600)
 
 
@@ -1401,8 +1406,9 @@ async def _log_resident_silence_finding(
             status="open",
         )
         await graph.add_discovery(note)
+        record_success("silence_finding_write", log=logger)
     except Exception as e:
-        logger.debug(f"[SILENCE] KG finding write failed: {e}")
+        record_failure("silence_finding_write", e, log=logger)
 
 
 async def _close_resident_silence_findings(agent_id: str, reconnected_at: datetime) -> bool:
@@ -1469,9 +1475,17 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             })
             if landed is False:
                 all_landed = False
+        if all_landed:
+            record_success("silence_finding_close", log=logger)
+        else:
+            record_failure(
+                "silence_finding_close",
+                "the knowledge graph rejected a resolve update; retried next pass",
+                log=logger,
+            )
         return all_landed
     except Exception as e:
-        logger.debug(f"[SILENCE] KG finding close failed: {e}")
+        record_failure("silence_finding_close", e, log=logger)
         return False
 
 
@@ -1774,13 +1788,15 @@ async def check_agent_silence():
     while True:
         try:
             await _silence_check_iteration()
+            record_success("silence_check", log=logger)
         except Exception as e:
-            logger.debug(f"[SILENCE] Check failed: {e}")
+            record_failure("silence_check", e, log=logger)
 
         try:
             await _resident_pause_check_iteration()
+            record_success("resident_pause_check", log=logger)
         except Exception as e:
-            logger.debug(f"[RESIDENT_PAUSE] Check failed: {e}")
+            record_failure("resident_pause_check", e, log=logger)
 
         await asyncio.sleep(600)  # every 10 minutes
 
