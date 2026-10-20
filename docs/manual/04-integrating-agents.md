@@ -1,6 +1,6 @@
 # 4 · Integrating agents
 
-[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the signals →](05-reading-the-signals.md)
+[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the record →](05-reading-the-signals.md)
 
 This chapter owns the minimal agent workflow. Transport-specific configuration
 belongs in [`MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md), and exact runtime
@@ -21,8 +21,15 @@ integrators read the same operational rules.
 3. **Real handoff from a finished predecessor:** start fresh and declare
    `parent_agent_id=<prior uuid>, spawn_reason="explicit"`.
 4. Call `sync_state(...)` after meaningful work.
-5. Call `record_result(...)` when a bounded external outcome exists.
-6. Use `check_working_state()` for a read-only state check.
+5. Call `record_result(...)` when a bounded external outcome exists. To grade
+   a specific check-in, pass the `prediction_id` that check-in returned;
+   `sync_state` issues one only when you pass `confidence`, and it expires, so
+   record the outcome while the work is fresh.
+6. Use `check_working_state()` for a read-only state check. Calling it once with
+   `client_session_id` confirms threading: it should return your `agent_uuid`.
+
+`search_shared_memory` is a read and works before `start_session`, so search
+first.
 
 ```python
 session = start_session(force_new=True)
@@ -46,7 +53,9 @@ call and the server's responses, see the
 Reads may work without a bound caller; writes must be accountable. Do not use a
 bare UUID as resume proof, treat a display name as identity, pass a continuity
 token on every ordinary call, or declare a parent merely because another process
-shares the workspace. Full rules: [`identity.md`](../ontology/identity.md).
+shares the workspace. Do not call bare `identity()` or `onboard()` to find out
+who you are: with no arguments they resolve whatever the transport suggests,
+which proves no ownership. Full rules: [`identity.md`](../ontology/identity.md).
 
 Short dispatched subagents usually should not onboard. If one genuinely needs
 its own identity, declare the dispatcher as parent with
@@ -54,14 +63,34 @@ its own identity, declare the dispatcher as parent with
 
 ## 4.3 Primary workflow tools
 
-| Job | Primary tool | Raw implementation |
+By default the server advertises a small initial `tools/list`: `start_session`,
+`identity`, `sync_state`, `check_working_state`, `record_result`,
+`search_shared_memory`, `store_finding`, `request_review`, `consult`,
+`self_recovery`, `list_tools`, `describe_tool` and `use_tool`. Every other
+capability stays callable through three steps: `list_tools(lite=true)` reports
+every capability name and the contract version (interface contract 1.13.0 and
+later), `describe_tool(tool_name=..., action=...)` gives the full parameters,
+and `use_tool(tool_name=..., arguments={...})` invokes it. Each action still
+enforces its own authorization and identity requirements. Set
+`UNITARES_TOOL_ADVERTISEMENT=full` when a client needs every schema up front;
+legacy `GOVERNANCE_TOOL_MODE` values are ignored.
+
+| Job | Primary tool | Canonical implementation (via `use_tool` on the default surface) |
 |---|---|---|
 | Start a process session | `start_session(...)` | `onboard` |
 | Check in after work | `sync_state(...)` | `process_agent_update` |
 | Read current state | `check_working_state()` | `get_governance_metrics` |
 | Search shared memory | `search_shared_memory(...)` | `knowledge(action="search")` |
+| Write a finding | `store_finding(...)` | `knowledge(action="store")` |
+| Revise a finding | `update_finding(...)` (via `use_tool`) | `knowledge(action="update")` |
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
+| Recover from a pause | `self_recovery(...)` | — |
+
+Canonical implementations remain callable for independently upgraded clients.
+On the default surface, a form such as `knowledge(action="details", ...)` below
+means `use_tool(tool_name="knowledge", arguments={"action": "details", ...})`;
+the server writes its own hints in that form.
 
 The primary tools return a compact agent-facing envelope. Read aliases,
 bounded `sync_state` modes, and the write acknowledgements of `store_finding`,
@@ -103,15 +132,7 @@ acknowledgements keep the ids a caller needs next (`discovery_id`,
 caller can see which identity a write was recorded under; `record_result`
 carries them only when its binding was not server-inferred (for example, the
 call passed `client_session_id`), because `outcome_event` signs nothing for a
-server-inferred binding. Interface contract
-1.13.0 and later negotiates one complete catalog while initially advertising a
-small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
-`list_tools(lite=true)` reports every capability name and the contract version;
-`describe_tool(tool_name=..., action=...)` provides the full parameters; and
-`use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
-the initial listing. Set `UNITARES_TOOL_ADVERTISEMENT=full` when a client needs
-every schema up front. Raw implementations remain available for independently upgraded clients.
-Each action still enforces its own authorization and identity requirements.
+server-inferred binding.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result
@@ -130,6 +151,10 @@ To learn whether you are paused before writing anything, call
 `held` says which writes are refused when they are. This works for a fresh
 identity that has not checked in yet.
 
+`sync_state` defaults to `response_mode="auto"`, which resolves to `compact`
+for a steady check-in and to `mirror` (actionable self-signals) for a guide,
+pause, at-risk, degraded-identity or warning-bearing response.
+
 For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
 `policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,
 reject, suppression, or actuator event restores bounded summaries marked
@@ -143,8 +168,8 @@ aliases are exact: `lite=compact`, `verbose=full`, and `interpreted=standard`.
 A consolidated router (`knowledge`, `dialectic`, `observe`, `agent`, and the
 rest) advertises one flat schema covering every action it routes, because the
 MCP wrapper builds a tool's argument model from top-level properties. That
-union is not what a single call takes: `knowledge` shows about fifty
-parameters whichever of its twelve actions you mean. Pass the action to
+union is not what a single call takes: `knowledge` advertises every parameter
+of every action it routes, whichever one you mean. Pass the action to
 `describe_tool` to see only that action's parameters:
 
 ```
@@ -176,15 +201,24 @@ effect of governance check-in.
 ## 4.4 Handle the policy response
 
 ```python
-action = result.get("action_summary", {}).get("action")
-if action == "pause":
-    agent.require_human_review(result.get("next_action"))
+summary = result.get("action_summary", {})
+if summary.get("action") == "pause":
+    # Governed writes are held. Read the reason and next_action, then try
+    # self_recovery(action="check"); a dialectic review, an operator, or the
+    # pause's expiry also lift it.
+    handle_pause(summary.get("reason"), result.get("next_action"))
+elif summary.get("sub_action") == "guide":
+    adjust(summary.get("reason"))  # advisory; work may continue
 ```
+
+`action_summary.action` is always `proceed` or `pause`. A guide verdict arrives
+as `proceed` with `sub_action: "guide"`, and a reject-severity decision as
+`pause` with `sub_action: "reject"`.
 
 Treat the response as a policy affordance, not a moral judgment or outcome
 label. For finer client behavior, read the E/I/S/V fields and the named risk
 components. Their meaning and maturity stages are in
-[Reading the signals](05-reading-the-signals.md).
+[the EISV instrument](05-reading-the-signals.md#55-the-eisv-instrument) in chapter 5.
 
 ## 4.5 Connect a client or resident
 
@@ -194,8 +228,10 @@ components. Their meaning and maturity stages are in
   [`unitares-sdk`](../../agents/sdk/README.md) and its `GovernanceAgent` pattern.
 - Codex and Claude Code lifecycle hooks: use the
   [governance plugin](https://github.com/cirwel/unitares-governance-plugin).
-- Hermes Agent: the `unitares` plugin in the Hermes plugin catalog, installed
-  with `hermes plugins install cirwel/unitares-host-adapter`. At install it asks
+- Hermes Agent: install the reviewed `unitares` plugin from the Hermes plugin
+  catalog with `hermes plugins install unitares`
+  (`hermes plugins install cirwel/unitares-host-adapter` installs the
+  unreleased repository version instead). At install it asks
   for `UNITARES_MCP_URL`, your server's endpoint (for example
   `http://localhost:8767/mcp/`); with it unset, the plugin logs a warning and
   sends nothing.
@@ -204,4 +240,4 @@ components. Their meaning and maturity stages are in
 
 ---
 
-[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the signals →](05-reading-the-signals.md)
+[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the record →](05-reading-the-signals.md)

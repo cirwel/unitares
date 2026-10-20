@@ -486,9 +486,6 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end
   end
 
-  defp verify_predecessor(nil, _env, _intended_sha),
-    do: {:error, :promotion_predecessor_not_found}
-
   defp verify_predecessor(predecessor, env, intended_sha) do
     predecessor_sha = Map.get(predecessor, "payload_sha256")
     predecessor_tier = Map.get(predecessor, "reverified_tier")

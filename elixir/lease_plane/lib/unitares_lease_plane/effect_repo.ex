@@ -12,8 +12,6 @@ defmodule UnitaresLeasePlane.EffectRepo do
 
   alias UnitaresLeasePlane.DB
 
-  require Logger
-
   @doc """
   Insert the fresh effect-payload row (rollback_state NULL). Dispatch passes
   the custody transaction connection so payload and reservation commit together.
