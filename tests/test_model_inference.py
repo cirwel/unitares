@@ -901,6 +901,59 @@ class TestAutoProviderSelection:
         assert parsed["routed_via"] == "ollama"
 
     @pytest.mark.asyncio
+    async def test_auto_without_a_named_model_falls_back_to_hf(self, monkeypatch):
+        """Ollama answers but no model is named: auto routing (which allows
+        cloud) uses the HF fallback rather than refusing."""
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            model="deepseek-ai/DeepSeek-R1:fastest"
+        )
+        mock_socket = MagicMock()
+        mock_socket.connect_ex.return_value = 0  # Ollama is up
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \
+             patch("socket.socket", return_value=mock_socket):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "auto",
+                "privacy": "cloud",
+                "model": "auto",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is True
+        assert parsed["routed_via"] == "huggingface"
+
+    @pytest.mark.asyncio
+    async def test_auto_without_a_named_model_or_hf_token_is_refused(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+        mock_openai = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.connect_ex.return_value = 0  # Ollama is up
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", mock_openai), \
+             patch("socket.socket", return_value=mock_socket):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "auto",
+                "privacy": "cloud",
+                "model": "auto",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "MODEL_NOT_CONFIGURED"
+        mock_openai.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_auto_falls_back_to_hf_when_ollama_down(self):
         """Auto provider falls back to HF when Ollama is not running and HF_TOKEN is set."""
         mock_client_instance = MagicMock()

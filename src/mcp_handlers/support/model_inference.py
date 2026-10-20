@@ -559,8 +559,11 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         # Reuse the registry's cached probe instead of a second inline socket
         # connect — same source of truth, and it benefits from the TTL cache.
         ollama_available = _ollama_available()
+        # The local route needs a model: the caller's, or the configured one.
+        # With neither, auto routing falls through to the HF fallback.
+        local_model_named = model != "auto" or bool(default_local_model())
 
-        if ollama_available:
+        if ollama_available and local_model_named:
             # Prefer Ollama (local, free, no token needed)
             base_url = model_base_url()
             local_endpoint = classify_endpoint(base_url)
@@ -580,6 +583,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                     model = f"{model}:fastest"
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
+            elif ollama_available:
+                # Reachable, but no model is named and no HF token to fall back on.
+                return _model_not_configured_outcome()
             elif not await asyncio.to_thread(_configured_endpoint_is_ollama):
                 configured = display_url(model_base_url())
                 return InferenceOutcome.failed(
