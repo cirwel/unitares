@@ -112,7 +112,7 @@ layer, not this case.
 
 All tests below run in CI (`.github/workflows/tests.yml`).
 
-- The real-Postgres suite runs in the `tests-u-z-and-agents` shard, which
+- The real-Postgres suite runs in the `tests-s-z-and-agents` shard, which
   includes `tests/*/`, against a `pgvector/pgvector:pg17` service.
 - The same suite **skips itself when no test database is reachable**, which is
   the usual case locally. An assessor must confirm from the CI logs that it ran
