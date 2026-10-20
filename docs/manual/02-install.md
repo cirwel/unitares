@@ -320,15 +320,19 @@ git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
 ```
 
 Stop the server, and the lease plane if you run one, so nothing writes while
-the schema changes. Confirm both are gone by process, not by an unanswered
-health check, which a timeout or a different port would also produce. Then
-move the code and its Python dependencies:
+the schema changes: unload each LaunchAgent you use, and press Ctrl-C in the
+terminal of a server started in the foreground. Note which ones were running;
+you start the same ones again at the end. Confirm they are gone by service
+registration, process and listening port, not by an unanswered health check,
+which a timeout would also produce. Then move the code and its Python
+dependencies:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or stop the foreground process
-launchctl list | grep com.unitares.governance-mcp   # must print nothing
-pgrep -fl "$PWD/src/mcp_server.py"                  # must print nothing
-pgrep -fl lease_plane                               # must print nothing, if you run the lease plane
+launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # if you use it
+launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you use it
+launchctl list | grep -E 'com\.unitares\.(governance-mcp|lease-plane)'    # must print nothing
+pgrep -fl 'src/mcp_server\.py|mix run --no-halt'                          # must print nothing
+lsof -nP -iTCP:8767 -iTCP:8788 -sTCP:LISTEN                               # must print nothing
 git checkout --detach "$TAG"
 source .venv/bin/activate
 pip install -r requirements-full.txt -c constraints.txt
@@ -348,28 +352,37 @@ python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --di
 Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
 statement that the server and lease plane are stopped; migrations 077 and 078
 refuse to apply without it, and the tool does not check it for you, so pass it
-only once the three checks above printed nothing. The migration tool calls `psql`, which the Homebrew PostgreSQL
-install puts on your `PATH`.
+only once the three checks above printed nothing. Those checks cover the whole
+machine, so they also list another UNITARES instance, and the `mix run` pattern
+matches any Elixir service. Look at what each listed process is
+(`ps -o command= -p <pid>`), and stop anything that writes to this database. The migration tool calls
+`psql`, which the Homebrew PostgreSQL install puts on your `PATH`.
 
 If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
 shows changes, carry them into your installed plist by hand before loading it.
 Do not render it again with the [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
 command: that writes new tokens and secrets and resets the database URL and
 any other setting you changed, so clients stop authenticating and the server
-can start against a database other than the one you just migrated. Then start the server and check deep health, which should
-report `healthy` or `moderate`:
+can start against a database other than the one you just migrated.
+
+Then start what you stopped. The lease plane fetches its dependencies and
+compiles at boot, so its first start on a new release takes longer. Deep
+health should report `healthy` or `moderate`, and the lease plane's
+`build_sha` should match the release:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or: python src/mcp_server.py --port 8767
+launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you stopped it
 ./scripts/unitares health
 curl -s http://localhost:8767/health/deep
+curl -s http://127.0.0.1:8788/health; git rev-parse --short HEAD           # if you run the lease plane
 ```
 
 If a migration fails, do not start the previous release over the database
 until you know where the schema stopped (the `psql` query above). If it did not
 cross 077 or 078 during this update, you can go back with
-`git checkout --detach "$PREV"`, reinstall its dependencies and load the
-LaunchAgent again. If it crossed either one, or you cannot read the version,
+`git checkout --detach "$PREV"`, reinstall its dependencies and start what
+you stopped again. If it crossed either one, or you cannot read the version,
 stay on the new release, fix the cause the error names and run the `--apply`
 line again; the backup is the way back.
 
