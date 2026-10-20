@@ -64,7 +64,14 @@ The currently shipping `primary_eisv_source` + `verdict_source_meta` pattern is 
 
 > **Implementation note (v0.2).** The shipped ignorance shape (PR #605) deviates from the example above in one deliberate way: `summary` emits the self-describing string `"uninitialized | no observations yet"` and `verdict` emits the glossary-wrapped `"uninitialized"` rather than bare `null`s. Same §3.2 honesty (warmup status is an allowed output); more legible to a cold caller than a null. If a consumer ever needs the strict-null form, that is a schema-versioning decision, not a re-litigation of the principle.
 
-## 6. Known violations as of v0.1 (live probe, 2026-06-10) — grounded v0.2
+## 6. Dated history: known violations found by the v0.1 live probe (2026-06-10)
+
+> **History, not current state.** This table records what the 2026-06-10 probe
+> found and each row's status as of the date in its Status cell (2026-06-11,
+> or 2026-08-10 for row 8). It is not re-verified and is not a list of current
+> violations. Current enforcement coverage is in [§7](#7-enforcement); the
+> dated narrative is in the [§9 grounding log](#9-grounding-log-v02). Row
+> numbers stay stable because tests and other documents cite them.
 
 |#|Violation                                                                                           |Contract clause                 |Severity|Status (2026-06-11)|
 |-|----------------------------------------------------------------------------------------------------|--------------------------------|--------|---------------------|
