@@ -2,13 +2,56 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sentinel_side_effects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Redirect log/state/session paths to tmp_path and stub live DB/evaluator
+    and desktop notification side effects (#2942).
+
+    Without this fixture, `run_cycle(client=None)` appends fixture findings to
+    the operator's live `~/Library/Logs/unitares-sentinel.log`, queries the live
+    `lease_plane_events` table via `_emit_forced_release_alarms`, shells out to
+    the Phase B evaluator, and writes `.sentinel_state` / `last_phase_b_verdict.json`.
+    """
+    import agents.sentinel.agent as sentinel_mod
+    import agents.sentinel.phase_b_promotion as phase_b_mod
+
+    monkeypatch.setenv("SENTINEL_LOG_FILE", str(tmp_path / "sentinel.log"))
+    monkeypatch.setattr(sentinel_mod, "LOG_FILE", tmp_path / "sentinel.log")
+    monkeypatch.setattr(sentinel_mod, "STATE_FILE", tmp_path / "sentinel_state.json")
+    monkeypatch.setattr(sentinel_mod, "SESSION_FILE", tmp_path / "sentinel_session.json")
+    monkeypatch.setattr(sentinel_mod, "LEGACY_SESSION_FILE", tmp_path / "legacy_session")
+    monkeypatch.setattr(sentinel_mod, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        sentinel_mod.SentinelAgent,
+        "_emit_forced_release_alarms",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        sentinel_mod.SentinelAgent,
+        "_emit_phase_b_transitions",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        phase_b_mod,
+        "DEFAULT_STATE_PATH",
+        tmp_path / "last_phase_b_verdict.json",
+    )
+    monkeypatch.setattr(
+        sentinel_mod,
+        "detect_phase_b_transitions",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+
+
 @pytest.mark.asyncio
-async def test_run_cycle_posts_findings_for_high_severity():
+async def test_run_cycle_posts_findings_for_high_severity(tmp_path: Path):
     """High-severity fleet findings are POSTed to /api/findings with a stable fingerprint."""
     from agents.sentinel.agent import SentinelAgent
 
@@ -45,6 +88,7 @@ async def test_run_cycle_posts_findings_for_high_severity():
     assert kwargs["fingerprint"]  # non-empty
     assert kwargs["extra"]["violation_class"] == "BEH"
     assert kwargs["extra"]["finding_type"] == "coordinated_degradation"
+    assert "3 agents drifting in lockstep" in (tmp_path / "sentinel.log").read_text()
 
 
 @pytest.mark.asyncio
@@ -100,14 +144,7 @@ async def test_run_cycle_does_not_post_self_observations():
     ]
     agent.fleet.fleet_summary.return_value = {"active_agents": 1}
 
-    # `run_cycle` also calls `_emit_forced_release_alarms` (which in turn drives
-    # phase-B transitions). That path queries the live governance DB and posts
-    # under its own event types, so left unstubbed this test passes in CI (no DB,
-    # no alarms) and fails on any machine with real lease-conflict state. Stub it
-    # and assert on the channel this test is actually about.
-    with patch("agents.sentinel.agent.post_finding") as mock_post, \
-            patch.object(SentinelAgent, "_emit_forced_release_alarms",
-                         new=AsyncMock(return_value=None)):
+    with patch("agents.sentinel.agent.post_finding") as mock_post:
         await agent.run_cycle(client=None)
 
     # The claim is "no self-observation reaches the fleet-finding stream", not
@@ -120,3 +157,21 @@ async def test_run_cycle_does_not_post_self_observations():
     assert not fleet_finding_calls, (
         f"self-observation leaked to the event stream: {fleet_finding_calls}"
     )
+
+
+def test_sentinel_log_file_respects_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """SENTINEL_LOG_FILE overrides the default ~/Library/Logs path at import time (#2942)."""
+    import importlib.util
+    import agents.sentinel.agent as sentinel_mod
+
+    custom_log = tmp_path / "custom-sentinel.log"
+    monkeypatch.setenv("SENTINEL_LOG_FILE", str(custom_log))
+
+    spec = importlib.util.spec_from_file_location(
+        "sentinel_agent_env_test", Path(sentinel_mod.__file__).resolve()
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.LOG_FILE == custom_log
+
