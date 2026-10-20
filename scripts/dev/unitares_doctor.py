@@ -1257,6 +1257,15 @@ def check_background_task_failures() -> CheckResult:
                            "running server predates the background-task record")
     tasks = entry.get("tasks") or {}
     failing = sorted(n for n, t in tasks.items() if isinstance(t, dict) and t.get("status") == "failing")
+    # /health/deep serves the last good snapshot, flagged stale, when later
+    # probes time out or fail. A stale record still shows failures that were
+    # real, but it cannot show that every task's latest run succeeded.
+    cache = (payload or {}).get("_cache") or {}
+    stale_note = (
+        f"deep-health snapshot is stale (produced {cache.get('produced_at') or 'unknown'}, "
+        f"{cache.get('age_seconds')}s old); this is the record as of then"
+        if cache.get("stale") else ""
+    )
     if failing:
         lines = []
         for task_name in failing:
@@ -1266,9 +1275,16 @@ def check_background_task_failures() -> CheckResult:
                 f"last success {t.get('last_success_at') or 'never in this process'}, "
                 f"last error: {t.get('last_error')}"
             )
+        if stale_note:
+            lines.insert(0, stale_note)
         return CheckResult(name, mode, Status.WARN,
                            f"{len(failing)} background task(s) failing: {', '.join(failing)}",
                            detail="\n".join(lines))
+    if stale_note:
+        return CheckResult(name, mode, Status.WARN,
+                           "background-task record is stale; current runs unconfirmed",
+                           detail=stale_note + ". The deep-health probe itself is not "
+                                  "refreshing; http_health and the server log say why.")
     if not tasks:
         return CheckResult(name, mode, Status.INFO,
                            "no background task has recorded a run since the server started")

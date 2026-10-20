@@ -1447,6 +1447,10 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             and getattr(d, "agent_id", agent_id) == agent_id
         ]
         if not rows:
+            # A completed lookup with nothing to close is a success: without
+            # recording it, one earlier failure would stay on the health record
+            # after the caller stops checking this agent.
+            record_success("silence_finding_close", log=logger)
             return True
         now = datetime.now(timezone.utc)
         reconnect_iso = reconnected_at.isoformat()

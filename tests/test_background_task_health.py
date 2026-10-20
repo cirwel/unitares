@@ -201,6 +201,29 @@ async def test_silence_finding_close_rejected_update_is_a_failure(monkeypatch):
     assert "rejected" in entry["last_error"]
 
 
+
+@pytest.mark.asyncio
+async def test_silence_finding_close_recovers_when_nothing_is_left_to_close(monkeypatch):
+    import src.knowledge_graph as kg
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", AsyncMock(side_effect=ConnectionError("kg down")))
+    assert await background_tasks._close_resident_silence_findings(
+        "agent-1", datetime.now(timezone.utc)
+    ) is False
+    assert health.snapshot()["silence_finding_close"]["status"] == "failing"
+
+    # The finding was resolved elsewhere meanwhile: the lookup succeeds and
+    # finds nothing. That is a successful run, and it must clear the failure,
+    # because the caller stops checking this agent after a True.
+    graph = MagicMock()
+    graph.query = AsyncMock(return_value=[])
+    monkeypatch.setattr(kg, "get_knowledge_graph", AsyncMock(return_value=graph))
+    assert await background_tasks._close_resident_silence_findings(
+        "agent-1", datetime.now(timezone.utc)
+    ) is True
+    assert health.snapshot()["silence_finding_close"]["status"] == "ok"
+
 # --- doctor --------------------------------------------------------------------
 
 
@@ -282,3 +305,31 @@ def test_doctor_skips_an_older_server_without_the_record(doctor, monkeypatch):
 def test_doctor_skips_when_server_unreachable(doctor, monkeypatch):
     _serve(monkeypatch, doctor, error=urllib.error.URLError("refused"))
     assert doctor.check_background_task_failures().status == doctor.Status.SKIP
+
+
+def test_doctor_does_not_pass_on_a_stale_snapshot(doctor, monkeypatch):
+    payload = _payload({"matview_refresh": {"status": "ok"}})
+    payload["_cache"] = {"stale": True, "produced_at": "2026-10-20T00:00:00Z", "age_seconds": 900.0}
+    _serve(monkeypatch, doctor, payload)
+    result = doctor.check_background_task_failures()
+    assert result.status == doctor.Status.WARN
+    assert "stale" in result.message
+    assert "2026-10-20T00:00:00Z" in result.detail
+
+
+def test_doctor_names_staleness_beside_real_failures(doctor, monkeypatch):
+    payload = _payload({"silence_check": {"status": "failing", "consecutive_failures": 1,
+                                          "last_success_at": None, "last_error": "boom"}})
+    payload["_cache"] = {"stale": True, "produced_at": "t0", "age_seconds": 600.0}
+    _serve(monkeypatch, doctor, payload)
+    result = doctor.check_background_task_failures()
+    assert result.status == doctor.Status.WARN
+    assert "silence_check" in result.message
+    assert result.detail.startswith("deep-health snapshot is stale")
+
+
+def test_doctor_passes_on_a_fresh_snapshot(doctor, monkeypatch):
+    payload = _payload({"matview_refresh": {"status": "ok"}})
+    payload["_cache"] = {"stale": False, "produced_at": "t0", "age_seconds": 5.0}
+    _serve(monkeypatch, doctor, payload)
+    assert doctor.check_background_task_failures().status == doctor.Status.PASS
