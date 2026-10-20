@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.52.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.53.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -979,3 +979,51 @@ adversarial review after it merged.
 - **Client action:** none. The Python SDK's `consult()` gains `host_ids`, and
   `ConsultResult` gains `council_id`, `answered`, `asked` and `members`.
   Before this release the SDK dropped every council answer.
+
+## 1.53.0 (2026-10-18)
+
+`delegate_inference` answers inside a ~60s per-tool client timeout by
+default (#2285).
+
+- **Affected:**
+  - `timeout_s` defaults to 45 (was 240). Many MCP clients give one tool
+    call about 60s; the client in #2285 did. A client that gives up first
+    sees a bare transport error, with no `orchestrator_execution_id` to
+    reconcile the child by. 45s leaves about 15s for host resolution, the
+    spawn request and the response, so by default the structured
+    `DELEGATED_INFERENCE_TIMEOUT` reaches the caller.
+  - The tool's own work ends within `timeout_s` + 10s. That is one
+    wall-clock deadline: host resolution, the codex lane's sandbox probe, the
+    spawn request, each await and the bookkeeping after the answer (provider-cooldown writes, Energy
+    accounting) are clipped to the time left before it rather than adding
+    their own timeouts on top. Bookkeeping that cannot finish by then
+    completes in the background, and the response names it in
+    `accounting_deferred` (`inference.accounting_deferred` on success,
+    alongside the complete answer and execution id; the failure details on
+    a failure). The field is absent when nothing was deferred. A deferred
+    provider-cooldown write still reports `provider_unavailable` with its
+    `reason` and `cooldown_recorded: false`, so `consult` fails over on a
+    usage-limit or logged-out answer whether or not the record finished.
+    An orchestrator that accepts the child and then stalls the await now
+    yields `DELEGATED_INFERENCE_TIMEOUT` with the execution id by that
+    deadline (it used to wait out the window plus 15s of HTTP grace, and an
+    await that timed out in transit reported `DELEGATED_INFERENCE_FAILED`).
+    The default call ends by 55s, 5s inside a 60s client budget.
+  - Failures that may leave a child running add `timeout_s` (the window
+    this call waited) and `orchestrator_backstop_s` (`timeout_s` + 30, when
+    the orchestrator stops the child itself). The recovery action names
+    that deadline, and on a timeout says a retry may raise `timeout_s` only
+    under the client's own per-tool timeout.
+  - The `timeout_s` description and the tool description say all of this.
+- **Compatibility:** every call 1.52.0 accepted is still accepted, and an
+  explicit `timeout_s` up to 420 is honoured unchanged, for clients that
+  wait longer (the Python SDK sends its own `timeout_s` and sizes its
+  transport timeout to it). A caller that omitted `timeout_s` and relied on
+  240s now waits 45s; on a slow child it gets the structured timeout with
+  the execution id instead of an answer.
+- **Schema digests:** `delegate_inference` moves; `surface_sha256` moves
+  with it.
+- **Client action:** none for callers on a ~60s client. A caller whose
+  client waits longer and wants the old window passes `timeout_s`
+  explicitly. `consult(effort='thorough')` keeps its own 240s attempt and is
+  unchanged.
