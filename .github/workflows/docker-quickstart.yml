@@ -34,6 +34,8 @@ on:
       - 'scripts/demo/quick_demo.py'
       - 'scripts/ci/check_mcp_tool_surface.py'
       - 'scripts/ci/plugin_file_lease_proof.py'
+      - 'scripts/ci/kg_graph_proof.py'
+      - 'docker-compose.full.yml'
       - '.github/workflows/docker-quickstart.yml'
   pull_request:
     branches: [ master, main ]
@@ -49,6 +51,8 @@ on:
       - 'scripts/demo/quick_demo.py'
       - 'scripts/ci/check_mcp_tool_surface.py'
       - 'scripts/ci/plugin_file_lease_proof.py'
+      - 'scripts/ci/kg_graph_proof.py'
+      - 'docker-compose.full.yml'
       - '.github/workflows/docker-quickstart.yml'
 
 permissions:
@@ -80,6 +84,17 @@ jobs:
 
       - name: Run the two-agent coordination proof
         run: make coordination-demo
+
+      # The quickstart runs the AGE knowledge backend: a stored finding must get
+      # its AUTHORED and TAGGED edges, and tag overlap a RELATED_TO edge.
+      - name: Prove stored findings are written as a graph
+        run: python3 scripts/ci/kg_graph_proof.py
+
+      # The full search override needs an image with sentence-transformers and a
+      # multi-GB model download, too heavy for this job. Check it at least
+      # merges with the base file.
+      - name: Validate the full search override
+        run: docker compose -f docker-compose.yml -f docker-compose.full.yml config --quiet
 
       # The companion plugin's real edit hooks against this stack's real lease
       # plane. The plugin's own tests stop at a fake HTTP server, so without
