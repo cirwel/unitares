@@ -3923,8 +3923,8 @@ def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
     if not model_named:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{shown} answers, but no model is named; the server falls back to "
-            f"{lie.DEFAULT_LOCAL_MODEL}, a default a later release removes",
+            f"{shown} answers, but no model is named, so consult and local "
+            "reviews refuse with MODEL_NOT_CONFIGURED",
             detail=f"set {lie.MODEL_ENV} to one of: {', '.join(ids[:10]) or '(none listed)'}",
         )
     if model not in ids:

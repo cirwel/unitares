@@ -49,7 +49,6 @@ ALIAS_KEY = "UNITARES_OLLAMA_BASE_URL"
 # The server, in the container, reaches the same endpoint through
 # container_base().
 HOST_OLLAMA = "http://localhost:11434"
-PREFERRED_MODEL = "gemma4:latest"
 
 
 def _with_scheme(url: str) -> str:
@@ -153,8 +152,9 @@ def container_base(host_url: str) -> str:
 
 
 def default_choice(models: list[str]) -> str:
-    """The model offered first: the documented default if pulled, else the first listed."""
-    return PREFERRED_MODEL if PREFERRED_MODEL in models else models[0]
+    """The model offered first: the first the server lists. UNITARES prefers
+    no model; which one suits a host is the operator's call."""
+    return models[0]
 
 
 def update_env_text(text: str, settings: dict[str, str | None]) -> str:
@@ -371,12 +371,12 @@ def main(argv: list[str] | None = None) -> int:
     if models is None:
         print(f"✗ No model server answered at {base}/models.")
         print("  Start an OpenAI-compatible server (Ollama from https://ollama.com is one: start it and pull a model,")
-        print("  for example ollama pull gemma4:latest), or point --base-url at yours, then run this again.")
+        print("  for example ollama pull <model>), or point --base-url at yours, then run this again.")
         print("  Without a model, consult is unavailable and reviews wait for a peer.")
         return 1
     if not models:
         if ollama:
-            print(f"✗ Ollama at {base} has no models. Pull one (for example: ollama pull {PREFERRED_MODEL}) and run this again.")
+            print(f"✗ Ollama at {base} has no models. Pull one (ollama pull <model>) and run this again.")
         else:
             print(f"✗ The server at {base} lists no models. Load one and run this again.")
         return 1

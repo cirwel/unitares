@@ -72,9 +72,10 @@ def test_one_default_model_resolver(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_is_llm_available_uses_the_registry_probe():
+async def test_is_llm_available_uses_the_registry_probe(monkeypatch):
     """Availability comes from the registry's TTL-cached probe — the same
     source call_model's auto-routing consults — not a private models.list ping."""
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
          patch.object(llm_delegation, "_ollama_available", return_value=True) as probe:
         assert await llm_delegation.is_llm_available() is True
@@ -83,6 +84,20 @@ async def test_is_llm_available_uses_the_registry_probe():
     with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
          patch.object(llm_delegation, "_ollama_available", return_value=False):
         assert await llm_delegation.is_llm_available() is False
+
+
+@pytest.mark.asyncio
+async def test_internal_lane_sends_nothing_without_a_named_model(monkeypatch):
+    """No model is built in: with UNITARES_MODEL_ID unset the internal lane is
+    unavailable and its calls return None without creating a client."""
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+    with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
+         patch.object(llm_delegation, "_ollama_available", return_value=True) as probe, \
+         patch.object(llm_delegation, "_get_ollama_client") as client:
+        assert await llm_delegation.is_llm_available() is False
+        assert await llm_delegation.call_local_llm("hello") is None
+    probe.assert_not_called()
+    client.assert_not_called()
 
 
 def test_one_provenance_hash_helper():

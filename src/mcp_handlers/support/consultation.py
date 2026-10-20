@@ -43,7 +43,7 @@ from . import host_availability
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
 from src import inference_config
-from src.local_inference_env import ENDPOINT_NOT_LOCAL
+from src.local_inference_env import ENDPOINT_NOT_LOCAL, MODEL_NOT_CONFIGURED
 from .model_inference import (
     CallModelRequest,
     _provider_timeout_s,
@@ -1011,6 +1011,11 @@ def _recovery_for_upstream(
             "privacy='local' brief was not sent. Use privacy='cloud_allowed', or "
             "have the operator reclassify the endpoint (UNITARES_TRUSTED_NETWORKS, "
             "UNITARES_MODEL_LOCAL_HOSTS or UNITARES_MODEL_PRIVACY)."
+        )
+    if failure.code == MODEL_NOT_CONFIGURED:
+        return (
+            "No local model is named. Have the operator set UNITARES_MODEL_ID "
+            "to a model the endpoint serves (`unitares model`), then retry."
         )
     if failure.code in {
         "INFERENCE_HOST_NOT_FOUND",

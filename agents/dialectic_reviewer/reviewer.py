@@ -39,9 +39,11 @@ from src.identity.lineage_semantics import LineageSpawnReason
 from src.local_inference_env import (
     no_redirect_http_client,
     EndpointNotLocalError,
+    ModelNotConfiguredError,
     default_local_model,
     model_base_url,
     require_local_endpoint,
+    require_local_model,
 )
 
 from .host_list import ListedHost, reviewer_host_plan
@@ -68,7 +70,8 @@ _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 # Same resolution as the server's local lane (src/local_inference_env.py):
 # UNITARES_MODEL_BASE_URL (or an older name from its alias table), the
-# OpenAI-compatible base including /v1.
+# OpenAI-compatible base including /v1, and UNITARES_MODEL_ID ("" when unset:
+# there is no default model, and the local floor then abstains).
 DEFAULT_MODEL = default_local_model()
 OLLAMA_BASE_URL = model_base_url()
 SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
@@ -909,16 +912,17 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
     }
     try:
         text = await call_reviewer_model(prompt)
-    except EndpointNotLocalError as exc:
+    except (EndpointNotLocalError, ModelNotConfiguredError) as exc:
         # The local fallback is the operator's own model by definition. When
-        # the endpoint does not classify local, nothing is sent: the empty text
-        # parses to no judgment, so the reviewer abstains, and the reason
-        # travels in the provenance warnings recorded with the abstention.
+        # the endpoint does not classify local, or no model is named, nothing
+        # is sent: the empty text parses to no judgment, so the reviewer
+        # abstains, and the reason travels in the provenance warnings recorded
+        # with the abstention.
         logger.warning("Dialectic reviewer local backend refused: %s", exc)
         refused = {
             "backend": "ollama",
             "host_id": "ollama:local",
-            "model_requested": DEFAULT_MODEL,
+            "model_requested": DEFAULT_MODEL or None,
             "models_used": [],
             "fallback_from": fallback_from,
             "warnings": [*warnings, f"{exc.code}: {exc}"],
@@ -941,18 +945,20 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
     return ReviewerText(text, floor, FLOOR)
 
 
-async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
+async def call_reviewer_model(prompt: str, model: Optional[str] = None) -> str:
     """Run the local heterogeneous model in THIS process (not via the server's
-    call_model tool, whose 30s timeout is shorter than gemma4's 43–70s budget).
-    Localhost Ollama, OpenAI-compat — no paid API.
+    call_model tool, whose 30s timeout is shorter than a local model's 43–70s
+    budget). The operator's OpenAI-compatible endpoint — no paid API.
 
     Uses the ASYNC client + ``await`` so the ~40-70s model call does not block the
     event loop (this is an ``async def`` driven by ``asyncio.run``)."""
     from openai import AsyncOpenAI  # local import: only the runner process needs it
 
     # privacy='local' by nature: raises EndpointNotLocalError, before any
-    # request, when the endpoint does not classify local.
+    # request, when the endpoint does not classify local, and
+    # ModelNotConfiguredError when no model is named.
     require_local_endpoint(OLLAMA_BASE_URL)
+    model = require_local_model(model or DEFAULT_MODEL)
     client = AsyncOpenAI(
         base_url=OLLAMA_BASE_URL,
         api_key="ollama",

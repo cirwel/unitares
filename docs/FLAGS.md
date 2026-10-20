@@ -97,7 +97,7 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR` | `''` | The operator's ordered reviewer host list, read as a plan | agents/dialectic_reviewer/host_list.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `None (no reader fallback)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
-| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than a local model's 4 | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S` | `''` | read by _dialectic_sweep_cycle_timeout_s() | src/background_tasks.py |
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
@@ -163,7 +163,7 @@ additions merge cleanly. -->
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
-| `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; default gemma4:latest | src/local_inference_env.py |
+| `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
 | `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:372); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:404, src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:372); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:404, src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |

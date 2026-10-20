@@ -41,6 +41,8 @@ from src.local_inference_env import (
     classify_endpoint,
     local_refusal_message,
     model_base_url,
+    MODEL_NOT_CONFIGURED,
+    model_not_configured_message,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -311,6 +313,23 @@ def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
                 "with UNITARES_TRUSTED_NETWORKS (an address), "
                 "UNITARES_MODEL_LOCAL_HOSTS (a hostname) or "
                 "UNITARES_MODEL_PRIVACY=local."
+            ),
+            "related_tools": ["list_inference_hosts"],
+        },
+    )
+
+
+def _model_not_configured_outcome() -> InferenceOutcome:
+    """The refusal for a local-route request when no model is named."""
+    return InferenceOutcome.failed(
+        model_not_configured_message(),
+        code=MODEL_NOT_CONFIGURED,
+        category="system_error",
+        recovery={
+            "action": (
+                "Have the operator set UNITARES_MODEL_ID to a model the configured "
+                "endpoint serves (`unitares model` lists them), or pass model "
+                "explicitly."
             ),
             "related_tools": ["list_inference_hosts"],
         },
@@ -601,6 +620,10 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             category="validation_error",
         )
     
+    # The local route has no built-in model: with none named, nothing is sent.
+    if provider == "ollama" and not model:
+        return _model_not_configured_outcome()
+
     # All HF routes (host id, provider, model prefix, and auto fallback) share
     # the same observed account readiness. Listing a host must not be the only
     # path that respects its cooldown.

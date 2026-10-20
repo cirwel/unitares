@@ -258,20 +258,26 @@ def _static_hosts() -> list[InferenceHost]:
             display_name="Ollama local",
             provider_kind="ollama",
             transport="openai_compatible_http",
+            # Configured and available describe the endpoint. With no model
+            # named, a call must pass one explicitly; models is then empty and
+            # the notes say so.
             configured=True,
             available=_ollama_available(),
             privacy_class="local" if local_route_is_local else "external",
             cost_class="local_free" if local_route_is_local else "unknown",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "generation", "analysis"],
-            models=[ollama_model],
+            models=[ollama_model] if ollama_model else [],
             implementation_status="active",
             # host_id="ollama:local" forces privacy='local', so an endpoint
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
             accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
             notes=(
-                "Local Ollama OpenAI-compatible endpoint. Model names are "
+                "No model is named: set UNITARES_MODEL_ID to a model the "
+                "endpoint serves (`unitares model` lists them)."
+                if not ollama_model
+                else "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
                 if local_route_is_local
                 else "The configured model endpoint classifies external, so "
