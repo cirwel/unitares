@@ -73,6 +73,9 @@ fi
 [ -f "$stack/.env" ] || fail '.env must be a regular file'
 cd "$stack"
 printf 'Installed: %s\nCheckout: %s\n' "$installed" "$stack"
+# Pull first: inside `up`, a failed pull surfaces only as "No such image".
+docker compose pull --quiet \
+    || fail 'Could not pull the release images; check the network and retry'
 # Compose is idempotent: a second run keeps unchanged, running containers.
 # A missing release image is an error, not an implicit source build.
 docker compose up -d --wait --no-build

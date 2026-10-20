@@ -36,6 +36,7 @@ printf '%s\n' "$*" >> "$TEST_DOCKER_LOG"
 case "$*" in
   info) exit "${TEST_DAEMON_RC:-0}" ;;
   inspect*) [ -n "${TEST_OWNER:-}" ] && printf '%s' "$TEST_OWNER"; exit 0 ;;
+  "compose pull"*) exit "${TEST_PULL_RC:-0}" ;;
   *exec*) cat > "$TEST_HEALTH_CODE"; exit "${TEST_HEALTH_RC:-0}" ;;
 esac
 ''',
@@ -109,6 +110,15 @@ def test_foreign_container_refused_before_up(launcher):
     result = launch(TEST_OWNER="/another/checkout")
     assert result.returncode != 0
     assert "belongs to" in result.stderr
+    assert "up -d" not in Path(env["TEST_DOCKER_LOG"]).read_text()
+
+
+def test_pull_failure_stops_before_up(launcher):
+    # Inside `up`, a failed pull surfaced only as "No such image" (seen in CI).
+    _, env, launch = launcher
+    result = launch(TEST_PULL_RC="1")
+    assert result.returncode != 0
+    assert "Could not pull the release images" in result.stderr
     assert "up -d" not in Path(env["TEST_DOCKER_LOG"]).read_text()
 
 
