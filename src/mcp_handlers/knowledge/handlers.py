@@ -3980,7 +3980,13 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _attach_search_synthesis(response, state, discoveries)
 
     writers = list({document.agent_id for document in state.results if document.agent_id})[:10]
-    await _broadcast_knowledge_read(
+    # Sent in the background: the response does not depend on it, and a
+    # stalled dashboard WebSocket can hold a broadcast for 2s per send plus
+    # 2s per close, which no response reserve should have to cover. The
+    # payload (reader identity included) is built here, before returning.
+    from src.background_tasks import create_tracked_task
+
+    create_tracked_task(_broadcast_knowledge_read(
         "search",
         _resolve_reader_agent_id(state.request.arguments),
         payload={
@@ -4001,7 +4007,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
             "writer_agent_ids": writers,
             "filter_agent_id": state.request.agent_id,
         },
-    )
+    ), name="knowledge_read_broadcast")
     return response
 
 

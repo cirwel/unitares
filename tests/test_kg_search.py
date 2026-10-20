@@ -1079,7 +1079,9 @@ class TestSearchKnowledgeGraph:
         assert [row["id"] for row in payload["discoveries"]] == ["wanted"]
         if search_mode == "indexed_filters":
             assert graph.query.call_args.kwargs["agent_id"] == "wanted-author"
-        assert broadcast.await_args.kwargs["payload"]["filter_agent_id"] == "wanted-author"
+        # The search schedules its broadcast in the background, so read the
+        # call, which is recorded when it is scheduled.
+        assert broadcast.call_args.kwargs["payload"]["filter_agent_id"] == "wanted-author"
 
     @pytest.mark.asyncio
     async def test_exclude_agent_labels_drops_matching_rows(self, patch_common):

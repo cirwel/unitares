@@ -440,3 +440,44 @@ async def test_synthesis_timeout_fits_the_remaining_budget(graph):
         - handlers.LOCAL_LLM_WAIT_BUFFER_S
     )
     assert handlers.SEARCH_SYNTHESIS_MIN_TIMEOUT_S <= timeout <= ceiling
+
+
+# --- Nothing after retrieval waits on the dashboard ---------------------------
+#
+# Codex review of 8fb83be12 [P1]: a second pass abandoned near the end of its
+# budget left the response reserve to cover the knowledge_read broadcast,
+# whose WebSocket send and close can each stall for 2s. The search now sends
+# that broadcast in the background.
+
+
+@pytest.mark.asyncio
+async def test_stalled_broadcast_does_not_cost_the_page(graph, small_budget):
+    release = asyncio.Event()
+    sent = []
+
+    async def stalled_broadcast(event_type, **kwargs):
+        sent.append(event_type)
+        await release.wait()
+
+    async def first():
+        return [_node("d-open")]
+
+    async def second():
+        await asyncio.sleep(30)
+        return []
+
+    _two_pass_fts(graph, first, second)
+    try:
+        with patch.object(handlers.broadcaster_instance, "broadcast_event", side_effect=stalled_broadcast):
+            data = await _search_within_handler_timeout({"query": "dormancy"})
+            assert [d["id"] for d in data["discoveries"]] == ["d-open"]
+            assert "did not finish" in data[f"{ARCHIVED_COLD_TIER}_error"]
+            # Still sent, just not waited on.
+            for _ in range(10):
+                if sent:
+                    break
+                await asyncio.sleep(0)
+            assert sent == ["knowledge_read"]
+    finally:
+        release.set()
+        await asyncio.sleep(0)
