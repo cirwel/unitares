@@ -390,3 +390,53 @@ async def test_lean_digest_carries_the_second_pass_report(graph):
     _two_pass_fts(graph, first, second)
     env = await envelope({"query": "dormancy"})
     assert "backend down" in env["state_summary"][f"{ARCHIVED_COLD_TIER}_error"]
+
+
+# --- Synthesis is bounded by the same budget ----------------------------------
+#
+# Codex review of 76c3b8ea6 [P1]: synthesize=true skips synthesis under 3
+# rows, so a second pass that fills a 1-row page to 3 turns on a local LLM
+# call that allowed 30s, and the handler timeout then lost the whole page.
+
+
+def _one_open_two_cold(graph):
+    _fts_only(graph, [
+        _node("d-open"),
+        _node("d-cold-1", status="cold"),
+        _node("d-cold-2", status="cold"),
+    ])
+
+
+@pytest.mark.asyncio
+async def test_synthesis_skipped_when_the_budget_is_spent(graph, small_budget):
+    _one_open_two_cold(graph)
+
+    async def slow_llm(*args, timeout=30.0, **kwargs):
+        await asyncio.sleep(timeout)
+        return None
+
+    with patch("src.mcp_handlers.knowledge.handlers.synthesize_results", side_effect=slow_llm):
+        data = await _search_within_handler_timeout({"query": "dormancy", "synthesize": True})
+
+    assert [d["id"] for d in data["discoveries"]][0] == "d-open"
+    assert data["count"] == 3
+    assert "search budget" in data["_synthesis_note"]
+    assert "synthesis" not in data
+
+
+@pytest.mark.asyncio
+async def test_synthesis_timeout_fits_the_remaining_budget(graph):
+    _one_open_two_cold(graph)
+    synth = AsyncMock(return_value={"text": "insight"})
+
+    with patch("src.mcp_handlers.knowledge.handlers.synthesize_results", synth):
+        data = await _search({"query": "dormancy", "synthesize": True})
+
+    assert data["synthesis"] == {"text": "insight"}
+    timeout = synth.await_args.kwargs["timeout"]
+    ceiling = (
+        handlers.KNOWLEDGE_SEARCH_TIMEOUT_S
+        - handlers.SEARCH_SYNTHESIS_RESERVE_S
+        - handlers.LOCAL_LLM_WAIT_BUFFER_S
+    )
+    assert handlers.SEARCH_SYNTHESIS_MIN_TIMEOUT_S <= timeout <= ceiling

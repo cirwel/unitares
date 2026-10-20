@@ -1052,6 +1052,10 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
     `state_summary.archived_cold_fallback`, the error into
     `state_summary.archived_cold_fallback_error`, and carry
     `retrieval_tier` on each digest row.
+  - With `synthesize=true`, the local-model synthesis call is bounded by the
+    same budget: its timeout is what retrieval left, less 6 seconds, at
+    most 30. With under 2 seconds of that it is skipped and
+    `_synthesis_note` says so; the results are returned either way.
   - `include_archived` and `include_cold` sent as the string `"false"` now
     mean false. They used to be read raw, so `"false"` switched the filter off.
 - **Compatibility:** additive. An explicit `include_archived=false` or

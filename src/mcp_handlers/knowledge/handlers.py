@@ -115,7 +115,7 @@ from src.recall_telemetry import (
     record_recall_event,
 )
 from ..support.coerce import LimitError, parse_limit
-from ..support.llm_delegation import synthesize_results
+from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
@@ -3238,6 +3238,12 @@ ARCHIVED_COLD_RESPONSE_RESERVE_S = 3.0
 # Second passes the handler stopped waiting for, kept referenced until they
 # finish unwinding so the loop does not collect them mid-cancel.
 _ABANDONED_ARCHIVED_COLD_PASSES: set[asyncio.Task] = set()
+# Search synthesis (synthesize=true) is bounded by the same budget: its LLM
+# request timeout is what is left, less this reserve and call_local_llm's
+# wait buffer, capped at the old fixed 30s; under the minimum it is skipped.
+SEARCH_SYNTHESIS_MAX_TIMEOUT_S = 30.0
+SEARCH_SYNTHESIS_RESERVE_S = 1.0
+SEARCH_SYNTHESIS_MIN_TIMEOUT_S = 2.0
 
 
 def _archived_cold_widening(request: _KnowledgeSearchRequest) -> Optional[dict[str, bool]]:
@@ -3891,12 +3897,33 @@ async def _attach_search_synthesis(
     if len(discoveries) < 3:
         response["_synthesis_note"] = "Synthesis skipped: fewer than 3 results"
         return
+    # The LLM call gets what retrieval left of the handler's budget, less a
+    # reserve for the rest of the response. Without this a slow model ran
+    # into the handler timeout and the caller lost the results it had: the
+    # archived/cold second pass makes that likelier, since filling a short
+    # page to 3 rows is what turns synthesis on.
+    llm_timeout = SEARCH_SYNTHESIS_MAX_TIMEOUT_S
+    if state.deadline is not None:
+        llm_timeout = min(
+            llm_timeout,
+            state.deadline
+            - time.monotonic()
+            - SEARCH_SYNTHESIS_RESERVE_S
+            - LOCAL_LLM_WAIT_BUFFER_S,
+        )
+        if llm_timeout < SEARCH_SYNTHESIS_MIN_TIMEOUT_S:
+            response["_synthesis_note"] = (
+                "Synthesis skipped: too little of the "
+                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget left after retrieval"
+            )
+            return
     try:
         synthesis = await synthesize_results(
             discoveries=discoveries,
             query=state.request.query_text,
             max_discoveries=10,
             max_tokens=400,
+            timeout=llm_timeout,
         )
         if synthesis:
             response["synthesis"] = synthesis
