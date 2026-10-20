@@ -74,7 +74,8 @@ fi
 cd "$stack"
 printf 'Installed: %s\nCheckout: %s\n' "$installed" "$stack"
 # Pull first: inside `up`, a failed pull surfaces only as "No such image".
-docker compose pull --quiet \
+# Only missing images: refreshing the floating redis tag would restart Redis.
+docker compose pull --policy missing --quiet \
     || fail 'Could not pull the release images; check the network and retry'
 # Compose is idempotent: a second run keeps unchanged, running containers.
 # A missing release image is an error, not an implicit source build.

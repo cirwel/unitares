@@ -76,7 +76,10 @@ def test_clone_repeat_and_preserve_config(launcher):
     assert second.returncode == 0, second.stderr
     assert "Installed: v3.4.0" in second.stdout
     assert (stack / ".env").read_text() == "GOVERNANCE_HOST_PORT=18767\n"
-    assert "up -d --wait --no-build" in Path(env["TEST_DOCKER_LOG"]).read_text()
+    calls = Path(env["TEST_DOCKER_LOG"]).read_text()
+    assert "up -d --wait --no-build" in calls
+    # A repeat run must not refresh floating tags (redis:8-alpine) and restart them.
+    assert "compose pull --policy missing" in calls
     assert not Path(str(stack) + ".launch-lock").exists()
 
 
