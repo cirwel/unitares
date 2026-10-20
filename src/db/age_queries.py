@@ -326,16 +326,25 @@ def query_cross_agent_knowledge_flow(
     """
     Build Cypher query to find cross-agent knowledge flow.
 
+    One row per (builder, source) agent pair: ``builder`` authored a discovery
+    whose RELATED_TO edge points at a discovery ``source`` authored. The store
+    path writes RELATED_TO from the new discovery to the ones it cites, so the
+    direction reads "builder built on source". ``links`` counts those edges.
+
+    graph_query maps one return expression to its single result column, so the
+    row is a map literal; a bare multi-column RETURN fails on column arity.
+
     Returns:
         (cypher_query, params_dict)
     """
     safe_limit = max(1, int(limit))
 
     cypher = f"""
-        MATCH (a1:Agent)-[:AUTHORED]->(d1:Discovery)-[:RELATED_TO]-(d2:Discovery)<-[:AUTHORED]-(a2:Agent)
+        MATCH (a1:Agent)-[:AUTHORED]->(d1:Discovery)-[:RELATED_TO]->(d2:Discovery)<-[:AUTHORED]-(a2:Agent)
         WHERE a1.id <> a2.id
-        RETURN a1.id AS from_agent, a2.id AS to_agent, count(*) AS shared_insights
-        ORDER BY shared_insights DESC
+        WITH a1.id AS builder, a2.id AS source, count(*) AS links
+        RETURN {{builder: builder, source: source, links: links}}
+        ORDER BY links DESC
         LIMIT {safe_limit}
     """
 
