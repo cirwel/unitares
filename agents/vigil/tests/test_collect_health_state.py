@@ -65,14 +65,14 @@ def test_lumen_result_detail_merges_into_state():
     lumen_result = CheckResult(
         ok=True,
         summary="Lumen: ok (8ms)",
-        detail={"lumen_last_ok_url": "http://192.168.1.165:8766/health"},
+        detail={"lumen_last_ok_url": "http://192.0.2.10:8766/health"},
     )
 
     state = _collect_health_state(
         [(gov_check, gov_result), (lumen_check, lumen_result)],
         prev_state={},
     )
-    assert state["lumen_last_ok_url"] == "http://192.168.1.165:8766/health"
+    assert state["lumen_last_ok_url"] == "http://192.0.2.10:8766/health"
     assert state["lumen_healthy"] is True
     assert state["lumen_up_cycles"] == 1
 

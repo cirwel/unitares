@@ -185,7 +185,7 @@ class GovernanceEventDetector:
         # elapsed time — only when the underlying data changes. This is the
         # correct dedup for a frozen condition: an idle agent's one-time
         # historical risk_spike must not re-fire every sweep once the 30-min
-        # window elapses (see project_stale-history-riskspike-refire). Bounded
+        # window elapses, or it re-fires as fresh noise forever. Bounded
         # by (#agents x #condition types) ever seen; capped below.
         self._change_tokens: Dict[str, str] = {}
         self._max_change_tokens: int = 5000

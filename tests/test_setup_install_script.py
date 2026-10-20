@@ -29,6 +29,13 @@ def setup_mod():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_secrets_env(monkeypatch):
+    # run_pipeline resolves the secrets file from os.environ; an exported
+    # UNITARES_SECRETS_ENV would point --apply at the developer's real file.
+    monkeypatch.delenv("UNITARES_SECRETS_ENV", raising=False)
+
+
 def test_module_loads_and_exposes_main(setup_mod):
     assert callable(setup_mod.main)
     assert setup_mod.SCHEMA_VERSION == 1

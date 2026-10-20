@@ -25,8 +25,10 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
-# Every PR push runs ./scripts/dev/review.sh and joins its result, so the
-# working agent can act on findings before leaving. SHIP_NO_REVIEW=1 explicitly
+# Every PR push runs ./scripts/dev/review.sh and joins its result. Choose the
+# provider with UNITARES_REVIEWER=claude (or codex/antigravity) for this delivery.
+# Without a choice it reads existing evidence but starts no new review.
+# SHIP_NO_REVIEW=1 explicitly
 # defers review. Ordinary changes may proceed with an unreviewed note;
 # sensitive paths still require their review coverage before readiness.
 #
@@ -483,13 +485,14 @@ case "$DELIVERY" in
                     exit 3
                 fi
                 if [[ "$review_rc" == "2" ]]; then
-                    echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
+                    echo "[ship] WARNING: delivered but UNREVIEWED — see the review result above."
+                    echo "[ship] choose with UNITARES_REVIEWER for shipping, or review.sh --reviewer PROVIDER."
                     echo "[ship] note this in the PR body; ordinary changes may proceed after validation."
                     echo "[ship] request the shared host with review-requested; sensitive paths still require review coverage."
                     exit 2
                 fi
                 echo "[ship] branch pushed and PR opened; review needs author follow-up."
-                echo "[ship] address the result above, then run ./scripts/dev/review.sh before marking ready."
+                echo "[ship] address the result above, then run ./scripts/dev/review.sh --reviewer PROVIDER before marking ready."
                 exit 1
             fi
         else

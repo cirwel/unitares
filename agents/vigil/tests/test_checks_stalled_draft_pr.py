@@ -43,7 +43,7 @@ def _iso(epoch: float) -> str:
     return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _pr(number: int, updated_h: float = 1.0, repo: str = "cirwel/unitares") -> dict:
+def _pr(number: int, updated_h: float = 1.0, repo: str = "acmeco/unitares") -> dict:
     return {
         "number": number,
         "repository": {"nameWithOwner": repo},
@@ -65,7 +65,7 @@ def _run(name: str, conclusion: str, completed_h: float = 0.0) -> dict:
 
 def _stalled(number: int, red_hours: float, failing=("smoke",)) -> dict:
     return {
-        "repo": "cirwel/unitares",
+        "repo": "acmeco/unitares",
         "number": number,
         "red_hours": red_hours,
         "failing": list(failing),
@@ -99,7 +99,7 @@ async def _gather(monkeypatch, fake_gh, **kw):
         timeout=5.0, budget=25.0, concurrency=4,
     )
     params.update(kw)
-    return await mod.gather("cirwel", **params)
+    return await mod.gather("acmeco", **params)
 
 
 # --- identity / registration -------------------------------------------------
@@ -210,7 +210,7 @@ def test_search_is_ordered_oldest_first():
     would drop an arbitrary subset — possibly the very PR being hunted."""
     from agents.vigil.checks.stalled_draft_pr import _search_args
 
-    args = _search_args("cirwel", 60)
+    args = _search_args("acmeco", 60)
     assert "--sort" in args and args[args.index("--sort") + 1] == "updated"
     assert "--order" in args and args[args.index("--order") + 1] == "asc"
 
@@ -306,7 +306,7 @@ def test_assess_flags_stalled_pr():
     assert r.ok is False
     assert r.severity == "warning"
     assert r.fingerprint_key == "stalled_draft_pr"
-    assert "cirwel/unitares#1511" in r.summary
+    assert "acmeco/unitares#1511" in r.summary
     assert "23h" in r.summary and "smoke" in r.summary
     assert r.detail["stalled_pr_count"] == 1
 

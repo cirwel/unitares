@@ -36,7 +36,7 @@ def signing_key():
 
 def _mint(signing_key, **overrides):
     base = dict(
-        uuid="dadfe388-2655-4682-b99d-9421adefa24a",
+        uuid="89f6f085-e669-52b9-9f4c-82dc5af9b115",
         structured_agent_id="Claude_20260623",
         role_family="ephemeral",
         substrate_class=None,
@@ -66,7 +66,7 @@ def test_round_trip_with_signing_key_public_half(signing_key):
         token, public_key=signing_key.public_key(), now=T0 + 10
     )
     assert claims is not None
-    assert claims["uuid"] == "dadfe388-2655-4682-b99d-9421adefa24a"
+    assert claims["uuid"] == "89f6f085-e669-52b9-9f4c-82dc5af9b115"
     assert claims["structured_agent_id"] == "Claude_20260623"
     assert claims["trust_tier"] == 1
     assert claims["observation_count"] == 5

@@ -97,7 +97,7 @@ jobs:
             fs.writeFileSync(`${process.env.RUNNER_TEMP}/pr_body.txt`, pr.body || '');
 
       # The file guard checks committed content; a PR description is not a file,
-      # so lint it separately for operator-local paths and chat-session register.
+      # so lint it separately for machine-absolute home paths and chat-session register.
       # Body read from a file (never inlined) to avoid script injection.
       - name: Lint PR body for local paths and chat register
         if: github.event_name == 'pull_request'
@@ -106,17 +106,23 @@ jobs:
           # Escape hatch for PRs that legitimately discuss these patterns (this
           # guard, register cleanups, meta-docs): add the HTML comment
           # <!-- scope-guard: allow-register --> to the PR body. Rare by design.
-          # It exempts the REGISTER check only; the operator-local path check
-          # always runs.
+          # It exempts the REGISTER check only; the home-path check always runs.
           allow_register=0
           if printf '%s' "$PR_BODY" | grep -q 'scope-guard: allow-register'; then
             echo "PR body register: allow-register marker present — register check skipped."
             allow_register=1
           fi
           failures=0
-          bad_paths=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel' || true)
+          # Same patterns as scripts/dev/check-repo-scope.sh Rule 8 (held
+          # identical by tests/test_doc_contract_ci_wiring.py): any /Users/<name>
+          # home path except a placeholder name such as /Users/you. Matched
+          # case-insensitively here, as the old PR-body check was: macOS paths
+          # are case-insensitive, so /users/<name>/... still names a real home.
+          HOME_PATH_RE='/Users/[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9_-])?'
+          HOME_PLACEHOLDER_RE='^/Users/([A-Za-z0-9]|you|me|user|username|name|alice|bob|example|test|testuser|foo|runner|operator|op|someone|Shared)$'
+          bad_paths=$(printf '%s\n' "$PR_BODY" | grep -oiE "$HOME_PATH_RE" | grep -viE "$HOME_PLACEHOLDER_RE" | sort -u || true)
           if [ -n "$bad_paths" ]; then
-            echo "::error::PR body leaks an operator-local path (/Users/cirwel). Use repo-relative paths, environment variables, or neutral checkout wording."
+            echo "::error::PR body leaks a machine-absolute home path. Use repo-relative paths, environment variables, or a placeholder such as /Users/you."
             printf '%s\n' "$bad_paths"
             failures=1
           fi

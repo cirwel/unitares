@@ -9,7 +9,7 @@ recovery diagnostics. Install-specific failures live in the
 
 For questions about interpreting EISV, warmup, calibration, gaming limits, or
 how much evidence the current signal supports, use
-[Reading the signals](05-reading-the-signals.md) and the
+[Reading the record](05-reading-the-signals.md#55-the-eisv-instrument) and the
 [Reviewer Guide](../REVIEWER_GUIDE.md). This chapter remains as a stable manual
 route without restating those claims.
 

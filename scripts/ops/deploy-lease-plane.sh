@@ -26,7 +26,15 @@ set -euo pipefail
 # required order. The separate --dialectic-writers-quiesced flag is an
 # operator attestation, not something this wrapper may infer from DDL consent.
 # Run this script again without either flag to deploy code.
-APPLY_MIGRATIONS="${UNITARES_DEPLOY_APPLY_MIGRATIONS:-0}"
+#
+# UNITARES_DEPLOY_APPLY_MIGRATIONS=1 is that DDL consent given to a whole
+# deploy-apply.sh sweep, which runs every service script with no arguments;
+# deploy-mcp.sh reads it as "apply a schema gap before restarting". Here a gap
+# can be applied only with the attestation, so the variable selects the
+# schema-only operation only together with --dialectic-writers-quiesced. Alone
+# it leaves this a code deploy, and the migration preflight below still refuses
+# to restart over a gap. Read as the flag, it refused every sweep reaching here.
+APPLY_MIGRATIONS=0
 DIALECTIC_WRITERS_QUIESCED=0
 for arg in "$@"; do
   case "$arg" in
@@ -35,6 +43,9 @@ for arg in "$@"; do
     *) echo "[deploy] unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
+if [[ "${UNITARES_DEPLOY_APPLY_MIGRATIONS:-0}" == 1 && "$DIALECTIC_WRITERS_QUIESCED" == 1 ]]; then
+  APPLY_MIGRATIONS=1
+fi
 
 if [[ "$DIALECTIC_WRITERS_QUIESCED" == 1 && "$APPLY_MIGRATIONS" != 1 ]]; then
   echo "[deploy] REFUSING: --dialectic-writers-quiesced is valid only with --apply-migrations." >&2
@@ -257,6 +268,9 @@ if [[ "$migration_check_rc" != 0 ]]; then
     echo "[deploy] REFUSING: live DB is not in sync with the migration manifest in the code about to deploy." >&2
     echo "[deploy] Rolling the worktree back to ${PREV:0:8} and NOT restarting." >&2
     deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
+    if [[ "${UNITARES_DEPLOY_APPLY_MIGRATIONS:-0}" == 1 ]]; then
+      echo "[deploy] UNITARES_DEPLOY_APPLY_MIGRATIONS=1 does not apply schema here without the writer attestation." >&2
+    fi
     echo "[deploy] Stop/unload both writers, then re-run $0 --apply-migrations --dialectic-writers-quiesced." >&2
     exit 1
   fi

@@ -982,6 +982,97 @@ adversarial review after it merged.
   `ConsultResult` gains `council_id`, `answered`, `asked` and `members`.
   Before this release the SDK dropped every council answer.
 
+## 1.53.0 (2026-10-18)
+
+`delegate_inference` answers inside a ~60s per-tool client timeout by
+default (#2285).
+
+- **Affected:**
+  - `timeout_s` defaults to 45 (was 240). Many MCP clients give one tool
+    call about 60s; the client in #2285 did. A client that gives up first
+    sees a bare transport error, with no `orchestrator_execution_id` to
+    reconcile the child by. 45s leaves about 15s for host resolution, the
+    spawn request and the response, so by default the structured
+    `DELEGATED_INFERENCE_TIMEOUT` reaches the caller.
+  - The tool's own work ends within `timeout_s` + 10s. That is one
+    wall-clock deadline: host resolution, the codex lane's sandbox probe, the
+    spawn request, each await and the bookkeeping after the answer (provider-cooldown writes, Energy
+    accounting) are clipped to the time left before it rather than adding
+    their own timeouts on top. Bookkeeping that cannot finish by then
+    completes in the background, and the response names it in
+    `accounting_deferred` (`inference.accounting_deferred` on success,
+    alongside the complete answer and execution id; the failure details on
+    a failure). The field is absent when nothing was deferred. A deferred
+    provider-cooldown write still reports `provider_unavailable` with its
+    `reason` and `cooldown_recorded: false`, so `consult` fails over on a
+    usage-limit or logged-out answer whether or not the record finished.
+    An orchestrator that accepts the child and then stalls the await now
+    yields `DELEGATED_INFERENCE_TIMEOUT` with the execution id by that
+    deadline (it used to wait out the window plus 15s of HTTP grace, and an
+    await that timed out in transit reported `DELEGATED_INFERENCE_FAILED`).
+    The default call ends by 55s, 5s inside a 60s client budget.
+  - Failures that may leave a child running add `timeout_s` (the window
+    this call waited) and `orchestrator_backstop_s` (`timeout_s` + 30, when
+    the orchestrator stops the child itself). The recovery action names
+    that deadline, and on a timeout says a retry may raise `timeout_s` only
+    under the client's own per-tool timeout.
+  - The `timeout_s` description and the tool description say all of this.
+- **Compatibility:** every call 1.52.0 accepted is still accepted, and an
+  explicit `timeout_s` up to 420 is honoured unchanged, for clients that
+  wait longer (the Python SDK sends its own `timeout_s` and sizes its
+  transport timeout to it). A caller that omitted `timeout_s` and relied on
+  240s now waits 45s; on a slow child it gets the structured timeout with
+  the execution id instead of an answer.
+- **Schema digests:** `delegate_inference` moves; `surface_sha256` moves
+  with it.
+- **Client action:** none for callers on a ~60s client. A caller whose
+  client waits longer and wants the old window passes `timeout_s`
+  explicitly. `consult(effort='thorough')` keeps its own 240s attempt and is
+  unchanged.
+
+## 1.54.0 (2026-10-19)
+
+Default search now looks at archived and cold rows when it would otherwise
+come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
+
+- **Affected:**
+  - `search_shared_memory` / `knowledge(action='search')` with a query: when
+    the first pass finds fewer than 3 active rows (fewer than `limit`, if
+    `limit` is smaller), the same retrieval runs again with archived and cold
+    rows included. Rows the first pass hid by status are appended after every
+    active row, up to `limit`. Each carries
+    `retrieval_tier: "archived_cold_fallback"`, and their reported similarity,
+    rerank and RRF scores are multiplied by 0.5.
+  - The response gains `archived_cold_fallback` (`used`, `primary_count`,
+    `added`, `statuses_searched`, `threshold`, `score_penalty`, `note`) when
+    the second pass added rows, or `archived_cold_fallback_error` when it
+    did not: it failed, it ran past what the first pass left of the
+    search's 15-second budget (less 3 seconds kept for building the
+    response), or it was skipped because that remainder was shorter than
+    the first pass took. The first page is returned in every case. The
+    lean and compact tiers lift the counts into
+    `state_summary.archived_cold_fallback`, the error into
+    `state_summary.archived_cold_fallback_error`, and carry
+    `retrieval_tier` on each digest row.
+  - With `synthesize=true`, the local-model synthesis call is bounded by the
+    same budget: its timeout is what retrieval left, less 6 seconds, at
+    most 30. With under 2 seconds of that it is skipped and
+    `_synthesis_note` says so; the results are returned either way.
+  - `include_archived` and `include_cold` sent as the string `"false"` now
+    mean false. They used to be read raw, so `"false"` switched the filter off.
+- **Compatibility:** additive. An explicit `include_archived=false` or
+  `include_cold=false` keeps that status out of the second pass; both false
+  turns it off. Queryless listings (tag, type, severity or agent polls) and
+  searches with an explicit `status` filter are unchanged, so a poller is
+  never handed an old row as new. A search that already returns 3 or more
+  active rows makes the same backend calls as before; a shorter one makes
+  the first pass's calls up to twice.
+- **Schema digests:** none move. `search_shared_memory`'s tool description
+  now says a short query search also reads archived and cold rows; the tool
+  description is outside every input digest.
+- **Client action:** none. A client that treats every result as current
+  should check `retrieval_tier` or `status` before relying on a row.
+
 ## 2.0.0 (2026-10-19)
 
 Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default. Workspace diagnostics check the server installation without discovering desktop clients or assuming a development checkout.

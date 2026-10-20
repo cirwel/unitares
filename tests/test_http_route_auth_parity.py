@@ -164,7 +164,9 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # 54 -> 53: /v1/sentinel/adjudication-queue removed with operator and model
 # adjudication (2026-09-27). Its two POST siblings were never counted here.
 # 53 -> 48: five reference extension GETs now come from deployment manifests.
-EXPECTED_GET_ROUTES = 48
+# 48 -> 49: /v1/knowledge/flow (cross-agent knowledge flow from the AGE graph,
+# for the Discoveries panel). Gated.
+EXPECTED_GET_ROUTES = 49
 
 
 def test_route_registry_is_readable():

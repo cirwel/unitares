@@ -32,8 +32,6 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
   verdict as anima_broker's client.
   """
 
-  require Logger
-
   @spec check(map()) :: :allow | {:blocked, String.t()} | {:error, term()}
   def check(%{proposer_agent_uuid: uuid}) when not is_binary(uuid) or uuid == "" do
     # No attributed proposer → governance cannot judge → fail closed. An

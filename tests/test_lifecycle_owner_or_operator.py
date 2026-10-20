@@ -13,6 +13,7 @@ caller, and a self-claimed ``operator`` label or tag all stay refused.
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -105,11 +106,15 @@ async def test_unbound_caller_is_refused(action, server):
 
 
 @pytest.mark.asyncio
-async def test_token_not_on_the_allowlist_is_refused(action, server, monkeypatch):
+async def test_token_not_on_the_allowlist_is_refused(action, server):
     """Presenting a token is not enough: it has to match UNITARES_OPERATOR_TOKENS."""
     name, call, meta, status, _ = action
     with bound_caller(OTHER), operator_caller("some-other-token"):
-        monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", TEST_OPERATOR_TOKEN)
+        # Plain assignment, not monkeypatch: operator_caller owns this variable
+        # inside the block and restores its prior state on exit. A monkeypatch
+        # here recorded operator_caller's value as the "prior" one and put it
+        # back at teardown, after the block had already cleaned up.
+        os.environ["UNITARES_OPERATOR_TOKENS"] = TEST_OPERATOR_TOKEN
         body = _body(await call(server))
     _assert_refused(body, meta, status, OTHER)
 

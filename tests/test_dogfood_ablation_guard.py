@@ -59,7 +59,7 @@ def test_identity_neutrality_alerts_on_laundered_server_identity():
         "status": "🟡 moderate",
         "agent_id": "Chronicler",
         "display_name": "Chronicler",
-        "agent_uuid": "deb879b6-4ff8-4dee-81ce-0683f4563dc5",
+        "agent_uuid": "2f6f8516-647c-5cd8-b98b-0f20462adad4",
         "agent_signature": {"uuid": None},
     }
 
@@ -203,3 +203,14 @@ def test_render_alert_report_includes_signal_evidence_next_when_alerting():
     assert "Signal: no-session get_governance_metrics is not identity-neutral" in report
     assert "- no_session_metrics={...}" in report
     assert "Next: inspect identity proof-origin" in report
+
+
+def test_default_python_keeps_legacy_interpreter_when_present(tmp_path):
+    import sys
+
+    from scripts.diagnostics.dogfood_ablation_guard import default_python
+
+    legacy = tmp_path / "python3"
+    legacy.write_text("")
+    assert default_python(str(legacy)) == str(legacy)
+    assert default_python(str(tmp_path / "missing" / "python3")) == sys.executable

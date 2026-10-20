@@ -20,7 +20,7 @@ async def test_session_like_no_substrate_tag_falls_through_without_db():
     # Sentinel that will blow up if verify_substrate_earned is called
     with patch.object(trust_tier_routing, "__name__", trust_tier_routing.__name__):
         result = await trust_tier_routing.resolve_trust_tier(
-            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            "0e6d210c-5828-5513-aafa-b325829beba3",
             metadata,
             prefetched_tags=["ephemeral"],
             prefetched_label="test-session",
@@ -51,7 +51,7 @@ async def test_session_like_no_tags_and_no_substrate_falls_through_via_db():
 
     with patch("src.identity.substrate.verify_substrate_earned", _not_earned):
         result = await trust_tier_routing.resolve_trust_tier(
-            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            "0e6d210c-5828-5513-aafa-b325829beba3",
             metadata,
         )
     assert result["tier"] == 1
@@ -117,7 +117,7 @@ async def test_substrate_tag_present_but_predicate_fails_falls_through():
 
     with patch("src.identity.substrate.evaluate_substrate_earned", _not_earned):
         result = await trust_tier_routing.resolve_trust_tier(
-            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            "0e6d210c-5828-5513-aafa-b325829beba3",
             metadata,
             prefetched_tags=["persistent"],
             prefetched_label="Watcher",
@@ -137,7 +137,7 @@ async def test_substrate_check_exception_falls_through():
 
     with patch("src.identity.substrate.verify_substrate_earned", _boom):
         result = await trust_tier_routing.resolve_trust_tier(
-            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            "0e6d210c-5828-5513-aafa-b325829beba3",
             metadata,
         )
     assert result["tier"] == 1  # from compute_trust_tier, not a crash
@@ -178,7 +178,7 @@ async def test_substrate_check_exception_preserves_stored_tier():
 
     with patch("src.identity.substrate.verify_substrate_earned", _boom):
         result = await trust_tier_routing.resolve_trust_tier(
-            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            "0e6d210c-5828-5513-aafa-b325829beba3",
             metadata,
         )
 
@@ -200,7 +200,7 @@ async def test_substrate_check_exception_is_visible_not_debug_silent():
     with patch("src.identity.substrate.verify_substrate_earned", _boom):
         with patch.object(trust_tier_routing.logger, "warning") as warn:
             await trust_tier_routing.resolve_trust_tier(
-                "7bf970d4-5713-4184-a6f8-58e798275f3f",
+                "0e6d210c-5828-5513-aafa-b325829beba3",
                 metadata,
             )
     assert warn.call_count == 1, "no-stored-tier fallthrough must be visible"
@@ -208,7 +208,7 @@ async def test_substrate_check_exception_is_visible_not_debug_silent():
     with patch("src.identity.substrate.verify_substrate_earned", _boom):
         with patch.object(trust_tier_routing.logger, "warning") as warn:
             await trust_tier_routing.resolve_trust_tier(
-                "7bf970d4-5713-4184-a6f8-58e798275f3f",
+                "0e6d210c-5828-5513-aafa-b325829beba3",
                 {"trust_tier": {"tier": 3, "source": "substrate_earned"}},
             )
     assert warn.call_count == 1, "preserve branch must be visible"

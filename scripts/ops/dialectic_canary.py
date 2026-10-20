@@ -257,6 +257,13 @@ def review_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw = payload.get("raw_governance")
     if isinstance(raw, dict) and ("session_id" in raw or "error" in raw):
         return raw
+    # A routine request_review ack (the review opened and waits on its
+    # reviewer) omits raw_governance (#2443). Its session_id, phase,
+    # whose_move, one_call_review and orchestrated_review are lifted into
+    # state_summary, so read them there; top-level success stays authoritative.
+    summary = payload.get("state_summary")
+    if isinstance(summary, dict) and "session_id" in summary:
+        return {**summary, "success": payload.get("success")}
     return payload
 
 

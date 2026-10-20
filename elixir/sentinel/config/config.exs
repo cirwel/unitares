@@ -10,9 +10,9 @@ bool_env = fn name, default ->
 
     raw ->
       # Total for exactly the reason `int_env` below is, and the argument is not
-      # weaker here — it is stronger. `scripts/start.sh` sources
-      # `~/.config/cirwel/secrets.env` and then exports all NINE of these knobs from
-      # `${VAR:-default}`, so both the launchd plist and secrets.env can set them;
+      # weaker here — it is stronger. `scripts/start.sh` sources the secrets
+      # env file explicitly named by `$UNITARES_SECRETS_ENV` and then exports all
+      # NINE of these knobs from `${VAR:-default}`, so both the launchd plist and secrets.env can set them;
       # config.exs is evaluated on every `mix run --no-halt`, so a raise here
       # exits non-zero and hands launchd (`KeepAlive=true`) a crash-looping
       # resident. `UNITARES_SENTINEL_EMIT_FINDINGS=y` is a knob an operator

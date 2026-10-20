@@ -1556,7 +1556,7 @@ def grounding_shadow_enabled() -> bool:
     persist/response stages, records the per-dimension divergence via the
     'grounding_shadow' audit event, then reverts the live metrics unless
     grounding_apply_enabled(). Lets the fleet-wide metric shift be measured
-    before activation — see [[project_logprob-entropy-grounding]].
+    before activation, so grounding is not switched on blind.
     """
     return os.getenv("UNITARES_GROUNDING_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
 

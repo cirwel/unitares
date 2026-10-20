@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -23,26 +24,46 @@ def _coverage_floor(text: str) -> int:
     return int(match.group(1))
 
 
-def _ci_shard(path: Path) -> str | None:
-    relative = path.relative_to(PROJECT_ROOT).as_posix()
+def _assert_shard_partition(workflow: dict, root: Path) -> None:
+    """Execute CI's selector: a second Python routing map can drift from Bash."""
+    job = workflow["jobs"]["test_shard"]
+    run = next(
+        step["run"] for step in job["steps"]
+        if 'case "${{ matrix.shard }}" in' in step.get("run", "")
+    )
+    selector, separator, _ = run.partition("\ncovargs=()")
+    assert separator, "cannot isolate the workflow's target selection"
+    selector = selector.replace("${{ matrix.shard }}", "$CI_SHARD")
+    selected: Counter[Path] = Counter()
+    for shard in job["strategy"]["matrix"]["shard"]:
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c",
+             selector + '\nprintf \'%s\\0\' "${targets[@]}"'],
+            cwd=root,
+            env={**os.environ, "CI_SHARD": shard},
+            capture_output=True,
+            check=True,
+        )
+        targets = [root / path.decode() for path in result.stdout.split(b"\0") if path]
+        assert targets, f"empty shard: {shard}"
+        for target in targets:
+            assert target.exists(), f"unmatched shard target: {target}"
+            files = target.rglob("*.py") if target.is_dir() else [target]
+            selected.update(path for path in files if _is_test_file(path))
+    expected = {
+        path for directory in (root / "tests", root / "agents")
+        for path in directory.rglob("*.py") if _is_test_file(path)
+    }
+    missing = expected - selected.keys()
+    duplicate = {path: count for path, count in selected.items() if count != 1}
+    extra = selected.keys() - expected
+    assert not (missing or duplicate or extra), (
+        f"invalid shard partition: missing={missing}, duplicate={duplicate}, extra={extra}"
+    )
 
-    if relative.startswith("agents/") or relative.count("/") > 1:
-        return "tests-u-z-and-agents"
-    if relative == "tests/smoke_test.py":
-        return "tests-u-z-and-agents"
-    if not relative.startswith("tests/test_"):
-        return None
 
-    first_letter = path.name.removeprefix("test_")[:1].lower()
-    if "a" <= first_letter <= "e":
-        return "tests-a-e"
-    if "f" <= first_letter <= "m":
-        return "tests-f-m"
-    if "n" <= first_letter <= "t":
-        return "tests-n-t"
-    if "u" <= first_letter <= "z":
-        return "tests-u-z-and-agents"
-    return None
+def _is_test_file(path: Path) -> bool:
+    return path.name.startswith("test_") or path.name.endswith("_test.py")
 
 
 def test_github_full_test_jobs_cover_every_test_file() -> None:
@@ -54,29 +75,13 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "needs: smoke" not in shard_job
     assert "timeout-minutes: 20" in shard_job
     assert (
-        "shard: [tests-a-e, tests-f-m, tests-n-t, tests-u-z-and-agents]" in shard_job
-    )
-    assert "targets=(tests/test_[a-e]*.py)" in shard_job
-    assert "targets=(tests/test_[f-m]*.py)" in shard_job
-    assert "targets=(tests/test_[n-t]*.py)" in shard_job
-    assert (
-        "targets=(tests/test_[u-z]*.py agents/ tests/*/ tests/smoke_test.py)"
-        in shard_job
+        "shard: [tests-a-d, tests-e-k, tests-l-r, tests-s-z-and-agents]" in shard_job
     )
     assert '--health-cmd "pg_isready -U postgres"' in shard_job
     assert 'python -m pytest "${targets[@]}" -q -ra' in shard_job
     assert "--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents" in shard_job
 
-    test_files = [
-        path
-        for root in (PROJECT_ROOT / "tests", PROJECT_ROOT / "agents")
-        for path in root.rglob("*.py")
-        if path.name.startswith("test_") or path.name.endswith("_test.py")
-    ]
-    unassigned = [
-        path.relative_to(PROJECT_ROOT) for path in test_files if not _ci_shard(path)
-    ]
-    assert not unassigned, f"pytest files missing from CI shards: {unassigned}"
+    _assert_shard_partition(yaml.safe_load(workflow), PROJECT_ROOT)
 
     assert "name: test (3.12)" in workflow
     assert "needs: [test_shard, macos-platform]" in workflow
@@ -85,6 +90,33 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "python -m coverage combine coverage-data" in workflow
     assert "cancel-in-progress: true" in workflow
     assert _coverage_floor(workflow) >= MIN_COVERAGE_FLOOR
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("test_[a-d]*.py", "test_[a-c]*.py"),  # drop d
+        ("test_[e-k]*.py", "test_[d-k]*.py"),  # repeat d
+        (" agents/ tests/*/", " agents/"),  # drop nested tests
+        (" agents/ tests/*/", " tests/*/"),  # drop agents
+        (" tests/smoke_test.py", ""),
+    ],
+)
+def test_shard_partition_rejects_omissions_and_overlap(tmp_path, old, new):
+    # Include every letter and both recursive roots, independent of which
+    # files happen to exist today. The same executable selector checks both.
+    files = [f"tests/test_{letter}.py" for letter in "abcdefghijklmnopqrstuvwxyz"]
+    files += ["tests/nested/test_example.py", "agents/example/example_test.py",
+              "tests/smoke_test.py"]
+    for relative in files:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    text = (PROJECT_ROOT / ".github/workflows/tests.yml").read_text()
+    _assert_shard_partition(yaml.safe_load(text), tmp_path)
+    assert old in text
+    with pytest.raises(AssertionError, match="invalid shard partition"):
+        _assert_shard_partition(yaml.safe_load(text.replace(old, new)), tmp_path)
 
 
 def test_local_test_entrypoints_keep_realistic_coverage_floor() -> None:
@@ -206,7 +238,7 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
         for version in matrix["python-version"]
     }
     assert legs_by_version == {
-        floor: {"tests-a-e", "tests-f-m", "tests-n-t", "tests-u-z-and-agents"}
+        floor: {"tests-a-d", "tests-e-k", "tests-l-r", "tests-s-z-and-agents"}
     }
     expected_legs = len(expanded)
     assert expected_legs == 4
@@ -228,7 +260,7 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
 
 _SUCCESSFUL_SHARDS = "".join(
     f"success\ttest shard (3.14, {shard})\n"
-    for shard in ("tests-a-e", "tests-f-m", "tests-n-t", "tests-u-z-and-agents")
+    for shard in ("tests-a-d", "tests-e-k", "tests-l-r", "tests-s-z-and-agents")
 )
 _MISSING_SHARD = _SUCCESSFUL_SHARDS.rsplit("success", 1)[0]
 _FAILED_SHARD = _SUCCESSFUL_SHARDS.replace("success", "failure", 1)

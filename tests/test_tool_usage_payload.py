@@ -29,7 +29,7 @@ from src.services.tool_usage_recorder import (
     resolve_audit_agent_id,
 )
 
-AGENT_UUID = "7750bf80-20ad-4108-a952-5271b73845b8"
+AGENT_UUID = "660ba42a-baca-501c-ab2a-110f348bab92"
 
 
 def _consume_coro(coro, name=None):

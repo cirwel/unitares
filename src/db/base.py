@@ -434,6 +434,15 @@ class DatabaseBackend(ABC):
         """Check if graph queries are available."""
         return False
 
+    async def graph_status(self) -> str:
+        """Classify graph availability: ``available``, ``absent`` or ``error``.
+
+        Default derives it from ``graph_available()``: a backend without graph
+        support reports ``absent``. The PostgreSQL backend overrides this to
+        tell a missing AGE extension from a probe that failed.
+        """
+        return "available" if await self.graph_available() else "absent"
+
     # =========================================================================
     # TOOL USAGE OPERATIONS
     # =========================================================================

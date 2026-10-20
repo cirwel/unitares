@@ -20,13 +20,13 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "77c2d531f71796be4323a3c41a28d0619aa3d5f2c135031804255cf74cdf42b6",
+  "surface_sha256": "15de4e7008ac5e8d03ce38af23805147d1bfd3140d6588576f6c824a522e215c",
   "capabilities": [
     {
       "name": "start_session",
       "implementation": "onboard",
       "kind": "workflow_alias",
-      "input_schema_sha256": "fdbe2f08ffa840cdee07d780bf25992aaa3f04f29050e2658f37adc9e948e83c",
+      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
       "transport_names": {
         "mcp_streamable_http": "start_session",
         "rest_v1_tools": "start_session",
@@ -356,7 +356,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "62c79418764479946baf98659e9b3c160e302f45f331b8601df6a77f49375614",
+      "input_schema_sha256": "80c58dd1d6f5168866380a0ad13d645c8794480e752b062787e4ddaaf1c2d882",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",
@@ -367,7 +367,7 @@
       "name": "onboard",
       "implementation": "onboard",
       "kind": "canonical_tool",
-      "input_schema_sha256": "fdbe2f08ffa840cdee07d780bf25992aaa3f04f29050e2658f37adc9e948e83c",
+      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
       "transport_names": {
         "mcp_streamable_http": "onboard",
         "rest_v1_tools": "onboard",

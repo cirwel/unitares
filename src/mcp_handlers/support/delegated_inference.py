@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
@@ -13,12 +14,17 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
+from ..schemas.core import (
+    DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
+    DELEGATE_INFERENCE_OVERHEAD_S,
+)
 from ..utils import error_response, require_argument, success_response
 from . import host_availability
 from src import inference_config
 from .host_adapter import (
     HOST_ADAPTER_EXTENSION,
     HOST_ADAPTER_EXTENSION_NOTE,
+    ORCHESTRATOR_BACKSTOP_GRACE_S,
     codex_answer_region_located,
     host_adapter_disabled_hosts,
     host_adapter_lane_configured,
@@ -40,7 +46,7 @@ class DelegatedInferenceRequest:
     host_id: str | None = None
     model: str | None = None
     task_type: str = "reasoning"
-    timeout_s: int = 240
+    timeout_s: int = DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
 
 
 async def _track_energy(
@@ -70,6 +76,66 @@ async def _track_energy(
         })
     except Exception as exc:  # noqa: BLE001 - accounting is intentionally non-fatal
         logger.warning("Could not track delegated-inference Energy: %s", exc)
+
+
+# Bookkeeping that outlived its call's deadline, held so it is not garbage
+# collected mid-flight (the src/agent_loop_detection.py pattern).
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _log_deferred_outcome(task: asyncio.Task, step: str) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        logger.warning("Deferred delegated-inference %s was cancelled", step)
+    elif task.exception() is not None:
+        logger.warning(
+            "Deferred delegated-inference %s failed: %r", step, task.exception()
+        )
+
+
+async def _finish_by_deadline(
+    coro: Any, deadline: float, *, step: str,
+) -> tuple[bool, Any]:
+    """Await ``coro`` until ``deadline``; return ``(finished, result)``.
+
+    Past the deadline the step keeps running as a tracked background task and
+    this returns ``(False, None)`` at once, so post-answer bookkeeping cannot
+    hold the reply past the caller's budget. The response headroom beyond the
+    deadline (DELEGATE_INFERENCE_RESPONSE_HEADROOM_S) covers building and
+    delivering the reply. A step that fails inside the deadline is logged and
+    counted as finished: bookkeeping is best-effort and never fails the call.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        result = await asyncio.wait_for(
+            asyncio.shield(task), timeout=max(0.0, deadline - time.monotonic()),
+        )
+    except asyncio.CancelledError:
+        # The call itself was cancelled; the shielded step still runs.
+        _background_tasks.add(task)
+        task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
+        raise
+    except TimeoutError:
+        if task.done() and not task.cancelled():
+            # The step ended on its own: it raised TimeoutError itself (an
+            # inner wait_for), or completed just as the deadline fell.
+            exc = task.exception()
+            if exc is None:
+                return True, task.result()
+            logger.warning("Delegated-inference %s failed: %r", step, exc)
+            return True, None
+        _background_tasks.add(task)
+        task.add_done_callback(lambda done: _log_deferred_outcome(done, step))
+        logger.warning(
+            "Delegated-inference %s did not finish by the call deadline; "
+            "it continues in the background",
+            step,
+        )
+        return False, None
+    except Exception as exc:  # noqa: BLE001 - bookkeeping is best-effort
+        logger.warning("Delegated-inference %s failed: %r", step, exc)
+        return True, None
+    return True, result
 
 
 # Truncation budget for the diagnostic excerpt below. Large enough to carry a
@@ -148,7 +214,13 @@ def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
 async def run_delegated_inference(
     request: DelegatedInferenceRequest,
 ) -> InferenceOutcome:
-    """Run one strong advisory inference without an MCP response envelope."""
+    """Run one strong advisory inference without an MCP response envelope.
+
+    Answers within ``request.timeout_s + DELEGATE_INFERENCE_OVERHEAD_S`` of
+    being called: one wall-clock deadline bounds host resolution, the spawn
+    request and every await, so their own timeouts cannot add up past it.
+    """
+    deadline = time.monotonic() + request.timeout_s + DELEGATE_INFERENCE_OVERHEAD_S
     loaded = inference_config.load()
     if loaded.state == "error":
         return InferenceOutcome.failed(
@@ -166,10 +238,14 @@ async def run_delegated_inference(
         )
     host_id = request.host_id
     # Registry construction includes a cached blocking local-endpoint probe.
-    # Keep it off the MCP event loop, including host selection.
+    # Keep it off the MCP event loop, including host selection, and off the
+    # caller's clock: past the overhead allowance it is a pre-execution failure.
     try:
         if host_id is None:
-            hosts = await asyncio.to_thread(list_inference_hosts, include_unconfigured=True)
+            hosts = await asyncio.wait_for(
+                asyncio.to_thread(list_inference_hosts, include_unconfigured=True),
+                timeout=DELEGATE_INFERENCE_OVERHEAD_S,
+            )
             reachable = {
                 host["host_id"]: host for host in hosts
                 if "delegate_inference" in (host.get("accepts_host_id_from") or [])
@@ -213,7 +289,10 @@ async def run_delegated_inference(
                 )
             host = reachable[host_id]
         else:
-            host = await asyncio.to_thread(get_inference_host, host_id)
+            host = await asyncio.wait_for(
+                asyncio.to_thread(get_inference_host, host_id),
+                timeout=DELEGATE_INFERENCE_OVERHEAD_S,
+            )
     except Exception as exc:  # noqa: BLE001 - registry failure is pre-execution
         logger.warning("Could not resolve inference host %s: %s", host_id, exc)
         return InferenceOutcome.failed(
@@ -347,6 +426,7 @@ async def run_delegated_inference(
         timeout_s=request.timeout_s,
         sandbox="read-only",
         model=request.model,
+        deadline=deadline,
     )
     adapter_provenance = adapter_result.get("provenance") or {}
     terminal_answer = adapter_provenance.get("terminal_answer")
@@ -388,12 +468,26 @@ async def run_delegated_inference(
         # Only a call the provider actually answered can say the provider is
         # out: a spawn rejection is our own orchestrator, not the account.
         provider_unavailable = None
+        accounting_deferred: list[str] = []
         if terminal_result:
             classified = host_availability.classify(str(adapter_result.get("error") or ""))
             if classified is not None:
-                provider_unavailable = await host_availability.record_unavailable_async(
-                    host_id, classified, detail=message,
+                finished, provider_unavailable = await _finish_by_deadline(
+                    host_availability.record_unavailable_async(
+                        host_id, classified, detail=message,
+                    ),
+                    deadline,
+                    step="provider_cooldown",
                 )
+                if not finished:
+                    accounting_deferred.append("provider_cooldown")
+                if provider_unavailable is None:
+                    # The classification is already known even though the
+                    # cooldown record is still being written or failed:
+                    # consult's failover reads provider_unavailable.reason, so
+                    # a write that did not land must not turn a usage-limit or
+                    # logged-out answer into a terminal failure.
+                    provider_unavailable = {**classified, "cooldown_recorded": False}
         return InferenceOutcome.failed(
             message,
             code=(
@@ -418,9 +512,28 @@ async def run_delegated_inference(
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
                 "possibly_running": possibly_running,
+                # Only a timeout or a failure that may leave a child running
+                # names the window this call waited and when the orchestrator
+                # stops a child nobody is waiting for any more; with no child,
+                # a backstop time would describe nothing.
+                **(
+                    {
+                        "timeout_s": request.timeout_s,
+                        "orchestrator_backstop_s": (
+                            request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S
+                        ),
+                    }
+                    if still_running or possibly_running
+                    else {}
+                ),
                 **(
                     {"provider_unavailable": provider_unavailable}
                     if provider_unavailable
+                    else {}
+                ),
+                **(
+                    {"accounting_deferred": accounting_deferred}
+                    if accounting_deferred
                     else {}
                 ),
                 **_raw_excerpt_details(adapter_result),
@@ -428,8 +541,19 @@ async def run_delegated_inference(
             recovery={
                 "action": (
                     "Do not retry yet. The delegated execution may still be running; "
-                    "ask the operator to reconcile or terminate it using the "
-                    "orchestrator controls."
+                    "the orchestrator stops it about "
+                    f"{request.timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S}s after "
+                    "dispatch. Sooner than that, ask the operator to reconcile or "
+                    "terminate it using the orchestrator controls and "
+                    "orchestrator_execution_id."
+                    + (
+                        " When you do retry, raise timeout_s only to a value "
+                        "your own MCP client's per-tool timeout exceeds by "
+                        "~15s, or the client gives up first and the execution "
+                        "id never reaches you."
+                        if still_running
+                        else ""
+                    )
                     if possibly_running
                     else "Check the host adapter configuration and orchestrator logs"
                 ),
@@ -439,7 +563,15 @@ async def run_delegated_inference(
             possibly_running=possibly_running,
         )
 
-    await host_availability.clear_async(host_id)
+    # The answer is in hand. Bookkeeping after this point must not cost the
+    # caller the answer: each step gets only what is left of the deadline,
+    # and one that cannot finish in it completes in the background instead.
+    accounting_deferred = []
+    finished, _ = await _finish_by_deadline(
+        host_availability.clear_async(host_id), deadline, step="cooldown_clear",
+    )
+    if not finished:
+        accounting_deferred.append("cooldown_clear")
     response_text = str(adapter_result.get("text") or "")
     models_used = [
         str(value) for value in (adapter_provenance.get("models_used") or [])
@@ -448,13 +580,19 @@ async def run_delegated_inference(
     # Strong external consultation gets a deliberately modest, fixed accounting
     # increment. Dollar cost remains provider-reported metadata, not an EISV proxy.
     energy_cost = 0.05
-    await _track_energy(
-        request.requesting_agent_uuid,
-        host_id=host_id,
-        models_used=models_used,
-        tokens_used=tokens_used,
-        energy_cost=energy_cost,
+    finished, _ = await _finish_by_deadline(
+        _track_energy(
+            request.requesting_agent_uuid,
+            host_id=host_id,
+            models_used=models_used,
+            tokens_used=tokens_used,
+            energy_cost=energy_cost,
+        ),
+        deadline,
+        step="energy",
     )
+    if not finished:
+        accounting_deferred.append("energy")
 
     inference = {
         "schema": "unitares.inference_result.v0",
@@ -492,6 +630,10 @@ async def run_delegated_inference(
         "configured_by": "operator",
         "warnings": adapter_provenance.get("warnings") or [],
     }
+    if accounting_deferred:
+        # Named steps still finishing after this response: the answer and its
+        # execution id are complete, the bookkeeping lands shortly after.
+        inference["accounting_deferred"] = accounting_deferred
 
     return InferenceOutcome(
         response=response_text,
@@ -524,7 +666,9 @@ async def handle_delegate_inference(
         host_id=(str(arguments["host_id"]) if arguments.get("host_id") is not None else None),
         model=(str(arguments["model"]) if arguments.get("model") else None),
         task_type=str(arguments.get("task_type") or "reasoning"),
-        timeout_s=int(arguments.get("timeout_s", 240)),
+        timeout_s=int(
+            arguments.get("timeout_s", DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S)
+        ),
     )
     outcome = await run_delegated_inference(request)
     if not outcome.ok:

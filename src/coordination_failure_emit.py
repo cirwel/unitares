@@ -249,8 +249,8 @@ async def _emit_to_coordination_events_async(
         # AsyncMock auto-attribute, and `async with pool.acquire()` inside
         # emit_event falls through into AsyncMock's coroutine-returning
         # call protocol, leaving an unawaited AsyncMockMixin coroutine that
-        # the pytest_warning_recorded hook (per memory
-        # feedback_pytest-unawaited-coroutine) flags as a leak in any test
+        # the pytest_warning_recorded hook (unawaited coroutines are
+        # treated as test failures) flags as a leak in any test
         # that incidentally triggers an emit. The leak fires SILENTLY in
         # production absent this check too — async with would raise
         # TypeError on a non-real pool — so the isinstance gate is correct

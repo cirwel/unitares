@@ -165,6 +165,7 @@
     <!-- Discoveries (increment 3) -->
     <section class="section" data-pane="discoveries" hidden>
       <h2 class="section-title">Discoveries</h2>
+      <div id="kflow-mount"></div>
       <div id="dsc-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
 
@@ -204,6 +205,7 @@
 <script src="./sections/landing.js"></script>
 <script src="./sections/agents.js"></script>
 <script src="./sections/discoveries.js"></script>
+<script src="./sections/knowledge-flow.js"></script>
 <script src="./sections/dialectic.js"></script>
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
@@ -256,6 +258,8 @@ function lazyLoad(id) {
   if (loaded[id]) return;
   if (id === "agents" && window.Agents) { loaded[id] = true; window.Agents.load(); }
   if (id === "discoveries" && window.Discoveries) { loaded[id] = true; window.Discoveries.load(); }
+  // The knowledge-flow panel shares the Discoveries pane and loads with it.
+  if (id === "discoveries" && window.KnowledgeFlow) window.KnowledgeFlow.load();
   if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }

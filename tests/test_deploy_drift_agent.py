@@ -37,6 +37,12 @@ def agent_mod(monkeypatch, tmp_path):
         )
     )
     monkeypatch.setenv("UNITARES_DEPLOY_DRIFT_SURFACES", str(surfaces))
+    # run_cycle exports the agent's UUID into os.environ for the doctor it
+    # drives (that is the behavior under test), so record the variable's
+    # prior state with monkeypatch first: setenv then delenv leaves it unset
+    # for the test and restores the original value, or its absence, after.
+    monkeypatch.setenv("DEPLOY_DRIFT_DOCTOR_UUID", "")
+    monkeypatch.delenv("DEPLOY_DRIFT_DOCTOR_UUID")
     captured: dict = {}
 
     class CycleResult:
@@ -125,7 +131,6 @@ def test_unreadable_fleet_lowers_confidence_not_a_clean_report(agent_mod, monkey
 def test_identity_flows_into_doctor_for_outcome_emission(agent_mod, monkeypatch):
     """The whole point: resolutions must carry the agent's UUID so
     outcome_event snapshots its EISV."""
-    monkeypatch.delenv("DEPLOY_DRIFT_DOCTOR_UUID", raising=False)
     cls = agent_mod._build_agent_cls()
     agent = cls()
     monkeypatch.setattr(agent_mod, "diagnose", lambda s, io: [])

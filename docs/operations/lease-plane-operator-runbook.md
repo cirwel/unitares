@@ -71,6 +71,12 @@ attestation and the wrapper also refuses while either writer LaunchAgent is
 still loaded. Run the script again without either flag only when the rollout
 order below reaches the BEAM restart step.
 
+`UNITARES_DEPLOY_APPLY_MIGRATIONS=1`, as a `deploy-apply.sh` sweep exports it,
+does not select the schema-only mode on its own here: the script deploys code
+when the schema is in sync and still refuses over a gap. Only together with
+`--dialectic-writers-quiesced` does the variable stand in for
+`--apply-migrations`.
+
 For the dialectic resolution-effect/frontier rollout, the safe order is:
 
 1. Quiesce dialectic writers: block new dialectic submissions and stop/drain

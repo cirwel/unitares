@@ -8,7 +8,13 @@ defmodule UnitaresLeasePlane.HTTPAuth do
     * everything else              → `:bearer_token`
       (sourced from `LEASE_PLANE_BEARER_TOKEN` env var)
 
-  Both tokens come from `~/.config/cirwel/secrets.env`. Per RFC §7.10 line 731
+  Both tokens come from the process env. Under Docker Compose,
+  `docker-compose.yml` sets only `LEASE_PLANE_BEARER_TOKEN`; it does not
+  forward `LEASE_FORCE_RELEASE_TOKEN`, so force-release stays unconfigured
+  there. A native install fills both through
+  `scripts/start.sh` from the service environment or the file explicitly
+  named by `$UNITARES_SECRETS_ENV`.
+  Per RFC §7.10 line 731
   ("standard bearer must NOT permit force-release"), the regular bearer cannot
   authorize force-release, and the elevated force-release bearer cannot
   authorize anything else. Mutual exclusion lives at this auth layer (the

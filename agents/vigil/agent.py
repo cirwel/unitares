@@ -672,6 +672,7 @@ class VigilAgent(GovernanceAgent):
         the auto-sweep was hiding initializing-agent bugs behind archival.
         Operators can still invoke ``archive_orphan_agents`` manually.
 
+        The summary KG note is written only with ``VIGIL_GROUNDSKEEPER_NOTES=1``.
         ``prev_state`` is the previous cycle's state dict; when supplied, the
         summary KG note is suppressed if ``stale_found`` (the persistent
         backlog count) is unchanged from the prior cycle. We deliberately
@@ -760,7 +761,17 @@ class VigilAgent(GovernanceAgent):
                 and prev.get("groundskeeper_eligible", summary["archive_eligible"])
                 == summary["archive_eligible"]
             )
-            if unchanged and prev:
+            # The summary note is opt-in (VIGIL_GROUNDSKEEPER_NOTES=1). Written on
+            # every change, it was a resident's largest share of KG writes; the
+            # ephemeral tag archives each after seven days, but until then they
+            # crowd the feed and near-duplicate review (one deployment,
+            # 2026-10-20: 29 rows in 14 days, half of a week's duplicate
+            # candidates). A staleness spike still raises the drift finding in
+            # detect_changes, and the counts stay in the log and cycle state.
+            if os.getenv("VIGIL_GROUNDSKEEPER_NOTES", "0") != "1":
+                summary["note_suppressed"] = True
+                log(f"GROUNDSKEEPER: {note_text}")
+            elif unchanged and prev:
                 summary["note_suppressed"] = True
                 log(f"GROUNDSKEEPER: {note_text} (note suppressed — unchanged)")
             else:

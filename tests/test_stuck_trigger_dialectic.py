@@ -21,7 +21,7 @@ import pytest
 
 @pytest.fixture
 def agent_id():
-    return "9a6681ec-1d16-4143-ada9-282f14483fea"
+    return "1c4f9a1f-b890-5e4e-9b15-fb60e82ffa0a"
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def paused_state():
 @pytest.fixture
 def mock_metadata(agent_id):
     """Simulate a fleet with the paused agent plus one healthy peer."""
-    peer_id = "f92dcea8-4786-412a-a0eb-362c273382f5"
+    peer_id = "02e168be-4264-527b-9643-9c737dd309e4"
     return {
         agent_id: SimpleNamespace(status="active", label="Steward", tags=["resident"]),
         peer_id: SimpleNamespace(status="active", label="Sentinel", tags=["resident"]),
@@ -58,7 +58,7 @@ async def test_passes_metadata_to_select_reviewer(agent_id, paused_state, mock_m
         ),
         patch(
             "src.mcp_handlers.dialectic.reviewer.select_reviewer",
-            new=AsyncMock(return_value="f92dcea8-4786-412a-a0eb-362c273382f5"),
+            new=AsyncMock(return_value="02e168be-4264-527b-9643-9c737dd309e4"),
         ) as mock_select,
         patch(
             "src.mcp_handlers.dialectic.session.save_session",
@@ -79,7 +79,7 @@ async def test_passes_metadata_to_select_reviewer(agent_id, paused_state, mock_m
     assert kwargs["metadata"] is mock_metadata
 
     assert result is not None
-    assert result["reviewer_id"] == "f92dcea8-4786-412a-a0eb-362c273382f5"
+    assert result["reviewer_id"] == "02e168be-4264-527b-9643-9c737dd309e4"
 
 
 @pytest.mark.asyncio

@@ -89,8 +89,10 @@ a restricted profile; inspect their actual catalog (see governance-lifecycle,
 The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory`, bounded `sync_state` modes,
-a plain fresh `start_session`, and the write aliases `store_finding`,
-`update_finding` and `record_result` omit it by default. The reads, check-ins
+a plain fresh `start_session`, a routine `request_review` (an open review
+waiting on a known move; one that carries the review itself keeps it), and the
+write aliases `store_finding`, `update_finding` and `record_result` omit it by
+default. The reads, check-ins
 and mint take their documented full-mode option to include it. A write ack's
 `raw_governance_hint` names where to read more, and names a repeat only where
 it writes nothing: an identical prediction-bound `record_result` repeated under

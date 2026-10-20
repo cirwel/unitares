@@ -210,6 +210,44 @@ else
   bad "schema-synced deploy path"
 fi
 
+# deploy-apply.sh runs every service script with no arguments, so a sweep's
+# migration opt-in reaches this script only as the environment variable.
+setup_case sweep-optin-synced-deploy
+: > "$CASE/deploy/scripts/dev/apply_migrations.py"
+run_case "" UNITARES_DEPLOY_APPLY_MIGRATIONS=1 FAKE_CHECK_FIRST_RC=0
+if [[ "$LAST_RC" == 0 ]] && grep -q '^mix compile$' "$CASE/log" \
+  && grep -q '^restart$' "$CASE/log" \
+  && ! grep -q -- '--apply' "$CASE/log"; then
+  ok "a sweep's migration opt-in still deploys code when the schema is in sync"
+else
+  bad "sweep migration opt-in on a synced schema"
+fi
+
+setup_case sweep-optin-gap-refuses
+: > "$CASE/deploy/scripts/dev/apply_migrations.py"
+run_case "" UNITARES_DEPLOY_APPLY_MIGRATIONS=1 FAKE_CHECK_FIRST_RC=1
+if [[ "$LAST_RC" != 0 ]] && grep -q '^restore$' "$CASE/log" \
+  && ! grep -q -- '--apply' "$CASE/log" \
+  && ! grep -qE '^(mix|restart)' "$CASE/log" \
+  && grep -q -- '--apply-migrations --dialectic-writers-quiesced' "$CASE/out"; then
+  ok "a sweep's migration opt-in never applies a schema gap without the writer attestation"
+else
+  bad "sweep migration opt-in on a schema gap"
+fi
+
+setup_case env-optin-with-attestation-stays-schema-only
+: > "$CASE/deploy/scripts/dev/apply_migrations.py"
+run_case --dialectic-writers-quiesced UNITARES_DEPLOY_APPLY_MIGRATIONS=1 \
+  FAKE_CHECK_FIRST_RC=1 FAKE_APPLY_RC=0 FAKE_CHECK_NEXT_RC=0
+if [[ "$LAST_RC" == 0 ]] \
+  && grep -q -- '--apply --dialectic-writers-quiesced' "$CASE/log" \
+  && ! grep -qE '^(mix|restart)' "$CASE/log" \
+  && grep -q 'migration-only operation complete' "$CASE/out"; then
+  ok "the environment opt-in with the writer attestation stays schema-only"
+else
+  bad "environment opt-in with the writer attestation"
+fi
+
 setup_case restart-failure-keeps-forward-tree
 : > "$CASE/deploy/scripts/dev/apply_migrations.py"
 run_case "" FAKE_CHECK_FIRST_RC=0 FAKE_RESTART_RC=1

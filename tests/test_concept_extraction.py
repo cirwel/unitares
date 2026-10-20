@@ -237,3 +237,103 @@ class TestEndToEndMock:
         assert result["status"] == "completed"
         assert result["concepts_created"] >= 1
         assert result["tags_processed"] >= 2
+
+
+class TestTagQueryShape:
+    def test_tag_query_returns_single_map_expression(self):
+        """graph_query declares one ``result`` column; a two-column RETURN
+        failed every run with a column-arity error, so no Concept was ever
+        written."""
+        from src.db.age_queries import query_tags_with_discoveries
+
+        cypher, params = query_tags_with_discoveries()
+        assert "RETURN {tag_name: t.name, discovery_id: d.id}" in cypher
+        assert " AS tag_name" not in cypher
+        assert params == {}
+
+    def test_relates_to_merge_does_not_key_on_strength(self):
+        """Strength changes between runs; keying MERGE on it would add a
+        duplicate edge every day instead of updating the existing one."""
+        from src.db.age_queries import create_concept_relates_to_edge
+
+        cypher, params = create_concept_relates_to_edge("c1", "c2", strength=0.5)
+        assert "MERGE (c1)-[r:RELATES_TO]->(c2)" in cypher
+        assert "SET r.strength = ${strength}" in cypher
+        assert params["strength"] == 0.5
+
+
+class TestWriteFailuresAreSurfaced:
+    @pytest.mark.asyncio
+    async def test_write_failures_counted_and_warned_once(self):
+        extractor = ConceptExtractor()
+        concepts = [
+            {"concept_id": "c1", "label": "a", "source_tags": ["a"], "discovery_ids": ["d1", "d2"]},
+            {"concept_id": "c2", "label": "b", "source_tags": ["b"], "discovery_ids": ["d2"]},
+        ]
+        mock_db = MagicMock()
+        mock_db.graph_query = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with patch("src.concept_extraction.get_db", return_value=mock_db), \
+                patch("src.concept_extraction.logger") as mock_logger:
+            written = await extractor._write_to_graph(concepts, {})
+
+        assert written["concepts"] == 0
+        assert written["failures"] == {"concept_node": 2, "relates_to_edge": 1}
+        # One warning per failure kind, not one per failed write.
+        assert mock_logger.warning.call_count == 2
+        assert "boom" in mock_logger.warning.call_args_list[0].args[0]
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_reports_completed_with_errors(self):
+        extractor = ConceptExtractor(split_min_discoveries=100)
+        graph_rows = [
+            {"tag_name": "python", "discovery_id": "d1"},
+            {"tag_name": "python", "discovery_id": "d2"},
+        ]
+        embedding_rows = [
+            {"discovery_id": "d1", "embedding": "[1.0,0.0,0.0]"},
+            {"discovery_id": "d2", "embedding": "[0.98,0.1,0.0]"},
+        ]
+        mock_db = MagicMock()
+        mock_db.graph_query = AsyncMock(side_effect=[
+            graph_rows,  # Phase 1
+            [],  # concept node
+            [],  # ABOUT d1
+            RuntimeError("edge refused"),  # ABOUT d2
+        ])
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=embedding_rows)
+        mock_db.acquire = MagicMock(return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_conn),
+            __aexit__=AsyncMock(return_value=False),
+        ))
+
+        with patch("src.concept_extraction.get_db", return_value=mock_db):
+            result = await extractor.run()
+
+        assert result["status"] == "completed_with_errors"
+        assert result["concepts_created"] == 1
+        assert result["about_edges_created"] == 1
+        assert result["write_failures"] == {"about_edge": 1}
+
+
+class TestBackgroundTaskSurfacesErrors:
+    @pytest.mark.asyncio
+    async def test_run_failure_logged_at_warning(self):
+        import asyncio
+
+        from src import background_tasks
+
+        sleeps = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+        failing = MagicMock()
+        failing.return_value.run = AsyncMock(side_effect=RuntimeError("column arity"))
+
+        with patch.object(background_tasks.asyncio, "sleep", sleeps), \
+                patch("src.concept_extraction.ConceptExtractor", failing), \
+                patch.object(background_tasks, "logger") as mock_logger:
+            await background_tasks.concept_extraction_background_task()
+
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args.args[0]
+        assert "RuntimeError" in message and "column arity" in message
+        mock_logger.debug.assert_not_called()

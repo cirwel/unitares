@@ -174,7 +174,9 @@ def test_finding_posted_then_suppressed_by_cooldown(tmp_path):
     doc.run()
     assert len(posted) == 1
     assert posted[0]["event_type"] == ddd.FINDING_KIND
-    assert posted[0]["severity"] == "critical"
+    # One commit behind on first sight is a warning; escalation to critical is
+    # covered in tests/test_deploy_drift_severity.py.
+    assert posted[0]["severity"] == "warning"
 
     ddd.Doctor(io=make_io(behind=1)).run()
     assert len(posted) == 1, "second cycle should be cooldown-suppressed"

@@ -264,8 +264,6 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     end
   end
 
-  defp key_from_jwks(_keys, _kid), do: {:error, :invalid}
-
   defp keys_from_jwks(keys) when is_list(keys) and length(keys) in 1..64 do
     Enum.reduce_while(keys, {:ok, %{}}, fn
       %{"kid" => kid} = jwk, {:ok, acc}

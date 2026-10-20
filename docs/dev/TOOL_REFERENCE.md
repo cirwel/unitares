@@ -94,7 +94,7 @@ Name/model fields are cosmetic/contextual. The returned uuid is your identity an
 - **Timeout:** 10s
 - **Related:** `onboard`, `process_agent_update`, `agent(action='list')`
 
-Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= skips that gate and can instead infer a co-located binding — pass client_session_id to get your own back. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
+Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= — with no session or ownership signal and no explicit session header — is also gated to a fresh mint — pass client_session_id to read or rename your own session. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
 
 Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. identity(client_session_id='...', name='...') sets a cosmetic display label.
 
@@ -750,16 +750,16 @@ EXAMPLE RESPONSE:
 - **Timeout:** 30s
 - **Related:** `agent`, `agent(action='list')`
 
-Classify agents fleet-wide as orphan or ephemeral-session archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, non-ephemeral labels, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
+Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
 
-TARGETS (classified as candidates):
+TARGETS (classified as candidates; agents with more than max_updates updates, default 3, are skipped first):
 - Unlabeled agents with 1 update after 3 hours
 - Unlabeled UUID agents with 2+ updates after 6 hours
-- Ephemeral session-labeled agents after 6 hours
+- Agents tagged archive-eligible, labeled or not, with at most 5 updates, after 6 hours
 
 NEVER AUTO-ARCHIVED:
 - Agents with 0 updates (still initializing - never checked in)
-- Agents with labels/display names
+- Labeled agents without the archive-eligible tag
 - Agents with "pioneer" / "persistent" / "protected" tags
 - Agents with verified/established/trusted trust_tier
 
@@ -1296,7 +1296,7 @@ Still callable until its removal, no earlier than 2026-12-02. Its model, tempera
 
 Hand a bounded task to a strong-model CLI host (operator extension, off by default); for a local completion use consult.
 
-Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s, below the 240s default); past that the client sees a bare transport timeout with no id, so set timeout_s under the client's limit. consult at effort='thorough' takes this same lane with optional host_id selection. Omitted host_id uses the deployment's consult.thorough.prefer order in UNITARES_INFERENCE_HOSTS_FILE, or the only enabled, configured and available host; missing or ambiguous selection refuses with setup guidance. No vendor is the default. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing; the orchestrator stops it 30s after timeout_s regardless. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s): the 45s default timeout_s fits that. A larger timeout_s (up to 420) is only for a client that waits longer; otherwise the client sees a bare transport timeout with no id. consult at effort='thorough' takes this same lane with optional host_id selection. Omitted host_id uses the deployment's consult.thorough.prefer order in UNITARES_INFERENCE_HOSTS_FILE, or the only enabled, configured and available host; missing or ambiguous selection refuses with setup guidance. No vendor is the default. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 

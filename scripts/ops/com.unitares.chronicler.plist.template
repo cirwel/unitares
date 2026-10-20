@@ -3,12 +3,18 @@
     Chronicler launchd template.
 
     Before installing, substitute placeholders:
-      __UNITARES_ROOT__  → absolute path to your unitares checkout
+      __UNITARES_ROOT__  → absolute path to your unitares checkout (for
+                           production, the master-pinned deploy worktree,
+                           $UNITARES_DEPLOY)
       __HOME__           → your $HOME (expanded absolute path)
+      __PYTHON3__        → absolute path of an interpreter that has
+                           unitares_sdk installed
 
-    Example:
-      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+    Example (UNITARES_DEPLOY = that checkout's absolute path; replace
+    $(command -v python3) if unitares_sdk lives in a different interpreter):
+      sed -e "s|__UNITARES_ROOT__|${UNITARES_DEPLOY:?set UNITARES_DEPLOY to the deploy worktree path}|g" \
           -e "s|__HOME__|$HOME|g" \
+          -e "s|__PYTHON3__|$(command -v python3)|g" \
           scripts/ops/com.unitares.chronicler.plist.template \
           > ~/Library/LaunchAgents/com.unitares.chronicler.plist
 -->
@@ -21,7 +27,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>__PYTHON3__</string>
         <string>__UNITARES_ROOT__/agents/chronicler/agent.py</string>
     </array>
 
