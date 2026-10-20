@@ -1044,9 +1044,14 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
   - The response gains `archived_cold_fallback` (`used`, `primary_count`,
     `added`, `statuses_searched`, `threshold`, `score_penalty`, `note`) when
     the second pass added rows, or `archived_cold_fallback_error` when it
-    failed; the first page is returned either way. The lean and compact
-    tiers lift the counts into `state_summary.archived_cold_fallback` and
-    carry `retrieval_tier` on each digest row.
+    did not: it failed, it ran past what the first pass left of the
+    search's 15-second budget (less 3 seconds kept for building the
+    response), or it was skipped because that remainder was shorter than
+    the first pass took. The first page is returned in every case. The
+    lean and compact tiers lift the counts into
+    `state_summary.archived_cold_fallback`, the error into
+    `state_summary.archived_cold_fallback_error`, and carry
+    `retrieval_tier` on each digest row.
   - `include_archived` and `include_cold` sent as the string `"false"` now
     mean false. They used to be read raw, so `"false"` switched the filter off.
 - **Compatibility:** additive. An explicit `include_archived=false` or
@@ -1055,7 +1060,7 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
   searches with an explicit `status` filter are unchanged, so a poller is
   never handed an old row as new. A search that already returns 3 or more
   active rows makes the same backend calls as before; a shorter one makes
-  the first pass's calls twice.
+  the first pass's calls up to twice.
 - **Schema digests:** none move. `search_shared_memory`'s tool description
   now says a short query search also reads archived and cold rows; the tool
   description is outside every input digest.

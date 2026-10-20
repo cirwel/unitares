@@ -12,6 +12,7 @@ or the caller said no.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -233,3 +234,159 @@ def test_widening_rules():
         parse({"query": "x", "include_cold": True, "include_archived": True})
     ) is None
     assert handlers._archived_cold_widening(parse({})) is None
+
+
+# --- The second pass never costs the caller the first page -----------------
+#
+# Both passes share the handler's timeout. Codex review of 122245d03 [P1]: a
+# first pass that returned in 8s and a second pass that took another 8s ran
+# into the 15s handler timeout, whose cancellation skipped the `except
+# Exception` around the second pass, so the caller got a timeout instead of
+# the finished first page. These tests scale that budget down to one second
+# and replace the decorator's timeout with an equivalent outer bound.
+
+_BUDGET_S = 1.0
+_RESERVE_S = 0.25
+
+
+@pytest.fixture
+def small_budget(monkeypatch):
+    monkeypatch.setattr(handlers, "KNOWLEDGE_SEARCH_TIMEOUT_S", _BUDGET_S)
+    monkeypatch.setattr(handlers, "ARCHIVED_COLD_RESPONSE_RESERVE_S", _RESERVE_S)
+
+
+async def _search_within_handler_timeout(arguments):
+    """The handler under an outer timeout equal to its budget, as the
+    mcp_tool decorator runs it (its own 15s bound is skipped via __wrapped__)."""
+    inner = handle_search_knowledge_graph.__wrapped__
+    result = await asyncio.wait_for(inner(arguments), timeout=_BUDGET_S)
+    return json.loads(result[0].text)
+
+
+def _two_pass_fts(graph, first, second):
+    """Pass one answers with an open row via `first`; pass two via `second`."""
+    calls = {"n": 0}
+
+    async def fts(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return await first()
+        return await second()
+
+    graph.full_text_search = fts
+    if hasattr(graph, "semantic_search"):
+        del graph.semantic_search
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_slow_first_pass_skips_the_second_and_keeps_the_page(graph, small_budget):
+    # The reviewer's case, scaled: pass one uses half the budget, so what is
+    # left after the response reserve is less than another pass would take.
+    async def first():
+        await asyncio.sleep(_BUDGET_S / 2)
+        return [_node("d-open")]
+
+    async def second():
+        await asyncio.sleep(_BUDGET_S * 2)
+        return [_node("d-cold", status="cold")]
+
+    calls = _two_pass_fts(graph, first, second)
+
+    data = await _search_within_handler_timeout({"query": "dormancy"})
+
+    assert data["success"] is True
+    assert [d["id"] for d in data["discoveries"]] == ["d-open"]
+    assert ARCHIVED_COLD_TIER not in data
+    assert "second pass skipped" in data[f"{ARCHIVED_COLD_TIER}_error"]
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_pass_overrun_is_abandoned_and_keeps_the_page(graph, small_budget):
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def first():
+        return [_node("d-open")]
+
+    async def second():
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return [_node("d-cold", status="cold")]
+
+    _two_pass_fts(graph, first, second)
+
+    data = await _search_within_handler_timeout({"query": "dormancy"})
+
+    assert started.is_set()
+    assert [d["id"] for d in data["discoveries"]] == ["d-open"]
+    assert ARCHIVED_COLD_TIER not in data
+    assert "did not finish" in data[f"{ARCHIVED_COLD_TIER}_error"]
+    # The abandoned pass is cancelled, so it starts no further stages.
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+    for _ in range(10):  # let the task's done callback run
+        if not handlers._ABANDONED_ARCHIVED_COLD_PASSES:
+            break
+        await asyncio.sleep(0)
+    assert not handlers._ABANDONED_ARCHIVED_COLD_PASSES
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_request_cancels_the_second_pass(graph):
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def first():
+        return [_node("d-open")]
+
+    async def second():
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return []
+
+    _two_pass_fts(graph, first, second)
+
+    request = asyncio.create_task(_search({"query": "dormancy"}))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    request.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_lean_digest_carries_the_second_pass_report(graph):
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+    from src.mcp_handlers.support.param_normalization import normalize_compact_search_details
+
+    async def envelope(arguments):
+        args = dict(arguments)
+        normalize_compact_search_details(args)  # search_shared_memory's default: lean
+        payload = await _search(dict(args))
+        return build_experience_envelope("search_shared_memory", "knowledge", payload, args)
+
+    _fts_only(graph, [_node("d-open"), _node("d-cold", status="cold")])
+    env = await envelope({"query": "dormancy"})
+    assert env["state_summary"][ARCHIVED_COLD_TIER]["added"] == 1
+    tiers = {d["discovery_id"]: d.get("retrieval_tier") for d in env["memory_suggestions"]}
+    assert tiers == {"d-open": None, "d-cold": ARCHIVED_COLD_TIER}
+
+    async def first():
+        return [_node("d-open")]
+
+    async def second():
+        raise RuntimeError("backend down")
+
+    _two_pass_fts(graph, first, second)
+    env = await envelope({"query": "dormancy"})
+    assert "backend down" in env["state_summary"][f"{ARCHIVED_COLD_TIER}_error"]

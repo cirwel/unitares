@@ -151,7 +151,11 @@ that includes them. Rows from that pass come after every other row, carry
 `retrieval_tier="archived_cold_fallback"`, and their reported scores are
 halved. The response's `archived_cold_fallback` block (lean:
 `state_summary.archived_cold_fallback`) gives the counts. Check `status` and
-`superseded_by` before relying on such a row. An explicit
+`superseded_by` before relying on such a row. The pass is optional: when it
+fails or does not fit in what is left of the search's time budget, the page
+holds the first pass's rows alone and `archived_cold_fallback_error` (lean:
+`state_summary.archived_cold_fallback_error`) says why; pass
+`include_archived=true` / `include_cold=true` to ask for those rows directly. An explicit
 `include_archived=false` or `include_cold=false` keeps that status out.
 Queryless listings and searches with a `status` filter never get the second
 pass.

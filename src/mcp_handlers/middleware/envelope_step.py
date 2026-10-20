@@ -3235,6 +3235,11 @@ def build_experience_envelope(
             state_summary["archived_cold_fallback"] = _lift(
                 archived_cold, "primary_count", "added", "statuses_searched", "score_penalty"
             )
+        # Present only when the second pass failed, timed out or was skipped
+        # for lack of time: the page is first-pass rows alone, and says why.
+        archived_cold_error = source_payload.get("archived_cold_fallback_error")
+        if isinstance(archived_cold_error, str) and archived_cold_error:
+            state_summary["archived_cold_fallback_error"] = archived_cold_error
         # `confidence_note` is not copied here: the envelope lifts it to the
         # top level for every alias (next to search_degraded_message), and a
         # second ~270 B copy was paid out of the lean digest's budget before
