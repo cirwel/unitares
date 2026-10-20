@@ -56,7 +56,11 @@ jobs:
           grep -Eq '^Deep health: (healthy|moderate)$' "$RUNNER_TEMP/launch-1.log" \
             || { echo "::error::launcher did not report deep health healthy/moderate"; exit 1; }
           test -d "$UNITARES_STACK_DIR/.git"
-          git -C "$UNITARES_STACK_DIR" describe --tags --exact-match
+          release="v$(tr -d '[:space:]' < "$UNITARES_STACK_DIR/PUBLISHED_VERSION")"
+          echo "RELEASE=$release" >> "$GITHUB_ENV"
+          # The release commit also carries sdk-vX.Y.Z; the launcher must name the release.
+          grep -qx "Installed: $release" "$RUNNER_TEMP/launch-1.log" \
+            || { echo "::error::launcher did not report Installed: $release"; exit 1; }
 
       - name: Record the running stack
         run: |
@@ -92,7 +96,10 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/unitares update --check 2>&1 | tee "$RUNNER_TEMP/update-check.log"
-          grep -q 'Already on' "$RUNNER_TEMP/update-check.log" \
+          # This runs the published release's scripts/unitares, not this
+          # checkout's, so its "Installed:" line is not asserted here: releases
+          # up to v3.4.0 print the SDK tag there (fixed alongside this job).
+          grep -q "Already on $RELEASE" "$RUNNER_TEMP/update-check.log" \
             || { echo "::error::update --check did not report the installed release as current"; exit 1; }
 
       - name: Launcher refuses a checkout with tracked edits

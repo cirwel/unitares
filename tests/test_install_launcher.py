@@ -25,6 +25,8 @@ def launcher(tmp_path):
     run_git("add", ".")
     run_git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "release")
     run_git("tag", "v3.4.0")
+    # Real release commits also carry the SDK tag; only the v* tag names the release.
+    run_git("tag", "sdk-v0.5.0")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     commands = {

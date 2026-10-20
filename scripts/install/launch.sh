@@ -58,7 +58,8 @@ fi
 for file in docker-compose.yml db/postgres/docker-initdb.sh scripts/unitares .env.example; do
     [ -f "$stack/$file" ] || fail "Checkout is missing $file"
 done
-installed=$(git -C "$stack" describe --tags --exact-match 2>/dev/null) \
+# The release commit also carries the SDK tag (sdk-vX.Y.Z); name the release.
+installed=$(git -C "$stack" describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null) \
     || fail 'The managed checkout is not on a release tag; use its existing update command'
 # Fixed container names belong to an existing install, never adopt that stack.
 for name in unitares-postgres-age unitares-redis unitares-lease-plane unitares-governance-mcp; do
