@@ -108,7 +108,7 @@ dependency (the execution-cost policy in `CLAUDE.md`).
    attribution at creation time, or OCSF ingest, which carries evidence over
    the agent's life?
 2. Does UNITARES's fleet workload-identity proposal
-   (`docs/proposals/active/fleet-workload-identity-auth-audit-v0.md`) gain
+   (`docs/proposals/archive/fleet-workload-identity-auth-audit-v0.md`) gain
    anything from OpenShell's gateway-minted, sandbox-scoped JWT design as
    prior art? The proposal deliberately excludes a third-party credential
    runtime; that decision is unchanged here.
