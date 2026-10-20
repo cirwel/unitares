@@ -1,4 +1,4 @@
-# Unitares Governance Dashboard
+# UNITARES dashboard
 
 **Last updated:** September 2026
 

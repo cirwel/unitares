@@ -340,13 +340,19 @@ indefinitely, and that outage is not self-announcing, because the gateway's
 
 ## Agent Identity
 
-For a fresh process, call `start_session(force_new=true)`. If the process is taking over from a predecessor that has **exited**, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`. Sharing a workspace with a still-running agent is co-location, not lineage: a succession claim naming a live parent is rejected (`lineage_coincidental_rejected`) and cleared.
+The identity rule every client follows is owned by
+[Integrating agents §4.2](../manual/04-integrating-agents.md#42-identity-rule)
+(with the default workflow in §4.1), and the identity model by
+[`identity.md`](../ontology/identity.md): fresh processes, threading
+`client_session_id`, explicit handoff from an exited predecessor, subagents,
+substrate agents, and same-owner rebind with a `continuity_token`. This section
+covers only what a client sees in the responses. One identity response to
+expect: a succession claim naming a still-running parent is rejected
+(`lineage_coincidental_rejected`) and the declared parent is cleared.
 
-Keep the returned `client_session_id` and pass it on every later call from the same process. Without it, writes fall back to a weak transport-fingerprint binding that can merge or split co-resident sessions.
+### Workflow response envelopes
 
-Two kinds of process do not follow this default. A short dispatched subagent usually should not onboard at all; if it needs its own identity, it calls `start_session(force_new=true, parent_agent_id=<driver uuid>, spawn_reason="subagent")` and lands at least one real `sync_state()` before it exits. Persistent or substrate agents use their dedicated substrate identity pattern, not an ordinary session.
-
-Use raw `onboard(...)` instead when targeting older servers or when a raw
+Use raw `onboard(...)` instead of `start_session` when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
 `agent_uuid`, `client_session_id`, and `next_action`. Read aliases, routine
 `sync_state` check-ins, a plain fresh `start_session` and the write aliases
@@ -393,7 +399,5 @@ was recorded under. `record_result` carries them only when its binding was not
 server-inferred (for example, the call passed `client_session_id`):
 `outcome_event` signs nothing for a server-inferred binding, so such an ack
 names no writer.
-
-For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 
 See also: [Getting Started](../guides/START_HERE.md), [Operator Runbook](../operations/OPERATOR_RUNBOOK.md).
