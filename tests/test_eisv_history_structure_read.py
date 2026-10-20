@@ -8,6 +8,8 @@ rendering are verified on known inputs.
 import datetime as dt
 import math
 import random
+import sys
+from types import ModuleType
 
 import pytest
 
@@ -285,14 +287,14 @@ class _ConnectCalled(Exception):
 
 
 def _forbid_connect(monkeypatch):
-    import psycopg2
-
     def _connect(*_args, **_kwargs):
         raise _ConnectCalled()
 
-    # raising=False: an earlier test in the suite can leave a stub psycopg2
-    # module without ``connect`` in sys.modules.
-    monkeypatch.setattr(psycopg2, "connect", _connect, raising=False)
+    # These are DB-free guard tests. Supply our own driver sentinel instead
+    # of depending on an optional install or a stub left by another test.
+    driver = ModuleType("psycopg2")
+    driver.connect = _connect
+    monkeypatch.setitem(sys.modules, "psycopg2", driver)
 
 
 def test_main_refuses_a_cross_era_window_without_connecting(monkeypatch, capsys):
