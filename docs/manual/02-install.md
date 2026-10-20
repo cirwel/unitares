@@ -314,17 +314,21 @@ the second the newest migration the release ships; if the first is larger,
 stop, because moving to an older release is not supported:
 
 ```bash
-python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --print-db-version
+psql "$DB_POSTGRES_URL" -Atqc "SELECT COALESCE(MAX(version), 0) FROM core.schema_migrations"
 git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
   | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1 | sed 's/^0*//'
 ```
 
 Stop the server, and the lease plane if you run one, so nothing writes while
-the schema changes. Then move the code and its Python dependencies:
+the schema changes. Confirm both are gone by process, not by an unanswered
+health check, which a timeout or a different port would also produce. Then
+move the code and its Python dependencies:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or stop the foreground process
-curl -s --max-time 3 http://localhost:8767/health/live || echo stopped      # must print "stopped"
+launchctl list | grep com.unitares.governance-mcp   # must print nothing
+pgrep -fl "$PWD/src/mcp_server.py"                  # must print nothing
+pgrep -fl lease_plane                               # must print nothing, if you run the lease plane
 git checkout --detach "$TAG"
 source .venv/bin/activate
 pip install -r requirements-full.txt -c constraints.txt
@@ -343,8 +347,8 @@ python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --di
 
 Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
 statement that the server and lease plane are stopped; migrations 077 and 078
-refuse to apply without it, so pass it only once the check above printed
-`stopped`. The migration tool calls `psql`, which the Homebrew PostgreSQL
+refuse to apply without it, and the tool does not check it for you, so pass it
+only once the three checks above printed nothing. The migration tool calls `psql`, which the Homebrew PostgreSQL
 install puts on your `PATH`.
 
 If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
@@ -362,7 +366,7 @@ curl -s http://localhost:8767/health/deep
 ```
 
 If a migration fails, do not start the previous release over the database
-until you know where the schema stopped (`--print-db-version`). If it did not
+until you know where the schema stopped (the `psql` query above). If it did not
 cross 077 or 078 during this update, you can go back with
 `git checkout --detach "$PREV"`, reinstall its dependencies and load the
 LaunchAgent again. If it crossed either one, or you cannot read the version,
