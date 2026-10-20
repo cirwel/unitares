@@ -1,6 +1,6 @@
 # 6 · Operating
 
-[← Reading the signals](05-reading-the-signals.md) · [Manual index](README.md) · [Next: Troubleshooting →](07-troubleshooting.md)
+[← Reading the record](05-reading-the-signals.md) · [Manual index](README.md) · [Next: Troubleshooting →](07-troubleshooting.md)
 
 This chapter is the operator's orientation. The deep, living runbook is [`../operations/OPERATOR_RUNBOOK.md`](../operations/OPERATOR_RUNBOOK.md) — this is the map and the parts most readers actually need.
 
@@ -55,7 +55,7 @@ UNITARES has run in production since November 2025 on a **single-operator fleet*
 
 ## 6.4 Tuning governance thresholds
 
-Read thresholds with `config(action="get")`; change them with `config(action="set", thresholds={...})` (writes require a bound session whose agent carries the operator-granted `admin` tag; overrides are held in process memory and reset when the server restarts). Defaults and margin computation live in [`config/governance_config.py`](../../config/governance_config.py). Prefer leaving defaults in place until the falsifiability harness ([chapter 5](05-reading-the-signals.md#57-reading-the-instrument-and-evaluating-its-uses)) tells you a change helps on *your* fleet.
+Read thresholds with `config(action="get")`; change them with `config(action="set", thresholds={...})` (writes require a bound session whose agent carries the operator-granted `admin` tag; overrides are held in process memory and reset when the server restarts). Defaults and margin computation live in [`config/governance_config.py`](../../config/governance_config.py). Prefer leaving defaults in place until the falsifiability harness ([chapter 5](05-reading-the-signals.md#reading-the-instrument-and-evaluating-its-uses)) tells you a change helps on *your* fleet.
 
 ## 6.5 The operations doc map
 
@@ -89,4 +89,4 @@ These dumps are taken only when a release brings migrations. They are gzipped pl
 
 ---
 
-[← Reading the signals](05-reading-the-signals.md) · [Manual index](README.md) · [Next: Troubleshooting →](07-troubleshooting.md)
+[← Reading the record](05-reading-the-signals.md) · [Manual index](README.md) · [Next: Troubleshooting →](07-troubleshooting.md)
