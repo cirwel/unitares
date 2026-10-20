@@ -16,6 +16,7 @@ const dataSource = read("../redesign/data.js");
 const SECTIONS = [
   ["Agents", "agents", "ag-mount"],
   ["Discoveries", "discoveries", "dsc-mount"],
+  ["KnowledgeFlow", "knowledge-flow", "kflow-mount"],
   ["Dialectic", "dialectic", "dlc-mount"],
   ["Activity", "activity", "act-mount"],
   ["EISV", "eisv", "eisv-mount"],

@@ -1,5 +1,5 @@
 """Registry and overview feeds for dashboards: agent history, tier
-distribution, automations, activity, incidents,
+distribution, knowledge flow, automations, activity, incidents,
 violation taxonomy, and silent-bootstrap observability.
 
 Split out of src/http_api.py (see that module for route registration).
@@ -343,6 +343,39 @@ async def http_tier_distribution(request):
         })
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+async def http_knowledge_flow(request):
+    """GET /v1/knowledge/flow?limit=25 — cross-agent knowledge flow.
+
+    Top (builder, source) agent pairs: the builder authored a discovery that
+    links by RELATED_TO to one the source authored (src/knowledge_flow.py).
+    Reads the AGE graph; ``graph_available`` false means no graph backend, not
+    an empty one. A graph probe that failed on a backend that has one is a 503,
+    not a no-graph answer. ``limit`` is clamped to 1..100.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+    from src.knowledge_flow import GraphProbeError, clamp_limit, query_knowledge_flow
+
+    limit = clamp_limit(request.query_params.get("limit"))
+    try:
+        from src.db import get_db
+
+        return JSONResponse(await query_knowledge_flow(get_db(), limit=limit))
+    except GraphProbeError as exc:
+        logger.error("Knowledge flow graph probe failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "knowledge graph unavailable"},
+            status_code=503,
+        )
+    except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
+        logger.error("Knowledge flow query failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "knowledge flow query failed"},
+            status_code=500,
+        )
 
 
 async def http_bootstrap_silent(request):
