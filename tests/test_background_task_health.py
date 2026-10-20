@@ -224,6 +224,44 @@ async def test_silence_finding_close_recovers_when_nothing_is_left_to_close(monk
     ) is True
     assert health.snapshot()["silence_finding_close"]["status"] == "ok"
 
+
+async def _one_rotation_pass(monkeypatch, tmp_path):
+    """Run periodic_server_log_rotation for exactly one pass over a temp log dir."""
+    import asyncio
+
+    log_dir = tmp_path / "data" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "mcp_server.log").write_text("x" * 64)
+    monkeypatch.setattr(background_tasks, "__file__", str(tmp_path / "src" / "background_tasks.py"))
+    # First sleep is the startup delay; the second ends the loop after one pass.
+    monkeypatch.setattr(
+        background_tasks.asyncio, "sleep",
+        AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await background_tasks.periodic_server_log_rotation(max_size_mb=0)
+    return log_dir
+
+
+@pytest.mark.asyncio
+async def test_server_log_rotation_failure_is_recorded(monkeypatch, tmp_path):
+    def broken_gzip_open(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(background_tasks.gzip, "open", broken_gzip_open)
+    await _one_rotation_pass(monkeypatch, tmp_path)
+    entry = health.snapshot()["server_log_rotation"]
+    assert entry["status"] == "failing"
+    assert "mcp_server.log" in entry["last_error"] and "disk full" in entry["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_server_log_rotation_success_is_recorded(monkeypatch, tmp_path):
+    log_dir = await _one_rotation_pass(monkeypatch, tmp_path)
+    assert health.snapshot()["server_log_rotation"]["status"] == "ok"
+    assert (log_dir / "mcp_server.log").read_text() == ""
+    assert list((log_dir / "archive").glob("mcp_server_*.log.gz"))
+
 # --- doctor --------------------------------------------------------------------
 
 

@@ -1024,6 +1024,7 @@ async def periodic_server_log_rotation(interval_hours: float = 24.0, max_size_mb
     log_files = ["mcp_server.log", "mcp_server_error.log"]
 
     while True:
+        failed: list[str] = []
         for log_name in log_files:
             log_path = log_dir / log_name
             try:
@@ -1053,8 +1054,14 @@ async def periodic_server_log_rotation(interval_hours: float = 24.0, max_size_mb
                 _prune_log_archives(archive_dir, stem, keep_months=6)
 
             except Exception as e:
-                logger.debug(f"[ROTATION] {log_name} rotation failed: {e}")
+                # A real copy or truncate failure: the log keeps growing past
+                # max_size_mb until someone notices, so it is not a debug event.
+                failed.append(f"{log_name}: {type(e).__name__}: {e}")
 
+        if failed:
+            record_failure("server_log_rotation", "; ".join(failed), log=logger)
+        else:
+            record_success("server_log_rotation", log=logger)
         await asyncio.sleep(interval_hours * 3600)
 
 
