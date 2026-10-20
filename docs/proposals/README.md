@@ -22,7 +22,7 @@ implementation is Built. The archive includes Parked questions that may resume.
 
 The child indexes preserve the disposition reading taken on **2026-09-03**,
 plus subsequently added rows. A proposals audit on **2026-09-23** re-read the
-rows whose status the code, git history or the maintainer deployment had
+rows whose status the code, git history or the reference deployment had
 overturned (retagging 13 of them and annotating others), and, at the operator's
 selection that day, parked four Active rows whose documents are untouched for
 30 days and wait on nothing in flight, and retagged a fifth Built (partial)

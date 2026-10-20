@@ -105,7 +105,7 @@ These documents stay at their archive paths because live code, tests and the ind
 
 The seven decisions packaged in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md) are tracked in its own decision index. The documents below state another operator decision as pending. Merged here on 2026-10-20 from the [2026-10-10 collection](../archive/open-decisions-other-2026-10-10.md), which is archived as superseded; dates are those of each document's reading. This list records no decision and changes no status; each linked document is authoritative.
 
-- [`msg-send-assurance-gate-v0.md`](msg-send-assurance-gate-v0.md): which assurance bar gates the `msg/send` mint, a pilot before rollout, retry and retention, the stakes tier, and the idempotency digest (2026-10-20, added at the merge).
+- [`msg-send-assurance-gate-v0.md`](msg-send-assurance-gate-v0.md): which assurance bar gates the `msg/send` mint, a pilot before rollout, retry and retention, the stakes tier, the idempotency digest, and where the wake address lives (Q1–Q6; 2026-10-20, added at the merge).
 - [`gap-recovery-arming-semantics-v0.md`](gap-recovery-arming-semantics-v0.md): how long an absence must be before the first check-in after it is distrusted (`GAP_RECOVERY_ARM_SECONDS`; the shipped default reproduces the legacy 150 s) (file added 2026-09-08).
 - [`dialectic-resolution-receipt-v0.md`](dialectic-resolution-receipt-v0.md): whether to enable `drr.v1` receipt minting once the preconditions in "Why it stays dormant" exist (file added 2026-09-02).
 - [`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md): the execute-half question, deliberately left open; the commissioned [design read](execute-plane-design-read-v0.md) is written and decides nothing (2026-09-17).
