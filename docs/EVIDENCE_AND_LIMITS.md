@@ -123,7 +123,7 @@ structural snapshots**; current capabilities and setup are described in
 | Database migrations | **76** |
 | Python modules | **567** across `src/`, `governance_core/`, and reference residents |
 | Documents | **328** |
-| Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Ecosystem](../README.md#ecosystem) |
+| Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Sibling repos](README.md#sibling-repos) |
 
 The tool/router/alias counts were recorded 2026-09-20 at `76a68c02` from
 `src/tool_meta.py` and router `ACTION_FIELDS` declarations. The test, migration,

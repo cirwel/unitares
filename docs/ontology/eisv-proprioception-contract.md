@@ -467,7 +467,7 @@ and restarts the service.
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal
-(`docs/proposals/active/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
+(`docs/proposals/archive/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
 certified core and leaves reintroduction — as a policy-layer leaky EMA of the
 outcome-channel residual — as an open design decision. That decision was taken
 through a governed dialectic review (session `3e003d82fb2d251e`, resolved
