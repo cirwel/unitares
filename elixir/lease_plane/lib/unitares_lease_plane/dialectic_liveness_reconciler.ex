@@ -12,8 +12,6 @@ defmodule UnitaresLeasePlane.DialecticLivenessReconciler do
 
   alias UnitaresLeasePlane.{DialecticSaga, DialecticLivenessSupervisor}
 
-  require Logger
-
   @spec perform(map()) :: {:ok, map()} | {:error, term()}
   def perform(_args) do
     case DialecticSaga.live_sessions(500) do
