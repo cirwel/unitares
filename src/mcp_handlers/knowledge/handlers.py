@@ -1952,6 +1952,14 @@ def _attach_store_related_discoveries(response: dict[str, Any], state: _Knowledg
         f"{len(unique_agents)} agent(s), all still open. Consider superseding "
         "older entries or resolving them."
     )
+    # The scheduled synthesis pass rolls these topics up next
+    # (src/kg_synthesis_schedule.py); before it, the hint went nowhere.
+    from src.kg_synthesis_schedule import hint_topics, record_consolidation_hint
+
+    record_consolidation_hint(
+        hint_topics(state.discovery.tags, (item.tags for item in open_similar)),
+        discovery_id=state.discovery.id,
+    )
 
 
 def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:

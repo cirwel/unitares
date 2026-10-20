@@ -119,6 +119,23 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
 | `UNITARES_MODEL_BASE_URL` / `UNITARES_MODEL_ID` | OpenAI-compatible base URL (`/v1` included) and model id for `consult` and the local reviewer; the older `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` were removed in v3.3.0 and are ignored, so rename them ([Choose a model](02-install.md#choose-a-model-optional)) |
 
+### Search and retrieval flags
+
+Shared-memory search is full-text on the `postgres` backend and semantic on
+`age` (pass `search_mode="fts"` to force full-text). Hybrid fusion, reranking and
+graph expansion are opt-in.
+
+| Variable | Effect |
+|---|---|
+| `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (the compose default) stores findings and serves full-text search, with no graph edges. `age` stores the same rows and also writes the graph in Apache AGE: an `AUTHORED` edge from the writing process, `RELATED_TO` edges to earlier findings that share tags, `TAGGED`, `RESPONDS_TO` for a `response_to` link, and `SUPERSEDES` when a finding replaces another. Semantic search and the replacement id on a superseded result (`superseded_by`) both need `age`; a superseded result is flagged, and its replacement is not fetched into the results. |
+| `UNITARES_EMBEDDING_MODEL` | Picks the embedding model for semantic search (for example `bge-m3`). Unset means `minilm` (all-MiniLM-L6-v2); it does not turn semantic search off. Semantic search needs `sentence-transformers` and the `age` backend. |
+| `UNITARES_ENABLE_HYBRID` | `1` fuses semantic and full-text results with reciprocal rank fusion. Off by default; needs semantic search. |
+| `UNITARES_ENABLE_RERANKER` | `1` re-scores the top candidates with a cross-encoder (`UNITARES_RERANKER_MODEL`). Off by default; needs `sentence-transformers`. |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | Off by default; leave it off. When on, it adds the neighbours each top result lists in its stored `related_to` column. It reads that column, not the AGE edges, and it lets a finding's retrievability grow with its own link count. The docstring of `graph_expansion_enabled` in `src/retrieval.py` explains the feedback loop. |
+
+The graph records who wrote what and what replaced it. It is not an entity or
+fact graph, and search does not traverse its edges.
+
 ## 3.7 Run at login (macOS LaunchAgent)
 
 The repo ships a plist template that renders with your paths and generated secrets:

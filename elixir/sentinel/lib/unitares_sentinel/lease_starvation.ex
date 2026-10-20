@@ -456,8 +456,8 @@ defmodule UnitaresSentinel.LeaseStarvation do
   # Adopt THIS episode's closure and give it its first delivery attempt.
   #
   # The second attempt is guarded on `closure != nil` rather than piped
-  # unconditionally after `owe_closure/2`. `owe_closure(tracker, nil)` is a
-  # pass-through, so an unconditional pipe fires `retry_pending_closure/2`
+  # unconditionally after `owe_closure/2`. A nil closure owes nothing, so an
+  # unconditional pipe fires `retry_pending_closure/2`
   # TWICE in one granted tick whenever this episode never alerted (the normal
   # case) and an older debt is still pending: the identical finding is POSTed
   # twice and two of the five attempts are burned at once. Measured on the
@@ -652,8 +652,6 @@ defmodule UnitaresSentinel.LeaseStarvation do
   # the operator actually cares about. The older debt has already had its own
   # delivery attempt this tick (see `clear/2`) — superseding is what happens
   # after that attempt fails, not instead of it.
-  defp owe_closure(tracker, nil), do: tracker
-
   defp owe_closure(%{lease_blocked_pending_closure: nil} = tracker, episode),
     do: %{tracker | lease_blocked_pending_closure: %{episode: episode, attempts: 0}}
 

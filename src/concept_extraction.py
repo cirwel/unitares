@@ -1,8 +1,8 @@
 """
 Concept Extraction — Option D (Tags Seed, Embeddings Refine)
 
-Reads Tag→Discovery relationships from AGE, fetches embeddings from
-core.discovery_embeddings, and produces Concept nodes by:
+Reads Tag→Discovery relationships from AGE, fetches embeddings from the
+active embedding table (``src.embeddings.get_active_table_name``), and produces Concept nodes by:
   1. Merging similar tags (co-occurrence + embedding cosine > threshold)
   2. Splitting broad tags into sub-Concepts (agglomerative clustering)
   3. Writing Concept vertices and ABOUT/RELATES_TO edges to AGE
@@ -10,6 +10,7 @@ core.discovery_embeddings, and produces Concept nodes by:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections import defaultdict
 from typing import Any, Dict, List, Set
@@ -95,10 +96,40 @@ class ConceptExtractor:
         if not embeddings:
             return {"status": "skipped", "reason": "no embeddings found"}
 
+        # Phases 3-6 are pure CPU (pairwise cosine over every qualifying tag,
+        # then agglomerative clustering). Run them off the event loop: on a
+        # live corpus of ~1000 tags this is seconds of work the server's
+        # request path should not wait behind.
+        tag_embeddings, concepts = await asyncio.to_thread(
+            self._build_concepts_from_embeddings, tag_discoveries, embeddings
+        )
+        if not tag_embeddings:
+            return {"status": "skipped", "reason": "no tags with sufficient embeddings"}
+
+        # Phase 7: Write to graph
+        written = await self._write_to_graph(concepts, tag_discoveries)
+
+        status = "completed" if not written["failures"] else "completed_with_errors"
+        return {
+            "status": status,
+            "tags_processed": len(tag_embeddings),
+            "concepts_planned": len(concepts),
+            "concepts_created": written["concepts"],
+            "about_edges_created": written["about_edges"],
+            "relates_to_edges_created": written["relates_to_edges"],
+            "write_failures": written["failures"],
+        }
+
+    def _build_concepts_from_embeddings(
+        self,
+        tag_discoveries: Dict[str, List[str]],
+        embeddings: Dict[str, np.ndarray],
+    ) -> tuple[Dict[str, np.ndarray], List[Dict[str, Any]]]:
+        """Phases 3-6: tag embeddings, merge, split, and concept definitions."""
         # Phase 3: Compute per-tag mean embeddings
         tag_embeddings = self._compute_tag_embeddings(tag_discoveries, embeddings)
         if not tag_embeddings:
-            return {"status": "skipped", "reason": "no tags with sufficient embeddings"}
+            return tag_embeddings, []
 
         # Phase 4: Merge similar tags (Union-Find)
         co_occurrence = self._compute_co_occurrence(tag_discoveries)
@@ -110,18 +141,7 @@ class ConceptExtractor:
         )
 
         # Phase 6: Build concept definitions
-        concepts = self._build_concepts(split_clusters, tag_discoveries)
-
-        # Phase 7: Write to graph
-        written = await self._write_to_graph(concepts, tag_discoveries)
-
-        return {
-            "status": "completed",
-            "tags_processed": len(tag_embeddings),
-            "concepts_created": written["concepts"],
-            "about_edges_created": written["about_edges"],
-            "relates_to_edges_created": written["relates_to_edges"],
-        }
+        return tag_embeddings, self._build_concepts(split_clusters, tag_discoveries)
 
     async def _fetch_tags_with_discoveries(self) -> Dict[str, List[str]]:
         """Phase 1: Get {tag_name: [discovery_id, ...]} from AGE."""
@@ -374,11 +394,26 @@ class ConceptExtractor:
         concepts: List[Dict[str, Any]],
         tag_discoveries: Dict[str, List[str]],
     ) -> Dict[str, int]:
-        """Phase 7: Write Concepts, ABOUT edges, and RELATES_TO edges to AGE."""
+        """Phase 7: Write Concepts, ABOUT edges, and RELATES_TO edges to AGE.
+
+        A failed write is counted, and the first failure of each kind is logged
+        at WARNING with its error. Failures used to be logged at debug only, so
+        a run that wrote nothing looked the same as a run that never happened.
+        """
         db = get_db()
         concept_count = 0
         about_count = 0
         relates_count = 0
+        failures: Dict[str, int] = defaultdict(int)
+
+        def _record_failure(kind: str, subject: str, error: Exception) -> None:
+            if not failures[kind]:
+                logger.warning(
+                    f"[CONCEPT_EXTRACTION] {kind} write failed for {subject}: "
+                    f"{type(error).__name__}: {error} "
+                    "(later failures of this kind are counted, not logged)"
+                )
+            failures[kind] += 1
 
         # Create Concept nodes and ABOUT edges
         for concept in concepts:
@@ -398,9 +433,9 @@ class ConceptExtractor:
                         await db.graph_query(q, p)
                         about_count += 1
                     except Exception as e:
-                        logger.debug(f"ABOUT edge failed for {disc_id}: {e}")
+                        _record_failure("about_edge", disc_id, e)
             except Exception as e:
-                logger.debug(f"Concept node failed for {concept['concept_id']}: {e}")
+                _record_failure("concept_node", concept["concept_id"], e)
 
         # RELATES_TO edges between concepts sharing discoveries
         for i in range(len(concepts)):
@@ -422,10 +457,15 @@ class ConceptExtractor:
                         await db.graph_query(q, p)
                         relates_count += 1
                     except Exception as e:
-                        logger.debug(f"RELATES_TO edge failed: {e}")
+                        _record_failure(
+                            "relates_to_edge",
+                            f"{concepts[i]['concept_id']}->{concepts[j]['concept_id']}",
+                            e,
+                        )
 
         return {
             "concepts": concept_count,
             "about_edges": about_count,
             "relates_to_edges": relates_count,
+            "failures": dict(failures),
         }
