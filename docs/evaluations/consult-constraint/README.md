@@ -16,13 +16,15 @@ Both records are format-following evidence for one local model and a small set
 of briefs. They are not an estimate of a general failure rate and make no claim
 about advisory quality. The probe is superseded on the reported failure by the
 replay: its synthetic briefs began with `Proposal:` and did not expose the
-case where an imperative brief is read as material to critique. Its six-call
+failure that the replay, from the response text alone, reads as treating an
+imperative brief as material to critique. Its six-call
 result still stands as evidence about those synthetic briefs.
 
 The three replayed samples of the original request share one brief and one
 model, so they are not independent coverage of the wider consultation
 workload. Other purposes and cloud hosts were checked deterministically for
-prompt routing only. The replay also records a separate Claude consultation that
+prompt routing and envelope preservation, not evaluated for live model
+adherence. The replay also records a separate Claude consultation that
 ended with `adapter_status="malformed"`; its cause remains unresolved.
 
 The wrapper itself lives in `src/mcp_handlers/support/consultation.py`.

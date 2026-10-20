@@ -27,7 +27,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 
 ## Index by category
 
-Every current document in this folder has one entry below. Dated notes that no current document depends on are listed under [Archived](#archived).
+Every current document in this folder has one entry below. Dated notes that current documents cite only as provenance are listed under [Archived](#archived).
 
 **Conceptual entries** (read these for the model):
 - [`eisv-proprioception-contract.md`](eisv-proprioception-contract.md) — EISV as proprioceptive telemetry, not an outcome oracle; separates measurement, diagnosis, policy, enforcement, and external labels
@@ -73,7 +73,7 @@ Every current document in this folder has one entry below. Dated notes that no c
 
 ## Archived
 
-Dated notes in [`archive/`](archive/README.md). Archive placement does not reject a finding or change a decision recorded in the note; it says that no current document depends on the note as a live reference.
+Dated notes in [`archive/`](archive/README.md). Archive placement does not reject a finding or change a decision recorded in the note; it says that no current document relies on the note except as provenance or a pointer to its full text.
 
 - [`archive/frontier-brief-2026-09-24.md`](archive/frontier-brief-2026-09-24.md) — source check of an operator-supplied weekly frontier brief (Anthropic oversight metrics, OpenAI assessment principles, WorkWorlds, RoboHarm) mapped onto existing work; records the operator disposition that produced the outcome-binding assurance case
 - [`archive/frontier-brief-2026-10-05.md`](archive/frontier-brief-2026-10-05.md) — source check of the 2026-09-28 to 10-05 brief: configuration manifest as a join over existing write-context fields; the coordination ablation stopped on feasibility

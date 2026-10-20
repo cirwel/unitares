@@ -3,9 +3,9 @@
 Dated notes moved out of the current [ontology index](../README.md) on 2026-10-20.
 Each note keeps its original text, findings and recorded decisions. Archive
 placement does not reject a finding, withdraw a decision, or change a status;
-it says that no current document depends on the note as a live reference.
-Notes that current documents, tests or scripts still cite as reference stay in
-the parent folder.
+it says that no current document relies on the note except as provenance or a
+pointer to its full text. Notes that current documents, tests or scripts still
+cite as live reference stay in the parent folder.
 
 | Note | What it records |
 |---|---|
