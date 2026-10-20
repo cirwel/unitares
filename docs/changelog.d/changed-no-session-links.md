@@ -1,0 +1,1 @@
+- **contract:** the PR ownership bullet no longer mentions harness session links; `UNITARES agent: <uuid>` is the only footer it names.

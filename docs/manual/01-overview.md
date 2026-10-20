@@ -6,14 +6,14 @@ This chapter gives you the mental model and the vocabulary. Read it once; the re
 
 ## 1.1 The problem it solves
 
-Some autonomous-agent failures unfold gradually: loops, repeated tool errors,
-miscalibrated confidence, or movement away from prior behavior. Pre-deploy evals
-and per-action guardrails answer different questions and may not retain this
-longitudinal context.
+Long-running agent work outlives the process that started it. Context windows
+reset, processes restart, and work passes between agents, runtimes and vendors.
+Without a shared record, a successor cannot tell who made a claim, what
+supports it, who challenged it or what actually happened, and an operator
+cannot reconstruct the work afterwards.
 
-UNITARES records check-ins **mid-run** and reports state change to the operator
-and the agent. Whether a change precedes a bad outcome is measured separately;
-the state estimate is not an early-warning guarantee.
+UNITARES keeps that record on a server the operator controls. Each runtime
+keeps its own models, tools and execution loop; the record is what they share.
 
 ## 1.2 Where it fits
 
@@ -23,12 +23,11 @@ UNITARES runs **alongside** your evals and guardrails. It does not replace eithe
 |---|---|---|
 | **Evals** | Is this model good enough to ship? | before deploy |
 | **Guardrails** | Is this *action* allowed right now? | per action |
-| **UNITARES** | What state and evidence does this process have as it works? | continuously, mid-run |
+| **UNITARES** | Who did this work, on what evidence, who challenged it, and what happened? | as the work runs, and afterwards |
 
-It is **not** an output validator, a sandbox, or a hosted agent platform. It is
-an MCP-native, harness-agnostic runtime *state layer* between evals and
-guardrails. MCP is its primary agent-facing contract; it does not own the
-agent's reasoning, tool-execution, or user-interaction loop. (Full scope:
+It is **not** an output validator, a sandbox, or a hosted agent platform. It
+does not own the agent's reasoning, tool-execution, or user-interaction loop;
+MCP is its primary agent-facing contract. (Full scope:
 [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
 
 The first-party **UNITARES Resident** is intended to supply that agent
@@ -37,40 +36,101 @@ contract as every other harness. Its repository currently ships an early
 runtime skeleton, not a usable general-purpose agent. The specialized residents
 shipped as examples in this repository are not that product.
 
-**Use UNITARES if** you run autonomous coding/research/ops/resident agents, want runtime state signals, want agents to check their recorded state before continuing, and want an audit trail of confidence, evidence, drift, and recovery.
+**Use UNITARES if** you run several long-lived agents (coding, research, ops or
+resident), want their work attributable across restarts and handoffs, want
+findings, review and outcomes kept with the process that made them, and want
+agents to read that record before continuing.
 
 ## 1.3 The core loop
 
-The minimal contract starts a process session, then checks in after meaningful
-work:
+A process binds an identity, reads the record before acting, writes what it
+found, checks in after meaningful work, and records the outcome:
 
 ```python
 session = start_session(force_new=True)
+csid = session["client_session_id"]
+
+prior = search_shared_memory(query="flaky upload retry test")  # reads need no identity
+
+finding = store_finding(
+    client_session_id=csid,
+    discovery_type="bug_found",
+    summary="Upload retry test races the mock server's shutdown.",
+)
 
 result = sync_state(
-    response_text=output,
-    complexity=0.6,
-    confidence=0.8,
-    client_session_id=session["client_session_id"],
+    client_session_id=csid,
+    response_text="Fixed the race and ran the focused tests.",
+    complexity=0.4,
+    confidence=0.7,
 )
-action = result.get("action_summary", {}).get("action")
+if result.get("action_summary", {}).get("action") == "pause":
+    handle_pause(result)  # governed writes are held; see §1.5
 
-if action == "pause":  # reject-severity verdicts arrive as pause with sub_action="reject"
-    stop_and_request_review(result)  # implement this in the host client
+record_result(
+    client_session_id=csid,
+    outcome_type="test_passed",
+    prediction_id=result.get("prediction_id"),
+)
 ```
 
-The agent reports **what it did** plus its self-reported `complexity` and `confidence`, and gets back a policy action it can act on using its own state estimate. That's it — no new vocabulary required to *use* it. The vocabulary below is for when you want to act on *why*, not just the action.
+A successor process repeats `search_shared_memory` before acting, and declares
+lineage only when it is taking over from a finished predecessor. The
+[agent session walkthrough](../guides/AGENT_SESSION_WALKTHROUGH.md) captures
+both processes with every response.
 
-## 1.4 The four numbers: EISV
+## 1.4 The record
 
-Each check-in returns four indices built from runtime observations and controller
-history. With the current
-constants, check-ins 1–2 use the Φ cold-start prior, check-ins 3–24 use
-behavioral fixed thresholds, and check-in 25 enables self-relative risk scoring
-against the agent's own history (the target reaches full confidence at 30).
-The coordinates remain smoothed indices; assessment adds comparisons with the
-agent's baseline alongside absolute thresholds. With behavioral-sensor inputs,
-the indices contain these blends:
+The shared record answers five questions about any piece of work:
+
+| Question | Mechanism |
+|---|---|
+| **Who said it?** | Process identity and explicit lineage; lineage grants no authority. |
+| **What supports it?** | Durable findings with their corrections and provenance. The `sync_state` report text is transient; a durable claim needs a finding. |
+| **Who challenged it?** | Structured review that preserves positions, objections, conditions and resolution. |
+| **What happened?** | Typed outcome events with their evidence grade, bound to a check-in's prediction when supplied. |
+| **What can a successor recover?** | Search, review reads, history export and authorized outcome reads. |
+
+- **Identity** — a fresh process mints a fresh agent UUID; cross-process
+  continuity is *declared* and assessed, never silently inherited. See
+  [chapter 4](04-integrating-agents.md#42-identity-rule) and
+  [`../ontology/identity.md`](../ontology/identity.md).
+- **Shared memory (knowledge graph, KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Search it with `search_shared_memory` (no identity needed), write with `store_finding`, and revise with `update_finding`; `supersede` links require the AGE backend. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
+- **Review (dialectic)** — a structured protocol (thesis → antithesis →
+  synthesis) that an agent or operator requests with `request_review`, for
+  disputed work or a disputed decision. Requesting review does not complete it.
+- **Outcomes** — `record_result` stores test, build, exit-code or review
+  results. Evidence from CI or an operator is stronger than an agent-authored
+  outcome; if the agent controls both its confidence and every result record,
+  it can forge a calibrated story.
+
+## 1.5 The policy action
+
+Each `sync_state` check-in returns a policy action. `action_summary.action` is
+always `proceed` or `pause`, qualified by `sub_action`:
+
+| `action` / `sub_action` | Meaning | What the agent should do |
+|---|---|---|
+| `proceed` | Policy permits continuation | Continue working normally |
+| `proceed` / `guide` | Continuation with guidance | Read the guidance text and adjust approach |
+| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | A hard stop: check-ins and new shared-memory entries are refused, not queued; `sub_action` names the cause | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
+| `pause` / `reject` | Legacy or review label for significant concern, normalized to `pause` | Request a dialectic review (`request_review`) to resolve or contest, or bring in a human |
+
+A pause holds governed writes until self-recovery, review, an operator or
+expiry lifts it. Enforcement outside those writes is the host's job. Verdict
+definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py).
+
+## 1.6 The check-in instrument: EISV
+
+The policy action is derived from EISV, a behavioral state estimate computed at
+each check-in. EISV still ships in the core path; its move to an optional module
+subscribed to check-ins follows a
+[staged plan](../proposals/active/eisv-core-boundary-v0.md). You do not need
+its vocabulary to use the record; it matters when you want to act on *why* a
+check-in returned the action it did.
+
+Each check-in returns four indices built from runtime observations and
+controller history:
 
 | | Historical name | What the index contains |
 |---|---|---|
@@ -79,56 +139,27 @@ the indices contain these blends:
 | **S** | Entropy | Drift, regime transitions and complexity divergence, with available continuity and tool features |
 | **V** | Valence | A separately smoothed raw `E_obs − I_obs` gap |
 
-Physical sensor inputs can also enter the behavioral smoothing stage. Inspect
-the input provenance: `primary_eisv_source=behavioral` identifies that output
-path, not necessarily a behavioral-sensor input.
+The historical names carry intended interpretations; the implemented indices
+are defined by their inputs and transformations. Check-ins 1–2 use a cold-start
+prior, check-ins 3–24 use fixed behavioral thresholds, and from check-in 25 risk
+scoring is also relative to the agent's own history. Prior decisions feed back
+into E, so a policy response can change later readings without a change in task
+inputs.
 
-V has its own smoothing rate, so it carries temporal information that generally
-cannot be recovered by subtracting current E and I. Its sign records the
-direction of the smoothed observation gap. Prior decisions also feed back into
-E: a policy response can change later readings without a change in task inputs.
-These are inspectable features of the instrument, not independent confirmation
-of its judgments.
+The policy action also carries a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`): proximity to the nearest measurable decision threshold (risk, void or coherence). Read `margin_scope` and `unmeasurable_edges` with it.
 
-The live policy combines behavioral assessment with ODE structural checks for
-basin, void and coherence. The historical names carry intended interpretations;
-the implemented indices are defined by their inputs and transformations. See
-[chapter 5](05-reading-the-signals.md) and
-[`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md) for formulas, provenance and a
-worked example.
+Two related fields need care. **Coherence** is an overloaded compatibility
+field: read `coherence_source` and `coherence_role` with it. The default
+`legacy_tanh_v` value is directional ODE control feedback, while the dormant
+manifold producer is a structural E/I/S measurement; neither is an outcome or
+health score. **Ethical drift** is a four-signal vector (calibration deviation,
+complexity divergence, change in the configured coherence signal, stability
+deviation) that feeds S and inherits the coherence producer's semantics; it is
+not independent outcome evidence.
 
-## 1.5 The verdict
-
-The decision engine returns `proceed` or `pause`, qualified by a sub-action.
-Responses expose `guide` as a policy action; reject-severity decisions use
-`action="pause"` with `sub_action="reject"`:
-
-| Verdict | Meaning | What the agent should do |
-|---|---|---|
-| `proceed` | Policy permits continuation | Continue working normally |
-| `guide` | Continuation with guidance | Read the guidance text and adjust approach |
-| `pause` | A hard stop: check-ins and new shared-memory entries are refused, not queued | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
-| `reject` | Significant concern | Open a dialectic review to resolve/contest, or bring in a human |
-
-Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) indicating proximity to the nearest measurable *decision threshold* — risk, void, or coherence — which is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. Verdict definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py); the margin levels come from `GovernanceConfig.compute_proprioceptive_margin`.
-
-## 1.6 Supporting concepts
-
-- **Coherence** — an overloaded compatibility field. Read `coherence_source` and `coherence_role` with it: the default `legacy_tanh_v` value is directional ODE control feedback, while the dormant manifold producer is a structural E/I/S measurement. Neither is an outcome or health score.
-- **Ethical drift** — a four-signal vector (calibration deviation, complexity divergence, change in the configured coherence signal, stability deviation) that feeds entropy. The component inherits the coherence producer's semantics; it is not independent outcome evidence.
-- **Calibration** — the system tracks whether stated `confidence` matches
-  recorded outcomes such as tests, exit codes, or review labels. Evidence from
-  CI or an operator is stronger than an agent-authored outcome; if the agent
-  controls both channels, calibration can be forged. The calibration input
-  currently blended into I on the handler path is a lifetime fleet aggregate of
-  strategic confidence-versus-trajectory-health bins, not a current-claim check.
-- **Knowledge graph (KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
-- **Dialectic** — a structured recovery/review protocol (thesis → antithesis
-  → synthesis) that an agent or operator can request after a disputed decision.
-- **Identity** — a fresh process mints a fresh agent UUID; cross-process
-  continuity is *declared* and assessed, never silently inherited. See
-  [chapter 4](04-integrating-agents.md#42-identity-rule) and
-  [`../ontology/identity.md`](../ontology/identity.md).
+[Chapter 5](05-reading-the-signals.md#55-the-eisv-instrument) and
+[`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md) give the formulas,
+provenance and a worked example.
 
 ## 1.7 Inspect the signal; evaluate its use
 

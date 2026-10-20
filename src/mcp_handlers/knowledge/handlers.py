@@ -12,12 +12,13 @@ Performance:
 Claude Desktop compatible: All operations are async and non-blocking.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
+import asyncio
 import hashlib
 import json
 import os
@@ -114,7 +115,7 @@ from src.recall_telemetry import (
     record_recall_event,
 )
 from ..support.coerce import LimitError, parse_limit
-from ..support.llm_delegation import synthesize_results
+from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
@@ -188,6 +189,9 @@ _LEAN_DISCOVERY_FIELDS = (
     "imported_memory",
     "closure_class",
     "resolution_notes",
+    # Set only on rows the archived/cold second pass appended, so a lean
+    # reader can tell an aged-out row from a current one.
+    "retrieval_tier",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
     # told a reader what a finding says but not who wrote it (#2386); the
@@ -290,6 +294,17 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         if payload.get(key) is not None
     }
+    # The archived/cold second pass reports itself here too: its counts when
+    # it added rows (the long note stays in full mode), or why the page holds
+    # first-pass rows only. search_shared_memory reads this lean payload, so
+    # without these its digest could not say either.
+    archived_cold = payload.get("archived_cold_fallback")
+    if isinstance(archived_cold, dict):
+        lean_payload["archived_cold_fallback"] = {
+            key: value for key, value in archived_cold.items() if key != "note"
+        }
+    if payload.get("archived_cold_fallback_error"):
+        lean_payload["archived_cold_fallback_error"] = payload["archived_cold_fallback_error"]
     lean_payload["discoveries"] = lean_discoveries
     lean_payload["discovery_retrieval_options"] = {
         "current_tier": "lean_digest",
@@ -729,7 +744,9 @@ def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     return get_context_agent_id()
 
 
-async def _annotate_supersession(discovery_list: list, graph) -> None:
+async def _annotate_supersession(
+    discovery_list: list, graph, *, deadline: Optional[float] = None,
+) -> None:
     """Flag superseded rows in a result list so agents don't cite stale notes.
 
     Agent-facing trust signal (2026-06-21). Default search excludes archived/cold
@@ -738,6 +755,11 @@ async def _annotate_supersession(discovery_list: list, graph) -> None:
     `status` (free) and best-effort attaches the replacement id(s) from the AGE
     SUPERSEDES edge. Mutates `discovery_list` in place; fail-soft (a graph error
     still leaves the free status-based flag).
+
+    With a ``deadline`` (search's monotonic budget), the replacement-id lookup
+    gets only what is left of it, less SUPERSESSION_LOOKUP_RESERVE_S, and is
+    stopped the way an overrunning archived/cold pass is: the rows keep the free
+    flag and lose only ``superseded_by``.
     """
     superseded_ids = [
         d["id"] for d in discovery_list
@@ -748,7 +770,10 @@ async def _annotate_supersession(discovery_list: list, graph) -> None:
     successors: Dict[str, list] = {}
     if hasattr(graph, "get_superseded_by"):
         try:
-            successors = await graph.get_superseded_by(superseded_ids)
+            if deadline is None:
+                successors = await graph.get_superseded_by(superseded_ids)
+            else:
+                successors = await _bounded_supersession_lookup(graph, superseded_ids, deadline)
         except Exception as exc:  # noqa: BLE001 — advisory flag, never break search
             logger.debug(f"[KG_SEARCH] supersession lookup failed (non-fatal): {exc}")
     for d in discovery_list:
@@ -1952,6 +1977,14 @@ def _attach_store_related_discoveries(response: dict[str, Any], state: _Knowledg
         f"{len(unique_agents)} agent(s), all still open. Consider superseding "
         "older entries or resolving them."
     )
+    # The scheduled synthesis pass rolls these topics up next
+    # (src/kg_synthesis_schedule.py); before it, the hint went nowhere.
+    from src.kg_synthesis_schedule import hint_topics, record_consolidation_hint
+
+    record_consolidation_hint(
+        hint_topics(state.discovery.tags, (item.tags for item in open_similar)),
+        discovery_id=state.discovery.id,
+    )
 
 
 def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
@@ -2071,6 +2104,11 @@ class _KnowledgeSearchRequest:
     # Opt-in recency weight on the relevance score (operator decision
     # 2026-09-27: per call, default off). None = no weighting.
     recency_half_life_days: Optional[float] = None
+    # The caller's literal include_archived / include_cold: None when unsent.
+    # An explicit false keeps that status out of the archived/cold second
+    # pass; the plain booleans above cannot tell false from unsent.
+    include_archived_explicit: Optional[bool] = None
+    include_cold_explicit: Optional[bool] = None
 
     @property
     def query_terms(self) -> list[str]:
@@ -2115,6 +2153,14 @@ class _KnowledgeSearchState:
     # Unpromoted imported-memory rows the queryless listing skipped while
     # filling its page (see _omits_imported_lane).
     imported_omitted: int = 0
+    # Archived/cold rows appended by the second pass (_apply_archived_cold_tier).
+    archived_cold_ids: set[str] = field(default_factory=set)
+    archived_cold_primary_count: int = 0
+    archived_cold_statuses: list[str] = field(default_factory=list)
+    archived_cold_error: Optional[str] = None
+    # time.monotonic() at which the handler's timeout fires; None when the
+    # search runs outside handle_search_knowledge_graph (no budget to keep).
+    deadline: Optional[float] = None
 
 
 def _optional_flag(value: Any) -> Optional[bool]:
@@ -2370,8 +2416,12 @@ def _parse_knowledge_search_request(
         discovery_type=arguments.get("discovery_type"),
         severity=arguments.get("severity"),
         status=status,
-        include_archived=arguments.get("include_archived", False),
-        include_cold=arguments.get("include_cold", False),
+        # Parsed, not read raw: the string "false" is truthy, and used to
+        # switch the status filter it names off.
+        include_archived=_optional_flag(arguments.get("include_archived")) is True,
+        include_cold=_optional_flag(arguments.get("include_cold")) is True,
+        include_archived_explicit=_optional_flag(arguments.get("include_archived")),
+        include_cold_explicit=_optional_flag(arguments.get("include_cold")),
         authority_mode=authority_mode,
         sort_by=sort_by,
         created_after=created_after,
@@ -3187,6 +3237,218 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
         logger.debug("Semantic→FTS fallback failed: %s", exc)
 
 
+# A query search that finds fewer active rows than this runs a second pass
+# over archived and cold rows (KG decision 2026-09-29T04:11:58.480600+00:00,
+# proposal 1). About two thirds of the graph is archived or cold, and lifecycle
+# aging moves a row there by age alone, so a default search could miss the only
+# entry that answers the question.
+ARCHIVED_COLD_MIN_RESULTS = 3
+# Second-pass rows sit after every active row; their reported scores are
+# multiplied by this so the numbers agree with the order.
+ARCHIVED_COLD_SCORE_PENALTY = 0.5
+ARCHIVED_COLD_TIER = "archived_cold_fallback"
+# search_knowledge_graph's handler timeout. The second pass is optional, so it
+# gets only what the first pass left of this budget, less this reserve for
+# building the response. Without the bound, a slow second pass ran into the
+# handler timeout and the caller lost the first page it had already earned.
+KNOWLEDGE_SEARCH_TIMEOUT_S = 15.0
+ARCHIVED_COLD_RESPONSE_RESERVE_S = 3.0
+# Second passes the handler stopped waiting for, kept referenced until they
+# finish unwinding so the loop does not collect them mid-cancel.
+_ABANDONED_ARCHIVED_COLD_PASSES: set[asyncio.Task] = set()
+# Search synthesis (synthesize=true) is bounded by the same budget: its LLM
+# request timeout is what is left, less this reserve and call_local_llm's
+# wait buffer, capped at the old fixed 30s; under the minimum it is skipped.
+SEARCH_SYNTHESIS_MAX_TIMEOUT_S = 30.0
+SEARCH_SYNTHESIS_RESERVE_S = 1.0
+SEARCH_SYNTHESIS_MIN_TIMEOUT_S = 2.0
+# The replacement-id lookup for superseded rows runs last, after the optional
+# second pass may have spent the budget down to its reserve, so it gets what is
+# left less this reserve for building the response.
+SUPERSESSION_LOOKUP_RESERVE_S = 1.0
+
+
+def _archived_cold_widening(request: _KnowledgeSearchRequest) -> Optional[dict[str, bool]]:
+    """The include flags a second pass would turn on, or None when it should not run.
+
+    Query searches only: a queryless listing is a newest-first poll of a known
+    lane, and padding it with stale rows would hand a poller old work as new.
+    An explicit status filter already says which statuses the caller wants,
+    and an explicit include_archived=false / include_cold=false keeps that
+    status out.
+    """
+    if not request.query_text or request.status:
+        return None
+    widen_archived = not request.include_archived and request.include_archived_explicit is not False
+    widen_cold = not request.include_cold and request.include_cold_explicit is not False
+    if not (widen_archived or widen_cold):
+        return None
+    return {
+        "include_archived": request.include_archived or widen_archived,
+        "include_cold": request.include_cold or widen_cold,
+    }
+
+
+async def _run_archived_cold_pass(second: _KnowledgeSearchState, limit: int) -> None:
+    await _run_text_search(second)
+    await _apply_semantic_fts_fallback(second)
+    if second.fallback_used:
+        second.results = _rank_search_documents(second, second.results)[:limit]
+
+
+def _settle_abandoned_pass(task: asyncio.Task) -> None:
+    _ABANDONED_ARCHIVED_COLD_PASSES.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.debug("[KG_SEARCH] abandoned archived/cold pass ended with: %s", task.exception())
+
+
+async def _bounded_supersession_lookup(
+    graph, superseded_ids: list, deadline: float,
+) -> Dict[str, list]:
+    """``get_superseded_by`` within what is left of the search budget.
+
+    An empty mapping when no time is left or the lookup overruns; the overrun
+    task is stopped like an abandoned second pass. Cancelling the request
+    cancels the lookup too.
+    """
+    budget = deadline - SUPERSESSION_LOOKUP_RESERVE_S - time.monotonic()
+    if budget <= 0:
+        logger.info("[KG_SEARCH] supersession lookup skipped: search budget spent")
+        return {}
+    task = asyncio.create_task(graph.get_superseded_by(superseded_ids))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=budget)
+    except asyncio.CancelledError:
+        _abandon_archived_cold_pass(task)
+        raise
+    if not done:
+        _abandon_archived_cold_pass(task)
+        logger.warning(
+            "[KG_SEARCH] supersession lookup did not finish within %.1fs; "
+            "returning superseded rows without superseded_by", budget,
+        )
+        return {}
+    return task.result()
+
+
+def _abandon_archived_cold_pass(task: asyncio.Task) -> None:
+    """Stop a second pass the handler no longer waits for.
+
+    The cancel stops later retrieval stages from starting. A statement already
+    running on the ExecutorPool loop may still finish there (CPython #105836);
+    nothing reads its result.
+    """
+    task.cancel()
+    _ABANDONED_ARCHIVED_COLD_PASSES.add(task)
+    task.add_done_callback(_settle_abandoned_pass)
+
+
+async def _apply_archived_cold_tier(
+    state: _KnowledgeSearchState,
+    *,
+    first_pass_s: float = 0.0,
+) -> None:
+    """Fill a short page from archived and cold rows, ranked below every active row.
+
+    Re-runs the same retrieval with the widened status filter, so ranking,
+    tag, window, label and authority rules are the ones the first pass used.
+    Only rows the first pass hid by status are added.
+
+    The pass is optional, so it never costs the caller the first page. With a
+    deadline it is skipped when what remains (less the response reserve) is
+    shorter than the first pass took, and otherwise the handler stops waiting
+    for it when that remainder runs out. Either way the first page comes back
+    with archived_cold_error saying why. The pass runs as its own task so the
+    handler can stop waiting without a timeout wrapper around the retrieval;
+    cancellation of the whole request still propagates.
+    """
+    request = state.request
+    threshold = min(ARCHIVED_COLD_MIN_RESULTS, request.limit)
+    if len(state.results) >= threshold:
+        return
+    widening = _archived_cold_widening(request)
+    if widening is None:
+        return
+
+    budget: Optional[float] = None
+    if state.deadline is not None:
+        budget = state.deadline - ARCHIVED_COLD_RESPONSE_RESERVE_S - time.monotonic()
+        if budget <= 0 or budget < first_pass_s:
+            state.archived_cold_error = (
+                f"second pass skipped: {max(budget, 0.0):.1f}s of the "
+                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget was left after a "
+                f"{first_pass_s:.1f}s first pass; returning the first page only"
+            )
+            logger.info("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
+            return
+
+    second = _KnowledgeSearchState(
+        request=replace(request, **widening),
+        graph=state.graph,
+    )
+    task = asyncio.create_task(_run_archived_cold_pass(second, request.limit))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=budget)
+    except asyncio.CancelledError:
+        # The request itself was cancelled: take the pass down with it.
+        _abandon_archived_cold_pass(task)
+        raise
+    if not done:
+        _abandon_archived_cold_pass(task)
+        state.archived_cold_error = (
+            f"second pass did not finish within the {budget:.1f}s left of the "
+            f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget; returning the first page only"
+        )
+        logger.warning("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
+        return
+    if task.cancelled():
+        state.archived_cold_error = "second pass was cancelled; returning the first page only"
+        return
+    exc = task.exception()
+    if exc is not None:
+        if not isinstance(exc, Exception):
+            raise exc
+        logger.warning("[KG_SEARCH] archived/cold second pass failed: %s", exc)
+        state.archived_cold_error = str(exc)
+        return
+
+    seen = {document.id for document in state.results}
+    room = request.limit - len(state.results)
+    added = [
+        document
+        for document in second.results
+        if document.id not in seen and not _candidate_status_visible(document, request)
+    ][:room]
+    if not added:
+        return
+
+    state.archived_cold_primary_count = len(state.results)
+    state.archived_cold_statuses = [
+        status
+        for status, widened in (
+            ("archived", widening["include_archived"] and not request.include_archived),
+            ("cold", widening["include_cold"] and not request.include_cold),
+        )
+        if widened
+    ]
+    for document in added:
+        state.archived_cold_ids.add(document.id)
+        for source, target in (
+            (second.semantic_scores, state.semantic_scores),
+            (second.rerank_scores, state.rerank_scores),
+            (second.rrf_scores, state.rrf_scores),
+        ):
+            if document.id in source:
+                target[document.id] = source[document.id] * ARCHIVED_COLD_SCORE_PENALTY
+    if state.fts_anchor_ids is not None and second.fts_anchor_ids:
+        state.fts_anchor_ids.update(
+            document.id for document in added if document.id in second.fts_anchor_ids
+        )
+    state.results = list(state.results) + added
+    if not state.search_mode:
+        state.search_mode = second.search_mode
+
+
 def _candidate_matches_semantic_fallback(
     document: Any,
     request: _KnowledgeSearchRequest,
@@ -3312,6 +3574,8 @@ def _serialize_search_discoveries(
                 item["provenance_chain"] = document.provenance_chain
         annotate_resolution_notes(item, document)
         annotate_imported_read(item, document)
+        if document.id in state.archived_cold_ids:
+            item["retrieval_tier"] = ARCHIVED_COLD_TIER
         discoveries.append(item)
     return discoveries
 
@@ -3391,6 +3655,26 @@ def _attach_search_diagnostics(
             "No exact matches found. Retried with individual terms (OR operator)."
         )
         response["fallback_terms"] = str(state.request.query_text).split()[:3] if state.request.query_text else []
+    if state.archived_cold_ids:
+        statuses = " and ".join(state.archived_cold_statuses)
+        response[ARCHIVED_COLD_TIER] = {
+            "used": True,
+            "primary_count": state.archived_cold_primary_count,
+            "added": len(state.archived_cold_ids),
+            "statuses_searched": state.archived_cold_statuses,
+            "threshold": ARCHIVED_COLD_MIN_RESULTS,
+            "score_penalty": ARCHIVED_COLD_SCORE_PENALTY,
+            "note": (
+                f"Only {state.archived_cold_primary_count} active result(s) matched, "
+                f"so a second pass searched {statuses} rows. Those rows come after "
+                f"every active result, carry retrieval_tier='{ARCHIVED_COLD_TIER}', "
+                f"and their scores are multiplied by {ARCHIVED_COLD_SCORE_PENALTY}. "
+                "Check status and superseded_by before relying on one. Pass "
+                "include_archived=false or include_cold=false to leave that status out."
+            ),
+        }
+    elif state.archived_cold_error:
+        response[f"{ARCHIVED_COLD_TIER}_error"] = state.archived_cold_error
 
     authority_counts: dict[str, int] = {}
     for document in state.results:
@@ -3664,12 +3948,33 @@ async def _attach_search_synthesis(
     if len(discoveries) < 3:
         response["_synthesis_note"] = "Synthesis skipped: fewer than 3 results"
         return
+    # The LLM call gets what retrieval left of the handler's budget, less a
+    # reserve for the rest of the response. Without this a slow model ran
+    # into the handler timeout and the caller lost the results it had: the
+    # archived/cold second pass makes that likelier, since filling a short
+    # page to 3 rows is what turns synthesis on.
+    llm_timeout = SEARCH_SYNTHESIS_MAX_TIMEOUT_S
+    if state.deadline is not None:
+        llm_timeout = min(
+            llm_timeout,
+            state.deadline
+            - time.monotonic()
+            - SEARCH_SYNTHESIS_RESERVE_S
+            - LOCAL_LLM_WAIT_BUFFER_S,
+        )
+        if llm_timeout < SEARCH_SYNTHESIS_MIN_TIMEOUT_S:
+            response["_synthesis_note"] = (
+                "Synthesis skipped: too little of the "
+                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget left after retrieval"
+            )
+            return
     try:
         synthesis = await synthesize_results(
             discoveries=discoveries,
             query=state.request.query_text,
             max_discoveries=10,
             max_tokens=400,
+            timeout=llm_timeout,
         )
         if synthesis:
             response["synthesis"] = synthesis
@@ -3692,6 +3997,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _apply_semantic_fts_fallback(state)
     if state.fallback_used:
         state.results = _rank_search_documents(state, state.results)[: state.request.limit]
+    await _apply_archived_cold_tier(state, first_pass_s=time.perf_counter() - started_at)
     record_ms(
         f"knowledge.search.{state.search_mode}",
         (time.perf_counter() - started_at) * 1000.0,
@@ -3705,7 +4011,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
         state,
         include_details=include_details,
     )
-    await _annotate_supersession(discoveries, state.graph)
+    await _annotate_supersession(discoveries, state.graph, deadline=state.deadline)
 
     response = _base_search_response(
         state,
@@ -3725,7 +4031,13 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _attach_search_synthesis(response, state, discoveries)
 
     writers = list({document.agent_id for document in state.results if document.agent_id})[:10]
-    await _broadcast_knowledge_read(
+    # Sent in the background: the response does not depend on it, and a
+    # stalled dashboard WebSocket can hold a broadcast for 2s per send plus
+    # 2s per close, which no response reserve should have to cover. The
+    # payload (reader identity included) is built here, before returning.
+    from src.background_tasks import create_tracked_task
+
+    create_tracked_task(_broadcast_knowledge_read(
         "search",
         _resolve_reader_agent_id(state.request.arguments),
         payload={
@@ -3746,21 +4058,26 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
             "writer_agent_ids": writers,
             "filter_agent_id": state.request.agent_id,
         },
-    )
+    ), name="knowledge_read_broadcast")
     return response
 
 
-@mcp_tool("search_knowledge_graph", timeout=15.0, requires_identity="pre_onboard")
+@mcp_tool("search_knowledge_graph", timeout=KNOWLEDGE_SEARCH_TIMEOUT_S, requires_identity="pre_onboard")
 @_knowledge_read_response_mode
 async def handle_search_knowledge_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
     """Search the KG through the explicit retrieval and response pipeline."""
+    # The decorator's timeout started a moment earlier; the second pass's
+    # response reserve covers the difference.
+    deadline = time.monotonic() + KNOWLEDGE_SEARCH_TIMEOUT_S
     arguments = apply_param_aliases("search_knowledge_graph", arguments)
     try:
         graph = await get_knowledge_graph()
         request = _parse_knowledge_search_request(arguments)
-        response = await _execute_knowledge_search(_KnowledgeSearchState(request=request, graph=graph))
+        response = await _execute_knowledge_search(
+            _KnowledgeSearchState(request=request, graph=graph, deadline=deadline)
+        )
         return success_response(response, arguments=arguments)
     except _SearchParameterError as exc:
         return [error_response(str(exc))]

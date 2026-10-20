@@ -2,7 +2,16 @@
 
 Status: live operator guide. Use for local operational procedures and triage, not for architecture truth.
 
-This is the simplest local operator path for running Unitares governance on the Mac host.
+Local operator procedures for a single host.
+
+**Docker Compose install** (the default in the [manual](../manual/02-install.md)):
+`./scripts/unitares start`, `./scripts/unitares stop` (stops the containers;
+it does not remove them) and `./scripts/unitares logs [service]`.
+`./scripts/unitares status`, `health` and `diag` are read-only checks; see
+[Status at a Glance](#status-at-a-glance).
+
+**Native install** (for example macOS with Homebrew PostgreSQL): use the
+scripts below. Most of the remaining sections apply to both.
 
 ## Start
 
@@ -53,7 +62,7 @@ If you already know dependencies are ready and only want the server:
 ./scripts/ops/stop_unitares.sh
 ```
 
-This attempts a graceful stop first, then force-kills only if needed, and cleans up the real `data/.mcp_server.*` files in the repo root.
+This attempts a graceful stop first, then force-kills only if needed, and cleans up the `data/.mcp_server.*` files in the repo root. It matches by process name: it signals **every** `mcp_server.py` process on the host, not only this checkout's. It also ignores `UNITARES_SERVER_PID_FILE` / `UNITARES_SERVER_LOCK_FILE` overrides. When the server runs under a service manager that restarts it (the shipped LaunchAgent template sets `KeepAlive`), stop it through that service manager instead.
 
 ## Health Check
 
@@ -64,8 +73,9 @@ This attempts a graceful stop first, then force-kills only if needed, and cleans
 This verifies:
 
 - local HTTP health on `http://127.0.0.1:8767/health`
-- whether `data/.mcp_server.pid` maps to a live process
+- whether `data/.mcp_server.pid` maps to a live process (a ⚠ rather than ✗ when HTTP is healthy: another checkout or service may own the server)
 - whether PostgreSQL is reachable at `DB_POSTGRES_URL`
+- whether the durable `knowledge.discoveries` count matches the AGE `Discovery` vertex count. This comparison is meaningful only with `UNITARES_KNOWLEDGE_BACKEND=age`. Under the default backend (`auto`, which selects `postgres`), discoveries are not written to AGE, so once any discovery exists the script reports `Knowledge graph drift` and exits 1 even on a healthy install.
 
 The `health_check()` tool now also returns `operator_summary`:
 
@@ -79,7 +89,7 @@ Use `first_action` as the initial remediation hint instead of reading every comp
 
 `not_configured_checks` lists components that are neither healthy nor failing, and they do not move `overall_status`. A check reports `not_configured` when an optional part is not set up, for example no embedder installed and no `UNITARES_EMBEDDING_MODEL` named, so knowledge search uses Postgres full-text search. It reports `no_data_yet` when there is nothing to read yet, for example an audit log that no event has written. An embedder that was asked for and is missing is still `degraded`, and an audit log whose directory cannot be written is still a `warning`.
 
-For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis, such as Redis, calibration DB, the knowledge graph and the lease plane. It does **not** report Pi connectivity — the Mac→Pi coupling was retired by operator decision (#2189). The authoritative list is whatever `get_health_check_data` in `src/services/runtime_queries.py` assembles into `checks[...]`; read it there rather than trusting an enumeration in prose.
+For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis, such as Redis, calibration DB, the knowledge graph and the lease plane. It reports only this server's own components; services outside it belong to the deployment's own monitoring. The authoritative list is whatever `get_health_check_data` in `src/services/runtime_queries.py` assembles into `checks[...]`; read it there rather than trusting an enumeration in prose.
 
 ## Status at a Glance
 
@@ -124,7 +134,7 @@ kept distinct.
 
 UUID is an identity anchor, not sufficient proof that the current execution context owns that identity. The `identity()` response includes:
 
-- `identity_status` (`created` or `resumed`)
+- `identity_status` (`created`, `resumed`, or `reactivated`)
 - `bound_identity` (`uuid`, `agent_id`, `display_name`)
 - `session_resolution_source` (for diagnosing unexpected forks)
 
@@ -190,9 +200,13 @@ S20 migration.
 
 Symptom:
 
-- `check_health.sh` reports `PID file: stale or unreadable`
+- `check_health.sh` reports `✗ PID file: stale or unreadable` with HTTP down
 
-Fix:
+A `⚠` with HTTP healthy is not this failure: another checkout or a service
+manager owns the running server, so leave it alone.
+
+Fix (native install, server not under a restarting service manager; see
+[Stop](#stop) for what the stop script signals):
 
 ```bash
 ./scripts/ops/stop_unitares.sh
@@ -209,6 +223,9 @@ Fix:
 
 ```bash
 pg_isready -d "$DB_POSTGRES_URL"
+# Docker Compose install:
+./scripts/unitares start
+# Native Homebrew install:
 brew services start postgresql@17
 ./scripts/ops/start_with_deps.sh
 ```
@@ -237,7 +254,7 @@ Those are the paths `scripts/ops/com.unitares.governance-mcp.plist` sets via
 `StandardOutPath` / `StandardErrorPath`, so they are the right ones whenever the
 server runs under launchd — the macOS LaunchAgent install option. A Docker
 Compose install logs through its container runtime instead
-(`docker compose logs -f governance-mcp`).
+(`./scripts/unitares logs governance-mcp`).
 
 If instead you started it by hand with `start_with_deps.sh`, there is no log
 file: that path execs `start_server.sh`, which execs `python3 src/mcp_server.py`
@@ -283,22 +300,11 @@ Fix:
 - if the process is taking over from a predecessor that has exited, include `parent_agent_id=<prior uuid>` and `spawn_reason="explicit"`; co-location with a live agent is not lineage and is rejected
 - avoid bare `identity(agent_uuid=..., resume=true)`; use a matching `continuity_token` only for same-owner rebinding
 
-### Start script exits unexpectedly
-
-Symptom:
-
-- the wrapper script starts the server and then the process exits during shutdown/cleanup
-
-Interpretation:
-
-- This points to process-management or event-loop cleanup behavior, not necessarily a core governance failure
-- confirm with `health_check()` whether a live server is still reachable before assuming the whole stack is down
-
 ## Practical Triage Order
 
 When something feels wrong, do the checks in this order:
 
-1. Run `./scripts/diagnostics/check_health.sh`
+1. Run `./scripts/diagnostics/check_health.sh` (under the default knowledge backend, ignore its `Knowledge graph drift` line; see [Health Check](#health-check))
 2. If HTTP is up, call `health_check()`
 3. If an agent identity looks wrong, read it with `agent(action="get", agent_id=...)` — never with that agent's `client_session_id`, which is its possession proof and would bind you as it; a bare `identity()` is no better, since it mints a fresh identity instead of reading one
 4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
