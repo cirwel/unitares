@@ -88,6 +88,16 @@
     })),
   };
 
+  // Cross-agent knowledge flow: builder linked a finding to one source wrote.
+  const flowAgents = recentAgents.agents.map((a) => a.name);
+  const knowledgeFlow = {
+    graphAvailable: true,
+    flows: [[1, 0, 21], [2, 0, 14], [2, 1, 9], [3, 1, 6], [0, 3, 4], [4, 2, 2]].map(([b, s, n]) => ({
+      builder: "example-" + b, source: "example-" + s, links: n,
+      builderLabel: flowAgents[b % flowAgents.length], sourceLabel: flowAgents[s % flowAgents.length],
+    })),
+  };
+
   // ── dialectic ───────────────────────────────────────────────────────────────
   const TOPICS = [
     "Agent paused after a burst of failed tool calls; asks to resume with a smaller batch size.",
@@ -171,6 +181,7 @@
     agentsSummary: { total: 40, active: 36, archived: 4, paused: 0, observed: 20, unobserved: 20, live: 5, presenceUnknown: 3, presenceUnavailable: 0 },
     agentsList,
     discoveries,
+    knowledgeFlow,
     dialectic,
     activity,
     eisv: eisvChart,
