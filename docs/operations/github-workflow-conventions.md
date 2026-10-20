@@ -171,7 +171,7 @@ holds automatic review, even when a request is present.
 The opted-in shared host reviews a quiet PR and posts the existing diff-bound
 review record on that PR. One provider attempt runs per scheduled tick. For
 an explicitly requested sensitive diff, a later tick selects an eligible
-missing model family; the normal cycle budget, provider pauses and retry
+missing model family from the host's configured choices; the normal cycle budget, provider pauses and retry
 limits still apply. Findings require author action before another family is
 started. A request never authorizes extra cycles or an operator waiver.
 
@@ -270,12 +270,13 @@ review in the body, some in a comment, most in neither, and nothing could tell
 which. It is now a command and a status check, the way `test-cache.sh` made
 the test run one.
 
-- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
-  reviewer session, defaulting to pinned Codex Sol medium, read-only, within
+- `./scripts/dev/review.sh --reviewer PROVIDER` reviews the PR diff for `HEAD`
+  in a fresh reviewer session, read-only, within
   a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
-  requests the shared host or runs the same command locally. If a review
+  chooses the provider and requests a configured shared host or runs the same
+  command locally. Set `UNITARES_REVIEWER` when using `ship.sh`. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
@@ -346,7 +347,7 @@ there is no automatic paid cascade. Temporary provider disables may name a
 restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
 
-Native Codex is an optional default for an operator who has enabled GitHub
+Native Codex is an optional route for a caller who selects Codex and enables GitHub
 code review. On the reference deployment's UNITARES repo, native requests are owned by
 the author/sweep workflow: repository auto review is **Follow personal**, and
 the shared account's personal **Auto review is off**. Explicit native review
@@ -364,8 +365,9 @@ had already passed native review. The command-owned request avoids both
 retriggers. Authors run `review.sh` for changed diffs as part of delivery;
 the operator does not need to request reviews or chase their comments.
 
-`review.sh` first reads native completion evidence for the current commit. If
-nothing has started after 30 seconds, it posts one `@codex review` request
+`review.sh` reads native completion evidence regardless of provider choice.
+With `UNITARES_REVIEWER=codex` and `review.native=true`, if nothing has started
+after 30 seconds, it posts one `@codex review` request
 bound to the head and diff; this covers drafts that automatic review misses.
 It waits up to ten minutes within the total review budget. A known running
 native review returns pending rather than starting a local fallback, including
@@ -373,6 +375,9 @@ with `--fresh` or `--reviewer`. Only absent/terminal unavailable native runs
 allow a local attempt. Existing requests are reused, and an expired request is not
 posted again on each sweep. `--reviewer` selects the local provider (without overlapping native work);
 `--fresh` can re-review clean evidence but cannot bypass unresolved findings.
+The sweep passes its selected provider through `UNITARES_REVIEWER` for the
+first pass, preserving this optional native route when it selects Codex.
+Required-family passes use an explicit local provider and `--fresh`.
 
 The adapter recognizes the official Codex bot's submitted reviews and explicit
 clean comments naming the reviewed commit. It also joins a completed activity
@@ -519,11 +524,81 @@ qualify. Findings remain visible for the proposal's author; design suggestions
 do not block merging a proposal. Merging it does not authorize implementation,
 which requires correctness review under the ordinary/security rules above.
 
+#### Reviewer selection is an agent decision
+
+The authoring agent chooses a reviewer for the actual change. Consider useful
+independent perspective (including another model family), prior-review continuity
+for bounded corrections, provider availability, budgets, and required family
+coverage. No provider is preferred universally. Briefly explain the choice in
+the PR body or review handoff; no additional model call is needed to select one.
+Findings still require fixes or dispositions regardless of the chosen provider.
+
+Pass `--reviewer codex`, `--reviewer claude`, or `--reviewer antigravity` to
+`review.sh`. A caller may instead set `UNITARES_REVIEWER` to one of those names;
+the command-line choice wins. For example, when choosing Claude for a fresh
+perspective on this change:
+
+```bash
+unitares-github -- review --reviewer claude
+# Or pass the selection through the delivery workflow:
+UNITARES_REVIEWER=claude ./scripts/dev/ship.sh "fix: describe the change"
+```
+
+Without a choice, `review.sh` can join/read existing evidence and report findings,
+but starts no new local or native review. If new review is needed it returns
+UNREVIEWED (exit 2) and asks the agent to choose. A proposal-only advisory result
+is still not implementation review; host/environment configuration preserves
+that advisory shortcut. Use an explicit `--reviewer` flag or `--fresh` (with a
+provider selected) to request implementation review of a proposal. Missing choice does not waive sensitive
+coverage or erase earlier findings. Existing council/human review remains valid.
+
+Unattended callers make their policy explicit: `review.sh sweep --reviewer claude
+--reviewer antigravity --worktree PATH` supplies an ordered fallback list chosen
+by that caller. The sweep filters that list by availability, cooldown, retry
+budget and missing model family, and attempts only one provider per tick. A
+local Codex CLI cooldown does not prevent its separately enabled native route. It
+never adds providers to the list. `UNITARES_REVIEWER` supplies a single choice
+when no flags are given. With neither, it reports the missing configuration and
+starts nothing. The installer requires at least one `--reviewer` and saves the
+choices in the job arguments. Existing jobs need that explicit configuration
+before this driver is deployed; updating repository code does not modify or
+reload installed jobs. Candidate lists printed by the runner are alphabetical
+for display, not a ranking.
+
+**Migrating an existing launchd sweep.** Its bootstrap refreshes the driver from
+`origin/master` on every tick, so merging this change deploys the new requirement.
+Stage a single explicit environment choice before merge: the old driver ignores
+it and the new driver honors it. Choose the provider for this host; `claude`
+below is an example. Wait for any active review to finish before unloading the
+job, and preserve its other settings:
+
+```bash
+review_plist="$HOME/Library/LaunchAgents/com.unitares.review-sweep.plist"
+launchctl bootout "gui/$(id -u)" "$review_plist"
+python3 - "$review_plist" claude <<'PY'
+import pathlib, plistlib, sys
+path = pathlib.Path(sys.argv[1])
+config = plistlib.loads(path.read_bytes())
+config.setdefault("EnvironmentVariables", {})["UNITARES_REVIEWER"] = sys.argv[2]
+path.write_bytes(plistlib.dumps(config))
+PY
+launchctl bootstrap "gui/$(id -u)" "$review_plist"
+```
+
+After the new driver is available, a host wanting an ordered list can wait for
+the active review to finish, unload the job with the same `bootout` command,
+and run `install-review-sweep.py --repo PATH --reviewer PROVIDER` with additional
+`--reviewer` arguments as desired. The installer bootstraps the replacement;
+it deliberately refuses to overwrite a loaded job. A single configured family
+cannot satisfy a sensitive diff by itself; configure another eligible family
+or have the author explicitly request it. These are deployment steps, not
+actions performed by a source-only PR.
+
 #### Review provider availability
 
 `scripts/dev/review_providers.json` is the one repo-wide switch for reviewers
 that are down. A provider listed under `disabled` is skipped by
-`review.sh`'s default choice, by its local fallback, and (for Codex) by native
+local attempts, configured sweep choices, and (for Codex) native
 review, in every checkout, so an outage no longer costs each session a failed
 attempt per hour of cooldown. Agents without local tooling read the same file
 before posting `@codex review`. Explicit `--reviewer` does not retry a disabled
@@ -582,9 +657,10 @@ family then found two P2 defects; the `agy` isolation hole (standing grants in
 
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
-used only when the `agy` command is installed. The default ordering is Codex, then Antigravity, then Claude, minus unavailable
-providers. Only one is attempted per invocation; selecting a distinct family
-for a sensitive diff remains explicit.
+used only when the `agy` command is installed. Select it with
+`--reviewer antigravity`; there is no universal provider preference. Only one
+is attempted per invocation; selecting a distinct family for a sensitive diff
+remains explicit.
 
 It is deliberately **not** run inside the checkout. A PR can carry
 `.agents/` hooks, rules and project permission rules, and `agy` loads those
@@ -622,7 +698,7 @@ self-contained prompt, keeps the ~120 KB argument cap, and does not read
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy        # once, interactively: sign in, then /exit
-./scripts/dev/review.sh --reviewer antigravity   # or let the default pick it
+./scripts/dev/review.sh --reviewer antigravity   # explicit caller choice
 ```
 
 Antigravity's terms let Google collect interaction data unless you opt out in
@@ -726,7 +802,7 @@ the reviewer honestly in `--reviewer-name`.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
-(`review.sh --background`) is useful while the agent does other work, but the
+(`review.sh --background --reviewer PROVIDER`) is useful while the agent does other work, but the
 agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
 explicitly defers this step and prints the author's next action. If review
 cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
@@ -741,7 +817,7 @@ install such as the reference deployment (`--repo` defaults to
 `~/projects/unitares`; pass your own checkout):
 
 ```bash
-python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares
+python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares --reviewer claude --reviewer antigravity
 launchctl print gui/$(id -u)/com.unitares.review-sweep
 unitares-automations census --grep review-sweep --all
 ```

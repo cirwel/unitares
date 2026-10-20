@@ -551,7 +551,7 @@ class Record:
 
     def status(self) -> tuple[str, str]:
         if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
-            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh"
+            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh --reviewer PROVIDER"
         if self.verdict == "CLEAN":
             return "success", f"clean ({self.reviewer})"
         if self.verdict == "FINDINGS" and self.disposed:
@@ -1418,8 +1418,6 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
 
 PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
 KNOWN_PROVIDERS = {"codex", "claude", "antigravity"}
-# One pinned default provider; a distinct security family is explicitly selected.
-PROVIDER_ORDER = ("codex", "antigravity", "claude")
 # Reviewers that need an extra operator-installed CLI count only when it is on
 # PATH; codex and claude keep their behaviour (a missing CLI is an UNREVIEWED
 # launch failure with a cooldown, not a silent skip).
@@ -1741,7 +1739,7 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
     missing = "two model families" if not families else "a second model family"
     return ("action_required",
             f"security-sensitive path {sensitive[0]}{more}: needs review coverage "
-            f"from {missing} (have: {have}); run review.sh again")
+            f"from {missing} (have: {have}); run review.sh --reviewer PROVIDER again")
 
 
 # --- operator waiver of the second family ---------------------------------
@@ -1981,7 +1979,7 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
         info = pr_view(pr)
         require_open(pr, info)
         if info["headRefOid"] != head:
-            return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh")
+            return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh --reviewer PROVIDER")
         comments = pr_comments(repo, pr)
         snapshot = read_native(repo, pr, key, head, comments)
         if snapshot.unavailable_reason:
@@ -2118,21 +2116,26 @@ def optional_cli_installed(provider: str) -> bool:
 
 
 def reviewer_candidates(branch: str) -> list[str]:
-    """Usable reviewers for a branch, best first.
-
-    Pin Codex first; independence means a fresh reviewer context. A distinct
-    security family is explicitly selected. Disabled providers are dropped,
-    and an optional CLI only counts when installed.
-    """
+    """Usable reviewers, alphabetically for display, never a preference order."""
     disabled = disabled_providers()
-    usable = [p for p in PROVIDER_ORDER if p not in disabled and optional_cli_installed(p)]
+    usable = [p for p in sorted(KNOWN_PROVIDERS) if p not in disabled and optional_cli_installed(p)]
     return usable
 
 
-def default_reviewer(branch: str) -> str:
-    # A quota outage must not prohibit the available reviewer.
-    candidates = reviewer_candidates(branch)
-    return candidates[0] if candidates else ("claude" if branch.startswith("codex/") else "codex")
+def selected_reviewers(explicit=None) -> list[str]:
+    """Caller choices only; a host may configure UNITARES_REVIEWER explicitly.
+
+    A sweep can supply several --reviewer options in its chosen fallback order.
+    The environment supplies one provider only, and never overrides CLI choices.
+    """
+    choices = ([explicit] if isinstance(explicit, str) else explicit)
+    if not choices:
+        configured = os.environ.get("UNITARES_REVIEWER", "").strip()
+        choices = [configured] if configured else []
+    unknown = set(choices) - KNOWN_PROVIDERS
+    if unknown:
+        raise SystemExit(f"review_gate: unknown reviewer choice: {', '.join(sorted(unknown))}")
+    return list(dict.fromkeys(choices))
 
 
 def provider_state_path(reviewer: str) -> Path:
@@ -2958,8 +2961,9 @@ def cmd_review(args) -> int:
         require_operator_account()
     args.base = getattr(args, "base", DEFAULT_BASE)
     pr, repo, key, branch = _resolve(args)
-    reviewer = args.reviewer or default_reviewer(branch)
-    args.branch = branch  # review_with_fallback picks the next candidate by author family
+    choices = selected_reviewers(args.reviewer)
+    reviewer = choices[0] if choices else None
+    args.branch = branch
     head = git("rev-parse", "HEAD").strip()
     grant_id = getattr(args, "review_cycle_grant", None)
     deadline = time.monotonic() + args.budget
@@ -3002,6 +3006,12 @@ def cmd_review(args) -> int:
                 # A pinned local reviewer must not overlap a known native run.
                 if native_activity_running(comments) or read_native(repo, pr, key, head, comments).running:
                     print("[review] UNREVIEWED: native review pending; join it before starting another reviewer")
+                    return UNREVIEWED
+                if reviewer is None:
+                    print("[review] UNREVIEWED: choose a reviewer explicitly with --reviewer "
+                          "or UNITARES_REVIEWER; no model was started. "
+                          "Consider the diff, prior review, availability and required model family.")
+                    print("[review] available choices: " + ", ".join(reviewer_candidates(branch)))
                     return UNREVIEWED
                 # A small follow-up extends prior work instead of resetting it.
                 # Try this before the cycle cap: it spends no full cycle.
@@ -3063,7 +3073,7 @@ def cmd_review(args) -> int:
                         return capped_review(args, repo, pr, key, head, rounds)
                 args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
-                if native and not args.reviewer and not args.fresh:
+                if native and reviewer == "codex" and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
                     try:
                         rec = join_native(args, repo, pr, key, head)
@@ -3478,7 +3488,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         # A scope refusal cannot discard concrete findings the reviewer found.
         if parsed[0] == "CLEAN":
             parsed, note = None, "full review required: follow-up scope not confirmed"
-        print("[review] follow-up cannot establish coverage; run review.sh --fresh for a full pass within the budget")
+        print("[review] follow-up cannot establish coverage; run review.sh --fresh --reviewer PROVIDER for a full pass within the budget")
     if parsed is not None and not has_reasoning(text):
         # Not a review: fall back to the next reviewer instead of recording it.
         parsed, note = None, "verdict without reasoning"
@@ -3735,11 +3745,17 @@ def cmd_sweep(args) -> int:
     a job with itself. Runs THIS script (the caller's trusted checkout) with
     its cwd in `--worktree`, detached at the PR head — the PR's own copy of
     this script is never executed."""
+    choices = selected_reviewers(getattr(args, "reviewer", None))
+    if not choices:
+        print("[sweep] no reviewer selected; configure --reviewer (repeat for fallbacks) "
+              "or UNITARES_REVIEWER. No review started.")
+        return UNREVIEWED
     repo = repo_slug()
     prs = open_prs(repo)
     candidates = 0
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
         reviewer = None
+        required_family = False
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
         git("fetch", "--quiet", "--no-tags", "origin",
             f"+refs/heads/{base}:refs/remotes/origin/{base}",
@@ -3774,15 +3790,18 @@ def cmd_sweep(args) -> int:
                                                f"origin/{base}", head)
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], families, comments, key))
-                    if eligible:
-                        reviewer = eligible[0]
+                    selected = next((p for p in choices if p in eligible), None)
+                    if selected:
+                        reviewer = selected
+                        required_family = True
                     elif waived:
                         print(f"[sweep] PR #{n}: second family covered by operator waiver")
                     else:
-                        print(f"[sweep] PR #{n}: required family unavailable; coverage remains incomplete")
+                        print(f"[sweep] PR #{n}: configured reviewers cannot supply the required family; "
+                              "coverage remains incomplete")
         if reviewer is None and rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
-                for provider in ("claude", "codex"))):
+                for provider in choices)):
             if rec.status()[0] != "success":
                 print(f"[sweep] PR #{n}: author follow-up needed — {rec.status()[1]} {rec.url}")
             elif not args.dry_run and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
@@ -3795,7 +3814,17 @@ def cmd_sweep(args) -> int:
             continue  # report findings/retry exhaustion rather than silently skipping
         if native_activity_running(comments) or read_native(repo, n, key, head, comments).running or review_lock(f"pr-{n}").holder_alive():
             continue
-        reason = f"needs required family via {reviewer}" if reviewer else "needs review"
+        if reviewer is None:
+            usable = reviewer_candidates(p["headRefName"])
+            reviewer = next((provider for provider in choices
+                             if provider in usable
+                             and ((provider == "codex" and native_enabled())
+                                  or not provider_cooldown(provider))
+                             and failed_runs(comments, key, provider) < SWEEP_MAX_FAILED), None)
+        if reviewer is None:
+            print(f"[sweep] PR #{n}: configured reviewers unavailable; no review started")
+            continue
+        reason = f"needs required family via {reviewer}" if required_family else f"needs review via {reviewer}"
         print(f"[sweep] PR #{n} ({p['headRefName']}) {reason} for {key[:12]}")
         candidates += 1
         if args.dry_run:
@@ -3806,9 +3835,13 @@ def cmd_sweep(args) -> int:
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
         command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
-        if reviewer:
+        if required_family:
             command += ["--reviewer", reviewer, "--fresh"]
-        rc = subprocess.run(command, cwd=wt).returncode
+        # The chosen provider is explicit even without a CLI flag. Preserve
+        # the optional native route for a first Codex pass; --reviewer pins a
+        # local attempt, which the missing-family pass deliberately requests.
+        rc = subprocess.run(command, cwd=wt,
+                            env={**os.environ, "UNITARES_REVIEWER": reviewer}).returncode
         if rc == NEEDS_SECOND_FAMILY:
             # Missing coverage is visible on the PR, not a runner crash.
             next_step = "requested from shared host on a later tick" if requested else "needs the author's request"
@@ -3831,7 +3864,7 @@ def review_check(rec: Record | None, *, requested: bool = False, held: bool = Fa
             return "neutral", "UNREVIEWED: automatic review held by no-auto-review"
         return "neutral", ("UNREVIEWED: requested from shared host; no completed review"
                            if requested else
-                           "UNREVIEWED: add review-requested for shared-host review, or run review.sh locally")
+                           "UNREVIEWED: add review-requested for shared-host review, or run review.sh --reviewer PROVIDER locally")
     if rec.verdict == "FAILED":
         return "neutral", rec.status()[1]
     if rec.verdict == "FINDINGS" and not rec.disposed:
@@ -3954,7 +3987,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("review", help="review HEAD's diff and post the record")
-    r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS))
+    r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS),
+                   help="agent-selected provider; otherwise UNITARES_REVIEWER (no built-in default)")
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
     authorization = r.add_mutually_exclusive_group()
     authorization.add_argument("--authorize-full-review", metavar="REASON", help="operator account: authorize an additional full review; explain why")
@@ -4004,6 +4038,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="worktree to check PR heads out into (created if missing)")
     sw.add_argument("--quiet-minutes", type=int, default=15)
     sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--reviewer", action="append", choices=sorted(KNOWN_PROVIDERS),
+                    help="caller-selected provider; repeat in desired fallback order; "
+                         "otherwise UNITARES_REVIEWER (no built-in default)")
 
     c = sub.add_parser("ci", help="workflow: set the review evidence check on a PR head")
     c.add_argument("--repo", required=True)
