@@ -22,6 +22,47 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
+### Managed checkout alternative
+
+With Docker running, Git, curl and a POSIX shell, the launcher creates and
+starts a shallow release checkout without a manual clone:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/scripts/install/launch.sh | sh
+```
+
+It resolves `PUBLISHED_VERSION`, keeps the checkout at `~/.unitares/stack`,
+copies `.env.example` to `.env` only when missing, starts the release images,
+and requires deep health `healthy` or `moderate`. Python for this health check
+runs inside the container. Repeating the command preserves `.env` and the
+installed release; Compose leaves unchanged running containers alone. It does
+not upgrade an existing installation. A failed start can be retried after
+fixing the reported problem. No package is installed or published by this path.
+To inspect the script first, download that URL to a file and run `sh` on it.
+
+Set `UNITARES_STACK_DIR` to an absolute path to choose a different directory
+(pass it to `sh`, not just to `curl`, when using the pipeline). Set port or
+credential overrides in that checkout's `.env` before starting a shared
+installation. The launcher refuses containers owned by a different checkout.
+The managed clone includes `db/postgres`, which Compose mounts for database
+initialization, and the Git metadata used by the existing update command.
+
+After startup, run the coordination acceptance demo using container Python:
+
+```sh
+cd ~/.unitares/stack
+docker compose exec -T \
+  -e UNITARES_COORDINATION_DEMO_GOVERNANCE_URL=http://127.0.0.1:8767 \
+  -e UNITARES_COORDINATION_DEMO_URL=http://lease-plane:8788 \
+  governance-mcp python scripts/demo/coordination_demo.py
+# The existing update CLI requires Python 3 and curl on the host:
+./scripts/unitares update --check
+```
+
+Use `./scripts/unitares update` from this directory for upgrades, following
+§2.4 below; rerunning the launcher never moves Git or runs upgrade migrations.
+The launcher URL becomes available when the launcher change lands on master.
+
 On a release checkout, Compose pulls the server, the coordination lease plane
 and the database as the images published from that release tag
 (`ghcr.io/cirwel/unitares`, `ghcr.io/cirwel/unitares-lease-plane` and
