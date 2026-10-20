@@ -1,12 +1,11 @@
-# NVIDIA OpenShell: Provenance Check and Federation Fit (2026-10)
+# NVIDIA OpenShell: Layer Comparison and Federation Fit (2026-10)
 
 **Status:** Research note (external project read). Extends the market map in
 [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md); no
 verdict there is changed.
 **Date:** 2026-10-01.
-**Prompted by:** the operator asked whether NVIDIA OpenShell
-(`github.com/NVIDIA/openshell`) does what UNITARES does "better", and whether
-it copied UNITARES, after meeting an NVIDIA employee in 2026-09.
+**Question:** how NVIDIA OpenShell (`github.com/NVIDIA/openshell`) relates to
+UNITARES: which layer each occupies, and where they could federate.
 **Method:** full-history clone of OpenShell at `8091f66` (2026-10-01, 1,599
 commits) and a read of its `docs/`, `rfc/` and `examples/` READMEs, with a search of
 its `proto/`. The
@@ -17,12 +16,11 @@ were read, not products; nothing here was run.
 
 ## TL;DR
 
-- **No evidence of copying.** OpenShell's first commit is 2026-01-29;
-  UNITARES's is 2025-11-20. Neither date is close to the 2026-09 meeting. Its
-  repository is Rust and gRPC around kernel sandboxing, and its docs, RFCs and
-  protos use none of UNITARES's distinctive concepts (EISV, dialectic adjudication, claims bound to
-  outcomes, process lineage). The overlap is shared vocabulary that this whole
-  field uses ("governance", "fleets of agents", "audit").
+- **Independent projects.** OpenShell's repository is Rust and gRPC around
+  kernel sandboxing, and its docs, RFCs and protos use none of UNITARES's
+  distinctive concepts (EISV, dialectic adjudication, claims bound to outcomes,
+  process lineage). The overlap is shared vocabulary that this whole field uses
+  ("governance", "fleets of agents", "audit").
 - **Different layer.** OpenShell decides what an agent *may* do: sandbox
   isolation, network and filesystem policy, credential injection, and
   SMT-checked policy changes. UNITARES records what an agent *did*, who vouched
@@ -94,8 +92,8 @@ dependency (the execution-cost policy in `CLAUDE.md`).
 
 ## What this note does not establish
 
-- **Provenance.** Separate first commits and unrelated stacks make copying
-  implausible, not impossible to rule out. Nothing that was read suggests it.
+- **Code-level comparison.** The independence above rests on concepts, stacks
+  and documentation; no source code was compared.
 - **Value.** No seam has been exercised. Whether an OpenShell operator wants a
   claims-and-outcomes record is the same buyer question that
   `competitive-analysis-2026-09.md` leaves open.
