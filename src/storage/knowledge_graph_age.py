@@ -1154,6 +1154,7 @@ class KnowledgeGraphAGE:
         exclude_cold: bool = False,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> List[DiscoveryNode]:
         """
         Query discoveries with filters, newest first.
@@ -1168,6 +1169,9 @@ class KnowledgeGraphAGE:
             exclude_archived: Drop archived rows when no explicit status filter
             exclude_cold: Drop cold-storage rows when no explicit status filter
             created_after / created_before: exclusive bounds on created_at
+            raise_on_error: re-raise a failed SQL read instead of returning no
+                rows, for a caller that must not read a failure as "none" (the
+                postgres backend always raises)
         """
         db = await self._get_db()
 
@@ -1194,7 +1198,7 @@ class KnowledgeGraphAGE:
                 # window", which is how a timed-out write's recovery settles
                 # that it saved nothing (error_helpers). A failed read must
                 # not give that answer; the postgres backend raises here too.
-                raise_on_error=bool(created_after or created_before),
+                raise_on_error=raise_on_error or bool(created_after or created_before),
             )
 
         # Check if graph is available
@@ -1215,6 +1219,7 @@ class KnowledgeGraphAGE:
                 limit=limit,
                 exclude_archived=exclude_archived,
                 exclude_cold=exclude_cold,
+                raise_on_error=raise_on_error,
             )
 
         # Build query
@@ -1300,6 +1305,7 @@ class KnowledgeGraphAGE:
             limit=limit,
             exclude_archived=exclude_archived,
             exclude_cold=exclude_cold,
+            raise_on_error=raise_on_error,
         )
 
     async def _query_sql_fallback(

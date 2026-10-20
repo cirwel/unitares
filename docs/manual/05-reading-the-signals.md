@@ -1,28 +1,92 @@
-# 5 · Reading the signals
+# 5 · Reading the record
 
 [← Integrating agents](04-integrating-agents.md) · [Manual index](README.md) · [Next: Operating →](06-operating.md)
 
-This chapter is the interpretation guide: what the numbers mean, how they're produced, and how much to trust them. The exact formulas with source references are in [`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md); this is the readable companion.
+This chapter reads the record in the order a successor or operator should:
+findings first, then outcomes, then the policy action and how a pause is
+lifted. The last section covers EISV, the behavioral state estimate behind the
+policy action: what its numbers mean, how they are produced, and how much to
+trust them. EISV still ships in the core path; its move to an optional module
+follows a [staged plan](../proposals/active/eisv-core-boundary-v0.md). The exact
+formulas with source references are in
+[`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md).
 
-## 5.1 The pipeline at a glance
+## 5.1 Findings and shared memory
+
+Findings are the durable part of the record. Searching them *before* acting is how agents avoid re-discovering known failures, and it's where closed mysteries and corrected conclusions live. Discipline (agent-facing): **search before writing**; prefer a linked correction or `supersede` (which needs the AGE backend) over a fresh note; store something only when a future agent would search for it and not already find it. Operational runbooks belong in `docs/`, not KG notes. Full operating manual: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
+
+## 5.2 Outcomes and their trust boundary
+
+The system records stated `confidence` and result evidence — test pass/fail,
+command exit codes, lint results, or review labels — through
+`record_result` / `outcome_event`. These records support calibration analysis.
+Pass the `prediction_id` returned by `sync_state` to `record_result`: it binds
+the outcome to that check-in's stated confidence. Without it, an explicit
+`confidence` argument is used as given; otherwise the server falls back to the
+most recent stated confidence, which is marked scraped and excluded from
+calibration.
+
+Evidence is not automatically independent merely because it is called an
+outcome. CI-, tool-, or operator-authored records provide a stronger anchor than
+an outcome authored by the monitored process. If the agent controls both its
+confidence and every result record, it can forge a calibrated story. Preserve
+provenance and keep high-stakes outcome channels outside the agent's authority.
+
+## 5.3 The policy action
+
+Each `sync_state` check-in returns a policy action. Internally the EISV assessment emits a `safe` / `caution` / `high-risk` label, which becomes the action the agent reads back. `action_summary.action` is only ever `proceed` or `pause`; `sub_action` carries the rest:
+
+| `action` / `sub_action` | Internal sense | Agent action | Recovery path |
+|---|---|---|---|
+| `proceed` | safe | Continue | — |
+| `proceed` / `guide` | slightly off | Read guidance, adjust | — |
+| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.4](#54-recovery-self-recovery--dialectic)) |
+| `pause` / `reject` | legacy or review label for significant concern | Human input or dialectic | dialectic |
+
+How the risk behind a pause is computed, and the margin that rides along with
+the action, are in [§5.5](#risk-components-and-margin).
+
+## 5.4 Recovery: self-recovery → dialectic
+
+When an agent is paused, recovery is a structured escalation:
+
+1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. A paused agent cannot write the check-in that would lower its risk, so self-recovery succeeds only when the reading that paused it is already under the gate below; most pauses end through the dialectic, an operator, or re-evaluation at expiry. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
+2. **LLM-assisted dialectic** — a configured reviewer model supplies an
+   antithesis for single-agent reflection; the default reference path supports a
+   local model.
+3. **Peer dialectic** — request one with `request_review` (that is,
+   `dialectic(action="request")`); a peer reviews through thesis → antithesis →
+   synthesis.
+
+Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md).
+
+## 5.5 The EISV instrument
+
+EISV is one instrument attached to check-ins, not the record itself. Read it
+for *why* a check-in returned its action; read the findings and outcomes above
+for what the work was and what happened.
+
+### The pipeline at a glance
 
 ```
 observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
- calibration,    sensor.py)           state.py)       assessment.py)        guide/
- drift, tools)                                                               pause/reject
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
+ calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
+ drift, tools)                                                               pause
 ```
 
-The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`; older docs call it the "thermodynamic model", a historical name, not a claim that it computes physical quantities) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
+The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
 
 The current implementation has three stages: check-ins 1–2 use the Φ
 cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
 universal thresholds; and check-in 25 enables per-agent **Welford-baseline**
 z-scores against a 30-update target. Read the state as telemetry against the
-reference available in that stage, not as an outcome judgment. The exact gates
-are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
+reference available in that stage, not as an outcome judgment. During cold
+start the response marks `action_summary.verdict_confidence: "provisional"`,
+and a cold-start risk estimate does not hard-pause. The exact gates are in
+[EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
-## 5.2 The four dimensions
+### The four dimensions
 
 | Coord | What it records | Deployed computation (heuristic) |
 |---|---|---|
@@ -37,26 +101,14 @@ Three things to internalize:
 2. **V carries a distinct temporal summary.** Its smoothing rate differs from E's and I's, so it is not generally their current smoothed values subtracted. Positive V records a positive smoothed `E_obs − I_obs` gap; negative V records the reverse. “Running hot” and “running careful” are interpretations to investigate, not facts established by the sign.
 3. **Controller feedback is part of the record.** Prior decisions enter E, so a policy response can change later E even with unchanged task and tool features. That reflects the controller's response without independently confirming its judgment. The blend weights are hand-set engineering parameters; the exact formulas and defaults are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
-## 5.3 Verdict and margin
+### Risk components and margin
 
-The assessment emits an internal `safe` / `caution` / `high-risk` label, which becomes the action the agent reads back:
+Behavioral assessment risk is the **sum of named components** (`low_E`, `low_I`, `high_S`, `high_V`, `adversarial_rho`, `high_CE`), each with an explicit weight — with each contribution available for inspection ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
 
-| Verdict | Internal sense | Agent action | Recovery path |
-|---|---|---|---|
-| `proceed` | safe | Continue | — |
-| `guide` | slightly off | Read guidance, adjust | — |
-| `pause` | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.5](#55-recovery-self-recovery--dialectic)) |
-| `reject` | significant concern | Human input or dialectic | dialectic |
+**Margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) rides along with the verdict, reporting the distance to the nearest *decision threshold* (risk, void or coherence), not to a basin boundary, even while the verdict is still `proceed`. Read `margin_scope` and `unmeasurable_edges` with it: under the legacy coherence producer the coherence edge is not assessed, so `comfortable` covers only the measured edges. Threshold distance is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. The levels come from `GovernanceConfig.compute_proprioceptive_margin`.
 
-Behavioral assessment risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — with each contribution available for inspection ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
+### Calibration input to I
 
-**Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
-
-## 5.4 Calibration and its trust boundary
-
-The system records stated `confidence` and result evidence — test pass/fail,
-command exit codes, lint results, or review labels — through
-`record_result` / `outcome_event`. These records support calibration analysis.
 The calibration input currently blended into I on the handler path is a
 lifetime **fleet** aggregate of strategic confidence-versus-trajectory-health
 bins. It is not an accuracy reading for the current claim or just this agent;
@@ -65,36 +117,17 @@ history and optional consistency features. Inspect the producer and scope in
 [EISV_COMPUTATION.md](../EISV_COMPUTATION.md#step-1--observations-srcbehavioral_sensorpy)
 before interpreting a change as improved or worsened calibration.
 
-Evidence is not automatically independent merely because it is called an
-outcome. CI-, tool-, or operator-authored records provide a stronger anchor than
-an outcome authored by the monitored process. If the agent controls both its
-confidence and every result record, it can forge a calibrated story. Preserve
-provenance and keep high-stakes outcome channels outside the agent's authority.
+### Peer comparisons
 
-## 5.5 Recovery: self-recovery → dialectic
-
-When an agent is paused, recovery is a structured escalation:
-
-1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. A paused agent cannot write the check-in that would lower its risk, so self-recovery succeeds only when the reading that paused it is already under the gate below; most pauses end through the dialectic, an operator, or re-evaluation at expiry. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
-2. **LLM-assisted dialectic** — a configured reviewer model supplies an
-   antithesis for single-agent reflection; the default reference path supports a
-   local model.
-3. **Peer dialectic** — another agent reviews via `dialectic`: thesis → antithesis → synthesis.
-
-Federation comparisons follow the same rule. Peer-similarity scores use E/I/S/V,
+Like recovery, peer comparisons do not lean on legacy coherence.
+Peer-similarity scores use E/I/S/V,
 controller state, maturity, regime, and verdict where available; legacy
 `coherence` is reported with producer/role tags but excluded from ranking. The
 old `min_coherence` state-announcement filter is rejected, and the former
 coherence-variance `focus_stability` value is explicitly retired rather than
 recalibrated around a nearly constant producer.
 
-Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md).
-
-## 5.6 The knowledge graph as a signal source
-
-The KG isn't just storage — searching it *before* acting is how agents avoid re-discovering known failures, and it's where closed mysteries and corrected conclusions live. Discipline (agent-facing): **search before writing**; prefer a linked correction or `supersede` over a fresh note; store something only when a future agent would search for it and not already find it. Operational runbooks belong in `docs/`, not KG notes. Full operating manual: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
-
-## 5.7 Reading the instrument and evaluating its uses
+### Reading the instrument and evaluating its uses
 
 EISV records specified runtime features and controller history using auditable
 blends and smoothing. Narrow, derived and correlated signals remain information
@@ -105,6 +138,9 @@ response-distribution entropy.
 
 Read provenance alongside a value: `primary_eisv_source` identifies behavioral
 versus ODE-fallback metrics, and telemetry envelopes carry `measurement_source`.
+Physical sensor inputs can also enter the behavioral smoothing stage, so
+`primary_eisv_source=behavioral` identifies that output path, not necessarily a
+behavioral-sensor input.
 The legacy coherence producer has a `coherence_source`/`coherence_role` stamp.
 Per-coordinate tags such as `e_source`, `i_source` and `s_source` are attached
 when the opt-in grounding stage runs; they are not universal. Legacy rows without
@@ -134,7 +170,7 @@ For optional intuition (not a spec),
 [`../essays/tonality-metaphor.md`](../essays/tonality-metaphor.md) uses a bounded
 tonal analogy for self-relative measurement and names where the comparison stops.
 
-## 5.8 Worked example: a signal moves while the action stays the same
+### Worked example: a signal moves while the action stays the same
 
 This synthetic example calls the sensor, smoother, behavioral assessment and
 final decision functions directly. It holds the supplied histories and ODE
