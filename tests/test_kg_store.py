@@ -424,6 +424,66 @@ class TestStoreKnowledgeGraph:
         assert len(data["related_discoveries"]) == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", [None, "true", "1"])
+    async def test_store_links_when_flag_unset_null_or_truthy_string(
+        self, patch_common, registered_agent, flag
+    ):
+        """An unsent flag reaches the handler as None after params validation.
+
+        validate_params merges the Pydantic model's dump back into the
+        arguments, and the store schema defaults auto_link_related to None, so
+        a store that never mentioned the flag used to skip linking entirely.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        mock_graph.find_similar = AsyncMock(return_value=[make_discovery(id="related-1")])
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Something related",
+            "auto_link_related": flag,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        mock_graph.find_similar.assert_awaited()
+        assert [d["id"] for d in data["related_discoveries"]] == ["related-1"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", [False, "false", "0"])
+    async def test_store_skips_linking_only_when_explicitly_false(
+        self, patch_common, registered_agent, flag
+    ):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        mock_graph.find_similar = AsyncMock(return_value=[make_discovery(id="related-1")])
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "No linking",
+            "auto_link_related": flag,
+        })
+
+        assert parse_result(result)["success"] is True
+        mock_graph.find_similar.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_validated_store_arguments_still_link(self):
+        """The real validation step: what it hands the store handler must link."""
+        from src.mcp_handlers.knowledge.handlers import _auto_link_requested
+        from src.mcp_handlers.middleware.params_step import validate_params
+
+        _name, arguments, _ctx = await validate_params(
+            "knowledge",
+            {"action": "store", "summary": "Validated store"},
+            SimpleNamespace(),
+        )
+        # The dump carries the unsent flag as a present None ...
+        assert "auto_link_related" in arguments and arguments["auto_link_related"] is None
+        # ... which must still mean "link".
+        assert _auto_link_requested(arguments.get("auto_link_related")) is True
+
+    @pytest.mark.asyncio
     async def test_store_auto_link_excludes_rollup_rows(self, patch_common, registered_agent):
         """Auto-linking drops system-generated topic_rollup rows (#44 follow-up).
 
