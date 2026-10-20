@@ -242,14 +242,19 @@ tools `review.sh` needs.
   use, although it restricts unrelated GraphQL operations. The hosted session
   of 2026-09-25 had no `gh`; its only PR channel was the GitHub connector.
   Check with `command -v gh` rather than assuming either.
-- **Reviewer CLIs vary too.** `default_reviewer` takes the first usable
-  provider in a fixed order with Codex first, skipping providers disabled in
-  `scripts/dev/review_providers.json`. `review.sh` makes one provider attempt
-  per run: if that CLI is absent or unavailable, the run ends UNREVIEWED and
-  the provider goes on cooldown, and the author picks another with
-  `--reviewer <provider>`. With `git config review.native true`, it can instead
-  request and join native GitHub Codex review without needing a local Codex
-  CLI. The 2026-09-25 session had the `claude` CLI and no `codex`.
+- **Reviewer CLIs vary too.** The authoring agent selects a provider based on
+  the change, prior review, availability and required model-family coverage.
+  Pass `--reviewer codex`, `--reviewer claude`, or `--reviewer antigravity`, or
+  set `UNITARES_REVIEWER`. There is no built-in provider order; providers
+  disabled in `scripts/dev/review_providers.json` remain unavailable.
+  `review.sh` makes one provider attempt per run. Without a choice it reads
+  existing evidence but starts no new review. If the selected CLI is absent or
+  unavailable, the run ends UNREVIEWED; the author can select another provider.
+  `UNITARES_REVIEWER=codex` together with `git config review.native true` enables
+  requesting native GitHub Codex review without a local Codex CLI. Explicit
+  `--reviewer codex` selects the local CLI route. The 2026-09-25 session had
+  the `claude` CLI and no `codex`.
+
 
 Without `gh`, the session still completes its own review gate. Run the review
 in a fresh context that did not write the diff: a fresh `claude -p` session
@@ -269,7 +274,7 @@ the same model is valid, though it is the weakest reviewer the gate accepts,
 so name it honestly. An independent human or model code review done elsewhere
 is recorded the same way, with
 `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`
-(plus `--emit` without `gh`), or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
+(plus `--emit` without `gh`), or another machine with the reviewer CLI can run `./scripts/dev/review.sh --reviewer PROVIDER`.
 Consult advice alone is not a code review. If no reviewer completes, the
 author records that in the PR body; CI shows a neutral `review` check, meaning
 unreviewed. Ordinary changes may then proceed after validation; a diff that
