@@ -1418,6 +1418,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
 
 PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
 KNOWN_PROVIDERS = {"codex", "claude", "antigravity"}
+# Compatibility inventory for callers importing the old name. Alphabetical
+# display order only: no execution path uses its first entry as a default.
+PROVIDER_ORDER = tuple(sorted(KNOWN_PROVIDERS))
 # Reviewers that need an extra operator-installed CLI count only when it is on
 # PATH; codex and claude keep their behaviour (a missing CLI is an UNREVIEWED
 # launch failure with a cooldown, not a silent skip).
@@ -2118,7 +2121,7 @@ def optional_cli_installed(provider: str) -> bool:
 def reviewer_candidates(branch: str) -> list[str]:
     """Usable reviewers, alphabetically for display, never a preference order."""
     disabled = disabled_providers()
-    usable = [p for p in sorted(KNOWN_PROVIDERS) if p not in disabled and optional_cli_installed(p)]
+    usable = [p for p in PROVIDER_ORDER if p not in disabled and optional_cli_installed(p)]
     return usable
 
 
@@ -2136,6 +2139,12 @@ def selected_reviewers(explicit=None) -> list[str]:
     if unknown:
         raise SystemExit(f"review_gate: unknown reviewer choice: {', '.join(sorted(unknown))}")
     return list(dict.fromkeys(choices))
+
+
+def default_reviewer(branch: str) -> str | None:
+    """Compatibility entry point: only a caller-configured choice, never inferred."""
+    choices = selected_reviewers()
+    return choices[0] if choices else None
 
 
 def provider_state_path(reviewer: str) -> Path:

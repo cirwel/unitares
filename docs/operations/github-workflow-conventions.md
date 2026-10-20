@@ -564,6 +564,16 @@ choices in the job arguments. Existing jobs need that explicit configuration
 before this driver is deployed; updating repository code does not modify or
 reload installed jobs. Candidate lists printed by the runner are alphabetical
 for display, not a ranking.
+The legacy Python helper names remain importable: `PROVIDER_ORDER` is that
+display inventory, and `default_reviewer` returns only the environment choice
+or `None`; neither supplies a built-in preference.
+
+The native-route cooldown exception retains an existing scheduling limitation:
+if a selected Codex native request has expired or is unavailable while the local
+CLI is cooling down, that PR can consume subsequent sweep ticks without moving
+to the next configured provider. There is no same-tick cascade. Select another
+provider first for that host or have the author explicitly choose another
+provider; this selection change does not redesign native retry scheduling.
 
 **Migrating an existing launchd sweep.** Its bootstrap refreshes the driver from
 `origin/master` on every tick, so merging this change deploys the new requirement.

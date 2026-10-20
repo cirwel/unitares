@@ -985,8 +985,12 @@ def test_status_mapping(verdict, disposed, state):
 
 def test_reviewer_choice_has_no_default_and_cli_overrides_host(monkeypatch):
     assert rg.selected_reviewers() == []
+    assert rg.default_reviewer("codex/change") is None
+    assert rg.default_reviewer("claude/change") is None
+    assert set(rg.PROVIDER_ORDER) == rg.KNOWN_PROVIDERS
     monkeypatch.setenv("UNITARES_REVIEWER", "claude")
     assert rg.selected_reviewers() == ["claude"]
+    assert rg.default_reviewer("codex/change") == "claude"
     assert rg.selected_reviewers("antigravity") == ["antigravity"]
     assert rg.selected_reviewers(["codex", "claude", "codex"]) == ["codex", "claude"]
     monkeypatch.setenv("UNITARES_REVIEWER", "unknown")
