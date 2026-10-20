@@ -44,11 +44,11 @@ Read its body and linked implementation before choosing work.
 | **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
 
 Current counts:
-Built 36 · Registered 7 · Active 22 · Parked 31 · Closed 18
+Built 44 · Registered 7 · Active 23 · Parked 29 · Closed 32
 
-These counts cover the tagged entries across all three indexes. The archive
-also preserves the 19 older records previously indexed under `resolved/`, and
-one supporting JSON artifact. The counts are mechanically checked; the tags
+These counts cover the tagged entries across all three indexes. They include
+the 19 older records previously indexed under `resolved/`, tagged from their own
+status lines on 2026-10-20; the archive also holds one supporting JSON artifact. The counts are mechanically checked; the tags
 remain a dated reading. Protocols that register at merge are tagged
 Registered from their merge commit, even where the body keeps its DRAFT header.
 
