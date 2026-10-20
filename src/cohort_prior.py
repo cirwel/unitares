@@ -11,7 +11,7 @@ A pure, read-only aggregator. It pools many characterized agents' Welford
 baselines (`src.agent_behavioral_baseline.AgentBehavioralBaseline`) into a
 per-signal cohort prior, then hands out a *seed* an operator could use to
 warm-start a fresh agent's baseline so it starts near-calibrated instead of
-cold ("~30 check-ins from scratch every time" — `docs/UNIFIED_ARCHITECTURE.md` §2).
+cold (the warmup stages are in `docs/EISV_COMPUTATION.md`: check-ins 1–2, 3–24, then 25 onward).
 
 What this module is NOT
 -----------------------
