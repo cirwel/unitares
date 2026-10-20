@@ -60,8 +60,10 @@ The system records stated `confidence` and result evidence — test pass/fail,
 command exit codes, lint results, or review labels — through
 `record_result` / `outcome_event`. These records support calibration analysis.
 Pass the `prediction_id` returned by `sync_state` to `record_result`: it binds
-the outcome to that check-in's stated confidence, and without it the row is
-excluded from calibration.
+the outcome to that check-in's stated confidence. Without it, an explicit
+`confidence` argument is used as given; otherwise the server falls back to the
+most recent stated confidence, which is marked scraped and excluded from
+calibration.
 The calibration input currently blended into I on the handler path is a
 lifetime **fleet** aggregate of strategic confidence-versus-trajectory-health
 bins. It is not an accuracy reading for the current claim or just this agent;
