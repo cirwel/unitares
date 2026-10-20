@@ -1262,7 +1262,9 @@ def _append_more_results(
         if discovery_id is None:
             continue
         row: Dict[str, Any] = {"discovery_id": discovery_id}
-        row.update(_lift(item, "type", "status", "imported_memory", "resolution_notes"))
+        row.update(
+            _lift(item, "type", "status", "retrieval_tier", "imported_memory", "resolution_notes")
+        )
         summary = item.get("summary") or item.get("title")
         if isinstance(summary, str):
             row["summary"], _ = _summary_preview(summary, _SEARCH_MORE_SUMMARY_CHARS)
@@ -1316,6 +1318,7 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 "title",
                 "type",
                 "status",
+                "retrieval_tier",
                 "last_activity_days",
                 "imported_memory",
                 "closure_class",
@@ -3224,6 +3227,14 @@ def build_experience_envelope(
             # was all"; count alone cannot (#2125).
             "limit_clamped_from",
         )
+        # Present only when a short page was filled from archived/cold rows.
+        # The counts ride in the digest; the full note stays in full mode, and
+        # each such row carries retrieval_tier.
+        archived_cold = source_payload.get("archived_cold_fallback")
+        if isinstance(archived_cold, dict):
+            state_summary["archived_cold_fallback"] = _lift(
+                archived_cold, "primary_count", "added", "statuses_searched", "score_penalty"
+            )
         # `confidence_note` is not copied here: the envelope lifts it to the
         # top level for every alias (next to search_degraded_message), and a
         # second ~270 B copy was paid out of the lean digest's budget before

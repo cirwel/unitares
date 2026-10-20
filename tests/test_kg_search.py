@@ -2150,9 +2150,12 @@ class TestSearchKnowledgeGraphAdditional:
         mock_graph.semantic_search = AsyncMock(return_value=[])
         mock_graph.full_text_search = AsyncMock(return_value=[])
 
+        # Explicit opt-out of the archived/cold second pass, which would
+        # otherwise re-query on this short page; this test is about the first.
         result = await handle_search_knowledge_graph({
             "query": "obscure search concept with no matches",
             "semantic": True,
+            "include_archived": False, "include_cold": False,
         })
 
         data = parse_result(result)
@@ -2553,8 +2556,14 @@ class TestSearchArchivedFiltering:
         data = parse_result(result)
 
         assert data["success"] is True
-        result_ids = [d["id"] for d in data["discoveries"]]
-        assert "d-open" in result_ids
+        # Excluded from the first pass; the page is short, so the archived
+        # row returns from the second pass, after the open one and marked.
+        assert [d["id"] for d in data["discoveries"]] == ["d-open", "d-archived"]
+        assert "retrieval_tier" not in data["discoveries"][0]
+        assert data["discoveries"][1]["retrieval_tier"] == "archived_cold_fallback"
+
+        result = await handle_search_knowledge_graph({"query": "matching", "include_archived": False})
+        result_ids = [d["id"] for d in parse_result(result)["discoveries"]]
         assert "d-archived" not in result_ids
 
 
@@ -2647,8 +2656,13 @@ class TestSearchColdFiltering:
         data = parse_result(result)
 
         assert data["success"] is True
-        result_ids = [d["id"] for d in data["discoveries"]]
-        assert "d-open" in result_ids
+        # Excluded from the first pass; the page is short, so the cold row
+        # returns from the second pass, after the open one and marked.
+        assert [d["id"] for d in data["discoveries"]] == ["d-open", "d-cold"]
+        assert data["discoveries"][1]["retrieval_tier"] == "archived_cold_fallback"
+
+        result = await handle_search_knowledge_graph({"query": "matching", "include_cold": False})
+        result_ids = [d["id"] for d in parse_result(result)["discoveries"]]
         assert "d-cold" not in result_ids
 
 
@@ -2842,7 +2856,9 @@ class TestIssue165FtsOperator:
 
         mock_graph.full_text_search = AsyncMock(side_effect=fts)
 
-        result = await handle_search_knowledge_graph({"query": "two terms"})
+        # Explicit opt-out of the archived/cold second pass, which would
+        # otherwise re-query on this short page; this test is about the first.
+        result = await handle_search_knowledge_graph({"query": "two terms", "include_archived": False, "include_cold": False})
         data = parse_result(result)
         assert data["success"] is True
         assert data["count"] == 1
@@ -2900,8 +2916,11 @@ class TestKgSearchComplexityCeiling:
 
         # 13 terms — above the (decoupled) hybrid cap of 12, so auto still
         # skips RRF fusion for truly pathological term dumps.
+        # Explicit opt-out of the archived/cold second pass, which would
+        # otherwise re-query on this short page; this test is about the first.
         result = await handle_search_knowledge_graph({
             "query": "a b c d e f g h i j k l m",
+            "include_archived": False, "include_cold": False,
         })
         data = parse_result(result)
 
@@ -2955,8 +2974,11 @@ class TestKgSearchComplexityCeiling:
         mock_graph.full_text_search = AsyncMock(return_value=[])
 
         # 25 terms — above the new OR-recall cap of 24.
+        # Explicit opt-out of the archived/cold second pass, which would
+        # otherwise re-query on this short page; this test is about the first.
         result = await handle_search_knowledge_graph({
             "query": " ".join(f"term{i}" for i in range(25)),
+            "include_archived": False, "include_cold": False,
         })
         data = parse_result(result)
 

@@ -12,7 +12,7 @@ Performance:
 Claude Desktop compatible: All operations are async and non-blocking.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
@@ -2071,6 +2071,11 @@ class _KnowledgeSearchRequest:
     # Opt-in recency weight on the relevance score (operator decision
     # 2026-09-27: per call, default off). None = no weighting.
     recency_half_life_days: Optional[float] = None
+    # The caller's literal include_archived / include_cold: None when unsent.
+    # An explicit false keeps that status out of the archived/cold second
+    # pass; the plain booleans above cannot tell false from unsent.
+    include_archived_explicit: Optional[bool] = None
+    include_cold_explicit: Optional[bool] = None
 
     @property
     def query_terms(self) -> list[str]:
@@ -2115,6 +2120,11 @@ class _KnowledgeSearchState:
     # Unpromoted imported-memory rows the queryless listing skipped while
     # filling its page (see _omits_imported_lane).
     imported_omitted: int = 0
+    # Archived/cold rows appended by the second pass (_apply_archived_cold_tier).
+    archived_cold_ids: set[str] = field(default_factory=set)
+    archived_cold_primary_count: int = 0
+    archived_cold_statuses: list[str] = field(default_factory=list)
+    archived_cold_error: Optional[str] = None
 
 
 def _optional_flag(value: Any) -> Optional[bool]:
@@ -2370,8 +2380,12 @@ def _parse_knowledge_search_request(
         discovery_type=arguments.get("discovery_type"),
         severity=arguments.get("severity"),
         status=status,
-        include_archived=arguments.get("include_archived", False),
-        include_cold=arguments.get("include_cold", False),
+        # Parsed, not read raw: the string "false" is truthy, and used to
+        # switch the status filter it names off.
+        include_archived=_optional_flag(arguments.get("include_archived")) is True,
+        include_cold=_optional_flag(arguments.get("include_cold")) is True,
+        include_archived_explicit=_optional_flag(arguments.get("include_archived")),
+        include_cold_explicit=_optional_flag(arguments.get("include_cold")),
         authority_mode=authority_mode,
         sort_by=sort_by,
         created_after=created_after,
@@ -3187,6 +3201,105 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
         logger.debug("Semantic→FTS fallback failed: %s", exc)
 
 
+# A query search that finds fewer active rows than this runs a second pass
+# over archived and cold rows (KG decision 2026-09-29T04:11:58.480600+00:00,
+# proposal 1). About two thirds of the graph is archived or cold, and lifecycle
+# aging moves a row there by age alone, so a default search could miss the only
+# entry that answers the question.
+ARCHIVED_COLD_MIN_RESULTS = 3
+# Second-pass rows sit after every active row; their reported scores are
+# multiplied by this so the numbers agree with the order.
+ARCHIVED_COLD_SCORE_PENALTY = 0.5
+ARCHIVED_COLD_TIER = "archived_cold_fallback"
+
+
+def _archived_cold_widening(request: _KnowledgeSearchRequest) -> Optional[dict[str, bool]]:
+    """The include flags a second pass would turn on, or None when it should not run.
+
+    Query searches only: a queryless listing is a newest-first poll of a known
+    lane, and padding it with stale rows would hand a poller old work as new.
+    An explicit status filter already says which statuses the caller wants,
+    and an explicit include_archived=false / include_cold=false keeps that
+    status out.
+    """
+    if not request.query_text or request.status:
+        return None
+    widen_archived = not request.include_archived and request.include_archived_explicit is not False
+    widen_cold = not request.include_cold and request.include_cold_explicit is not False
+    if not (widen_archived or widen_cold):
+        return None
+    return {
+        "include_archived": request.include_archived or widen_archived,
+        "include_cold": request.include_cold or widen_cold,
+    }
+
+
+async def _apply_archived_cold_tier(state: _KnowledgeSearchState) -> None:
+    """Fill a short page from archived and cold rows, ranked below every active row.
+
+    Re-runs the same retrieval with the widened status filter, so ranking,
+    tag, window, label and authority rules are the ones the first pass used.
+    Only rows the first pass hid by status are added.
+    """
+    request = state.request
+    threshold = min(ARCHIVED_COLD_MIN_RESULTS, request.limit)
+    if len(state.results) >= threshold:
+        return
+    widening = _archived_cold_widening(request)
+    if widening is None:
+        return
+
+    second = _KnowledgeSearchState(
+        request=replace(request, **widening),
+        graph=state.graph,
+    )
+    try:
+        await _run_text_search(second)
+        await _apply_semantic_fts_fallback(second)
+        if second.fallback_used:
+            second.results = _rank_search_documents(second, second.results)[: request.limit]
+    except Exception as exc:
+        logger.warning("[KG_SEARCH] archived/cold second pass failed: %s", exc)
+        state.archived_cold_error = str(exc)
+        return
+
+    seen = {document.id for document in state.results}
+    room = request.limit - len(state.results)
+    added = [
+        document
+        for document in second.results
+        if document.id not in seen and not _candidate_status_visible(document, request)
+    ][:room]
+    if not added:
+        return
+
+    state.archived_cold_primary_count = len(state.results)
+    state.archived_cold_statuses = [
+        status
+        for status, widened in (
+            ("archived", widening["include_archived"] and not request.include_archived),
+            ("cold", widening["include_cold"] and not request.include_cold),
+        )
+        if widened
+    ]
+    for document in added:
+        state.archived_cold_ids.add(document.id)
+        for source, target in (
+            (second.semantic_scores, state.semantic_scores),
+            (second.rerank_scores, state.rerank_scores),
+            (second.rrf_scores, state.rrf_scores),
+        ):
+            if document.id in source:
+                target[document.id] = source[document.id] * ARCHIVED_COLD_SCORE_PENALTY
+    if state.fts_anchor_ids is not None and second.fts_anchor_ids:
+        state.fts_anchor_ids.update(
+            document.id for document in added if document.id in second.fts_anchor_ids
+        )
+    state.results = list(state.results) + added
+    if not state.search_mode:
+        state.search_mode = second.search_mode
+
+
 def _candidate_matches_semantic_fallback(
     document: Any,
     request: _KnowledgeSearchRequest,
@@ -3312,6 +3425,8 @@ def _serialize_search_discoveries(
                 item["provenance_chain"] = document.provenance_chain
         annotate_resolution_notes(item, document)
         annotate_imported_read(item, document)
+        if document.id in state.archived_cold_ids:
+            item["retrieval_tier"] = ARCHIVED_COLD_TIER
         discoveries.append(item)
     return discoveries
 
@@ -3391,6 +3506,26 @@ def _attach_search_diagnostics(
             "No exact matches found. Retried with individual terms (OR operator)."
         )
         response["fallback_terms"] = str(state.request.query_text).split()[:3] if state.request.query_text else []
+    if state.archived_cold_ids:
+        statuses = " and ".join(state.archived_cold_statuses)
+        response[ARCHIVED_COLD_TIER] = {
+            "used": True,
+            "primary_count": state.archived_cold_primary_count,
+            "added": len(state.archived_cold_ids),
+            "statuses_searched": state.archived_cold_statuses,
+            "threshold": ARCHIVED_COLD_MIN_RESULTS,
+            "score_penalty": ARCHIVED_COLD_SCORE_PENALTY,
+            "note": (
+                f"Only {state.archived_cold_primary_count} active result(s) matched, "
+                f"so a second pass searched {statuses} rows. Those rows come after "
+                f"every active result, carry retrieval_tier='{ARCHIVED_COLD_TIER}', "
+                f"and their scores are multiplied by {ARCHIVED_COLD_SCORE_PENALTY}. "
+                "Check status and superseded_by before relying on one. Pass "
+                "include_archived=false or include_cold=false to leave that status out."
+            ),
+        }
+    elif state.archived_cold_error:
+        response[f"{ARCHIVED_COLD_TIER}_error"] = state.archived_cold_error
 
     authority_counts: dict[str, int] = {}
     for document in state.results:
@@ -3692,6 +3827,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     await _apply_semantic_fts_fallback(state)
     if state.fallback_used:
         state.results = _rank_search_documents(state, state.results)[: state.request.limit]
+    await _apply_archived_cold_tier(state)
     record_ms(
         f"knowledge.search.{state.search_mode}",
         (time.perf_counter() - started_at) * 1000.0,

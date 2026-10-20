@@ -142,6 +142,20 @@ response reports `imported_omitted` with a hint; the same two routes read them
 (`authority_mode="all"`, or a `source-<provider>-memory` tag filter). Check-in memory
 suggestions leave them out as well. A query search still returns them.
 
+### Archived and cold rows on a short page
+
+Search hides `archived` and `cold` rows unless you pass `include_archived` /
+`include_cold` or a `status` filter. Lifecycle aging moves rows there by age
+alone, so a query search that finds fewer than 3 other rows runs a second pass
+that includes them. Rows from that pass come after every other row, carry
+`retrieval_tier="archived_cold_fallback"`, and their reported scores are
+halved. The response's `archived_cold_fallback` block (lean:
+`state_summary.archived_cold_fallback`) gives the counts. Check `status` and
+`superseded_by` before relying on such a row. An explicit
+`include_archived=false` or `include_cold=false` keeps that status out.
+Queryless listings and searches with a `status` filter never get the second
+pass.
+
 ## Quick Contribution
 
 For low-friction contributions, use the unified note action:
