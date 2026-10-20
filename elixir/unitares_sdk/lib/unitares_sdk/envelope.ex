@@ -108,8 +108,6 @@ defmodule UnitaresSdk.Envelope do
       Map.get(m, "error_category") == "auth_error"
   end
 
-  defp refusal?(_), do: false
-
   defp refusal_reason(%{} = m) do
     cond do
       Map.get(m, "status") == @refusal_status -> :identity_required
@@ -133,8 +131,6 @@ defmodule UnitaresSdk.Envelope do
   defp paused?(%{} = m) do
     Map.get(m, "error_code") == "AGENT_PAUSED" or Map.get(m, "status") == "AGENT_PAUSED"
   end
-
-  defp paused?(_), do: false
 
   # --- json -----------------------------------------------------------------
 
