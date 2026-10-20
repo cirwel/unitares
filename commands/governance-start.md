@@ -46,9 +46,8 @@ Do not use `onboard(continuity_token=...)` as cross-process resume; after S1-c i
 
 After a successful `identity()` or `onboard()` response:
 
-- create or update a slotted cache using `scripts/client/session_cache.py set session --slot <client_session_id-or-codex-session-id> --merge --stamp`
-- keep it compact and machine-readable JSON
-- include:
+- create or update a slotted cache using `scripts/client/session_cache.py set session --slot <client_session_id-or-codex-session-id> --merge --stamp --json '<payload>'`, where `<payload>` is a compact JSON object of the fields below. The `--json` payload is required: without it nothing is written, and a new slot is refused because it carries no identity field
+- include in the payload (`updated_at` is set by `--stamp`):
   - `schema_version: 2`
   - `server_url` when known
   - `uuid`
