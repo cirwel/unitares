@@ -133,8 +133,9 @@ the dashboard on a LAN address or a hostname also needs its origin in
   route does not carry them.
 - **The guard does not cover the other services or other credentials.** The
   lease plane loads `LEASE_PLANE_BEARER_TOKEN` at boot and serves with whatever
-  value it is given; it reads none of the exposure configuration above, so it
-  does not refuse a published default. Nothing refuses an unauthenticated
+  value it is given. It warns when that value is the published default, and
+  again when it binds beyond loopback outside a container, but it reads none of
+  the exposure configuration above, so it does not refuse. Nothing refuses an unauthenticated
   Redis, the default Postgres password, or a missing MCP bearer on a
   non-loopback bind. `.github/SECURITY.md` treats a non-loopback bind and
   local-host/local-process access as operator responsibility and out of report
