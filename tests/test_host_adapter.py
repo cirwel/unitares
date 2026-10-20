@@ -1028,3 +1028,37 @@ def test_codex_refuses_when_the_cli_does_not_enforce_the_profile(monkeypatch):
     assert result["ok"] is False and result["dispatch_phase"] == "preflight"
     assert "does not enforce" in result["error"]
     assert state["calls"] == []
+
+
+def test_stalled_codex_probe_is_clipped_to_the_call_deadline(monkeypatch):
+    """A cold sandbox probe cannot hold the call past its deadline (#2943)."""
+    import threading
+    import time
+
+    _enable(monkeypatch)
+    release = threading.Event()
+
+    def stalled_probe(_cli):
+        release.wait(5)
+        return True
+
+    monkeypatch.setattr(ha, "codex_confinement_verified", stalled_probe)
+    state = _patch_httpx(monkeypatch, [])
+    elapsed = {}
+
+    async def call():
+        started = time.monotonic()
+        try:
+            return await ha.invoke_host_adapter(
+                "codex:host-adapter", "hi", timeout_s=5, deadline=started + 0.2)
+        finally:
+            # Timed inside the loop: the loop's shutdown still joins the
+            # uncancellable probe thread, which the release below ends.
+            elapsed["s"] = time.monotonic() - started
+            release.set()
+
+    result = _run(call())
+    assert elapsed["s"] < 2
+    assert result["ok"] is False and result["dispatch_phase"] == "preflight"
+    assert "sandbox probe" in result["error"]
+    assert state["calls"] == []
