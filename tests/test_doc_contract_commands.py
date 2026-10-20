@@ -352,6 +352,7 @@ def test_documented_commands_resolve(doc_health):
 
 # Regression: the confirmed stale line from docs/operations/
 # kg-lineage-dashboard-handoff.md:172 on origin/master before the audit fix.
+# The handoff now lives in docs/operations/archive/.
 _STALE_HANDOFF = """\
 - `pytest tests/test_dashboard_redesign_route.py tests/test_dashboard.py`
 - `cd dashboard && npm test && npm run lint && npm run format:check`
@@ -361,10 +362,10 @@ _STALE_HANDOFF = """\
 
 def test_flags_npm_script_missing_from_package_json():
     failures = check_doc_text(
-        "docs/operations/kg-lineage-dashboard-handoff.md", _STALE_HANDOFF, _repo_sources()
+        "docs/operations/archive/kg-lineage-dashboard-handoff.md", _STALE_HANDOFF, _repo_sources()
     )
     assert len(failures) == 1
-    assert failures[0].startswith("docs/operations/kg-lineage-dashboard-handoff.md:2:")
+    assert failures[0].startswith("docs/operations/archive/kg-lineage-dashboard-handoff.md:2:")
     assert "npm run format:check" in failures[0]
     assert "dashboard/package.json" in failures[0]
 

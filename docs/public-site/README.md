@@ -1,0 +1,114 @@
+# Public site (GitHub Pages)
+
+This folder holds the sources for the public UNITARES GitHub Pages site. The
+landing page, ontology glossary, interactive glossary viewer, and latest
+glossary drift audit are published to GitHub Pages. Each page is **generated
+from repository markdown**; the built HTML is never hand-edited.
+
+| File | Role |
+| --- | --- |
+| [`index.md`](index.md) | Landing page source |
+| [`glossary-viewer.template.html`](glossary-viewer.template.html) | Interactive glossary viewer template; the build injects the glossary data |
+| [`favicon.svg`](favicon.svg) | Site icon |
+| `README.md` (this file) | Maintainer notes; the build does not render it, so it is not published |
+
+Because the publish workflow watches `docs/public-site/**`, merging an edit to
+this README also redeploys the (unchanged) site.
+
+## How it builds
+
+- `scripts/dev/build_public_site.py` renders `docs/public-site/index.md`,
+  `docs/ontology/glossary.md`, and the latest `glossary-drift-audit-*.md` into a
+  small static site (`build/public-site/`) with a shared theme. Only the
+  `markdown` pip package is needed — no model API, no paid service.
+- The **interactive viewer** (`glossary-viewer.html` — search + homonym /
+  single-sense / Rosetta / open-gap filters) is generated from a structured
+  parse of the same `glossary.md` (`scripts/dev/glossary_data.py` injected into
+  `docs/public-site/glossary-viewer.template.html`), so it holds no data copy
+  of its own. The old hand-maintained viewer prototype (a standalone
+  `glossary-viewer.html` under `docs/ontology/`) carried its own `TERMS` array
+  and drifted; it is retired, and
+  `scripts/dev/check_glossary_drift.py` (run in CI by `tests.yml`) fails if it
+  comes back, if `glossary.md` stops parsing, or if the glossary's
+  `path.py::symbol` code references or its cross-references with the runtime
+  glossary (`src/governance_glossary.py`) go stale.
+- `.github/workflows/public-pages.yml` runs the build and deploys to Pages on
+  every push to `master` that touches the landing page, glossary, drift audit,
+  build script, parser, viewer template, or workflow. Also runnable via
+  **Actions → public-pages → Run workflow**.
+
+Build locally to preview:
+
+```bash
+pip install markdown
+python3 scripts/dev/build_public_site.py --out build/public-site
+# open build/public-site/index.html (landing page)
+# open build/public-site/glossary.html (canonical glossary)
+# open build/public-site/glossary-viewer.html (interactive viewer)
+```
+
+## How publishing works (Actions source)
+
+The workflow builds the site and deploys it to GitHub Pages via
+`actions/upload-pages-artifact` + `actions/deploy-pages` (Pages **Source =
+"GitHub Actions"**). On every relevant push to `master`, the site re-publishes
+to **https://cirwel.github.io/unitares/**.
+
+### Enablement history (why it took a few tries)
+
+The workflow `GITHUB_TOKEN` cannot *create* a Pages site — only deploy to one that
+exists. So enabling Pages was a one-time human step:
+
+- #985 (Actions deploy) and #986 (`configure-pages enablement: true`) both failed
+  with `Resource not accessible by integration` / a deploy 404, because Pages was
+  not yet enabled and the token may not enable it.
+- #987 published to a `gh-pages` branch as a token-only fallback (that branch now
+  exists but is unused under Actions source — safe to delete).
+- Once Pages was enabled by hand (**Settings → Pages → Source = "GitHub
+  Actions"**), this Actions-deploy path works and is the maintained one.
+
+If you ever see the deploy job 404 again, confirm **Settings → Pages → Source**
+is still "GitHub Actions".
+
+## Custom domain (optional, branded URL)
+
+Recommended alias: **`unitares.cirwel.org`**. To switch:
+
+1. In `.github/workflows/public-pages.yml`, change the build step to:
+   `python3 scripts/dev/build_public_site.py --out build/public-site --cname unitares.cirwel.org`
+   (the script writes the `CNAME` file Pages needs).
+2. At your DNS provider, add a **CNAME** record:
+   `unitares.cirwel.org  →  cirwel.github.io`.
+3. Repo **Settings → Pages → Custom domain** = `unitares.cirwel.org`, then enable
+   **Enforce HTTPS** once the cert provisions.
+
+That's the whole switch — one flag + one DNS record. The site content and source
+of truth are unchanged; only the served hostname moves.
+
+## Copy discipline: one sentence, owned by the README
+
+The landing page's heading and first paragraph copy the root README's tagline
+("Accountability infrastructure for long-running AI agents") and its three
+definition sentences verbatim. Those are the two short paragraphs beginning
+"UNITARES is self-hosted accountability infrastructure"; the problem paragraph
+above them is README-only and is not copied. The build test
+`tests/test_build_public_site.py` asserts the definition sentence is present in
+both files. cirwel.org pins the same strings against the
+README through its claims register (`cirwel-site/src/data/claims.json`) and
+states the rule in its `EDITORIAL.md`; the social card's tagline constant in
+`scripts/dev/brand/render_social_preview.py` follows the README too. To change
+the sentence, change the README first, then this landing page, then the site.
+Ten different phrasings were live across these surfaces on 2026-09-16
+(`docs/plans/public-presentation-critique-2026-09-16.md`); this is what keeps it
+at one.
+
+The page is set in the CIRWEL house register (cream and oxblood, bistre and
+verdigris at night) with system serifs, so it reads as the same publication as
+cirwel.org without shipping webfonts.
+
+## What it publishes (and what it doesn't)
+
+Deliberately scoped to the landing page, glossary, and drift audit rather than
+the whole `docs/` tree. Internal proposals and runbooks are not published as
+polished pages by this workflow; evaluator links point to their canonical files
+in the public repository.
