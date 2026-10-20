@@ -395,6 +395,17 @@ Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
 write** — a per-write LLM pass across a multi-agent fleet is exactly the
 high-frequency-noise anti-pattern this graph avoids.
 
+The server also runs that cadence itself, set by
+`UNITARES_KG_SYNTHESIS_SCHEDULE`. The default, `shadow`, previews rollups
+with the deterministic narrative and only logs them, so nothing is written;
+`apply` writes them as the `system:kg-synthesis` writer, with the local-LLM
+narrative and its deterministic fallback; `off` disables it. When a store
+finds three or more open near-duplicates, its response carries a
+`consolidation_hint`, and the tags the new finding shares with those
+duplicates (its own semantic tags when it shares none) are queued as topics
+for the next pass. That queue is in memory and lost on restart. The hint still asks you to supersede or resolve the duplicates: a
+rollup summarizes them and leaves each one open.
+
 ### Imported-memory previews
 
 Search and agent-scoped get cap imported inline details at 2 KiB UTF-8, even
