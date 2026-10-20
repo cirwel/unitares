@@ -101,9 +101,6 @@ If the guard flags something that genuinely belongs here, add the path to
 Until 2026-10-14 the guard also refused `claude.ai/code/session` links and the
 `Claude-Session:` trailer in files, commit messages and PR bodies, and CI
 rewrote PR bodies to strip the harness-appended footer. The operator removed
-that rule on 2026-10-14, and nothing rewrites a PR body any more. On
-2026-10-20 the operator chose to stop adding session links by convention: the
-`UNITARES agent: <uuid>` footer is the provenance pointer (see
-`docs/operations/github-workflow-conventions.md`, *Branch ownership*). The
-guard stays removed, and commits that carry a session link were never
-rewritten and need no action.
+that rule on 2026-10-14: a session link in a PR body or commit message is
+allowed, and nothing rewrites a PR body any more. The commits that carry the
+old trailer were never rewritten and need no action.
