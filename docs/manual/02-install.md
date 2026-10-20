@@ -58,8 +58,8 @@ Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
 exercise self-relative scoring or establish predictive value.
 
-The quickstart leaves several capabilities off, among them graph edges in shared
-memory, semantic search, a model for `consult`, and cross-family review.
+The quickstart leaves several capabilities off, among them semantic search, a
+model for `consult`, and cross-family review.
 [§2.4](#24-quickstart-defaults-and-a-full-setup) lists each one, how to turn it
 on, and what is missing without it.
 
@@ -495,9 +495,26 @@ extensions installed), Redis and the lease plane. Several capabilities are off
 in it, either because they need something the stack does not start (a model
 server, the agent orchestrator, the embeddings package) or because they change
 live decisions and wait on an operator. Each row names what the quickstart
-does, how to turn the capability on, and what is missing while it is off. Set a
-variable in `.env` and recreate the service (`docker compose up -d
-governance-mcp`), or `--build` where the row says the image changes.
+does, how to turn the capability on, and what is missing while it is off.
+
+Compose reads `.env` only to fill in variables that `docker-compose.yml` already
+names in the `governance-mcp` environment block: the knowledge backend, the
+`consult` model and the lease attestation settings. Any other variable in the
+table needs an environment entry of its own. Put it in
+`docker-compose.override.yml`, which Compose reads automatically:
+
+```yaml
+services:
+  governance-mcp:
+    environment:
+      UNITARES_ENABLE_RERANKER: "1"
+```
+
+Then recreate the service (`docker compose up -d governance-mcp`), with
+`--build` where the row says the image changes. Naming files with `-f` or
+`COMPOSE_FILE` turns the automatic override off, so with the full override
+below list all three:
+`COMPOSE_FILE=docker-compose.yml:docker-compose.full.yml:docker-compose.override.yml`.
 
 Semantic search and hybrid ranking come together in an override file, which
 builds a local image with the embeddings package and sets both flags:
