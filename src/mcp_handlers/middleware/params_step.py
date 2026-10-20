@@ -26,6 +26,14 @@ _BROWSABLE_CALLS = call_set(
     actions={("knowledge", action) for action in ("search", "list", "stats", "details", "get")},
 )
 
+
+
+def is_browsable_call(name: str, arguments: dict) -> bool:
+    """Whether this call is a browsable read that must not be filtered to the
+    bound agent. Public so the REST prebind applies the same set as /mcp/."""
+    return _BROWSABLE_CALLS.matches(name, arguments)
+
+
 # Tools that act on OTHER agents (dashboard resume/archive/observe), so a
 # different agent_id is a target, not impersonation. Until 2026-09 this set
 # also named observe_agent and archive_agent, and a separate set named

@@ -1087,7 +1087,30 @@ async def _resolve_http_bound_agent(
             for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
         )
     )
-    if unnamed_destructive:
+    # Browsable reads take the same treatment for a different reason: on a
+    # knowledge search an omitted agent_id must stay omitted, because the
+    # handler reads agent_id as an AUTHOR FILTER. Stamped with the caller it
+    # answered every bound REST search with the caller's own rows only, under
+    # a success envelope (0 of 20 operator decisions, 2026-10-20). /mcp/ never
+    # stamps these (params_step.is_browsable_call). The view dispatch finally
+    # acts on must be browsable, and no depth may name a non-browsable action,
+    # so a write wrapped inside a read keeps its stamp.
+    from src.mcp_handlers.middleware.params_step import is_browsable_call
+
+    views = [
+        unwrapped_view(arguments, depth)
+        for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
+    ]
+    unnamed_browsable = (
+        is_browsable_call(tool_name, views[-1])
+        and not views[-1].get("agent_id")
+        and all(
+            is_browsable_call(tool_name, view)
+            for view in views
+            if view.get("action") or view.get("op")
+        )
+    )
+    if unnamed_destructive or unnamed_browsable:
         try:
             return await _resolve_http_bound_caller(arguments, signals, tool_name)
         finally:
