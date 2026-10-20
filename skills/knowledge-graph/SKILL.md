@@ -142,6 +142,24 @@ response reports `imported_omitted` with a hint; the same two routes read them
 (`authority_mode="all"`, or a `source-<provider>-memory` tag filter). Check-in memory
 suggestions leave them out as well. A query search still returns them.
 
+### Archived and cold rows on a short page
+
+Search hides `archived` and `cold` rows unless you pass `include_archived` /
+`include_cold` or a `status` filter. Lifecycle aging moves rows there by age
+alone, so a query search that finds fewer than 3 other rows runs a second pass
+that includes them. Rows from that pass come after every other row, carry
+`retrieval_tier="archived_cold_fallback"`, and their reported scores are
+halved. The response's `archived_cold_fallback` block (lean:
+`state_summary.archived_cold_fallback`) gives the counts. Check `status` and
+`superseded_by` before relying on such a row. The pass is optional: when it
+fails or does not fit in what is left of the search's time budget, the page
+holds the first pass's rows alone and `archived_cold_fallback_error` (lean:
+`state_summary.archived_cold_fallback_error`) says why; pass
+`include_archived=true` / `include_cold=true` to ask for those rows directly. An explicit
+`include_archived=false` or `include_cold=false` keeps that status out.
+Queryless listings and searches with a `status` filter never get the second
+pass.
+
 ## Quick Contribution
 
 For low-friction contributions, use the unified note action:
@@ -260,7 +278,9 @@ open  -->  resolved / closed / wont_fix
   `store(..., supersedes=<older>)` and expect a `supersession_warning` that the
   edge was not recorded. Where the edge exists, a search result or a `details`
   read of the older entry names its replacement in `superseded_by` (the
-  default `search_shared_memory` digest carries the first successor id)
+  default `search_shared_memory` digest carries the first successor id). A
+  search that has spent its time budget still flags the row
+  `superseded: true` but may omit `superseded_by`, so read the row to get it
 - **disputed**: Contested and still worth retaining
 - **closed / wont_fix**: Terminal generic closure / deliberate non-action
 

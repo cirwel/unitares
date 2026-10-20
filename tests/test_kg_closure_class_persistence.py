@@ -367,6 +367,7 @@ def _search_state(document):
     return SimpleNamespace(
         results=[document],
         request=SimpleNamespace(include_provenance=False),
+        archived_cold_ids=set(),
     )
 
 

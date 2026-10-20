@@ -91,6 +91,9 @@ single list the whole process shares.
   the prefix joins the scope with no diff and no review. An exact set makes the
   commit that widens a scope *be* the security review.
 - **The presence site keeps its exemption and keeps its two paths.**
+  *(Correction 2026-10-20: the presence helper also mints for
+  `POST /v1/lease/release` (`agent_presence_lease.py:503`), so its exemption
+  covers three bootstrap paths. See [`msg-send-assurance-gate-v0.md`](msg-send-assurance-gate-v0.md) §2.)*
   `{POST /v1/lease/heartbeat, POST /v1/lease/acquire}`. Unchanged behavior,
   but the exemption is now bounded by something that says so, rather than by a
   prefix that bounds it as a side effect.
