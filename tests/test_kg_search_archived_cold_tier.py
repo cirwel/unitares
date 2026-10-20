@@ -481,3 +481,40 @@ async def test_stalled_broadcast_does_not_cost_the_page(graph, small_budget):
     finally:
         release.set()
         await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_slow_supersession_lookup_after_the_second_pass_keeps_the_page(
+    graph, small_budget, monkeypatch,
+):
+    # Codex review of 0d636d64f [P1]: the second pass may spend the budget down
+    # to its reserve, and the replacement-id lookup for a superseded first-page
+    # row then ran unbounded into the handler timeout.
+    monkeypatch.setattr(handlers, "SUPERSESSION_LOOKUP_RESERVE_S", 0.1)
+    cancelled = asyncio.Event()
+
+    async def first():
+        return [_node("d-stale", status="superseded")]
+
+    async def second():
+        await asyncio.sleep(_BUDGET_S * 0.6)
+        return []
+
+    async def slow_lookup(ids):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return {"d-stale": ["d-new"]}
+
+    _two_pass_fts(graph, first, second)
+    graph.get_superseded_by = slow_lookup
+
+    data = await _search_within_handler_timeout({"query": "dormancy"})
+
+    [row] = data["discoveries"]
+    assert row["id"] == "d-stale"
+    assert row["superseded"] is True
+    assert "superseded_by" not in row
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)

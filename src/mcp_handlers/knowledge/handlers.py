@@ -744,7 +744,9 @@ def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     return get_context_agent_id()
 
 
-async def _annotate_supersession(discovery_list: list, graph) -> None:
+async def _annotate_supersession(
+    discovery_list: list, graph, *, deadline: Optional[float] = None,
+) -> None:
     """Flag superseded rows in a result list so agents don't cite stale notes.
 
     Agent-facing trust signal (2026-06-21). Default search excludes archived/cold
@@ -753,6 +755,11 @@ async def _annotate_supersession(discovery_list: list, graph) -> None:
     `status` (free) and best-effort attaches the replacement id(s) from the AGE
     SUPERSEDES edge. Mutates `discovery_list` in place; fail-soft (a graph error
     still leaves the free status-based flag).
+
+    With a ``deadline`` (search's monotonic budget), the replacement-id lookup
+    gets only what is left of it, less SUPERSESSION_LOOKUP_RESERVE_S, and is
+    stopped the way an overrunning archived/cold pass is: the rows keep the free
+    flag and lose only ``superseded_by``.
     """
     superseded_ids = [
         d["id"] for d in discovery_list
@@ -763,7 +770,10 @@ async def _annotate_supersession(discovery_list: list, graph) -> None:
     successors: Dict[str, list] = {}
     if hasattr(graph, "get_superseded_by"):
         try:
-            successors = await graph.get_superseded_by(superseded_ids)
+            if deadline is None:
+                successors = await graph.get_superseded_by(superseded_ids)
+            else:
+                successors = await _bounded_supersession_lookup(graph, superseded_ids, deadline)
         except Exception as exc:  # noqa: BLE001 — advisory flag, never break search
             logger.debug(f"[KG_SEARCH] supersession lookup failed (non-fatal): {exc}")
     for d in discovery_list:
@@ -3252,6 +3262,10 @@ _ABANDONED_ARCHIVED_COLD_PASSES: set[asyncio.Task] = set()
 SEARCH_SYNTHESIS_MAX_TIMEOUT_S = 30.0
 SEARCH_SYNTHESIS_RESERVE_S = 1.0
 SEARCH_SYNTHESIS_MIN_TIMEOUT_S = 2.0
+# The replacement-id lookup for superseded rows runs last, after the optional
+# second pass may have spent the budget down to its reserve, so it gets what is
+# left less this reserve for building the response.
+SUPERSESSION_LOOKUP_RESERVE_S = 1.0
 
 
 def _archived_cold_widening(request: _KnowledgeSearchRequest) -> Optional[dict[str, bool]]:
@@ -3286,6 +3300,35 @@ def _settle_abandoned_pass(task: asyncio.Task) -> None:
     _ABANDONED_ARCHIVED_COLD_PASSES.discard(task)
     if not task.cancelled() and task.exception() is not None:
         logger.debug("[KG_SEARCH] abandoned archived/cold pass ended with: %s", task.exception())
+
+
+async def _bounded_supersession_lookup(
+    graph, superseded_ids: list, deadline: float,
+) -> Dict[str, list]:
+    """``get_superseded_by`` within what is left of the search budget.
+
+    An empty mapping when no time is left or the lookup overruns; the overrun
+    task is stopped like an abandoned second pass. Cancelling the request
+    cancels the lookup too.
+    """
+    budget = deadline - SUPERSESSION_LOOKUP_RESERVE_S - time.monotonic()
+    if budget <= 0:
+        logger.info("[KG_SEARCH] supersession lookup skipped: search budget spent")
+        return {}
+    task = asyncio.create_task(graph.get_superseded_by(superseded_ids))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=budget)
+    except asyncio.CancelledError:
+        _abandon_archived_cold_pass(task)
+        raise
+    if not done:
+        _abandon_archived_cold_pass(task)
+        logger.warning(
+            "[KG_SEARCH] supersession lookup did not finish within %.1fs; "
+            "returning superseded rows without superseded_by", budget,
+        )
+        return {}
+    return task.result()
 
 
 def _abandon_archived_cold_pass(task: asyncio.Task) -> None:
@@ -3968,7 +4011,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
         state,
         include_details=include_details,
     )
-    await _annotate_supersession(discoveries, state.graph)
+    await _annotate_supersession(discoveries, state.graph, deadline=state.deadline)
 
     response = _base_search_response(
         state,

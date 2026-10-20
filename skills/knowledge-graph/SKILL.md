@@ -278,7 +278,9 @@ open  -->  resolved / closed / wont_fix
   `store(..., supersedes=<older>)` and expect a `supersession_warning` that the
   edge was not recorded. Where the edge exists, a search result or a `details`
   read of the older entry names its replacement in `superseded_by` (the
-  default `search_shared_memory` digest carries the first successor id)
+  default `search_shared_memory` digest carries the first successor id). A
+  search that has spent its time budget still flags the row
+  `superseded: true` but may omit `superseded_by`, so read the row to get it
 - **disputed**: Contested and still worth retaining
 - **closed / wont_fix**: Terminal generic closure / deliberate non-action
 
