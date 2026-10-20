@@ -1642,7 +1642,8 @@ async def resolve_session_identity(
     # cryptographic signal: PATH 0 (agent_uuid), PATH 2.8
     # (continuity_token), or explicit session binding via PATH 1/2.
     # Callers with only a label and no UUID/token get a fresh identity.
-    # See docs/architecture/identity.md.
+    # Do not reintroduce label lookup: labels are not unique, so any
+    # name-based resume merges unrelated sessions into one UUID.
 
     # PATH 2.8: Direct agent lookup from continuity token
     # The token embeds the agent UUID. If session bindings expired but the
@@ -2085,4 +2086,5 @@ async def resolve_session_identity(
 # resolve_by_name_claim and _audit_identity_claim removed 2026-04-17.
 # Name is now a cosmetic label set at agent creation or via set_agent_label;
 # identity resolution goes through cryptographic signals only (UUID, token,
-# or explicit session binding). See docs/architecture/identity.md.
+# or explicit session binding). Label-based resume was removed because
+# non-unique labels let distinct sessions collide on one UUID.
