@@ -108,6 +108,7 @@ from src.http_routes.telemetry import (
 from src.http_routes.overview import (
     http_agent_history,
     http_tier_distribution,
+    http_knowledge_flow,
     http_bootstrap_silent,
     http_incidents,
     http_activity,
@@ -321,6 +322,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/progress_flat/recent", http_get_progress_flat_recent, methods=["GET"]))
     app.routes.append(Route("/v1/bootstrap/silent", http_bootstrap_silent, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
+    app.routes.append(Route("/v1/knowledge/flow", http_knowledge_flow, methods=["GET"]))
     app.routes.append(Route("/v1/agents/{agent_id}/history", http_agent_history, methods=["GET"]))
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
