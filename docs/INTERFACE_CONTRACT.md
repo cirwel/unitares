@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.52.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.53.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -979,3 +979,37 @@ adversarial review after it merged.
 - **Client action:** none. The Python SDK's `consult()` gains `host_ids`, and
   `ConsultResult` gains `council_id`, `answered`, `asked` and `members`.
   Before this release the SDK dropped every council answer.
+
+## 1.53.0 (2026-10-19)
+
+Default search now looks at archived and cold rows when it would otherwise
+come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
+
+- **Affected:**
+  - `search_shared_memory` / `knowledge(action='search')` with a query: when
+    the first pass finds fewer than 3 active rows (fewer than `limit`, if
+    `limit` is smaller), the same retrieval runs again with archived and cold
+    rows included. Rows the first pass hid by status are appended after every
+    active row, up to `limit`. Each carries
+    `retrieval_tier: "archived_cold_fallback"`, and their reported similarity,
+    rerank and RRF scores are multiplied by 0.5.
+  - The response gains `archived_cold_fallback` (`used`, `primary_count`,
+    `added`, `statuses_searched`, `threshold`, `score_penalty`, `note`) when
+    the second pass added rows, or `archived_cold_fallback_error` when it
+    failed; the first page is returned either way. The lean and compact
+    tiers lift the counts into `state_summary.archived_cold_fallback` and
+    carry `retrieval_tier` on each digest row.
+  - `include_archived` and `include_cold` sent as the string `"false"` now
+    mean false. They used to be read raw, so `"false"` switched the filter off.
+- **Compatibility:** additive. An explicit `include_archived=false` or
+  `include_cold=false` keeps that status out of the second pass; both false
+  turns it off. Queryless listings (tag, type, severity or agent polls) and
+  searches with an explicit `status` filter are unchanged, so a poller is
+  never handed an old row as new. A search that already returns 3 or more
+  active rows makes the same backend calls as before; a shorter one makes
+  the first pass's calls twice.
+- **Schema digests:** none move. `search_shared_memory`'s tool description
+  now says a short query search also reads archived and cold rows; the tool
+  description is outside every input digest.
+- **Client action:** none. A client that treats every result as current
+  should check `retrieval_tier` or `status` before relying on a row.
