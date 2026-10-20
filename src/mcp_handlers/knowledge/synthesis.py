@@ -324,7 +324,13 @@ async def synthesize_topic(
             "reason": "non_semantic_topic",
         }
 
-    members = await graph.query(tags=[topic], limit=MAX_MEMBERS_PER_ROLLUP * 3, exclude_archived=True)
+    # A failed read must raise, not come back as an empty topic: an empty
+    # result is reported as below_min_members, and the scheduler only retries
+    # a hinted topic whose synthesis raised.
+    members = await graph.query(
+        tags=[topic], limit=MAX_MEMBERS_PER_ROLLUP * 3, exclude_archived=True,
+        raise_on_error=True,
+    )
     member_dicts = [m.to_dict(include_details=False) for m in members]
     # Never let an existing rollup row become a member of itself.
     member_dicts = [m for m in member_dicts if not is_rollup(m)]

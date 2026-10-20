@@ -248,6 +248,47 @@ def test_recovered_hint_resets_its_failure_count(no_sweep):
     assert sched._hint_failures == {}
 
 
+def _age_graph_whose_reads_fail():
+    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+    class DownDB:
+        async def kg_query(self, **kwargs):
+            raise ConnectionError("pool closed")
+
+    kg = KnowledgeGraphAGE()
+    db = DownDB()
+    kg._db = db
+
+    async def _get_db():
+        return db
+
+    kg._get_db = _get_db
+    return kg
+
+
+def test_age_tagged_read_failure_is_raised_for_synthesis():
+    kg = _age_graph_whose_reads_fail()
+    # The default read keeps its contract: a failure logs and returns no rows.
+    assert asyncio.run(kg.query(tags=["redis"])) == []
+    with pytest.raises(ConnectionError):
+        asyncio.run(kg.query(tags=["redis"], raise_on_error=True))
+
+
+def test_hint_on_age_backend_is_retried_after_a_failed_read(no_sweep):
+    # Follow-up review finding (PR #2948): the AGE backend turned a failed
+    # tagged read into [], synthesis reported below_min_members, and the hint
+    # was discarded as if it had succeeded.
+    graph = _age_graph_whose_reads_fail()
+    sched.record_consolidation_hint(["redis"], discovery_id="d1")
+
+    report = asyncio.run(sched.run_synthesis_cycle(graph=graph))
+
+    assert report["rollups"] == []
+    assert report["errors"] == [{"topic": "redis", "error": "pool closed"}]
+    assert report["requeued_topics"] == ["redis"]
+    assert sched.pending_hints() == {"redis": ["d1"]}
+
+
 def test_cycle_does_not_wrap_db_work_in_wait_for(monkeypatch, no_sweep):
     # Review finding (PR #2948): the house rule forbids asyncio.wait_for around
     # ExecutorPool-backed asyncpg work; asyncpg's command_timeout bounds each
