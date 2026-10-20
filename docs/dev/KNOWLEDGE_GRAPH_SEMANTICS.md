@@ -23,8 +23,8 @@ builds on it. All actions route through the consolidated `knowledge(...)` tool
    response_to={"discovery_id": ..., "response_type": "answer"},
    summary=...)` → a new discovery linked back via `response_to_id`. Traversing
    the chain (`details` with `include_response_chain=true`) requires the AGE
-   backend (`UNITARES_KNOWLEDGE_BACKEND=age`); on the default PostgreSQL
-   backend only the relational `response_to_id` link exists.
+   backend (`UNITARES_KNOWLEDGE_BACKEND=age`, the compose default); on the
+   `postgres` backend only the relational `response_to_id` link exists.
 
 > Write discipline (see the shared agent contract, `AGENTS.md` / `CLAUDE.md`,
 > "Strict Identity"): **search before writing.**
