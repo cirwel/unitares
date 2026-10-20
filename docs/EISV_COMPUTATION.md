@@ -25,9 +25,9 @@ Provenance identifies the producer: `primary_eisv_source` in the metrics (`behav
 
 ```
 observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
- calibration,    sensor.py)           state.py)       assessment.py)        guide/
- drift, tools)                                                               pause/reject
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
+ calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
+ drift, tools)                                                               pause
 ```
 
 The dynamical-systems model (`governance_core/`, the ODE; "thermodynamic model"
@@ -196,7 +196,7 @@ identity of EISV itself.
   behavioral assessments.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents as the *principled* fix; the floor survives as defense-in-depth, bounding the z-score denominator in the boundary region — `MIN_MEANINGFUL_EISV_STD`.)
 
-Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `proceed` / `guide` / `pause` / `reject`.
+Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `action_summary.action` (`proceed` or `pause`) with a `sub_action` such as `guide`, a named pause cause, or the legacy `reject` label.
 
 ## Deployed vs. target, at a glance
 
