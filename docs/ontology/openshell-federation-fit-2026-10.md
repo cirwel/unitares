@@ -92,8 +92,8 @@ dependency (the execution-cost policy in `CLAUDE.md`).
 
 ## What this note does not establish
 
-- **Provenance.** Separate first commits and unrelated stacks make copying
-  implausible, not impossible to rule out. Nothing that was read suggests it.
+- **Code-level comparison.** The independence above rests on concepts, stacks
+  and documentation; no source code was compared.
 - **Value.** No seam has been exercised. Whether an OpenShell operator wants a
   claims-and-outcomes record is the same buyer question that
   `competitive-analysis-2026-09.md` leaves open.

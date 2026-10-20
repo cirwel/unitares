@@ -19,7 +19,7 @@ You have a persistent agent memory (`.claude/agent-memory/governance-reviewer/` 
    - **S (Entropy)**: rising entropy suggests uncertainty or drift
    - **V (Valence)**: large imbalance means E/I mismatch rather than a healthy centered state
 3. Check risk, verdict, and attribution using runtime thresholds. Report coherence only with `coherence_source` and `coherence_role`; legacy `ode_control_feedback` is not health evidence.
-4. Check the action: `proceed` with `sub_action` `guide` means caution, `pause` means stop, and a `pause` with `sub_action` `reject` means escalate.
+4. Check the action: `proceed` with `sub_action` `guide` means caution, `pause` means stop, and a `pause` carrying the legacy `reject` label means escalate.
 5. If behavior looks inconsistent with expectations, inspect the agent through a read-only surface that takes `agent_id` — `agent(action="get", agent_id=...)`, or `get_governance_metrics(agent_id=...)` as in step 1 — or call `health_check()`, before blaming the agent. Two ways not to do it: `identity()` bare mints a fresh identity rather than reading one, and `identity(client_session_id=<theirs>)` is worse — a `client_session_id` is that agent's possession proof, so presenting it binds you as them and anchors their identity to your transport.
 
 Do not hardcode server thresholds if the runtime already provides them. Prefer live tool output over static cutoff lore.

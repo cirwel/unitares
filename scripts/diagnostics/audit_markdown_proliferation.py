@@ -3,11 +3,11 @@
 Audit markdown file proliferation and suggest consolidation/migration.
 
 Usage:
-    python scripts/audit_markdown_proliferation.py                    # Full audit
-    python scripts/audit_markdown_proliferation.py --check-new        # Check for new files
-    python scripts/audit_markdown_proliferation.py --suggest-consolidation  # Find consolidation candidates
-    python scripts/audit_markdown_proliferation.py --suggest-migration      # Find migration candidates
-    python scripts/audit_markdown_proliferation.py --stats              # Show statistics
+    python scripts/diagnostics/audit_markdown_proliferation.py                    # Full audit
+    python scripts/diagnostics/audit_markdown_proliferation.py --check-new        # Check for new files
+    python scripts/diagnostics/audit_markdown_proliferation.py --suggest-consolidation  # Find consolidation candidates
+    python scripts/diagnostics/audit_markdown_proliferation.py --suggest-migration      # Find migration candidates
+    python scripts/diagnostics/audit_markdown_proliferation.py --stats              # Show statistics
 """
 
 import sys
