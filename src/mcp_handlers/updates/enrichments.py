@@ -2361,7 +2361,7 @@ async def enrich_agent_profile(ctx: UpdateContext) -> None:
 
 
 # =================================================================
-# Grounding enrichment — spec docs/specs/2026-04-17-eisv-grounding-design.md
+# Grounding enrichment — design note: git show ce8879dc3^:docs/specs/2026-04-17-eisv-grounding-design.md
 # =================================================================
 # Runs at order=75, AFTER gating (phases.py) but BEFORE mirror.
 # Copies legacy E/I/S/coherence into *_legacy, then overwrites E/I/S/coherence
