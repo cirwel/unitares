@@ -59,7 +59,7 @@ These files are the canonical runtime sources for current behavior:
 
 Use this page differently depending on the task:
 
-- If you are summarizing the system, read `docs/PRODUCT_DEFINITION.md` for the product framing, then `docs/UNIFIED_ARCHITECTURE.md` for the layered architecture, then confirm the relevant claims in the runtime files listed above. `README.md` owns the public product sentence those two copy.
+- If you are summarizing the system, read `docs/PRODUCT_DEFINITION.md` for the product framing, then `docs/UNIFIED_ARCHITECTURE.md` for the layered architecture, then confirm the relevant claims in the runtime files listed above. The architecture summary copies the product definition's headline sentence; `README.md` owns the public tagline and opening definition (see the public product sentence row above).
 - If you are debugging a discrepancy between docs and behavior, skip straight to the runtime files and treat prose as secondary evidence.
 - If you are changing architecture docs, update the relevant live doc and then verify that the runtime source still supports the wording.
 - If you are changing runtime semantics, update this file only if the authority map or doc classifications have changed.

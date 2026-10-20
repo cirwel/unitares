@@ -77,7 +77,7 @@ deployed Core component.
 |---|---|---|
 | Identity & lineage | **Mature** | Load-bearing; strict write gate live; anchors everything |
 | Findings & knowledge graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |
-| Review (dialectic) | **In-flight** | Independent reviewer serving live; reviewer-quality is the open frontier |
+| Review (dialectic) | **In-flight** | Independent reviewer serving live where the orchestrated-review flag is on (default off); reviewer-quality is the open frontier |
 | Outcomes | **Deployed** | Outcome claims are recorded with provenance; independence depends on the producer |
 | Policy & EISV | **Deployed** | Runtime observations and controller history → smoothed indices → assessment and policy |
 | Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
@@ -147,7 +147,7 @@ Identity is **not** auto-resumed across process boundaries. Per the v2 identity 
 
 - **Modules:** `src/mcp_handlers/identity/`, `src/mcp_handlers/middleware/identity_step.py`, `src/mcp_handlers/schemas/identity.py`, `core.identities`.
 - **Invariants (structural, do not re-introduce):** never auto-`force_new`; no lookup-by-label; first MCP call is the sole identity source; co-location is not lineage.
-- **Maturity: MATURE / load-bearing.** Strict identity is enforced in production. This layer **anchors the KG** (every discovery has an `Agent` vertex + `AUTHORED` edge) and every verdict (state attributes to a UUID).
+- **Maturity: MATURE / load-bearing.** Strict identity is enforced in production. This layer **anchors the KG** (with the AGE knowledge backend, every discovery has an `Agent` vertex + `AUTHORED` edge) and every verdict (state attributes to a UUID).
 
 ## Knowledge Graph
 
@@ -172,7 +172,7 @@ self-reports low confidence** when a query matches only semantically. Write
 discipline: search before writing; supersede over duplicate.
 
 - **Modules:** `src/knowledge_graph.py`, `src/storage/knowledge_graph_age.py`, `src/mcp_handlers/knowledge/`. Semantics: [`dev/KNOWLEDGE_GRAPH_SEMANTICS.md`](dev/KNOWLEDGE_GRAPH_SEMANTICS.md).
-- **Maturity: LIVE / strong bones, two named gaps.** Provenance tagging and cross-agent linking are solid and differentiated. (a) The objective retrieval eval now drives the **live serving path** (the same handler `knowledge(action="search")` uses; [issue #1050](https://github.com/cirwel/unitares/issues/1050) closed 2026-06-26), but the committed baselines predate that fix, so no current serving-path score is on record, and the labeled corpus remains small and skewed toward distinctive-term queries. (b) The AGE graph is **live and 1:1-synced** but **advisory** — graph *traversal/reasoning* is dormant; canonical lineage uses a recursive CTE (AGE 1.7 can't express the causal path filter). It is *not* "dormant/off"; it *is* "not canonical."
+- **Maturity: LIVE / strong bones, two named gaps.** Provenance tagging and cross-agent linking are solid and differentiated. (a) The objective retrieval eval now drives the **live serving path** (the same handler `knowledge(action="search")` uses; [issue #1050](https://github.com/cirwel/unitares/issues/1050) closed 2026-06-26), but the committed baselines predate that fix, so no current serving-path score is on record, and the labeled corpus remains small and skewed toward distinctive-term queries. (b) With the AGE knowledge backend, the AGE graph is **live and 1:1-synced** but **advisory** — graph *traversal/reasoning* is dormant; canonical lineage uses a recursive CTE (AGE 1.7 can't express the causal path filter). It is *not* "dormant/off"; it *is* "not canonical."
 
 ## Review: dialectic and recovery
 
@@ -181,7 +181,8 @@ escalate to a **dialectic review**: a separate reasoner argues the case
 (thesis / antithesis / synthesis, typed messages, resolution tracking) instead
 of a rubber stamp. The record keeps positions, objections, conditions, and
 resolution; requesting review does not complete it. The orchestrated
-independent reviewer is **de-inert and serving live reviews** (dispute →
+independent reviewer is **de-inert and serving live reviews** in the reference
+deployment, where `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` is on (dispute →
 fail-closed).
 
 **Who reviews.** A dialectic review (`request_review`; thesis -> antithesis ->
