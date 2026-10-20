@@ -56,7 +56,13 @@ jobs:
           grep -Eq '^Deep health: (healthy|moderate)$' "$RUNNER_TEMP/launch-1.log" \
             || { echo "::error::launcher did not report deep health healthy/moderate"; exit 1; }
           test -d "$UNITARES_STACK_DIR/.git"
-          release="v$(tr -d '[:space:]' < "$UNITARES_STACK_DIR/PUBLISHED_VERSION")"
+          # The launcher reads PUBLISHED_VERSION from master, which this
+          # checkout matches. The release tree's own copy predates promotion
+          # (v3.4.0's says 3.3.0), so it cannot name the expected release.
+          release="v$(tr -d '[:space:]' < PUBLISHED_VERSION)"
+          test "$(git -C "$UNITARES_STACK_DIR" rev-parse HEAD)" = \
+            "$(git -C "$UNITARES_STACK_DIR" rev-parse "refs/tags/$release^{commit}")" \
+            || { echo "::error::managed checkout is not on $release"; exit 1; }
           echo "RELEASE=$release" >> "$GITHUB_ENV"
           # The release commit also carries sdk-vX.Y.Z; the launcher must name the release.
           grep -qx "Installed: $release" "$RUNNER_TEMP/launch-1.log" \
