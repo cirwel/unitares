@@ -5587,3 +5587,23 @@ def test_glob_unsafe_names_every_glob_character():
     for path in ("/a/[b]", "/a/b*", "/a/b?", "/a/{b}", "/a/b\\c"):
         assert _REAL_GLOB_UNSAFE(path)
     assert not _REAL_GLOB_UNSAFE("/Users/me/projects/wt/unitares-review")
+
+
+@pytest.mark.parametrize("text", [
+    "verified the prior [P1] fix; startup then failed",
+    rg.REVIEW_PROMPT,
+    "No open [P0] or [P1] issues were found before the connection closed",
+])
+def test_severity_mentions_in_failed_transcript_are_not_findings(text):
+    assert rg.partial_finding_count(text) == 0
+    failed = _comment(full_record("k", "FAILED", 0, False, "codex"))
+    failed["body"] += "\n" + text
+    assert rg.latest_matching([failed], "k").verdict == "FAILED"
+
+
+def test_exhausted_resume_provider_is_unavailable_without_another_attempt(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_review_locked", lambda *a: pytest.fail("retried exhausted provider"))
+    args = SimpleNamespace(budget=30, reviewer="claude", respect_provider_cooldown=True,
+                           failed_providers={"claude"})
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert args.provider_unavailable

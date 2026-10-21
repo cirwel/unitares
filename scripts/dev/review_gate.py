@@ -2079,7 +2079,7 @@ def has_reasoning(text: str) -> bool:
 
 def partial_finding_count(text: str) -> int:
     parsed = parse_verdict(text)
-    return max(len(re.findall(r"\[P[0-3]\]", text)),
+    return max(len(FINDING_TITLE_RE.findall(text)),
                parsed[1] if parsed and parsed[0] == "FINDINGS" else 0)
 
 
@@ -3440,8 +3440,9 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
             continue
         if (provider in getattr(args, "failed_providers", set())
                 and not (getattr(args, "reviewer", None) == provider and retry_override)):
+            args.provider_unavailable = True
             print(f"[review] {provider} exhausted retries for this diff; "
-                  f"use --reviewer {provider} to explicitly retry")
+                  f"use review.sh --reviewer {provider} without --respect-provider-cooldown to explicitly retry")
             continue
         reason = provider_cooldown(provider)
         if reason and not (getattr(args, "reviewer", None) == provider and retry_override):
