@@ -45,8 +45,8 @@ and behavioral state and policy. Agents own their reasoning and execution.
 
 **UNITARES Resident** is a separate first-party agent project for persistent
 conversations, provider and tool adapters, scheduling, task queues, and operator
-interfaces. Its repository and runtime skeleton are shipped; the
-usable agent is in development. It uses the same public MCP/SDK contract as any
+interfaces. Its repository and runtime skeleton are shipped; the usable agent
+product is not yet shipped. It uses the same public MCP/SDK contract as any
 other harness, with no direct database access, Core-internal imports, or
 privileged measurement or policy path.
 
@@ -101,7 +101,8 @@ server responses. The
 traces findings to the fixes they produced: evidence grades preserved,
 formatting repair kept from manufacturing approval, unresolved findings kept
 visible, and a review condition carried into an implementation ten days after
-its review opened. Governed pauses are delivered and audited.
+its review opened. A governed pause has been delivered, and pause delivery is
+audited.
 
 Comparative benefit and task-outcome improvement remain unmeasured. The
 [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the
