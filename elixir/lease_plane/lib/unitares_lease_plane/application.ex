@@ -55,7 +55,7 @@ defmodule UnitaresLeasePlane.Application do
     for warning <-
           published_default_warnings(
             System.get_env("LEASE_PLANE_BEARER_TOKEN"),
-            System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+            resolved_http_ip(),
             File.exists?("/.dockerenv")
           ) do
       Logger.warning(warning)
@@ -402,10 +402,14 @@ defmodule UnitaresLeasePlane.Application do
   the lease plane binds every interface by design and only Docker's host port
   mapping, which this process cannot see, decides reachability, so the bind
   address cannot justify a refusal there. Outside a container, a bind beyond
-  loopback adds a second, stronger warning. The governance server applies the
+  loopback adds a second, stronger warning. `http_ip` is the address the
+  listener resolves (the environment variable, else `config :lease_plane,
+  http_ip:`), as a tuple; a string is parsed for convenience. The governance server applies the
   configuration-signalled refusal (src/insecure_defaults.py).
   """
   def published_default_warnings(token, http_ip, in_container?) do
+    http_ip = if is_binary(http_ip), do: parse_ip_or_nil(http_ip), else: http_ip
+
     if published_default_bearer?(token) do
       base =
         "LEASE_PLANE_BEARER_TOKEN is still set to the published docker-compose.yml " <>
@@ -437,16 +441,29 @@ defmodule UnitaresLeasePlane.Application do
 
   defp published_default_bearer?(_), do: false
 
-  defp beyond_loopback?(raw) when raw in [nil, ""], do: false
-
-  defp beyond_loopback?(raw) when is_binary(raw) do
+  defp parse_ip_or_nil(raw) do
     case :inet.parse_address(String.to_charlist(raw)) do
-      {:ok, {127, _, _, _}} -> false
-      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> false
-      {:ok, _} -> true
-      {:error, _} -> false
+      {:ok, address} -> address
+      {:error, _} -> nil
     end
   end
+
+  # The address the listener will bind: the environment variable, else app
+  # config, as http_children/0 resolves it. An unparseable variable is left
+  # for http_children/0 to refuse; here it reads as "not known to be exposed".
+  defp resolved_http_ip do
+    parse_http_ip(
+      System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+      Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+    )
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp beyond_loopback?({127, _, _, _}), do: false
+  defp beyond_loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: false
+  defp beyond_loopback?(ip) when is_tuple(ip), do: true
+  defp beyond_loopback?(_), do: false
 
   @doc false
   def parse_http_ip(nil, default), do: default
