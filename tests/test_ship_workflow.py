@@ -176,6 +176,17 @@ def test_explicit_draft_pr_uses_current_feature_branch(ship_repo: Path) -> None:
     assert plan["force_auto_branch"] == "0"
 
 
+def test_resume_entry_does_not_source_secrets_or_touch_index(ship_repo: Path) -> None:
+    shutil.copy2(PROJECT_ROOT / "scripts/dev/_ship_resume.py", ship_repo / "scripts/dev/_ship_resume.py")
+    secrets = ship_repo / "must-not-source.env"
+    secrets.write_text("exit 97\n")
+    before = run(["git", "write-tree"], ship_repo).stdout
+    result = run([str(ship_repo / "scripts/dev/ship.sh"), "--resume", "--help"], ship_repo,
+                 env={**os.environ, "UNITARES_SECRETS_ENV": str(secrets)})
+    assert "--reviewer" in result.stdout
+    assert run(["git", "write-tree"], ship_repo).stdout == before
+
+
 @pytest.mark.parametrize("review_exit", [0, 1, 2])
 def test_ship_joins_review_and_surfaces_followup_after_push(ship_repo: Path, review_exit: int) -> None:
     run(["git", "checkout", "-q", "-b", "codex/review-flow"], ship_repo)
