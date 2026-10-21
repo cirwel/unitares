@@ -583,7 +583,7 @@ class Record:
 
     def status(self) -> tuple[str, str]:
         if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
-            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh --reviewer PROVIDER"
+            return "pending", "UNREVIEWED: review incomplete or follow-up scope declined; run review.sh --fresh --reviewer PROVIDER"
         if self.verdict == "CLEAN":
             return "success", f"clean ({self.reviewer})"
         if self.verdict == "FINDINGS" and self.disposed:
@@ -3065,6 +3065,8 @@ def cmd_review(args) -> int:
                           "Consider the diff, prior review, availability and required model family.")
                     print("[review] available choices: " + ", ".join(reviewer_candidates(branch)))
                     return UNREVIEWED
+                args.failed_providers = {p for p in KNOWN_PROVIDERS
+                                         if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 # A small follow-up extends prior work instead of resetting it.
                 # Try this before the cycle cap: it spends no full cycle.
                 # --fresh explicitly asks for a full pass.
@@ -3072,7 +3074,7 @@ def cmd_review(args) -> int:
                                      and (existing.scope == "full-required"
                                           or "full review required: follow-up scope not confirmed" in existing.text))
                 if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None) and not grant_id:
-                    print("[review] UNREVIEWED: follow-up scope was declined; explicitly request --fresh for a full pass")
+                    print("[review] UNREVIEWED: review incomplete or follow-up scope declined; explicitly request --fresh for a full pass")
                     return UNREVIEWED
                 if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
                     snapshot = read_native(repo, pr, key, head, comments)
@@ -3128,8 +3130,6 @@ def cmd_review(args) -> int:
                     sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
-                args.failed_providers = {p for p in KNOWN_PROVIDERS
-                                         if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and reviewer == "codex" and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
                     try:

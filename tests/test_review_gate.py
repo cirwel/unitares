@@ -5619,3 +5619,31 @@ def test_exhausted_resume_provider_is_unavailable_without_another_attempt(repo, 
                            failed_providers={"claude"})
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
     assert args.provider_unavailable
+
+
+def test_followup_dispatch_honors_exhaustion_before_entering_provider(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex', respect_provider_cooldown=True)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'failed_runs', lambda comments, key, provider: 3 if provider == 'codex' else 0)
+    monkeypatch.setattr(rg, '_review_locked', lambda *a: pytest.fail('retried exhausted follow-up provider'))
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+    assert args.provider_unavailable and args.failed_providers == {'codex'}
+
+
+def test_disposed_partial_findings_recover_through_explicit_full_review(repo, monkeypatch):
+    prior = full_record('k', 'FINDINGS', 1, True, 'codex', scope='full-required')
+    prior.verdict = 'FAILED'  # latest_matching answers findings without inventing coverage
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/x'))
+    monkeypatch.setattr(rg, 'current_record', lambda *a: prior)
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds())
+    monkeypatch.setattr(rg, 'review_budget', lambda rounds, *a: rounds)
+    monkeypatch.setattr(rg, '_review_locked', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a, **kw: a[5])
+    args = SimpleNamespace(base='master', budget=30, fresh=False, reviewer='codex')
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+    assert prior.status()[0] == 'pending'
+    args.fresh = True
+    assert rg.cmd_review(args) == 0

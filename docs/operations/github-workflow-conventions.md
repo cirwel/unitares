@@ -754,11 +754,12 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   cycles that found no P0/P1, stop redundant full-review requests and escalate
    unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
-   coverage from two families. P0/P1 remain blockers, and an additional full
-   cycle requires explicit operator authorization with a recorded reason.
+   coverage from two families. P0/P1 remain blockers, and fixes of serious
+   findings still earn a full pass. Ten total cycles warn and prompt scope
+   reassessment; only the redundancy budget requires additional-cycle approval.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -899,6 +900,10 @@ state and journal before retrying. A lost readiness receipt can cause label
 renewal on retry and change queue order. Ambiguous failed reviewer transcripts
 may conservatively retain echoed finding titles as open findings; inspect and
 dispose those with reasons rather than treating an uncertain failure as clean.
+Disposal answers the alleged findings but does not complete an interrupted review.
+Run `./scripts/dev/review.sh --fresh --reviewer PROVIDER` with a healthy provider
+(within the spending budget), then resume delivery. Automatic resume deliberately
+parks incomplete/full-required evidence instead of inferring completed coverage.
 
 The ownership footer must match the bound UUID. Automatic completion is limited
 to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
@@ -1198,7 +1203,8 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done | Escalate redundant full-review requests; fixes of serious findings retain their exemption ([round cap](#round-cap)) |
+| Tenth total cycle or later | Reassess scope and recurring findings; total count warns without blocking useful fix verification |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
