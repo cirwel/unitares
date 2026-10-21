@@ -40,6 +40,18 @@ defmodule UnitaresLeasePlane.PublishedDefaultTest do
     assert [_] = LeaseApplication.published_default_warnings(published_default(), "0.0.0.0", true)
   end
 
+  test "a bind set in app config counts, not only the environment variable" do
+    assert [_, _] =
+             LeaseApplication.published_default_warnings(published_default(), {0, 0, 0, 0}, false)
+
+    assert [_] =
+             LeaseApplication.published_default_warnings(
+               published_default(),
+               {127, 0, 0, 1},
+               false
+             )
+  end
+
   test "loopback binds do not add it" do
     for ip <- [nil, "", "127.0.0.1", "::1"] do
       assert [_] = LeaseApplication.published_default_warnings(published_default(), ip, false)
