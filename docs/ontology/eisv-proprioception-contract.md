@@ -1,8 +1,12 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** October 16, 2026
+**Last Updated:** October 20, 2026
 **Status:** Active
+
+> **Scope:** This is the contract for EISV, one state-estimation instrument
+> within UNITARES, not a definition of the product. For what UNITARES is, see
+> [`PRODUCT_DEFINITION.md`](../PRODUCT_DEFINITION.md).
 
 ---
 
