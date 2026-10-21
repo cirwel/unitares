@@ -64,7 +64,7 @@ This manual deliberately does not restate the deep references. Keep these open a
 - [`../CAPABILITIES_AND_DEPLOYMENT.md`](../CAPABILITIES_AND_DEPLOYMENT.md) — what ships and how it deploys.
 - [`../INTERFACE_CONTRACT.md`](../INTERFACE_CONTRACT.md) — the versioned agent-facing interface contract.
 - [`../dev/TOOL_REFERENCE.md`](../dev/TOOL_REFERENCE.md) — every tool, action and parameter.
-- [`../UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) — the canonical architecture and pipeline.
+- [`../UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) — the canonical architecture, organized around the record's layers.
 - [`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md) — the exact formulas the running code computes.
 - [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md) — who it's for, what anchors the signal, and what remains unproven.
 - [`../REVIEWER_GUIDE.md`](../REVIEWER_GUIDE.md) — the falsifiability harness you run yourself.
