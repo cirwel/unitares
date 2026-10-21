@@ -820,7 +820,7 @@ def latest_matching(comments: list[dict], key: str,
             rec.created_at = c.get("created_at", "")
             records.append(rec)
     records.extend(rec for rec in native if rec.key == key)
-    found, completed, open_findings = None, None, []
+    found, completed, open_findings, required_full = None, None, [], None
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
         original = None
         found = rec
@@ -856,13 +856,22 @@ def latest_matching(comments: list[dict], key: str,
             else:
                 rec.disposed = False
                 open_findings.append(rec)
+        # A failed retry cannot erase a request for an actual full pass.
+        # Disposition answers findings; only a later completed, non-disposition
+        # full review can satisfy the outstanding coverage requirement.
+        if rec.scope == "full-required" and not rec.disposed:
+            required_full, completed = rec, None
+        elif rec.full() and rec.verdict != "FAILED" and not rec.disposed:
+            required_full = None
         if rec.scope == "full-required" and rec.disposed:
+            if required_full is original:
+                required_full = rec
             rec.verdict = "FAILED"  # findings answered, coverage still missing
             if completed is rec or completed is original:
                 completed = None
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
-    return open_findings[-1] if open_findings else completed or found
+    return open_findings[-1] if open_findings else required_full or completed or found
 
 
 #: (repo, pr) -> (head key, base-merge equivalents). Set where a command has
@@ -1238,7 +1247,7 @@ CYCLE_GRANT_MARKER = "unitares-review-cycle v1"
 CYCLE_GRANT_TTL_S = 24 * 60 * 60
 CYCLE_GRANT_RE = re.compile(
     r"\A<!-- " + re.escape(CYCLE_GRANT_MARKER)
-    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\n(.+)\Z",
+    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\r?\n(.+)\Z",
     re.S,
 )
 

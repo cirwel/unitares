@@ -5287,8 +5287,10 @@ def _cycle_grant_comment(head='a' * 40, key='b' * 64, after=3):
                     'I authorize one additional cycle to finish these reviewed corrections.'}
 
 
-def test_user_grant_allows_exactly_one_additional_two_family_cycle():
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\r\n\r\n'])
+def test_user_grant_allows_exactly_one_additional_two_family_cycle(separator):
     comments = [_cycle_grant_comment()]
+    comments[0]['body'] = comments[0]['body'].replace('\n', separator)
     head, key = 'a' * 40, 'b' * 64
     assert rg.cycle_grant(comments, 42, head, key, rg.CodexRounds(3), 'openai', GRANT_NOW)
     fourth = rg.ReviewCycle(head, key, {'openai'})
@@ -5301,12 +5303,13 @@ def test_user_grant_allows_exactly_one_additional_two_family_cycle():
     assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
 
 
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
 @pytest.mark.parametrize('change', [
     'bot', 'app', 'outsider', 'quoted', 'other-head', 'other-key', 'other-pr',
     'expired', 'too-long', 'future', 'bad-date', 'short-reason', 'unknown-history',
     'wrong-position', 'unknown-family', 'deleted',
 ])
-def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change):
+def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change, newline):
     comment = _cycle_grant_comment()
     rounds, family = rg.CodexRounds(3), 'openai'
     comments = [comment]
@@ -5339,6 +5342,7 @@ def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(chang
         family = None
     elif change == 'deleted':
         comments = []
+    comment['body'] = comment['body'].replace('\n', newline)
     assert not rg.cycle_grant(comments, 42, 'a' * 40, 'b' * 64, rounds, family, GRANT_NOW)
 
 
@@ -5672,3 +5676,38 @@ def test_final_outage_confirmation_preserves_stored_scope_refusal(monkeypatch):
     monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds())
     monkeypatch.setattr(rg, 'current_record', lambda *a: full_record('k', 'FAILED', 0, False, 'codex', scope='full-required'))
     assert not rg.provider_outage_confirmed(args)
+
+
+@pytest.mark.parametrize('origin', ['scope-refusal', 'disposed-partial'])
+def test_failed_full_retry_does_not_erase_unresolved_full_requirement(origin):
+    required = full_record('k', 'FAILED' if origin == 'scope-refusal' else 'FINDINGS',
+                           0 if origin == 'scope-refusal' else 1, False, 'codex', scope='full-required')
+    comments = [_comment(required, text='Scope needs a full pass' if origin == 'scope-refusal' else '[P1] Unsafe caller')]
+    if origin == 'disposed-partial':
+        required.disposed = True
+        comments.append(_comment(required, text='1. rebutted: inspected the echoed transcript'))
+    failed = full_record('k', 'FAILED', 0, False, 'claude')
+    comments.append(_comment(failed, text='Provider quota unavailable'))
+    result = rg.latest_matching(comments, 'k')
+    assert result.verdict == 'FAILED' and result.scope == 'full-required'
+    assert result.status()[0] == 'pending'
+
+
+def test_completed_full_review_satisfies_requirement_even_before_old_findings_disposed():
+    partial = full_record('k', 'FINDINGS', 1, False, 'codex', scope='full-required')
+    comments = [_comment(partial, text='[P1] echoed old finding')]
+    full = full_record('k', 'CLEAN', 0, False, 'claude')
+    comments.append(_comment(full, text='Examined the complete implementation.'))
+    assert rg.latest_matching(comments, 'k').verdict == 'FINDINGS'
+    partial.disposed = True
+    comments.append(_comment(partial, text='1. rebutted: transcript echoed a previously fixed finding'))
+    assert rg.latest_matching(comments, 'k').verdict == 'CLEAN'
+
+
+def test_full_review_before_later_refusal_cannot_satisfy_that_requirement():
+    comments = [_comment(full_record('k', 'CLEAN', 0, False, 'claude')),
+                _comment(full_record('k', 'FAILED', 0, False, 'codex', scope='full-required')),
+                _comment(full_record('k', 'FAILED', 0, False, 'claude'))]
+    assert rg.latest_matching(comments, 'k').scope == 'full-required'
+    comments.append(_comment(full_record('k', 'CLEAN', 0, False, 'claude')))
+    assert rg.latest_matching(comments, 'k').verdict == 'CLEAN'
