@@ -112,7 +112,7 @@ jobs:
 
       - name: Launcher refuses a checkout with tracked edits
         run: |
-          set -uo pipefail
+          set -euo pipefail
           echo "# local edit" >> "$UNITARES_STACK_DIR/README.md"
           if sh scripts/install/launch.sh > "$RUNNER_TEMP/launch-dirty.log" 2>&1; then
             cat "$RUNNER_TEMP/launch-dirty.log"
