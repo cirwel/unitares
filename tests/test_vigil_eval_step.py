@@ -26,6 +26,13 @@ sys.path.insert(0, str(project_root))
          "UNITARES_ENABLE_RELATED_EXPANSION": "1"},
         "hybrid_graph",
     ),
+    # An explicitly empty new flag overrides an enabled deprecated flag.
+    ({"UNITARES_EMBEDDING_MODEL": "bge-m3",
+      "UNITARES_ENABLE_HYBRID": "1",
+      "UNITARES_ENABLE_RELATED_EXPANSION": "",
+      "UNITARES_ENABLE_GRAPH_EXPANSION": "1"}, "hybrid_rrf"),
+    ({"UNITARES_EMBEDDING_MODEL": "bge-m3",
+      "UNITARES_ENABLE_RELATED_EXPANSION": "true"}, "hybrid_graph"),
     # The flag's deprecated name still selects the same baseline.
     (
         {"UNITARES_EMBEDDING_MODEL": "bge-m3",
@@ -105,6 +112,7 @@ async def test_run_eval_step_no_baseline_returns_warning(tmp_path, monkeypatch):
     monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
     monkeypatch.delenv("UNITARES_ENABLE_HYBRID", raising=False)
     monkeypatch.delenv("UNITARES_ENABLE_GRAPH_EXPANSION", raising=False)
+    monkeypatch.delenv("UNITARES_ENABLE_RELATED_EXPANSION", raising=False)
     monkeypatch.delenv("UNITARES_ENABLE_RERANKER", raising=False)
 
     vigil = VigilAgent(with_eval=True)
@@ -129,6 +137,7 @@ async def test_run_eval_step_regression_alert(tmp_path, monkeypatch):
     monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
     monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
     monkeypatch.delenv("UNITARES_ENABLE_GRAPH_EXPANSION", raising=False)
+    monkeypatch.delenv("UNITARES_ENABLE_RELATED_EXPANSION", raising=False)
 
     baseline = tmp_path / "baseline_2026-04-20_hybrid_rrf.json"
     baseline.write_text(json.dumps({
@@ -156,6 +165,7 @@ async def test_run_eval_step_within_threshold_no_regression(tmp_path, monkeypatc
     monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
     monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
     monkeypatch.delenv("UNITARES_ENABLE_GRAPH_EXPANSION", raising=False)
+    monkeypatch.delenv("UNITARES_ENABLE_RELATED_EXPANSION", raising=False)
 
     baseline = tmp_path / "baseline_2026-04-20_hybrid_rrf.json"
     baseline.write_text(json.dumps({
@@ -199,6 +209,7 @@ def _hybrid_env(monkeypatch):
     monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
     monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
     monkeypatch.delenv("UNITARES_ENABLE_GRAPH_EXPANSION", raising=False)
+    monkeypatch.delenv("UNITARES_ENABLE_RELATED_EXPANSION", raising=False)
     monkeypatch.delenv("UNITARES_ENABLE_RERANKER", raising=False)
 
 
