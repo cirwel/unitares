@@ -273,19 +273,25 @@ def _static_hosts() -> list[InferenceHost]:
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
             accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
-            notes=(
-                "No model is named: set UNITARES_MODEL_ID to a model the "
-                "endpoint serves (`unitares model` lists them)."
-                if not ollama_model
-                else "Local Ollama OpenAI-compatible endpoint. Model names are "
-                "passed through; use `ollama list` on the host for inventory."
-                if local_route_is_local
-                else "The configured model endpoint classifies external, so "
-                "host_id='ollama:local' (which requests local privacy) is refused. "
-                "Reach it with consult(privacy='cloud_allowed') or the deprecated "
-                "call_model(provider='ollama', privacy='auto' or 'cloud'), or reclassify it "
-                "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
-            ),
+            # Each problem the record has is named: an operator who fixes
+            # one must not find the host still unusable without a reason.
+            notes=" ".join(part for part in (
+                (
+                    "Local Ollama OpenAI-compatible endpoint. Model names are "
+                    "passed through; use `ollama list` on the host for inventory."
+                    if local_route_is_local
+                    else "The configured model endpoint classifies external, so "
+                    "host_id='ollama:local' (which requests local privacy) is refused. "
+                    "Reach it with consult(privacy='cloud_allowed') or the deprecated "
+                    "call_model(provider='ollama', privacy='auto' or 'cloud'), or reclassify it "
+                    "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
+                ),
+                (
+                    "No model is named: set UNITARES_MODEL_ID to a model the "
+                    "endpoint serves (`unitares model` lists them)."
+                    if not ollama_model else ""
+                ),
+            ) if part),
         ),
         InferenceHost(
             host_id="hf:router",

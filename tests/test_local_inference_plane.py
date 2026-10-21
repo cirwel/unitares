@@ -117,3 +117,15 @@ def test_internal_delegation_never_attributes_energy():
     source = inspect.getsource(llm_delegation)
     assert "process_update" not in source
     assert "get_or_create_monitor" not in source
+
+
+def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
+    """Review finding on #2971: with no model named and an external endpoint,
+    the host record names both problems, not only the first."""
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "https://models.example.com/v1")
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["models"] == []
+    assert host["accepts_host_id_from"] == []
+    assert "classifies external" in host["notes"]
+    assert "No model is named" in host["notes"]
