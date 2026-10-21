@@ -13,14 +13,17 @@ This page brings those results together with their sources, dates, and scope.
 
 | Capability | Demonstrated or observed result | Evidence |
 |---|---|---|
-| Process attribution | Calls and stored findings are bound to the process that made them. | [Captured identity and write sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) |
-| Cross-session retrieval | A second process retrieves the first process's resolved finding, including its author and recorded closure. | [Captured successor sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) |
+| Process attribution and outcome binding | Calls and stored findings are bound to the process that made them. An outcome grades the intended prediction and retains its evidence grade. | [Captured identity and write sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) |
+| Cross-session retrieval | A second process retrieves the first process's resolved finding, including its author and recorded closure, then declares the handoff. | [Captured successor sequence](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) |
 | Governed review | A paused agent's submission cannot resolve its own review over a standing reviewer objection; the objection remains pending for facilitation. | [Review constraint implementation](../src/dialectic_protocol.py) |
 | Review-driven corrections | Published findings can be traced to fixes for evidence grading, approval handling, and preservation of unresolved findings. | [September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md) |
+| Review conditions surviving a session | A public PR implements a condition ten days after its originating review opened; the original transcript is operator-private. | [Carried condition and later repair](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317) |
 | Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
 
-For predictive lift, pause benefit, and cross-operator verification, see the
-[evaluation boundaries](#evaluation-boundaries).
+Comparative benefit over other review or handoff approaches remains
+unmeasured. Deployment counts measure recorded activity, not uptime or
+independent trials. For predictive lift, pause benefit, and cross-operator
+verification, see the [evaluation boundaries](#evaluation-boundaries).
 
 The [two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) was captured
 on 2026-10-08 from a fresh Docker quickstart install. Its task is illustrative;
@@ -123,7 +126,7 @@ structural snapshots**; current capabilities and setup are described in
 | Database migrations | **76** |
 | Python modules | **567** across `src/`, `governance_core/`, and reference residents |
 | Documents | **328** |
-| Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Ecosystem](../README.md#ecosystem) |
+| Companion repositories | **7**, including the SDK, host adapter, Raspberry Pi testbed, and resident userland; see [Sibling repos](README.md#sibling-repos) |
 
 The tool/router/alias counts were recorded 2026-09-20 at `76a68c02` from
 `src/tool_meta.py` and router `ACTION_FIELDS` declarations. The test, migration,
@@ -254,14 +257,8 @@ mechanics.
 
 ### Research and threat model
 
-The deployed policy path uses behavioral state estimation. The mathematical
-formulation in the companion paper remains a research target and parallel
-diagnostic path. The DOI identifies a
-[public preprint](https://doi.org/10.5281/zenodo.19647159). Reliability,
-faithfulness under intervention, and calibration work are tracked in the
-[roadmap](ROADMAP.md).
-
-A capable process can conceal or optimize behavior outside the monitored
-signals. Correctness, safety, and resistance to a motivated attacker require
-independent evidence and controls; the
-[scope and threat model](SCOPE_AND_THREAT_MODEL.md) defines that boundary.
+The [scope and threat model](SCOPE_AND_THREAT_MODEL.md#scope-and-threat-model)
+owns this boundary: the deployed policy path versus the companion paper's
+research formulation, behavior concealed or optimized outside the monitored
+signals, and the independent evidence and controls that correctness, safety,
+and resistance to a motivated attacker require.

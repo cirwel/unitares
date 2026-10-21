@@ -1,6 +1,6 @@
 # Incremental `src/` and `tests/` package-seam migration map
 
-**Status:** Proposed execution map for [issue #1606](https://github.com/CIRWEL/unitares/issues/1606); no module move is authorized by this document alone.  
+**Status:** Proposed execution map for [issue #1606](https://github.com/CIRWEL/unitares/issues/1606); no module move is authorized by this document alone. Historical as of 2026-10-20: the map landed in PR #1815 (2026-08-22) and issue #1606 closed as completed on 2026-08-30 when #2033 finished its second seam, and the map moved from `docs/plans/` to the proposal archive.  
 **Snapshot:** `origin/master` at `0632fa93` on 2026-08-22.  
 **Scope:** Organize the existing Python package without changing runtime behavior, public imports, CLI entry points, or the top-level package name `src`.
 

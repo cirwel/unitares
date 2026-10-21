@@ -2,7 +2,7 @@
 
 The October 5–12 frontier brief proposed revoking authority between planning
 and execution. This implements that experiment on the existing file-write
-executor. See the [brief's repository mapping](../ontology/frontier-brief-2026-10-12.md).
+executor. See the [brief's repository mapping](../ontology/archive/frontier-brief-2026-10-12.md).
 It does not add a standing capability grant or enable live deployment flags.
 
 ## Enforcement contract
