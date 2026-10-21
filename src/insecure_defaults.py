@@ -53,6 +53,11 @@ def running_in_container() -> bool:
 
 ALLOW_PUBLISHED_DEFAULTS_ENV = "UNITARES_ALLOW_PUBLISHED_DEFAULTS"
 
+# A fresh signing seed in the format src/lease_attestation.py loads: 32 random
+# bytes, base64url without padding. `openssl rand -hex 32` would give 64 hex
+# characters, which base64url-decode to 48 bytes and are refused at mint time.
+SIGNING_KEY_COMMAND = "openssl rand 32 | base64 | tr '+/' '-_' | tr -d '='"
+
 
 def _csv(env: Mapping[str, str], name: str) -> list[str]:
     return [item.strip() for item in (env.get(name) or "").split(",") if item.strip()]
@@ -156,11 +161,13 @@ def published_default_refusal(environ: Mapping[str, str] | None = None) -> str |
         f"Refusing to start: {', '.join(defaults)} still set to the published "
         "docker-compose.yml default, which anyone can read, while "
         f"{', '.join(signals)} configure this server for clients beyond this host. "
-        "Set your own values first, for example `openssl rand -hex 32` for each, in "
-        "the server's process environment (the governance-mcp environment block or "
-        ".env for docker compose, the plist on a launchd install). "
-        "LEASE_PLANE_BEARER_TOKEN must match on the lease plane, so set it in both "
-        "services. For a deliberate demo, "
+        "Set your own values first, in the server's process environment (the "
+        "governance-mcp environment block or .env for docker compose, the plist on "
+        "a launchd install). LEASE_PLANE_BEARER_TOKEN takes any long random string "
+        "(for example `openssl rand -hex 32`) and must match on the lease plane, so "
+        "set it in both services. UNITARES_LEASE_ATTESTATION_SIGNING_KEY is a "
+        "base64url-encoded 32-byte Ed25519 seed: "
+        f"`{SIGNING_KEY_COMMAND}`. For a deliberate demo, "
         f"{ALLOW_PUBLISHED_DEFAULTS_ENV}=1 downgrades this refusal to a warning "
         "(docs/DEPLOYMENT_SECURITY.md)."
     )

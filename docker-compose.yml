@@ -265,6 +265,10 @@ services:
       # Known development-only Ed25519 seed + issuer for the loopback quickstart.
       # Replace the seed and choose a globally stable issuer on shared installs.
       UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}
+      # Downgrades the startup refusal for a published default secret on an
+      # exposed configuration to a warning, for a deliberate demo only
+      # (src/insecure_defaults.py, docs/DEPLOYMENT_SECURITY.md).
+      UNITARES_ALLOW_PUBLISHED_DEFAULTS: ${UNITARES_ALLOW_PUBLISHED_DEFAULTS:-}
       UNITARES_LEASE_ATTESTATION_ISSUER: ${UNITARES_LEASE_ATTESTATION_ISSUER:-unitares-local}
       UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       # SDK continuity-proof exchanges may use HTTP only for this exact

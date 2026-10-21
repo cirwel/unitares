@@ -125,7 +125,7 @@ the dashboard on a LAN address or a hostname also needs its origin in
   cannot see Docker's host port mapping, and inside the container it binds
   every interface by design, so a quickstart whose port mapping was widened
   to `0.0.0.0` by hand is not detected; the warning still prints.
-  `UNITARES_ALLOW_PUBLISHED_DEFAULTS=1` turns the refusal back into a warning
+  `UNITARES_ALLOW_PUBLISHED_DEFAULTS=1` (in `.env` for docker compose, which passes it through) turns the refusal back into a warning
   for a deliberate demo and logs a second warning at every start while it is
   set. The variable names in use also appear as the `insecure_defaults` check
   in the `health_check` tool and the authenticated `/health/deep` snapshot that

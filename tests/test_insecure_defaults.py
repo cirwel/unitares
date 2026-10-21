@@ -265,3 +265,26 @@ def test_refusal_is_judged_before_bootstrap():
     source = (Path(__file__).resolve().parents[1] / "src" / "mcp_server.py").read_text()
     refusal = source.index("_published_refusal = published_default_refusal()")
     assert source.index("raise SystemExit(1)", refusal) < source.index("bootstrap_server(", refusal)
+
+
+def test_refusal_names_a_signing_key_recipe_the_server_can_load():
+    # `openssl rand -hex 32` passed the startup check but failed at mint time:
+    # 64 hex characters base64url-decode to 48 bytes, and the seed must be 32.
+    import base64
+    import os
+
+    from src.insecure_defaults import SIGNING_KEY_COMMAND
+    from src.lease_attestation import load_signing_key
+
+    refusal = published_default_refusal(_exposed(UNITARES_MCP_BEARER_TOKENS="a"))
+    assert SIGNING_KEY_COMMAND in refusal
+    assert "openssl rand -hex 32" not in refusal.split("UNITARES_LEASE_ATTESTATION_SIGNING_KEY is")[1]
+    # What the recipe produces: 32 random bytes, base64url, padding stripped.
+    seed = base64.b64encode(os.urandom(32)).decode().translate(str.maketrans("+/", "-_")).rstrip("=")
+    load_signing_key(seed)
+
+
+def test_compose_passes_the_override_through():
+    # Compose reads .env only to fill variables docker-compose.yml names, so an
+    # override missing from the environment block could never be set there.
+    assert QUICKSTART_ENV.get(ALLOW_PUBLISHED_DEFAULTS_ENV) == ""
