@@ -282,6 +282,15 @@ def test_another_actors_removal_never_uses_our_intent(delivery):
     assert not ship.own_renewal(pr, AGENT, events)
 
 
+def test_quoted_intent_in_review_text_is_not_a_renewal_record(delivery):
+    pr, _ = delivery
+    pr["comments"] = [{"body": "Review example:\n" + ship.intent_marker(pr, AGENT, 0),
+                       "author": {"login": "app/delivery-bot"}, "createdAt": "2026-10-21T00:00:00Z"}]
+    events = [{"id": 1, "event": "unlabeled", "actor": {"login": "delivery-bot[bot]"},
+               "created_at": "2026-10-21T00:00:01Z"}]
+    assert not ship.own_renewal(pr, AGENT, events)
+
+
 def test_cancelled_push_check_does_not_hide_successful_pr_workflows(delivery):
     pr, _ = delivery
     pr["statusCheckRollup"].append({"__typename": "CheckRun", "name": "push guard",

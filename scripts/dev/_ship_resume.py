@@ -133,7 +133,7 @@ def own_renewal(pr: dict, agent: str, events: list[dict]) -> bool:
         return False
     prefix = re.escape(f"<!-- unitares-ship-renew-intent head={pr['headRefOid']} agent={agent} prior_event=")
     for comment in pr["comments"]:
-        match = re.search(prefix + r"(\d+) -->", comment["body"])
+        match = re.match(prefix + r"(\d+) -->(?:\n|$)", comment["body"])
         if not match:
             continue
         newer = [event for event in events if event["id"] > int(match[1])]
@@ -154,7 +154,7 @@ def own_renewal(pr: dict, agent: str, events: list[dict]) -> bool:
 def renewal_intent(pr: dict, agent: str, previous_event: int) -> dict:
     marker = intent_marker(pr, agent, previous_event)
     for comment in pr["comments"]:
-        if marker in comment["body"]:
+        if comment["body"].splitlines()[0:1] == [marker]:
             return comment
     # The POST response is durable server evidence even if the comments/events
     # read APIs lag. Journal before touching the label, not after its removal.
@@ -225,9 +225,9 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         print(f"[ship] resume {pr['url']} at {head}: review -> CI -> prepr -> ready/queue -> closeout")
         return
     marker = f"<!-- unitares-ship-ready head={head} agent={agent} -->"
-    recorded = any(marker in comment["body"] for comment in pr["comments"])
-    prior_readiness = any("<!-- unitares-ship-ready " in comment["body"]
-                          and f"agent={agent} -->" in comment["body"] for comment in pr["comments"])
+    recorded = any(comment["body"].splitlines()[0:1] == [marker] for comment in pr["comments"])
+    prior_readiness = any(comment["body"].startswith("<!-- unitares-ship-ready ")
+                          and f"agent={agent} -->" in comment["body"].splitlines()[0] for comment in pr["comments"])
     labelled = "approved-to-merge" in {label["name"] for label in pr["labels"]}
     if prior_readiness and not labelled and not recovering_renewal:
         raise Parked("Queue approval was removed after readiness; do not overwrite that hold automatically.")
@@ -247,7 +247,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         if (error.returncode != 2 or not reviewer or not unavailable or unfinished
                 or mandatory_review(pr)):
             raise
-        unreviewed = error.output
+        unreviewed = f"Selected reviewer {reviewer} did not complete (review command exit 2)."
     if wait:
         # Cancelled push checks can make --watch exit nonzero. The required
         # checks and latest PR workflow runs below remain authoritative.
@@ -273,10 +273,10 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if labelled and not final_labelled and not recovering_renewal:
         raise Parked("Queue approval was removed during validation; leave the hold in place.")
     advisory_marker = f"<!-- unitares-ship-unreviewed head={head} agent={agent} -->"
-    if unreviewed and not any(advisory_marker in c["body"] for c in final["comments"]):
+    if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in final["comments"]):
         run("gh", "pr", "comment", str(pr["number"]), "--body",
             advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; proceeding under the "
-            "documented exception after CI. Reviewer output:\n\n" + unreviewed
+            "documented exception after CI. Review attempt:\n\n" + unreviewed
             + f"\nUNITARES agent: {agent}", remote=True)
     if final["isDraft"]:
         run("gh", "pr", "ready", str(pr["number"]), remote=True)
