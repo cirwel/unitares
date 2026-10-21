@@ -172,8 +172,8 @@ can be moved over as it is: a base with no path gets `/v1` added. Running
 `./scripts/unitares model` rewrites `.env` with the new names and removes the old
 `UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
 
-**Where the prompt goes.** `consult` and `call_model` default to
-`privacy='local'`, and the in-process reviewer, check-in coaching and
+**Where the prompt goes.** `consult` (and the deprecated `call_model`, removed
+no earlier than 2026-12-02) default to `privacy='local'`, and the in-process reviewer, check-in coaching and
 knowledge synthesis always count as local. The server sends those only to an
 endpoint it classifies as local, and it decides that from the URL alone,
 never from DNS:
@@ -196,8 +196,8 @@ until you add that range to `UNITARES_TRUSTED_NETWORKS`. On a source install
 that also lets callers from that network reach the REST API without a token;
 under Compose, callers arrive through the Docker bridge, so it changes only
 which model endpoints count as local.
-`consult(privacy='cloud_allowed')` and `call_model(privacy='auto')` may still
-use an external endpoint.
+`consult(privacy='cloud_allowed')` (or the deprecated
+`call_model(privacy='auto')`) may still use an external endpoint.
 
 ### Reinstalling and side-by-side installs
 
@@ -286,6 +286,142 @@ rebuilds, restarts and health-checks the stack. If it stops before a release's
 protected migrations are applied (077 and 078 for v3.4.0), it restarts the
 stack from the checked-out Compose file; to run the previous release instead,
 check that release out and run `docker compose up -d --wait`.
+
+#### Updating a bare-metal or LaunchAgent install
+
+`update` manages only a Compose stack, so on a [bare-metal install](#22-bare-metal-installation)
+or a [LaunchAgent](03-running-the-server.md#37-run-at-login-macos-launchagent)
+you run the same steps by hand, from the checkout. Set `DB_POSTGRES_URL` to
+the URL your server uses (the playbook's is shown):
+
+```bash
+export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
+git status --porcelain --untracked-files=no     # must print nothing
+git ls-files --others --exclude-standard -- db/postgres   # must print nothing
+PREV=$(git rev-parse HEAD)                      # the release you are leaving
+TAG="v$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)"
+echo "$TAG"                                     # the newest release; set TAG yourself to pick another
+git fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+```
+
+The `db/postgres` check matters because the migration tool applies every
+`NNN_*.sql` file it finds under `db/postgres/migrations/`, so an untracked file
+there would reach the database even though the release does not ship it. Move
+or delete anything it lists first.
+
+Confirm this is not a downgrade. The first number is the database's schema,
+the second the newest migration the release ships; if the first is larger,
+stop, because moving to an older release is not supported:
+
+```bash
+psql "$DB_POSTGRES_URL" -Atqc "SELECT COALESCE(MAX(version), 0) FROM core.schema_migrations"
+git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
+  | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1 | sed 's/^0*//'
+```
+
+Stop the server, and the lease plane if you run one, so nothing writes while
+the schema changes: unload each LaunchAgent you use, and press Ctrl-C in the
+terminal of a server started in the foreground. Note which ones were running;
+you start the same ones again at the end. Confirm they are gone by service
+registration, process and listening port, not by an unanswered health check,
+which a timeout would also produce. Then move the code and its Python
+dependencies:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # if you use it
+launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you use it
+launchctl list | grep -E 'com\.unitares\.(governance-mcp|lease-plane)'    # must print nothing
+pgrep -fl 'src/mcp_server\.py|mix run --no-halt'                          # must print nothing
+lsof -nP -iTCP:8767 -iTCP:8788 -sTCP:LISTEN                               # must print nothing
+git checkout --detach "$TAG"
+source .venv/bin/activate
+pip install -r requirements-full.txt -c constraints.txt
+```
+
+Back the database up, list the pending migrations, then apply them:
+
+```bash
+mkdir -p ~/.unitares/backups && chmod 700 ~/.unitares/backups
+( set -o pipefail; umask 077
+  pg_dump "$DB_POSTGRES_URL" | gzip > ~/.unitares/backups/unitares-$(date +%Y%m%d-%H%M%S)-before-$TAG.sql.gz ) \
+  && echo "backup ok"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --dialectic-writers-quiesced
+```
+
+Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
+statement that the server and lease plane are stopped; migrations 077 and 078
+refuse to apply without it, and the tool does not check it for you, so pass it
+only once the three checks above printed nothing. Those checks cover the whole
+machine, so they also list another UNITARES instance, and the `mix run` pattern
+matches any Elixir service. Look at what each listed process is
+(`ps -o command= -p <pid>`), and stop anything that writes to this database. The migration tool calls
+`psql`, which the Homebrew PostgreSQL install puts on your `PATH`.
+
+If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
+shows changes, carry them into your installed plist by hand before loading it.
+Do not render it again with the [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
+command: that writes new tokens and secrets and resets the database URL and
+any other setting you changed, so clients stop authenticating and the server
+can start against a database other than the one you just migrated.
+
+The lease plane runs from whatever checkout its plist's `WorkingDirectory`
+names, and the [lease-plane runbook](../operations/lease-plane-operator-runbook.md)
+uses a separate deploy checkout for it. If that is not this checkout, move it
+to the same release before you load the plist, or the previous release's
+lease plane starts over the migrated schema:
+
+```bash
+plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+LP=$(git -C "$(plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist)" rev-parse --show-toplevel)
+git -C "$LP" fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+git -C "$LP" checkout --detach "$TAG"
+```
+
+Then start what you stopped. The lease plane fetches its dependencies and
+compiles at boot, so its first start on a new release takes longer. Deep
+health should report `healthy` or `moderate`, and the lease plane's
+`build_sha` should match the release:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or: python src/mcp_server.py --port 8767
+launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you stopped it
+./scripts/unitares health
+curl -s http://localhost:8767/health/deep
+curl -s http://127.0.0.1:8788/health; git rev-parse --short "$TAG^{commit}"   # if you run the lease plane
+```
+
+If a migration fails, do not start the previous release over the database
+until you know where the schema stopped (the `psql` query above). If it did not
+cross 077 or 078 during this update, you can go back with
+`git checkout --detach "$PREV"`, reinstall its dependencies and start what
+you stopped again. If it crossed either one, or you cannot read the version,
+stay on the new release, fix the cause the error names and run the `--apply`
+line again; the backup is the way back.
+
+#### Updating the agent plugin
+
+The [governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+is installed into each agent client, not the server, so neither path above
+touches it. It publishes a new version alongside each server release, whose
+release notes name the server version its skills match; update it after the
+server. Claude Code
+does not auto-update third-party marketplaces unless you turn that on under
+`/plugin` > Marketplaces.
+
+```bash
+# Claude Code
+claude plugin marketplace update unitares-governance
+claude plugin update unitares-governance@unitares-governance
+
+# Codex
+codex plugin marketplace upgrade unitares-governance
+```
+
+In Codex, open `/plugins` and confirm the new version is installed, then open
+`/hooks` to review and trust any hooks that changed. In both clients, hooks
+load when a session starts: running sessions keep the old ones until you start
+a new session (or run `/reload-plugins` in Claude Code).
 
 ### Tool discovery (interface 1.13.0 and later)
 

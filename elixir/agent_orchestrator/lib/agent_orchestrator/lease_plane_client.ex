@@ -13,8 +13,6 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   @behaviour AgentOrchestrator.LeasePlaneClient.Behaviour
 
-  require Logger
-
   @impl true
   def acquire(surface_id, holder_agent_uuid, holder_kind, ttl_s) do
     body = %{

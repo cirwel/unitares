@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the opt-in macOS PR review fallback; never reload a running job.
 
-python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares
+python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares --reviewer claude --reviewer antigravity
 Uses existing gh/codex/claude authentication. The installed bootstrap refreshes
 its review driver from origin/master on each run, never from a PR branch.
 """
@@ -18,7 +18,9 @@ import sys
 LABEL = "com.unitares.review-sweep"
 
 
-def install(repo: Path, *, write_only: bool = False) -> Path:
+def install(repo: Path, *, reviewers: list[str], write_only: bool = False) -> Path:
+    if not reviewers or any(p not in {"codex", "claude", "antigravity"} for p in reviewers):
+        raise SystemExit("Choose at least one reviewer: codex, claude, antigravity")
     home = Path.home()
     service = f"gui/{os.getuid()}/{LABEL}"
     if not write_only and subprocess.run(
@@ -33,6 +35,8 @@ def install(repo: Path, *, write_only: bool = False) -> Path:
     logs = home / "Library/Logs"
     logs.mkdir(parents=True, exist_ok=True)
     arguments = ["/bin/bash", str(wrapper)]
+    for reviewer in dict.fromkeys(reviewers):
+        arguments += ["--reviewer", reviewer]
     recorder = shutil.which("unitares-automation-run")
     if recorder:
         arguments = [recorder, "--id", f"launchd:{LABEL}", "--name", LABEL,
@@ -40,7 +44,7 @@ def install(repo: Path, *, write_only: bool = False) -> Path:
     # launchd's default PATH omits Homebrew and the user's model CLIs.
     paths = [str(Path(sys.executable).parent), str(home / ".local/bin"),
              "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-    for command in ("gh", "codex", "claude"):
+    for command in ("gh", "codex", "claude", "agy"):
         found = shutil.which(command)
         if found:
             paths.insert(0, str(Path(found).parent))
@@ -69,5 +73,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.home() / "projects/unitares")
     parser.add_argument("--write-only", action="store_true", help="write config without loading launchd")
+    parser.add_argument("--reviewer", action="append", required=True,
+                        choices=["codex", "claude", "antigravity"],
+                        help="choose a provider; repeat in desired fallback order")
     args = parser.parse_args()
-    install(args.repo.expanduser().resolve(), write_only=args.write_only)
+    install(args.repo.expanduser().resolve(), reviewers=args.reviewer, write_only=args.write_only)

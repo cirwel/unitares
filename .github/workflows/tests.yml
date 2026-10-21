@@ -190,14 +190,11 @@ jobs:
         # the smallest letter group. Each job gets its own DB and filesystem,
         # avoiding the shared-state hazards of pytest-xdist.
         #
-        # Four shards, not eight: at this suite's size the fixed per-job cost
-        # (runner, Postgres container, dependency install) is a large share of a
-        # shard, and every shard is a runner slot other PRs compete for. These are
-        # the groups the 3.14 leg already ran; their test steps measured
-        # 203-243s uninstrumented in CI (run 35190809793), now with coverage.
-        # The wall clock is the SLOWEST shard: re-cut from measured --durations
-        # output, not from file counts, whenever the spread drifts.
-        shard: [tests-a-e, tests-f-m, tests-n-t, tests-u-z-and-agents]
+        # Keep four isolated runners; balance by observed elapsed time rather
+        # than filename counts. The Oct 20 runs left u-z idle for ~5 minutes.
+        # Moving e, l-m and s-t gives a-d / e-k / l-r / s-z + nested/agents.
+        # Measurements and limits: docs/operations/ci-coverage-validation.md.
+        shard: [tests-a-d, tests-e-k, tests-l-r, tests-s-z-and-agents]
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -279,17 +276,17 @@ jobs:
         COVERAGE_CORE: sysmon
       run: |
         case "${{ matrix.shard }}" in
-          tests-a-e)
-            targets=(tests/test_[a-e]*.py)
+          tests-a-d)
+            targets=(tests/test_[a-d]*.py)
             ;;
-          tests-f-m)
-            targets=(tests/test_[f-m]*.py)
+          tests-e-k)
+            targets=(tests/test_[e-k]*.py)
             ;;
-          tests-n-t)
-            targets=(tests/test_[n-t]*.py)
+          tests-l-r)
+            targets=(tests/test_[l-r]*.py)
             ;;
-          tests-u-z-and-agents)
-            targets=(tests/test_[u-z]*.py agents/ tests/*/ tests/smoke_test.py)
+          tests-s-z-and-agents)
+            targets=(tests/test_[s-z]*.py agents/ tests/*/ tests/smoke_test.py)
             ;;
           *)
             echo "unknown test shard: ${{ matrix.shard }}" >&2
