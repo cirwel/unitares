@@ -871,7 +871,7 @@ every change** — runtime, docs, or tests:
 - `--auto-merge` remains available for the rare case where the operator
   explicitly wants auto-merge-on-green; it is not the default.
 
-For an already-pushed PR, resume delivery from the named branch:
+For an already-pushed docs/tests/tooling fix, resume delivery from the named branch:
 
 ```bash
 UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer claude --wait
@@ -886,12 +886,18 @@ It neither commits nor pushes, starts no local full test run, and never updates
 the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
 Without `--wait`, pending validation exits 2 with the command to resume later.
 
-The ownership footer must match the bound UUID. Dirty work, a different local
-or remote head, incomplete review or CI, explicit holds, capability classification,
-and governance-sensitive paths park delivery. A head/base change during validation
+The ownership footer must match the bound UUID. Automatic completion is limited
+to `docs/`, `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and
+`.github/workflows/`; runtime/auth/identity changes keep their operator decision.
+Dirty work, a different local or remote head, open findings, pending review or CI,
+incomplete mandatory family coverage, explicit holds, capability classification,
+and governance-sensitive paths park delivery. An unavailable selected reviewer
+for an ordinary fix uses the existing advisory exception with a PR note; it
+cannot waive mandatory family coverage. A head/base change during validation
 requires another inspection. Successful readiness is recorded against the head
 on the PR; repeating resume rechecks the live evidence without renewing the
-queue label. A missing receipt causes a pre-existing label to be renewed once
+queue label. Approval-removal event history is read across all PR heads, even
+when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
 after validation, covering a follow-up push. Removing approval after a recorded
 readiness parks the command rather than undoing the removal. Surface claims
 must already be released; ownership handoffs and operator decisions remain

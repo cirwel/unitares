@@ -34,9 +34,15 @@ def delivery(monkeypatch):
         if args[:3] == ("git", "status", "--porcelain=v1"):
             return ""
         if args[:2] == ("git", "show"):
-            return "src/policy.py\tENFORCE\toperator boundary\n"
+            if args[2].endswith("review_policy.json"):
+                return json.dumps({"second_family_paths": ["scripts/dev/review_gate.py"]})
+            return "tests/test_policy.py\tENFORCE\toperator boundary\n"
+        if args[:2] == ("git", "diff") and "--name-only" in args:
+            return "docs/change.md\0"
         if args[:2] == ("git", "diff"):
             return ""
+        if args[:2] == ("gh", "api"):
+            return "[[]]"
         if args[:3] == ("gh", "pr", "checks"):
             return json.dumps([{"name": "test", "bucket": "pass"}])
         if args[:3] == ("gh", "run", "list"):
@@ -167,12 +173,90 @@ def test_trusted_base_manifest_blocks_unlabelled_reserved_change(delivery, monke
     _, calls = delivery
     original = ship.run
     def run(*args, **kwargs):
-        if args[:2] == ("git", "diff"):
+        if args[:2] == ("git", "diff") and "-U0" in args:
             return "-ENFORCE = True\n+ENFORCE = False\n"
         return original(*args, **kwargs)
     monkeypatch.setattr(ship, "run", run)
     with pytest.raises(ship.Parked, match="Operator merge required"):
         execute()
+    assert not writes(calls)
+
+
+def test_runtime_identity_change_requires_explicit_operator_decision(delivery, monkeypatch):
+    _, calls = delivery
+    monkeypatch.setattr(ship, "changed_paths", lambda _: ["src/mcp_handlers/identity/handlers.py"])
+    with pytest.raises(ship.Parked, match="operator decisions stay explicit"):
+        execute()
+    assert not writes(calls)
+
+
+def test_unlabel_history_survives_push_and_missing_old_receipt(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[:2] == ("gh", "api"):
+            return json.dumps([[{"id": 2, "event": "unlabeled", "label": {"name": "approved-to-merge"}}]])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="across subsequent pushes"):
+        execute()
+    assert not writes(calls)
+
+
+def test_old_head_receipt_and_removed_label_stay_held(delivery):
+    pr, calls = delivery
+    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={'c' * 40} agent={AGENT} -->"}]
+    with pytest.raises(ship.Parked, match="approval was removed"):
+        execute()
+    assert not writes(calls)
+
+
+@pytest.mark.parametrize("mandatory", [False, True])
+def test_advisory_outage_exception_keeps_mandatory_family_gate(delivery, monkeypatch, mandatory):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.CommandFailed(args, Mock(returncode=2, stdout="[review] UNREVIEWED: provider unavailable", stderr=""))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    monkeypatch.setattr(ship, "mandatory_review", lambda _: mandatory)
+    if mandatory:
+        with pytest.raises(ship.CommandFailed):
+            execute()
+        assert not writes(calls)
+    else:
+        execute()
+        assert any(args[2] == "ready" for args in writes(calls))
+        assert any("Advisory review unavailable" in " ".join(args) for args in writes(calls))
+
+
+def test_pending_review_is_not_an_advisory_outage(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.CommandFailed(args, Mock(returncode=2, stdout="[review] native review pending; provider unavailable", stderr=""))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.CommandFailed):
+        execute()
+    assert not writes(calls)
+
+
+def test_advisory_exception_receipt_is_not_reposted(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["isDraft"] = False
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->"},
+                      {"body": f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->"}]
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.CommandFailed(args, Mock(returncode=2, stdout="[review] provider unavailable", stderr=""))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    execute()
     assert not writes(calls)
 
 
