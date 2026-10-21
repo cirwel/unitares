@@ -880,11 +880,20 @@ UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer 
 This joins the existing diff-bound review, waits for CI when `--wait` is set,
 runs `git prepr`, declares readiness and adds `approved-to-merge`, then runs
 strict closeout. It uses the installed GitHub App runner when available;
-other hosts must supply an explicitly provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
+this optional command also requires the shared host `git-prepr` and
+`git-closeout` tools (or equivalent Git aliases). Those tools are installed
+separately, not supplied by this checkout; missing prerequisites park before
+any review spending. Other hosts need those tools plus an explicitly
+provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
 It refuses an implicit fallback to the interactive `gh` login.
 It neither commits nor pushes, starts no local full test run, and never updates
 the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
 Without `--wait`, pending validation exits 2 with the command to resume later.
+An error after approval can leave the PR ready and queued: inspect the live
+state and journal before retrying. A lost readiness receipt can cause label
+renewal on retry and change queue order. Ambiguous failed reviewer transcripts
+may conservatively retain echoed finding titles as open findings; inspect and
+dispose those with reasons rather than treating an uncertain failure as clean.
 
 The ownership footer must match the bound UUID. Automatic completion is limited
 to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,

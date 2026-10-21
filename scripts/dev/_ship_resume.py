@@ -44,6 +44,18 @@ def run(*args: str, remote: bool = False, read_only: bool = False) -> str:
     return result.stdout
 
 
+def require_delivery_tools() -> None:
+    for command in ("prepr", "closeout"):
+        if shutil.which(f"git-{command}"):
+            continue
+        try:
+            configured = run("git", "config", "--get", f"alias.{command}").strip()
+        except CommandFailed:
+            configured = ""
+        if not configured:
+            raise Parked(f"Missing required host tool git {command}; install the shared delivery tools before resuming.")
+
+
 def snapshot() -> dict:
     return json.loads(run("gh", "pr", "view", "--json",
                           "number,url,state,body,headRefName,headRefOid,baseRefName,baseRefOid,"
@@ -234,6 +246,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if pr["state"] == "MERGED":
         print(f"[ship] already merged: {pr['url']}")
         return
+    require_delivery_tools()
     ensure_base(pr)
     reserved_hold(pr)
     recovering_renewal = approval_hold(pr, agent)
@@ -288,6 +301,12 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if final_labelled and not recorded and (not before or before[-1]["event"] != "labeled"):
         raise Parked("Approval history is not consistent with the visible label yet; resume later without changing approval.")
     advisory_marker = f"<!-- unitares-ship-unreviewed head={head} agent={agent} -->"
+    if unreviewed and advisory_marker not in final["body"]:
+        notice = (advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; "
+                  "proceeding under the documented exception after CI. " + unreviewed)
+        footer = list(re.finditer(r"(?m)^UNITARES agent: ", final["body"]))[-1].start()
+        body = final["body"][:footer] + notice + "\n\n" + final["body"][footer:]
+        run("gh", "pr", "edit", str(pr["number"]), "--body", body, remote=True)
     if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in final["comments"]):
         run("gh", "pr", "comment", str(pr["number"]), "--body",
             advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; proceeding under the "
@@ -326,7 +345,16 @@ def main() -> int:
     try:
         resume(reviewer=args.reviewer, wait=args.wait, plan=args.plan)
     except (Parked, json.JSONDecodeError, OSError, KeyError, ValueError) as error:
-        print(f"[ship] parked: {error}\n[ship] resume: ./scripts/dev/ship.sh --resume", file=sys.stderr)
+        try:
+            current = snapshot()
+            queued = not current["isDraft"] and any(label["name"] == "approved-to-merge" for label in current["labels"])
+        except (Parked, json.JSONDecodeError, OSError, KeyError, ValueError):
+            queued = False
+        if queued:
+            print(f"[ship] PR is already ready and approved; completion follow-up failed: {error}\n"
+                  "[ship] Approval remains set. Inspect the receipt/closeout failure before retrying.", file=sys.stderr)
+        else:
+            print(f"[ship] parked: {error}\n[ship] resume: ./scripts/dev/ship.sh --resume", file=sys.stderr)
         return 2
     return 0
 

@@ -54,6 +54,9 @@ def delivery(monkeypatch):
             if pr["labels"] and not events:
                 events.append({"id": 1, "event": "labeled", "label": {"name": "approved-to-merge"}})
             return json.dumps([events])
+        if args[:3] == ("gh", "pr", "edit") and "--body" in args:
+            pr["body"] = args[args.index("--body") + 1]
+            return ""
         if args[:3] == ("gh", "pr", "edit"):
             event = "unlabeled" if "--remove-label" in args else "labeled"
             events.append({"id": max((e["id"] for e in events), default=0) + 1,
@@ -361,7 +364,7 @@ def test_old_head_receipt_and_removed_label_stay_held(delivery):
 
 @pytest.mark.parametrize("mandatory", [False, True])
 def test_advisory_outage_exception_keeps_mandatory_family_gate(delivery, monkeypatch, mandatory):
-    _, calls = delivery
+    pr, calls = delivery
     original = ship.run
     def run(*args, **kwargs):
         if args[0] == "review":
@@ -377,6 +380,8 @@ def test_advisory_outage_exception_keeps_mandatory_family_gate(delivery, monkeyp
         execute()
         assert any(args[2] == "ready" for args in writes(calls))
         assert any("Advisory review unavailable" in " ".join(args) for args in writes(calls))
+        assert "Advisory review unavailable" in pr["body"]
+        assert pr["body"].rstrip().endswith(f"UNITARES agent: {AGENT}")
 
 
 def test_pending_review_is_not_an_advisory_outage(delivery, monkeypatch):
@@ -394,6 +399,7 @@ def test_pending_review_is_not_an_advisory_outage(delivery, monkeypatch):
 
 def test_advisory_exception_receipt_is_not_reposted(delivery, monkeypatch):
     pr, calls = delivery
+    pr["body"] = f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->\n" + pr["body"]
     pr["isDraft"] = False
     pr["labels"] = [{"name": "approved-to-merge"}]
     pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->"},
@@ -525,3 +531,21 @@ def test_missing_base_is_fetched_before_policy_inspection(delivery, monkeypatch)
     policy = next(i for i, (args, _) in enumerate(calls) if args[:2] == ("git", "show"))
     assert fetched and fetch < policy
     assert calls[fetch][1] == {"remote": True, "read_only": True}
+
+
+def test_missing_host_tools_park_before_review_spending(delivery, monkeypatch):
+    _, calls = delivery
+    monkeypatch.setattr(ship.shutil, "which", lambda _: None)
+    with pytest.raises(ship.Parked, match="Missing required host tool"):
+        execute()
+    assert not any(args[0] in {"review", "./scripts/dev/review.sh"} for args, _ in calls)
+    assert not writes(calls)
+
+
+def test_post_readiness_failure_reports_approval_remains(delivery, monkeypatch, capsys):
+    pr, _ = delivery
+    pr["isDraft"], pr["labels"] = False, [{"name": "approved-to-merge"}]
+    monkeypatch.setattr(ship, "resume", lambda **kw: (_ for _ in ()).throw(ship.Parked("receipt failed")))
+    monkeypatch.setattr("sys.argv", ["ship-resume"])
+    assert ship.main() == 2
+    assert "already ready and approved" in capsys.readouterr().err
