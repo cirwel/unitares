@@ -17,7 +17,7 @@ import logging
 import sys
 import urllib.error
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -282,15 +282,34 @@ async def test_one_agents_success_does_not_clear_anothers_close_failure(monkeypa
     now = datetime.now(timezone.utc)
 
     assert await background_tasks._close_resident_silence_findings("agent-a", now) is False
+    failed = health.snapshot()["silence_finding_close"]
     # Agent B has nothing to close; agent A's resolve is still pending.
     assert await background_tasks._close_resident_silence_findings("agent-b", now) is True
     entry = health.snapshot()["silence_finding_close"]
     assert entry["status"] == "failing"
     assert "agent-a" in entry["last_error"]
+    assert entry["consecutive_failures"] == failed["consecutive_failures"] == 1
+    assert entry["last_error_at"] == failed["last_error_at"]
 
     graph.update_discovery = AsyncMock(return_value=True)
     assert await background_tasks._close_resident_silence_findings("agent-a", now) is True
     assert health.snapshot()["silence_finding_close"]["status"] == "ok"
+
+@pytest.mark.asyncio
+async def test_inactive_agent_stops_pending_close_retries(monkeypatch):
+    import src.agent_metadata_model as metadata
+
+    monkeypatch.setattr(metadata, "agent_metadata", {})
+    background_tasks._record_silence_close("archived-agent", "resolve rejected")
+    assert health.snapshot()["silence_finding_close"]["status"] == "failing"
+
+    with patch.object(background_tasks.logger, "warning") as warning:
+        await background_tasks._silence_check_iteration()
+
+    assert not background_tasks._silence_close_pending
+    assert health.snapshot()["silence_finding_close"]["status"] == "ok"
+    assert any("finding remains unresolved" in call.args[0] for call in warning.call_args_list)
+
 
 # --- doctor --------------------------------------------------------------------
 

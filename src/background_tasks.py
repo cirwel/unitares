@@ -1434,6 +1434,10 @@ def _record_silence_close(agent_id: str, error: "BaseException | str | None") ->
     if not _silence_close_pending:
         record_success("silence_finding_close", log=logger)
         return
+    # A successful close for another agent is not another failed attempt.
+    # Keep the pending failure visible without advancing its streak or time.
+    if error is None:
+        return
     pending = sorted(_silence_close_pending.items())
     record_failure(
         "silence_finding_close",
@@ -1736,6 +1740,17 @@ async def _silence_check_iteration() -> None:
     _silence_critical_alerted.intersection_update(active_ids)
     _silence_duplicate_warned.intersection_update(active_ids)
     _silence_close_checked.intersection_update(active_ids)
+    # Inactive agents are no longer eligible for retries in this loop. Keep
+    # their KG findings untouched and report that tracking has stopped.
+    inactive_pending = set(_silence_close_pending) - active_ids
+    for agent_id in sorted(inactive_pending):
+        _silence_close_pending.pop(agent_id)
+        logger.warning(
+            "[SILENCE] stopped close retries for inactive agent %s; "
+            "its finding remains unresolved", agent_id,
+        )
+    if inactive_pending and not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
 
 
 async def _resident_pause_check_iteration() -> None:
