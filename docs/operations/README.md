@@ -19,6 +19,8 @@ or [User Manual](../manual/README.md).
   deployment release checklist.
 - [`deployment-env-overlay.md`](deployment-env-overlay.md) — external reviewed
   environment configuration required by the managed MCP deploy.
+- [`deployment-inventory.md`](deployment-inventory.md) — the explicit,
+  operator-owned inventory that deployment status and dispatch read.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
 - [`ci-issue-surfacing.md`](ci-issue-surfacing.md) — deduplicated CI finding
@@ -35,6 +37,8 @@ or [User Manual](../manual/README.md).
 ## Runtime services and residents
 
 - [`resident-roster.md`](resident-roster.md) — configured resident set.
+- [`reference-monitoring.md`](reference-monitoring.md) — optional reference
+  monitoring agents and the repository, owner and services they are pointed at.
 - [`cloud-deploy-runbook.md`](cloud-deploy-runbook.md) — hosting the governance
   stack off the primary machine: exposure, off-site backups, cutover.
 - [`cloud-session-plugin.md`](cloud-session-plugin.md) — why the governance
