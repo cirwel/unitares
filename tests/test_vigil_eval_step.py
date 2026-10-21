@@ -23,6 +23,13 @@ sys.path.insert(0, str(project_root))
     (
         {"UNITARES_EMBEDDING_MODEL": "bge-m3",
          "UNITARES_ENABLE_HYBRID": "1",
+         "UNITARES_ENABLE_RELATED_EXPANSION": "1"},
+        "hybrid_graph",
+    ),
+    # The flag's deprecated name still selects the same baseline.
+    (
+        {"UNITARES_EMBEDDING_MODEL": "bge-m3",
+         "UNITARES_ENABLE_HYBRID": "1",
          "UNITARES_ENABLE_GRAPH_EXPANSION": "1"},
         "hybrid_graph",
     ),
@@ -36,7 +43,8 @@ def test_derive_eval_config_tag(env, expected, monkeypatch):
     from agents.vigil.agent import _derive_eval_config_tag
 
     for k in ("UNITARES_EMBEDDING_MODEL", "UNITARES_ENABLE_HYBRID",
-              "UNITARES_ENABLE_GRAPH_EXPANSION", "UNITARES_ENABLE_RERANKER"):
+              "UNITARES_ENABLE_GRAPH_EXPANSION", "UNITARES_ENABLE_RELATED_EXPANSION",
+              "UNITARES_ENABLE_RERANKER"):
         monkeypatch.delenv(k, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
