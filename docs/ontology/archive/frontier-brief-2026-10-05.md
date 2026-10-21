@@ -13,7 +13,7 @@ each idea onto what the repository already records, and says what is new.
 
 - Most of the brief's "best experiments" are already designed, and the
   coordination ablation was **stopped on feasibility** on 2026-10-01
-  ([pilot plan §5.1](../evaluations/accountable-coordination-ablation/plumbing-pilot-plan-v0.md)).
+  ([pilot plan §5.1](../../evaluations/accountable-coordination-ablation/plumbing-pilot-plan-v0.md)).
   It is not "overdue"; it needs a new premise (a second operator, or a task
   source large enough for the fixed sample in the plan's power table).
 - A configuration manifest is mostly a **join over fields the write context
@@ -41,7 +41,7 @@ Opened 2026-10-05 via the arXiv abstract pages only; full texts not read.
 The proposed split (authorized scope, action completeness, truthful reporting,
 monitorability, unresolved evidence) corresponds to pieces that exist
 separately: effect receipts, outcome binding (`record_result`), and the
-[outcome-binding assurance case](../evaluations/assurance-cases/outcome-binding-v0.md).
+[outcome-binding assurance case](../../evaluations/assurance-cases/outcome-binding-v0.md).
 There is no campaign-level deployability verdict and this note does not propose
 one; a verdict that blocks release is an operator-owned policy decision.
 
@@ -57,7 +57,7 @@ write: `harness_id`/`type`/`version`, `model`, `model_provider`, `model_source`,
 `transport`, `tool_surface`, `memory_context`, `governance_mode`,
 `comparison_key`, `task_type`, `episode_id`, and `episode_fork_kind`. A defined field
 is not necessarily populated; see the measured counts below. The layer
-taxonomy in [`harness-substrate-plurality.md`](harness-substrate-plurality.md)
+taxonomy in [`harness-substrate-plurality.md`](../harness-substrate-plurality.md)
 already says the harness layer is recorded as "context, not collapsed into
 identity".
 
