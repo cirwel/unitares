@@ -5467,17 +5467,29 @@ def test_an_unlabelled_finding_counts_as_serious():
     assert rounds.spent == 1
 
 
-def test_the_backstop_bounds_a_review_that_never_converges():
-    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+@pytest.mark.parametrize("count", [10, 11, 20])
+def test_total_cycles_warn_without_blocking_useful_fix_reviews(count):
+    rounds = _cycles_with(*([["P1"]] * count))
     assert rounds.spent == 0
-    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=False, key="fix-key")
     assert not rounds.exhausted(joining=True)
+    assert "convergence warning: reassess scope" in rg.round_note(rounds)
+    assert "cap reached" not in rg.round_note(rounds)
+
+
+def test_redundancy_budget_still_blocks_after_convergence_warning():
+    rounds = _cycles_with(*([["P1"]] * 10), [], ["P2"], [])
+    assert rounds.spent == 3
+    assert rounds.exhausted(joining=False, key="new-key")
+    assert not rounds.exhausted(joining=True)
+    assert "cap reached" in rg.round_note(rounds)
+    assert "convergence warning" in rg.round_note(rounds)
 
 
 def test_the_round_note_says_when_serious_cycles_were_not_counted():
     rounds = _cycles_with(["P1"], [], ["P1"])
     assert rg.round_note(rounds) == (
-        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1)")
 
 
 def test_review_text_findings_keep_their_severity():
@@ -5510,7 +5522,7 @@ def test_a_clean_review_mentioning_labels_has_no_findings():
 
 def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
     """Three unproductive cycles, then one that found a P1: its fix gets a
-    full review without a grant (up to the backstop)."""
+    full review without a grant, including past the convergence warning."""
     rounds = _cycles_with([], ["P2"], [], ["P1"])
     assert rounds.spent == 3
     assert not rounds.exhausted(joining=False, key="fix-key")

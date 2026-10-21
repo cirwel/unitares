@@ -431,7 +431,12 @@ before (a re-review of the same unchanged diff does not). Only posted review
 records can show a serious finding; an unposted local run always counts.
 Clean cycles and cycles with only lesser findings count. The cap stops review that
 has stopped finding serious problems, not review that keeps finding them; a
-backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
+convergence warning at ten total cycles asks the agent to reassess scope and
+recurring findings (operator refinement, 2026-10-21). Total count alone no longer
+blocks verification of useful fixes. Narrow the work or change the independent
+perspective when a review is not converging; do not repeat unchanged review work.
+The three-cycle redundancy budget, provider cooldown/retry limits, actual
+findings and mandatory model-family coverage remain authoritative. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle. The second family can finish cycle three

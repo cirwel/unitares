@@ -125,10 +125,12 @@ NATIVE_WAIT_S = 600
 # of lesser findings is answered by targeted fix verification either way
 # (capped_review in cmd_review).
 # Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
-# should be context based". ROUND_BACKSTOP bounds a review that never
-# converges.
+# should be context based". Operator 2026-10-21: ten total cycles warn
+# and prompt scope reassessment; useful fixes are not blocked by total count.
 ROUND_CAP = 3
-ROUND_BACKSTOP = 10
+CONVERGENCE_WARNING_CYCLES = 10
+# Compatibility for callers importing the former name; this threshold is advisory.
+ROUND_BACKSTOP = CONVERGENCE_WARNING_CYCLES
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -971,12 +973,12 @@ class CodexRounds:
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
     def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
-        """No new full cycle without the operator: too many unproductive
-        cycles, or a review that has not converged by the backstop."""
+        """Require operator approval after too many unproductive cycles.
+
+        Total cycle count prompts reassessment, never grants or denies coverage.
+        """
         if not ROUND_CAP_ENABLED:
             return False
-        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
-            return True
         if joining:
             # Finishing a cycle (its second family) costs nothing when starting
             # it did not need the operator: the cycle before it was serious, or
@@ -3094,6 +3096,11 @@ def cmd_review(args) -> int:
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     print(f"[review] UNREVIEWED: {exc}")
                     return UNREVIEWED
+                if rounds.count >= CONVERGENCE_WARNING_CYCLES:
+                    print(f"[review] Convergence warning after {rounds.count} full cycles: "
+                          "reassess scope and recurring findings before proceeding. "
+                          "The three-cycle redundancy budget, provider limits and required "
+                          "model-family coverage still apply.")
                 joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
                 if grant_id:
                     if not cycle_grant(comments, grant_id, head, key, rounds,
@@ -3108,7 +3115,7 @@ def cmd_review(args) -> int:
                 if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
                     print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
-                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          f"a P0/P1 finding; {rounds.count} in all); "
                           "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
@@ -3974,12 +3981,11 @@ def round_note(rounds: CodexRounds | None) -> str:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
     if rounds.spent != rounds.count:
-        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
-                f"backstop {ROUND_BACKSTOP})")
+        note = f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1)"
     serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
-    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
-                                     or (rounds.spent >= ROUND_CAP and not serious_last))
-    return note + (" (cap reached)" if reached else "")
+    reached = rounds.spent >= ROUND_CAP and not serious_last
+    warning = " (convergence warning: reassess scope)" if rounds.count >= CONVERGENCE_WARNING_CYCLES else ""
+    return note + (" (cap reached)" if reached else "") + warning
 
 
 def cmd_ci(args) -> int:
