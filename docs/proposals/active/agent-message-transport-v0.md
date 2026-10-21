@@ -48,7 +48,7 @@ On 2026-08-27, 49 of 60 KG writes were channel traffic.
 ## 2. Scope — transport only
 
 This is **neither piece A nor piece B** of
-[`agent-channel-wake-gate-v0.md`](agent-channel-wake-gate-v0.md):
+[`agent-channel-wake-gate-v0.md`](../archive/agent-channel-wake-gate-v0.md):
 
 - Not piece A. Nothing here long-polls or provides a change feed. `/v1/msg/inbox`
   is a plain request that returns immediately, empty if there is nothing.

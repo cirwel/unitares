@@ -1,6 +1,6 @@
 # 4 · Integrating agents
 
-[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the signals →](05-reading-the-signals.md)
+[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the record →](05-reading-the-signals.md)
 
 This chapter owns the minimal agent workflow. Transport-specific configuration
 belongs in [`MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md), and exact runtime
@@ -218,7 +218,7 @@ as `proceed` with `sub_action: "guide"`, and a reject-severity decision as
 Treat the response as a policy affordance, not a moral judgment or outcome
 label. For finer client behavior, read the E/I/S/V fields and the named risk
 components. Their meaning and maturity stages are in
-[Reading the signals](05-reading-the-signals.md).
+[the EISV instrument](05-reading-the-signals.md#55-the-eisv-instrument) in chapter 5.
 
 ## 4.5 Connect a client or resident
 
@@ -240,4 +240,4 @@ components. Their meaning and maturity stages are in
 
 ---
 
-[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the signals →](05-reading-the-signals.md)
+[← Running the server](03-running-the-server.md) · [Manual index](README.md) · [Next: Reading the record →](05-reading-the-signals.md)

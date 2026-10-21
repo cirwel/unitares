@@ -6,7 +6,7 @@ not the paper itself. Prose is written to be paste-ready; trim to page budget.
 **Date:** 2026-06-30.
 **Synthesizes:** `paper-positioning.md` (the v7 four-anchor §10 spine + the
 2026-04-23 FEP-grounding demotion), `trajectory-identity-prior-art-2026-06.md`
-(foundational-theory anchors + verdicts), `competitive-analysis-2026-06.md`
+(foundational-theory anchors + verdicts), `archive/competitive-analysis-2026-06.md`
 (runtime-governance neighbors MI9 / Auton), `identity.md` (axioms, five-layer
 taxonomy, substrate-earned pattern).
 **Framing rule (inherited):** every neighbor below is cited as prior art the
@@ -112,7 +112,7 @@ directly to pre-empt the "UNITARES is MI9 re-skinned" reading, and disambiguate
 "drift" on first use — UNITARES's EISV-state-space drift is not MI9's
 goal/spec-conformance drift. **Auton** (arXiv:2602.23720) is adjacent, not
 competitive (a different layer), and is cited as such. (Full triage:
-`competitive-analysis-2026-06.md`.)
+`archive/competitive-analysis-2026-06.md`.)
 
 A third neighbor sits on the **training** plane. **NeoHorse-1**
 (arXiv:2609.08183, Sep 2026) converts a routing harness's per-turn records —
@@ -124,7 +124,7 @@ and **disambiguate "harness" on first use** — NeoHorse's harness looks down at
 model pool, ours looks across an agent's trajectory. Do not import its
 recursive-self-improvement banner; the protocol that would license such a claim
 here is preregistered and unread (`self-improvement-loop-evaluation-v0.md`).
-(Full triage: `neohorse-1-triage-2026-09.md`.)
+(Full triage: `archive/neohorse-1-triage-2026-09.md`.)
 
 ## 10.6 Gaps this work identifies
 

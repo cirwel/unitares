@@ -3,10 +3,12 @@
 # status check reads. The review-side counterpart of test-cache.sh: one
 # command, keyed on the diff, a no-op when this diff already has a record.
 #
-#   ./scripts/dev/review.sh                     # start or join review; ship.sh does this
-#   ./scripts/dev/review.sh --background        # explicitly detach; join before readiness
-#   ./scripts/dev/review.sh --fresh             # re-review even if recorded
-#   ./scripts/dev/review.sh --reviewer claude   # retry preferred provider despite cooldown
+#   ./scripts/dev/review.sh --reviewer claude    # choose based on this change's context
+#   UNITARES_REVIEWER=antigravity ./scripts/dev/review.sh
+#   ./scripts/dev/review.sh                     # read existing review; no implicit provider
+#   ./scripts/dev/review.sh --background --reviewer claude  # detach; join before readiness
+#   ./scripts/dev/review.sh --fresh --reviewer claude  # re-review even if recorded
+#   ./scripts/dev/review.sh --reviewer claude   # explicit choice also retries cooldown
 #   ./scripts/dev/review.sh record FILE --reviewer-name NAME --independent
 #   ./scripts/dev/review.sh dispose FILE        # dispositions for a FINDINGS record
 #   ./scripts/dev/review.sh waive --reason TEXT --operator-approved  # operator only

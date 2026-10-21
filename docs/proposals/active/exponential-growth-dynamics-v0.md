@@ -68,7 +68,7 @@ grounded. Revisit only if the F̂ grounding is re-established.
 
 The one growth-shaped move that is also coherent: warm-start a fresh agent's Welford/EMA
 baseline from a **cohort prior** so it starts near-calibrated instead of cold
-(`docs/UNIFIED_ARCHITECTURE.md §2`, "~30 check-ins from scratch"). A sharper prior *reduces*
+(warmup stages in `docs/EISV_COMPUTATION.md`: check-ins 1–2, 3–24, then 25 onward). A sharper prior *reduces*
 surprise → contractive-compatible → never touches the governor. Note it is a **one-time
 cold-start offset, not an exponential** — "slow exponential" was oversold; we keep the honest
 label.
