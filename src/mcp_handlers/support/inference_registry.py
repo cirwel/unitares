@@ -285,6 +285,8 @@ def _static_hosts() -> list[InferenceHost]:
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
             accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
+            # Each problem the record has is named: an operator who fixes
+            # one must not find the host still unusable without a reason.
             notes=(
                 (
                     "Pass consult(model=...) with one of models to choose. "
@@ -302,6 +304,12 @@ def _static_hosts() -> list[InferenceHost]:
                 "Reach it with consult(privacy='cloud_allowed') or the deprecated "
                 "call_model(provider='ollama', privacy='auto' or 'cloud'), or reclassify it "
                 "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
+                + (
+                    ""
+                    if ollama_model
+                    else " No model is named: set UNITARES_MODEL_ID to a model the "
+                    "endpoint serves (`unitares model` lists them)."
+                )
             ),
         ),
         InferenceHost(

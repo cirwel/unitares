@@ -131,3 +131,16 @@ def test_registry_lists_the_endpoints_served_models(monkeypatch):
 
     monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
     assert inference_registry.get_inference_host("ollama:local")["models"] == ["qwen3:8b"]
+
+
+def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
+    """Review finding on #2971: with no model named and an external endpoint,
+    the host record names both problems, not only the first."""
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "https://models.example.com/v1")
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["models"] == []
+    assert host["accepts_host_id_from"] == []
+    assert "classifies external" in host["notes"]
+    assert "No model is named" in host["notes"]
