@@ -51,6 +51,8 @@ def delivery(monkeypatch):
                 pr["comments"].append(comment)
                 return json.dumps({"body": body, "user": {"login": "delivery-bot[bot]"},
                                    "created_at": comment["createdAt"]})
+            if "/comments?" in args[2]:
+                return json.dumps([[{"author_association": "COLLABORATOR", **c} for c in pr["comments"]]])
             if pr["labels"] and not events:
                 events.append({"id": 1, "event": "labeled", "label": {"name": "approved-to-merge"}})
             return json.dumps([events])
@@ -549,3 +551,30 @@ def test_post_readiness_failure_reports_approval_remains(delivery, monkeypatch, 
     monkeypatch.setattr("sys.argv", ["ship-resume"])
     assert ship.main() == 2
     assert "already ready and approved" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("labelled", [False, True])
+def test_untrusted_ready_marker_cannot_hold_delivery_or_skip_renewal(delivery, labelled):
+    pr, calls = delivery
+    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->",
+                       "author_association": "NONE", "user": {"type": "User", "id": 7}}]
+    if labelled:
+        pr["labels"] = [{"name": "approved-to-merge"}]
+    execute()
+    assert any("--add-label" in args for args in writes(calls))
+    assert any("--remove-label" in args for args in writes(calls)) == labelled
+
+
+def test_untrusted_advisory_marker_cannot_suppress_receipt(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["comments"] = [{"body": f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->",
+                       "author_association": "NONE"}]
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.CommandFailed(args, Mock(returncode=4, stdout="provider unavailable", stderr=""))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    execute()
+    assert any(args[:3] == ("gh", "pr", "comment") and "Advisory review unavailable" in " ".join(args)
+               for args in writes(calls))

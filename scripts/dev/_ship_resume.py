@@ -19,6 +19,11 @@ import subprocess
 import sys
 from uuid import UUID
 
+if __package__:
+    from .review_gate import trusted_review_comment
+else:
+    from review_gate import trusted_review_comment
+
 
 class Parked(RuntimeError):
     pass
@@ -54,6 +59,14 @@ def require_delivery_tools() -> None:
             configured = ""
         if not configured:
             raise Parked(f"Missing required host tool git {command}; install the shared delivery tools before resuming.")
+
+
+def trusted_receipts(pr: dict) -> list[dict]:
+    # GraphQL comment bodies omit App provenance. Use REST's server-issued
+    # association/App/actor metadata, with the controller's existing policy.
+    pages = json.loads(run("gh", "api", f"repos/{{owner}}/{{repo}}/issues/{pr['number']}/comments?per_page=100",
+                           "--paginate", "--slurp", remote=True, read_only=True))
+    return [comment for page in pages for comment in page if trusted_review_comment(comment)]
 
 
 def snapshot() -> dict:
@@ -254,9 +267,10 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         print(f"[ship] resume {pr['url']} at {head}: review -> CI -> prepr -> ready/queue -> closeout")
         return
     marker = f"<!-- unitares-ship-ready head={head} agent={agent} -->"
-    recorded = any(comment["body"].splitlines()[0:1] == [marker] for comment in pr["comments"])
+    receipts = trusted_receipts(pr)
+    recorded = any(comment["body"].splitlines()[0:1] == [marker] for comment in receipts)
     prior_readiness = any(comment["body"].startswith("<!-- unitares-ship-ready ")
-                          and f"agent={agent} -->" in comment["body"].splitlines()[0] for comment in pr["comments"])
+                          and f"agent={agent} -->" in comment["body"].splitlines()[0] for comment in receipts)
     labelled = "approved-to-merge" in {label["name"] for label in pr["labels"]}
     if prior_readiness and not labelled and not recovering_renewal:
         raise Parked("Queue approval was removed after readiness; do not overwrite that hold automatically.")
@@ -307,7 +321,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         footer = list(re.finditer(r"(?m)^UNITARES agent: ", final["body"]))[-1].start()
         body = final["body"][:footer] + notice + "\n\n" + final["body"][footer:]
         run("gh", "pr", "edit", str(pr["number"]), "--body", body, remote=True)
-    if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in final["comments"]):
+    if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in trusted_receipts(final)):
         run("gh", "pr", "comment", str(pr["number"]), "--body",
             advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; proceeding under the "
             "documented exception after CI. Review attempt:\n\n" + unreviewed
@@ -351,8 +365,8 @@ def main() -> int:
         except (Parked, json.JSONDecodeError, OSError, KeyError, ValueError):
             queued = False
         if queued:
-            print(f"[ship] PR is already ready and approved; completion follow-up failed: {error}\n"
-                  "[ship] Approval remains set. Inspect the receipt/closeout failure before retrying.", file=sys.stderr)
+            print(f"[ship] Delivery failed while the live PR is already ready and approved: {error}\n"
+                  "[ship] Approval remains set and may belong to an earlier head. Inspect the error and approval freshness before retrying.", file=sys.stderr)
         else:
             print(f"[ship] parked: {error}\n[ship] resume: ./scripts/dev/ship.sh --resume", file=sys.stderr)
         return 2
