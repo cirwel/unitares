@@ -5647,3 +5647,28 @@ def test_disposed_partial_findings_recover_through_explicit_full_review(repo, mo
     assert prior.status()[0] == 'pending'
     args.fresh = True
     assert rg.cmd_review(args) == 0
+
+
+@pytest.mark.parametrize('output', [
+    'Scope is uncertain.\nSCOPE: FULL_REQUIRED',
+    'Scope is uncertain.\nSCOPE: FULL_REQUIRED\nVERDICT: CLEAN',
+])
+def test_interrupted_followup_scope_refusal_is_persisted_not_an_outage(repo, reviewed_followup, monkeypatch, output):
+    _, fix = reviewed_followup
+    posted = []
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (output, 'killed at the time budget'))
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Prior context')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
+    assert not args.provider_unavailable
+    assert posted[0].scope == 'full-required' and posted[0].verdict == 'FAILED'
+
+
+def test_final_outage_confirmation_preserves_stored_scope_refusal(monkeypatch):
+    args = SimpleNamespace(provider_unavailable=True, provider_outage_key='k', provider_outage_head='h')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
+    monkeypatch.setattr(rg, 'git', lambda *a, **kw: 'h')
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds())
+    monkeypatch.setattr(rg, 'current_record', lambda *a: full_record('k', 'FAILED', 0, False, 'codex', scope='full-required'))
+    assert not rg.provider_outage_confirmed(args)

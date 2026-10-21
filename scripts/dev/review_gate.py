@@ -3550,14 +3550,15 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     # Only a provider execution failure after context/history validation can
     # use the ordinary advisory exception. Missing objects, pending reviews,
     # Scope refusals stay unreviewed; partial findings persist as open findings.
-    args.provider_unavailable = (note != "exit 0" and parse_verdict(text) is None
+    scopes = re.findall(r"(?m)^SCOPE: (\w+)\s*$", text)
+    explicit_refusal = bool(followup and scopes and scopes != ["FOLLOWUP"])
+    args.provider_unavailable = (not explicit_refusal and note != "exit 0" and parse_verdict(text) is None
                                  and not partial_finding_count(text))
     parsed = parse_verdict(text) if note == "exit 0" else None
-    scope_declined = bool(followup and parsed is not None
-                          and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
+    scope_declined = explicit_refusal or bool(followup and parsed is not None and scopes != ["FOLLOWUP"])
     if scope_declined:
         # A scope refusal cannot discard concrete findings the reviewer found.
-        if parsed[0] == "CLEAN":
+        if parsed is None or parsed[0] == "CLEAN":
             parsed, note = None, "full review required: follow-up scope not confirmed"
         print("[review] follow-up cannot establish coverage; run review.sh --fresh --reviewer PROVIDER for a full pass within the budget")
     if parsed is not None and not has_reasoning(text):
@@ -4074,7 +4075,8 @@ def provider_outage_confirmed(args) -> bool:
         if native.unavailable_reason or native.running or any(r.verdict == "FINDINGS" and not r.disposed for r in native.records):
             return False
         latest = current_record(repo, pr, key, head, comments)
-        return not (latest and latest.verdict == "FINDINGS" and not latest.disposed)
+        return not (latest and (latest.scope == "full-required"
+                                or (latest.verdict == "FINDINGS" and not latest.disposed)))
     except (SystemExit, GhUnavailable, subprocess.SubprocessError, OSError, ValueError):
         return False
 
