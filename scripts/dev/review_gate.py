@@ -3413,6 +3413,9 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     dislike. An explicit --reviewer retries that provider despite cooldown.
     """
     args.provider_unavailable = False
+    if getattr(args, "provider_outage_exit", False):
+        args.provider_outage_key = key
+        args.provider_outage_head = git("rev-parse", "HEAD").strip()
     providers = [preferred]  # one provider per explicit attempt; no automatic spending cascade
     deadline = time.monotonic() + args.budget
     available = []
@@ -4027,6 +4030,34 @@ def cmd_ci(args) -> int:
     return 0
 
 
+def provider_outage_confirmed(args) -> bool:
+    """A provider failure is advisory only when FINAL evidence is complete.
+
+    The provider flag alone survives later error paths. Re-resolve the head
+    and current history, preserving unknown history, findings and native work
+    instead of converting an incomplete-evidence result into an outage.
+    """
+    if not (getattr(args, "provider_unavailable", False)
+            and getattr(args, "provider_outage_key", None)
+            and getattr(args, "provider_outage_head", None)):
+        return False
+    try:
+        pr, repo, key, _ = _resolve(argparse.Namespace(**vars(args)))
+        head = git("rev-parse", "HEAD").strip()
+        if key != args.provider_outage_key or head != args.provider_outage_head:
+            return False
+        comments = pr_comments(repo, pr)
+        if pr_rounds(repo, pr, key, head, comments).unknown_history or native_activity_running(comments):
+            return False
+        native = read_native(repo, pr, key, head, comments)
+        if native.unavailable_reason or native.running or any(r.verdict == "FINDINGS" and not r.disposed for r in native.records):
+            return False
+        latest = current_record(repo, pr, key, head, comments)
+        return not (latest and latest.verdict == "FINDINGS" and not latest.disposed)
+    except (SystemExit, GhUnavailable, subprocess.SubprocessError, OSError, ValueError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--base", default=None,
@@ -4104,7 +4135,7 @@ def main(argv: list[str] | None = None) -> int:
         result = {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
                   "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
         if (args.cmd == "review" and args.provider_outage_exit and result == UNREVIEWED
-                and getattr(args, "provider_unavailable", False)):
+                and provider_outage_confirmed(args)):
             return PROVIDER_OUTAGE
         return result
     except ClosedPullRequest as exc:

@@ -4841,7 +4841,39 @@ def test_provider_outage_exit_is_explicit_and_not_inferred_from_error_text(monke
         print('UNREVIEWED: unavailable historical commit; review history incomplete')
         return rg.UNREVIEWED
     monkeypatch.setattr(rg, 'cmd_review', command)
+    monkeypatch.setattr(rg, 'provider_outage_confirmed', lambda args: args.provider_unavailable)
     assert rg.main(['review', *(['--provider-outage-exit'] if opt_in else [])]) == expected
+
+
+@pytest.mark.parametrize('state,expected', [('complete', True), ('completion-error', False),
+    ('history-error', False), ('findings', False), ('native-pending', False), ('native-unavailable', False), ('head-moved', False)])
+def test_outage_requires_final_complete_evidence(monkeypatch, state, expected):
+    args = SimpleNamespace(provider_unavailable=True, provider_outage_key='k', provider_outage_head='h')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
+    monkeypatch.setattr(rg, 'git', lambda *a, **k: 'moved' if state == 'head-moved' else 'h')
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: SimpleNamespace(unknown_history=state == 'history-error'))
+    monkeypatch.setattr(rg, 'read_native', lambda *a: SimpleNamespace(running=state == 'native-pending', unavailable_reason='unknown base' if state == 'native-unavailable' else '', records=[]))
+    def latest(*a):
+        if state == 'completion-error':
+            raise SystemExit('unavailable commit: review history is incomplete')
+        return full_record('k', 'FINDINGS', 1, False, 'codex') if state == 'findings' else None
+    monkeypatch.setattr(rg, 'current_record', latest)
+    assert rg.provider_outage_confirmed(args) is expected
+
+
+def test_stale_outage_flag_cannot_convert_completion_failure_to_exit_four(monkeypatch):
+    def command(args):
+        args.provider_unavailable = True
+        args.provider_outage_key, args.provider_outage_head = 'k', 'h'
+        return rg.UNREVIEWED
+    monkeypatch.setattr(rg, 'cmd_review', command)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
+    monkeypatch.setattr(rg, 'git', lambda *a, **k: 'h')
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: SimpleNamespace(unknown_history=False))
+    monkeypatch.setattr(rg, 'current_record', lambda *a: (_ for _ in ()).throw(SystemExit('incomplete completion evidence')))
+    assert rg.main(['review', '--provider-outage-exit']) == rg.UNREVIEWED
 
 
 def test_declined_followup_cannot_report_provider_outage(repo, reviewed_followup, monkeypatch):
