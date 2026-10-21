@@ -203,8 +203,9 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
             details={"agent_id": agent_uuid[:12], "status": "archived"},
             recovery={"action": (
                 "Reclaim the SAME identity if this is the same live process: "
-                "start_session(resume=true) with your continuity_token or "
-                "client_session_id (auto-unarchives). Operator restore: "
+                "start_session(resume=true) with your client_session_id "
+                "(auto-unarchives); a continuity_token counts only together "
+                "with agent_uuid, never alone. Operator restore: "
                 "agent(action='update'). Otherwise onboard fresh."
             )}
         )
@@ -487,9 +488,10 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                         "agent_status": "archived",
                         "action": (
                             "If this is the same live process, reclaim the SAME "
-                            "identity: onboard(resume=true) with your "
-                            "continuity_token or client_session_id — this "
-                            "auto-unarchives the agent. Only if you cannot prove "
+                            "identity: start_session(resume=true) with your "
+                            "client_session_id — this auto-unarchives the "
+                            "agent. A continuity_token counts only together "
+                            "with agent_uuid, never alone. Only if you cannot prove "
                             "continuity, onboard fresh and declare this UUID as "
                             "parent_agent_id (a new identity succeeding the "
                             "archived one)."

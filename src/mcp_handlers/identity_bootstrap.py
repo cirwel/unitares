@@ -437,8 +437,9 @@ def hijack_guard_refusal_hint(
         + " Nothing was written. Mint a new identity with "
         "start_session(force_new=true, parent_agent_id="
         "<your prior uuid, which must have exited>, "
-        "spawn_reason=\"explicit\") "
-        "or retry with a valid continuity_token."
+        "spawn_reason=\"explicit\"), or, if this is the same live process, "
+        "rebind with identity(agent_uuid=<uuid>, continuity_token=<token>, "
+        "resume=true)."
     )
 
 
