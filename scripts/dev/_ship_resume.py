@@ -15,14 +15,10 @@ import json
 import os
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 from uuid import UUID
-
-if __package__:
-    from .review_gate import trusted_review_comment
-else:
-    from review_gate import trusted_review_comment
 
 
 class Parked(RuntimeError):
@@ -62,6 +58,11 @@ def require_delivery_tools() -> None:
 
 
 def trusted_receipts(pr: dict) -> list[dict]:
+    # Keep CLI --help independent of receipt-processing dependencies.
+    if __package__:
+        from .review_gate import trusted_review_comment
+    else:
+        from review_gate import trusted_review_comment
     # GraphQL comment bodies omit App provenance. Use REST's server-issued
     # association/App/actor metadata, with the controller's existing policy.
     pages = json.loads(run("gh", "api", f"repos/{{owner}}/{{repo}}/issues/{pr['number']}/comments?per_page=100",
@@ -368,7 +369,14 @@ def main() -> int:
             print(f"[ship] Delivery failed while the live PR is already ready and approved: {error}\n"
                   "[ship] Approval remains set and may belong to an earlier head. Inspect the error and approval freshness before retrying.", file=sys.stderr)
         else:
-            print(f"[ship] parked: {error}\n[ship] resume: ./scripts/dev/ship.sh --resume", file=sys.stderr)
+            retry = ["./scripts/dev/ship.sh", "--resume"]
+            if args.reviewer:
+                retry.extend(["--reviewer", args.reviewer])
+            if args.wait:
+                retry.append("--wait")
+            if args.plan:
+                retry.append("--plan")
+            print(f"[ship] parked: {error}\n[ship] resume: {shlex.join(retry)}", file=sys.stderr)
         return 2
     return 0
 

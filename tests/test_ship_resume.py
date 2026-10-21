@@ -578,3 +578,10 @@ def test_untrusted_advisory_marker_cannot_suppress_receipt(delivery, monkeypatch
     execute()
     assert any(args[:3] == ("gh", "pr", "comment") and "Advisory review unavailable" in " ".join(args)
                for args in writes(calls))
+
+
+def test_parked_retry_preserves_provider_and_wait_flags(delivery, monkeypatch, capsys):
+    monkeypatch.setattr(ship, "resume", lambda **kw: (_ for _ in ()).throw(ship.Parked("pending CI")))
+    monkeypatch.setattr("sys.argv", ["ship-resume", "--reviewer", "claude", "--wait"])
+    assert ship.main() == 2
+    assert "./scripts/dev/ship.sh --resume --reviewer claude --wait" in capsys.readouterr().err

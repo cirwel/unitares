@@ -899,11 +899,15 @@ The ownership footer must match the bound UUID. Automatic completion is limited
 to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
 `scripts/diagnostics/`, and `.github/workflows/`. Scientific proposals, registered
 stop rules, identity ontology and public-site prose remain outside that lane,
-along with runtime/auth/identity changes and their operator decisions.
+along with runtime authentication/identity enforcement and their operator decisions.
+Review-controller and review-workflow tooling listed in `second_family_paths`
+remains eligible within this technical tooling lane only after passing its
+required two-family review; the advisory exception never substitutes for that
+coverage.
 Dirty work, a different local or remote head, open findings, pending review or CI,
 incomplete mandatory family coverage, explicit holds, capability classification,
 and governance-sensitive paths park delivery. An unavailable selected reviewer
-for an ordinary fix uses the existing advisory exception with a PR note; it
+for an ordinary fix uses the existing advisory exception with a PR body note; it
 cannot waive mandatory family coverage. A head/base change during validation
 requires another inspection. Successful readiness is recorded against the head
 on the PR; repeating resume rechecks the live evidence without renewing the
