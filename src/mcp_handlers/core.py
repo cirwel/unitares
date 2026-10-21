@@ -3,7 +3,7 @@ Core governance tool handlers.
 
 EISV Completeness: Utilities available in src.eisv.formatting and src.eisv.validation
 to ensure all metrics (E, I, S, V) are reported together, preventing selection bias.
-See docs/guides/EISV_COMPLETENESS.md for usage.
+See scripts/diagnostics/check_eisv_completeness.py for the completeness check.
 """
 
 from typing import Dict, Any, Optional, Sequence

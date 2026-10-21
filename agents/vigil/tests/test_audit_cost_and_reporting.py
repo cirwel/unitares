@@ -46,6 +46,8 @@ def _isolate(tmp_path, monkeypatch):
     redirect that exists there does not apply here."""
     monkeypatch.setattr(vigil, "LOG_FILE", tmp_path / "vigil-test.log", raising=False)
     monkeypatch.setenv("VIGIL_LOG_FILE", str(tmp_path / "vigil-test.log"))
+    # The note-suppression tests below exercise the opt-in summary note.
+    monkeypatch.setenv("VIGIL_GROUNDSKEEPER_NOTES", "1")
 
 
 class _Recorder:

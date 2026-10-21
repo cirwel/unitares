@@ -36,7 +36,7 @@ async def run_search(monkeypatch, rows, scores, *, options=None, lexical=()):
     monkeypatch.setattr(embeddings, "get_embeddings_service", AsyncMock(return_value=SimpleNamespace(
         embed=AsyncMock(return_value=[1.0, 0.0]))))
     monkeypatch.setattr("src.retrieval.hybrid_enabled", lambda: True)
-    monkeypatch.setattr("src.retrieval.graph_expansion_enabled", lambda: False)
+    monkeypatch.setattr("src.retrieval.related_expansion_enabled", lambda: False)
     monkeypatch.setattr("src.reranker.reranker_enabled", lambda: False)
     request = handlers._parse_knowledge_search_request({"query": "incident diagnosis", "limit": 10, **(options or {})})
     state = handlers._KnowledgeSearchState(request=request, graph=graph)

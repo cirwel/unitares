@@ -1,5 +1,9 @@
 # Test Suite Triage
 
+> **Archived 2026-10-20.** The skip counts below date from 2026-06-14 and are
+> stale. The opt-in drill commands are maintained in
+> [`ci-coverage-validation.md`](../ci-coverage-validation.md#opt-in-drills-outside-the-default-gate).
+
 Last triaged: 2026-06-14.
 
 Default full gate:
