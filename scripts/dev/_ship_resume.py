@@ -250,9 +250,9 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     unreviewed = None
     try:
         if shutil.which("unitares-github"):
-            run("review", "--provider-outage-exit", *(["--reviewer", reviewer] if reviewer else []), remote=True)
+            run("review", "--provider-outage-exit", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []), remote=True)
         else:
-            run("./scripts/dev/review.sh", "--provider-outage-exit", *(["--reviewer", reviewer] if reviewer else []))
+            run("./scripts/dev/review.sh", "--provider-outage-exit", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []))
     except CommandFailed as error:
         # Exit 4 is explicitly issued by the review controller after validated
         # context reached an unavailable provider. Exit 2 never authorizes the

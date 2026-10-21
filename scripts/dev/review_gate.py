@@ -800,6 +800,11 @@ def latest_matching(comments: list[dict], key: str,
         body = c.get("body", "")
         rec = comment_record(c)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
+            # Interrupted reviews can still contain concrete findings. Preserve
+            # legacy FAILED records too; a later outage or CLEAN cannot erase
+            # them, and disposing them must not invent completed coverage.
+            if rec.verdict == "FAILED" and (partial := partial_finding_count(body)):
+                rec.verdict, rec.findings, rec.scope = "FINDINGS", partial, "full-required"
             if (rec.scope == "fix" and rec.status()[0] == "success"
                     and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
                 if rec.disposed:
@@ -2070,6 +2075,12 @@ def has_reasoning(text: str) -> bool:
     lines = [ln for ln in (text or "").splitlines() if ln.strip()]
     body = "".join("".join(ln.split()) for ln in lines[:-1])
     return len(body) >= REVIEW_MIN_REASONING_CHARS
+
+
+def partial_finding_count(text: str) -> int:
+    parsed = parse_verdict(text)
+    return max(len(re.findall(r"\[P[0-3]\]", text)),
+               parsed[1] if parsed and parsed[0] == "FINDINGS" else 0)
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
@@ -3420,6 +3431,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     deadline = time.monotonic() + args.budget
     available = []
     disabled = disabled_providers()
+    retry_override = not getattr(args, "respect_provider_cooldown", False)
     for provider in providers:
         if provider in disabled:
             args.provider_unavailable = True
@@ -3427,12 +3439,12 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
                   f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
             continue
         if (provider in getattr(args, "failed_providers", set())
-                and getattr(args, "reviewer", None) != provider):
+                and not (getattr(args, "reviewer", None) == provider and retry_override)):
             print(f"[review] {provider} exhausted retries for this diff; "
                   f"use --reviewer {provider} to explicitly retry")
             continue
         reason = provider_cooldown(provider)
-        if reason and getattr(args, "reviewer", None) != provider:
+        if reason and not (getattr(args, "reviewer", None) == provider and retry_override):
             args.provider_unavailable = True
             print(f"[review] skipping {provider}: {reason} cooldown; "
                   f"use --reviewer {provider} to retry after restoring access")
@@ -3529,9 +3541,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     minutes = (time.monotonic() - t0) / 60
     # Only a provider execution failure after context/history validation can
     # use the ordinary advisory exception. Missing objects, pending reviews,
-    # scope refusals and partial findings must retain the generic exit 2.
+    # Scope refusals stay unreviewed; partial findings persist as open findings.
     args.provider_unavailable = (note != "exit 0" and parse_verdict(text) is None
-                                 and not re.search(r"\[P[0-3]\]", text))
+                                 and not partial_finding_count(text))
     parsed = parse_verdict(text) if note == "exit 0" else None
     scope_declined = bool(followup and parsed is not None
                           and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
@@ -3546,8 +3558,10 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if parsed is None:
         if "follow-up scope not confirmed" not in note:
             remember_unavailable(reviewer, text, note)
-        rec = Record(key, "FAILED", 0, False, reviewer)
-        heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
+        partial = partial_finding_count(text)
+        rec = Record(key, "FINDINGS" if partial else "FAILED", partial, False, reviewer)
+        heading = (f"FINDINGS({partial}) (incomplete review: {note})" if partial else
+                   f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})")
     else:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
@@ -3558,7 +3572,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
                  argparse.Namespace(review_id=review_run_id,
                                     reviewed_from=followup.from_head if followup else None, fixes_only=True),
                  head=reviewed_head_oid, base_oid=reviewed_base_oid)
-    if scope_declined:
+    if scope_declined or (parsed is None and rec.findings):
         rec.scope = "full-required"
     if followup:
         heading += f" · follow-up from {followup.from_head[:10]}"
@@ -3585,7 +3599,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if rec.verdict == "FINDINGS":
         print("[review] fix and push (the next run reviews the new diff), or record "
               "dispositions: scripts/dev/review.sh dispose <file>")
-    return UNREVIEWED if parsed is None else (0 if state == "success" else 1)
+    return UNREVIEWED if parsed is None and not rec.findings else (0 if state == "success" else 1)
 
 
 def cmd_record(args) -> int:
@@ -4076,6 +4090,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
+    r.add_argument("--respect-provider-cooldown", action="store_true",
+                   help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
     r.add_argument("--provider-outage-exit", action="store_true",
                    help="return 4 only for an unavailable provider after context validation; other unreviewed cases stay 2")
 

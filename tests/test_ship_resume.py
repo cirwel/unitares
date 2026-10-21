@@ -90,7 +90,7 @@ def test_resume_joins_evidence_then_queues_without_commit_push_or_full_tests(del
     _, calls = delivery
     execute()
     commands = [args for args, _ in calls]
-    assert ("review", "--provider-outage-exit", "--reviewer", "claude") in commands
+    assert ("review", "--provider-outage-exit", "--respect-provider-cooldown", "--reviewer", "claude") in commands
     assert commands.index(("git", "prepr")) < commands.index(("gh", "pr", "ready", "42"))
     assert commands[-1] == ("git", "closeout", "--strict")
     assert any("--add-label" in args for args in writes(calls))

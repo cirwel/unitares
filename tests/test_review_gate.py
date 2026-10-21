@@ -1552,13 +1552,41 @@ def test_findings_stop_fallback(repo, monkeypatch):
     assert calls == ["claude"]
 
 
-def test_partial_findings_during_provider_failure_are_not_an_advisory_outage(repo, monkeypatch):
+@pytest.mark.parametrize("output", ["[P1] Unsafe access path found before failure",
+    "Unsafe access path found before failure.\nVERDICT: FINDINGS(1)"])
+def test_partial_findings_during_provider_failure_are_not_an_advisory_outage(repo, monkeypatch, output):
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
-    monkeypatch.setattr(rg, "run_reviewer", lambda *a: ("[P1] Unsafe access path found before failure", "exit 1"))
-    monkeypatch.setattr(rg, "post_record", lambda *a: None)
+    monkeypatch.setattr(rg, "run_reviewer", lambda *a: (output, "exit 1"))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *a: records.append(a[1]))
     args = SimpleNamespace(base="master", budget=30, reviewer="codex")
-    assert rg.review_with_fallback(args, 1, "k", "codex") == rg.UNREVIEWED
+    assert rg.review_with_fallback(args, 1, "k", "codex") == 1
     assert args.provider_unavailable is False
+    assert records[0].verdict == "FINDINGS" and records[0].findings == 1
+    assert records[0].scope == "full-required"
+
+
+def test_legacy_failed_partial_findings_survive_later_clean_record():
+    failed = _comment(full_record("k", "FAILED", 0, False, "codex"))
+    failed["body"] += "\n[P1] Unsafe access path found before failure"
+    clean = _comment(full_record("k", "CLEAN", 0, False, "claude"))
+    result = rg.latest_matching([failed, clean], "k")
+    assert result.verdict == "FINDINGS" and result.findings == 1
+    assert result.scope == "full-required"
+
+
+def test_resume_provider_selection_respects_cooldown_on_unchanged_retry(repo, monkeypatch):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    calls = []
+    def reviewer(*a):
+        calls.append(a[0])
+        return "You've hit your weekly limit", "exit 1"
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *a: None)
+    args = SimpleNamespace(base="master", budget=30, reviewer="claude", respect_provider_cooldown=True)
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert calls == ["claude"] and args.provider_unavailable
 
 
 def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
