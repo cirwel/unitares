@@ -1812,8 +1812,9 @@ async def resolve_session_identity(
                 f"by the identity hijack guard ({resume_rejected_reason}); "
                 f"refusing to silently mint a fresh identity in its place. "
                 f"Re-onboard with force_new=true (declaring parent_agent_id "
-                f"if this continues prior work), or present a valid "
-                f"continuity_token."
+                f"if this continues prior work). If this is the same live "
+                f"process, rebind with identity(agent_uuid=<uuid>, "
+                f"continuity_token=<token>, resume=true)."
             ),
         }
 
