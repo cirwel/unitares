@@ -136,8 +136,11 @@ def test_registry_lists_the_endpoints_served_models(monkeypatch):
 def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
     """Review finding on #2971: with no model named and an external endpoint,
     the host record names both problems, not only the first."""
-    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+    for name in ("UNITARES_MODEL_ID", "UNITARES_MODEL_PRIVACY",
+                 "UNITARES_MODEL_LOCAL_HOSTS", "UNITARES_TRUSTED_NETWORKS"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "https://models.example.com/v1")
+    # No socket probe to an outside host from a unit test.
     monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
     host = inference_registry.get_inference_host("ollama:local")
     assert host["models"] == []
