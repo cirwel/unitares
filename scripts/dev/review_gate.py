@@ -497,19 +497,48 @@ def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
     base integration diff accompanies it as interaction-review context.
     """
     integrated_base = git("merge-base", base, head).strip()
-    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
-                             previous, integrated_base], capture_output=True, text=True)
-    tree = merged.stdout.split("\n", 1)[0].strip()
-    if merged.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages", "-z",
+                             previous, integrated_base], capture_output=True)
+    records = merged.stdout.split(b"\0")
+    tree = records[0].decode("ascii", "replace").strip()
+    conflicts: set[str] = set()
+    valid = merged.returncode in (0, 1) and bool(re.fullmatch(r"[0-9a-f]{40,64}", tree))
+    for record in records[1:]:
+        if not record:
+            continue
+        stage = re.fullmatch(rb"[0-7]{6} [0-9a-f]{40,64} [123]\t(.+)", record, re.DOTALL)
+        if stage is None:
+            valid = False
+            break
+        conflicts.add(os.fsdecode(stage[1]))
+    if not valid or (merged.returncode == 1 and not conflicts):
         return (diff_text(previous, head),
                 "Base integration could not be reconstructed conflict-free. The supplied delta "
                 "contains ALL changes since the full review, without separating upstream work. "
                 "Do not assume any changes are already covered; uncertain scope requires FULL_REQUIRED.")
 
-    def patch(left: str, right: str) -> str:
+    def patch(left: str, right: str, *, only: bool = False, exclude: bool = False) -> str:
+        paths = ([f":(literal){p}" for p in sorted(conflicts)] if only else
+                 [".", *[f":(exclude,literal){p}" for p in sorted(conflicts)]] if exclude else [])
         return subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "--no-renames",
-                               "--binary", left, right], capture_output=True,
+                               "--binary", left, right, "--", *paths], capture_output=True,
                               check=True).stdout.decode("utf-8", "replace")
+
+    if conflicts:
+        # The merge-tree contains conflict markers, not a usable baseline for
+        # those paths. Compare the actual resolution to BOTH real inputs:
+        # taking the reviewed side unchanged must still expose an upstream
+        # change it rejects. All other paths retain the automatic baseline.
+        delta = ("Subsequent PR edits outside conflicted paths:\n" + patch(tree, head, exclude=True)
+                 + "\nConflict resolutions relative to the reviewed side:\n" + patch(previous, head, only=True)
+                 + "\nConflict resolutions relative to the integrated base:\n" + patch(integrated_base, head, only=True))
+        return (delta,
+                "Git reconstructed base integration with conflicts. The supplied delta includes "
+                "every conflicted path against BOTH inputs, plus all subsequent edits outside "
+                "those paths. Inspect the resolutions and their interactions; conflicts alone "
+                "do not establish expanded scope or require FULL_REQUIRED. Decline uncertain scope.\n\n"
+                "Integrated upstream changes (context, not automatically new PR scope):\n"
+                + patch(previous, integrated_base))
 
     return (patch(tree, head),
             f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "

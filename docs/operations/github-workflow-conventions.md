@@ -461,8 +461,13 @@ author edit, including resolutions and reversions. The complete base integration
 diff is supplied separately for checking interactions, alongside the original
 and current PR diffs. Upstream file count alone is not expanded PR scope, and an
 empty author delta does not prove that prior reasoning still applies. If Git
-cannot reconstruct the integration conflict-free, the reviewer receives the
-complete unseparated delta and must decline uncertain scope.
+reconstructs conflicts, the reviewer sees each actual resolution against both
+the reviewed side and the integrated base. Other paths use the automatic merge
+baseline. Keeping the old PR version therefore still exposes an upstream fix
+that the resolution rejected, without classifying every upstream file as new
+author work. Unreadable reconstruction falls back to the complete unseparated
+delta. Reviewers still decline uncertain scope; this changes input preparation,
+not review authority or coverage requirements.
 
 A bounded follow-up preserves the original design and security assumptions.
 The reviewer explicitly confirms that scope and reviews every changed line.
@@ -865,6 +870,32 @@ every change** — runtime, docs, or tests:
   skip the PR.
 - `--auto-merge` remains available for the rare case where the operator
   explicitly wants auto-merge-on-green; it is not the default.
+
+For an already-pushed PR, resume delivery from the named branch:
+
+```bash
+UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer claude --wait
+```
+
+This joins the existing diff-bound review, waits for CI when `--wait` is set,
+runs `git prepr`, declares readiness and adds `approved-to-merge`, then runs
+strict closeout. It uses the installed GitHub App runner when available;
+other hosts must supply an explicitly provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
+It refuses an implicit fallback to the interactive `gh` login.
+It neither commits nor pushes, starts no local full test run, and never updates
+the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
+Without `--wait`, pending validation exits 2 with the command to resume later.
+
+The ownership footer must match the bound UUID. Dirty work, a different local
+or remote head, incomplete review or CI, explicit holds, capability classification,
+and governance-sensitive paths park delivery. A head/base change during validation
+requires another inspection. Successful readiness is recorded against the head
+on the PR; repeating resume rechecks the live evidence without renewing the
+queue label. A missing receipt causes a pre-existing label to be renewed once
+after validation, covering a follow-up push. Removing approval after a recorded
+readiness parks the command rather than undoing the removal. Surface claims
+must already be released; ownership handoffs and operator decisions remain
+explicit prerequisites.
 
 ### 3. Parallel / simultaneous work
 

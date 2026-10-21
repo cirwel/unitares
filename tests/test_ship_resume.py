@@ -1,0 +1,238 @@
+"""Delivery resumes only from live, owned-head evidence; no GitHub writes in tests."""
+
+from copy import deepcopy
+import json
+from unittest.mock import Mock
+
+import pytest
+
+from scripts.dev import _ship_resume as ship
+
+
+AGENT = "82667120-1d6c-4612-bc2d-f2f64adb5304"
+HEAD = "a" * 40
+
+
+@pytest.fixture
+def delivery(monkeypatch):
+    pr = {
+        "number": 42, "url": "https://example.invalid/pr/42", "state": "OPEN",
+        "body": f"Classification: fix\n\nUNITARES agent: {AGENT}\n",
+        "headRefName": "codex/workflow", "headRefOid": HEAD,
+        "baseRefName": "master", "baseRefOid": "b" * 40,
+        "isDraft": True, "isCrossRepository": False, "labels": [], "comments": [],
+        "statusCheckRollup": [{"__typename": "CheckRun", "name": "test",
+                               "status": "COMPLETED", "conclusion": "SUCCESS"}],
+    }
+    calls = []
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args == ("git", "branch", "--show-current"):
+            return "codex/workflow\n"
+        if args == ("git", "rev-parse", "HEAD"):
+            return HEAD + "\n"
+        if args[:3] == ("git", "status", "--porcelain=v1"):
+            return ""
+        if args[:2] == ("git", "show"):
+            return "src/policy.py\tENFORCE\toperator boundary\n"
+        if args[:2] == ("git", "diff"):
+            return ""
+        if args[:3] == ("gh", "pr", "checks"):
+            return json.dumps([{"name": "test", "bucket": "pass"}])
+        if args[:3] == ("gh", "run", "list"):
+            return json.dumps([{"databaseId": 2, "workflowDatabaseId": 10,
+                                "status": "completed", "conclusion": "success"}])
+        return ""
+    monkeypatch.setattr(ship, "run", run)
+    monkeypatch.setattr(ship, "snapshot", lambda: deepcopy(pr))
+    monkeypatch.setattr(ship.shutil, "which", lambda _: "/installed/unitares-github")
+    monkeypatch.setenv("UNITARES_AGENT_UUID", AGENT)
+    return pr, calls
+
+
+def execute(**kwargs):
+    ship.resume(reviewer="claude", wait=False, plan=False, **kwargs)
+
+
+def writes(calls):
+    return [args for args, _ in calls if args[:2] == ("gh", "pr")
+            and args[2] in {"ready", "edit", "comment"}]
+
+
+def test_resume_joins_evidence_then_queues_without_commit_push_or_full_tests(delivery):
+    _, calls = delivery
+    execute()
+    commands = [args for args, _ in calls]
+    assert ("review", "--reviewer", "claude") in commands
+    assert commands.index(("git", "prepr")) < commands.index(("gh", "pr", "ready", "42"))
+    assert commands[-1] == ("git", "closeout", "--strict")
+    assert any("--add-label" in args for args in writes(calls))
+    assert not any("commit" in args or "push" in args or "test-cache.sh" in args for args in commands)
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("body", "Classification: fix\nUNITARES agent: 00000000-0000-0000-0000-000000000000", "ownership"),
+    ("headRefOid", "c" * 40, "head differ"),
+    ("isCrossRepository", True, "same-repository"),
+    ("baseRefName", "parent-feature", "targeting master"),
+    ("labels", [{"name": "governance-sensitive"}], "hold"),
+    ("body", f"Classification: capability\nUNITARES agent: {AGENT}", "operator ruling"),
+])
+def test_resume_preserves_ownership_and_reserved_gates(delivery, field, value, reason):
+    pr, calls = delivery
+    pr[field] = value
+    with pytest.raises(ship.Parked, match=reason):
+        execute()
+    assert not writes(calls)
+
+
+def test_changed_head_during_review_never_becomes_ready(delivery, monkeypatch):
+    pr, calls = delivery
+    moved = deepcopy(pr)
+    moved["headRefOid"] = "d" * 40
+    monkeypatch.setattr(ship, "snapshot", Mock(side_effect=[deepcopy(pr), moved]))
+    with pytest.raises(ship.Parked, match="head differ"):
+        execute()
+    assert not writes(calls)
+
+
+def test_base_move_requires_reinspection(delivery, monkeypatch):
+    pr, calls = delivery
+    moved = deepcopy(pr)
+    moved["baseRefOid"] = "c" * 40
+    monkeypatch.setattr(ship, "snapshot", Mock(side_effect=[deepcopy(pr), moved]))
+    with pytest.raises(ship.Parked, match="base moved"):
+        execute()
+    assert not writes(calls)
+
+
+def test_incomplete_independent_review_does_not_queue(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.Parked("second model family still required")
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="second model family"):
+        execute()
+    assert not writes(calls)
+
+
+def test_dirty_work_is_never_committed_by_resume(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[:2] == ("git", "status"):
+            return " M src/changed.py\n"
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="Commit and push"):
+        execute()
+    assert not writes(calls)
+
+
+def test_missing_identity_parks_without_remote_calls(delivery, monkeypatch):
+    _, calls = delivery
+    monkeypatch.delenv("UNITARES_AGENT_UUID")
+    with pytest.raises(ship.Parked, match="bound UNITARES identity"):
+        execute()
+    assert not calls
+
+
+@pytest.mark.parametrize("status,conclusion", [("IN_PROGRESS", ""), ("COMPLETED", "ACTION_REQUIRED")])
+def test_pending_ci_and_open_review_findings_park(delivery, status, conclusion):
+    pr, calls = delivery
+    pr["statusCheckRollup"][0].update(status=status, conclusion=conclusion)
+    with pytest.raises(ship.Parked, match="CI is pending or failing"):
+        execute()
+    assert not writes(calls)
+
+
+def test_missing_aggregate_does_not_hide_queued_workflow(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[:3] == ("gh", "run", "list"):
+            return json.dumps([{"databaseId": 2, "workflowDatabaseId": 10,
+                                "status": "queued", "conclusion": ""}])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="workflow is queued"):
+        execute()
+    assert not writes(calls)
+
+
+def test_trusted_base_manifest_blocks_unlabelled_reserved_change(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[:2] == ("git", "diff"):
+            return "-ENFORCE = True\n+ENFORCE = False\n"
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="Operator merge required"):
+        execute()
+    assert not writes(calls)
+
+
+def test_resuming_recorded_readiness_is_idempotent(delivery):
+    pr, calls = delivery
+    pr["isDraft"] = False
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->"}]
+    execute()
+    assert not writes(calls)
+
+
+def test_stale_label_is_renewed_once_for_validated_head(delivery):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    execute()
+    edits = [args for args in writes(calls) if args[2] == "edit"]
+    assert "--remove-label" in edits[0] and "--add-label" in edits[1]
+
+
+def test_removed_queue_approval_is_not_automatically_restored(delivery):
+    pr, calls = delivery
+    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->"}]
+    with pytest.raises(ship.Parked, match="approval was removed"):
+        execute()
+    assert not writes(calls)
+
+
+def test_approval_removed_during_validation_is_left_removed(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    held = deepcopy(pr)
+    held["labels"] = []
+    monkeypatch.setattr(ship, "snapshot", Mock(side_effect=[deepcopy(pr), deepcopy(pr), held]))
+    with pytest.raises(ship.Parked, match="removed during validation"):
+        execute()
+    assert not writes(calls)
+
+
+def test_plan_does_not_start_review_or_mutate_pr(delivery):
+    _, calls = delivery
+    ship.resume(reviewer=None, wait=False, plan=True)
+    assert not writes(calls)
+    assert not any(args[0] == "review" for args, _ in calls)
+
+
+def test_remote_commands_use_installed_app_runner(monkeypatch):
+    monkeypatch.setattr(ship.shutil, "which", lambda _: "/installed/unitares-github")
+    command = Mock(return_value=Mock(returncode=0, stdout="ok", stderr=""))
+    monkeypatch.setattr(ship.subprocess, "run", command)
+    ship.run("git", "prepr", remote=True, read_only=True)
+    assert command.call_args.args[0] == ["unitares-github", "--read-only", "--", "git", "prepr"]
+
+
+def test_missing_app_runner_does_not_fall_back_to_human_login(monkeypatch):
+    monkeypatch.setattr(ship.shutil, "which", lambda _: None)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    command = Mock()
+    monkeypatch.setattr(ship.subprocess, "run", command)
+    with pytest.raises(ship.Parked, match="refusing implicit gh login"):
+        ship.run("gh", "pr", "ready", "42", remote=True)
+    command.assert_not_called()

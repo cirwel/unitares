@@ -4771,18 +4771,39 @@ def test_conflicting_base_keeps_the_complete_followup_delta(carry_repo):
     previous = _git(carry_repo, 'rev-parse', 'HEAD')
     _git(carry_repo, 'checkout', '-q', 'master')
     (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE conflicting upstream\nfour\nfive\n')
-    _git(carry_repo, 'commit', '-qam', 'conflicting base')
+    (carry_repo / 'upstream-only.py').write_text('upstream_auth_change()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '-qm', 'conflicting base')
     _git(carry_repo, 'checkout', '-q', 'feature')
     result = subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
                             capture_output=True)
     assert result.returncode == 1
     (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE manually resolved\nfour\nfive\n')
-    _git(carry_repo, 'commit', '-qam', 'resolve conflict')
+    (carry_repo / 'extra.py').write_text('new_author_work()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '-qm', 'resolve conflict')
     delta, context = rg.followup_diff('master', previous, 'HEAD')
     assert '+THREE manually resolved' in delta
-    assert delta == rg.diff_text(previous, 'HEAD')
-    assert 'could not be reconstructed conflict-free' in context
-    assert 'FULL_REQUIRED' in context
+    assert '-THREE by the PR' in delta and '-THREE conflicting upstream' in delta
+    assert 'upstream_auth_change' not in delta
+    assert 'upstream_auth_change' in context
+    assert 'against BOTH inputs' in context
+    assert '+new_author_work()' in delta
+
+
+def test_conflict_resolution_keeping_reviewed_side_exposes_rejected_base(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    reviewed = (carry_repo / 'f.txt').read_text()
+    _git(carry_repo, 'checkout', '-q', 'master')
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE upstream security fix\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'base fix')
+    _git(carry_repo, 'checkout', '-q', 'feature')
+    assert subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
+                          capture_output=True).returncode == 1
+    (carry_repo / 'f.txt').write_text(reviewed)
+    _git(carry_repo, 'commit', '-qam', 'keep reviewed side')
+    delta, _ = rg.followup_diff('master', previous, 'HEAD')
+    assert '-THREE upstream security fix' in delta and '+THREE by the PR' in delta
 
 
 def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
