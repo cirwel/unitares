@@ -150,6 +150,7 @@ def _governance_port(default: int = 8767, path: Path | None = None) -> int:
 MCP_PORT = _governance_port()
 HTTP_HEALTH_URL = f"http://127.0.0.1:{MCP_PORT}/health/live"
 HTTP_RESIDENTS_URL = f"http://127.0.0.1:{MCP_PORT}/v1/residents"
+HTTP_DEEP_HEALTH_URL = f"http://127.0.0.1:{MCP_PORT}/health/deep"
 # The streamable-HTTP MCP route. Unlike the custom routes above it is the one
 # path the SDK's DNS-rebinding protection validates the Host on, which is why
 # check_mcp_route_gate probes it specifically.
@@ -1206,6 +1207,89 @@ def check_http_health() -> CheckResult:
         return CheckResult(name, mode, Status.FAIL,
                            "HTTP health endpoint unreachable",
                            detail=str(e))
+
+
+def check_background_task_failures() -> CheckResult:
+    """WARN while a server background loop's latest run failed.
+
+    Several loops (matview refresh, audit partition maintenance, the silence
+    probe and its KG finding writes) catch their own exceptions. They used to
+    log them at DEBUG, which the server never writes, so a loop could fail on
+    every run with nothing on record: concept extraction did exactly that for
+    months. The server now keeps a per-task record (last success, last error,
+    failures in a row) in ``src/background_task_health.py``; this reads it from
+    the ``background_tasks`` entry of the cached ``/health/deep`` snapshot.
+
+    The record is in server memory, so it has to come over HTTP, and
+    ``/health/deep`` is gated. Loopback passes in local posture; in strict
+    posture the request needs a bearer this shell can see. When it cannot get
+    the snapshot the check SKIPs and says why: it never reads an unreadable
+    record as healthy.
+    """
+    name, mode = "background_task_failures", "operator"
+    headers = {"User-Agent": "unitares-doctor"}
+    token = _doctor_visible_bearer_token() or os.environ.get("UNITARES_HTTP_API_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(HTTP_DEEP_HEALTH_URL, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return CheckResult(
+                name, mode, Status.SKIP,
+                "/health/deep refused this shell (strict posture, no visible token)",
+                detail="Export UNITARES_MCP_BEARER_TOKENS or UNITARES_HTTP_API_TOKEN "
+                       "in this shell to read the background-task record.",
+            )
+        if e.code == 503:
+            return CheckResult(name, mode, Status.INFO,
+                               "deep health snapshot not populated yet; re-run shortly")
+        return CheckResult(name, mode, Status.SKIP, f"/health/deep returned {e.code}")
+    except (urllib.error.URLError, ConnectionError, OSError, ValueError) as e:
+        return CheckResult(name, mode, Status.SKIP,
+                           "server not reachable; http_health reports why", detail=str(e))
+
+    entry = ((payload or {}).get("checks") or {}).get("background_tasks")
+    if not isinstance(entry, dict):
+        return CheckResult(name, mode, Status.SKIP,
+                           "running server predates the background-task record")
+    tasks = entry.get("tasks") or {}
+    failing = sorted(n for n, t in tasks.items() if isinstance(t, dict) and t.get("status") == "failing")
+    # /health/deep serves the last good snapshot, flagged stale, when later
+    # probes time out or fail. A stale record still shows failures that were
+    # real, but it cannot show that every task's latest run succeeded.
+    cache = (payload or {}).get("_cache") or {}
+    stale_note = (
+        f"deep-health snapshot is stale (produced {cache.get('produced_at') or 'unknown'}, "
+        f"{cache.get('age_seconds')}s old); this is the record as of then"
+        if cache.get("stale") else ""
+    )
+    if failing:
+        lines = []
+        for task_name in failing:
+            t = tasks[task_name]
+            lines.append(
+                f"{task_name}: {t.get('consecutive_failures')} failed run(s) in a row, "
+                f"last success {t.get('last_success_at') or 'never in this process'}, "
+                f"last error: {t.get('last_error')}"
+            )
+        if stale_note:
+            lines.insert(0, stale_note)
+        return CheckResult(name, mode, Status.WARN,
+                           f"{len(failing)} background task(s) failing: {', '.join(failing)}",
+                           detail="\n".join(lines))
+    if stale_note:
+        return CheckResult(name, mode, Status.WARN,
+                           "background-task record is stale; current runs unconfirmed",
+                           detail=stale_note + ". The deep-health probe itself is not "
+                                  "refreshing; http_health and the server log say why.")
+    if not tasks:
+        return CheckResult(name, mode, Status.INFO,
+                           "no background task has recorded a run since the server started")
+    return CheckResult(name, mode, Status.PASS,
+                       f"{len(tasks)} background task(s) recorded; latest run of each succeeded")
 
 
 def _http_health_available(timeout: float = 1.0) -> bool:
@@ -4016,6 +4100,7 @@ def build_checks(
         *_model_alias_checks(repo_root),
         Check("http_listening", "operator", check_http_listening),
         Check("http_health", "operator", check_http_health),
+        Check("background_task_failures", "operator", check_background_task_failures),
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
         Check("pid_file", "operator",
               lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded(),
