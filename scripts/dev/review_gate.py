@@ -100,7 +100,6 @@ UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 #: A review passed, but a security-sensitive diff still needs a second model
 #: family (review_policy.json). Not an outage: the next step is the author's.
 NEEDS_SECOND_FAMILY = 3
-PROVIDER_OUTAGE = 4  # opt-in only; unlike exit 2, validated context reached an unavailable provider
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # GitHub-issued App ID -> bot actor ID. This is review-evidence admission
 # only, configured in the trusted gate checkout, never in a PR's marker.
@@ -807,12 +806,11 @@ def latest_matching(comments: list[dict], key: str,
             # them, and disposing them must not invent completed coverage.
             if rec.verdict == "FAILED" and (partial := partial_finding_count(body)):
                 rec.verdict, rec.findings, rec.scope = "FINDINGS", partial, "full-required"
-            if (rec.scope == "fix" and rec.status()[0] == "success"
+            if (rec.scope == "fix"
                     and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
-                if rec.disposed:
-                    rec.scope = "full-required"  # answer the findings without approving the scope
-                else:
-                    rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
+                rec.scope = "full-required"  # missing source proof cannot establish coverage
+                if rec.verdict == "CLEAN":
+                    rec.verdict = "FAILED"
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
             rec.url = c.get("html_url", "")
@@ -861,7 +859,8 @@ def latest_matching(comments: list[dict], key: str,
         # full review can satisfy the outstanding coverage requirement.
         if rec.scope == "full-required" and not rec.disposed:
             required_full, completed = rec, None
-        elif rec.full() and rec.verdict != "FAILED" and not rec.disposed:
+        elif (rec.full() or (rec in native and rec.reviewer == "codex-native"
+                             and rec.scope == "full" and rec.head)) and rec.verdict != "FAILED" and not rec.disposed:
             required_full = None
         if rec.scope == "full-required" and rec.disposed:
             if required_full is original:
@@ -2088,7 +2087,17 @@ def has_reasoning(text: str) -> bool:
     return len(body) >= REVIEW_MIN_REASONING_CHARS
 
 
+def partial_review_text(text: str) -> str:
+    """Surface a failed provider's JSON response without crediting completion."""
+    try:
+        data = json.loads(text.strip().splitlines()[-1]) if text.strip() else None
+    except (ValueError, IndexError):
+        return text
+    return data["response"] if isinstance(data, dict) and isinstance(data.get("response"), str) else text
+
+
 def partial_finding_count(text: str) -> int:
+    text = partial_review_text(text)
     parsed = parse_verdict(text)
     return max(len(FINDING_TITLE_RE.findall(text)),
                parsed[1] if parsed and parsed[0] == "FINDINGS" else 0)
@@ -3439,10 +3448,6 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     Findings stop routing: trying another model must never erase a review we
     dislike. An explicit --reviewer retries that provider despite cooldown.
     """
-    args.provider_unavailable = False
-    if getattr(args, "provider_outage_exit", False):
-        args.provider_outage_key = key
-        args.provider_outage_head = git("rev-parse", "HEAD").strip()
     providers = [preferred]  # one provider per explicit attempt; no automatic spending cascade
     deadline = time.monotonic() + args.budget
     available = []
@@ -3450,19 +3455,16 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     retry_override = not getattr(args, "respect_provider_cooldown", False)
     for provider in providers:
         if provider in disabled:
-            args.provider_unavailable = True
             print(f"[review] skipping {provider}: disabled repo-wide "
                   f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
             continue
         if (provider in getattr(args, "failed_providers", set())
                 and not (getattr(args, "reviewer", None) == provider and retry_override)):
-            args.provider_unavailable = True
             print(f"[review] {provider} exhausted retries for this diff; "
                   f"use review.sh --reviewer {provider} without --respect-provider-cooldown to explicitly retry")
             continue
         reason = provider_cooldown(provider)
         if reason and not (getattr(args, "reviewer", None) == provider and retry_override):
-            args.provider_unavailable = True
             print(f"[review] skipping {provider}: {reason} cooldown; "
                   f"use --reviewer {provider} to retry after restoring access")
         else:
@@ -3474,7 +3476,6 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         attempt = argparse.Namespace(**vars(args))
         attempt.budget = max(1, remaining // (len(available) - i))
         result = _review_locked(attempt, pr, key, provider)
-        args.provider_unavailable = getattr(attempt, "provider_unavailable", False)
         if result != UNREVIEWED:
             # second_family_pass needs to know this without re-reading the
             # comment it just posted (GitHub reads can lag a fresh write).
@@ -3556,13 +3557,10 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials, model, effort)
     minutes = (time.monotonic() - t0) / 60
-    # Only a provider execution failure after context/history validation can
-    # use the ordinary advisory exception. Missing objects, pending reviews,
-    # Scope refusals stay unreviewed; partial findings persist as open findings.
-    scopes = re.findall(r"(?m)^SCOPE: (\w+)\s*$", text)
+    # Failed attempts never establish completed coverage. Preserve concrete
+    # findings and explicit scope requests even in partial provider JSON.
+    scopes = re.findall(r"(?m)^SCOPE: (\w+)\s*$", partial_review_text(text))
     explicit_refusal = bool(followup and scopes and scopes != ["FOLLOWUP"])
-    args.provider_unavailable = (not explicit_refusal and note != "exit 0" and parse_verdict(text) is None
-                                 and not partial_finding_count(text))
     parsed = parse_verdict(text) if note == "exit 0" else None
     scope_declined = explicit_refusal or bool(followup and parsed is not None and scopes != ["FOLLOWUP"])
     if scope_declined:
@@ -3577,6 +3575,8 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         if "follow-up scope not confirmed" not in note:
             remember_unavailable(reviewer, text, note)
         partial = partial_finding_count(text)
+        if partial:
+            text = partial_review_text(text) + f"\n\nIncomplete provider attempt ({note}); no completed review coverage."
         rec = Record(key, "FINDINGS" if partial else "FAILED", partial, False, reviewer)
         heading = (f"FINDINGS({partial}) (incomplete review: {note})" if partial else
                    f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})")
@@ -4061,33 +4061,6 @@ def cmd_ci(args) -> int:
     return 0
 
 
-def provider_outage_confirmed(args) -> bool:
-    """A provider failure is advisory only when FINAL evidence is complete.
-
-    The provider flag alone survives later error paths. Re-resolve the head
-    and current history, preserving unknown history, findings and native work
-    instead of converting an incomplete-evidence result into an outage.
-    """
-    if not (getattr(args, "provider_unavailable", False)
-            and getattr(args, "provider_outage_key", None)
-            and getattr(args, "provider_outage_head", None)):
-        return False
-    try:
-        pr, repo, key, _ = _resolve(argparse.Namespace(**vars(args)))
-        head = git("rev-parse", "HEAD").strip()
-        if key != args.provider_outage_key or head != args.provider_outage_head:
-            return False
-        comments = pr_comments(repo, pr)
-        if pr_rounds(repo, pr, key, head, comments).unknown_history or native_activity_running(comments):
-            return False
-        native = read_native(repo, pr, key, head, comments)
-        if native.unavailable_reason or native.running or any(r.verdict == "FINDINGS" and not r.disposed for r in native.records):
-            return False
-        latest = current_record(repo, pr, key, head, comments)
-        return not (latest and (latest.scope == "full-required"
-                                or (latest.verdict == "FINDINGS" and not latest.disposed)))
-    except (SystemExit, GhUnavailable, subprocess.SubprocessError, OSError, ValueError):
-        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4110,8 +4083,6 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
     r.add_argument("--respect-provider-cooldown", action="store_true",
                    help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
-    r.add_argument("--provider-outage-exit", action="store_true",
-                   help="return 4 only for an unavailable provider after context validation; other unreviewed cases stay 2")
 
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")
@@ -4168,9 +4139,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
                   "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
-        if (args.cmd == "review" and args.provider_outage_exit and result == UNREVIEWED
-                and provider_outage_confirmed(args)):
-            return PROVIDER_OUTAGE
         return result
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")

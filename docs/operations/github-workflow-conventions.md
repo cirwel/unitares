@@ -917,8 +917,10 @@ coverage.
 Dirty work, a different local or remote head, open findings, pending review or CI,
 incomplete mandatory family coverage, explicit holds, capability classification,
 and governance-sensitive paths park delivery. An unavailable selected reviewer
-for an ordinary fix uses the existing advisory exception with a PR body note; it
-cannot waive mandatory family coverage. A head/base change during validation
+parks automatic delivery. For an ordinary fix the owning agent may document
+the advisory exception in the PR body and complete the normal prepr/readiness
+steps under existing authority. That is an explicit owner decision; resume
+never infers it from a failed process. Mandatory family coverage remains required. A head/base change during validation
 requires another inspection. Successful readiness is recorded against the head
 on the PR; repeating resume rechecks the live evidence without renewing the
 queue label. Approval-removal event history is read across all PR heads, even
@@ -934,9 +936,9 @@ after a recorded readiness parks the command rather than undoing the removal. Su
 must already be released; ownership handoffs and operator decisions remain
 explicit prerequisites.
 
-Delivery requests a distinct provider-outage exit (`review.sh
---provider-outage-exit`, code 4). Incomplete history, pending review, declined
-scope and partial findings retain code 2 and park delivery. Missing base objects
+Delivery proceeds only after the review command succeeds. Incomplete history,
+provider failures, pending review, declined scope and partial findings park
+automatic delivery; there is no provider-failure approval fallback. Missing base objects
 are fetched through the App/read-only route before policy and diff inspection;
 the plan can refresh that base history too.
 

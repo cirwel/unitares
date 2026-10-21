@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-from fnmatch import fnmatchcase
 import json
 import os
 import re
@@ -101,10 +100,6 @@ def changed_paths(pr: dict) -> list[str]:
                                  f"{pr['baseRefOid']}...HEAD").split("\0") if path]
 
 
-def mandatory_review(pr: dict) -> bool:
-    policy = json.loads(run("git", "show", f"{pr['baseRefOid']}:scripts/dev/review_policy.json"))
-    patterns = policy["second_family_paths"]
-    return any(fnmatchcase(path, pattern) for path in changed_paths(pr) for pattern in patterns)
 
 
 def ensure_base(pr: dict) -> None:
@@ -275,19 +270,10 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     labelled = "approved-to-merge" in {label["name"] for label in pr["labels"]}
     if prior_readiness and not labelled and not recovering_renewal:
         raise Parked("Queue approval was removed after readiness; do not overwrite that hold automatically.")
-    unreviewed = None
-    try:
-        if shutil.which("unitares-github"):
-            run("review", "--provider-outage-exit", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []), remote=True)
-        else:
-            run("./scripts/dev/review.sh", "--provider-outage-exit", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []))
-    except CommandFailed as error:
-        # Exit 4 is explicitly issued by the review controller after validated
-        # context reached an unavailable provider. Exit 2 never authorizes the
-        # exception: its text may describe missing objects or hidden findings.
-        if error.returncode != 4 or not reviewer or mandatory_review(pr):
-            raise
-        unreviewed = f"Selected reviewer {reviewer} was unavailable (review command provider-outage exit 4)."
+    if shutil.which("unitares-github"):
+        run("review", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []), remote=True)
+    else:
+        run("./scripts/dev/review.sh", "--respect-provider-cooldown", *(["--reviewer", reviewer] if reviewer else []))
     if wait:
         # Cancelled push checks can make --watch exit nonzero. The required
         # checks and latest PR workflow runs below remain authoritative.
@@ -315,18 +301,6 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     before = label_events(final) if final_labelled and not recorded else []
     if final_labelled and not recorded and (not before or before[-1]["event"] != "labeled"):
         raise Parked("Approval history is not consistent with the visible label yet; resume later without changing approval.")
-    advisory_marker = f"<!-- unitares-ship-unreviewed head={head} agent={agent} -->"
-    if unreviewed and advisory_marker not in final["body"]:
-        notice = (advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; "
-                  "proceeding under the documented exception after CI. " + unreviewed)
-        footer = list(re.finditer(r"(?m)^UNITARES agent: ", final["body"]))[-1].start()
-        body = final["body"][:footer] + notice + "\n\n" + final["body"][footer:]
-        run("gh", "pr", "edit", str(pr["number"]), "--body", body, remote=True)
-    if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in trusted_receipts(final)):
-        run("gh", "pr", "comment", str(pr["number"]), "--body",
-            advisory_marker + "\nAdvisory review unavailable for this delegated ordinary fix; proceeding under the "
-            "documented exception after CI. Review attempt:\n\n" + unreviewed
-            + f"\nUNITARES agent: {agent}", remote=True)
     if final["isDraft"]:
         run("gh", "pr", "ready", str(pr["number"]), remote=True)
     if final_labelled and not recorded:

@@ -1535,14 +1535,12 @@ def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeyp
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args[1]))
     args = SimpleNamespace(base="master", budget=30, reviewer=None)
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
-    assert args.provider_unavailable is True
     assert calls == ["claude"]
     assert [rec.verdict for rec in records] == ["FAILED"]
     calls.clear()
     assert rg.review_with_fallback(args, 2, "k", "claude") == rg.UNREVIEWED
     assert calls == []
     assert "skipping claude: quota cooldown" in capsys.readouterr().out
-    assert args.provider_unavailable is True
 
 
 def test_findings_stop_fallback(repo, monkeypatch):
@@ -1561,7 +1559,6 @@ def test_partial_findings_during_provider_failure_are_not_an_advisory_outage(rep
     monkeypatch.setattr(rg, "post_record", lambda *a: records.append(a[1]))
     args = SimpleNamespace(base="master", budget=30, reviewer="codex")
     assert rg.review_with_fallback(args, 1, "k", "codex") == 1
-    assert args.provider_unavailable is False
     assert records[0].verdict == "FINDINGS" and records[0].findings == 1
     assert records[0].scope == "full-required"
 
@@ -1586,7 +1583,7 @@ def test_resume_provider_selection_respects_cooldown_on_unchanged_retry(repo, mo
     args = SimpleNamespace(base="master", budget=30, reviewer="claude", respect_provider_cooldown=True)
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
-    assert calls == ["claude"] and args.provider_unavailable
+    assert calls == ["claude"]
 
 
 def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
@@ -4860,48 +4857,10 @@ def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, mo
     assert all(c['body'] in args.followup_reviews for c in comments)
 
 
-@pytest.mark.parametrize('opt_in,provider_unavailable,expected', [
-    (False, True, 2), (True, True, 4), (True, False, 2),
-])
-def test_provider_outage_exit_is_explicit_and_not_inferred_from_error_text(monkeypatch, opt_in, provider_unavailable, expected):
-    def command(args):
-        args.provider_unavailable = provider_unavailable
-        print('UNREVIEWED: unavailable historical commit; review history incomplete')
-        return rg.UNREVIEWED
-    monkeypatch.setattr(rg, 'cmd_review', command)
-    monkeypatch.setattr(rg, 'provider_outage_confirmed', lambda args: args.provider_unavailable)
-    assert rg.main(['review', *(['--provider-outage-exit'] if opt_in else [])]) == expected
 
 
-@pytest.mark.parametrize('state,expected', [('complete', True), ('completion-error', False),
-    ('history-error', False), ('findings', False), ('native-pending', False), ('native-unavailable', False), ('head-moved', False)])
-def test_outage_requires_final_complete_evidence(monkeypatch, state, expected):
-    args = SimpleNamespace(provider_unavailable=True, provider_outage_key='k', provider_outage_head='h')
-    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
-    monkeypatch.setattr(rg, 'git', lambda *a, **k: 'moved' if state == 'head-moved' else 'h')
-    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
-    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: SimpleNamespace(unknown_history=state == 'history-error'))
-    monkeypatch.setattr(rg, 'read_native', lambda *a: SimpleNamespace(running=state == 'native-pending', unavailable_reason='unknown base' if state == 'native-unavailable' else '', records=[]))
-    def latest(*a):
-        if state == 'completion-error':
-            raise SystemExit('unavailable commit: review history is incomplete')
-        return full_record('k', 'FINDINGS', 1, False, 'codex') if state == 'findings' else None
-    monkeypatch.setattr(rg, 'current_record', latest)
-    assert rg.provider_outage_confirmed(args) is expected
 
 
-def test_stale_outage_flag_cannot_convert_completion_failure_to_exit_four(monkeypatch):
-    def command(args):
-        args.provider_unavailable = True
-        args.provider_outage_key, args.provider_outage_head = 'k', 'h'
-        return rg.UNREVIEWED
-    monkeypatch.setattr(rg, 'cmd_review', command)
-    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
-    monkeypatch.setattr(rg, 'git', lambda *a, **k: 'h')
-    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
-    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: SimpleNamespace(unknown_history=False))
-    monkeypatch.setattr(rg, 'current_record', lambda *a: (_ for _ in ()).throw(SystemExit('incomplete completion evidence')))
-    assert rg.main(['review', '--provider-outage-exit']) == rg.UNREVIEWED
 
 
 def test_declined_followup_cannot_report_provider_outage(repo, reviewed_followup, monkeypatch):
@@ -4910,7 +4869,6 @@ def test_declined_followup_cannot_report_provider_outage(repo, reviewed_followup
     monkeypatch.setattr(rg, 'post_record', lambda *a: None)
     args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Original review')
     assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
-    assert args.provider_unavailable is False
 
 
 def test_repeated_followups_recheck_cumulative_delta(repo, reviewed_followup):
@@ -5622,7 +5580,6 @@ def test_exhausted_resume_provider_is_unavailable_without_another_attempt(repo, 
     args = SimpleNamespace(budget=30, reviewer="claude", respect_provider_cooldown=True,
                            failed_providers={"claude"})
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
-    assert args.provider_unavailable
 
 
 def test_followup_dispatch_honors_exhaustion_before_entering_provider(repo, reviewed_followup, monkeypatch):
@@ -5633,7 +5590,6 @@ def test_followup_dispatch_honors_exhaustion_before_entering_provider(repo, revi
     monkeypatch.setattr(rg, 'failed_runs', lambda comments, key, provider: 3 if provider == 'codex' else 0)
     monkeypatch.setattr(rg, '_review_locked', lambda *a: pytest.fail('retried exhausted follow-up provider'))
     assert rg.cmd_review(args) == rg.UNREVIEWED
-    assert args.provider_unavailable and args.failed_providers == {'codex'}
 
 
 def test_disposed_partial_findings_recover_through_explicit_full_review(repo, monkeypatch):
@@ -5664,18 +5620,9 @@ def test_interrupted_followup_scope_refusal_is_persisted_not_an_outage(repo, rev
     monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
     args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Prior context')
     assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
-    assert not args.provider_unavailable
     assert posted[0].scope == 'full-required' and posted[0].verdict == 'FAILED'
 
 
-def test_final_outage_confirmation_preserves_stored_scope_refusal(monkeypatch):
-    args = SimpleNamespace(provider_unavailable=True, provider_outage_key='k', provider_outage_head='h')
-    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/work'))
-    monkeypatch.setattr(rg, 'git', lambda *a, **kw: 'h')
-    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
-    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds())
-    monkeypatch.setattr(rg, 'current_record', lambda *a: full_record('k', 'FAILED', 0, False, 'codex', scope='full-required'))
-    assert not rg.provider_outage_confirmed(args)
 
 
 @pytest.mark.parametrize('origin', ['scope-refusal', 'disposed-partial'])
@@ -5711,3 +5658,37 @@ def test_full_review_before_later_refusal_cannot_satisfy_that_requirement():
     assert rg.latest_matching(comments, 'k').scope == 'full-required'
     comments.append(_comment(full_record('k', 'CLEAN', 0, False, 'claude')))
     assert rg.latest_matching(comments, 'k').verdict == 'CLEAN'
+
+
+def test_actual_native_full_review_clears_scope_requirement_but_claimed_native_comment_does_not():
+    required = _comment(full_record('k', 'FAILED', 0, False, 'claude', scope='full-required'))
+    native = rg.Record('k', 'CLEAN', 0, False, 'codex-native', head='a' * 40, scope='full')
+    assert not native.full()  # native APIs do not supply the reviewed base
+    assert rg.latest_matching([required, _comment(native)], 'k').scope == 'full-required'
+    assert rg.latest_matching([required], 'k', [native]).verdict == 'CLEAN'
+
+
+@pytest.mark.parametrize('disposition_scope', ['fix', 'legacy'])
+def test_invalid_followup_findings_disposal_preserves_full_requirement_through_failed_retry(disposition_scope):
+    original = rg.Record('k', 'FINDINGS', 1, False, 'codex', scope='fix')
+    answered = rg.Record('k', 'FINDINGS', 1, True, 'codex', scope=disposition_scope)
+    comments = [_comment(original, text='[P2] inspect this caller'),
+                _comment(answered, text='1. rebutted: caller was inspected'),
+                _comment(full_record('k', 'FAILED', 0, False, 'claude'))]
+    assert rg.latest_matching(comments, 'k').scope == 'full-required'
+
+
+@pytest.mark.parametrize('exit_note', ['exit 0', 'exit 1'])
+def test_failed_agy_json_findings_are_visible_without_completed_coverage(repo, monkeypatch, exit_note):
+    payload = json.dumps({'status': 'ERROR', 'response': '[P1] Unsafe caller.\nVERDICT: FINDINGS(1)',
+                          'error': 'The stream was interrupted'})
+    assert rg.partial_finding_count(payload) == 1
+    monkeypatch.setattr(rg, 'diff_key', lambda *a: 'k')
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (payload, exit_note))
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, heading, text: posted.append((rec, text)))
+    args = SimpleNamespace(base='master', budget=30)
+    assert rg._review_locked(args, 1, 'k', 'antigravity') == 1
+    rec, text = posted[0]
+    assert rec.verdict == 'FINDINGS' and rec.scope == 'full-required'
+    assert text.startswith('[P1] Unsafe caller.') and 'no completed review coverage' in text

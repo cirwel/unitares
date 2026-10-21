@@ -95,7 +95,7 @@ def test_resume_joins_evidence_then_queues_without_commit_push_or_full_tests(del
     _, calls = delivery
     execute()
     commands = [args for args, _ in calls]
-    assert ("review", "--provider-outage-exit", "--respect-provider-cooldown", "--reviewer", "claude") in commands
+    assert ("review", "--respect-provider-cooldown", "--reviewer", "claude") in commands
     assert commands.index(("git", "prepr")) < commands.index(("gh", "pr", "ready", "42"))
     assert commands[-1] == ("git", "closeout", "--strict")
     assert any("--add-label" in args for args in writes(calls))
@@ -364,26 +364,6 @@ def test_old_head_receipt_and_removed_label_stay_held(delivery):
     assert not writes(calls)
 
 
-@pytest.mark.parametrize("mandatory", [False, True])
-def test_advisory_outage_exception_keeps_mandatory_family_gate(delivery, monkeypatch, mandatory):
-    pr, calls = delivery
-    original = ship.run
-    def run(*args, **kwargs):
-        if args[0] == "review":
-            raise ship.CommandFailed(args, Mock(returncode=4, stdout="[review] UNREVIEWED: provider unavailable", stderr=""))
-        return original(*args, **kwargs)
-    monkeypatch.setattr(ship, "run", run)
-    monkeypatch.setattr(ship, "mandatory_review", lambda _: mandatory)
-    if mandatory:
-        with pytest.raises(ship.CommandFailed):
-            execute()
-        assert not writes(calls)
-    else:
-        execute()
-        assert any(args[2] == "ready" for args in writes(calls))
-        assert any("Advisory review unavailable" in " ".join(args) for args in writes(calls))
-        assert "Advisory review unavailable" in pr["body"]
-        assert pr["body"].rstrip().endswith(f"UNITARES agent: {AGENT}")
 
 
 def test_pending_review_is_not_an_advisory_outage(delivery, monkeypatch):
@@ -399,21 +379,6 @@ def test_pending_review_is_not_an_advisory_outage(delivery, monkeypatch):
     assert not writes(calls)
 
 
-def test_advisory_exception_receipt_is_not_reposted(delivery, monkeypatch):
-    pr, calls = delivery
-    pr["body"] = f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->\n" + pr["body"]
-    pr["isDraft"] = False
-    pr["labels"] = [{"name": "approved-to-merge"}]
-    pr["comments"] = [{"body": f"<!-- unitares-ship-ready head={HEAD} agent={AGENT} -->"},
-                      {"body": f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->"}]
-    original = ship.run
-    def run(*args, **kwargs):
-        if args[0] == "review":
-            raise ship.CommandFailed(args, Mock(returncode=4, stdout="[review] provider unavailable", stderr=""))
-        return original(*args, **kwargs)
-    monkeypatch.setattr(ship, "run", run)
-    execute()
-    assert not writes(calls)
 
 
 def test_resuming_recorded_readiness_is_idempotent(delivery):
@@ -565,19 +530,6 @@ def test_untrusted_ready_marker_cannot_hold_delivery_or_skip_renewal(delivery, l
     assert any("--remove-label" in args for args in writes(calls)) == labelled
 
 
-def test_untrusted_advisory_marker_cannot_suppress_receipt(delivery, monkeypatch):
-    pr, calls = delivery
-    pr["comments"] = [{"body": f"<!-- unitares-ship-unreviewed head={HEAD} agent={AGENT} -->",
-                       "author_association": "NONE"}]
-    original = ship.run
-    def run(*args, **kwargs):
-        if args[0] == "review":
-            raise ship.CommandFailed(args, Mock(returncode=4, stdout="provider unavailable", stderr=""))
-        return original(*args, **kwargs)
-    monkeypatch.setattr(ship, "run", run)
-    execute()
-    assert any(args[:3] == ("gh", "pr", "comment") and "Advisory review unavailable" in " ".join(args)
-               for args in writes(calls))
 
 
 def test_parked_retry_preserves_provider_and_wait_flags(delivery, monkeypatch, capsys):
@@ -585,3 +537,17 @@ def test_parked_retry_preserves_provider_and_wait_flags(delivery, monkeypatch, c
     monkeypatch.setattr("sys.argv", ["ship-resume", "--reviewer", "claude", "--wait"])
     assert ship.main() == 2
     assert "./scripts/dev/ship.sh --resume --reviewer claude --wait" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('exit_code', [1, 2, 3, 4])
+def test_incomplete_review_never_automatically_declares_readiness(delivery, monkeypatch, exit_code):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == 'review':
+            raise ship.CommandFailed(args, Mock(returncode=exit_code, stdout='Review incomplete: provider unavailable', stderr=''))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, 'run', run)
+    with pytest.raises(ship.CommandFailed):
+        execute()
+    assert not writes(calls)
