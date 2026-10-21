@@ -105,8 +105,9 @@ additions merge cleanly. -->
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:253, agents/vigil/agent.py) | True when the operator named a model, asking for semantic search | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |

@@ -1280,6 +1280,16 @@ def test_update_check_reports_without_changing_anything(tmp_path):
     assert " up " not in calls and " exec " not in calls
 
 
+def test_update_names_the_installed_release_not_the_sdk_tag():
+    """A release commit carries both vX.Y.Z and sdk-vX.Y.Z; a bare
+    `describe --tags --exact-match` printed "Installed: sdk-v0.5.0" for a v3.4.0
+    install (seen in the Install Launcher CI run). Pin the release-tag match."""
+    source = CLI.read_text()
+    start = source.index("cmd_update() {")
+    body = source[start:source.index("\n}\n", start)]
+    assert "describe --tags --exact-match --match 'v[0-9]*'" in body
+
+
 def test_update_names_a_target_the_remote_does_not_have(tmp_path):
     env, log = _fake_bin(tmp_path, launchd=False, compose=True)
     env = _local_remote(tmp_path, env)

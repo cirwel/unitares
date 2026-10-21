@@ -65,16 +65,16 @@ migration unit.
   policy-engine direction. This proposal supplies authenticated principals and
   capability scopes; it does not silently enable Cedar or duplicate its policy
   language.
-- [`orchestrator-vouched-identity-v0.md`](../archive/orchestrator-vouched-identity-v0.md)
+- [`orchestrator-vouched-identity-v0.md`](orchestrator-vouched-identity-v0.md)
   covers headless-child identity. A vouched identity may later become an
   issuance input, but lineage alone is never authorization.
-- [`track-a-strict-identity-hardening-runbook.md`](../archive/track-a-strict-identity-hardening-runbook.md)
+- [`track-a-strict-identity-hardening-runbook.md`](track-a-strict-identity-hardening-runbook.md)
   remains a prerequisite for delegation based on governance identity.
 - [`s1-continuity-token-retirement.md`](../../ontology/s1-continuity-token-retirement.md)
   narrowed continuity proofs to one hour and rotated their secret. That is
   useful precedent, not evidence that continuity already meets this proposal's
   custody, audience, replay, and revocation requirements.
-- [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md)
+- [`surface-lease-plane-phase-a-plan.md`](../active/surface-lease-plane-phase-a-plan.md)
   remains the canonical execution history for the Lease Plane. This document
   does not reopen its lease semantics.
 

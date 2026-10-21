@@ -9,7 +9,9 @@ or lifecycle claims.
   [MCP client matrix](../integration/MCP_CLIENTS.md).
 - Repository contributors: read [`AGENTS.md`](../../AGENTS.md) and
   [Canonical Sources](../dev/CANONICAL_SOURCES.md).
-- Evaluators: follow the [Reviewer Guide](../REVIEWER_GUIDE.md) and the
-  [EISV proprioception contract](../ontology/eisv-proprioception-contract.md).
+- Evaluators: start with [Evidence and limitations](../EVIDENCE_AND_LIMITS.md)
+  for the claims ledger, then follow the [Reviewer Guide](../REVIEWER_GUIDE.md).
+  The [EISV proprioception contract](../ontology/eisv-proprioception-contract.md)
+  is the detailed reference for the EISV instrument, not an entry point.
 
 This path remains as a stub so existing links do not break.
