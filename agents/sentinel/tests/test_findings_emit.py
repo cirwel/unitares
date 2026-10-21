@@ -48,6 +48,7 @@ def _isolate_sentinel_side_effects(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         lambda *a, **kw: [],
     )
     monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+    monkeypatch.delenv("LEASE_PLANE_ENFORCED_SURFACE_KINDS", raising=False)
 
 
 @pytest.mark.asyncio
