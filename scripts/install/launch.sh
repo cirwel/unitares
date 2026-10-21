@@ -58,7 +58,8 @@ fi
 for file in docker-compose.yml db/postgres/docker-initdb.sh scripts/unitares .env.example; do
     [ -f "$stack/$file" ] || fail "Checkout is missing $file"
 done
-installed=$(git -C "$stack" describe --tags --exact-match 2>/dev/null) \
+# The release commit also carries the SDK tag (sdk-vX.Y.Z); name the release.
+installed=$(git -C "$stack" describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null) \
     || fail 'The managed checkout is not on a release tag; use its existing update command'
 # Fixed container names belong to an existing install, never adopt that stack.
 for name in unitares-postgres-age unitares-redis unitares-lease-plane unitares-governance-mcp; do
@@ -72,6 +73,10 @@ fi
 [ -f "$stack/.env" ] || fail '.env must be a regular file'
 cd "$stack"
 printf 'Installed: %s\nCheckout: %s\n' "$installed" "$stack"
+# Pull first: inside `up`, a failed pull surfaces only as "No such image".
+# Only missing images: refreshing the floating redis tag would restart Redis.
+docker compose pull --policy missing --quiet \
+    || fail 'Could not pull the release images; check the network and retry'
 # Compose is idempotent: a second run keeps unchanged, running containers.
 # A missing release image is an error, not an implicit source build.
 docker compose up -d --wait --no-build

@@ -1335,7 +1335,8 @@ cmd_update() {
 
     local root current current_sha target_sha
     root="$(_repo_root)"
-    current=$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --short HEAD)
+    # Release commits also carry the SDK tag (sdk-vX.Y.Z); name the release.
+    current=$(git -C "$root" describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null || git -C "$root" rev-parse --short HEAD)
     current_sha=$(git -C "$root" rev-parse HEAD)
     if [ -z "$target" ]; then
         local published
