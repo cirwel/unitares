@@ -134,16 +134,18 @@ carries them only when its binding was not server-inferred (for example, the
 call passed `client_session_id`), because `outcome_event` signs nothing for a
 server-inferred binding.
 
-For `sync_state`, read `action_summary` first. It keeps the policy action,
-one-line reason, risk score, and verdict maturity together; a cold-start result
-is labeled `verdict_confidence="provisional"` at that surface. If the response
-contains `legacy_diagnostics`, treat that block as compatibility telemetry, not
-behavioral health evidence. Routine bounded responses omit repeated mode
-coaching and size receipts; `response_mode="full"` restores the canonical
-payload and its diagnostics. The friendly `state_summary` does not carry the
-all-clear band `status: "healthy"`: read the risk from `risk_score` and
-`risk_summary`. A `moderate` or `critical` band is still shown, and
-`raw_governance` keeps the canonical value.
+For `sync_state`, read `action_summary` first. It always keeps the policy action,
+one-line reason and risk score. A non-routine response also keeps the verdict
+and its maturity; a cold-start result is labeled
+`verdict_confidence="provisional"` at that surface. A routine proceed instead
+sets `response_shape="routine"` and omits the repeated safe verdict plus its
+unspecified maturity. If the response contains `legacy_diagnostics`, treat that
+block as compatibility telemetry, not behavioral health evidence. Routine
+bounded responses omit repeated mode coaching and size receipts;
+`response_mode="full"` restores the canonical payload and its diagnostics. The
+friendly `state_summary` does not carry the all-clear band `status: "healthy"`:
+read the risk from `risk_score` and `risk_summary`. A `moderate` or `critical`
+band is still shown, and `raw_governance` keeps the canonical value.
 
 To learn whether you are paused before writing anything, call
 `check_working_state`. Its `action_summary` carries `paused` and
