@@ -4787,6 +4787,7 @@ def test_conflicting_base_keeps_the_complete_followup_delta(carry_repo):
     assert '-THREE by the PR' in delta and '-THREE conflicting upstream' in delta
     assert 'upstream_auth_change' not in delta
     assert 'upstream_auth_change' in context
+    assert '-THREE by the PR' not in context  # never label a PR reversal as upstream work
     assert 'against BOTH inputs' in context
     assert '+new_author_work()' in delta
 

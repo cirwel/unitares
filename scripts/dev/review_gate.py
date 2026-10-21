@@ -538,7 +538,7 @@ def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
                 "those paths. Inspect the resolutions and their interactions; conflicts alone "
                 "do not establish expanded scope or require FULL_REQUIRED. Decline uncertain scope.\n\n"
                 "Integrated upstream changes (context, not automatically new PR scope):\n"
-                + patch(previous, integrated_base))
+                + patch(git("merge-base", previous, integrated_base).strip(), integrated_base))
 
     return (patch(tree, head),
             f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "

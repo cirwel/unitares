@@ -43,10 +43,18 @@ def delivery(monkeypatch):
         if args[:2] == ("git", "diff"):
             return ""
         if args[:2] == ("gh", "api"):
+            if "--method" in args:
+                body = args[args.index("--raw-field") + 1].removeprefix("body=")
+                comment = {"body": body, "author": {"login": "app/delivery-bot"},
+                           "createdAt": "2026-10-21T00:00:00Z"}
+                pr["comments"].append(comment)
+                return json.dumps({"body": body, "user": {"login": "delivery-bot[bot]"},
+                                   "created_at": comment["createdAt"]})
             return json.dumps([events])
         if args[:3] == ("gh", "pr", "edit"):
             event = "unlabeled" if "--remove-label" in args else "labeled"
-            events.append({"id": len(events) + 1, "event": event, "label": {"name": "approved-to-merge"}})
+            events.append({"id": len(events) + 1, "event": event, "label": {"name": "approved-to-merge"},
+                           "actor": {"login": "delivery-bot[bot]"}, "created_at": "2026-10-21T00:00:01Z"})
             pr["labels"] = [] if event == "unlabeled" else [{"name": "approved-to-merge"}]
         if args[:3] == ("gh", "pr", "ready"):
             pr["isDraft"] = False
@@ -222,7 +230,7 @@ def test_interrupted_renewal_can_resume_its_exact_journalled_removal(delivery, m
     with pytest.raises(ship.CommandFailed):
         execute()
     assert not pr["labels"]
-    assert any("removed_event=1" in c["body"] for c in pr["comments"])
+    assert any("prior_event=0" in c["body"] for c in pr["comments"])
     execute()
     assert pr["labels"] == [{"name": "approved-to-merge"}]
     assert sum("--remove-label" in args for args in writes(calls)) == 1
@@ -230,16 +238,55 @@ def test_interrupted_renewal_can_resume_its_exact_journalled_removal(delivery, m
 
 def test_later_external_veto_does_not_match_renewal_journal(delivery, monkeypatch):
     pr, calls = delivery
-    pr["comments"] = [{"body": ship.renewal_marker(pr, AGENT, 1)}]
+    pr["comments"] = [{"body": ship.intent_marker(pr, AGENT, 0),
+                       "author": {"login": "app/delivery-bot"}, "createdAt": "2026-10-21T00:00:00Z"}]
     original = ship.run
     def run(*args, **kwargs):
         if args[:2] == ("gh", "api"):
-            return json.dumps([[{"id": 3, "event": "unlabeled", "label": {"name": "approved-to-merge"}}]])
+            return json.dumps([[{"id": i, "event": event, "label": {"name": "approved-to-merge"},
+                                 "actor": {"login": "delivery-bot[bot]"}, "created_at": "2026-10-21T00:00:01Z"}
+                                for i, event in [(1, "unlabeled"), (2, "labeled"), (3, "unlabeled")]]])
         return original(*args, **kwargs)
     monkeypatch.setattr(ship, "run", run)
     with pytest.raises(ship.Parked, match="approval was removed"):
         execute()
     assert not writes(calls)
+
+
+def test_event_api_lag_keeps_a_recoverable_pre_removal_intent(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    original = ship.run
+    hidden = False
+    def run(*args, **kwargs):
+        nonlocal hidden
+        if args[:2] == ("gh", "api") and "/events?" in args[2] and not pr["labels"] and not hidden:
+            hidden = True
+            return "[[]]"
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="not yet visible"):
+        execute()
+    assert not pr["labels"] and any("renew-intent" in c["body"] for c in pr["comments"])
+    execute()
+    assert pr["labels"] == [{"name": "approved-to-merge"}]
+    assert sum("--remove-label" in args for args in writes(calls)) == 1
+
+
+def test_another_actors_removal_never_uses_our_intent(delivery):
+    pr, _ = delivery
+    pr["comments"] = [{"body": ship.intent_marker(pr, AGENT, 0),
+                       "author": {"login": "app/delivery-bot"}, "createdAt": "2026-10-21T00:00:00Z"}]
+    events = [{"id": 1, "event": "unlabeled", "actor": {"login": "operator"},
+               "created_at": "2026-10-21T00:00:01Z"}]
+    assert not ship.own_renewal(pr, AGENT, events)
+
+
+def test_cancelled_push_check_does_not_hide_successful_pr_workflows(delivery):
+    pr, _ = delivery
+    pr["statusCheckRollup"].append({"__typename": "CheckRun", "name": "push guard",
+                                   "status": "COMPLETED", "conclusion": "CANCELLED"})
+    execute()
 
 
 def test_unlabel_history_survives_push_and_missing_old_receipt(delivery, monkeypatch):

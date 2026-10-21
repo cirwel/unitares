@@ -900,9 +900,10 @@ requires another inspection. Successful readiness is recorded against the head
 on the PR; repeating resume rechecks the live evidence without renewing the
 queue label. Approval-removal event history is read across all PR heads, even
 when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
-after validation, covering a follow-up push. The exact removal event is journalled
-before re-adding the label, so a failed addition can resume for that same head;
-an ambiguous removal or a later external veto stays parked. Removing approval
+after validation, covering a follow-up push. Renewal intent is journalled before
+removal, binding the head, previous label event, writer and server timestamp.
+A matching removal can resume after API lag or a failed addition. A different
+actor, an ambiguous event sequence or a later external veto stays parked. Removing approval
 after a recorded readiness parks the command rather than undoing the removal. Surface claims
 must already be released; ownership handoffs and operator decisions remain
 explicit prerequisites.
