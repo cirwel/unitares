@@ -101,7 +101,7 @@ class TestDialecticLabelSetIntegrity:
 
         path = (
             Path(__file__).resolve().parents[1]
-            / "docs/evaluation/dialectic-reviewer-labels-20260819.jsonl"
+            / "docs/evaluations/dialectic-reviewer/dialectic-reviewer-labels-20260819.jsonl"
         )
         return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
@@ -155,7 +155,7 @@ class TestDialecticLabelSetIntegrity:
         post = Counter(r["label"] for r in rows if r["era"] == "post_codex_reviewer")
         doc = (
             Path(__file__).resolve().parents[1]
-            / "docs/evaluation/dialectic-reviewer-labels.md"
+            / "docs/evaluations/dialectic-reviewer/dialectic-reviewer-labels.md"
         ).read_text()
 
         assert f"pre 07-02 (n={sum(pre.values())})" in doc
