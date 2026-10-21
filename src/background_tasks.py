@@ -1418,6 +1418,30 @@ async def _log_resident_silence_finding(
         record_failure("silence_finding_write", e, log=logger)
 
 
+# Agents whose last close attempt failed. The health record is one task for
+# every agent, so a success for one agent must not clear another's failure:
+# the task stays failing while any agent here is still pending.
+_silence_close_pending: dict[str, str] = {}
+
+
+def _record_silence_close(agent_id: str, error: "BaseException | str | None") -> None:
+    if error is None:
+        _silence_close_pending.pop(agent_id, None)
+    else:
+        _silence_close_pending[agent_id] = (
+            f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
+        )
+    if not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
+        return
+    pending = sorted(_silence_close_pending.items())
+    record_failure(
+        "silence_finding_close",
+        "; ".join(f"{agent}: {reason}" for agent, reason in pending),
+        log=logger,
+    )
+
+
 async def _close_resident_silence_findings(agent_id: str, reconnected_at: datetime) -> bool:
     """Resolve this agent's open auto-filed resident-silence rows after it is healthy again.
 
@@ -1454,10 +1478,10 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             and getattr(d, "agent_id", agent_id) == agent_id
         ]
         if not rows:
-            # A completed lookup with nothing to close is a success: without
-            # recording it, one earlier failure would stay on the health record
-            # after the caller stops checking this agent.
-            record_success("silence_finding_close", log=logger)
+            # A completed lookup with nothing to close is a success for this
+            # agent: without recording it, its earlier failure would stay on
+            # the health record after the caller stops checking it.
+            _record_silence_close(agent_id, None)
             return True
         now = datetime.now(timezone.utc)
         reconnect_iso = reconnected_at.isoformat()
@@ -1486,17 +1510,13 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             })
             if landed is False:
                 all_landed = False
-        if all_landed:
-            record_success("silence_finding_close", log=logger)
-        else:
-            record_failure(
-                "silence_finding_close",
-                "the knowledge graph rejected a resolve update; retried next pass",
-                log=logger,
-            )
+        _record_silence_close(
+            agent_id,
+            None if all_landed else "the knowledge graph rejected a resolve update; retried next pass",
+        )
         return all_landed
     except Exception as e:
-        record_failure("silence_finding_close", e, log=logger)
+        _record_silence_close(agent_id, e)
         return False
 
 

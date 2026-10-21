@@ -31,8 +31,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "unitares_doc
 @pytest.fixture(autouse=True)
 def _clean_registry():
     health.reset_for_tests()
+    background_tasks._silence_close_pending.clear()
     yield
     health.reset_for_tests()
+    background_tasks._silence_close_pending.clear()
 
 
 @pytest.fixture
@@ -261,6 +263,34 @@ async def test_server_log_rotation_success_is_recorded(monkeypatch, tmp_path):
     assert health.snapshot()["server_log_rotation"]["status"] == "ok"
     assert (log_dir / "mcp_server.log").read_text() == ""
     assert list((log_dir / "archive").glob("mcp_server_*.log.gz"))
+
+
+@pytest.mark.asyncio
+async def test_one_agents_success_does_not_clear_anothers_close_failure(monkeypatch):
+    import src.knowledge_graph as kg
+    from datetime import datetime, timezone
+
+    row = MagicMock(id="d1", tags=["resident-silence", "auto-filed"], agent_id="agent-a", details="")
+
+    async def query(**kwargs):
+        return [row] if kwargs.get("agent_id") == "agent-a" else []
+
+    graph = MagicMock()
+    graph.query = AsyncMock(side_effect=query)
+    graph.update_discovery = AsyncMock(return_value=False)
+    monkeypatch.setattr(kg, "get_knowledge_graph", AsyncMock(return_value=graph))
+    now = datetime.now(timezone.utc)
+
+    assert await background_tasks._close_resident_silence_findings("agent-a", now) is False
+    # Agent B has nothing to close; agent A's resolve is still pending.
+    assert await background_tasks._close_resident_silence_findings("agent-b", now) is True
+    entry = health.snapshot()["silence_finding_close"]
+    assert entry["status"] == "failing"
+    assert "agent-a" in entry["last_error"]
+
+    graph.update_discovery = AsyncMock(return_value=True)
+    assert await background_tasks._close_resident_silence_findings("agent-a", now) is True
+    assert health.snapshot()["silence_finding_close"]["status"] == "ok"
 
 # --- doctor --------------------------------------------------------------------
 
