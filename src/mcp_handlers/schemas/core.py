@@ -1026,7 +1026,7 @@ class ConsultParams(AgentIdentityMixin):
             "call local. Omitted: the operator's UNITARES_MODEL_ID, else the "
             "endpoint's only served model."
         ),
-        json_schema_extra={"brief": "Standard lane: a local model ollama:local lists; omitted uses the default."},
+        json_schema_extra={"brief": "Standard lane: a model ollama:local lists."},
     )
     purpose: Literal["answer", "critique", "summarize", "generate"] = Field(
         "answer",
