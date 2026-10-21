@@ -40,6 +40,13 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# A pushed PR already has durable GitHub evidence. Resume before loading local
+# secrets, staging, acquiring a ship lease, or creating another commit/branch.
+if [[ "${1:-}" == "--resume" ]]; then
+    shift
+    exec python3 scripts/dev/_ship_resume.py "$@"
+fi
+
 # Source operator secrets (LEASE_PLANE_BEARER_TOKEN, etc.) so the lease-advisory
 # helper below can authenticate. The lease plane fails closed without a token,
 # which surfaces as "lease: service_unavailable" — harmless per RFC v0.5 §6.1
@@ -157,6 +164,7 @@ usage() {
 usage: ship.sh [--stage-all] [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
        ship.sh --classify
        ship.sh [--stage-all] --plan "commit message"
+       ship.sh --resume [--reviewer PROVIDER] [--wait] [--plan]
 
 Modes:
   auto         draft PR for everything (the default convention); runtime/detached
@@ -169,6 +177,10 @@ Modes:
   --direct    commit and push the current branch; refuses detached HEAD
   --stage-all stage the full current worktree before classifying/committing.
                With --plan, previews that route without mutating the index.
+  --resume    resume an owned, clean, pushed docs/tests/tooling PR from live evidence;
+               join review, check CI, run prepr, and declare readiness/queue it.
+               Requires UNITARES_AGENT_UUID matching the PR ownership footer.
+               --wait joins CI; --plan only inspects local/remote state.
 USAGE
 }
 

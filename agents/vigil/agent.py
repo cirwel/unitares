@@ -331,7 +331,11 @@ def _derive_eval_config_tag() -> str:
     """
     embedding = os.environ.get("UNITARES_EMBEDDING_MODEL", "").strip().lower()
     hybrid = os.environ.get("UNITARES_ENABLE_HYBRID", "").strip() == "1"
-    graph = os.environ.get("UNITARES_ENABLE_GRAPH_EXPANSION", "").strip() == "1"
+    # Related-finding expansion; the flag's old name still counts.
+    related_flag = os.environ.get("UNITARES_ENABLE_RELATED_EXPANSION")
+    if related_flag is None:
+        related_flag = os.environ.get("UNITARES_ENABLE_GRAPH_EXPANSION", "")
+    graph = related_flag.strip().lower() in {"1", "true", "yes", "on"}
     reranker = os.environ.get("UNITARES_ENABLE_RERANKER", "").strip() == "1"
 
     base = "bge_m3" if "bge-m3" in embedding else (embedding.replace("-", "_") or "default")

@@ -38,6 +38,14 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
 )
 
+# Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
+# tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
+# to ~/Library/Logs/unitares-sentinel.log unless redirected before import.
+os.environ.setdefault(
+    "SENTINEL_LOG_FILE",
+    str(Path(tempfile.gettempdir()) / "unitares-sentinel-test.log"),
+)
+
 # The resident roster is now deployment config (UNITARES_RESIDENTS), empty by
 # default for user-agnostic installs. The test suite validates the resident
 # machinery against historical reference-resident fixtures, so configure it

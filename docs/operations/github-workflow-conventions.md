@@ -429,7 +429,12 @@ before (a re-review of the same unchanged diff does not). Only posted review
 records can show a serious finding; an unposted local run always counts.
 Clean cycles and cycles with only lesser findings count. The cap stops review that
 has stopped finding serious problems, not review that keeps finding them; a
-backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
+convergence warning at ten total cycles asks the agent to reassess scope and
+recurring findings (operator refinement, 2026-10-21). Total count alone no longer
+blocks verification of useful fixes. Narrow the work or change the independent
+perspective when a review is not converging; do not repeat unchanged review work.
+The three-cycle redundancy budget, provider cooldown/retry limits, actual
+findings and mandatory model-family coverage remain authoritative. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle. The second family can finish cycle three
@@ -459,8 +464,13 @@ author edit, including resolutions and reversions. The complete base integration
 diff is supplied separately for checking interactions, alongside the original
 and current PR diffs. Upstream file count alone is not expanded PR scope, and an
 empty author delta does not prove that prior reasoning still applies. If Git
-cannot reconstruct the integration conflict-free, the reviewer receives the
-complete unseparated delta and must decline uncertain scope.
+reconstructs conflicts, the reviewer sees each actual resolution against both
+the reviewed side and the integrated base. Other paths use the automatic merge
+baseline. Keeping the old PR version therefore still exposes an upstream fix
+that the resolution rejected, without classifying every upstream file as new
+author work. Unreadable reconstruction falls back to the complete unseparated
+delta. Reviewers still decline uncertain scope; this changes input preparation,
+not review authority or coverage requirements.
 
 A bounded follow-up preserves the original design and security assumptions.
 The reviewer explicitly confirms that scope and reviews every changed line.
@@ -725,11 +735,12 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   cycles that found no P0/P1, stop redundant full-review requests and escalate
    unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
-   coverage from two families. P0/P1 remain blockers, and an additional full
-   cycle requires explicit operator authorization with a recorded reason.
+   coverage from two families. P0/P1 remain blockers, and fixes of serious
+   findings still earn a full pass. Ten total cycles warn and prompt scope
+   reassessment; only the redundancy budget requires additional-cycle approval.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -849,6 +860,71 @@ every change** — runtime, docs, or tests:
   skip the PR.
 - `--auto-merge` remains available for the rare case where the operator
   explicitly wants auto-merge-on-green; it is not the default.
+
+For an already-pushed docs/tests/tooling fix, resume delivery from the named branch:
+
+```bash
+UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer claude --wait
+```
+
+This joins the existing diff-bound review, waits for CI when `--wait` is set,
+runs `git prepr`, declares readiness and adds `approved-to-merge`, then runs
+strict closeout. It uses the installed GitHub App runner when available;
+this optional command also requires the shared host `git-prepr` and
+`git-closeout` tools (or equivalent Git aliases). Those tools are installed
+separately, not supplied by this checkout; missing prerequisites park before
+any review spending. Other hosts need those tools plus an explicitly
+provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
+It refuses an implicit fallback to the interactive `gh` login.
+It neither commits nor pushes, starts no local full test run, and never updates
+the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
+Without `--wait`, pending validation exits 2 with the command to resume later.
+An error after approval can leave the PR ready and queued: inspect the live
+state and journal before retrying. A lost readiness receipt can cause label
+renewal on retry and change queue order. Ambiguous failed reviewer transcripts
+may conservatively retain echoed finding titles as open findings; inspect and
+dispose those with reasons rather than treating an uncertain failure as clean.
+Disposal answers the alleged findings but does not complete an interrupted review.
+Run `./scripts/dev/review.sh --fresh --reviewer PROVIDER` with a healthy provider
+(within the spending budget), then resume delivery. Automatic resume deliberately
+parks incomplete/full-required evidence instead of inferring completed coverage.
+
+The ownership footer must match the bound UUID. Automatic completion is limited
+to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
+`scripts/diagnostics/`, and `.github/workflows/`. Scientific proposals, registered
+stop rules, identity ontology and public-site prose remain outside that lane,
+along with runtime authentication/identity enforcement and their operator decisions.
+Review-controller and review-workflow tooling listed in `second_family_paths`
+remains eligible within this technical tooling lane only after passing its
+required two-family review; the advisory exception never substitutes for that
+coverage.
+Dirty work, a different local or remote head, open findings, pending review or CI,
+incomplete mandatory family coverage, explicit holds, capability classification,
+and governance-sensitive paths park delivery. An unavailable selected reviewer
+parks automatic delivery. For an ordinary fix the owning agent may document
+the advisory exception in the PR body and complete the normal prepr/readiness
+steps under existing authority. That is an explicit owner decision; resume
+never infers it from a failed process. Mandatory family coverage remains required. A head/base change during validation
+requires another inspection. Successful readiness is recorded against the head
+on the PR; repeating resume rechecks the live evidence without renewing the
+queue label. Approval-removal event history is read across all PR heads, even
+when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
+after validation, covering a follow-up push. Renewal intent is journalled before
+removal, binding the head, previous label event, writer and server timestamp.
+The visible label must agree with the pre-removal history, and a successful
+removal acknowledgement is recorded before any recovery can re-add approval.
+An unconfirmed intent cannot adopt a later same-login veto. A matching removal
+can resume after API lag or a failed addition. A different
+actor, an ambiguous event sequence or a later external veto stays parked. Removing approval
+after a recorded readiness parks the command rather than undoing the removal. Surface claims
+must already be released; ownership handoffs and operator decisions remain
+explicit prerequisites.
+
+Delivery proceeds only after the review command succeeds. Incomplete history,
+provider failures, pending review, declined scope and partial findings park
+automatic delivery; there is no provider-failure approval fallback. Missing base objects
+are fetched through the App/read-only route before policy and diff inspection;
+the plan can refresh that base history too.
 
 ### 3. Parallel / simultaneous work
 
@@ -1113,7 +1189,8 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done | Escalate redundant full-review requests; fixes of serious findings retain their exemption ([round cap](#round-cap)) |
+| Tenth total cycle or later | Reassess scope and recurring findings; total count warns without blocking useful fix verification |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

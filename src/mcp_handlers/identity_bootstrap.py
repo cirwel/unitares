@@ -656,8 +656,8 @@ def strict_identity_refusal_payload(
     process_agent_update Path-C refusal (updates/phases.py, hint
     override), and the bare-onboard Path-B refusal (identity/handlers.py,
     status+hint overrides — its status is deliberately
-    ``lineage_declaration_required``). Stage-1 burn-in (2026-06-11,
-    docs/handoffs/strict-identity-stage1-burnin-2026-06-11.md) found the
+    ``lineage_declaration_required``). Stage-1 burn-in (2026-06-11; the
+    burn-in note is not kept in the public tree) found the
     surfaces drifting — empty ontology_ref on two of them, divergent
     fields — so the shape lives here and the emission points cannot
     drift (same single-source discipline as core.unbound_metrics_payload).

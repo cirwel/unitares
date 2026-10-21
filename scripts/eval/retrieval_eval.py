@@ -120,7 +120,7 @@ async def _serving_search(
         arguments["search_mode"] = "hybrid"
         env["UNITARES_ENABLE_HYBRID"] = "1"
     if graph_expand:
-        env["UNITARES_ENABLE_GRAPH_EXPANSION"] = "1"
+        env["UNITARES_ENABLE_RELATED_EXPANSION"] = "1"
     if rerank:
         env["UNITARES_ENABLE_RERANKER"] = "1"
 

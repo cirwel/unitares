@@ -58,7 +58,10 @@ from agents.sentinel.phase_b_promotion import (
 SESSION_FILE = Path.home() / ".unitares" / "anchors" / "sentinel.json"
 LEGACY_SESSION_FILE = project_root / ".sentinel_session"
 STATE_FILE = project_root / ".sentinel_state"
-LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-sentinel.log"
+LOG_FILE = Path(os.getenv(
+    "SENTINEL_LOG_FILE",
+    str(Path.home() / "Library" / "Logs" / "unitares-sentinel.log"),
+))
 MAX_LOG_LINES = 1000
 
 # Analysis cycle interval
@@ -490,9 +493,10 @@ def _poll_sync_forced_release(db_url: str, last_event_ts: "datetime | None"):
     Awaiting `asyncpg.connect()` directly inside that scope can deadlock —
     the prior 30h wedge cited at lines 63-69 was this exact pathology.
     This wrapper runs the asyncpg work on a thread executor with
-    `asyncio.run()`, which creates a fresh inner event loop. The asyncpg
-    connection and its awaitables are created on that inner loop, run to
-    completion, and tear down inside `asyncio.run()` —
+    `asyncio.run()`, which creates a fresh inner event loop. Because asyncpg
+    pools and futures bind to whichever loop is running when the awaitable is
+    evaluated, asyncpg binds to that
+    inner loop, runs to completion, and tears down inside `asyncio.run()` —
     never crossing the outer anyio loop.
 
     The inner `asyncio.wait_for(..., timeout=_POLL_TIMEOUT_S)` is
@@ -723,9 +727,9 @@ class SentinelAgent(GovernanceAgent):
         Mitigation: pattern 2 from CLAUDE.md — push the asyncpg call to a
         thread executor via `_poll_sync_forced_release`, which runs
         `asyncio.run(...)` in the executor thread. asyncpg binds to that
-        fresh inner loop: the connection and its awaitables are created,
-        used, and closed within the executor call. The outer
-        anyio task group is unblocked throughout.
+        fresh inner loop (loop-binding happens at create time, so a new loop
+        scoped to the executor call is safe), runs to completion, tears down.
+        The outer anyio task group is unblocked throughout.
         """
         db_url = os.environ.get(
             "GOVERNANCE_DATABASE_URL",

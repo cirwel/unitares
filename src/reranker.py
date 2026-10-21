@@ -66,7 +66,7 @@ def reranker_enabled() -> bool:
     on its own past output; a read-log-trained reranker makes a discovery
     easier to retrieve because it was retrieved before. Treat that as a
     decision about propagation rights rather than a retrieval improvement — see
-    `graph_expansion_enabled()` in `src/retrieval.py` for the same loop by a
+    `related_expansion_enabled()` in `src/retrieval.py` for the same loop by a
     shorter route, and `src/storage/kg_write_budget.py` for the write-side
     constraint.
     """

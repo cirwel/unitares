@@ -19,19 +19,22 @@ This resolves the descriptive question: **the instrument records specified featu
 
 The historical names describe intended interpretations: productive capacity (E), information integrity (I), entropy (S), and valence (V). The current formulas define weighted indices, not physical energy, mutual information or response-distribution entropy. Those information-theoretic quantities remain research targets in [Paper v6](https://github.com/cirwel/unitares-paper-v6). Reading the implemented indices does not depend on establishing that interpretation.
 
-Provenance identifies the producer: `primary_eisv_source` in the metrics (`behavioral` vs `ode_fallback`), `measurement_source` in the telemetry envelope, and an unconditional `coherence_source`/`coherence_role` stamp naming the legacy ODE producer. Per-coordinate `e_source`/`i_source`/`s_source` tags are attached when the opt-in grounding stage runs (`UNITARES_GROUNDING_SHADOW`/`_APPLY`, both default off — `src/mcp_handlers/updates/enrichments.py`, `run_grounding_stage`). The definitions here describe the behavioral path; inspect those source fields before interpreting a particular reading.
+Provenance identifies the producer: `primary_eisv_source` in the metrics (`behavioral` vs `ode_fallback`), `measurement_source` in the telemetry envelope, and an unconditional `coherence_source`/`coherence_role` stamp naming the legacy ODE producer. Per-coordinate `e_source`/`i_source`/`s_source` tags are attached when the opt-in grounding stage runs (`UNITARES_GROUNDING_SHADOW`/`_APPLY`, both default off — `src/mcp_handlers/updates/enrichments.py`, `run_grounding_stage`). The definitions here describe the behavioral path; inspect those source fields before interpreting a particular reading. Physical sensor inputs can enter the same smoothing stage, so `primary_eisv_source=behavioral` identifies that output path, not the origin of its inputs; inspect input provenance separately.
+
+This document is the owner of the EISV instrument: its inputs, smoothing, risk assessment, margin, and the evidence about what it does and does not show. The [architecture](UNIFIED_ARCHITECTURE.md) places it in the system, and [manual §5.3](manual/05-reading-the-signals.md#53-the-policy-action) owns how an agent handles the policy action it returns.
 
 ## Pipeline (primary, verdict-driving path)
 
 ```
 observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
- calibration,    sensor.py)           state.py)       assessment.py)        guide/
- drift, tools)                                                               pause/reject
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
+ calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
+ drift, tools)                                                               pause
 ```
 
-The dynamical-systems model (`governance_core/`, the ODE; "thermodynamic model"
-in older docs is a historical name, not a claim about physical quantities) is
+The dynamical-systems model (`governance_core/`, the ODE; older docs use a
+retired physics-flavoured name for it, which is not a claim about physical
+quantities) is
 **not the direct verdict owner** by default: behavioral assessment owns the
 post-warmup assessment. The final decision also uses ODE state for structural
 basin, void and coherence checks (`src/monitor_decision.py`). The behavioral sensor
@@ -40,6 +43,48 @@ uses ODE-derived regime/history inputs. The old “does NOT drive verdicts” co
 therefore describes authority, not causal independence. This residual coupling
 is compatibility debt and must be shadow-evaluated before removal because it
 changes the E/I distribution and every downstream baseline.
+
+### One check-in, end to end
+
+```
+  Any AI Agent                                    Unitares Server
+  (Claude Code, Codex,                            (port 8767)
+   Hermes, any MCP client)
+  ============================                    ========================
+
+  Do work                     HTTP POST /mcp/
+  Report: what you did,      ------------------->
+    complexity, confidence    process_agent_update   Behavioral EISV
+                                                      +---------------------+
+                                                      | observations +      |
+                                                      | controller history  |
+                                                      | -> blends + EMA     |
+                                                      | -> risk assessment  |
+                                                      | (baseline + floors) |
+                                                      +----------+----------+
+                                                                 |       ODE state feeds
+                                                            policy <---- structural checks
+                                                                 |       and later observations
+                                                            action + margin
+                                                                 |
+                              <----------------------------------+
+                              {"action": "proceed",
+                               "margin": "comfortable",
+                               "guidance": "..."}
+```
+
+The behavioral path blends observations and controller history into smoothed
+indices. Risk assessment uses fixed thresholds and, after warmup, the agent's
+own baseline. The ODE supplies additional structural decision inputs and feeds
+later behavioral observations.
+
+**Where the code lives.** The grounding path lives in `src/dual_log/`,
+`src/behavioral_sensor.py`, `src/behavioral_state.py`, and
+`src/behavioral_assessment.py`; final policy is `src/monitor_decision.py`. The
+ODE engine lives in `governance_core/` (`dynamics.py`) at the top level of this
+repo — pure Python, no separate install (it was a private compiled wheel,
+`unitares-core`, until it was folded back in 2026-04). `src/grounding/free_energy.py`
+is tiered, with the free-energy (FEP) tier explicitly stubbed.
 
 ## Step 1 — Observations (`src/behavioral_sensor.py`)
 
@@ -72,7 +117,7 @@ I_obs         = 0.6·cal_I + 0.4·coh_I                                   # no o
 ```
 `calibration_error` has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). These are lifetime **fleet** bins; the agent-scoped candidate is collected separately as measurement-only (`src/mcp_handlers/updates/context.py`). This is not an error measurement for the current claim. The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only. Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
 
-The outcome-consistency term records variance: constant success scores and constant failure scores both have zero variance. The derivation marks this term `health_evidence=false`; outcome success enters E separately. Read consistency and success as separate properties.
+The outcome-consistency term records variance: constant success scores and constant failure scores both have zero variance. The derivation marks this term `health_evidence=false`; outcome success enters E separately. Read consistency and success as separate properties. Matching reported confidence to suppressed performance can still resemble honest lower capability in the monitored trace; see the [threat model](SCOPE_AND_THREAT_MODEL.md) and the [concealment boundary fixture](../tests/test_calibrated_capability_concealment.py).
 
 **S_obs** — drift, regime-transition and complexity blend (`_compute_S`):
 ```
@@ -81,6 +126,17 @@ regime_s = regime transitions / (window − 1) over last 10   (instability)
 cd_s     = min(1, complexity_divergence)
 S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
 ```
+
+**The drift vector** (`src/monitor_drift.py`, `compute_drift_vector`). Four observable signals define the drift vector whose norm feeds entropy (`drift_norm` above):
+
+| Signal | What it measures |
+|--------|-----------------|
+| Calibration deviation | Worst populated tactical bin's overconfidence (expected minus observed accuracy, floored at zero) |
+| Complexity divergence | Self-reported complexity vs system estimate |
+| Coherence deviation | How far coherence has moved from baseline |
+| Stability deviation | Decision-pattern instability (`1 − decision_consistency`) |
+
+No human oracle is needed for runtime drift estimation. Independent exogenous outcomes still matter for calibration and research validation.
 
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
 
@@ -146,8 +202,9 @@ identity of EISV itself.
 - **Check-ins 3–24**: the behavioral assessment is authoritative, using fixed
   universal thresholds because the agent-specific baseline is not ready.
 - **From check-in 25 with the current constants**: `baseline_confidence >= 0.8`
-  against the 30-update target, enabling self-relative z-score deviations from
-  the agent's own behavioral baseline.
+  against the 30-update target, enabling self-relative (Welford) z-score
+  deviations from the agent's own behavioral baseline. The coordinates
+  themselves remain weighted indices, not z-scores.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
   per-component `max`), not the *verdict*. The largest single-floor contribution
@@ -196,7 +253,18 @@ identity of EISV itself.
   behavioral assessments.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents as the *principled* fix; the floor survives as defense-in-depth, bounding the z-score denominator in the boundary region — `MIN_MEANINGFUL_EISV_STD`.)
 
-Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `proceed` / `guide` / `pause` / `reject`.
+Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `action_summary.action` (`proceed` or `pause`) with a `sub_action` such as `guide`, a named pause cause, or the legacy `reject` label.
+
+Responses include `margin` indicating proximity to decision thresholds (risk,
+void or coherence), distinct from basin membership: `comfortable` / `tight`,
+`warning` (a threshold just crossed, < 0.1 past), `critical` (≥ 0.1 past), or
+`settling` (fewer than 3 check-ins of history). See `config/governance_config.py`.
+
+## Edge regime: oscillation near a threshold
+
+This behavior at the edge of the verdict path is deliberate and easy to miss when reading the code. (The other edge posture, fail-open assessment failure, belongs to the check-in handler and is described in the [architecture](UNIFIED_ARCHITECTURE.md#the-check-in-and-policy-action).)
+
+**Oscillation / churn near a threshold.** There is no deadband on the risk cut itself — a single check-in crossing a threshold can change the action. The EISV inputs are EMA-smoothed before scoring (`src/behavioral_state.py`, per-dimension α ≈ 0.08–0.15). The live oscillation layer is CIRS v2, the `AdaptiveGovernor` (`governance_core/adaptive_governor.py`, run from `src/monitor_cirs.py`; `ADAPTIVE_GOVERNOR_ENABLED = True`). It tracks verdict flips and an oscillation index over a window of 10 (`flip_threshold=4`, `oi_threshold=2.5`) for observability only: in v2, resonance does not block. Its `hard_block` comes only from the fixed `tau_floor=0.25` coherence and `beta_ceiling=0.80` risk bounds; the recorded risk-ceiling blocks came from short-lived agents before warmup, and the coherence floor has never fired (contract ledger rows 18, 30 and 42). v2 emits no `soft_dampen`. So churn near a boundary is not damped by a hold-band or by a settle-pause. The legacy v0.1 detector in `src/cirs.py` (`window=8`, `flip_threshold=3`, `oi_threshold=3.0`, `soft_dampen` and resonance `hard_block`) runs only when the governor is disabled.
 
 ## Deployed vs. target, at a glance
 

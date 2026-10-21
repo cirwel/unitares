@@ -1,7 +1,7 @@
 # Claims Falsification Audit and Competitive Map (2026-09)
 
 **Status:** Research note (external market audit). Supersedes
-[`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) as the
+[`competitive-analysis-2026-06.md`](archive/competitive-analysis-2026-06.md) as the
 project's market map; the June verdicts on MI9 and Auton as paper-positioning
 neighbors stand and are re-verified below.
 **Date:** 2026-09-16.

@@ -1550,6 +1550,42 @@ def test_findings_stop_fallback(repo, monkeypatch):
     assert calls == ["claude"]
 
 
+@pytest.mark.parametrize("output", ["[P1] Unsafe access path found before failure",
+    "Unsafe access path found before failure.\nVERDICT: FINDINGS(1)"])
+def test_partial_findings_during_provider_failure_are_not_an_advisory_outage(repo, monkeypatch, output):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "run_reviewer", lambda *a: (output, "exit 1"))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *a: records.append(a[1]))
+    args = SimpleNamespace(base="master", budget=30, reviewer="codex")
+    assert rg.review_with_fallback(args, 1, "k", "codex") == 1
+    assert records[0].verdict == "FINDINGS" and records[0].findings == 1
+    assert records[0].scope == "full-required"
+
+
+def test_legacy_failed_partial_findings_survive_later_clean_record():
+    failed = _comment(full_record("k", "FAILED", 0, False, "codex"))
+    failed["body"] += "\n[P1] Unsafe access path found before failure"
+    clean = _comment(full_record("k", "CLEAN", 0, False, "claude"))
+    result = rg.latest_matching([failed, clean], "k")
+    assert result.verdict == "FINDINGS" and result.findings == 1
+    assert result.scope == "full-required"
+
+
+def test_resume_provider_selection_respects_cooldown_on_unchanged_retry(repo, monkeypatch):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    calls = []
+    def reviewer(*a):
+        calls.append(a[0])
+        return "You've hit your weekly limit", "exit 1"
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *a: None)
+    args = SimpleNamespace(base="master", budget=30, reviewer="claude", respect_provider_cooldown=True)
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert calls == ["claude"]
+
+
 def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
     calls = []
     monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 0)
@@ -4771,18 +4807,40 @@ def test_conflicting_base_keeps_the_complete_followup_delta(carry_repo):
     previous = _git(carry_repo, 'rev-parse', 'HEAD')
     _git(carry_repo, 'checkout', '-q', 'master')
     (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE conflicting upstream\nfour\nfive\n')
-    _git(carry_repo, 'commit', '-qam', 'conflicting base')
+    (carry_repo / 'upstream-only.py').write_text('upstream_auth_change()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '-qm', 'conflicting base')
     _git(carry_repo, 'checkout', '-q', 'feature')
     result = subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
                             capture_output=True)
     assert result.returncode == 1
     (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE manually resolved\nfour\nfive\n')
-    _git(carry_repo, 'commit', '-qam', 'resolve conflict')
+    (carry_repo / 'extra.py').write_text('new_author_work()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '-qm', 'resolve conflict')
     delta, context = rg.followup_diff('master', previous, 'HEAD')
     assert '+THREE manually resolved' in delta
-    assert delta == rg.diff_text(previous, 'HEAD')
-    assert 'could not be reconstructed conflict-free' in context
-    assert 'FULL_REQUIRED' in context
+    assert '-THREE by the PR' in delta and '-THREE conflicting upstream' in delta
+    assert 'upstream_auth_change' not in delta
+    assert 'upstream_auth_change' in context
+    assert '-THREE by the PR' not in context  # never label a PR reversal as upstream work
+    assert 'against BOTH inputs' in context
+    assert '+new_author_work()' in delta
+
+
+def test_conflict_resolution_keeping_reviewed_side_exposes_rejected_base(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    reviewed = (carry_repo / 'f.txt').read_text()
+    _git(carry_repo, 'checkout', '-q', 'master')
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE upstream security fix\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'base fix')
+    _git(carry_repo, 'checkout', '-q', 'feature')
+    assert subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
+                          capture_output=True).returncode == 1
+    (carry_repo / 'f.txt').write_text(reviewed)
+    _git(carry_repo, 'commit', '-qam', 'keep reviewed side')
+    delta, _ = rg.followup_diff('master', previous, 'HEAD')
+    assert '-THREE upstream security fix' in delta and '+THREE by the PR' in delta
 
 
 def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
@@ -4797,6 +4855,20 @@ def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, mo
     assert rg.cmd_review(args) == 0
     assert called[0].from_head == fix.from_head
     assert all(c['body'] in args.followup_reviews for c in comments)
+
+
+
+
+
+
+
+
+def test_declined_followup_cannot_report_provider_outage(repo, reviewed_followup, monkeypatch):
+    _, fix = reviewed_followup
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: ('Scope is uncertain.\nSCOPE: FULL_REQUIRED\nVERDICT: CLEAN', 'exit 0'))
+    monkeypatch.setattr(rg, 'post_record', lambda *a: None)
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Original review')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
 
 
 def test_repeated_followups_recheck_cumulative_delta(repo, reviewed_followup):
@@ -5173,8 +5245,10 @@ def _cycle_grant_comment(head='a' * 40, key='b' * 64, after=3):
                     'I authorize one additional cycle to finish these reviewed corrections.'}
 
 
-def test_user_grant_allows_exactly_one_additional_two_family_cycle():
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\r\n\r\n'])
+def test_user_grant_allows_exactly_one_additional_two_family_cycle(separator):
     comments = [_cycle_grant_comment()]
+    comments[0]['body'] = comments[0]['body'].replace('\n', separator)
     head, key = 'a' * 40, 'b' * 64
     assert rg.cycle_grant(comments, 42, head, key, rg.CodexRounds(3), 'openai', GRANT_NOW)
     fourth = rg.ReviewCycle(head, key, {'openai'})
@@ -5187,12 +5261,13 @@ def test_user_grant_allows_exactly_one_additional_two_family_cycle():
     assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
 
 
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
 @pytest.mark.parametrize('change', [
     'bot', 'app', 'outsider', 'quoted', 'other-head', 'other-key', 'other-pr',
     'expired', 'too-long', 'future', 'bad-date', 'short-reason', 'unknown-history',
     'wrong-position', 'unknown-family', 'deleted',
 ])
-def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change):
+def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change, newline):
     comment = _cycle_grant_comment()
     rounds, family = rg.CodexRounds(3), 'openai'
     comments = [comment]
@@ -5225,6 +5300,7 @@ def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(chang
         family = None
     elif change == 'deleted':
         comments = []
+    comment['body'] = comment['body'].replace('\n', newline)
     assert not rg.cycle_grant(comments, 42, 'a' * 40, 'b' * 64, rounds, family, GRANT_NOW)
 
 
@@ -5353,17 +5429,29 @@ def test_an_unlabelled_finding_counts_as_serious():
     assert rounds.spent == 1
 
 
-def test_the_backstop_bounds_a_review_that_never_converges():
-    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+@pytest.mark.parametrize("count", [10, 11, 20])
+def test_total_cycles_warn_without_blocking_useful_fix_reviews(count):
+    rounds = _cycles_with(*([["P1"]] * count))
     assert rounds.spent == 0
-    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=False, key="fix-key")
     assert not rounds.exhausted(joining=True)
+    assert "convergence warning: reassess scope" in rg.round_note(rounds)
+    assert "cap reached" not in rg.round_note(rounds)
+
+
+def test_redundancy_budget_still_blocks_after_convergence_warning():
+    rounds = _cycles_with(*([["P1"]] * 10), [], ["P2"], [])
+    assert rounds.spent == 3
+    assert rounds.exhausted(joining=False, key="new-key")
+    assert not rounds.exhausted(joining=True)
+    assert "cap reached" in rg.round_note(rounds)
+    assert "convergence warning" in rg.round_note(rounds)
 
 
 def test_the_round_note_says_when_serious_cycles_were_not_counted():
     rounds = _cycles_with(["P1"], [], ["P1"])
     assert rg.round_note(rounds) == (
-        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1)")
 
 
 def test_review_text_findings_keep_their_severity():
@@ -5396,7 +5484,7 @@ def test_a_clean_review_mentioning_labels_has_no_findings():
 
 def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
     """Three unproductive cycles, then one that found a P1: its fix gets a
-    full review without a grant (up to the backstop)."""
+    full review without a grant, including past the convergence warning."""
     rounds = _cycles_with([], ["P2"], [], ["P1"])
     assert rounds.spent == 3
     assert not rounds.exhausted(joining=False, key="fix-key")
@@ -5473,3 +5561,134 @@ def test_glob_unsafe_names_every_glob_character():
     for path in ("/a/[b]", "/a/b*", "/a/b?", "/a/{b}", "/a/b\\c"):
         assert _REAL_GLOB_UNSAFE(path)
     assert not _REAL_GLOB_UNSAFE("/Users/me/projects/wt/unitares-review")
+
+
+@pytest.mark.parametrize("text", [
+    "verified the prior [P1] fix; startup then failed",
+    rg.REVIEW_PROMPT,
+    "No open [P0] or [P1] issues were found before the connection closed",
+])
+def test_severity_mentions_in_failed_transcript_are_not_findings(text):
+    assert rg.partial_finding_count(text) == 0
+    failed = _comment(full_record("k", "FAILED", 0, False, "codex"))
+    failed["body"] += "\n" + text
+    assert rg.latest_matching([failed], "k").verdict == "FAILED"
+
+
+def test_exhausted_resume_provider_is_unavailable_without_another_attempt(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_review_locked", lambda *a: pytest.fail("retried exhausted provider"))
+    args = SimpleNamespace(budget=30, reviewer="claude", respect_provider_cooldown=True,
+                           failed_providers={"claude"})
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+
+
+def test_followup_dispatch_honors_exhaustion_before_entering_provider(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex', respect_provider_cooldown=True)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'failed_runs', lambda comments, key, provider: 3 if provider == 'codex' else 0)
+    monkeypatch.setattr(rg, '_review_locked', lambda *a: pytest.fail('retried exhausted follow-up provider'))
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+
+
+def test_disposed_partial_findings_recover_through_explicit_full_review(repo, monkeypatch):
+    prior = full_record('k', 'FINDINGS', 1, True, 'codex', scope='full-required')
+    prior.verdict = 'FAILED'  # latest_matching answers findings without inventing coverage
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', 'k', 'codex/x'))
+    monkeypatch.setattr(rg, 'current_record', lambda *a: prior)
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds())
+    monkeypatch.setattr(rg, 'review_budget', lambda rounds, *a: rounds)
+    monkeypatch.setattr(rg, '_review_locked', lambda *a: 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a, **kw: a[5])
+    args = SimpleNamespace(base='master', budget=30, fresh=False, reviewer='codex')
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+    assert prior.status()[0] == 'pending'
+    args.fresh = True
+    assert rg.cmd_review(args) == 0
+
+
+@pytest.mark.parametrize('output', [
+    'Scope is uncertain.\nSCOPE: FULL_REQUIRED',
+    'Scope is uncertain.\nSCOPE: FULL_REQUIRED\nVERDICT: CLEAN',
+])
+def test_interrupted_followup_scope_refusal_is_persisted_not_an_outage(repo, reviewed_followup, monkeypatch, output):
+    _, fix = reviewed_followup
+    posted = []
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (output, 'killed at the time budget'))
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Prior context')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
+    assert posted[0].scope == 'full-required' and posted[0].verdict == 'FAILED'
+
+
+
+
+@pytest.mark.parametrize('origin', ['scope-refusal', 'disposed-partial'])
+def test_failed_full_retry_does_not_erase_unresolved_full_requirement(origin):
+    required = full_record('k', 'FAILED' if origin == 'scope-refusal' else 'FINDINGS',
+                           0 if origin == 'scope-refusal' else 1, False, 'codex', scope='full-required')
+    comments = [_comment(required, text='Scope needs a full pass' if origin == 'scope-refusal' else '[P1] Unsafe caller')]
+    if origin == 'disposed-partial':
+        required.disposed = True
+        comments.append(_comment(required, text='1. rebutted: inspected the echoed transcript'))
+    failed = full_record('k', 'FAILED', 0, False, 'claude')
+    comments.append(_comment(failed, text='Provider quota unavailable'))
+    result = rg.latest_matching(comments, 'k')
+    assert result.verdict == 'FAILED' and result.scope == 'full-required'
+    assert result.status()[0] == 'pending'
+
+
+def test_completed_full_review_satisfies_requirement_even_before_old_findings_disposed():
+    partial = full_record('k', 'FINDINGS', 1, False, 'codex', scope='full-required')
+    comments = [_comment(partial, text='[P1] echoed old finding')]
+    full = full_record('k', 'CLEAN', 0, False, 'claude')
+    comments.append(_comment(full, text='Examined the complete implementation.'))
+    assert rg.latest_matching(comments, 'k').verdict == 'FINDINGS'
+    partial.disposed = True
+    comments.append(_comment(partial, text='1. rebutted: transcript echoed a previously fixed finding'))
+    assert rg.latest_matching(comments, 'k').verdict == 'CLEAN'
+
+
+def test_full_review_before_later_refusal_cannot_satisfy_that_requirement():
+    comments = [_comment(full_record('k', 'CLEAN', 0, False, 'claude')),
+                _comment(full_record('k', 'FAILED', 0, False, 'codex', scope='full-required')),
+                _comment(full_record('k', 'FAILED', 0, False, 'claude'))]
+    assert rg.latest_matching(comments, 'k').scope == 'full-required'
+    comments.append(_comment(full_record('k', 'CLEAN', 0, False, 'claude')))
+    assert rg.latest_matching(comments, 'k').verdict == 'CLEAN'
+
+
+def test_actual_native_full_review_clears_scope_requirement_but_claimed_native_comment_does_not():
+    required = _comment(full_record('k', 'FAILED', 0, False, 'claude', scope='full-required'))
+    native = rg.Record('k', 'CLEAN', 0, False, 'codex-native', head='a' * 40, scope='full')
+    assert not native.full()  # native APIs do not supply the reviewed base
+    assert rg.latest_matching([required, _comment(native)], 'k').scope == 'full-required'
+    assert rg.latest_matching([required], 'k', [native]).verdict == 'CLEAN'
+
+
+@pytest.mark.parametrize('disposition_scope', ['fix', 'legacy'])
+def test_invalid_followup_findings_disposal_preserves_full_requirement_through_failed_retry(disposition_scope):
+    original = rg.Record('k', 'FINDINGS', 1, False, 'codex', scope='fix')
+    answered = rg.Record('k', 'FINDINGS', 1, True, 'codex', scope=disposition_scope)
+    comments = [_comment(original, text='[P2] inspect this caller'),
+                _comment(answered, text='1. rebutted: caller was inspected'),
+                _comment(full_record('k', 'FAILED', 0, False, 'claude'))]
+    assert rg.latest_matching(comments, 'k').scope == 'full-required'
+
+
+@pytest.mark.parametrize('exit_note', ['exit 0', 'exit 1'])
+def test_failed_agy_json_findings_are_visible_without_completed_coverage(repo, monkeypatch, exit_note):
+    payload = json.dumps({'status': 'ERROR', 'response': '[P1] Unsafe caller.\nVERDICT: FINDINGS(1)',
+                          'error': 'The stream was interrupted'})
+    assert rg.partial_finding_count(payload) == 1
+    monkeypatch.setattr(rg, 'diff_key', lambda *a: 'k')
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (payload, exit_note))
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, heading, text: posted.append((rec, text)))
+    args = SimpleNamespace(base='master', budget=30)
+    assert rg._review_locked(args, 1, 'k', 'antigravity') == 1
+    rec, text = posted[0]
+    assert rec.verdict == 'FINDINGS' and rec.scope == 'full-required'
+    assert text.startswith('[P1] Unsafe caller.') and 'no completed review coverage' in text
