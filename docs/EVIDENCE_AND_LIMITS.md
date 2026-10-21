@@ -21,7 +21,8 @@ This page brings those results together with their sources, dates, and scope.
 | Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
 
 Comparative benefit over other review or handoff approaches remains
-unmeasured. Deployment counts measure recorded activity, not uptime or
+unmeasured, as do complete reconstruction across retention and authorization
+boundaries and whether agents prefer this workflow. Deployment counts measure recorded activity, not uptime or
 independent trials. For predictive lift, pause benefit, and cross-operator
 verification, see the [evaluation boundaries](#evaluation-boundaries).
 

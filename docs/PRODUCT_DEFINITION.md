@@ -45,8 +45,8 @@ and behavioral state and policy. Agents own their reasoning and execution.
 
 **UNITARES Resident** is a separate first-party agent project for persistent
 conversations, provider and tool adapters, scheduling, task queues, and operator
-interfaces. Its repository and runtime skeleton are shipped; the usable agent
-product is not yet shipped. It uses the same public MCP/SDK contract as any
+interfaces. Its repository and runtime skeleton are shipped; the
+usable agent is in development. It uses the same public MCP/SDK contract as any
 other harness, with no direct database access, Core-internal imports, or
 privileged measurement or policy path.
 
@@ -92,29 +92,20 @@ fields for provenance labels, uninitialized assessments, and fleet-calibration
 scope. The contract's [enforcement status](trust-contract.md#7-enforcement)
 defines that coverage and the remaining work.
 
-## Evidence and limits
+## Evidence
 
 The [captured two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md)
-shows attribution, outcome binding, closure, and successor retrieval using
-real server responses for an illustrative task. The
+shows attribution, outcome binding, closure, and successor retrieval with real
+server responses. The
 [review retrospective](evaluations/review-correction-traces-2026-09-21.md)
-traces findings to fixes that preserve evidence grades, prevent formatting
-repair from manufacturing approval, and keep unresolved findings visible.
-It also records a review condition implemented ten days after its originating
-review opened.
+traces findings to the fixes they produced: evidence grades preserved,
+formatting repair kept from manufacturing approval, unresolved findings kept
+visible, and a review condition carried into an implementation ten days after
+its review opened. Governed pauses are delivered and audited.
 
-These demonstrate working mechanisms and specific corrections. Comparative
-coordination benefit, complete reconstruction, and task-outcome improvement
-remain unmeasured. Agent preference has not been established. Reconstruction
-depends on captured evidence,
-retention, and caller authorization; reported claims need independent evidence
-to establish correctness.
-
-A governed pause has been delivered; its benefit remains untested. The frozen
-outcome evaluation did not establish predictive lift, and unresolved
-read-specific power leaves weak lift open. The [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries)
-preserves the dated pause-delivery audit, evaluation results, and registered
-read conditions. The [scope and threat model](SCOPE_AND_THREAT_MODEL.md)
-covers motivated agents concealing or gaming signals. Use the
-[Reviewer Guide](REVIEWER_GUIDE.md) to inspect and exercise the demonstrated
+Comparative benefit and task-outcome improvement remain unmeasured. The
+[evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the
+evaluation results and registered read conditions, the
+[scope and threat model](SCOPE_AND_THREAT_MODEL.md) covers agents concealing or
+gaming signals, and the [Reviewer Guide](REVIEWER_GUIDE.md) exercises the
 workflow.
