@@ -101,8 +101,8 @@ server responses. The
 traces findings to the fixes they produced: evidence grades preserved,
 formatting repair kept from manufacturing approval, unresolved findings kept
 visible, and a review condition carried into an implementation ten days after
-its review opened. A governed pause has been delivered, and pause delivery is
-audited.
+its review opened. Governed pauses are delivered: 370+ are on record since
+April 2026, the most recent on 2026-09-21.
 
 Comparative benefit and task-outcome improvement remain unmeasured. The
 [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the

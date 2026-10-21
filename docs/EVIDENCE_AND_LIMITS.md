@@ -218,9 +218,14 @@ independent unit, power, decision rule, and read protocol.
 
 ### Pause delivery and incident prevention
 
-A governed pause landed on 2026-08-09. The earlier 2026-08-06 audit found that a
-cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery;
-the current rate has not been re-measured. See
+Governed pauses are delivered. The audit log holds 370+ `lifecycle_paused`
+events since April 2026, every one triggered by governance (energy-integrity
+imbalance, the CIRS risk ceiling, high-risk verdicts, coherence) and none by an
+operator; 19 fell between 2026-08-09 and 2026-09-21, the most recent pause on
+record (queried 2026-10-21; retention starts 2026-04-01, so earlier pauses are
+not counted). A 2026-08-06 audit found that a cadence window had downgraded 195
+of 218 recorded pause decisions (89.4%) before delivery; the current rate has
+not been re-measured. See
 [ledger rows 24, 27, and 28](ontology/eisv-proprioception-contract.md).
 Incident prevention and benefit from pausing remain untested: no
 governed-versus-ungoverned comparison has shown an incident prevented or an
