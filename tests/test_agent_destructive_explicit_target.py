@@ -699,3 +699,12 @@ def test_rest_prebind_keeps_writes_and_named_filters(arguments, path, monkeypatc
     _bound_to, sent = _rest_prebind("knowledge", arguments, path, monkeypatch)
     expected = TARGET if arguments.get("agent_id") else CALLER
     assert unwrapped_view(sent)["agent_id"] == expected
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize("arguments", [{"action": "list"}, {"action": "get"}])
+def test_rest_prebind_keeps_dialectic_reads_scoped_to_the_caller(arguments, path, monkeypatch):
+    """dialectic list/get read an omitted agent_id as the caller's sessions on
+    REST; the knowledge-read exemption must not change that."""
+    _bound_to, sent = _rest_prebind("dialectic", arguments, path, monkeypatch)
+    assert sent["agent_id"] == CALLER
