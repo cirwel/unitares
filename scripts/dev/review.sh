@@ -18,6 +18,7 @@
 # Exit 2: unavailable/incomplete review; report an explicit unreviewed handoff.
 # Exit 3: a review passed, but a security-sensitive diff still needs a second
 #         model family; run one of the --fresh --reviewer commands it prints.
+# Exit 4: opt-in --provider-outage-exit only; provider unavailable after context validation.
 
 set -euo pipefail
 

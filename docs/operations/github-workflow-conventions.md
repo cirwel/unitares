@@ -911,6 +911,12 @@ after a recorded readiness parks the command rather than undoing the removal. Su
 must already be released; ownership handoffs and operator decisions remain
 explicit prerequisites.
 
+Delivery requests a distinct provider-outage exit (`review.sh
+--provider-outage-exit`, code 4). Incomplete history, pending review, declined
+scope and partial findings retain code 2 and park delivery. Missing base objects
+are fetched through the App/read-only route before policy and diff inspection;
+the plan can refresh that base history too.
+
 ### 3. Parallel / simultaneous work
 
 This convention exists because a lot of work happens concurrently. Two

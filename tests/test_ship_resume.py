@@ -90,7 +90,7 @@ def test_resume_joins_evidence_then_queues_without_commit_push_or_full_tests(del
     _, calls = delivery
     execute()
     commands = [args for args, _ in calls]
-    assert ("review", "--reviewer", "claude") in commands
+    assert ("review", "--provider-outage-exit", "--reviewer", "claude") in commands
     assert commands.index(("git", "prepr")) < commands.index(("gh", "pr", "ready", "42"))
     assert commands[-1] == ("git", "closeout", "--strict")
     assert any("--add-label" in args for args in writes(calls))
@@ -365,7 +365,7 @@ def test_advisory_outage_exception_keeps_mandatory_family_gate(delivery, monkeyp
     original = ship.run
     def run(*args, **kwargs):
         if args[0] == "review":
-            raise ship.CommandFailed(args, Mock(returncode=2, stdout="[review] UNREVIEWED: provider unavailable", stderr=""))
+            raise ship.CommandFailed(args, Mock(returncode=4, stdout="[review] UNREVIEWED: provider unavailable", stderr=""))
         return original(*args, **kwargs)
     monkeypatch.setattr(ship, "run", run)
     monkeypatch.setattr(ship, "mandatory_review", lambda _: mandatory)
@@ -401,7 +401,7 @@ def test_advisory_exception_receipt_is_not_reposted(delivery, monkeypatch):
     original = ship.run
     def run(*args, **kwargs):
         if args[0] == "review":
-            raise ship.CommandFailed(args, Mock(returncode=2, stdout="[review] provider unavailable", stderr=""))
+            raise ship.CommandFailed(args, Mock(returncode=4, stdout="[review] provider unavailable", stderr=""))
         return original(*args, **kwargs)
     monkeypatch.setattr(ship, "run", run)
     execute()
@@ -492,3 +492,36 @@ def test_renaming_reserved_document_keeps_its_source_in_scope(tmp_path, monkeypa
     assert set(ship.changed_paths({"baseRefOid": base})) == {
         "docs/proposals/registered/stop-rule.md", "docs/operations/stop-rule.md",
     }
+
+
+def test_unavailable_historical_commit_never_uses_advisory_exception(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[0] == "review":
+            raise ship.CommandFailed(args, Mock(returncode=2,
+                stdout="[review] UNREVIEWED: review history is incomplete: historical commit unavailable", stderr=""))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.CommandFailed):
+        execute()
+    assert not writes(calls)
+
+
+def test_missing_base_is_fetched_before_policy_inspection(delivery, monkeypatch):
+    _, calls = delivery
+    original = ship.run
+    fetched = False
+    def run(*args, **kwargs):
+        nonlocal fetched
+        if args[:2] == ("git", "cat-file") and not fetched:
+            raise ship.CommandFailed(args, Mock(returncode=1, stdout="", stderr="missing base"))
+        if args[:2] == ("git", "fetch"):
+            fetched = True
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    execute()
+    fetch = next(i for i, (args, _) in enumerate(calls) if args[:2] == ("git", "fetch"))
+    policy = next(i for i, (args, _) in enumerate(calls) if args[:2] == ("git", "show"))
+    assert fetched and fetch < policy
+    assert calls[fetch][1] == {"remote": True, "read_only": True}

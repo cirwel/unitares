@@ -100,6 +100,7 @@ UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 #: A review passed, but a security-sensitive diff still needs a second model
 #: family (review_policy.json). Not an outage: the next step is the author's.
 NEEDS_SECOND_FAMILY = 3
+PROVIDER_OUTAGE = 4  # opt-in only; unlike exit 2, validated context reached an unavailable provider
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # GitHub-issued App ID -> bot actor ID. This is review-evidence admission
 # only, configured in the trusted gate checkout, never in a PR's marker.
@@ -3411,12 +3412,14 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     Findings stop routing: trying another model must never erase a review we
     dislike. An explicit --reviewer retries that provider despite cooldown.
     """
+    args.provider_unavailable = False
     providers = [preferred]  # one provider per explicit attempt; no automatic spending cascade
     deadline = time.monotonic() + args.budget
     available = []
     disabled = disabled_providers()
     for provider in providers:
         if provider in disabled:
+            args.provider_unavailable = True
             print(f"[review] skipping {provider}: disabled repo-wide "
                   f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
             continue
@@ -3427,6 +3430,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
             continue
         reason = provider_cooldown(provider)
         if reason and getattr(args, "reviewer", None) != provider:
+            args.provider_unavailable = True
             print(f"[review] skipping {provider}: {reason} cooldown; "
                   f"use --reviewer {provider} to retry after restoring access")
         else:
@@ -3438,6 +3442,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         attempt = argparse.Namespace(**vars(args))
         attempt.budget = max(1, remaining // (len(available) - i))
         result = _review_locked(attempt, pr, key, provider)
+        args.provider_unavailable = getattr(attempt, "provider_unavailable", False)
         if result != UNREVIEWED:
             # second_family_pass needs to know this without re-reading the
             # comment it just posted (GitHub reads can lag a fresh write).
@@ -3519,6 +3524,11 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials, model, effort)
     minutes = (time.monotonic() - t0) / 60
+    # Only a provider execution failure after context/history validation can
+    # use the ordinary advisory exception. Missing objects, pending reviews,
+    # scope refusals and partial findings must retain the generic exit 2.
+    args.provider_unavailable = (note != "exit 0" and parse_verdict(text) is None
+                                 and not re.search(r"\[P[0-3]\]", text))
     parsed = parse_verdict(text) if note == "exit 0" else None
     scope_declined = bool(followup and parsed is not None
                           and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
@@ -4035,6 +4045,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
+    r.add_argument("--provider-outage-exit", action="store_true",
+                   help="return 4 only for an unavailable provider after context validation; other unreviewed cases stay 2")
 
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")
@@ -4089,8 +4101,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     try:
-        return {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
-                "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+        result = {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
+                  "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+        if (args.cmd == "review" and args.provider_outage_exit and result == UNREVIEWED
+                and getattr(args, "provider_unavailable", False)):
+            return PROVIDER_OUTAGE
+        return result
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
         return 0

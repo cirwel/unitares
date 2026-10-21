@@ -81,6 +81,15 @@ def mandatory_review(pr: dict) -> bool:
     return any(fnmatchcase(path, pattern) for path in changed_paths(pr) for pattern in patterns)
 
 
+def ensure_base(pr: dict) -> None:
+    commit = f"{pr['baseRefOid']}^{{commit}}"
+    try:
+        run("git", "cat-file", "-e", commit)
+    except CommandFailed:
+        run("git", "fetch", "--no-tags", "origin", pr["baseRefName"], remote=True, read_only=True)
+        run("git", "cat-file", "-e", commit)
+
+
 def reserved_hold(pr: dict) -> None:
     labels = {label["name"] for label in pr["labels"]}
     if labels & {"governance-sensitive", "automerge-hold", "no-auto-merge", "no-auto-review", "operator-armed"}:
@@ -225,6 +234,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if pr["state"] == "MERGED":
         print(f"[ship] already merged: {pr['url']}")
         return
+    ensure_base(pr)
     reserved_hold(pr)
     recovering_renewal = approval_hold(pr, agent)
     if plan:
@@ -240,20 +250,16 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     unreviewed = None
     try:
         if shutil.which("unitares-github"):
-            run("review", *(["--reviewer", reviewer] if reviewer else []), remote=True)
+            run("review", "--provider-outage-exit", *(["--reviewer", reviewer] if reviewer else []), remote=True)
         else:
-            run("./scripts/dev/review.sh", *(["--reviewer", reviewer] if reviewer else []))
+            run("./scripts/dev/review.sh", "--provider-outage-exit", *(["--reviewer", reviewer] if reviewer else []))
     except CommandFailed as error:
-        # Exit 2 can also mean a pending native review or declined follow-up;
-        # those are not provider outages. Known findings and mandatory model
-        # family coverage remain blockers. CI is independently checked below.
-        text = error.output.lower()
-        unavailable = any(word in text for word in ("unavailable", "disabled", "no reviewer completed"))
-        unfinished = any(word in text for word in ("pending", "still running", "scope was declined", "full_required", "scope not confirmed"))
-        if (error.returncode != 2 or not reviewer or not unavailable or unfinished
-                or mandatory_review(pr)):
+        # Exit 4 is explicitly issued by the review controller after validated
+        # context reached an unavailable provider. Exit 2 never authorizes the
+        # exception: its text may describe missing objects or hidden findings.
+        if error.returncode != 4 or not reviewer or mandatory_review(pr):
             raise
-        unreviewed = f"Selected reviewer {reviewer} did not complete (review command exit 2)."
+        unreviewed = f"Selected reviewer {reviewer} was unavailable (review command provider-outage exit 4)."
     if wait:
         # Cancelled push checks can make --watch exit nonzero. The required
         # checks and latest PR workflow runs below remain authoritative.
@@ -313,7 +319,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reviewer", choices=["codex", "claude", "antigravity"])
+    parser.add_argument("--reviewer", choices=["codex", "claude", "antigravity"], default=os.environ.get("UNITARES_REVIEWER"))
     parser.add_argument("--wait", action="store_true", help="join running CI before inspecting readiness")
     parser.add_argument("--plan", action="store_true", help="inspect ownership and holds without writing")
     args = parser.parse_args()

@@ -1535,12 +1535,14 @@ def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeyp
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args[1]))
     args = SimpleNamespace(base="master", budget=30, reviewer=None)
     assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert args.provider_unavailable is True
     assert calls == ["claude"]
     assert [rec.verdict for rec in records] == ["FAILED"]
     calls.clear()
     assert rg.review_with_fallback(args, 2, "k", "claude") == rg.UNREVIEWED
     assert calls == []
     assert "skipping claude: quota cooldown" in capsys.readouterr().out
+    assert args.provider_unavailable is True
 
 
 def test_findings_stop_fallback(repo, monkeypatch):
@@ -1548,6 +1550,15 @@ def test_findings_stop_fallback(repo, monkeypatch):
     monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 1)
     assert rg.review_with_fallback(SimpleNamespace(budget=30), 1, "k", "claude") == 1
     assert calls == ["claude"]
+
+
+def test_partial_findings_during_provider_failure_are_not_an_advisory_outage(repo, monkeypatch):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "run_reviewer", lambda *a: ("[P1] Unsafe access path found before failure", "exit 1"))
+    monkeypatch.setattr(rg, "post_record", lambda *a: None)
+    args = SimpleNamespace(base="master", budget=30, reviewer="codex")
+    assert rg.review_with_fallback(args, 1, "k", "codex") == rg.UNREVIEWED
+    assert args.provider_unavailable is False
 
 
 def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
@@ -4819,6 +4830,27 @@ def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, mo
     assert rg.cmd_review(args) == 0
     assert called[0].from_head == fix.from_head
     assert all(c['body'] in args.followup_reviews for c in comments)
+
+
+@pytest.mark.parametrize('opt_in,provider_unavailable,expected', [
+    (False, True, 2), (True, True, 4), (True, False, 2),
+])
+def test_provider_outage_exit_is_explicit_and_not_inferred_from_error_text(monkeypatch, opt_in, provider_unavailable, expected):
+    def command(args):
+        args.provider_unavailable = provider_unavailable
+        print('UNREVIEWED: unavailable historical commit; review history incomplete')
+        return rg.UNREVIEWED
+    monkeypatch.setattr(rg, 'cmd_review', command)
+    assert rg.main(['review', *(['--provider-outage-exit'] if opt_in else [])]) == expected
+
+
+def test_declined_followup_cannot_report_provider_outage(repo, reviewed_followup, monkeypatch):
+    _, fix = reviewed_followup
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: ('Scope is uncertain.\nSCOPE: FULL_REQUIRED\nVERDICT: CLEAN', 'exit 0'))
+    monkeypatch.setattr(rg, 'post_record', lambda *a: None)
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Original review')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == rg.UNREVIEWED
+    assert args.provider_unavailable is False
 
 
 def test_repeated_followups_recheck_cumulative_delta(repo, reviewed_followup):
