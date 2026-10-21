@@ -229,7 +229,7 @@ async def replay(args):
     with patch("src.storage.knowledge_graph_age.datetime", FrozenClock), \
          patch("src.mcp_handlers.knowledge.handlers.datetime", FrozenClock), \
          patch("src.retrieval.hybrid_enabled", return_value=True), \
-         patch("src.retrieval.graph_expansion_enabled", return_value=False), \
+         patch("src.retrieval.related_expansion_enabled", return_value=False), \
          patch("src.reranker.reranker_enabled", return_value=False):
         for name, options in VARIANTS.items():
             # Preserve pre-fix production weights as the experimental baseline.
