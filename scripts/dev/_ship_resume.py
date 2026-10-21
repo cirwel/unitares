@@ -91,7 +91,8 @@ def reserved_hold(pr: dict) -> None:
     # The contract delegates docs, tests and tooling delivery. Runtime auth or
     # identity changes can require an operator decision even when absent from
     # the narrower governance-sensitivity manifest. Do not infer that decision.
-    delegated = ("docs/", "tests/", "scripts/dev/", "scripts/diagnostics/", ".github/workflows/")
+    delegated = ("docs/operations/", "docs/dev/", "docs/changelog.d/", "tests/",
+                 "scripts/dev/", "scripts/diagnostics/", ".github/workflows/")
     if any(not path.startswith(delegated) for path in changed_paths(pr)):
         raise Parked("Automatic readiness is limited to delegated docs/tests/tooling paths; operator decisions stay explicit.")
     # Read the manifest from the actual base commit, never the branch's copy.
@@ -108,14 +109,27 @@ def reserved_hold(pr: dict) -> None:
             raise Parked(f"Operator merge required: {path}: {why}")
 
 
-def approval_hold(pr: dict) -> None:
+def label_events(pr: dict) -> list[dict]:
     pages = json.loads(run("gh", "api", f"repos/{{owner}}/{{repo}}/issues/{pr['number']}/events?per_page=100",
                            "--paginate", "--slurp", remote=True, read_only=True))
-    events = [event for page in pages for event in page
-              if event.get("event") in {"labeled", "unlabeled"}
-              and event.get("label", {}).get("name") == "approved-to-merge"]
-    if events and max(events, key=lambda event: event["id"])["event"] == "unlabeled":
+    return sorted((event for page in pages for event in page
+                   if event.get("event") in {"labeled", "unlabeled"}
+                   and event.get("label", {}).get("name") == "approved-to-merge"),
+                  key=lambda event: event["id"])
+
+
+def renewal_marker(pr: dict, agent: str, event_id: int) -> str:
+    return f"<!-- unitares-ship-renewal head={pr['headRefOid']} agent={agent} removed_event={event_id} -->"
+
+
+def approval_hold(pr: dict, agent: str) -> bool:
+    events = label_events(pr)
+    if events and events[-1]["event"] == "unlabeled":
+        marker = renewal_marker(pr, agent, events[-1]["id"])
+        if any(marker in comment["body"] for comment in pr["comments"]):
+            return True  # this exact head's journalled, interrupted renewal
         raise Parked("Queue approval was removed; label history preserves this hold across subsequent pushes.")
+    return False
 
 
 def check_ci(pr: dict) -> None:
@@ -163,7 +177,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         print(f"[ship] already merged: {pr['url']}")
         return
     reserved_hold(pr)
-    approval_hold(pr)
+    recovering_renewal = approval_hold(pr, agent)
     if plan:
         print(f"[ship] resume {pr['url']} at {head}: review -> CI -> prepr -> ready/queue -> closeout")
         return
@@ -172,7 +186,7 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     prior_readiness = any("<!-- unitares-ship-ready " in comment["body"]
                           and f"agent={agent} -->" in comment["body"] for comment in pr["comments"])
     labelled = "approved-to-merge" in {label["name"] for label in pr["labels"]}
-    if prior_readiness and not labelled:
+    if prior_readiness and not labelled and not recovering_renewal:
         raise Parked("Queue approval was removed after readiness; do not overwrite that hold automatically.")
     unreviewed = None
     try:
@@ -211,9 +225,9 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
         raise Parked("PR changed before readiness; resume against the current head.")
     reserved_hold(final)
     check_ci(final)
-    approval_hold(final)
+    recovering_renewal = approval_hold(final, agent)
     final_labelled = "approved-to-merge" in {label["name"] for label in final["labels"]}
-    if labelled and not final_labelled:
+    if labelled and not final_labelled and not recovering_renewal:
         raise Parked("Queue approval was removed during validation; leave the hold in place.")
     advisory_marker = f"<!-- unitares-ship-unreviewed head={head} agent={agent} -->"
     if unreviewed and not any(advisory_marker in c["body"] for c in final["comments"]):
@@ -226,7 +240,16 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if final_labelled and not recorded:
         # A label from before a push must be deliberately renewed after the
         # new head passes. The receipt below makes repeated resume idempotent.
+        before = label_events(final)
+        previous_event = before[-1]["id"] if before else 0
         run("gh", "pr", "edit", str(pr["number"]), "--remove-label", "approved-to-merge", remote=True)
+        new_events = [event for event in label_events(final) if event["id"] > previous_event]
+        if len(new_events) != 1 or new_events[0]["event"] != "unlabeled":
+            raise Parked("Renewal removal is ambiguous or not yet visible; inspect the label history before restoring approval.")
+        run("gh", "pr", "comment", str(pr["number"]), "--body",
+            renewal_marker(final, agent, new_events[0]["id"])
+            + f"\nApproval renewal removed this exact event before re-adding.\nUNITARES agent: {agent}",
+            remote=True)
     if not final_labelled or not recorded:
         run("gh", "pr", "edit", str(pr["number"]), "--add-label", "approved-to-merge", remote=True)
     if not recorded:

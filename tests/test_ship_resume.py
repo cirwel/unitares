@@ -25,6 +25,7 @@ def delivery(monkeypatch):
                                "status": "COMPLETED", "conclusion": "SUCCESS"}],
     }
     calls = []
+    events = []
     def run(*args, **kwargs):
         calls.append((args, kwargs))
         if args == ("git", "branch", "--show-current"):
@@ -38,11 +39,19 @@ def delivery(monkeypatch):
                 return json.dumps({"second_family_paths": ["scripts/dev/review_gate.py"]})
             return "tests/test_policy.py\tENFORCE\toperator boundary\n"
         if args[:2] == ("git", "diff") and "--name-only" in args:
-            return "docs/change.md\0"
+            return "docs/dev/change.md\0"
         if args[:2] == ("git", "diff"):
             return ""
         if args[:2] == ("gh", "api"):
-            return "[[]]"
+            return json.dumps([events])
+        if args[:3] == ("gh", "pr", "edit"):
+            event = "unlabeled" if "--remove-label" in args else "labeled"
+            events.append({"id": len(events) + 1, "event": event, "label": {"name": "approved-to-merge"}})
+            pr["labels"] = [] if event == "unlabeled" else [{"name": "approved-to-merge"}]
+        if args[:3] == ("gh", "pr", "ready"):
+            pr["isDraft"] = False
+        if args[:3] == ("gh", "pr", "comment"):
+            pr["comments"].append({"body": args[args.index("--body") + 1]})
         if args[:3] == ("gh", "pr", "checks"):
             return json.dumps([{"name": "test", "bucket": "pass"}])
         if args[:3] == ("gh", "run", "list"):
@@ -186,6 +195,49 @@ def test_runtime_identity_change_requires_explicit_operator_decision(delivery, m
     _, calls = delivery
     monkeypatch.setattr(ship, "changed_paths", lambda _: ["src/mcp_handlers/identity/handlers.py"])
     with pytest.raises(ship.Parked, match="operator decisions stay explicit"):
+        execute()
+    assert not writes(calls)
+
+
+def test_registered_scientific_rule_never_queues_as_a_docs_fix(delivery, monkeypatch):
+    _, calls = delivery
+    monkeypatch.setattr(ship, "changed_paths", lambda _: ["docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md"])
+    with pytest.raises(ship.Parked, match="operator decisions stay explicit"):
+        execute()
+    assert not writes(calls)
+
+
+def test_interrupted_renewal_can_resume_its_exact_journalled_removal(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    original = ship.run
+    failed = False
+    def run(*args, **kwargs):
+        nonlocal failed
+        if "--add-label" in args and not failed:
+            failed = True
+            raise ship.CommandFailed(args, Mock(returncode=1, stdout="", stderr="transient network error"))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.CommandFailed):
+        execute()
+    assert not pr["labels"]
+    assert any("removed_event=1" in c["body"] for c in pr["comments"])
+    execute()
+    assert pr["labels"] == [{"name": "approved-to-merge"}]
+    assert sum("--remove-label" in args for args in writes(calls)) == 1
+
+
+def test_later_external_veto_does_not_match_renewal_journal(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["comments"] = [{"body": ship.renewal_marker(pr, AGENT, 1)}]
+    original = ship.run
+    def run(*args, **kwargs):
+        if args[:2] == ("gh", "api"):
+            return json.dumps([[{"id": 3, "event": "unlabeled", "label": {"name": "approved-to-merge"}}]])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.Parked, match="approval was removed"):
         execute()
     assert not writes(calls)
 

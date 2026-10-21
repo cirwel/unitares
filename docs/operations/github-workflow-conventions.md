@@ -887,8 +887,10 @@ the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
 Without `--wait`, pending validation exits 2 with the command to resume later.
 
 The ownership footer must match the bound UUID. Automatic completion is limited
-to `docs/`, `tests/`, `scripts/dev/`, `scripts/diagnostics/`, and
-`.github/workflows/`; runtime/auth/identity changes keep their operator decision.
+to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
+`scripts/diagnostics/`, and `.github/workflows/`. Scientific proposals, registered
+stop rules, identity ontology and public-site prose remain outside that lane,
+along with runtime/auth/identity changes and their operator decisions.
 Dirty work, a different local or remote head, open findings, pending review or CI,
 incomplete mandatory family coverage, explicit holds, capability classification,
 and governance-sensitive paths park delivery. An unavailable selected reviewer
@@ -898,8 +900,10 @@ requires another inspection. Successful readiness is recorded against the head
 on the PR; repeating resume rechecks the live evidence without renewing the
 queue label. Approval-removal event history is read across all PR heads, even
 when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
-after validation, covering a follow-up push. Removing approval after a recorded
-readiness parks the command rather than undoing the removal. Surface claims
+after validation, covering a follow-up push. The exact removal event is journalled
+before re-adding the label, so a failed addition can resume for that same head;
+an ambiguous removal or a later external veto stays parked. Removing approval
+after a recorded readiness parks the command rather than undoing the removal. Surface claims
 must already be released; ownership handoffs and operator decisions remain
 explicit prerequisites.
 
