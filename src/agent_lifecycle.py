@@ -53,7 +53,8 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
             # we've seen prior activity — fresh-onboard agents stay update_count=0
             # so downstream "no measured trajectory" guards still trigger.
             # Lineage is recorded via meta.parent_agent_id but never transplants
-            # state; see docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
+            # state; design note: `git show ce8879dc3^:docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md`
+            # (removed from the public tree in ce8879dc3)
             monitor._needs_hydration = prior_activity
             if prior_activity:
                 monitor._cold_start_confirmation_lineage_status = "hydration_pending"

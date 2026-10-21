@@ -10,7 +10,7 @@ an analogy or proposal is not mistaken for a deployed contract.
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [product](PRODUCT_DEFINITION.md) → [architecture](UNIFIED_ARCHITECTURE.md) → [interface](INTERFACE_CONTRACT.md) → [evidence and limits](EVIDENCE_AND_LIMITS.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [product](PRODUCT_DEFINITION.md) → [architecture: the record's layers](UNIFIED_ARCHITECTURE.md) → [interface](INTERFACE_CONTRACT.md) → [evidence and limits](EVIDENCE_AND_LIMITS.md) |
 | **Integrating an agent client** | [`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md) → [`integration/CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) → [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
@@ -35,8 +35,10 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`CAPABILITIES_AND_DEPLOYMENT.md`](CAPABILITIES_AND_DEPLOYMENT.md)** — core workflow versus advanced capabilities, deployment prerequisites, and discovery versus readiness.
 
 - **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the Core/userland boundary, MCP's place in the stack, identity, claims/evidence, review, outcomes, and reconstruction, and the honest limits. Start here when the architecture nouns aren't landing.
-- **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
-- **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
+- **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc, organized around the record: userlands and interfaces, then the core layers (identity and lineage, findings and the knowledge graph, review, outcomes, policy and the EISV instrument), coordination, and storage, with each layer's maturity. Start here for architecture.
+- **[`EISV_COMPUTATION.md`](EISV_COMPUTATION.md)** — the owner of the EISV instrument: how each check-in's state estimate, risk, and margin are computed, the warmup stages, and what the evidence does and does not show.
+- **[`FLAGS.md`](FLAGS.md)** — generated catalog of `UNITARES_*` / `GOVERNANCE_*` environment reads and their reader fallbacks.
+- **[`REPO_SCOPE.md`](REPO_SCOPE.md)** — what belongs in this repository and what belongs in an operator's own deployment repository.
 - **[`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md)** — versioned, transport-neutral capability names and the boundary between tool reachability and host lifecycle integration.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
@@ -45,7 +47,6 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named cross-operator blocker. The root README and the public landing page link here rather than summarizing it.
 - **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
-- **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
 ### Subsystem guides
@@ -116,7 +117,51 @@ For people working on UNITARES itself, not using it.
 - [`TOOL_REFERENCE.md`](dev/TOOL_REFERENCE.md) — generated: what every tool does, with its identity requirement, timeouts, and other names
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 
+### `releases/` — release notes and errata
+
+Per-release notes and post-release errata, for example [`releases/3.4.0.md`](releases/3.4.0.md). [`CHANGELOG.md`](CHANGELOG.md) is the cumulative history.
+
 ## Research, provenance, and optional interpretation
+
+### `ontology/eisv-telemetry-envelope-v1.md` — EISV telemetry envelope
+
+[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)
+is the versioned measurement → derivation → policy → enforcement provenance
+stored with each new state row. It belongs to the EISV instrument; read it after
+[`EISV_COMPUTATION.md`](EISV_COMPUTATION.md).
+
+### `evaluations/` and `evaluation/` — dated evaluation records
+
+Study protocols, enrollments, schemas and results, one subfolder per study.
+[`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) is the reader's index; the
+subfolders are:
+
+- [`accountability-journey/`](evaluations/accountability-journey/) — accountability-journey rehearsal (mechanism validation only)
+- [`accountable-coordination-ablation/`](evaluations/accountable-coordination-ablation/) — draft plumbing pilot plan
+- [`assurance-cases/`](evaluations/assurance-cases/) — draft outcome-binding assurance case
+- [`ax-dogfood/`](evaluations/ax-dogfood/) — exploratory agent-experience dogfood read
+- [`eisv-ei-referent/`](evaluations/eisv-ei-referent/), [`eisv-i-rest-live-read/`](evaluations/eisv-i-rest-live-read/), [`eisv-s-faithfulness/`](evaluations/eisv-s-faithfulness/) — EISV coordinate studies
+- [`eisv-incremental-value/`](evaluations/eisv-incremental-value/) — episode and federation-pilot schemas
+- [`kg-agent-adoption/`](evaluations/kg-agent-adoption/) — enrollment schema and canary receipts
+- [`orientation-constraint-set/`](evaluations/orientation-constraint-set/) — diagnostic orientation constraint set: enrollments and registered results
+- [`production-snapshots/`](evaluations/production-snapshots/) — machine-readable snapshots behind [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)
+- [`relational-calibration-instrument-supply/`](evaluations/relational-calibration-instrument-supply/) — registered instrument-supply read
+- [`review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md) — the 20-PR review retrospective listed above
+
+[`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md)
+labels what dialectic reviewer antithesis messages actually do.
+
+### `analysis/` — dated audits and one-off reads
+
+Point-in-time audits and measurement reads (for example the
+[paper evidence audit](analysis/paper-evidence-audit-2026-10-11.md)). Each file
+states its own scope and date; none is a deployed contract.
+
+### `plans/` — dated plans and review records
+
+Execution plans and point-in-time review records, for example the
+[EISV instrument-quality sequence](plans/eisv-instrument-quality-2026-10-13.md).
+Each carries its own status line; a plan authorizes nothing beyond what it states.
 
 ### `proposals/` — internal RFCs and decision history
 

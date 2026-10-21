@@ -494,7 +494,7 @@ Repository evidence:
 - [`EVIDENCE_AND_LIMITS.md`](../EVIDENCE_AND_LIMITS.md)
 - [`SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md)
 - [`CAPABILITIES_AND_DEPLOYMENT.md`](../CAPABILITIES_AND_DEPLOYMENT.md)
-- [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md)
+- [`competitive-analysis-2026-06.md`](archive/competitive-analysis-2026-06.md)
 - [Competitive claims map, PR #2256](https://github.com/cirwel/unitares/pull/2256)
 - [Cross-agent review of this audit, PR #2258](https://github.com/cirwel/unitares/pull/2258)
 - [`independent-operator-cohort-preregistration-v0.md`](../proposals/registered/independent-operator-cohort-preregistration-v0.md)

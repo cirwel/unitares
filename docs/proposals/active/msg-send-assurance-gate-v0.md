@@ -96,6 +96,50 @@ as untrusted input with preserved provenance.
 changed deadline on retry is a conflict, so a retry cannot silently extend an
 operation's life.
 
+**Q6. Where does the wake address live?** (added 2026-10-20) Waking or
+resuming a specific agent needs its harness session id (the handle
+`claude --resume` and `codex exec resume` take). Governance knows only the
+agent uuid. Today the link exists only in the client cache
+`~/.unitares/session-<harness_session_id>.json`, written after onboarding:
+about 1,254 files, covering 41% of the last 30 days' Claude sessions, with no
+retention. The server stores no harness session ids, and 1,248 of 1,252 cached
+uuids map to exactly one session.
+
+- (A) **Identity attribute:** a `harness_ref` written at mint on the identity
+  record, unindexed, redacted for non-operator callers, and never an input to
+  a resolver.
+- (B) **Delivery address:** a wake-layer registry of
+  `{uuid, harness, harness_session_id, registration_id, at, provenance, state}`,
+  registered during onboarding, resolved uuid-to-address only. The identity
+  record holds at most an opaque registration receipt.
+- (C) **Client only:** fix the cache's coverage and retention and add a local
+  uuid-to-session resolver. The server stores nothing.
+
+A three-seat council and an outside consult (consultation `245f62c5`) both
+leaned to (B). A resume handle locates a conversation, not an accountable
+process, so on the identity record it invites the reverse lookups this system
+bans. A shared handle would read as inferred lineage, and it would be exposed
+through `agent(list)` and exports unless redacted field by field.
+
+Design rules the review attached to (B):
+- Register from the trusted SessionStart hook, which knows the harness session
+  id before onboarding. A valid `client_session_id` proves authority over a
+  uuid, not ownership of a conversation.
+- Resolve uuid-to-address only. No reverse resolver, deduplication, inferred
+  parentage or thread assignment. Several uuids may legitimately point at one
+  conversation, so near-uniqueness must not become a constraint.
+- An unregistered or unverifiable address is never woken. Fail visibly and
+  never fall back to labels or neighbouring sessions.
+- Keep the address out of the thread-sharing rollup, which groups agents by
+  declared `thread_id` edges.
+- The wake gate's spend caps, kill switch, and replay and concurrency checks
+  apply at execution time. Two uuids pointing at one conversation must not
+  cause concurrent resumes.
+
+Counter-argument the review kept open: if the same agent-reachable credentials
+control both stores, separating them is mostly cosmetic, and a narrowly
+protected (A) may be safer than a poorly authenticated (B).
+
 ## 5. What this does not do
 
 - No code, no migration and no scope change. The ratified rule that scope lands
