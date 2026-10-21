@@ -1,0 +1,1 @@
+- **source comments:** three comments in identity code cited docs that are not in the public tree; they now give the `git show` path to the removed design note or say the burn-in note is not kept publicly. Comments only.
