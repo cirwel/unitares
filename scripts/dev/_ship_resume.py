@@ -71,7 +71,7 @@ def owned_head(pr: dict, agent: str) -> str:
 
 
 def changed_paths(pr: dict) -> list[str]:
-    return [path for path in run("git", "diff", "--no-ext-diff", "--name-only", "-z",
+    return [path for path in run("git", "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
                                  f"{pr['baseRefOid']}...HEAD").split("\0") if path]
 
 
@@ -123,8 +123,12 @@ def intent_marker(pr: dict, agent: str, previous_event: int) -> str:
     return f"<!-- unitares-ship-renew-intent head={pr['headRefOid']} agent={agent} prior_event={previous_event} -->"
 
 
+def confirmation_marker(pr: dict, agent: str, previous_event: int) -> str:
+    return f"<!-- unitares-ship-renew-confirm head={pr['headRefOid']} agent={agent} prior_event={previous_event} -->"
+
+
 def own_renewal(pr: dict, agent: str, events: list[dict]) -> bool:
-    """A pre-removal intent and matching actor/time identify our interrupted work.
+    """Intent, a successful-removal acknowledgement and actor/time bind recovery.
 
     Any later add/remove cycle is a different decision, even by the same App.
     Missing event evidence parks safely until GitHub's feed catches up.
@@ -145,22 +149,24 @@ def own_renewal(pr: dict, agent: str, events: list[dict]) -> bool:
         writer = comment.get("author", {}).get("login", "")
         actor = event.get("actor", {}).get("login", "")
         written_at, removed_at = comment.get("createdAt"), event.get("created_at")
+        confirmed = [c for c in pr["comments"]
+                     if c["body"].splitlines()[0:1] == [confirmation_marker(pr, agent, int(match[1]))]
+                     and principal(c.get("author", {}).get("login", "")) == principal(writer)
+                     and c.get("createdAt") and removed_at
+                     and datetime.fromisoformat(c["createdAt"]) >= datetime.fromisoformat(removed_at)]
         if (writer and actor and principal(writer) == principal(actor) and written_at and removed_at
+                and confirmed
                 and datetime.fromisoformat(written_at) <= datetime.fromisoformat(removed_at)):
             return True
     return False
 
 
-def renewal_intent(pr: dict, agent: str, previous_event: int) -> dict:
-    marker = intent_marker(pr, agent, previous_event)
-    for comment in pr["comments"]:
-        if comment["body"].splitlines()[0:1] == [marker]:
-            return comment
-    # The POST response is durable server evidence even if the comments/events
-    # read APIs lag. Journal before touching the label, not after its removal.
+def renewal_record(pr: dict, agent: str, marker: str) -> dict:
+    # The POST response supplies server writer/time even if read APIs lag.
+    # Intent precedes the write; confirmation follows only a successful remove.
     comment = json.loads(run("gh", "api", f"repos/{{owner}}/{{repo}}/issues/{pr['number']}/comments",
                              "--method", "POST", "--raw-field",
-                             f"body={marker}\nValidated-head approval renewal intent.\nUNITARES agent: {agent}",
+                             f"body={marker}\nValidated-head approval renewal journal.\nUNITARES agent: {agent}",
                              remote=True))
     return {"body": comment["body"], "author": {"login": comment["user"]["login"]},
             "createdAt": comment["created_at"]}
@@ -272,6 +278,9 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     final_labelled = "approved-to-merge" in {label["name"] for label in final["labels"]}
     if labelled and not final_labelled and not recovering_renewal:
         raise Parked("Queue approval was removed during validation; leave the hold in place.")
+    before = label_events(final) if final_labelled and not recorded else []
+    if final_labelled and not recorded and (not before or before[-1]["event"] != "labeled"):
+        raise Parked("Approval history is not consistent with the visible label yet; resume later without changing approval.")
     advisory_marker = f"<!-- unitares-ship-unreviewed head={head} agent={agent} -->"
     if unreviewed and not any(c["body"].splitlines()[0:1] == [advisory_marker] for c in final["comments"]):
         run("gh", "pr", "comment", str(pr["number"]), "--body",
@@ -283,11 +292,13 @@ def resume(*, reviewer: str | None, wait: bool, plan: bool) -> None:
     if final_labelled and not recorded:
         # A label from before a push must be deliberately renewed after the
         # new head passes. The receipt below makes repeated resume idempotent.
-        before = label_events(final)
-        previous_event = before[-1]["id"] if before else 0
-        intent = renewal_intent(final, agent, previous_event)
+        previous_event = before[-1]["id"]
+        intent = renewal_record(final, agent, intent_marker(final, agent, previous_event))
         run("gh", "pr", "edit", str(pr["number"]), "--remove-label", "approved-to-merge", remote=True)
-        journalled = {**final, "comments": [*final["comments"], intent]}
+        # An intent alone cannot turn a later same-login veto into our action.
+        # A failed/ambiguous removal command never gets this acknowledgement.
+        confirmed = renewal_record(final, agent, confirmation_marker(final, agent, previous_event))
+        journalled = {**final, "comments": [*final["comments"], intent, confirmed]}
         if not own_renewal(journalled, agent, label_events(final)):
             raise Parked("Renewal removal is changed or not yet visible; resume when event evidence is available. The intent is journalled.")
     if not final_labelled or not recorded:

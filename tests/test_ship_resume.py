@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import subprocess
 from unittest.mock import Mock
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from scripts.dev import _ship_resume as ship
 
 
-AGENT = "82667120-1d6c-4612-bc2d-f2f64adb5304"
+AGENT = "00000000-0000-4000-8000-000000000042"
 HEAD = "a" * 40
 
 
@@ -45,15 +46,18 @@ def delivery(monkeypatch):
         if args[:2] == ("gh", "api"):
             if "--method" in args:
                 body = args[args.index("--raw-field") + 1].removeprefix("body=")
-                comment = {"body": body, "author": {"login": "app/delivery-bot"},
-                           "createdAt": "2026-10-21T00:00:00Z"}
+                stamp = "2026-10-21T00:00:02Z" if "renew-confirm" in body else "2026-10-21T00:00:00Z"
+                comment = {"body": body, "author": {"login": "app/delivery-bot"}, "createdAt": stamp}
                 pr["comments"].append(comment)
                 return json.dumps({"body": body, "user": {"login": "delivery-bot[bot]"},
                                    "created_at": comment["createdAt"]})
+            if pr["labels"] and not events:
+                events.append({"id": 1, "event": "labeled", "label": {"name": "approved-to-merge"}})
             return json.dumps([events])
         if args[:3] == ("gh", "pr", "edit"):
             event = "unlabeled" if "--remove-label" in args else "labeled"
-            events.append({"id": len(events) + 1, "event": event, "label": {"name": "approved-to-merge"},
+            events.append({"id": max((e["id"] for e in events), default=0) + 1,
+                           "event": event, "label": {"name": "approved-to-merge"},
                            "actor": {"login": "delivery-bot[bot]"}, "created_at": "2026-10-21T00:00:01Z"})
             pr["labels"] = [] if event == "unlabeled" else [{"name": "approved-to-merge"}]
         if args[:3] == ("gh", "pr", "ready"):
@@ -230,7 +234,7 @@ def test_interrupted_renewal_can_resume_its_exact_journalled_removal(delivery, m
     with pytest.raises(ship.CommandFailed):
         execute()
     assert not pr["labels"]
-    assert any("prior_event=0" in c["body"] for c in pr["comments"])
+    assert any("prior_event=1" in c["body"] for c in pr["comments"])
     execute()
     assert pr["labels"] == [{"name": "approved-to-merge"}]
     assert sum("--remove-label" in args for args in writes(calls)) == 1
@@ -271,6 +275,42 @@ def test_event_api_lag_keeps_a_recoverable_pre_removal_intent(delivery, monkeypa
     execute()
     assert pr["labels"] == [{"name": "approved-to-merge"}]
     assert sum("--remove-label" in args for args in writes(calls)) == 1
+
+
+def test_lag_before_removal_parks_without_changing_approval(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    original = ship.label_events
+    reads = 0
+    def label_events(value):
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            return [{"id": 2, "event": "unlabeled"}]
+        return original(value)
+    monkeypatch.setattr(ship, "label_events", label_events)
+    with pytest.raises(ship.Parked, match="not consistent"):
+        execute()
+    assert not writes(calls)
+    assert pr["labels"] == [{"name": "approved-to-merge"}]
+
+
+def test_failed_removal_intent_cannot_override_later_same_actor_veto(delivery, monkeypatch):
+    pr, calls = delivery
+    pr["labels"] = [{"name": "approved-to-merge"}]
+    original = ship.run
+    def run(*args, **kwargs):
+        if "--remove-label" in args:
+            raise ship.CommandFailed(args, Mock(returncode=1, stdout="", stderr="removal failed"))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ship, "run", run)
+    with pytest.raises(ship.CommandFailed):
+        execute()
+    assert not any("renew-confirm" in c["body"] for c in pr["comments"])
+    original("gh", "pr", "edit", "42", "--remove-label", "approved-to-merge", remote=True)
+    with pytest.raises(ship.Parked, match="approval was removed"):
+        execute()
+    assert not any("--add-label" in args for args in writes(calls))
 
 
 def test_another_actors_removal_never_uses_our_intent(delivery):
@@ -428,3 +468,27 @@ def test_missing_app_runner_does_not_fall_back_to_human_login(monkeypatch):
     with pytest.raises(ship.Parked, match="refusing implicit gh login"):
         ship.run("gh", "pr", "ready", "42", remote=True)
     command.assert_not_called()
+
+
+def test_renaming_reserved_document_keeps_its_source_in_scope(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    def git(*args):
+        return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q", "-b", "master")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    git("config", "commit.gpgsign", "false")
+    git("config", "diff.renames", "true")
+    source = tmp_path / "docs/proposals/registered/stop-rule.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Registered stop thresholds.\n")
+    git("add", ".")
+    git("commit", "-qm", "registered rule")
+    base = git("rev-parse", "HEAD")
+    target = tmp_path / "docs/operations/stop-rule.md"
+    target.parent.mkdir(parents=True)
+    git("mv", str(source), str(target))
+    git("commit", "-qm", "move rule")
+    assert set(ship.changed_paths({"baseRefOid": base})) == {
+        "docs/proposals/registered/stop-rule.md", "docs/operations/stop-rule.md",
+    }

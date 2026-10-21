@@ -902,7 +902,10 @@ queue label. Approval-removal event history is read across all PR heads, even
 when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
 after validation, covering a follow-up push. Renewal intent is journalled before
 removal, binding the head, previous label event, writer and server timestamp.
-A matching removal can resume after API lag or a failed addition. A different
+The visible label must agree with the pre-removal history, and a successful
+removal acknowledgement is recorded before any recovery can re-add approval.
+An unconfirmed intent cannot adopt a later same-login veto. A matching removal
+can resume after API lag or a failed addition. A different
 actor, an ambiguous event sequence or a later external veto stays parked. Removing approval
 after a recorded readiness parks the command rather than undoing the removal. Surface claims
 must already be released; ownership handoffs and operator decisions remain
