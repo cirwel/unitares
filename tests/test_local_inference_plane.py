@@ -117,3 +117,17 @@ def test_internal_delegation_never_attributes_energy():
     source = inspect.getsource(llm_delegation)
     assert "process_update" not in source
     assert "get_or_create_monitor" not in source
+
+
+def test_registry_lists_the_endpoints_served_models(monkeypatch):
+    """An agent picks the local model from what list_inference_hosts reports
+    (operator decision 2026-10-21)."""
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: True)
+    monkeypatch.setattr(inference_registry, "served_models", lambda: ("gemma4:latest", "qwen3:8b"))
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["models"] == ["gemma4:latest", "qwen3:8b"]
+    assert "consult(model=...)" in host["notes"]
+
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
+    assert inference_registry.get_inference_host("ollama:local")["models"] == ["qwen3:8b"]

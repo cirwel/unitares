@@ -116,7 +116,7 @@ settings:
 | Setting | Meaning | Default |
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | `http://localhost:11434/v1` (Ollama on the same machine) |
-| `UNITARES_MODEL_ID` | Model id the server serves | None: unset, the local lane has no model and refuses with `MODEL_NOT_CONFIGURED` (through v3.4.0 it fell back to `gemma4:latest`) |
+| `UNITARES_MODEL_ID` | The default model, used when an agent names none | None. An agent picks with `consult(model=...)` from the models `list_inference_hosts` lists; with no default and none picked, the endpoint's only model is used, else the call is refused with `MODEL_NOT_CONFIGURED` (through v3.4.0 it fell back to `gemma4:latest`) |
 
 Ollama is the server these steps are tested with. Other servers that speak the
 same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,

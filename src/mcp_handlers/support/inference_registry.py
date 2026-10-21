@@ -48,6 +48,7 @@ from src.local_inference_env import (
     default_local_model,
     model_base_url,
     ollama_base_url,
+    served_models,
 )
 
 from . import host_availability
@@ -245,8 +246,19 @@ def _hf_token_present() -> bool:
     return bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN"))
 
 
+def _local_models(configured: str) -> list[str]:
+    """What an agent may pick on the local route: the models the endpoint
+    lists when it answers (only while it is reachable, so a down endpoint costs
+    no request), else the configured default alone."""
+    listed = served_models() if _ollama_available() else None
+    if listed:
+        return list(listed)
+    return [configured] if configured else []
+
+
 def _static_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
+    local_models = _local_models(ollama_model)
     hf_configured = _hf_token_present()
     hf_cooldown = host_availability.cooldown("hf:router")
     # The record describes the configured endpoint, not the loopback default:
@@ -267,18 +279,23 @@ def _static_hosts() -> list[InferenceHost]:
             cost_class="local_free" if local_route_is_local else "unknown",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "generation", "analysis"],
-            models=[ollama_model] if ollama_model else [],
+            models=local_models,
             implementation_status="active",
             # host_id="ollama:local" forces privacy='local', so an endpoint
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
             accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
             notes=(
-                "No model is named: set UNITARES_MODEL_ID to a model the "
-                "endpoint serves (`unitares model` lists them)."
-                if not ollama_model
-                else "Local Ollama OpenAI-compatible endpoint. Model names are "
-                "passed through; use `ollama list` on the host for inventory."
+                (
+                    "Pass consult(model=...) with one of models to choose. "
+                    + (
+                        f"Without one, {ollama_model} (UNITARES_MODEL_ID) is used."
+                        if ollama_model
+                        else "No default is configured (UNITARES_MODEL_ID); without "
+                        "a model, a call uses the endpoint's only served model, "
+                        "or is refused with MODEL_NOT_CONFIGURED."
+                    )
+                )
                 if local_route_is_local
                 else "The configured model endpoint classifies external, so "
                 "host_id='ollama:local' (which requests local privacy) is refused. "

@@ -19,6 +19,7 @@ enforces.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -462,3 +463,63 @@ def test_the_flag_catalog_lists_each_alias_with_its_removal_release():
         assert f"| `{name}` |" in flags
     for name in REMOVED_NAMES:
         assert f"| `{name}` |" not in flags
+
+
+# --- served models and the agent's choice (operator decision 2026-10-21) ------
+
+
+class _ModelsResp:
+    def __init__(self, ids):
+        self._body = json.dumps({"object": "list", "data": [{"id": i} for i in ids]}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, *a):
+        return self._body
+
+
+@pytest.fixture
+def fresh_served_cache():
+    env._served_models_cache.clear()
+    yield
+    env._served_models_cache.clear()
+
+
+def test_served_models_reads_the_list_and_caches_it(monkeypatch, fresh_served_cache):
+    calls = []
+
+    def fake_open(request, *, timeout):
+        calls.append(request.full_url)
+        return _ModelsResp(["qwen3:8b", "gemma4:latest", "qwen3:8b"])
+
+    monkeypatch.setattr(env, "direct_urlopen", fake_open)
+    assert env.served_models() == ("gemma4:latest", "qwen3:8b")
+    assert env.served_models() == ("gemma4:latest", "qwen3:8b")
+    assert calls == ["http://localhost:11434/v1/models"]
+
+
+def test_served_models_is_none_when_the_endpoint_does_not_answer(monkeypatch, fresh_served_cache):
+    def refuse(request, *, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(env, "direct_urlopen", refuse)
+    assert env.served_models() is None
+
+
+def test_resolve_local_model_order(monkeypatch, fresh_served_cache):
+    monkeypatch.setattr(env, "served_models", lambda: ("only:1b",))
+    assert env.resolve_local_model() == "only:1b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "configured:7b")
+    assert env.resolve_local_model() == "configured:7b"
+    assert env.resolve_local_model("chosen:3b") == "chosen:3b"
+
+
+def test_resolve_local_model_guesses_nothing_among_several(monkeypatch):
+    monkeypatch.setattr(env, "served_models", lambda: ("a:1b", "b:1b"))
+    assert env.resolve_local_model() == ""
+    monkeypatch.setattr(env, "served_models", lambda: None)
+    assert env.resolve_local_model() == ""

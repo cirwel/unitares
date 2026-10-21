@@ -23,7 +23,6 @@ from ..decorators import mcp_tool
 from . import host_availability
 from .inference_registry import (
     _ollama_available,
-    default_local_model,
     get_inference_host,
     host_for_routed_provider,
     inference_extensions,
@@ -43,6 +42,7 @@ from src.local_inference_env import (
     model_base_url,
     MODEL_NOT_CONFIGURED,
     model_not_configured_message,
+    resolve_local_model,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -516,7 +516,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             if not local_endpoint.is_local:
                 return _endpoint_not_local_outcome(local_endpoint, privacy)
         if model == "auto":
-            model = default_local_model()
+            # The configured default, else the endpoint's only served model.
+            model = await asyncio.to_thread(resolve_local_model)
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
         provider = "ollama"
         logger.info(f"Privacy mode: local - routing to Ollama with model {model}")
@@ -559,16 +560,21 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         # Reuse the registry's cached probe instead of a second inline socket
         # connect — same source of truth, and it benefits from the TTL cache.
         ollama_available = _ollama_available()
-        # The local route needs a model: the caller's, or the configured one.
-        # With neither, auto routing falls through to the HF fallback.
-        local_model_named = model != "auto" or bool(default_local_model())
+        # The local route needs a model: the caller's, the configured one, or
+        # the endpoint's only served one. With none, auto routing falls through
+        # to the HF fallback.
+        auto_local_model = (
+            await asyncio.to_thread(resolve_local_model)
+            if ollama_available and model == "auto" else ""
+        )
+        local_model_named = model != "auto" or bool(auto_local_model)
 
         if ollama_available and local_model_named:
             # Prefer Ollama (local, free, no token needed)
             base_url = model_base_url()
             local_endpoint = classify_endpoint(base_url)
             api_key = "ollama"
-            model = default_local_model() if model == "auto" else model
+            model = auto_local_model if model == "auto" else model
             provider = "ollama"
             logger.info(f"Auto-selected Ollama (local): {model}")
         else:
