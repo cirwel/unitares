@@ -105,8 +105,9 @@ additions merge cleanly. -->
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:253, agents/vigil/agent.py) | True when the operator named a model, asking for semantic search | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
@@ -139,6 +140,8 @@ additions merge cleanly. -->
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_SYNTHESIS_INTERVAL_HOURS` | `str(DEFAULT_INTERVAL_HOURS)` | Hours between scheduled synthesis cycles; a non-positive value falls back to the default. | src/kg_synthesis_schedule.py |
+| `UNITARES_KG_SYNTHESIS_SCHEDULE` | `DEFAULT_MODE` | Scheduled synthesis mode | src/kg_synthesis_schedule.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LEASE_ATTESTATION_AUDIENCE` | `None (no reader fallback)` | Return the exact lease-plane deployment this token may authorize. | src/lease_attestation.py |
 | `UNITARES_LEASE_ATTESTATION_ISSUER` | `None (no reader fallback)` | read by configured_issuer() | src/lease_attestation.py |

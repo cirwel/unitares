@@ -98,7 +98,12 @@ async def concept_extraction_background_task(interval_hours: float = 24.0):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.debug(f"[CONCEPT_EXTRACTION] Skipped: {e}")
+            # WARNING, not debug: a failure here used to be invisible, and the
+            # task produced zero Concept vertices for months without a trace.
+            logger.warning(
+                f"[CONCEPT_EXTRACTION] Run failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
         try:
             await asyncio.sleep(interval_hours * 3600)
         except asyncio.CancelledError:
@@ -2150,6 +2155,10 @@ def start_all_background_tasks(set_ready):
     # _supervised_create_task(startup_kg_lifecycle(), name="kg_lifecycle")
     logger.info("[KG_LIFECYCLE] Disabled — AGE query deadlock under investigation")
     _supervised_create_task(concept_extraction_background_task(), name="concept_extraction")
+    # Topic rollups fed by store-time consolidation hints; shadow by default
+    # (UNITARES_KG_SYNTHESIS_SCHEDULE, see src/kg_synthesis_schedule.py).
+    from src.kg_synthesis_schedule import kg_synthesis_background_task
+    _supervised_create_task(kg_synthesis_background_task(), name="kg_synthesis")
     _supervised_create_task(class_promotion_sweeper_task(), name="class_promotion_sweeper")
     logger.info("[CLASS_PROMOTION] Started ephemeral → engaged_ephemeral sweep (every 30m)")
     _supervised_create_task(principal_rollup_sweeper_task(), name="principal_rollup_sweeper")

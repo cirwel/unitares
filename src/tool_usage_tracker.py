@@ -35,7 +35,7 @@ class ToolUsageTracker:
     """Tracks tool usage across the system"""
     
     # Tools that have been removed/deprecated and should be filtered from stats
-    # See: docs/archive/HARD_REMOVAL_SUMMARY_20251128.md for details
+    # (the 2025-11-28 hard-removal summary is not kept in the public tree)
     REMOVED_TOOLS = {
         'store_knowledge',
         'retrieve_knowledge',

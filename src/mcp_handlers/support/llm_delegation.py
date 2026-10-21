@@ -126,6 +126,11 @@ def _wants_reasoning_effort_none(model: str) -> bool:
     m = model.lower()
     return m.startswith("qwen3") or m.startswith("qwen-3")
 
+# call_local_llm stops waiting this long after the request's own timeout, to
+# cover executor overhead; a caller with a deadline subtracts it too.
+LOCAL_LLM_WAIT_BUFFER_S = 5.0
+
+
 async def call_local_llm(
     prompt: str,
     model: Optional[str] = None,
@@ -198,7 +203,7 @@ async def call_local_llm(
 
         result = await asyncio.wait_for(
             loop.run_in_executor(None, _call_sync),
-            timeout=timeout + 5  # Extra buffer for executor overhead
+            timeout=timeout + LOCAL_LLM_WAIT_BUFFER_S  # executor overhead
         )
 
         # Same provenance fields call_model records, so internal traffic is
@@ -324,7 +329,8 @@ async def synthesize_results(
     discoveries: List[Dict[str, Any]],
     query: Optional[str] = None,
     max_discoveries: int = 8,
-    max_tokens: int = 2048
+    max_tokens: int = 2048,
+    timeout: float = 30.0,
 ) -> Optional[Dict[str, Any]]:
     """
     Synthesize knowledge graph search results into key insights.
@@ -337,6 +343,8 @@ async def synthesize_results(
         query: Original search query (for context)
         max_discoveries: Max discoveries to include in synthesis prompt (default 8 for speed)
         max_tokens: Max tokens for synthesis response (default 250 for speed)
+        timeout: Request timeout for the local LLM call; the call returns
+            within this plus LOCAL_LLM_WAIT_BUFFER_S.
 
     Returns:
         Dict with synthesis text and metadata, or None if unavailable
@@ -364,7 +372,7 @@ Give 2-3 key insights in 2-3 sentences total. Be concise."""
         prompt=prompt,
         max_tokens=max_tokens,
         temperature=0.7,
-        timeout=30.0
+        timeout=timeout,
     )
 
     if not result:

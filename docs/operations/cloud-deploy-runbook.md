@@ -35,7 +35,7 @@ both believing they are canonical.
   environment for this Compose file.
 - **Free-tier ARM instances** (e.g. Oracle Cloud's always-free 4-core/24 GB
   shape) match the project's run-free policy and have headroom for a local
-  Ollama for the Watcher. Treat them as opportunistic: capacity is scarce in
+  Ollama model, for example for the optional Watcher reference resident. Treat them as opportunistic: capacity is scarce in
   popular regions and the images must be arm64-compatible (the Compose stack
   builds from source images that publish arm64 variants).
 - **Container PaaS (Fly.io, Railway, Render) works but is fiddlier.** No

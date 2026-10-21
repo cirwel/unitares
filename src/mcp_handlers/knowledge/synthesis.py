@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from src.knowledge_graph import DiscoveryNode, normalize_tags
 from src.logging_utils import get_logger
@@ -324,7 +324,13 @@ async def synthesize_topic(
             "reason": "non_semantic_topic",
         }
 
-    members = await graph.query(tags=[topic], limit=MAX_MEMBERS_PER_ROLLUP * 3, exclude_archived=True)
+    # A failed read must raise, not come back as an empty topic: an empty
+    # result is reported as below_min_members, and the scheduler only retries
+    # a hinted topic whose synthesis raised.
+    members = await graph.query(
+        tags=[topic], limit=MAX_MEMBERS_PER_ROLLUP * 3, exclude_archived=True,
+        raise_on_error=True,
+    )
     member_dicts = [m.to_dict(include_details=False) for m in members]
     # Never let an existing rollup row become a member of itself.
     member_dicts = [m for m in member_dicts if not is_rollup(m)]
@@ -359,13 +365,17 @@ async def synthesize_topics(
     use_llm: bool = True,
     dry_run: bool = False,
     writer_id: str = SYNTHESIS_WRITER_ID,
+    skip_topics: Iterable[str] = (),
 ) -> Dict[str, Any]:
     """Run a synthesis pass over the densest topics (or one named topic).
 
     Bounded by ``limit`` (topics per run) the way cleanup bounds its batch.
     Each topic is synthesized independently and failures are isolated so one bad
-    topic never aborts the pass.
+    topic never aborts the pass. ``skip_topics`` leaves out topics the caller
+    already handled this run, before any synthesis or write, and the sweep
+    still fills ``limit`` from the next densest topics.
     """
+    skip = set(skip_topics or ())
     if topic:
         candidates = [{"topic": normalize_tags([topic])[0] if normalize_tags([topic]) else topic}]
     else:
@@ -373,11 +383,12 @@ async def synthesize_topics(
         db = get_db()
         candidates = await db.kg_topic_candidates(
             min_members=min_members,
-            limit=limit,
+            limit=limit + len(skip),
             exclude_types=[ROLLUP_TYPE],
             exclude_tags=sorted(NON_SEMANTIC_TOPIC_TAGS),
             exclude_tag_prefixes=list(NON_SEMANTIC_TOPIC_PREFIXES),
         )
+        candidates = [c for c in candidates if c["topic"] not in skip][:limit]
 
     rollups: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []

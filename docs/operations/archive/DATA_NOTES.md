@@ -1,5 +1,11 @@
 # UNITARES Governance — Data Notes
 
+> **Archived 2026-10-20.** A dated snapshot of one deployment's database on
+> 2026-04-10; its row counts, date ranges and table inventory are not current.
+> For the schema read [`db/postgres/schema.sql`](../../../db/postgres/schema.sql);
+> for schema ownership and the Redis posture read
+> [`database_architecture.md`](../database_architecture.md).
+
 *Operational data dictionary for the production governance database as of 2026-04-10. Written to make the current state of the data legible before any reproducibility analysis or paper evidence compilation.*
 
 ---
