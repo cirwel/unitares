@@ -98,9 +98,11 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     from src.identity.compaction_outcomes import collect_compaction_outcomes
 
     kept_agent = OTHER
+    quiet_agent = "99999999-8888-4777-8666-555555555555"
     compactions = [
         _compaction(PARENT, T0, event_id="minted"),
         _compaction(kept_agent, T0, host="codex", event_id="kept"),
+        _compaction(quiet_agent, T0, event_id="quiet"),
     ]
     seen = {}
 
@@ -118,6 +120,9 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
             {"event_type": "identity_hijack_suspected", "last_ts": T0 + timedelta(hours=3)},
             {"event_type": "runtime_observation.context_compaction",
              "last_ts": T0 + timedelta(hours=3)},
+            # Someone else listing this identity's knowledge logs a read
+            # against it; that is not the identity acting.
+            {"event_type": "knowledge_read", "last_ts": T0 + timedelta(hours=3)},
         ]
         if agent_id == kept_agent:
             rows.append({"event_type": "knowledge_write", "last_ts": T0 + timedelta(hours=1)})
@@ -147,21 +152,30 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     report = await collect_compaction_outcomes(since=T0 - timedelta(days=1))
 
     assert seen["query"]["event_types"] == ["runtime_observation.context_compaction"]
-    assert set(seen["aggregate_types"]) == {
-        "auto_attest", "knowledge_read", "knowledge_write", "consultation"
-    }
+    assert set(seen["aggregate_types"]) == {"auto_attest", "knowledge_write", "consultation"}
     assert report["complete"] is True
-    assert seen["children_args"][0] == sorted([PARENT, kept_agent])
+    assert seen["children_args"][0] == sorted([PARENT, kept_agent, quiet_agent])
     by_event = {row["event_id"]: row for row in report["rows"]}
     assert by_event["minted"]["outcome"] == "minted"
     assert by_event["kept"]["outcome"] == "kept"
+    # Only rows others or detectors wrote against it: not kept.
+    assert by_event["quiet"]["outcome"] == "no_later_activity"
     assert report["by_host"]["codex"]["kept"] == 1
 
 
-def test_administrative_rows_alone_leave_no_later_activity():
-    # classify only sees self-activity times; nothing after T0 means none.
-    report = classify_compaction_outcomes([_compaction(PARENT, T0)], [], {})
-    assert report["rows"][0]["outcome"] == "no_later_activity"
+
+
+def test_compactions_at_the_cutoff_are_left_out_not_misclassified():
+    through = T0 + timedelta(hours=1)
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0, event_id="read"), _compaction(OTHER, through, event_id="cut")],
+        [_child("c", OTHER, through + timedelta(minutes=1))],
+        {},
+        through=through,
+    )
+    assert [row["event_id"] for row in report["rows"]] == ["read"]
+    assert report["excluded_at_cutoff"] == 1
+    assert report["complete"] is False
 
 
 def test_an_incomplete_read_does_not_credit_a_later_child_to_the_last_compaction_read():

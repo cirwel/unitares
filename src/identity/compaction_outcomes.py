@@ -10,10 +10,11 @@ already exist:
   ``spawn_reason="compaction"`` was created at or after the compaction and
   before this identity's next recorded compaction.
 - ``kept``: no such child, and this identity acted again after the
-  compaction: a check-in, a knowledge read or write, or a consult
+  compaction: a check-in, a knowledge write or a consult
   (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
   against an identity, such as ``agent_archived`` or
-  ``identity_hijack_suspected``, do not count.
+  ``identity_hijack_suspected``, do not count; nor does ``knowledge_read``,
+  which a reader listing this identity's knowledge can log against it.
 - ``no_later_activity``: neither. The session may have ended, or nothing it
   did was recorded. This is not evidence for either choice.
 
@@ -38,9 +39,9 @@ from src.runtime_observations import COMPACTION_EVENT_TYPE
 
 OUTCOMES = ("minted", "kept", "no_later_activity")
 # Audit rows written for an identity's own action: one ``auto_attest`` per
-# check-in, ``knowledge_read``/``knowledge_write`` for the caller, and
-# ``consultation`` for the consulting agent.
-SELF_ACTIVITY_EVENT_TYPES = ("auto_attest", "knowledge_read", "knowledge_write", "consultation")
+# check-in (the agent checking in), ``knowledge_write`` (the author) and
+# ``consultation`` (the requester).
+SELF_ACTIVITY_EVENT_TYPES = ("auto_attest", "knowledge_write", "consultation")
 PAGE_SIZE = 5000
 MAX_PAGES = 20
 
@@ -72,6 +73,8 @@ def classify_compaction_outcomes(
     ``through`` bounds the window when the compaction read was incomplete: an
     identity's last compaction read then ends there, so a child minted after a
     compaction that was never read is not credited to an earlier one.
+    Compactions at or after ``through`` may sit beside unread ones, so they are
+    left out and counted in ``excluded_at_cutoff`` rather than classified.
 
     ``compactions`` are audit rows (``agent_id``, ``timestamp``, ``details``,
     ``event_id``). ``children`` are identities with
@@ -80,11 +83,16 @@ def classify_compaction_outcomes(
     latest audit event that is not a runtime observation.
     """
     by_agent: dict[str, list[tuple[datetime, Mapping[str, Any]]]] = {}
+    excluded_at_cutoff = 0
     for row in compactions:
         agent_id = str(row.get("agent_id") or "").strip()
         at = _utc(row.get("timestamp"))
-        if agent_id and at is not None:
-            by_agent.setdefault(agent_id, []).append((at, row))
+        if not agent_id or at is None:
+            continue
+        if through is not None and at >= through:
+            excluded_at_cutoff += 1
+            continue
+        by_agent.setdefault(agent_id, []).append((at, row))
 
     children_by_parent: dict[str, list[tuple[datetime, str]]] = {}
     for child in children:
@@ -138,6 +146,7 @@ def classify_compaction_outcomes(
         },
         "rows": rows,
         "complete": through is None,
+        "excluded_at_cutoff": excluded_at_cutoff,
         "scope": (
             "Compactions reported with a usable session binding only; "
             "outcomes describe the identity record, not the agent's view."
