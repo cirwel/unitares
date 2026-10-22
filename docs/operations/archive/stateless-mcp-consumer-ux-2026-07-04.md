@@ -13,8 +13,8 @@ is partially addressed by this artifact's accompanying code change.
 **Captured against:** stateless MCP transport, model `claude-opus-4.8`, consumer chat
 (no persistent adapter threading `client_session_id`).
 
-> Read [`docs/operations/self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)
-> and [`../proposals/active/verification-weighted-verdict-v0.md`](../proposals/active/verification-weighted-verdict-v0.md)
+> Read [`docs/operations/self-report-verdict-dependence-2026-06-28.md`](../self-report-verdict-dependence-2026-06-28.md)
+> and [`../proposals/active/verification-weighted-verdict-v0.md`](../../proposals/active/verification-weighted-verdict-v0.md)
 > first — this report is downstream of both. EISV/risk/coherence are **policy inputs,
 > not the actuator**; this is about *how confidently the verdict is worded*, not about
 > the verdict changing a decision.
@@ -77,8 +77,8 @@ agent-facing check-in surfaces (mirror, compact, self-observation). This changes
 risk number, decision, or enforcement — it only stops the *wording* from outrunning the
 evidence, mirroring the outcome-event labeling philosophy. The deeper axis — making the
 *risk math* verification-weighted — remains the reserved v2 work tracked in
-[`verification-weighted-verdict-v0.md`](../proposals/active/verification-weighted-verdict-v0.md)
-and [`continuous-verdict-blending-v0.md`](../proposals/archive/continuous-verdict-blending-v0.md).
+[`verification-weighted-verdict-v0.md`](../../proposals/active/verification-weighted-verdict-v0.md)
+and [`continuous-verdict-blending-v0.md`](../../proposals/archive/continuous-verdict-blending-v0.md).
 
 > **Gate guardrail (read before extending).** This grading is **presentation-only** and
 > is *not* gated on independent review: it sits in the same class as the outcome-event corroboration
@@ -139,13 +139,13 @@ verification-weighted risk math it points at remains reserved v2 work.*
 
 ## Relation to neighboring work
 
-- [`self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)
+- [`self-report-verdict-dependence-2026-06-28.md`](../self-report-verdict-dependence-2026-06-28.md)
   — the pre-warmup regime F2 sits in; this report's `explain_verdict` grading makes that
   regime's provisionality visible in the verdict wording.
-- [`../proposals/active/verification-weighted-verdict-v0.md`](../proposals/active/verification-weighted-verdict-v0.md)
-  and [`continuous-verdict-blending-v0.md`](../proposals/archive/continuous-verdict-blending-v0.md)
+- [`../proposals/active/verification-weighted-verdict-v0.md`](../../proposals/active/verification-weighted-verdict-v0.md)
+  and [`continuous-verdict-blending-v0.md`](../../proposals/archive/continuous-verdict-blending-v0.md)
   — the reserved v2 axis (verification-weighted *risk*, one-sided blend). F2's change is
   the presentation-layer complement, not a substitute; it must not be read as closing
   those.
-- [`../proposals/archive/redis-retirement-v0.md`](../proposals/archive/redis-retirement-v0.md) — the
+- [`../proposals/archive/redis-retirement-v0.md`](../../proposals/archive/redis-retirement-v0.md) — the
   constraint on where a short opaque continuity handle (F3) could resolve.

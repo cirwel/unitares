@@ -129,7 +129,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 
 Shared-memory search is full-text on the `postgres` backend and semantic on
 `age` (pass `search_mode="fts"` to force full-text). Hybrid fusion, reranking and
-graph expansion are opt-in.
+related-finding expansion are opt-in.
 
 | Variable | Effect |
 |---|---|
@@ -137,7 +137,7 @@ graph expansion are opt-in.
 | `UNITARES_EMBEDDING_MODEL` | Picks the embedding model for semantic search (for example `bge-m3`). Unset means `minilm` (all-MiniLM-L6-v2); it does not turn semantic search off. Semantic search needs `sentence-transformers` and the `age` backend. |
 | `UNITARES_ENABLE_HYBRID` | `1` fuses semantic and full-text results with reciprocal rank fusion. Off by default; needs semantic search. |
 | `UNITARES_ENABLE_RERANKER` | `1` re-scores the top candidates with a cross-encoder (`UNITARES_RERANKER_MODEL`). Off by default; needs `sentence-transformers`. |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | Off by default; leave it off. When on, it adds the neighbours each top result lists in its stored `related_to` column. It reads that column, not the AGE edges, and it lets a finding's retrievability grow with its own link count. The docstring of `graph_expansion_enabled` in `src/retrieval.py` explains the feedback loop. |
+| `UNITARES_ENABLE_RELATED_EXPANSION` | Off by default; leave it off. When on, it adds the findings each top result lists in its stored `related_to` column (its tag-overlap links), not the AGE edges, and it lets a finding's retrievability grow with its own link count. The docstring of `related_expansion_enabled` in `src/retrieval.py` explains the feedback loop. The old name, `UNITARES_ENABLE_GRAPH_EXPANSION`, is still read, with a deprecation warning, when this one is unset. |
 
 The graph records who wrote what and what replaced it. It is not an entity or
 fact graph, and search does not traverse its edges.

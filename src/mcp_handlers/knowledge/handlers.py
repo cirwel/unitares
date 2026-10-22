@@ -2993,7 +2993,7 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
     from src.retrieval import (
         apply_tag_boost,
         expand_with_neighbors,
-        graph_expansion_enabled,
+        related_expansion_enabled,
         hybrid_enabled,
         rrf_fuse,
     )
@@ -3005,7 +3005,7 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
         request.limit * 2, state.rerank_pool_size, _authority_pool_size(request)
     )
     state.hybrid_on = hybrid_enabled()
-    state.graph_expand_on = graph_expansion_enabled()
+    state.graph_expand_on = related_expansion_enabled()
 
     has_semantic, has_fts = _validate_search_backend(state)
     if request.sort_by == "created_at":

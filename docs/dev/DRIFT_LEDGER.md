@@ -23,7 +23,8 @@ seams stay visible instead of being rediscovered each incident.
      ▲   │  /ws/eisv            Redis (primary runtime session bindings;
      │   │                        degraded local-only mode without it)
      │   ▼
-  Agents (observers): Watcher · Sentinel · Vigil · Chronicler
+  Optional resident agents (observers; any configured in UNITARES_RESIDENTS,
+     e.g. the reference Watcher · Sentinel · Vigil · Chronicler in agents/)
      read state via /ws/eisv + REST /v1/tools/call,
      write findings back as KG notes + audit events + local JSONL
 ```

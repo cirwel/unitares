@@ -22,6 +22,45 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
+### Managed checkout alternative
+
+With Docker running, Git, curl and a POSIX shell, the launcher creates and
+starts a shallow release checkout without a manual clone:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/scripts/install/launch.sh | sh
+```
+
+It resolves `PUBLISHED_VERSION`, keeps the checkout at `~/.unitares/stack`,
+copies `.env.example` to `.env` only when missing, starts the release images,
+and requires deep health `healthy` or `moderate`. Python for this health check
+runs inside the container. Repeating the command preserves `.env` and the
+installed release; Compose leaves unchanged running containers alone. It does
+not upgrade an existing installation. A failed start can be retried after
+fixing the reported problem. No package is installed or published by this path.
+To inspect the script first, download that URL to a file and run `sh` on it.
+
+Set `UNITARES_STACK_DIR` to an absolute path to choose a different directory
+(pass it to `sh`, not just to `curl`, when using the pipeline). Set port or
+credential overrides in that checkout's `.env` before starting a shared
+installation. The launcher refuses containers owned by a different checkout.
+The managed clone includes `db/postgres`, which Compose mounts for database
+initialization, and the Git metadata used by the existing update command.
+
+After startup, run the coordination acceptance demo using host Python 3
+(the demo uses only its standard library). Python 3 and curl on the host are
+also needed by the existing update CLI:
+
+```sh
+cd ~/.unitares/stack
+python3 scripts/demo/coordination_demo.py
+./scripts/unitares update --check
+```
+
+Use `./scripts/unitares update` from this directory for upgrades, following
+the update instructions below; rerunning the launcher never moves Git or runs upgrade migrations.
+The launcher URL becomes available when the launcher change lands on master.
+
 On a release checkout, Compose pulls the server, the coordination lease plane
 and the database as the images published from that release tag
 (`ghcr.io/cirwel/unitares`, `ghcr.io/cirwel/unitares-lease-plane` and
@@ -534,7 +573,7 @@ before it.
 | Semantic search | Off: the image omits `sentence-transformers` and no embedding model is named | `docker-compose.full.yml` (above): it builds with `INSTALL_EMBEDDINGS=1` and sets `UNITARES_EMBEDDING_MODEL=bge-m3`; needs the `age` backend. Findings stored before then have no vector until `scripts/migration/reembed_corpus.py --only-missing` fills them | Search matches terms only; a query worded differently from the finding does not find it | `requirements-docker.txt`; `src/embeddings.py`; `src/storage/knowledge_graph_age.py` (`semantic_search`); `UNITARES_EMBEDDING_MODEL` |
 | Hybrid ranking | Off | `docker-compose.full.yml` sets `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
 | Cross-encoder reranker | Off, also in `docker-compose.full.yml` | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed (the full override's image has it); `UNITARES_RERANKER_MODEL` picks the model. It scores every candidate with a second model on each search | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
-| Search graph expansion | Off | `UNITARES_ENABLE_GRAPH_EXPANSION=1`. Read the `graph_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`graph_expansion_enabled`); `UNITARES_ENABLE_GRAPH_EXPANSION` |
+| Search related-finding expansion | Off | `UNITARES_ENABLE_RELATED_EXPANSION=1`. Read the `related_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`related_expansion_enabled`); `UNITARES_ENABLE_RELATED_EXPANSION` |
 | Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_PROVIDER_UNAVAILABLE`; `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
 | CLI hosts for `consult(effort='thorough')` and `delegate_inference` | Not available: no Compose service starts the agent orchestrator | Run the agent orchestrator, then set `UNITARES_HOST_ADAPTER_ENABLED=1`, `AGENT_ORCHESTRATOR_BEARER_TOKEN`, and an authenticated Codex, Claude or Antigravity CLI | Those calls fail and say the extension is not configured; `list_inference_hosts` reports it under `extensions.agent_orchestrator` | `src/mcp_handlers/support/inference_registry.py`; `UNITARES_HOST_ADAPTER_ENABLED` |
 | Orchestrated and cross-family dialectic review | Off: reviews run in-process | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1` with the agent orchestrator reachable at `AGENT_ORCHESTRATOR_URL`; `UNITARES_DIALECTIC_REVIEWER_HOST` (or `_HOSTS`) picks the reviewer backend | Reviews come from the in-process reviewer (with a model) or a peer; no separately identified reviewer process from another model family. Any dispatch failure falls back to in-process | `src/mcp_handlers/dialectic/orchestrator_dispatch.py` (`orchestrated_review_enabled`); `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` |

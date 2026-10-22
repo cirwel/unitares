@@ -11,20 +11,9 @@ from master at install time, so merging the publication PR updates it.
 Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
 not publish a server tag or container.
 
-## v2.22.1 maintenance release
-
-See the [release notes and publication checklist](../releases/2.22.1.md).
-
-v2.22.1 was prepared from tag `v2.22.0` (`b1360809`) on `release/2.22`,
-rather than from master. It backported #2092 and the release-evidence
-corrections while preserving the published callable surface and skills. It
-was tagged and published from `release/2.22` on 2026-09-08, and its history
-was forward-merged into master by #2209, which makes the maintenance tag an
-ancestor of later mainline releases, as the release-range gate requires.
-
-The v2.22.0 tag and release were left intact; their correction is recorded in
-[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md). A merge into a
-maintenance branch does not deploy the master-only public Pages workflow.
+Per-release notes and errata live in `docs/releases/`; the
+v2.22.1 maintenance release, cut from `release/2.22` rather than master, is
+recorded in [`../releases/2.22.1.md`](../releases/2.22.1.md).
 
 ## Server release
 

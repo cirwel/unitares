@@ -208,7 +208,7 @@ title = "cirwel.org"
 where = "https://cirwel.org"
 source = "cirwel/cirwel-site (src/data/claims.json, components)"
 refresh = "Edit and deploy cirwel-site."
-content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json (pages include /llms.txt, the plain-text summary for language models)", "served-surfaces check: hero, share card, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
+content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json (pages include /llms.txt, the plain-text summary for language models)", "served-surfaces check: hero, share card, retired phrasings", "daily site-refresh-stats job (scheduled on the maintainer's deployment host, outside this repository)"]
 probe = { type = "http-ok", url = "https://cirwel.org" }
 
 [[surface]]
@@ -228,7 +228,7 @@ title = "cirwel.github.io index + CIRWEL profile README"
 where = "https://cirwel.github.io/"
 source = "cirwel/cirwel.github.io (index.html), cirwel/CIRWEL (README.md)"
 refresh = "Edit those repos."
-content_checked_by = ["cirwel.github.io scripts/check-index.py against Zenodo deposits", "served-surfaces check: hero, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
+content_checked_by = ["cirwel.github.io scripts/check-index.py against Zenodo deposits", "served-surfaces check: hero, retired phrasings", "daily site-refresh-stats job (scheduled on the maintainer's deployment host, outside this repository)"]
 probe = { type = "http-ok", url = "https://cirwel.github.io/" }
 
 [[surface]]
@@ -238,7 +238,7 @@ title = "Hugging Face dataset hikewa/unitares-eisv-trajectories"
 where = "https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories"
 source = "cirwel/eisv-lumen (HF_DATASET_CARD.md)"
 refresh = "Edit HF_DATASET_CARD.md in eisv-lumen, then upload it to the Hub."
-content_checked_by = ["served-surfaces check: Hub card mirrors eisv-lumen HF_DATASET_CARD.md", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
+content_checked_by = ["served-surfaces check: Hub card mirrors eisv-lumen HF_DATASET_CARD.md", "daily site-refresh-stats job (scheduled on the maintainer's deployment host, outside this repository)"]
 probe = { type = "http-ok", url = "https://huggingface.co/api/datasets/hikewa/unitares-eisv-trajectories" }
 
 [[surface]]
