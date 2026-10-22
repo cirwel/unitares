@@ -357,7 +357,10 @@ def query_entropy_work_correlation(
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query: What was agent working on when entropy peaked?
-    
+
+    Each row is one map, ``{timestamp, entropy, work_summary}``: graph_query
+    reads a single result column, so a multi-column RETURN fails on arity.
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -371,8 +374,9 @@ def query_entropy_work_correlation(
         WHERE state.eisv_s > ${min_entropy}
         MATCH (state)-[:TEMPORALLY_NEAR]->(work:Discovery)
         WHERE work.type <> 'self_observation'
-        RETURN state.timestamp, state.eisv_s, work.summary
+        WITH state, work
         ORDER BY state.timestamp DESC
+        RETURN {timestamp: state.timestamp, entropy: state.eisv_s, work_summary: work.summary}
     """
     
     return cypher, params
@@ -384,7 +388,10 @@ def query_unresolved_questions_with_entropy(
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query: Find unresolved questions with high-entropy context.
-    
+
+    Each row is one map, ``{summary, agent_id, context_entropy}``: graph_query
+    reads a single result column, so a multi-column RETURN fails on arity.
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -397,9 +404,10 @@ def query_unresolved_questions_with_entropy(
         MATCH (q:Discovery {{type: 'question', status: 'open'}})
         OPTIONAL MATCH (q)<-[:RESPONDS_TO]-(state:Discovery {{type: 'self_observation'}})
         WHERE state.eisv_s > ${{min_entropy}}
-        RETURN q.summary, q.agent_id, state.eisv_s AS context_entropy
+        WITH q, state.eisv_s AS context_entropy
         ORDER BY context_entropy DESC
         LIMIT {safe_limit}
+        RETURN {{summary: q.summary, agent_id: q.agent_id, context_entropy: context_entropy}}
     """
 
     return cypher, params
