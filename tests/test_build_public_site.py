@@ -58,6 +58,53 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "docs/public-site/index.md" in landing
 
 
+def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
+    import json
+
+    build(tmp_path, None)
+
+    demo = (tmp_path / "demo.html").read_text(encoding="utf-8")
+    landing = (tmp_path / "index.html").read_text(encoding="utf-8")
+    demo_text = " ".join(demo.split())
+    fixture = json.loads(
+        (PROJECT_ROOT / "tests" / "accountability_journey" / "incident-v0.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    # Every fact on the page comes from the fixture the journey test runs on.
+    for value in fixture["oracle"]["facts"].values():
+        assert str(value) in demo_text
+    record_ids = {r["record_id"] for r in fixture["arms"]["unitares"]["records"]}
+    for question in fixture["questions"]:
+        assert question["question_id"].replace("_", " ").capitalize() in demo_text
+    assert any(f"<code>{rid}</code>" in demo for rid in record_ids)
+    assert "{{" not in demo and "{fixture_blob}" not in demo
+    # The page shows the mechanism and says plainly it is not a win over git.
+    assert "docs/evaluations/accountability-journey/result-v0.md" in demo
+    assert "both scored 1.000" in demo_text
+    # Reachable from the landing hero and the nav.
+    assert 'href="demo.html"' in landing
+    assert 'href="demo.html" class="active"' in demo
+
+
+def test_demo_build_fails_on_unfilled_placeholder():
+    import pytest
+
+    from scripts.dev.build_public_site import render_demo_md
+
+    fixture = {
+        "oracle": {"facts": {"a": "x"}},
+        "questions": [],
+        "arms": {"unitares": {"records": []}},
+    }
+    with pytest.raises(ValueError):
+        render_demo_md("{{facts.missing}}", fixture)
+    fixture["questions"] = [{"question_id": "who", "fact_key": "a"}]
+    with pytest.raises(ValueError):
+        render_demo_md("{{questions_table}}", fixture)
+
+
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):
     build(tmp_path, None)
 
