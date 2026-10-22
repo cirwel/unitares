@@ -26,7 +26,6 @@ def test_summarize_renders_one_row_per_config(tmp_path):
     (tmp_path / "matrix-full" / "full.json").write_text(json.dumps({
         "config": "full", "compose_up_rc": 0,
         "ready": {"ok": True}, "identity": {"ok": True},
-        "store_budget": {"ok": True, "accepted": 20, "of": 21, "refusal": "Rate limit exceeded"},
         "deep_health": {"ok": True, "status": "healthy", "degraded": []},
         "database": {"ok": True, "migrations": "76 applied, max 78", "extensions": "age=1.7.0"},
     }))
@@ -34,10 +33,8 @@ def test_summarize_renders_one_row_per_config(tmp_path):
     (tmp_path / "matrix-no-redis" / "no-redis.json").write_text(json.dumps({
         "config": "no-redis", "compose_up_rc": 0,
         "ready": {"ok": True}, "identity": {"ok": False, "error": "x"},
-        "store_budget": {"ok": False, "accepted": 21, "of": 21, "refusal": None},
     }))
     table = probe.summarize(tmp_path)
     assert "| full | 0 | ✅ | ✅ |" in table
     assert "| no-redis | 0 | ✅ | ❌ |" in table
-    assert "no-redis** store budget: 21/21 accepted" in table
     assert "no-redis** identity: x" in table

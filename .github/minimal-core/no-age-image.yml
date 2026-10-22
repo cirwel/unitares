@@ -1,7 +1,13 @@
 # Plain pgvector Postgres (no AGE). Used alone, the stock init script runs
 # unchanged, which records how init fails without AGE.
+#
+# The service drops every capability (cap_drop: ALL). The shipped image
+# switches to USER postgres, but the stock pgvector entrypoint starts as root
+# and needs CHOWN/SETUID to fix data-directory ownership, so run it as postgres
+# the same way; the image's data and socket directories already belong to it.
 services:
   postgres-age:
     image: pgvector/pgvector:pg18
     build: !reset null
     pull_policy: missing
+    user: postgres
