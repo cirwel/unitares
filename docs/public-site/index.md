@@ -23,7 +23,8 @@ opinion.
 · Apache-2.0
 
 <div class="hero-actions" role="group" aria-label="Get started">
-  <a class="primary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
+  <a class="primary" href="demo.html">See it without installing</a>
+  <a class="secondary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
   <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
 </div>
 
