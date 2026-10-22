@@ -320,6 +320,28 @@ async def test_a_named_model_under_local_privacy_stays_local(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_named_model_under_local_privacy_asks_no_external_endpoint(monkeypatch):
+    """Review finding on #2994: under privacy='local' an external endpoint is
+    refused from its URL alone, so it is not asked for its model list first."""
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "https://models.example.com/v1")
+    for name in ("UNITARES_MODEL_PRIVACY", "UNITARES_MODEL_LOCAL_HOSTS",
+                 "UNITARES_TRUSTED_NETWORKS"):
+        monkeypatch.delenv(name, raising=False)
+
+    def asked():
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(co, "served_models", asked)
+
+    _payload(await co.handle_consult({"brief": "Answer this", "model": "qwen3:8b"}))
+
+    request = standard.await_args.args[0]
+    assert (request.provider, request.privacy) == ("ollama", "local")
+
+
+@pytest.mark.asyncio
 async def test_a_model_the_endpoint_does_not_serve_is_refused(monkeypatch):
     standard = AsyncMock(return_value=_completed())
     monkeypatch.setattr(co, "run_model_inference", standard)

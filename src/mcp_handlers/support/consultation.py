@@ -47,6 +47,7 @@ from src.local_inference_env import (
     ENDPOINT_NOT_LOCAL,
     MODEL_NOT_CONFIGURED,
     MODEL_NOT_SERVED,
+    classify_endpoint,
     served_models,
 )
 from .model_inference import (
@@ -708,7 +709,11 @@ async def _run_standard(
     *,
     force_local: bool,
 ) -> InferenceOutcome:
-    if request.model is not None:
+    # Under privacy='local' an endpoint that classifies external is not asked
+    # for its model list either: run_model_inference refuses it from the URL
+    # alone, before any request.
+    may_ask = not force_local or classify_endpoint().is_local
+    if request.model is not None and may_ask:
         # The agent's choice is bounded by what the endpoint serves. When the
         # list cannot be read, the call goes ahead and the endpoint answers.
         listed = await asyncio.to_thread(served_models)
