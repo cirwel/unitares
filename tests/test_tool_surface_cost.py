@@ -141,7 +141,11 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # Raised 2026-10-18 to 41,400 B: consult's host_ids (a council of 2-3 CLI
 # hosts) measured 41,340 B, 201 B over master's 41,139 B. One council call
 # replaces two or three consult calls and their separate result envelopes.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 41_400
+# Raised 2026-10-21 to 41,600 B: consult's model (the agent picks the local
+# model, operator decision 2026-10-21) measured 41,535 B, 158 B over the
+# 41,377 B base. Without it an agent cannot choose among the models the
+# endpoint serves, short of the deprecated call_model.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_600
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

@@ -577,6 +577,26 @@ class TestOllamaRouting:
         mock_openai.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_auto_uses_the_endpoints_only_served_model(self, monkeypatch):
+        """No default configured and one model served: that model is used."""
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.setattr(
+            "src.local_inference_env.served_models", lambda *a, **k: ("only:1b",)
+        )
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            model="only:1b"
+        )
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            await handle_call_model({"prompt": "Hello", "provider": "ollama", "model": "auto"})
+
+        call_kwargs = mock_client_instance.chat.completions.create.call_args[1]
+        assert call_kwargs["model"] == "only:1b"
+
+    @pytest.mark.asyncio
     async def test_explicit_model_needs_no_named_default(self, monkeypatch):
         """A caller-named model is sent as is when UNITARES_MODEL_ID is unset."""
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)

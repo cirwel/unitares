@@ -1015,6 +1015,20 @@ class ConsultParams(AgentIdentityMixin):
         max_length=32_000,
         description="Question or material to send for advisory model help.",
     )
+    model: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Standard lane only: the local model to use, one of the models "
+            "list_inference_hosts reports for ollama:local. A model the endpoint "
+            "does not list is refused (MODEL_NOT_SERVED). Naming one routes the "
+            "call to the configured endpoint (no Hugging Face fallback); privacy "
+            "still applies. Omitted: the operator's UNITARES_MODEL_ID, else the "
+            "endpoint's only served model."
+        ),
+        json_schema_extra={"brief": "Standard lane: a model ollama:local lists."},
+    )
     purpose: Literal["answer", "critique", "summarize", "generate"] = Field(
         "answer",
         description=(
