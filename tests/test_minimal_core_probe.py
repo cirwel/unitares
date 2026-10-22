@@ -68,6 +68,16 @@ def test_crash_restarts_counts_startup_crashes_too():
     assert probe.crash_restarts({}) == "–"
 
 
+def test_crash_restarts_survive_the_probe_restart_reset():
+    # `docker compose restart` resets RestartCount: 3 crashes before it, then 0.
+    r = {"containers_start": {"unitares-governance-mcp": {"restarts": 3}},
+         "containers_before_restart": {"unitares-governance-mcp": {"restarts": 3}},
+         "containers_end": {"unitares-governance-mcp": {"restarts": 0}}}
+    assert probe.crash_restarts(r) == "3"
+    r["containers_end"]["unitares-governance-mcp"]["restarts"] = 2
+    assert probe.crash_restarts(r) == "5"
+
+
 def test_deep_health_rejects_a_non_report(monkeypatch):
     monkeypatch.setattr(probe, "http", lambda *a, **k: (401, {"status": "unauthorized"}))
     monkeypatch.setattr(probe.time, "sleep", lambda s: None)

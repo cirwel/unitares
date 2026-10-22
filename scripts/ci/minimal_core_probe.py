@@ -316,12 +316,17 @@ def cell(r: dict | None) -> str:
 
 def crash_restarts(r: dict) -> str:
     """Restarts Docker made on its own for governance-mcp over the whole leg,
-    startup included. The probe's one manual restart does not raise
-    RestartCount, so the final value needs no baseline."""
-    for phase in ("containers_end", "containers_before_restart", "containers_start"):
+    startup included. The probe's manual restart resets RestartCount to 0, so
+    the count before it and the count after it are added."""
+    def count(phase: str) -> int | None:
         row = (r.get(phase) or {}).get("unitares-governance-mcp")
-        if row:
-            return str(row.get("restarts", 0))
+        return None if row is None else int(row.get("restarts", 0))
+    before, end = count("containers_before_restart"), count("containers_end")
+    if before is not None:
+        return str(before + (end or 0))
+    for value in (end, count("containers_start")):
+        if value is not None:
+            return str(value)
     return "–"
 
 
