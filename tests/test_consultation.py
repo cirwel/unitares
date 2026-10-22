@@ -2675,7 +2675,9 @@ async def test_unconfigured_host_order_refuses_missing_or_ambiguous_peers(monkey
         "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
     }))
     assert parsed["error_code"] == code
-    assert "consult.thorough.prefer" in parsed["recovery"]["action"]
+    # No peer and no orchestrator names the missing extension; an ambiguity names the preference.
+    expected = "consult.thorough.prefer" if available else "orchestrator extension"
+    assert expected in parsed["recovery"]["action"]
     assert co._thorough_host_for_caller() is None
     thorough.assert_not_awaited()
 

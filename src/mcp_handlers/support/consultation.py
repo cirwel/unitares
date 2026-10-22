@@ -1147,7 +1147,12 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             request.thorough_host_id is None and not request.thorough_blocked
         )
         reason_code = "CONSULT_HOST_SELECTION_REQUIRED" if selection_required else "CONSULT_NO_ELIGIBLE_HOST"
+        # No host and no orchestrator: choosing a host cannot help, so say what is missing.
+        not_configured = not selection_required and not host_adapter_lane_configured()
         if not request.allow_degraded:
+            failure_details = {"skipped": [dict(item) for item in request.skipped]}
+            if not_configured:
+                failure_details["reason"] = "extension_not_configured"
             return _failed(
                 request,
                 message=("A thorough consultation needs an explicit or unambiguous host selection"
@@ -1156,13 +1161,14 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 code=reason_code,
                 category="system_error",
                 recovery_action=(
+                    _THOROUGH_NOT_CONFIGURED_RECOVERY if not_configured else
                     "Pass host_id from list_inference_hosts, or configure "
                     "consult.thorough.prefer in UNITARES_INFERENCE_HOSTS_FILE. "
                     "Without a preference, exactly one enabled and available peer "
                     "of another family is required. Read skipped for setup details; "
                     "allow_degraded=true permits a standard local answer."
                 ),
-                failure_details={"skipped": [dict(item) for item in request.skipped]},
+                failure_details=failure_details,
             )
         degradation = {
             "occurred": True,

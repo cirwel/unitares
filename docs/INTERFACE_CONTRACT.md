@@ -1105,9 +1105,14 @@ schema remains `unitares.interface-contract.v1`. No tool or argument is removed.
   preference) now reports `INFERENCE_HOST_SELECTION_REQUIRED` for delegation,
   or `CONSULT_HOST_SELECTION_REQUIRED` for thorough consultation. When no host
   is eligible at all, as on a default install, delegation reports
-  `INFERENCE_HOST_UNAVAILABLE` with `reason: no_eligible_host` and thorough
-  consultation reports `CONSULT_NO_ELIGIBLE_HOST`, with or without a
-  configured job.
+  `INFERENCE_HOST_UNAVAILABLE` with `reason: no_eligible_host`, and thorough
+  consultation reports `CONSULT_NO_ELIGIBLE_HOST` (with `reason:
+  extension_not_configured` when the server has no orchestrator extension). A
+  configured preference is an order, not an availability check: its first
+  enabled, permitted host is attempted, and if that host cannot serve the
+  call, its own failure is returned (for example `INFERENCE_HOST_UNAVAILABLE`
+  with `reason: extension_not_configured`). Only a preference whose every
+  entry is switched off or excluded yields the no-eligible-host refusal.
   Consultation uses a standard local fallback only when the caller permits
   degradation; none of these choices creates a metered default.
 - **Client/operator action:** to preserve a fixed provider, pass `host_id`
