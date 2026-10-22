@@ -1,8 +1,61 @@
 # msg/send assurance gate: decision packet v0
 
-**Status: open operator decision, 2026-10-20.** Nothing here authorizes
-implementation. It records what a re-read of BEAM-verbs §9 step 1 (`msg/send`)
-found against the code, and the decisions that step now waits on.
+**Status: open operator decision, 2026-10-20; one recommendation, 2026-10-22
+(§0).** Nothing here authorizes implementation. It records what a re-read of
+BEAM-verbs §9 step 1 (`msg/send`) found against the code, and the decisions that
+step now waits on.
+
+## 0. Recommendation (2026-10-22)
+
+Take Q1 (b): governance sends on the agent's behalf from the agent's own
+caller-proven session. A three-seat council (dialectic, code review, live
+verification) and an outside consult (consultation `dcb4bc98`) converged on it.
+
+1. The agent calls a governance `msg` action in its own session. It holds no
+   lease-plane bearer and no continuity token.
+2. Governance derives the sender from that session, accepting only
+   `caller_asserted` bindings, the same set #2681 issues credentials to. It
+   mints a single-use `lat.v1` for that one request, as the presence site does,
+   and forwards it to the lease plane with the server-held bearer. The lease
+   plane is unchanged: `authorize_strict`, sender verified.
+3. Inbox reads take the same route. A wrong session reading an inbox consumes
+   at-most-once mail silently, so reads are never looser than sends.
+4. An unknown, inferred or mismatched session is refused, not accepted with a
+   label: an unknown session has no sender to label, and a stored wrong sender
+   is a permanent false record. Each refusal writes an audit event carrying both
+   claims, which is where a misattribution becomes visible.
+5. Every send and refusal also writes a metadata-only audit event (sender,
+   recipient, topic, time, how the sender was established), so the operator can
+   see traffic without reading bodies. Today nothing is visible: bodies live
+   only in `lease_plane.topic_messages`, for the recipient, for at most 7 days,
+   and no dashboard view reads them. Message traffic stays out of `tool_usage`
+   (`agent-message-transport-v0.md` §6).
+6. Messages stay pointers to durable artifacts. Lease release, handoff, pause
+   and resident commands keep their existing paths.
+
+Why not the continuity token (Q1 a): every later record narrows it.
+`docs/ontology/s1-continuity-token-retirement.md` labels it a possession proof
+("performative, narrowed"); clients stopped caching it on 2026-04-21; a token
+alone stopped resuming (#2465); #2681 (2026-10-06) made `client_session_id` a
+credential issued only on proof; #2995 stops teaching the token on ordinary
+calls. §7's sentence naming `recertify_strong_tier` predates #2681.
+
+Why not agents posting to the lease plane directly: they would need
+`LEASE_PLANE_BEARER_TOKEN`, which `http_auth.ex` applies to every route, including
+lease routes whose identity binding runs in `:log`. The lease plane has no
+session resolver, and `/v1/msg/send` takes the sender from the request body.
+
+What it does not close: a session that picks up a neighbour's cache holds a
+valid but wrong `client_session_id`, and the sender is then derived wrongly
+with confidence. Catching that needs a second, independent claim: the harness
+session id the SessionStart hook sees, compared with the one the session was
+registered with (Q6 B).
+
+Fits as written: `attestation-issuance-scope-v0.md` §4 (msg is its own mint
+site) and §8f(4) (a fresh single-use attestation per send and retry). Changes:
+§7's bar sentence, to name a caller-proven session. The operator's call: adding
+the `msg` action (new actions stay reserved, 2026-10-15) and that reading of the
+2026-08-29 "strong-assurance-gated" wording.
 
 Sources: [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md)
 (§§2, 7, 8g, 9), [`attestation-issuance-scope-v0.md`](attestation-issuance-scope-v0.md)
