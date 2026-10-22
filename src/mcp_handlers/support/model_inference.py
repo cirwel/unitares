@@ -41,6 +41,8 @@ from src.local_inference_env import (
     classify_endpoint,
     local_refusal_message,
     model_base_url,
+    MODEL_NOT_CONFIGURED,
+    model_not_configured_message,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -317,6 +319,23 @@ def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
     )
 
 
+def _model_not_configured_outcome() -> InferenceOutcome:
+    """The refusal for a local-route request when no model is named."""
+    return InferenceOutcome.failed(
+        model_not_configured_message(),
+        code=MODEL_NOT_CONFIGURED,
+        category="system_error",
+        recovery={
+            "action": (
+                "Have the operator set UNITARES_MODEL_ID to a model the configured "
+                "endpoint serves (`unitares model` lists them), or pass model "
+                "explicitly."
+            ),
+            "related_tools": ["list_inference_hosts"],
+        },
+    )
+
+
 def _hf_cooldown_failure(cooling: dict[str, Any]) -> InferenceOutcome:
     return InferenceOutcome.failed(
         f"Inference host 'hf:router' is cooling down after a {cooling['reason']} "
@@ -540,8 +559,11 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         # Reuse the registry's cached probe instead of a second inline socket
         # connect — same source of truth, and it benefits from the TTL cache.
         ollama_available = _ollama_available()
+        # The local route needs a model: the caller's, or the configured one.
+        # With neither, auto routing falls through to the HF fallback.
+        local_model_named = model != "auto" or bool(default_local_model())
 
-        if ollama_available:
+        if ollama_available and local_model_named:
             # Prefer Ollama (local, free, no token needed)
             base_url = model_base_url()
             local_endpoint = classify_endpoint(base_url)
@@ -561,6 +583,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                     model = f"{model}:fastest"
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
+            elif ollama_available:
+                # Reachable, but no model is named and no HF token to fall back on.
+                return _model_not_configured_outcome()
             elif not await asyncio.to_thread(_configured_endpoint_is_ollama):
                 configured = display_url(model_base_url())
                 return InferenceOutcome.failed(
@@ -601,6 +626,10 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             category="validation_error",
         )
     
+    # The local route has no built-in model: with none named, nothing is sent.
+    if provider == "ollama" and not model:
+        return _model_not_configured_outcome()
+
     # All HF routes (host id, provider, model prefix, and auto fallback) share
     # the same observed account readiness. Listing a host must not be the only
     # path that respects its cooldown.

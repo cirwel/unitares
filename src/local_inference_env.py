@@ -11,8 +11,9 @@ Settings (the documented names):
   server, including ``/v1`` (``http://localhost:11434/v1`` for Ollama on this
   machine, which is the default). A value with no path at all gets ``/v1``
   added, so a bare Ollama root still works.
-- ``UNITARES_MODEL_ID``: the model id the endpoint serves. Default
-  ``gemma4:latest`` for now; a later release removes the default.
+- ``UNITARES_MODEL_ID``: the model id the endpoint serves. No default: unset,
+  the local lane has no model, and every reader refuses with
+  ``MODEL_NOT_CONFIGURED`` before sending anything (``require_local_model``).
 - ``UNITARES_MODEL_LOCAL_HOSTS`` and ``UNITARES_MODEL_PRIVACY``: see
   ``classify_endpoint`` below.
 
@@ -25,9 +26,8 @@ release its row names; ``tests/test_local_inference_env.py`` fails once
 ``VERSION`` reaches it. The table is empty since v3.3.0, which removed
 ``UNITARES_OLLAMA_BASE``, ``UNITARES_OLLAMA_BASE_URL`` and
 ``UNITARES_LLM_MODEL``: nothing reads them, so an install that still sets only
-those gets the defaults. An empty value counts as unset, so a compose file that
-passes ``${VAR:-}`` through keeps the default instead of producing a model of
-``""``.
+those gets the default endpoint and no model. An empty value counts as unset, so a compose file that
+passes ``${VAR:-}`` through reads exactly as an unset one.
 
 Stdlib only and outside ``src/mcp_handlers``: the agent processes import this,
 and importing anything under ``src.mcp_handlers`` loads the whole handler
@@ -54,7 +54,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_BASE = "http://localhost:11434"
 DEFAULT_MODEL_BASE_URL = DEFAULT_OLLAMA_BASE + "/v1"
-DEFAULT_LOCAL_MODEL = "gemma4:latest"
 
 MODEL_BASE_URL_ENV = "UNITARES_MODEL_BASE_URL"
 MODEL_ENV = "UNITARES_MODEL_ID"
@@ -226,8 +225,13 @@ def ollama_openai_base_url() -> str:
 
 def default_local_model() -> str:
     """Model for local inference: ``UNITARES_MODEL_ID``, else an alias from
-    ``SETTING_ALIASES`` (none since v3.3.0), else gemma4:latest."""
-    return _resolve(MODEL_ENV, lambda _name, v: v.strip()) or DEFAULT_LOCAL_MODEL
+    ``SETTING_ALIASES`` (none since v3.3.0), else ``""``: no model is named.
+
+    A server cannot know which models an operator's endpoint serves, so it
+    names none. (Through v3.4.0 it fell back to ``gemma4:latest``, which inside
+    a container usually reached nothing.) Callers that send a request use
+    ``require_local_model``."""
+    return _resolve(MODEL_ENV, lambda _name, v: v.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +241,7 @@ def default_local_model() -> str:
 LOCAL = "local"
 EXTERNAL = "external"
 ENDPOINT_NOT_LOCAL = "MODEL_ENDPOINT_NOT_LOCAL"
+MODEL_NOT_CONFIGURED = "MODEL_NOT_CONFIGURED"
 
 _BUILTIN_LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal"})
 _warned_bad_privacy: set[str] = set()
@@ -517,6 +522,32 @@ def local_refusal_message(classification: EndpointPrivacy) -> str:
         f"Set {MODEL_PRIVACY_ENV}=local only if the server runs on a machine you "
         "operate."
     )
+
+
+class ModelNotConfiguredError(RuntimeError):
+    """A local-lane request with no model named (``UNITARES_MODEL_ID`` unset)."""
+
+    code = MODEL_NOT_CONFIGURED
+
+    def __init__(self):
+        super().__init__(model_not_configured_message())
+
+
+def model_not_configured_message() -> str:
+    return (
+        f"No local model is configured: set {MODEL_ENV} to a model the endpoint "
+        "serves (`unitares model` lists them and writes the setting), then "
+        "restart the server."
+    )
+
+
+def require_local_model(model: str | None = None) -> str:
+    """``model`` if given, else the configured one; raise
+    ``ModelNotConfiguredError`` when neither names a model. No network call."""
+    resolved = (model or "").strip() or default_local_model()
+    if not resolved:
+        raise ModelNotConfiguredError()
+    return resolved
 
 
 def display_url(url: str) -> str:

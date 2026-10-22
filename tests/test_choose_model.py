@@ -49,9 +49,9 @@ def test_clear_removes_only_the_owned_keys():
 
 # --- model choice -------------------------------------------------------------
 
-def test_prefers_the_documented_default_when_pulled():
-    assert cm.default_choice(["llama3:8b", "gemma4:latest"]) == "gemma4:latest"
-    assert cm.default_choice(["llama3:8b", "qwen3:8b"]) == "llama3:8b"
+def test_offers_the_first_listed_model_and_prefers_none():
+    assert cm.default_choice(["llama3:8b", "gemma4:latest"]) == "llama3:8b"
+    assert cm.default_choice(["qwen3:8b", "llama3:8b"]) == "qwen3:8b"
 
 
 def test_rejects_a_model_that_is_not_pulled(capsys):
@@ -202,7 +202,7 @@ def test_interactive_pick_by_number(monkeypatch):
 
 def test_interactive_enter_takes_the_default(monkeypatch):
     _tty(monkeypatch, [""])
-    assert cm.pick_model(["llama3:8b", "gemma4:latest"], None, assume_yes=False) == "gemma4:latest"
+    assert cm.pick_model(["llama3:8b", "gemma4:latest"], None, assume_yes=False) == "llama3:8b"
 
 
 def test_interactive_nonsense_is_refused(monkeypatch, capsys):
