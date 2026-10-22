@@ -1,0 +1,7 @@
+# Plain pgvector Postgres (no AGE). Used alone, the stock init script runs
+# unchanged, which records how init fails without AGE.
+services:
+  postgres-age:
+    image: pgvector/pgvector:pg18
+    build: !reset null
+    pull_policy: missing
