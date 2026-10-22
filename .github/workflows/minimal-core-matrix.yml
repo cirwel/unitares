@@ -67,7 +67,7 @@ jobs:
           grep -qx 'run_sql "graph_schema.sql"' db/postgres/docker-initdb.sh
           sed '/^run_sql "graph_schema.sql"$/d' db/postgres/docker-initdb.sh > "$RUNNER_TEMP/initdb-noage.sh"
           chmod 755 "$RUNNER_TEMP/initdb-noage.sh"
-          ! grep -q graph_schema "$RUNNER_TEMP/initdb-noage.sh"
+          if grep -q graph_schema "$RUNNER_TEMP/initdb-noage.sh"; then echo "::error::graph_schema still in the no-AGE init copy"; exit 1; fi
           echo "NOAGE_INITDB=$RUNNER_TEMP/initdb-noage.sh" >> "$GITHUB_ENV"
 
       - name: Validate the composed configuration
@@ -127,5 +127,6 @@ jobs:
           {
             echo "## Minimal core matrix"
             echo
-            python3 scripts/ci/minimal_core_probe.py --summarize "$RUNNER_TEMP/results"
+            python3 scripts/ci/minimal_core_probe.py --summarize "$RUNNER_TEMP/results" \
+              --expect full,no-redis,no-lease-plane,no-age-stock-init,no-age,minimal-core,minimal-floor
           } | tee -a "$GITHUB_STEP_SUMMARY"
