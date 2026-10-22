@@ -59,7 +59,7 @@ def test_ledger_discloses_the_interim_execution_counts() -> None:
 def test_ledger_preserves_earned_and_unearned_claims_side_by_side() -> None:
     """Operational evidence stays visible without being promoted to efficacy."""
     assert "records sustained maintainer traffic" in NORMALIZED
-    assert "A governed pause landed" in NORMALIZED
+    assert "Governed pauses are delivered" in NORMALIZED
     assert "current rate has not been re-measured" in NORMALIZED
     assert "did not establish predictive lift" in NORMALIZED
     assert "inconclusive, not a demonstrated negative" in NORMALIZED

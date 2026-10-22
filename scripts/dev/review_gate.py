@@ -124,10 +124,12 @@ NATIVE_WAIT_S = 600
 # of lesser findings is answered by targeted fix verification either way
 # (capped_review in cmd_review).
 # Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
-# should be context based". ROUND_BACKSTOP bounds a review that never
-# converges.
+# should be context based". Operator 2026-10-21: ten total cycles warn
+# and prompt scope reassessment; useful fixes are not blocked by total count.
 ROUND_CAP = 3
-ROUND_BACKSTOP = 10
+CONVERGENCE_WARNING_CYCLES = 10
+# Compatibility for callers importing the former name; this threshold is advisory.
+ROUND_BACKSTOP = CONVERGENCE_WARNING_CYCLES
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -497,19 +499,48 @@ def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
     base integration diff accompanies it as interaction-review context.
     """
     integrated_base = git("merge-base", base, head).strip()
-    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
-                             previous, integrated_base], capture_output=True, text=True)
-    tree = merged.stdout.split("\n", 1)[0].strip()
-    if merged.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages", "-z",
+                             previous, integrated_base], capture_output=True)
+    records = merged.stdout.split(b"\0")
+    tree = records[0].decode("ascii", "replace").strip()
+    conflicts: set[str] = set()
+    valid = merged.returncode in (0, 1) and bool(re.fullmatch(r"[0-9a-f]{40,64}", tree))
+    for record in records[1:]:
+        if not record:
+            continue
+        stage = re.fullmatch(rb"[0-7]{6} [0-9a-f]{40,64} [123]\t(.+)", record, re.DOTALL)
+        if stage is None:
+            valid = False
+            break
+        conflicts.add(os.fsdecode(stage[1]))
+    if not valid or (merged.returncode == 1 and not conflicts):
         return (diff_text(previous, head),
                 "Base integration could not be reconstructed conflict-free. The supplied delta "
                 "contains ALL changes since the full review, without separating upstream work. "
                 "Do not assume any changes are already covered; uncertain scope requires FULL_REQUIRED.")
 
-    def patch(left: str, right: str) -> str:
+    def patch(left: str, right: str, *, only: bool = False, exclude: bool = False) -> str:
+        paths = ([f":(literal){p}" for p in sorted(conflicts)] if only else
+                 [".", *[f":(exclude,literal){p}" for p in sorted(conflicts)]] if exclude else [])
         return subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "--no-renames",
-                               "--binary", left, right], capture_output=True,
+                               "--binary", left, right, "--", *paths], capture_output=True,
                               check=True).stdout.decode("utf-8", "replace")
+
+    if conflicts:
+        # The merge-tree contains conflict markers, not a usable baseline for
+        # those paths. Compare the actual resolution to BOTH real inputs:
+        # taking the reviewed side unchanged must still expose an upstream
+        # change it rejects. All other paths retain the automatic baseline.
+        delta = ("Subsequent PR edits outside conflicted paths:\n" + patch(tree, head, exclude=True)
+                 + "\nConflict resolutions relative to the reviewed side:\n" + patch(previous, head, only=True)
+                 + "\nConflict resolutions relative to the integrated base:\n" + patch(integrated_base, head, only=True))
+        return (delta,
+                "Git reconstructed base integration with conflicts. The supplied delta includes "
+                "every conflicted path against BOTH inputs, plus all subsequent edits outside "
+                "those paths. Inspect the resolutions and their interactions; conflicts alone "
+                "do not establish expanded scope or require FULL_REQUIRED. Decline uncertain scope.\n\n"
+                "Integrated upstream changes (context, not automatically new PR scope):\n"
+                + patch(git("merge-base", previous, integrated_base).strip(), integrated_base))
 
     return (patch(tree, head),
             f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "
@@ -551,7 +582,7 @@ class Record:
 
     def status(self) -> tuple[str, str]:
         if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
-            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh --reviewer PROVIDER"
+            return "pending", "UNREVIEWED: review incomplete or follow-up scope declined; run review.sh --fresh --reviewer PROVIDER"
         if self.verdict == "CLEAN":
             return "success", f"clean ({self.reviewer})"
         if self.verdict == "FINDINGS" and self.disposed:
@@ -770,12 +801,16 @@ def latest_matching(comments: list[dict], key: str,
         body = c.get("body", "")
         rec = comment_record(c)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
-            if (rec.scope == "fix" and rec.status()[0] == "success"
+            # Interrupted reviews can still contain concrete findings. Preserve
+            # legacy FAILED records too; a later outage or CLEAN cannot erase
+            # them, and disposing them must not invent completed coverage.
+            if rec.verdict == "FAILED" and (partial := partial_finding_count(body)):
+                rec.verdict, rec.findings, rec.scope = "FINDINGS", partial, "full-required"
+            if (rec.scope == "fix"
                     and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
-                if rec.disposed:
-                    rec.scope = "full-required"  # answer the findings without approving the scope
-                else:
-                    rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
+                rec.scope = "full-required"  # missing source proof cannot establish coverage
+                if rec.verdict == "CLEAN":
+                    rec.verdict = "FAILED"
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
             rec.url = c.get("html_url", "")
@@ -783,7 +818,7 @@ def latest_matching(comments: list[dict], key: str,
             rec.created_at = c.get("created_at", "")
             records.append(rec)
     records.extend(rec for rec in native if rec.key == key)
-    found, completed, open_findings = None, None, []
+    found, completed, open_findings, required_full = None, None, [], None
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
         original = None
         found = rec
@@ -819,13 +854,23 @@ def latest_matching(comments: list[dict], key: str,
             else:
                 rec.disposed = False
                 open_findings.append(rec)
+        # A failed retry cannot erase a request for an actual full pass.
+        # Disposition answers findings; only a later completed, non-disposition
+        # full review can satisfy the outstanding coverage requirement.
+        if rec.scope == "full-required" and not rec.disposed:
+            required_full, completed = rec, None
+        elif (rec.full() or (rec in native and rec.reviewer == "codex-native"
+                             and rec.scope == "full" and rec.head)) and rec.verdict != "FAILED" and not rec.disposed:
+            required_full = None
         if rec.scope == "full-required" and rec.disposed:
+            if required_full is original:
+                required_full = rec
             rec.verdict = "FAILED"  # findings answered, coverage still missing
             if completed is rec or completed is original:
                 completed = None
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
-    return open_findings[-1] if open_findings else completed or found
+    return open_findings[-1] if open_findings else required_full or completed or found
 
 
 #: (repo, pr) -> (head key, base-merge equivalents). Set where a command has
@@ -936,12 +981,12 @@ class CodexRounds:
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
     def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
-        """No new full cycle without the operator: too many unproductive
-        cycles, or a review that has not converged by the backstop."""
+        """Require operator approval after too many unproductive cycles.
+
+        Total cycle count prompts reassessment, never grants or denies coverage.
+        """
         if not ROUND_CAP_ENABLED:
             return False
-        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
-            return True
         if joining:
             # Finishing a cycle (its second family) costs nothing when starting
             # it did not need the operator: the cycle before it was serious, or
@@ -1201,7 +1246,7 @@ CYCLE_GRANT_MARKER = "unitares-review-cycle v1"
 CYCLE_GRANT_TTL_S = 24 * 60 * 60
 CYCLE_GRANT_RE = re.compile(
     r"\A<!-- " + re.escape(CYCLE_GRANT_MARKER)
-    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\n(.+)\Z",
+    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\r?\n(.+)\Z",
     re.S,
 )
 
@@ -2040,6 +2085,22 @@ def has_reasoning(text: str) -> bool:
     lines = [ln for ln in (text or "").splitlines() if ln.strip()]
     body = "".join("".join(ln.split()) for ln in lines[:-1])
     return len(body) >= REVIEW_MIN_REASONING_CHARS
+
+
+def partial_review_text(text: str) -> str:
+    """Surface a failed provider's JSON response without crediting completion."""
+    try:
+        data = json.loads(text.strip().splitlines()[-1]) if text.strip() else None
+    except (ValueError, IndexError):
+        return text
+    return data["response"] if isinstance(data, dict) and isinstance(data.get("response"), str) else text
+
+
+def partial_finding_count(text: str) -> int:
+    text = partial_review_text(text)
+    parsed = parse_verdict(text)
+    return max(len(FINDING_TITLE_RE.findall(text)),
+               parsed[1] if parsed and parsed[0] == "FINDINGS" else 0)
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
@@ -3022,6 +3083,8 @@ def cmd_review(args) -> int:
                           "Consider the diff, prior review, availability and required model family.")
                     print("[review] available choices: " + ", ".join(reviewer_candidates(branch)))
                     return UNREVIEWED
+                args.failed_providers = {p for p in KNOWN_PROVIDERS
+                                         if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 # A small follow-up extends prior work instead of resetting it.
                 # Try this before the cycle cap: it spends no full cycle.
                 # --fresh explicitly asks for a full pass.
@@ -3029,7 +3092,7 @@ def cmd_review(args) -> int:
                                      and (existing.scope == "full-required"
                                           or "full review required: follow-up scope not confirmed" in existing.text))
                 if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None) and not grant_id:
-                    print("[review] UNREVIEWED: follow-up scope was declined; explicitly request --fresh for a full pass")
+                    print("[review] UNREVIEWED: review incomplete or follow-up scope declined; explicitly request --fresh for a full pass")
                     return UNREVIEWED
                 if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
                     snapshot = read_native(repo, pr, key, head, comments)
@@ -3053,6 +3116,11 @@ def cmd_review(args) -> int:
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     print(f"[review] UNREVIEWED: {exc}")
                     return UNREVIEWED
+                if rounds.count >= CONVERGENCE_WARNING_CYCLES:
+                    print(f"[review] Convergence warning after {rounds.count} full cycles: "
+                          "reassess scope and recurring findings before proceeding. "
+                          "The three-cycle redundancy budget, provider limits and required "
+                          "model-family coverage still apply.")
                 joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
                 if grant_id:
                     if not cycle_grant(comments, grant_id, head, key, rounds,
@@ -3067,7 +3135,7 @@ def cmd_review(args) -> int:
                 if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
                     print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
-                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          f"a P0/P1 finding; {rounds.count} in all); "
                           "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
@@ -3080,8 +3148,6 @@ def cmd_review(args) -> int:
                     sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
-                args.failed_providers = {p for p in KNOWN_PROVIDERS
-                                         if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and reviewer == "codex" and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
                     try:
@@ -3386,18 +3452,19 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     deadline = time.monotonic() + args.budget
     available = []
     disabled = disabled_providers()
+    retry_override = not getattr(args, "respect_provider_cooldown", False)
     for provider in providers:
         if provider in disabled:
             print(f"[review] skipping {provider}: disabled repo-wide "
                   f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
             continue
         if (provider in getattr(args, "failed_providers", set())
-                and getattr(args, "reviewer", None) != provider):
+                and not (getattr(args, "reviewer", None) == provider and retry_override)):
             print(f"[review] {provider} exhausted retries for this diff; "
-                  f"use --reviewer {provider} to explicitly retry")
+                  f"use review.sh --reviewer {provider} without --respect-provider-cooldown to explicitly retry")
             continue
         reason = provider_cooldown(provider)
-        if reason and getattr(args, "reviewer", None) != provider:
+        if reason and not (getattr(args, "reviewer", None) == provider and retry_override):
             print(f"[review] skipping {provider}: {reason} cooldown; "
                   f"use --reviewer {provider} to retry after restoring access")
         else:
@@ -3490,12 +3557,15 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials, model, effort)
     minutes = (time.monotonic() - t0) / 60
+    # Failed attempts never establish completed coverage. Preserve concrete
+    # findings and explicit scope requests even in partial provider JSON.
+    scopes = re.findall(r"(?m)^SCOPE: (\w+)\s*$", partial_review_text(text))
+    explicit_refusal = bool(followup and scopes and scopes != ["FOLLOWUP"])
     parsed = parse_verdict(text) if note == "exit 0" else None
-    scope_declined = bool(followup and parsed is not None
-                          and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
+    scope_declined = explicit_refusal or bool(followup and parsed is not None and scopes != ["FOLLOWUP"])
     if scope_declined:
         # A scope refusal cannot discard concrete findings the reviewer found.
-        if parsed[0] == "CLEAN":
+        if parsed is None or parsed[0] == "CLEAN":
             parsed, note = None, "full review required: follow-up scope not confirmed"
         print("[review] follow-up cannot establish coverage; run review.sh --fresh --reviewer PROVIDER for a full pass within the budget")
     if parsed is not None and not has_reasoning(text):
@@ -3504,8 +3574,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if parsed is None:
         if "follow-up scope not confirmed" not in note:
             remember_unavailable(reviewer, text, note)
-        rec = Record(key, "FAILED", 0, False, reviewer)
-        heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
+        partial = partial_finding_count(text)
+        if partial:
+            text = partial_review_text(text) + f"\n\nIncomplete provider attempt ({note}); no completed review coverage."
+        rec = Record(key, "FINDINGS" if partial else "FAILED", partial, False, reviewer)
+        heading = (f"FINDINGS({partial}) (incomplete review: {note})" if partial else
+                   f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})")
     else:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
@@ -3516,7 +3590,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
                  argparse.Namespace(review_id=review_run_id,
                                     reviewed_from=followup.from_head if followup else None, fixes_only=True),
                  head=reviewed_head_oid, base_oid=reviewed_base_oid)
-    if scope_declined:
+    if scope_declined or (parsed is None and rec.findings):
         rec.scope = "full-required"
     if followup:
         heading += f" · follow-up from {followup.from_head[:10]}"
@@ -3543,7 +3617,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if rec.verdict == "FINDINGS":
         print("[review] fix and push (the next run reviews the new diff), or record "
               "dispositions: scripts/dev/review.sh dispose <file>")
-    return UNREVIEWED if parsed is None else (0 if state == "success" else 1)
+    return UNREVIEWED if parsed is None and not rec.findings else (0 if state == "success" else 1)
 
 
 def cmd_record(args) -> int:
@@ -3917,12 +3991,11 @@ def round_note(rounds: CodexRounds | None) -> str:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
     if rounds.spent != rounds.count:
-        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
-                f"backstop {ROUND_BACKSTOP})")
+        note = f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1)"
     serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
-    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
-                                     or (rounds.spent >= ROUND_CAP and not serious_last))
-    return note + (" (cap reached)" if reached else "")
+    reached = rounds.spent >= ROUND_CAP and not serious_last
+    warning = " (convergence warning: reassess scope)" if rounds.count >= CONVERGENCE_WARNING_CYCLES else ""
+    return note + (" (cap reached)" if reached else "") + warning
 
 
 def cmd_ci(args) -> int:
@@ -3988,6 +4061,8 @@ def cmd_ci(args) -> int:
     return 0
 
 
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--base", default=None,
@@ -4006,6 +4081,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
+    r.add_argument("--respect-provider-cooldown", action="store_true",
+                   help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
 
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")
@@ -4060,8 +4137,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     try:
-        return {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
-                "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+        result = {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
+                  "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+        return result
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
         return 0
