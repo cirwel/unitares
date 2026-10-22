@@ -1,0 +1,24 @@
+# Plain pgvector Postgres (no AGE). Used alone, the stock init script runs
+# unchanged, which records how init fails without AGE.
+#
+# The service drops every capability (cap_drop: ALL). The shipped image
+# switches to USER postgres, but the stock pgvector entrypoint starts as root
+# and needs CHOWN/SETUID to fix data-directory ownership, so run it as postgres
+# the same way; the image's data and socket directories already belong to it.
+services:
+  postgres-age:
+    image: pgvector/pgvector:pg18
+    build: !reset null
+    pull_policy: missing
+    user: postgres
+    # A failed first init must stay failed: with the default restart policy the
+    # entrypoint skips init on the second boot (PGDATA exists) and serves a
+    # partial schema. The healthcheck goes over TCP because the entrypoint's
+    # temporary init server listens only on the Unix socket, so "healthy" can
+    # only mean init has finished.
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d governance"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
