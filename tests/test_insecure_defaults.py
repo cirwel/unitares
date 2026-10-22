@@ -272,6 +272,8 @@ def test_refusal_names_a_signing_key_recipe_the_server_can_load():
     # 64 hex characters base64url-decode to 48 bytes, and the seed must be 32.
     import base64
     import os
+    import shutil
+    import subprocess
 
     from src.insecure_defaults import SIGNING_KEY_COMMAND
     from src.lease_attestation import load_signing_key
@@ -279,7 +281,19 @@ def test_refusal_names_a_signing_key_recipe_the_server_can_load():
     refusal = published_default_refusal(_exposed(UNITARES_MCP_BEARER_TOKENS="a"))
     assert SIGNING_KEY_COMMAND in refusal
     assert "openssl rand -hex 32" not in refusal.split("UNITARES_LEASE_ATTESTATION_SIGNING_KEY is")[1]
-    # What the recipe produces: 32 random bytes, base64url, padding stripped.
+    # Run the recipe itself where openssl exists, so a wrong byte count or a
+    # missing alphabet swap fails here rather than at the operator's first mint.
+    if shutil.which("openssl") and shutil.which("base64"):
+        for _ in range(8):  # several draws, so a '+' or '/' would surface
+            out = subprocess.run(
+                ["sh", "-c", SIGNING_KEY_COMMAND], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            assert "\n" not in out and not set(out) & set("+/=")
+            load_signing_key(out)
+    # And without openssl: the parts that make it loadable are present.
+    assert "rand 32" in SIGNING_KEY_COMMAND
+    assert "tr '+/' '-_'" in SIGNING_KEY_COMMAND
+    assert "tr -d '='" in SIGNING_KEY_COMMAND
     seed = base64.b64encode(os.urandom(32)).decode().translate(str.maketrans("+/", "-_")).rstrip("=")
     load_signing_key(seed)
 
