@@ -526,12 +526,19 @@ def test_resolve_local_model_guesses_nothing_among_several(monkeypatch):
     assert env.resolve_local_model() == ""
 
 
-def test_require_local_model_uses_the_endpoints_only_served_model(monkeypatch):
-    """Review finding on #2994: the reviewers and the resident runner resolve
-    like consult, so a single served model needs no UNITARES_MODEL_ID."""
+def test_require_local_model_does_not_ask_the_endpoint(monkeypatch):
+    """Review finding on #2994: the reviewers record the model they name, so
+    require_local_model never takes the endpoint's only served model (that
+    model went unrecorded) and makes no network call on the event loop."""
     monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
-    monkeypatch.setattr(env, "served_models", lambda *a, **k: ("only:1b",))
-    assert env.require_local_model() == "only:1b"
+
+    def asked(*a, **k):
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(env, "served_models", asked)
+    with pytest.raises(env.ModelNotConfiguredError):
+        env.require_local_model()
+    assert env.require_local_model("chosen:3b") == "chosen:3b"
 
 
 def test_not_configured_message_matches_what_the_caller_can_do():
@@ -539,4 +546,5 @@ def test_not_configured_message_matches_what_the_caller_can_do():
     internal = env.model_not_configured_message(caller_can_choose=False)
     assert "pass model" in tool and "UNITARES_MODEL_ID" in tool
     assert "pass model" not in internal and "UNITARES_MODEL_ID" in internal
-    assert str(env.ModelNotConfiguredError()) == internal
+    assert "pass model" not in str(env.ModelNotConfiguredError())
+    assert "UNITARES_MODEL_ID" in str(env.ModelNotConfiguredError())

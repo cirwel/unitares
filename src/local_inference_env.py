@@ -531,8 +531,11 @@ class ModelNotConfiguredError(RuntimeError):
 
     def __init__(self):
         # Raised for internal callers (the reviewers, the resident runner),
-        # which have no model argument to pass.
-        super().__init__(model_not_configured_message(caller_can_choose=False))
+        # which have no model argument to pass and record the model they name.
+        super().__init__(
+            f"No local model is configured: have the operator set {MODEL_ENV} "
+            "(`unitares model` writes it)."
+        )
 
 
 def model_not_configured_message(*, caller_can_choose: bool = True) -> str:
@@ -551,10 +554,13 @@ def model_not_configured_message(*, caller_can_choose: bool = True) -> str:
 
 
 def require_local_model(model: str | None = None) -> str:
-    """``model`` if given, else ``resolve_local_model`` (the configured one, or
-    the endpoint's only served model); raise ``ModelNotConfiguredError`` when
-    none is chosen. Blocking: it may ask the endpoint for its model list."""
-    resolved = resolve_local_model(model)
+    """``model`` if given, else the configured one; raise
+    ``ModelNotConfiguredError`` when neither names a model. No network call.
+
+    Deliberately not ``resolve_local_model``: its callers (the reviewers, the
+    resident runner) record the model they name as provenance, so a model the
+    endpoint picked would go unrecorded, and they call it on the event loop."""
+    resolved = (model or "").strip() or default_local_model()
     if not resolved:
         raise ModelNotConfiguredError()
     return resolved
