@@ -52,7 +52,7 @@ from src.local_inference_env import (
     is_ollama_endpoint,
     local_refusal_message,
     model_base_url,
-    model_not_configured_message,
+    ModelNotConfiguredError,
 )
 
 # Check if OpenAI SDK available
@@ -113,7 +113,10 @@ def _model_or_none(model: Optional[str]) -> Optional[str]:
         return resolved
     if not _unconfigured_logged:
         _unconfigured_logged = True
-        logger.warning("internal inference skipped: %s", model_not_configured_message())
+        # The operator's fix only: this lane has no caller to pass a model, and
+        # takes none from the endpoint, because the dialectic reviewer stamps
+        # the configured model as the provenance of what it records.
+        logger.warning("internal inference skipped: %s", ModelNotConfiguredError())
     return None
 
 

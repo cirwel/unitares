@@ -530,20 +530,33 @@ class ModelNotConfiguredError(RuntimeError):
     code = MODEL_NOT_CONFIGURED
 
     def __init__(self):
-        super().__init__(model_not_configured_message())
+        # Raised for internal callers (the reviewers, the resident runner, the
+        # internal lane), which have no model argument to pass and take none
+        # from the endpoint: they record the configured model as provenance.
+        super().__init__(
+            f"No local model is configured: have the operator set {MODEL_ENV} "
+            "(`unitares model` writes it)."
+        )
 
 
 def model_not_configured_message() -> str:
+    """Why a tool call has no model, and what fixes it: the caller can pass
+    ``model``. Internal callers raise ``ModelNotConfiguredError`` instead."""
     return (
-        f"No local model is configured: set {MODEL_ENV} to a model the endpoint "
-        "serves (`unitares model` lists them and writes the setting), then "
-        "restart the server."
+        "No local model is chosen: pass model (one the endpoint serves; "
+        "list_inference_hosts lists them), or have the operator set "
+        f"{MODEL_ENV} (`unitares model` writes it) or serve exactly one model "
+        "at the endpoint."
     )
 
 
 def require_local_model(model: str | None = None) -> str:
     """``model`` if given, else the configured one; raise
-    ``ModelNotConfiguredError`` when neither names a model. No network call."""
+    ``ModelNotConfiguredError`` when neither names a model. No network call.
+
+    Deliberately not ``resolve_local_model``: its callers (the reviewers, the
+    resident runner) record the model they name as provenance, so a model the
+    endpoint picked would go unrecorded, and they call it on the event loop."""
     resolved = (model or "").strip() or default_local_model()
     if not resolved:
         raise ModelNotConfiguredError()
@@ -666,3 +679,66 @@ def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_
     with _ollama_detect_lock:
         _ollama_detect_cache[root] = (time.monotonic(), result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Which models the endpoint serves, and which one a call uses
+# ---------------------------------------------------------------------------
+
+MODEL_NOT_SERVED = "MODEL_NOT_SERVED"
+# A model list changes when the operator pulls or removes one; half a minute
+# keeps a busy server from re-asking on every call without hiding a pull for long.
+_SERVED_MODELS_TTL_S = 30.0
+_served_models_cache: dict[str, tuple[float, tuple[str, ...] | None]] = {}
+_served_models_lock = threading.Lock()
+
+
+def served_models(
+    url: str | None = None, *, timeout: float = LOCAL_PROBE_TIMEOUT_S
+) -> tuple[str, ...] | None:
+    """Model ids the endpoint lists on ``GET {base}/models``, sorted, or None
+    when it does not answer in the OpenAI-compatible shape. Cached for 30 s.
+
+    Blocking; async callers run it with ``asyncio.to_thread``. Sends no prompt:
+    a local endpoint is reached directly, ignoring HTTP_PROXY, and any other
+    through the environment's proxy, as the inference clients do.
+    """
+    base = url or model_base_url()
+    now = time.monotonic()
+    with _served_models_lock:
+        cached = _served_models_cache.get(base)
+        if cached is not None and (now - cached[0]) < _SERVED_MODELS_TTL_S:
+            return cached[1]
+    opener = direct_urlopen if classify_endpoint(base).is_local else _proxied_urlopen
+    ids: tuple[str, ...] | None
+    try:
+        with opener(urllib.request.Request(base + "/models"), timeout=timeout) as resp:
+            payload = json.load(resp)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            ids = None
+        else:
+            ids = tuple(sorted({
+                m["id"] for m in data
+                if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
+            }))
+    except (urllib.error.URLError, OSError, ValueError):
+        ids = None
+    with _served_models_lock:
+        _served_models_cache[base] = (time.monotonic(), ids)
+    return ids
+
+
+def resolve_local_model(requested: str | None = None) -> str:
+    """The model a local-route call uses, or ``""`` when none can be chosen.
+
+    In order: the model the agent asked for; ``UNITARES_MODEL_ID``; the
+    endpoint's only served model, when it lists exactly one. With several
+    served and none named, nothing is guessed. Blocking (it may ask the
+    endpoint); async callers run it with ``asyncio.to_thread``.
+    """
+    chosen = (requested or "").strip() or default_local_model()
+    if chosen:
+        return chosen
+    listed = served_models()
+    return listed[0] if listed is not None and len(listed) == 1 else ""

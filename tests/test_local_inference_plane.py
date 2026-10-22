@@ -119,6 +119,20 @@ def test_internal_delegation_never_attributes_energy():
     assert "get_or_create_monitor" not in source
 
 
+def test_registry_lists_the_endpoints_served_models(monkeypatch):
+    """An agent picks the local model from what list_inference_hosts reports
+    (operator decision 2026-10-21)."""
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: True)
+    monkeypatch.setattr(inference_registry, "served_models", lambda: ("gemma4:latest", "qwen3:8b"))
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["models"] == ["gemma4:latest", "qwen3:8b"]
+    assert "consult(model=...)" in host["notes"]
+
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
+    assert inference_registry.get_inference_host("ollama:local")["models"] == ["qwen3:8b"]
+
+
 def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
     """Review finding on #2971: with no model named and an external endpoint,
     the host record names both problems, not only the first."""
@@ -133,3 +147,22 @@ def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
     assert host["accepts_host_id_from"] == []
     assert "classifies external" in host["notes"]
     assert "No model is named" in host["notes"]
+
+
+@pytest.mark.asyncio
+async def test_internal_lane_takes_no_model_from_the_endpoint(monkeypatch):
+    """Review finding on #2994: the in-process dialectic reviewer stamps the
+    configured model as provenance, so the internal lane never takes the
+    endpoint's only served model (its verdicts would record no model)."""
+    import src.local_inference_env as env
+
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+
+    def asked(*a, **k):
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(env, "served_models", asked)
+    assert llm_delegation._model_or_none(None) is None
+    with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
+         patch.object(llm_delegation, "_ollama_available", return_value=True):
+        assert await llm_delegation.is_llm_available() is False
