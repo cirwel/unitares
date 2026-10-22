@@ -20,7 +20,7 @@ import re
 import sys
 from typing import Callable
 
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
 ENV_VAR = "UNITARES_ROUTE_PACKS"
 MANIFEST_ENV = "UNITARES_ROUTE_PACKS_FILE"
@@ -138,6 +138,7 @@ def register_route_packs(app, *, logger=None, raw: str | None = None) -> list[st
     mounted = []
     occupied = {(r.path, method) for r in app.routes if isinstance(r, Route)
                 for method in (r.methods or ())}
+    mounts = tuple(r.path for r in app.routes if isinstance(r, Mount))
     for name in names:
         if name not in specs:
             if logger is not None:
@@ -148,6 +149,8 @@ def register_route_packs(app, *, logger=None, raw: str | None = None) -> list[st
             proposed = [(r.path, method) for r in routes for method in (r.methods or ())]
             if len(set(proposed)) != len(proposed) or occupied.intersection(proposed):
                 raise ValueError("extension routes collide with an existing route")
+            if any(r.path == m or r.path.startswith(m.rstrip("/") + "/") for r in routes for m in mounts):
+                raise ValueError("extension routes fall under an existing mount")
         except Exception as exc:  # A missing optional extension does not stop core startup.
             if logger is not None:
                 logger.error("route pack %r could not be loaded: %s", name, exc)

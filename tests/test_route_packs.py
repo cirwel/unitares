@@ -131,6 +131,39 @@ def test_collisions_reject_entire_pack_including_implicit_head(manifest, existin
     assert len(app.routes) == int(existing)
 
 
+@pytest.mark.parametrize('path', ['/v1/taxonomy', '/debug/memory', '/v1/residents'])
+def test_production_registrar_rejects_late_core_routes(manifest, monkeypatch, path):
+    from src.http_api import register_http_routes
+    doc = json.loads(manifest.read_text())
+    doc['packs']['example-summary'][0].update(path=path, methods=['GET'])
+    manifest.write_text(json.dumps(doc))
+    monkeypatch.setenv(packs.ENV_VAR, 'example-summary')
+    app = Starlette()
+    register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0.0,
+                         server_version='t', has_streamable_http=False)
+    assert [r.path for r in app.routes if isinstance(r, Route)].count(path) == 1
+
+
+def test_production_registrar_can_defer_packs(manifest, monkeypatch):
+    from src.http_api import register_http_routes
+    monkeypatch.setenv(packs.ENV_VAR, 'example-summary')
+    app = Starlette()
+    register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0.0,
+                         server_version='t', has_streamable_http=False, mount_route_packs=False)
+    assert '/extensions/summary' not in {r.path for r in app.routes}
+
+
+@pytest.mark.parametrize('path', ['/mcp', '/mcp/extra'])
+def test_paths_under_an_existing_mount_are_rejected(manifest, path):
+    from starlette.routing import Mount
+    doc = json.loads(manifest.read_text())
+    doc['packs']['example-summary'][0]['path'] = path
+    manifest.write_text(json.dumps(doc))
+    app = Starlette(routes=[Mount('/mcp', app=Starlette())])
+    assert packs.register_route_packs(app, raw='example-summary') == []
+    assert len(app.routes) == 1
+
+
 def test_compose_forwards_extension_settings():
     root = Path(__file__).resolve().parents[1]
     compose, example = (root / 'docker-compose.yml').read_text(), (root / '.env.example').read_text()

@@ -182,6 +182,7 @@ def register_http_routes(
     has_streamable_http: bool,
     mcp_server_name: str = "unitares",
     server_build_sha: str = "unknown",
+    mount_route_packs: bool = True,
 ):
     """
     Register all HTTP REST endpoints on the given Starlette ``app``.
@@ -327,12 +328,15 @@ def register_http_routes(
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
     app.routes.append(Route("/v1/residents", http_residents, methods=["GET"]))
-    # Deployment-specific routes (reference residents, automation census) are
-    # mounted only when UNITARES_ROUTE_PACKS names their pack; see
-    # src/http_routes/packs.py. The shipped default mounts none.
-    from src.http_routes.packs import register_route_packs
-    register_route_packs(app, logger=logger)
     app.routes.append(Route("/v1/residents/tag_audit", http_resident_tag_audit, methods=["GET"]))
     app.routes.append(Route("/v1/taxonomy", http_taxonomy, methods=["GET"]))
     app.routes.append(WebSocketRoute("/ws/eisv", websocket_eisv_stream))
     app.routes.append(Route("/debug/memory", http_debug_memory, methods=["GET"]))
+    # Deployment extensions are mounted only when UNITARES_ROUTE_PACKS names a
+    # pack in the UNITARES_ROUTE_PACKS_FILE manifest; see
+    # src/http_routes/packs.py. The shipped default mounts none. They go last so
+    # the collision check sees every core route; a caller that adds core routes
+    # afterwards passes mount_route_packs=False and mounts them itself.
+    if mount_route_packs:
+        from src.http_routes.packs import register_route_packs
+        register_route_packs(app, logger=logger)

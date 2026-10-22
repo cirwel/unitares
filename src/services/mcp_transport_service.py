@@ -517,6 +517,7 @@ def _register_application_routes(
         has_streamable_http=True,
         mcp_server_name=mcp.name,
         server_build_sha=server_build_sha,
+        mount_route_packs=False,
     )
     register_wave3a_probe_routes(app)
     register_wave3a_admin_routes(app)
@@ -541,6 +542,11 @@ def _register_application_routes(
         )
     )
     logger.info("Registered /mcp endpoint for Streamable HTTP transport")
+
+    # Extensions mount after every core route, so the collision check sees them all.
+    from src.http_routes.packs import register_route_packs
+
+    register_route_packs(app, logger=logger)
 
 
 def build_transport_runtime(
