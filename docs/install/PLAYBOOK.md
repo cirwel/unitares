@@ -28,7 +28,7 @@
 | Requirement | Why | How to check |
 |------------|-----|--------------|
 | macOS 12+ (Monterey or newer) | Homebrew formulae for PG 17 + Apple Silicon support | `sw_vers -productVersion` |
-| Xcode Command Line Tools | Required to build Apache AGE from source | `xcode-select -p` (should print a path; if not, `xcode-select --install`) |
+| Xcode Command Line Tools | Required to build Apache AGE and pgvector from source | `xcode-select -p` (should print a path; if not, `xcode-select --install`) |
 | Homebrew | Package manager | `brew --version` (if missing, see [brew.sh](https://brew.sh)) |
 | ~2 GB free disk | Postgres data dir + Python venv + AGE build | `df -h ~` |
 | Network access to GitHub + PyPI + Homebrew | For installs | — |
@@ -40,10 +40,19 @@
 ## Step 1 — Install Homebrew packages
 
 ```bash
-brew install postgresql@17 pgvector redis python@3.14 git
+brew install postgresql@17 redis python@3.14 git
+export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
 brew services start postgresql@17
 brew services start redis
 ```
+
+The [Homebrew core pgvector formula](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/p/pgvector.rb)
+supports PostgreSQL 17 and 18 and currently declares both as build/test
+dependencies. Building or testing that formula can install PostgreSQL 18 as
+well. This playbook builds pgvector against PostgreSQL 17 explicitly in Step 2,
+so both extensions target the same server without requiring a second major
+version. PostgreSQL 17's bin directory also selects the matching `psql` and
+`createdb` commands for the later steps.
 
 **Expected:**
 
@@ -64,7 +73,7 @@ operator continuity.
 
 ---
 
-## Step 2 — Build Apache AGE 1.7.0 against PostgreSQL 17
+## Step 2 — Build Apache AGE and pgvector against PostgreSQL 17
 
 AGE is not in Homebrew. You build it from source against the exact `pg_config` from your Homebrew Postgres.
 
@@ -80,13 +89,42 @@ cd -
 **Expected:** `make install` ends without errors, and:
 
 ```bash
-ls "$(brew --prefix postgresql@17)/lib/postgresql/age.dylib"
-# /opt/homebrew/.../lib/postgresql/age.dylib
+ls "$("$PG_CONFIG" --pkglibdir)/age.dylib"
 ```
 
 **If `make` fails with `bison: command not found`:** `brew install bison flex` and prepend them to PATH: `export PATH="$(brew --prefix bison)/bin:$PATH"`. Re-run `make`.
 
-**If `make install` fails with permission errors:** the Homebrew postgres lib dir is user-writable on a normal install. If yours isn't (rare), check `ls -la "$(brew --prefix postgresql@17)/lib/postgresql/"` — the directory should be owned by your user, not root. Don't `sudo` this; that creates a root-owned file Homebrew can't manage later.
+**If `make install` fails with permission errors:** the Homebrew postgres lib dir is user-writable on a normal install. If yours isn't (rare), check `ls -ld "$("$PG_CONFIG" --pkglibdir)"` — the directory should be owned by your user, not root. Don't `sudo` this; that creates a root-owned file Homebrew can't manage later.
+
+Then build pgvector 0.8.7 with the same `pg_config`, following its
+[source installation instructions](https://github.com/pgvector/pgvector/tree/v0.8.7#installation).
+Use a new source directory; the following path is a suggested durable build
+location, not a managed UNITARES installation:
+
+```bash
+export PG_CONFIG="$(brew --prefix postgresql@17)/bin/pg_config"
+mkdir -p "$HOME/src"
+git clone --depth 1 --branch v0.8.7 https://github.com/pgvector/pgvector.git "$HOME/src/pgvector-0.8.7"
+(
+  cd "$HOME/src/pgvector-0.8.7" &&
+  make PG_CONFIG="$PG_CONFIG" &&
+  make install PG_CONFIG="$PG_CONFIG"
+)
+```
+
+**Expected:** the build and install finish successfully, and PostgreSQL 17's
+extension files exist:
+
+```bash
+ls "$("$PG_CONFIG" --pkglibdir)/vector.dylib"
+ls "$("$PG_CONFIG" --sharedir)/extension/vector.control"
+```
+
+These steps install extension files only. Step 3 enables the extensions in the
+new database. On an existing installation, inspect any installed vector files
+before replacing them; do not mix a Homebrew-managed extension with a manual
+install. A PostgreSQL major-version upgrade requires rebuilding both extensions
+against that version's `pg_config`.
 
 ---
 

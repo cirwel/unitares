@@ -1,0 +1,1 @@
+- **source comments:** five comments in `src/` cited documents that are no longer in the public tree; they now give the `git show` path to the removed design notes, or point at the existing completeness script. Comments only; three similar references in protected identity code are left for a separately reviewed change.

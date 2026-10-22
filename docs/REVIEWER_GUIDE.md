@@ -2,7 +2,7 @@
 
 **Created:** May 23, 2026
 
-**Last Updated:** October 18, 2026
+**Last Updated:** October 20, 2026
 
 **Status:** Active
 
@@ -11,26 +11,19 @@ self-hosted, single-operator server that keeps attributed records of identity,
 claims and evidence, review, outcomes, and reconstruction across sessions,
 handoffs, and agents from different vendors.
 
-Start with the captured workflow and concrete corrections below, then exercise
-that workflow in a test deployment. The [evidence and limitations](EVIDENCE_AND_LIMITS.md)
-page collects the results and their scope; [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md)
-covers interfaces, storage, and authorization.
+This guide is procedure: what to run and inspect, in what order. Start with the
+claims ledger, then exercise the captured workflow in a test deployment.
+[Capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) covers interfaces,
+storage, and authorization.
 
 ## Evidence to check
 
-| What to evaluate | Record to inspect | What it establishes |
-|---|---|---|
-| Attribution and outcome binding | [Process A in the captured walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md#process-a) | Calls bind to one process; its finding retains authorship; an outcome grades the intended prediction and retains its evidence grade. |
-| Continuity across processes | [Process B in the walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md#process-b) | A fresh process retrieves A's resolved finding, author, and closure class, then declares the handoff. |
-| Review findings becoming corrections | [September 21 review retrospective](evaluations/review-correction-traces-2026-09-21.md) | Public finding-to-revision chains preserve evidence grades, prevent formatting repair from manufacturing approval, and keep unresolved findings visible. |
-| Review conditions surviving a session | [Carried condition and later repair](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317) | A public PR implements a condition ten days after its originating review opened; the original transcript is operator-private. |
-| Operation and recovery | [Dated production snapshot and queries](PRODUCTION_SNAPSHOT.md) | Recorded deployment activity and exercised recovery paths, with counting methods and scope. |
-
-The walkthrough's task is illustrative; its server responses were captured
-from a fresh Docker install on 2026-10-08. The retrospective establishes
-specific corrections in a recent, non-random sample. Comparative benefit over
-other review or handoff approaches remains unmeasured. Deployment counts
-measure recorded activity, not uptime or independent trials.
+The [current claim status](EVIDENCE_AND_LIMITS.md#current-claim-status) table
+in Evidence and limitations is the claims ledger: each demonstrated result,
+the record that shows it, and its scope, including the captured walkthrough's
+date and illustrative task, the sample limits of the review retrospective, and
+what deployment counts do and do not measure. Open each linked record there
+before running the workflow below.
 
 ## Verify one complete workflow
 
@@ -63,7 +56,8 @@ operations, or monitoring agents:
    only for a real handoff from that finished predecessor.
 
 The captured walkthrough covers steps 1–3 and 5–6. For step 4, inspect the
-[review protocol](../src/dialectic_protocol.py) and the correction records above,
+[review protocol](../src/dialectic_protocol.py) and the correction records in the
+[claims ledger](EVIDENCE_AND_LIMITS.md#current-claim-status),
 then exercise review with participating reviewers in your test deployment. A
 paused agent cannot resolve its own review over a standing reviewer objection;
 the objection remains pending for facilitation.

@@ -8,7 +8,7 @@ The installable Codex adapter itself is canonical in the companion `unitares-gov
 
 ## Goal
 
-Connect to a running UNITARES governance server, preserve continuity cleanly, and check in when there is meaningful agent state to report: typically at most once per assistant turn, plus milestone check-ins for substantial work. Do not manufacture a check-in, and avoid per-tool or per-edit noise. The plugin's Stop hook may add its own `substrate_interpretation` row after a turn; that row is not an agent check-in and does not need echoing (see `AGENTS.md`, *Codex-specific wiring*).
+Connect to a running UNITARES server, preserve continuity cleanly, and check in when there is meaningful agent state to report: typically at most once per assistant turn, plus milestone check-ins for substantial work. Do not manufacture a check-in, and avoid per-tool or per-edit noise. The plugin's Stop hook may add its own `substrate_interpretation` row after a turn; that row is not an agent check-in and does not need echoing (see `AGENTS.md`, *Codex-specific wiring*).
 
 ## Stable Workflow
 
@@ -46,10 +46,11 @@ also carries it under `raw_governance`.
 
 ## Continuity Model
 
-- `uuid` is an identity anchor, not ownership proof
-- `continuity_token` is short-lived ownership proof for same-owner/in-process use, not startup resume
-- `client_session_id` is in-session transport continuity metadata
-- `parent_agent_id` is how a fresh process declares lineage to prior work
+What `uuid`, `client_session_id`, `parent_agent_id` and `continuity_token` mean
+is owned by [`identity.md`](../ontology/identity.md); the rule a client follows
+is [Integrating agents §4.2](../manual/04-integrating-agents.md#42-identity-rule).
+Codex-specific:
+
 - `session_resolution_source` tells you how the runtime actually resolved continuity
 - if continuity falls back to a weak source, rerun `/governance-start`; do not repair it with bare UUID resume
 
