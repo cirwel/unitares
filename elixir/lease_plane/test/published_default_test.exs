@@ -34,6 +34,14 @@ defmodule UnitaresLeasePlane.PublishedDefaultTest do
              LeaseApplication.published_default_warnings(published_default(), "0.0.0.0", false)
 
     assert exposed =~ "UNITARES_LEASE_PLANE_HTTP_IP"
+    assert exposed =~ "config :lease_plane, http_ip:"
+  end
+
+  test "the :any atom binds every interface; :loopback does not" do
+    assert [_, _] = LeaseApplication.published_default_warnings(published_default(), :any, false)
+
+    assert [_] =
+             LeaseApplication.published_default_warnings(published_default(), :loopback, false)
   end
 
   test "the compose container's every-interface bind does not add it" do
@@ -56,5 +64,68 @@ defmodule UnitaresLeasePlane.PublishedDefaultTest do
     for ip <- [nil, "", "127.0.0.1", "::1"] do
       assert [_] = LeaseApplication.published_default_warnings(published_default(), ip, false)
     end
+  end
+end
+
+defmodule UnitaresLeasePlane.ResolvedHttpIpTest do
+  # Mutates the lease_plane app env and the process environment.
+  use ExUnit.Case, async: false
+
+  alias UnitaresLeasePlane.Application, as: LeaseApplication
+
+  setup do
+    env = System.get_env("UNITARES_LEASE_PLANE_HTTP_IP")
+    token = System.get_env("LEASE_PLANE_BEARER_TOKEN")
+    config = Application.fetch_env(:lease_plane, :http_ip)
+    System.delete_env("UNITARES_LEASE_PLANE_HTTP_IP")
+
+    on_exit(fn ->
+      if env,
+        do: System.put_env("UNITARES_LEASE_PLANE_HTTP_IP", env),
+        else: System.delete_env("UNITARES_LEASE_PLANE_HTTP_IP")
+
+      if token,
+        do: System.put_env("LEASE_PLANE_BEARER_TOKEN", token),
+        else: System.delete_env("LEASE_PLANE_BEARER_TOKEN")
+
+      case config do
+        {:ok, value} -> Application.put_env(:lease_plane, :http_ip, value)
+        :error -> Application.delete_env(:lease_plane, :http_ip)
+      end
+    end)
+  end
+
+  # The boot path judges this value, so a bind set only in app config must reach it.
+  test "with the variable unset, the app-config bind is the one judged" do
+    Application.put_env(:lease_plane, :http_ip, {0, 0, 0, 0})
+    assert LeaseApplication.resolved_http_ip() == {0, 0, 0, 0}
+  end
+
+  test "the variable wins over app config" do
+    Application.put_env(:lease_plane, :http_ip, {0, 0, 0, 0})
+    System.put_env("UNITARES_LEASE_PLANE_HTTP_IP", "127.0.0.1")
+    assert LeaseApplication.resolved_http_ip() == {127, 0, 0, 1}
+  end
+
+  test "the boot warnings judge an app-config bind, not only the variable" do
+    [_, value] =
+      Regex.run(
+        ~r/\$\{LEASE_PLANE_BEARER_TOKEN:-([^}]*)\}/,
+        File.read!(Path.expand("../../../docker-compose.yml", __DIR__))
+      )
+
+    System.put_env("LEASE_PLANE_BEARER_TOKEN", value)
+    Application.put_env(:lease_plane, :http_ip, {0, 0, 0, 0})
+
+    if File.exists?("/.dockerenv") do
+      assert [_] = LeaseApplication.boot_warnings()
+    else
+      assert [_, _] = LeaseApplication.boot_warnings()
+    end
+  end
+
+  test "an unparseable variable reads as unknown, not as exposed" do
+    System.put_env("UNITARES_LEASE_PLANE_HTTP_IP", "not-an-address")
+    assert LeaseApplication.resolved_http_ip() == nil
   end
 end
