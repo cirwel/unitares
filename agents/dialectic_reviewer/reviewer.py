@@ -913,7 +913,7 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
         text = await call_reviewer_model(prompt)
     except (EndpointNotLocalError, ModelNotConfiguredError) as exc:
         # The local fallback is the operator's own model by definition. When
-        # the endpoint does not classify local, nothing is sent: the empty text
+        # the endpoint is not local or no model is named, nothing is sent: the empty text
         # parses to no judgment, so the reviewer abstains, and the reason
         # travels in the provenance warnings recorded with the abstention.
         logger.warning("Dialectic reviewer local backend refused: %s", exc)
@@ -945,15 +945,15 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
 
 async def call_reviewer_model(prompt: str, model: Optional[str] = None) -> str:
     """Run the local heterogeneous model in THIS process (not via the server's
-    call_model tool, whose 30s timeout is shorter than gemma4's 43–70s budget).
-    Localhost Ollama, OpenAI-compat — no paid API.
+    call_model tool, whose 30s timeout is shorter than a local model's 43–70s).
+    The operator's OpenAI-compatible endpoint — no paid API.
 
     Uses the ASYNC client + ``await`` so the ~40-70s model call does not block the
     event loop (this is an ``async def`` driven by ``asyncio.run``)."""
     from openai import AsyncOpenAI  # local import: only the runner process needs it
 
     # privacy='local' by nature: raises EndpointNotLocalError, before any
-    # request, when the endpoint does not classify local.
+    # request, when the endpoint is not local; ModelNotConfiguredError, unnamed.
     require_local_endpoint(OLLAMA_BASE_URL)
     model = require_local_model(model or DEFAULT_MODEL)
     client = AsyncOpenAI(
