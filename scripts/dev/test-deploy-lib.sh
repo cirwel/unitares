@@ -89,10 +89,13 @@ echo "<string>/dev/checkout/prog.py</string>" > "$P"
   && ok "mismatched plist passes with allow-env=1" || bad "mismatched plist passes with allow-env=1"
 L="$SB/launch.sh"
 write_launcher_plist() {
+  local program=""
+  [[ -n "${2:-}" ]] && program="<key>Program</key><string>$2</string>"
   cat > "$P" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+  $program
   <key>ProgramArguments</key><array><string>$1</string><string>--port</string></array>
 </dict></plist>
 EOF
@@ -101,6 +104,15 @@ printf '#!/bin/sh\nexec python3 /deploy/needle/prog.py "$@"\n' > "$L"
 write_launcher_plist "$L"
 ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
   && ok "launcher that names the target passes" || bad "launcher that names the target passes"
+OLD_L="$SB/old-launch.sh"
+printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"\n' > "$OLD_L"
+write_launcher_plist "$L" "$OLD_L"   # launchd runs Program; ProgramArguments[0] is only argv[0]
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "Program wins over ProgramArguments[0]" || ok "Program wins over ProgramArguments[0]"
+write_launcher_plist "$OLD_L" "$L"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && ok "Program launcher that names the target passes" || bad "Program launcher that names the target passes"
+write_launcher_plist "$L"
 printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"\n' > "$L"
 ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
   && bad "launcher that names another path refuses" || ok "launcher that names another path refuses"
