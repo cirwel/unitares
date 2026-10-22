@@ -1,0 +1,11 @@
+# Redis off: the service never starts and the server is told not to use it.
+# Only 0/false/no disable it (src/cache/redis_client.py).
+services:
+  redis:
+    profiles: ["off"]
+  governance-mcp:
+    environment:
+      REDIS_ENABLED: "0"
+    depends_on: !override
+      postgres-age: {condition: service_healthy}
+      lease-plane: {condition: service_healthy}

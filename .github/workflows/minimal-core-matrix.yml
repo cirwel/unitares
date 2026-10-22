@@ -1,0 +1,132 @@
+name: Minimal Core Matrix
+
+# Measures which parts of the default stack are actually required, by running
+# the server with each optional part removed and recording what still works.
+# It is a measurement, not a gate: probes record outcomes and the legs pass
+# unless the harness itself breaks. The table lands in the run summary.
+#
+# Configurations (overrides live in .github/minimal-core/):
+#   full                stock docker-compose.yml (the baseline)
+#   no-redis            Redis service off, REDIS_ENABLED=0
+#   no-lease-plane      lease plane off, its bearer empty
+#   no-age-stock-init   plain pgvector Postgres, stock init script (records how init fails)
+#   no-age              plain pgvector Postgres, init skipping only graph_schema.sql
+#   minimal-core        server + Postgres (Redis and lease plane off)
+#   minimal-floor       minimal-core on plain pgvector Postgres
+#
+# Built from this checkout, so it measures the code a change would ship.
+# Path-filtered to its own files; run by hand with workflow_dispatch.
+
+on:
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - '.github/workflows/minimal-core-matrix.yml'
+      - '.github/minimal-core/**'
+      - 'scripts/ci/minimal_core_probe.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: full
+            files: ""
+          - config: no-redis
+            files: "-f .github/minimal-core/no-redis.yml"
+          - config: no-lease-plane
+            files: "-f .github/minimal-core/no-lease-plane.yml"
+          - config: no-age-stock-init
+            files: "-f .github/minimal-core/no-age-image.yml"
+          - config: no-age
+            files: "-f .github/minimal-core/no-age-image.yml -f .github/minimal-core/no-age-init.yml"
+          - config: minimal-core
+            files: "-f .github/minimal-core/minimal-core.yml"
+          - config: minimal-floor
+            files: "-f .github/minimal-core/minimal-core.yml -f .github/minimal-core/no-age-image.yml -f .github/minimal-core/no-age-init.yml"
+    env:
+      COMPOSE_PROJECT_NAME: unitares-matrix
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The init copy for the no-AGE configs drops exactly one line, and the
+      # step fails if that line is not there to drop.
+      - name: Prepare the no-AGE init script
+        run: |
+          set -euo pipefail
+          grep -qx 'run_sql "graph_schema.sql"' db/postgres/docker-initdb.sh
+          sed '/^run_sql "graph_schema.sql"$/d' db/postgres/docker-initdb.sh > "$RUNNER_TEMP/initdb-noage.sh"
+          chmod 755 "$RUNNER_TEMP/initdb-noage.sh"
+          if grep -q graph_schema "$RUNNER_TEMP/initdb-noage.sh"; then echo "::error::graph_schema still in the no-AGE init copy"; exit 1; fi
+          echo "NOAGE_INITDB=$RUNNER_TEMP/initdb-noage.sh" >> "$GITHUB_ENV"
+
+      - name: Validate the composed configuration
+        run: docker compose -f docker-compose.yml ${{ matrix.files }} config --quiet
+
+      - name: Build and start (outcome recorded, not asserted)
+        run: |
+          set +e
+          docker compose -f docker-compose.yml ${{ matrix.files }} up -d --build --wait --wait-timeout 300
+          echo "UP_RC=$?" >> "$GITHUB_ENV"
+          docker compose -f docker-compose.yml ${{ matrix.files }} ps -a
+
+      - name: Probe
+        run: >-
+          python3 scripts/ci/minimal_core_probe.py
+          --config "${{ matrix.config }}"
+          --out "$RUNNER_TEMP/results/${{ matrix.config }}.json"
+          --up-rc "$UP_RC"
+          -- docker compose -f docker-compose.yml ${{ matrix.files }}
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          docker compose -f docker-compose.yml ${{ matrix.files }} logs --no-color > "$RUNNER_TEMP/results/${{ matrix.config }}.log" 2>&1 || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: matrix-${{ matrix.config }}
+          path: ${{ runner.temp }}/results/
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml ${{ matrix.files }} down -v || true
+
+  summarize:
+    needs: measure
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: matrix-*
+          path: ${{ runner.temp }}/results
+
+      - name: Write the table to the run summary
+        run: |
+          {
+            echo "## Minimal core matrix"
+            echo
+            python3 scripts/ci/minimal_core_probe.py --summarize "$RUNNER_TEMP/results" \
+              --expect full,no-redis,no-lease-plane,no-age-stock-init,no-age,minimal-core,minimal-floor
+          } | tee -a "$GITHUB_STEP_SUMMARY"
