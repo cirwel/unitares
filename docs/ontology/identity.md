@@ -25,7 +25,9 @@ the full ontology:
    later calls are threaded. Confirm threading on the next call:
    `check_working_state(client_session_id=...)` returning your uuid as
    `agent_uuid`, or `identity(client_session_id=...)` reporting
-   `caller_proven` true.
+   `caller_proven` true. A context compaction is still the same running
+   process: keep the `uuid` and its `client_session_id` (see
+   [Compaction](#compaction-the-process-continues-the-context-does-not)).
 3. **Continuing prior work in a fresh process:** call
    `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`
    only when there is a real handoff from a finished predecessor.
@@ -376,6 +378,38 @@ The reason is still a declaration, not dispatch proof. Orchestrator-vouched
 process evidence remains the stronger future primitive. A genuine serial
 handoff to an exited predecessor is accepted and remains provisional until
 R1's behavioral-continuity check confirms it.
+
+### Compaction: the process continues, the context does not
+
+A context compaction replaces the conversation with a summary while the host
+keeps running. It splits the process-instance layer of the taxonomy above:
+the runtime, its transport connection, its session cache and its
+`client_session_id` continue, and the context window does not.
+
+The identity follows the runtime (operator decision, 2026-10-22). A compacted
+session keeps its `uuid` and keeps passing its `client_session_id`. The
+adapters' `SessionStart` hook names the existing binding on a `compact` start
+for both Codex and Claude Code, and their tool hooks inject it.
+
+`start_session(force_new=true, parent_agent_id=<own uuid>,
+spawn_reason="compaction")` remains for a compaction whose binding cannot be
+recovered: the session cache is missing or unusable, and no
+`client_session_id` survives in the summary. It is not the normal path. A
+write refused because the agent passed a `client_session_id` it reconstructed
+is not evidence that the binding is gone; omit the argument so the hook
+injects the cached one, or inspect it with `identity(client_session_id=...)`.
+
+What an agent says about its own continuity across a compaction, whether it
+feels like the same agent or a new one, is a report and not evidence for
+either answer. The summary that carries it across is a memory-layer record,
+and the axiom #12 caveat applies: from the inside, integrating a summary and
+reading one fluently are not distinguishable. Agents have reported both, and
+agents have acted on both: identities declaring `spawn_reason="compaction"`
+exist, and some of them followed hook guidance that missed a live binding.
+Sessions that kept their identity across a compaction leave no record of the
+compaction at all, so the two choices cannot yet be compared. Recording the
+compaction and its outcome (identity kept or minted) on the agent's own
+record is the follow-up that makes them comparable.
 
 ### Cross-role lineage envelope (role families)
 
