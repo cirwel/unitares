@@ -1096,11 +1096,16 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
 - **What changed:** `consult` gains an optional `model` input (operator
   decision 2026-10-21: the agent picks the local model). It applies to the
   standard lane only and names a model the configured endpoint serves;
-  naming one keeps the call on the local route. `list_inference_hosts` now
+  naming one pins the call to that endpoint (no Hugging Face fallback)
+  without changing the caller's privacy: `privacy='local'` still requires
+  the endpoint to classify local, and `cloud_allowed` may reach an external
+  one. `list_inference_hosts` now
   reports the endpoint's served models (`GET {base}/models`, cached 30 s)
   for `ollama:local` while it is reachable, and the configured default
   otherwise. Without `model`, a call uses `UNITARES_MODEL_ID`, else the
   endpoint's only served model, else is refused with `MODEL_NOT_CONFIGURED`.
+  The dialectic reviewers, the local resident runner and the internal lane
+  resolve the same way, and their refusal names only the operator's fixes.
 - **New refusals:** `MODEL_NOT_SERVED` (the endpoint lists models and the
   chosen one is not among them; the recovery names the served models) and
   `INVALID_CONSULT_MODEL` (`model` with `effort='thorough'`, a council, or

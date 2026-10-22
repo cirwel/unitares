@@ -154,6 +154,7 @@ def test_model_override_and_no_default(monkeypatch):
 
 
 def test_require_local_model_refuses_when_none_is_named(monkeypatch):
+    monkeypatch.setattr(env, "served_models", lambda *a, **k: None)
     with pytest.raises(env.ModelNotConfiguredError) as raised:
         env.require_local_model()
     assert raised.value.code == env.MODEL_NOT_CONFIGURED == "MODEL_NOT_CONFIGURED"
@@ -523,3 +524,19 @@ def test_resolve_local_model_guesses_nothing_among_several(monkeypatch):
     assert env.resolve_local_model() == ""
     monkeypatch.setattr(env, "served_models", lambda: None)
     assert env.resolve_local_model() == ""
+
+
+def test_require_local_model_uses_the_endpoints_only_served_model(monkeypatch):
+    """Review finding on #2994: the reviewers and the resident runner resolve
+    like consult, so a single served model needs no UNITARES_MODEL_ID."""
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+    monkeypatch.setattr(env, "served_models", lambda *a, **k: ("only:1b",))
+    assert env.require_local_model() == "only:1b"
+
+
+def test_not_configured_message_matches_what_the_caller_can_do():
+    tool = env.model_not_configured_message()
+    internal = env.model_not_configured_message(caller_can_choose=False)
+    assert "pass model" in tool and "UNITARES_MODEL_ID" in tool
+    assert "pass model" not in internal and "UNITARES_MODEL_ID" in internal
+    assert str(env.ModelNotConfiguredError()) == internal

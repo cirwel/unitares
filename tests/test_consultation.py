@@ -265,10 +265,10 @@ async def test_standard_cloud_allowed_is_local_first_auto(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_chosen_model_is_sent_and_keeps_the_call_local(monkeypatch):
+async def test_agent_chosen_model_is_sent_to_the_configured_endpoint(monkeypatch):
     """Operator decision 2026-10-21: the agent picks the local model. A model
-    the endpoint lists is passed through, and naming one keeps the call on the
-    local route even under cloud_allowed."""
+    the endpoint lists is passed through, and naming one pins the call to the
+    configured endpoint (no Hugging Face fallback)."""
     standard = AsyncMock(return_value=_completed())
     monkeypatch.setattr(co, "run_model_inference", standard)
     monkeypatch.setattr(co, "served_models", lambda: ("gemma4:latest", "qwen3:8b"))
@@ -282,7 +282,41 @@ async def test_agent_chosen_model_is_sent_and_keeps_the_call_local(monkeypatch):
     request = standard.await_args.args[0]
     assert request.model == "qwen3:8b"
     assert request.provider == "ollama"
-    assert request.privacy == "local"
+    # cloud_allowed is kept; the named model pins the endpoint, not the privacy.
+    assert request.privacy == "auto"
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_keeps_the_callers_privacy(monkeypatch):
+    """Review finding (P2) on #2994: under cloud_allowed, naming a model pins
+    the configured endpoint without forcing privacy='local', so an endpoint
+    that classifies external is still reachable."""
+    standard = AsyncMock(return_value=_completed(privacy_class="external"))
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("remote:70b",))
+
+    _payload(await co.handle_consult({
+        "brief": "Answer this",
+        "privacy": "cloud_allowed",
+        "model": "remote:70b",
+    }))
+
+    request = standard.await_args.args[0]
+    assert request.model == "remote:70b"
+    assert request.provider == "ollama"
+    assert request.privacy == "auto"
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_under_local_privacy_stays_local(monkeypatch):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("qwen3:8b",))
+
+    _payload(await co.handle_consult({"brief": "Answer this", "model": "qwen3:8b"}))
+
+    request = standard.await_args.args[0]
+    assert (request.provider, request.privacy) == ("ollama", "local")
 
 
 @pytest.mark.asyncio

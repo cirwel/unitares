@@ -726,14 +726,16 @@ async def _run_standard(
                     "related_tools": ["list_inference_hosts"],
                 },
             )
-        # A named local model keeps the call on the local route.
-        force_local = True
+    # A named model pins the configured endpoint (no Hugging Face fallback)
+    # without changing the caller's privacy: under privacy='local' the endpoint
+    # must classify local, and cloud_allowed may reach an external one.
+    pin_endpoint = force_local or request.model is not None
     return await run_model_inference(CallModelRequest(
         prompt=prompt,
         requesting_agent_uuid=request.requester_uuid,
         host_id=request.host_id,
         model=request.model or "auto",
-        provider="ollama" if force_local else "auto",
+        provider="ollama" if pin_endpoint else "auto",
         privacy="local" if force_local else "auto",
         task_type=_STANDARD_TASK_TYPES[request.purpose],
         max_tokens=2048,

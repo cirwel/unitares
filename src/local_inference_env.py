@@ -530,21 +530,31 @@ class ModelNotConfiguredError(RuntimeError):
     code = MODEL_NOT_CONFIGURED
 
     def __init__(self):
-        super().__init__(model_not_configured_message())
+        # Raised for internal callers (the reviewers, the resident runner),
+        # which have no model argument to pass.
+        super().__init__(model_not_configured_message(caller_can_choose=False))
 
 
-def model_not_configured_message() -> str:
-    return (
-        "No local model is chosen: pass model (one the endpoint serves; "
-        f"list_inference_hosts lists them), or have the operator set {MODEL_ENV} "
-        "(`unitares model` writes it)."
+def model_not_configured_message(*, caller_can_choose: bool = True) -> str:
+    """Why no model was chosen, and what will fix it for this caller: a tool
+    caller can pass ``model``; an internal caller depends on the operator."""
+    operator_fix = (
+        f"have the operator set {MODEL_ENV} (`unitares model` writes it) or serve "
+        "exactly one model at the endpoint"
     )
+    if caller_can_choose:
+        return (
+            "No local model is chosen: pass model (one the endpoint serves; "
+            f"list_inference_hosts lists them), or {operator_fix}."
+        )
+    return f"No local model is chosen: {operator_fix}."
 
 
 def require_local_model(model: str | None = None) -> str:
-    """``model`` if given, else the configured one; raise
-    ``ModelNotConfiguredError`` when neither names a model. No network call."""
-    resolved = (model or "").strip() or default_local_model()
+    """``model`` if given, else ``resolve_local_model`` (the configured one, or
+    the endpoint's only served model); raise ``ModelNotConfiguredError`` when
+    none is chosen. Blocking: it may ask the endpoint for its model list."""
+    resolved = resolve_local_model(model)
     if not resolved:
         raise ModelNotConfiguredError()
     return resolved
