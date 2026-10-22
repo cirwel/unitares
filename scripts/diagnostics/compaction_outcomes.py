@@ -70,6 +70,8 @@ async def main() -> int:
 
     print(f"since: {report['since']}")
     print(f"scope: {report['scope']}")
+    if not report["complete"]:
+        print("coverage: INCOMPLETE, the compaction read stopped at its page cap")
     outcomes = report["outcomes"]
     print(
         f"compactions: {report['compactions']} "

@@ -108,11 +108,17 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
         seen["query"] = kwargs
         return compactions
 
-    async def aggregate(agent_id=None, start_time=None, **_):
-        # A later runtime observation alone must not count as the identity
-        # writing again; a later knowledge write does.
-        rows = [{"event_type": "runtime_observation.context_compaction",
-                 "last_ts": T0 + timedelta(hours=3)}]
+    async def aggregate(agent_id=None, start_time=None, event_types=None, **_):
+        seen.setdefault("aggregate_types", event_types)
+        # Rows other callers or detectors write against an identity must not
+        # count as it acting again; its own knowledge write does. The fake
+        # returns them all to check the collector filters, not just the query.
+        rows = [
+            {"event_type": "agent_archived", "last_ts": T0 + timedelta(hours=3)},
+            {"event_type": "identity_hijack_suspected", "last_ts": T0 + timedelta(hours=3)},
+            {"event_type": "runtime_observation.context_compaction",
+             "last_ts": T0 + timedelta(hours=3)},
+        ]
         if agent_id == kept_agent:
             rows.append({"event_type": "knowledge_write", "last_ts": T0 + timedelta(hours=1)})
         return rows
@@ -141,8 +147,77 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     report = await collect_compaction_outcomes(since=T0 - timedelta(days=1))
 
     assert seen["query"]["event_types"] == ["runtime_observation.context_compaction"]
+    assert set(seen["aggregate_types"]) == {
+        "auto_attest", "knowledge_read", "knowledge_write", "consultation"
+    }
+    assert report["complete"] is True
     assert seen["children_args"][0] == sorted([PARENT, kept_agent])
     by_event = {row["event_id"]: row for row in report["rows"]}
     assert by_event["minted"]["outcome"] == "minted"
     assert by_event["kept"]["outcome"] == "kept"
     assert report["by_host"]["codex"]["kept"] == 1
+
+
+def test_administrative_rows_alone_leave_no_later_activity():
+    # classify only sees self-activity times; nothing after T0 means none.
+    report = classify_compaction_outcomes([_compaction(PARENT, T0)], [], {})
+    assert report["rows"][0]["outcome"] == "no_later_activity"
+
+
+def test_an_incomplete_read_does_not_credit_a_later_child_to_the_last_compaction_read():
+    through = T0 + timedelta(hours=1)
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0)],
+        [_child("late", PARENT, T0 + timedelta(hours=2))],
+        {PARENT: T0 + timedelta(minutes=30)},
+        through=through,
+    )
+    assert report["rows"][0]["outcome"] == "kept"
+    assert report["complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_collector_pages_through_every_compaction(monkeypatch):
+    import src.audit_db as audit_db
+    import src.db as db_module
+    from src.identity.compaction_outcomes import collect_compaction_outcomes
+
+    rows = [
+        _compaction(PARENT, T0 + timedelta(minutes=i), event_id=f"e{i}") for i in range(5)
+    ]
+    calls = []
+
+    async def query(start_time=None, limit=None, **_):
+        calls.append(start_time)
+        start = datetime.fromisoformat(start_time)
+        # Inclusive start, like the real query: the boundary row repeats.
+        return [r for r in rows if datetime.fromisoformat(r["timestamp"]) >= start][:limit]
+
+    async def aggregate(**_):
+        return []
+
+    class _Conn:
+        async def fetch(self, *a):
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _DB:
+        def acquire(self):
+            return _Acquire()
+
+    monkeypatch.setattr(audit_db, "query_audit_events_async", query)
+    monkeypatch.setattr(audit_db, "aggregate_audit_events_async", aggregate)
+    monkeypatch.setattr(db_module, "get_db", lambda: _DB())
+
+    report = await collect_compaction_outcomes(since=T0 - timedelta(days=1), page_size=2)
+
+    assert report["compactions"] == 5
+    assert sorted(row["event_id"] for row in report["rows"]) == [f"e{i}" for i in range(5)]
+    assert report["complete"] is True
+    assert len(calls) > 1

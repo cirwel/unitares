@@ -414,7 +414,8 @@ identity-bound host-observation route (`POST /v1/runtime/observe`,
 `runtime_observation.context_compaction` with no EISV or session-activity
 effect. `scripts/diagnostics/compaction_outcomes.py` pairs each recorded
 compaction with what followed: `minted` (a `spawn_reason="compaction"` child),
-`kept` (the identity wrote again) or `no_later_activity`. The outcome
+`kept` (the identity acted again: a check-in, a knowledge read or write, or a
+consult) or `no_later_activity`. The outcome
 describes the record, not the agent's view of itself, and a compaction without
 a usable binding cannot be recorded, so it does not appear.
 

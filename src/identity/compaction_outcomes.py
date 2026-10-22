@@ -9,8 +9,11 @@ already exist:
 - ``minted``: an identity declaring this one as parent with
   ``spawn_reason="compaction"`` was created at or after the compaction and
   before this identity's next recorded compaction.
-- ``kept``: no such child, and this identity has at least one audit event
-  after the compaction other than a runtime observation.
+- ``kept``: no such child, and this identity acted again after the
+  compaction: a check-in, a knowledge read or write, or a consult
+  (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
+  against an identity, such as ``agent_archived`` or
+  ``identity_hijack_suspected``, do not count.
 - ``no_later_activity``: neither. The session may have ended, or nothing it
   did was recorded. This is not evidence for either choice.
 
@@ -31,9 +34,15 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from src.runtime_observations import COMPACTION_EVENT_TYPE, RUNTIME_EVENT_PREFIX
+from src.runtime_observations import COMPACTION_EVENT_TYPE
 
 OUTCOMES = ("minted", "kept", "no_later_activity")
+# Audit rows written for an identity's own action: one ``auto_attest`` per
+# check-in, ``knowledge_read``/``knowledge_write`` for the caller, and
+# ``consultation`` for the consulting agent.
+SELF_ACTIVITY_EVENT_TYPES = ("auto_attest", "knowledge_read", "knowledge_write", "consultation")
+PAGE_SIZE = 5000
+MAX_PAGES = 20
 
 
 def _utc(value: Any) -> datetime | None:
@@ -55,8 +64,14 @@ def classify_compaction_outcomes(
     compactions: Iterable[Mapping[str, Any]],
     children: Iterable[Mapping[str, Any]],
     last_activity: Mapping[str, Any],
+    *,
+    through: datetime | None = None,
 ) -> dict[str, Any]:
     """Classify compactions against minted children and later activity.
+
+    ``through`` bounds the window when the compaction read was incomplete: an
+    identity's last compaction read then ends there, so a child minted after a
+    compaction that was never read is not credited to an earlier one.
 
     ``compactions`` are audit rows (``agent_id``, ``timestamp``, ``details``,
     ``event_id``). ``children`` are identities with
@@ -85,7 +100,7 @@ def classify_compaction_outcomes(
         events.sort(key=lambda item: item[0])
         latest = _utc(last_activity.get(agent_id))
         for index, (at, row) in enumerate(events):
-            until = events[index + 1][0] if index + 1 < len(events) else None
+            until = events[index + 1][0] if index + 1 < len(events) else through
             minted = sorted(
                 child_id
                 for created, child_id in children_by_parent.get(agent_id, [])
@@ -122,6 +137,7 @@ def classify_compaction_outcomes(
             for host, counts in sorted(by_host.items())
         },
         "rows": rows,
+        "complete": through is None,
         "scope": (
             "Compactions reported with a usable session binding only; "
             "outcomes describe the identity record, not the agent's view."
@@ -130,18 +146,40 @@ def classify_compaction_outcomes(
 
 
 async def collect_compaction_outcomes(
-    *, since: datetime, limit: int = 5000
+    *, since: datetime, page_size: int = PAGE_SIZE
 ) -> dict[str, Any]:
     """Read compactions since ``since`` and classify their outcomes."""
     from src.audit_db import aggregate_audit_events_async, query_audit_events_async
     from src.db import get_db
 
-    compactions = await query_audit_events_async(
-        event_types=[COMPACTION_EVENT_TYPE],
-        start_time=since.isoformat(),
-        limit=limit,
-        order="asc",
-    )
+    compactions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    start = since
+    through: datetime | None = None
+    for _ in range(MAX_PAGES):
+        page = await query_audit_events_async(
+            event_types=[COMPACTION_EVENT_TYPE],
+            start_time=start.isoformat(),
+            limit=page_size,
+            order="asc",
+        )
+        for row in page:
+            key = str(row.get("event_id") or "")
+            if key and key in seen:
+                continue
+            seen.add(key)
+            compactions.append(row)
+        last = _utc(page[-1].get("timestamp")) if page else None
+        if len(page) < page_size or last is None:
+            break
+        if last <= start:
+            # A full page sharing one timestamp cannot advance; stop and
+            # disclose rather than loop.
+            through = last
+            break
+        start = last
+    else:
+        through = start
     agent_ids = sorted(
         {str(row.get("agent_id")) for row in compactions if row.get("agent_id")}
     )
@@ -165,18 +203,20 @@ async def collect_compaction_outcomes(
         # one (agent, event type) row with last_ts, so no row limit truncates it.
         for agent_id in agent_ids:
             groups = await aggregate_audit_events_async(
-                agent_id=agent_id, start_time=since.isoformat()
+                agent_id=agent_id,
+                event_types=list(SELF_ACTIVITY_EVENT_TYPES),
+                start_time=since.isoformat(),
             )
             latest = [
                 _utc(group.get("last_ts"))
                 for group in groups
-                if not str(group.get("event_type") or "").startswith(RUNTIME_EVENT_PREFIX)
+                if group.get("event_type") in SELF_ACTIVITY_EVENT_TYPES
             ]
             latest = [value for value in latest if value is not None]
             if latest:
                 activity[agent_id] = max(latest)
     report = classify_compaction_outcomes(
-        compactions, [dict(row) for row in children], activity
+        compactions, [dict(row) for row in children], activity, through=through
     )
     report["since"] = since.isoformat()
     return report
