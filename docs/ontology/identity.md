@@ -406,10 +406,18 @@ and the axiom #12 caveat applies: from the inside, integrating a summary and
 reading one fluently are not distinguishable. Agents have reported both, and
 agents have acted on both: identities declaring `spawn_reason="compaction"`
 exist, and some of them followed hook guidance that missed a live binding.
-Sessions that kept their identity across a compaction leave no record of the
-compaction at all, so the two choices cannot yet be compared. Recording the
-compaction and its outcome (identity kept or minted) on the agent's own
-record is the follow-up that makes them comparable.
+Until 2026-10-22, sessions that kept their identity across a compaction left
+no record of the compaction at all, so the two choices could not be compared.
+An adapter that sees a compaction with a usable binding now reports it on the
+identity-bound host-observation route (`POST /v1/runtime/observe`,
+`observation_kind="context_compaction"`), stored in `audit.events` as
+`runtime_observation.context_compaction` with no EISV or session-activity
+effect. `scripts/diagnostics/compaction_outcomes.py` pairs each recorded
+compaction with what followed: `minted` (a `spawn_reason="compaction"` child),
+`kept` (the identity acted again: a check-in, a knowledge write or a
+consult) or `no_later_activity`. The outcome
+describes the record, not the agent's view of itself, and a compaction without
+a usable binding cannot be recorded, so it does not appear.
 
 ### Cross-role lineage envelope (role families)
 
