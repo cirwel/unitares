@@ -60,7 +60,23 @@ def test_summarize_marks_expected_configs_with_no_result(tmp_path):
     assert "| minimal-core | no result |" in table
 
 
-def test_crash_restarts_ignores_the_probe_restart_baseline():
-    r = {"containers_start": {"unitares-governance-mcp": {"restarts": 1}},
+def test_crash_restarts_counts_startup_crashes_too():
+    # Three crashes before the first snapshot must not be subtracted away.
+    r = {"containers_start": {"unitares-governance-mcp": {"restarts": 3}},
          "containers_end": {"unitares-governance-mcp": {"restarts": 3}}}
-    assert probe.crash_restarts(r) == "2"
+    assert probe.crash_restarts(r) == "3"
+    assert probe.crash_restarts({}) == "–"
+
+
+def test_deep_health_rejects_a_non_report(monkeypatch):
+    monkeypatch.setattr(probe, "http", lambda *a, **k: (401, {"status": "unauthorized"}))
+    monkeypatch.setattr(probe.time, "sleep", lambda s: None)
+    assert probe.deep_health()["ok"] is False
+
+
+def test_database_failure_is_not_ok(monkeypatch):
+    class Out:
+        returncode, stdout, stderr = 1, "", "container is not running"
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k: Out())
+    result = probe.database()
+    assert result["ok"] is False and "not running" in result["error"]

@@ -120,6 +120,9 @@ def deep_health() -> dict:
         return {"ok": False, "error": str(body)[:200]}
     checks = body.get("checks") or {}
     summary = body.get("operator_summary") or {}
+    # Only 200/503 with a real report count; a 401 or an error page is not health.
+    if code not in (200, 503) or body.get("status") not in ("healthy", "moderate", "critical") or not checks:
+        return {"ok": False, "error": f"not a health report: HTTP {code}, status {body.get('status')!r}"}
     return {
         "ok": True,
         "http": code,
@@ -137,11 +140,11 @@ def database() -> dict:
     def q(sql: str) -> str:
         out = subprocess.run([*PG, sql], capture_output=True, text=True, timeout=30)
         return out.stdout.strip() if out.returncode == 0 else f"error: {out.stderr.strip()[:200]}"
-    return {
-        "ok": True,
-        "extensions": q("select string_agg(extname||'='||extversion, ',' order by extname) from pg_extension"),
-        "migrations": q("select count(*)||' applied, max '||coalesce(max(version),0) from core.schema_migrations"),
-    }
+    extensions = q("select string_agg(extname||'='||extversion, ',' order by extname) from pg_extension")
+    migrations = q("select count(*)||' applied, max '||coalesce(max(version),0) from core.schema_migrations")
+    errors = [v for v in (extensions, migrations) if v.startswith("error:")]
+    return {"ok": not errors, "error": "; ".join(errors) or None,
+            "extensions": extensions, "migrations": migrations}
 
 
 def onboard(name: str) -> tuple[str | None, str | None, dict]:
@@ -312,13 +315,14 @@ def cell(r: dict | None) -> str:
 
 
 def crash_restarts(r: dict) -> str:
-    """governance-mcp restarts Docker made on its own (the probe's one manual
-    restart does not raise RestartCount)."""
-    end = ((r.get("containers_end") or {}).get("unitares-governance-mcp") or {})
-    start = ((r.get("containers_start") or {}).get("unitares-governance-mcp") or {})
-    if not end:
-        return "–"
-    return str(end.get("restarts", 0) - start.get("restarts", 0))
+    """Restarts Docker made on its own for governance-mcp over the whole leg,
+    startup included. The probe's one manual restart does not raise
+    RestartCount, so the final value needs no baseline."""
+    for phase in ("containers_end", "containers_before_restart", "containers_start"):
+        row = (r.get(phase) or {}).get("unitares-governance-mcp")
+        if row:
+            return str(row.get("restarts", 0))
+    return "–"
 
 
 def summarize(directory: Path, expect: list[str] | None = None) -> str:
