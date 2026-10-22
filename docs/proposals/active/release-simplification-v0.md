@@ -1,7 +1,7 @@
 # Simplify the server release process
 
-**Status:** DRAFT proposal, 2026-10-17, for operator review. Documentation only. This document changes no workflow, gate, tag, branch protection or release; every change in it is a proposal, and the operator-reserved ones are listed as yes/no decisions below.
-**Last Updated:** 2026-10-17
+**Status:** proposal with its seven reserved decisions taken, 2026-10-22 (see *Decisions, 2026-10-22*). Documentation only. Nothing is implemented. Steps 1 to 3 and the approved reserved items each land as their own PR.
+**Last Updated:** 2026-10-22
 
 Scope: cirwel/unitares server releases (tags `vX.Y.Z`). The SDK release chain is mentioned only where it shares a fix. Evidence below was gathered read-only at worktree HEAD 50bece6b5 (VERSION and PUBLISHED_VERSION both 3.3.0, newest tag v3.3.0). The claims come from four reader reports and three design drafts; I did not re-run the scripts or workflows myself. See "What was not verified".
 
@@ -123,6 +123,24 @@ CLAUDE.md as read by the readers does not list "tag a release" or "CI gate seman
 5. Do you approve a merge-queue hold while VERSION is untagged? (yes/no; only needed if decision 1 is declined)
 6. Do you approve making the absent-source skill-freshness failure a CI-enforced check rather than a local wrapper behavior? (yes/no)
 7. Do you adopt the suggested cadence (about 50 PRs or one to two weeks)? (yes/no)
+
+## Decisions, 2026-10-22
+
+**Basis:** operator delegation, 2026-10-22: "can you make the calls for the federation". The working agent made each choice below under that delegation; nothing here claims that the operator weighed each option. Merging this document is the ratification, and the operator vetoes by removing the merge label.
+
+**Changed since this was drafted.** On 2026-10-17 the operator gave the agents every release act except the `release-promotion` approval, including the tag and the release page (KG `2026-10-18T05:54:48.538440+00:00`). On 2026-10-18 the agents' App was granted `actions: write` for the Promote Release dispatch (#2898). `RELEASE_PROCESS.md` now says both. Read "the operator tags" and "the operator performs each act" above in that light: the releasing agent does those acts.
+
+| # | Decision | Taken | Why |
+|---|---|---|---|
+| 1 | Anchor the gate range at the release commit | **Yes** | It is the only change that removes the cause of the post-merge red window and the leftover-fragment failures. It is bound by the fail-closed rule under *Risks*: a detached HEAD, a merge-group ref or a PR merge ref that cannot be resolved to the anchor must keep the gates armed. The weekly advisory run that opens an issue is part of this change, not a follow-up. |
+| 2 | Run Release Seams on `release/**` | **Yes** | The trigger must stay unfiltered so that the job can be a required check. Adding it to the required checks for `release/**` is a branch-protection setting the App cannot change. That one setting is done once on the operator account, as for other repository administration. |
+| 3 | Delegate tagging to a `release-cut` workflow | **No** | Superseded. Since 2026-10-17 the releasing agent tags from its own terminal, so a workflow and environment would add an authority surface and remove no act. Tags stay signed when available, and the existing rule against replacing a public tag stands. The two sub-questions fall with it. |
+| 4 | Pin PR opened by the App; a `workflow_call` path into `publish-container.yml`; Promote Release dispatched after publish | **Yes**, `workflow_call` rather than a tag-push trigger | A tag-push trigger would fire alongside `release: published` and publish twice. The pin PR opens as a draft; readying, labelling and merging stay with the owning agent. If the App cannot open it, behaviour stays as today. The `release-promotion` approval stays the human gate. The release page is still created by the releasing agent from the reviewed commit, because publishing it archives the tree on Zenodo. |
+| 5 | Merge-queue hold while VERSION is untagged | **No** | It is only needed if decision 1 is declined. Until decision 1 ships, the "tag immediately, arm nothing else" rule stays in force. |
+| 6 | Make the absent-source skill-freshness note fail in CI | **No** | A CI checkout has no sibling repositories, so any skill citing an outside source reports absent sources there by construction, and a CI failure on that note would fire whenever such a skill is checked. The failure belongs in `prepare_release.py` (step 2, item 4), which runs where the siblings are present. |
+| 7 | Cadence of about 50 PRs or one to two weeks | **Yes, as guidance** | The operator's cost per release is now one approval, so the reason given for treating cadence as reserved no longer applies. Cut at about 50 first-parent PRs since the last tag or two weeks, whichever comes first. This is not a gate. |
+
+Order of work: step 1, then step 2 with its smoke test, then step 3, then decision 1, then decisions 2 and 4. Each is its own PR under the usual review and queue.
 
 ## Risks
 
