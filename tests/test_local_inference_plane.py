@@ -88,11 +88,9 @@ async def test_is_llm_available_uses_the_registry_probe(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_lane_sends_nothing_without_a_named_model(monkeypatch):
-    """No model is built in: with UNITARES_MODEL_ID unset and no single served
-    model, the internal lane is unavailable and its calls return None without
-    creating a client."""
+    """No model is built in: with UNITARES_MODEL_ID unset the internal lane is
+    unavailable and its calls return None without creating a client."""
     monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
-    monkeypatch.setattr(llm_delegation, "resolve_local_model", lambda *a: "")
     with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
          patch.object(llm_delegation, "_ollama_available", return_value=True) as probe, \
          patch.object(llm_delegation, "_get_ollama_client") as client:
@@ -152,12 +150,19 @@ def test_unnamed_model_and_external_endpoint_are_both_reported(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_internal_lane_uses_the_endpoints_only_served_model(monkeypatch):
-    """Review finding on #2994: the internal lane resolves like consult, so an
-    endpoint serving exactly one model needs no UNITARES_MODEL_ID."""
+async def test_internal_lane_takes_no_model_from_the_endpoint(monkeypatch):
+    """Review finding on #2994: the in-process dialectic reviewer stamps the
+    configured model as provenance, so the internal lane never takes the
+    endpoint's only served model (its verdicts would record no model)."""
+    import src.local_inference_env as env
+
     monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
-    monkeypatch.setattr(llm_delegation, "resolve_local_model", lambda *a: "only:1b")
-    assert await llm_delegation._model_or_none(None) == "only:1b"
+
+    def asked(*a, **k):
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(env, "served_models", asked)
+    assert llm_delegation._model_or_none(None) is None
     with patch.object(llm_delegation, "OPENAI_AVAILABLE", True), \
          patch.object(llm_delegation, "_ollama_available", return_value=True):
-        assert await llm_delegation.is_llm_available() is True
+        assert await llm_delegation.is_llm_available() is False

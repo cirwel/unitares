@@ -52,8 +52,7 @@ from src.local_inference_env import (
     is_ollama_endpoint,
     local_refusal_message,
     model_base_url,
-    model_not_configured_message,
-    resolve_local_model,
+    ModelNotConfiguredError,
 )
 
 # Check if OpenAI SDK available
@@ -105,22 +104,19 @@ _get_default_model = default_local_model
 _unconfigured_logged = False
 
 
-async def _model_or_none(model: Optional[str]) -> Optional[str]:
-    """``model``, else the configured one, else the endpoint's only served
-    model, else None (logged once): with no model chosen, this lane sends
-    nothing. The model-list lookup is blocking, so it runs off the loop."""
+def _model_or_none(model: Optional[str]) -> Optional[str]:
+    """``model``, else the configured one, else None (logged once): with no
+    model named, this lane sends nothing."""
     global _unconfigured_logged
-    import asyncio
-
-    resolved = model or _get_default_model() or await asyncio.to_thread(resolve_local_model)
+    resolved = model or _get_default_model()
     if resolved:
         return resolved
     if not _unconfigured_logged:
         _unconfigured_logged = True
-        logger.warning(
-            "internal inference skipped: %s",
-            model_not_configured_message(caller_can_choose=False),
-        )
+        # The operator's fix only: this lane has no caller to pass a model, and
+        # takes none from the endpoint, because the dialectic reviewer stamps
+        # the configured model as the provenance of what it records.
+        logger.warning("internal inference skipped: %s", ModelNotConfiguredError())
     return None
 
 
@@ -168,8 +164,8 @@ async def call_local_llm(
 
     Args:
         prompt: The prompt to send to the model
-        model: Model name (default: UNITARES_MODEL_ID, else the endpoint's only
-            served model; None is returned when none is chosen)
+        model: Model name (default: UNITARES_MODEL_ID; None is returned when
+            neither names one)
         max_tokens: Maximum tokens in response
         temperature: Sampling temperature (0.0-1.0)
         timeout: Request timeout in seconds
@@ -183,7 +179,7 @@ async def call_local_llm(
 
     if local_endpoint_refusal() is not None:
         return None
-    model = await _model_or_none(model)
+    model = _model_or_none(model)
     if model is None:
         return None
 
@@ -287,7 +283,7 @@ async def call_local_llm_structured(
 
     if local_endpoint_refusal() is not None:
         return None
-    model = await _model_or_none(model)
+    model = _model_or_none(model)
     if model is None:
         return None
     # The native route exists only on Ollama. Anything else gets None here, and
@@ -856,8 +852,8 @@ async def is_llm_available() -> bool:
         return False
     if local_endpoint_refusal() is not None:
         return False
-    import asyncio
-    if not (_get_default_model() or await asyncio.to_thread(resolve_local_model)):
+    if not _get_default_model():
         return False
+    import asyncio
     # The cache-priming probe is a blocking socket connect; keep it off the loop.
     return await asyncio.to_thread(_ollama_available)

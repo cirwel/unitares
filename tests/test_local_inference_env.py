@@ -543,8 +543,6 @@ def test_require_local_model_does_not_ask_the_endpoint(monkeypatch):
 
 def test_not_configured_message_matches_what_the_caller_can_do():
     tool = env.model_not_configured_message()
-    internal = env.model_not_configured_message(caller_can_choose=False)
     assert "pass model" in tool and "UNITARES_MODEL_ID" in tool
-    assert "pass model" not in internal and "UNITARES_MODEL_ID" in internal
     assert "pass model" not in str(env.ModelNotConfiguredError())
     assert "UNITARES_MODEL_ID" in str(env.ModelNotConfiguredError())

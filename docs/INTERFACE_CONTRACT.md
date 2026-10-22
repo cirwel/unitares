@@ -1104,9 +1104,9 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
   for `ollama:local` while it is reachable, and the configured default
   otherwise. Without `model`, a call uses `UNITARES_MODEL_ID`, else the
   endpoint's only served model, else is refused with `MODEL_NOT_CONFIGURED`.
-  The internal lane resolves the same way. The dialectic reviewers and the
-  local resident runner still need a named model (`UNITARES_MODEL_ID`): they
-  record the model they name as provenance, so they take none from the
+  The dialectic reviewers (in-process and agent), the local resident runner
+  and the internal lane still need a named model (`UNITARES_MODEL_ID`): they
+  record the configured model as provenance, so they take none from the
   endpoint. Their refusal names only the operator's fix.
 - **New refusals:** `MODEL_NOT_SERVED` (the endpoint lists models and the
   chosen one is not among them; the recovery names the served models) and
