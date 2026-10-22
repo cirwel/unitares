@@ -73,11 +73,16 @@ def _make_mock_response(content="Test response", tokens=42, model="gemini-flash"
 
 
 @pytest.fixture(autouse=True)
-def _reset_ollama_probe_cache():
+def _reset_ollama_probe_cache(monkeypatch):
     """The registry caches its blocking Ollama probe for a short TTL. Reset it
     before each test so socket-mocked availability is re-evaluated per test
-    rather than served stale from a prior test within the TTL window."""
+    rather than served stale from a prior test within the TTL window.
+
+    The local lane has no built-in model, so a model is named here; the
+    tests for the unnamed case delete it."""
     from src.mcp_handlers.support import inference_registry
+
+    monkeypatch.setenv("UNITARES_MODEL_ID", "gemma4:latest")
 
     inference_registry._ollama_probe_cache.update(
         {"ts": 0.0, "available": False, "primed": False}
@@ -550,16 +555,14 @@ class TestOllamaRouting:
         assert parsed["routed_via"] == "ollama"
 
     @pytest.mark.asyncio
-    async def test_ollama_uses_default_model_for_auto(self, monkeypatch):
-        """Ollama with model=auto defaults to gemma4:latest (no UNITARES_MODEL_ID set)."""
+    async def test_ollama_auto_without_a_named_model_is_refused(self, monkeypatch):
+        """Ollama with model=auto and no UNITARES_MODEL_ID: there is no built-in
+        model, so the call is refused before any client is made."""
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
-        mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
-            model="gemma4:latest"
-        )
+        mock_openai = MagicMock()
 
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+             patch("src.mcp_handlers.support.model_inference.OpenAI", mock_openai):
             from src.mcp_handlers.support.model_inference import handle_call_model
             result = await handle_call_model({
                 "prompt": "Hello",
@@ -567,12 +570,36 @@ class TestOllamaRouting:
                 "model": "auto",
             })
 
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "MODEL_NOT_CONFIGURED"
+        assert "UNITARES_MODEL_ID" in parsed["error"]
+        mock_openai.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_model_needs_no_named_default(self, monkeypatch):
+        """A caller-named model is sent as is when UNITARES_MODEL_ID is unset."""
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            model="qwen3:8b"
+        )
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            await handle_call_model({
+                "prompt": "Hello",
+                "provider": "ollama",
+                "model": "qwen3:8b",
+            })
+
         call_kwargs = mock_client_instance.chat.completions.create.call_args[1]
-        assert call_kwargs["model"] == "gemma4:latest"
+        assert call_kwargs["model"] == "qwen3:8b"
 
     @pytest.mark.asyncio
     async def test_ollama_auto_respects_unitares_model_id_env(self, monkeypatch):
-        """UNITARES_MODEL_ID env var overrides the gemma4:latest default."""
+        """UNITARES_MODEL_ID names the model model=auto resolves to."""
         monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3-coder-next:latest")
         mock_client_instance = MagicMock()
         mock_client_instance.chat.completions.create.return_value = _make_mock_response(
@@ -872,6 +899,59 @@ class TestAutoProviderSelection:
         parsed = _parse_text_content(result)
         assert parsed["success"] is True
         assert parsed["routed_via"] == "ollama"
+
+    @pytest.mark.asyncio
+    async def test_auto_without_a_named_model_falls_back_to_hf(self, monkeypatch):
+        """Ollama answers but no model is named: auto routing (which allows
+        cloud) uses the HF fallback rather than refusing."""
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            model="deepseek-ai/DeepSeek-R1:fastest"
+        )
+        mock_socket = MagicMock()
+        mock_socket.connect_ex.return_value = 0  # Ollama is up
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \
+             patch("socket.socket", return_value=mock_socket):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "auto",
+                "privacy": "cloud",
+                "model": "auto",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is True
+        assert parsed["routed_via"] == "huggingface"
+
+    @pytest.mark.asyncio
+    async def test_auto_without_a_named_model_or_hf_token_is_refused(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+        mock_openai = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.connect_ex.return_value = 0  # Ollama is up
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", mock_openai), \
+             patch("socket.socket", return_value=mock_socket):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "auto",
+                "privacy": "cloud",
+                "model": "auto",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "MODEL_NOT_CONFIGURED"
+        mock_openai.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_auto_falls_back_to_hf_when_ollama_down(self):

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.54.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.55.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1070,3 +1070,23 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
   description is outside every input digest.
 - **Client action:** none. A client that treats every result as current
   should check `retrieval_tier` or `status` before relying on a row.
+
+## 1.55.0 (2026-10-20)
+
+- **What changed:** the server names no local model by default. With
+  `UNITARES_MODEL_ID` unset, a local-route `call_model` or `consult` with
+  `model='auto'` is refused with the new code `MODEL_NOT_CONFIGURED` before
+  any request; auto routing that allows cloud falls back to Hugging Face
+  when `HF_TOKEN` is set. `list_inference_hosts` reports `ollama:local` with
+  an empty `models` list. `call_model`'s `model` description and tool
+  description no longer name `gemma4:latest` as a default.
+- **Compatibility:** an install that relied on the implicit
+  `gemma4:latest` loses its local model until it sets `UNITARES_MODEL_ID`
+  (setting it to `gemma4:latest` restores the old behaviour). A call that
+  passes an explicit `model` is unchanged. No capability, parameter name,
+  type, default or requiredness changed.
+- **Schema digests:** `call_model`'s `input_schema_sha256` and the surface
+  digest move, because the `model` parameter description is inside the
+  hashed schema.
+- **Client action:** a client that treated `MODEL_PROVIDER_UNAVAILABLE` as
+  the only "no model" answer should also handle `MODEL_NOT_CONFIGURED`.

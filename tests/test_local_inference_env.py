@@ -99,13 +99,13 @@ def test_documented_name_with_or_without_v1(monkeypatch, value):
     ],
 )
 def test_removed_names_are_ignored(monkeypatch, caplog, removed):
-    """v3.3.0: an install still setting only an old name gets the defaults,
-    and nothing is logged about it."""
+    """v3.3.0: an install still setting only an old name gets the default
+    endpoint and no model, and nothing is logged about it."""
     for name, value in removed.items():
         monkeypatch.setenv(name, value)
     with caplog.at_level(logging.DEBUG, logger=env.__name__):
         _both("http://localhost:11434")
-        assert env.default_local_model() == "gemma4:latest"
+        assert env.default_local_model() == ""
     assert caplog.records == []
     assert env.old_names_in_use() == []
 
@@ -136,7 +136,7 @@ def test_empty_values_count_as_unset(monkeypatch, stand_in_aliases):
     for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL_ID", OLD_BASE, OLDER_BASE, OLD_MODEL):
         monkeypatch.setenv(name, "")
     _both("http://localhost:11434")
-    assert env.default_local_model() == "gemma4:latest"
+    assert env.default_local_model() == ""
 
 
 def test_empty_documented_name_falls_through_to_alias(monkeypatch, stand_in_aliases):
@@ -145,10 +145,22 @@ def test_empty_documented_name_falls_through_to_alias(monkeypatch, stand_in_alia
     _both("http://b:11434")
 
 
-def test_model_override_and_default(monkeypatch):
-    assert env.default_local_model() == "gemma4:latest"
+def test_model_override_and_no_default(monkeypatch):
+    """No model is built in: unset reads as "", and the setting names one."""
+    assert env.default_local_model() == ""
     monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     assert env.default_local_model() == "qwen3:8b"
+
+
+def test_require_local_model_refuses_when_none_is_named(monkeypatch):
+    with pytest.raises(env.ModelNotConfiguredError) as raised:
+        env.require_local_model()
+    assert raised.value.code == env.MODEL_NOT_CONFIGURED == "MODEL_NOT_CONFIGURED"
+    assert "UNITARES_MODEL_ID" in str(raised.value)
+    assert env.require_local_model("explicit:1b") == "explicit:1b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+    assert env.require_local_model() == "qwen3:8b"
+    assert env.require_local_model("  ") == "qwen3:8b"
 
 
 def test_server_registry_uses_the_shared_resolver(monkeypatch):
@@ -254,12 +266,12 @@ def test_orchestrator_forwards_the_servers_resolved_host_for_an_alias_only_serve
 
 def test_orchestrator_does_not_forward_a_removed_name(monkeypatch):
     """v3.3.0: a server still setting only the removed names forwards the
-    defaults, not the old values."""
+    default endpoint and no model, not the old values."""
     monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://gpu:11434/v1")
     monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
     spawn = _reviewer_spawn_env()
     assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
-    assert spawn["UNITARES_MODEL_ID"] == "gemma4:latest"
+    assert spawn["UNITARES_MODEL_ID"] == ""
     for old in REMOVED_NAMES:
         assert old not in spawn
 
@@ -275,9 +287,10 @@ def test_orchestrator_forwards_the_new_name_when_several_are_set(monkeypatch):
 def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
     monkeypatch, unset_value
 ):
-    """A server on defaults still forwards its resolved endpoint and model, so
-    the child cannot fall back to a stale value in the orchestrator's own
-    environment. Older names are never forwarded; the new ones outrank them."""
+    """A server on defaults still forwards its resolved endpoint and model (""
+    when none is named), so the child cannot fall back to a stale value in the
+    orchestrator's own environment. Older names are never forwarded; the new
+    ones outrank them."""
     names = ("UNITARES_MODEL_BASE_URL", "UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL",
              "UNITARES_MODEL_ID", "UNITARES_LLM_MODEL")
     if unset_value is not None:
@@ -285,7 +298,7 @@ def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
             monkeypatch.setenv(name, unset_value)
     spawn = _reviewer_spawn_env()
     assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
-    assert spawn["UNITARES_MODEL_ID"] == "gemma4:latest"
+    assert spawn["UNITARES_MODEL_ID"] == ""
     for name in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
         assert name not in spawn
 

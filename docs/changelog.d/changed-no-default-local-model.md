@@ -1,0 +1,1 @@
+- Interface contract 1.55.0: call_model's model description no longer names a built-in default: with UNITARES_MODEL_ID unset, model='auto' on the local route is refused with MODEL_NOT_CONFIGURED. No capability, parameter name, type, default or requiredness changed; the description moves call_model's input_schema_sha256.
