@@ -24,12 +24,20 @@ verification) and an outside consult (consultation `dcb4bc98`) converged on it.
    label: an unknown session has no sender to label, and a stored wrong sender
    is a permanent false record. Each refusal writes an audit event carrying both
    claims, which is where a misattribution becomes visible.
-5. Every send and refusal also writes a metadata-only audit event (sender,
-   recipient, topic, time, how the sender was established), so the operator can
-   see traffic without reading bodies. Today nothing is visible: bodies live
-   only in `lease_plane.topic_messages`, for the recipient, for at most 7 days,
-   and no dashboard view reads them. Message traffic stays out of `tool_usage`
-   (`agent-message-transport-v0.md` §6).
+5. Every send and refusal writes an audit event: sender, recipient, topic,
+   time, how the sender was established, and the message itself. Today nothing
+   is visible: bodies live only in `lease_plane.topic_messages`, for the
+   recipient, for at most 7 days, and no dashboard view reads them. Message
+   traffic stays out of `tool_usage` (`agent-message-transport-v0.md` §6).
+
+   Delivery and record are two lifecycles. The inbox copy expires because
+   undelivered mail must not pile up as open work, which is what the KG
+   channel notes did. The audit copy is history, not work: nothing waits on
+   it, so it follows audit retention, not the inbox TTL. Agent-to-agent
+   confidentiality (§5 of the transport doc) is about agents reading each
+   other's mail, not about the operator's record. Agents are told at the
+   `msg` action that sends are recorded, so the record is never hidden from
+   them either.
 6. Messages stay pointers to durable artifacts. Lease release, handoff, pause
    and resident commands keep their existing paths.
 
