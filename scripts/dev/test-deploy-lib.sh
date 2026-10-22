@@ -84,6 +84,30 @@ echo "<string>/dev/checkout/prog.py</string>" > "$P"
   && bad "mismatched plist refuses when allow-env unset" || ok "mismatched plist refuses when allow-env unset"
 ( set -euo pipefail; export MY_ALLOW=1; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" --allow-env MY_ALLOW ) >/dev/null 2>&1 \
   && ok "mismatched plist passes with allow-env=1" || bad "mismatched plist passes with allow-env=1"
+# A launcher between launchd and the service: the plist names only the
+# launcher, and the launcher names the deploy worktree.
+LAUNCHER="$SB/svc-launch"
+printf '#!/bin/sh\nexec python3 /deploy/needle/prog.py "$@"\n' > "$LAUNCHER"
+cat > "$P" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>t</string>
+<key>ProgramArguments</key><array><string>$LAUNCHER</string><string>--port</string></array>
+</dict></plist>
+EOF
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && ok "launcher naming the deploy worktree passes" || bad "launcher naming the deploy worktree passes"
+printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"\n' > "$LAUNCHER"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "launcher naming another checkout refuses" || ok "launcher naming another checkout refuses"
+printf '\000\001/deploy/needle/prog.py\000' > "$LAUNCHER"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "binary program is not searched" || ok "binary program is not searched"
+rm -f "$LAUNCHER"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "missing launcher refuses" || ok "missing launcher refuses"
+echo "<string>/dev/checkout/prog.py</string>" > "$P"
 preflight_out="$(
   set +e
   ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" \

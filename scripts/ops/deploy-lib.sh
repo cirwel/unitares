@@ -118,6 +118,28 @@ deploy_lib_require_plist_target() {
 
   grep -q "$needle" "$plist" && return 0
 
+  # A launcher script may stand between launchd and the service, for example
+  # one that reads a credential from the OS keychain and then execs the
+  # program, so the plist itself names only the launcher. Follow the plist's
+  # program one step: accept it when it is a readable text file that names the
+  # deploy worktree. A binary is never searched (-I), and nothing is printed.
+  local program
+  program="$(python3 - "$plist" 2>/dev/null <<'PY' || true
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as handle:
+        job = plistlib.load(handle)
+    args = job.get("ProgramArguments") or []
+    print(job.get("Program") or (args[0] if args else ""))
+except Exception:
+    pass
+PY
+)"
+  if [[ -n "$program" && -f "$program" && -r "$program" ]] \
+      && grep -Iq -- "$needle" "$program" 2>/dev/null; then
+    return 0
+  fi
+
   echo "[$tag] REFUSING: the LaunchAgent plist does not point at the deploy worktree ($needle)." >&2
   echo "[$tag] kickstart would restart the OLD code and this script would lie about success." >&2
   echo "[$tag] One-time migration (interactive login shell — a RELOAD, kickstart won't re-read the plist):" >&2
