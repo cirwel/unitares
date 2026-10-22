@@ -373,12 +373,15 @@ class TestHandleAuditKnowledgeGraph:
                        "thresholds": {},
                    }) as mock_audit:
             from src.mcp_handlers.knowledge.handlers import handle_audit_knowledge_graph
-            await handle_audit_knowledge_graph({
-                "scope": "all",
-                "top_n": "5",
-                "use_model": "true",
-                "agent_id": "test-agent",
-            })
+            # The caller is bound as test-agent; an unproven agent_id is refused.
+            with patch("src.mcp_handlers.context.get_context_resolved_agent_id",
+                       return_value="test-agent"):
+                await handle_audit_knowledge_graph({
+                    "scope": "all",
+                    "top_n": "5",
+                    "use_model": "true",
+                    "agent_id": "test-agent",
+                })
 
         mock_audit.assert_called_once_with(
             scope="all",

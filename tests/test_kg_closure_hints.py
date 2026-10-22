@@ -501,6 +501,20 @@ def handler_env(server, graph):
         yield server, graph
 
 
+@pytest.fixture
+def owner_bound(handler_env):
+    """The finding's owner, ``a-1``, writing as itself through a proven binding.
+
+    Under strict identity an explicit ``agent_id`` with no resolved binding is
+    refused, so a test that stands for the owner closing its own finding has to
+    make that binding real rather than lean on the bare argument.
+    """
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id", return_value="a-1"
+    ):
+        yield handler_env
+
+
 def _discovery(**overrides) -> DiscoveryNode:
     fields = dict(
         id="d-1",
@@ -529,9 +543,9 @@ def _stores_what_it_is_sent(graph, stored: DiscoveryNode) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_class_the_record_does_not_carry_is_not_acknowledged(handler_env):
+async def test_a_class_the_record_does_not_carry_is_not_acknowledged(owner_bound):
     """The response reports the record read back, not the caller's echo."""
-    _server, graph = handler_env
+    _server, graph = owner_bound
     graph.get_discovery = AsyncMock(side_effect=[_discovery(), _discovery()])
 
     data = parse_result(
@@ -552,8 +566,8 @@ async def test_a_class_the_record_does_not_carry_is_not_acknowledged(handler_env
 
 
 @pytest.mark.asyncio
-async def test_a_stored_class_gets_no_caveat(handler_env):
-    _server, graph = handler_env
+async def test_a_stored_class_gets_no_caveat(owner_bound):
+    _server, graph = owner_bound
     _stores_what_it_is_sent(graph, _discovery())
 
     data = parse_result(
@@ -573,8 +587,8 @@ async def test_a_stored_class_gets_no_caveat(handler_env):
 
 
 @pytest.mark.asyncio
-async def test_unclassified_close_note_names_its_own_discovery_and_status(handler_env):
-    _server, graph = handler_env
+async def test_unclassified_close_note_names_its_own_discovery_and_status(owner_bound):
+    _server, graph = owner_bound
     graph.get_discovery = AsyncMock(side_effect=[_discovery(), _discovery()])
 
     data = parse_result(
@@ -591,9 +605,9 @@ async def test_unclassified_close_note_names_its_own_discovery_and_status(handle
 
 
 @pytest.mark.asyncio
-async def test_a_reclose_keeps_the_stored_class_and_says_nothing(handler_env):
+async def test_a_reclose_keeps_the_stored_class_and_says_nothing(owner_bound):
     """A row classified earlier is not unclassified because this call sent none."""
-    _server, graph = handler_env
+    _server, graph = owner_bound
     _stores_what_it_is_sent(
         graph,
         _discovery(

@@ -1382,6 +1382,80 @@ def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
     )[0]
 
 
+def _unproven_agent_id_refusal(arguments: Dict[str, Any]) -> Optional[TextContent]:
+    """Refuse a write naming an agent_id this call has not proven, under strict identity.
+
+    An explicit ``agent_id`` with no resolved binding is the caller's word
+    alone. The REST gate lets a non-UUID one through as a legacy name
+    reference, and below high severity nothing then checks it, so every
+    invented name wrote as its own author with its own store budget, and an
+    update could edit or close another agent's finding. Bound callers are
+    unaffected: dispatch injects their own id, and ``inject_identity`` already
+    refuses a different one. The anonymous pseudonym this module derives is
+    let through when it is written back into the same arguments.
+    """
+    from ..context import (
+        get_context_resolved_agent_id,
+        get_session_proof_origin,
+        get_session_resolution_source,
+    )
+    from ..identity_bootstrap import (
+        is_strict_identity_required,
+        strict_identity_refusal_payload,
+    )
+
+    if not is_strict_identity_required():
+        return None
+    claimed = arguments.get("agent_id")
+    if not claimed or get_context_resolved_agent_id():
+        return None
+    if str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX):
+        rest = {k: v for k, v in arguments.items() if k != "agent_id"}
+        if claimed == _derive_anonymous_writer_id(rest):
+            return None
+    return success_response(
+        strict_identity_refusal_payload(
+            "knowledge",
+            hint=(
+                "agent_id names an identity this call has not proven. Under strict "
+                "identity a knowledge write needs a binding: leave agent_id out and "
+                "pass the client_session_id that start_session returned."
+            ),
+            next_step=(
+                "Retry without agent_id and with client_session_id=<from "
+                "start_session>. If this process never called start_session, call "
+                "start_session(force_new=true) first."
+            ),
+            surface_context={
+                "transport_surface": "knowledge",
+                "reason": "unproven_agent_id",
+                "session_resolution_source": get_session_resolution_source(),
+                "proof_origin": get_session_proof_origin(),
+                "lifecycle_automation": "not_confirmed",
+            },
+        )
+    )[0]
+
+
+def _requires_proven_agent_id(handler):
+    """Apply ``_unproven_agent_id_refusal`` before an identity-gated knowledge handler.
+
+    The writer resolver already runs the check, but supersede (without notes),
+    cleanup, synthesize, promote and audit reach their writes without it, each
+    registered both as a router action and as a standalone tool. Gating every
+    such handler at its entry keeps one rule for all of them.
+    """
+
+    @wraps(handler)
+    async def guarded(arguments: Dict[str, Any], *args, **kwargs):
+        refusal = _unproven_agent_id_refusal(arguments)
+        if refusal is not None:
+            return [refusal]
+        return await handler(arguments, *args, **kwargs)
+
+    return guarded
+
+
 def _resolve_low_friction_writer(
     arguments: Dict[str, Any], *, inferred_exempt: Optional[bool] = None
 ) -> tuple[str, Optional[TextContent], bool]:
@@ -1403,6 +1477,10 @@ def _resolve_low_friction_writer(
     check-in gate lets it through.
     """
     from ..context import get_context_agent_id
+
+    refusal = _unproven_agent_id_refusal(arguments)
+    if refusal is not None:
+        return "", refusal, False
 
     if _inferred_binding_untrusted(inferred_exempt):
         arguments.pop("agent_id", None)
@@ -1477,6 +1555,31 @@ def _gated_write_refused_on_inferred_binding(
     if _inferred_binding_untrusted(inferred_exempt) and is_strict_identity_required():
         return _inferred_binding_refusal(update=update)
     return None
+
+
+def _requires_proven_writer(handler):
+    """``_requires_proven_agent_id`` plus the inferred-binding refusal.
+
+    For identity-gated knowledge handlers that reach their writes without the
+    writer resolver (supersede without notes, cleanup, synthesize, promote,
+    audit). A server-inferred binding (same address and User-Agent as some
+    agent) is not proof that the caller is that agent, so under strict
+    identity it is refused the way a high or critical write is, unless the
+    resolved agent is exempt from caller proof (a substrate resident).
+    """
+
+    @wraps(handler)
+    async def guarded(arguments: Dict[str, Any], *args, **kwargs):
+        refusal = _unproven_agent_id_refusal(arguments)
+        if refusal is None:
+            refusal = _gated_write_refused_on_inferred_binding(
+                await _inferred_writer_exempt(), update=True
+            )
+        if refusal is not None:
+            return [refusal]
+        return await handler(arguments, *args, **kwargs)
+
+    return guarded
 
 
 async def _resolve_store_writer(
@@ -2022,6 +2125,7 @@ async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> 
 
 
 @mcp_tool("store_knowledge_graph", timeout=20.0, register=False)
+@_requires_proven_agent_id
 async def handle_store_knowledge_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5204,6 +5308,7 @@ async def _execute_discovery_update(
 
 
 @mcp_tool("update_discovery_status_graph", timeout=10.0, register=False)
+@_requires_proven_agent_id
 async def handle_update_discovery_status_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5848,6 +5953,7 @@ async def _execute_note_write(
     return _build_note_response(request, note)
 
 
+@_requires_proven_agent_id
 async def handle_knowledge_note(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5905,6 +6011,7 @@ async def handle_knowledge_note(
     "leave_note",
     timeout=10.0,
 )
+@_requires_proven_agent_id
 async def handle_leave_note(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5915,6 +6022,7 @@ async def handle_leave_note(
 
 
 @mcp_tool("cleanup_knowledge_graph", timeout=60.0, register=False)
+@_requires_proven_writer
 async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Run knowledge graph lifecycle cleanup.
 
@@ -5949,6 +6057,7 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
         return [error_response(f"Failed to run lifecycle cleanup: {str(e)}")]
 
 @mcp_tool("synthesize_knowledge_graph", timeout=120.0, register=False)
+@_requires_proven_writer
 async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compound discrete discoveries into rolled-up topic summaries (Issue #1).
 
@@ -6218,6 +6327,7 @@ async def _supersede_flip_details(
 
 
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
+@_requires_proven_writer
 async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Mark a discovery as superseding another.
 
@@ -6312,6 +6422,7 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
 
 
 @mcp_tool("promote_memory_claim", timeout=20.0, register=False)
+@_requires_proven_writer
 async def handle_promote_memory_claim(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -6514,6 +6625,7 @@ async def handle_promote_memory_claim(
 
 
 @mcp_tool("audit_knowledge_graph", timeout=60.0, register=False)
+@_requires_proven_writer
 async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Audit knowledge graph for staleness and health.
 

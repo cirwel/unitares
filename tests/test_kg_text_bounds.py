@@ -221,11 +221,23 @@ def handler_env():
 
 
 async def _update_through_age(arguments: dict, stored: DiscoveryNode | None = None):
+    """Update as the finding's owner, bound to this call.
+
+    The callers pass agent_id "a-1", the stored finding's author. Under strict
+    identity an agent_id is only honoured when the call proved it, so the
+    binding is made real here rather than left as the caller's word.
+    """
     kg, db = _age_graph(stored or _stored())
-    with patch(
-        "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
-        new_callable=AsyncMock,
-        return_value=kg,
+    with (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            new_callable=AsyncMock,
+            return_value=kg,
+        ),
+        patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value=arguments.get("agent_id"),
+        ),
     ):
         data = parse_result(
             await kg_handlers.handle_update_discovery_status_graph(arguments)

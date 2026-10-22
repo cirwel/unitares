@@ -134,7 +134,13 @@ def registered_agent(mock_mcp_server):
     meta.created_at = "2026-01-01T00:00:00"
     meta.paused_at = None
     mock_mcp_server.agent_metadata[agent_uuid] = meta
-    return agent_uuid
+    # The registered agent is the bound caller writing as itself: under strict
+    # identity a knowledge write naming agent_id needs a resolved binding.
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
+        return_value=agent_uuid,
+    ):
+        yield agent_uuid
 
 
 # ============================================================================

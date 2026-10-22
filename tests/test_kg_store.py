@@ -153,10 +153,17 @@ def patch_common(mock_mcp_server, mock_graph):
 
 @pytest.fixture
 def registered_agent(mock_mcp_server):
-    """Register a test agent in the mock server's metadata.
+    """Register a test agent in the mock server's metadata and bind it.
 
     Uses a valid UUID4 as the key so require_registered_agent can find it
     via direct UUID lookup in agent_metadata.
+
+    Tests that take this fixture write as the registered agent itself, so the
+    agent is also this call's RESOLVED binding (``get_context_resolved_agent_id``),
+    which is what identity resolution stamps for a bound caller. Under strict
+    identity a knowledge write naming an agent_id with no resolved binding is
+    refused as unproven, so a test that means an UNBOUND named writer must not
+    take this fixture and must say so itself.
     """
     import uuid
     agent_uuid = str(uuid.uuid4())
@@ -172,7 +179,11 @@ def registered_agent(mock_mcp_server):
     meta.created_at = "2026-01-01T00:00:00"
     meta.paused_at = None
     mock_mcp_server.agent_metadata[agent_uuid] = meta
-    return agent_uuid
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
+        return_value=agent_uuid,
+    ):
+        yield agent_uuid
 
 
 # ============================================================================
@@ -618,7 +629,25 @@ class TestStoreKnowledgeGraph:
         })
 
         data = parse_result(result)
-        # Should fail because agent not registered for high severity
+        # Under strict identity the unproven agent_id is refused before the
+        # registered-writer check (typed, success-shaped #425 refusal).
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+        assert identity_refusal_status(data) == "identity_required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.legacy_identity_defaults
+    async def test_store_high_severity_requires_registered_agent_legacy(self, patch_common):
+        """With strict identity off, high severity still requires a registered agent."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": "unregistered-agent",
+            "summary": "Critical issue found",
+            "severity": "high",
+        })
+
+        data = parse_result(result)
         assert data["success"] is False
 
     @pytest.mark.asyncio
@@ -1094,11 +1123,16 @@ class TestStoreKnowledgeGraphAdditional:
         )
         mock_mcp_server.agent_metadata[agent_uuid] = meta
 
-        result = await handle_store_knowledge_graph({
-            "agent_id": agent_uuid,
-            "summary": "S22 fork-discriminator test",
-            "harness": "claude-code",
-        })
+        # The fork child writes as itself: it is this call's resolved binding.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value=agent_uuid,
+        ):
+            result = await handle_store_knowledge_graph({
+                "agent_id": agent_uuid,
+                "summary": "S22 fork-discriminator test",
+                "harness": "claude-code",
+            })
 
         data = parse_result(result)
         assert data["success"] is True
