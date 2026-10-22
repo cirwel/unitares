@@ -48,7 +48,7 @@ Rewrite RELEASE_PROCESS.md as a single numbered checklist grouped by who acts (a
 - Keep incident rationale as one-line footnotes.
 - Before moving text, grep `tests/` for `read_text` or `inspect.getsource` references to it, and run `make validate` (published-claims and README volatility checks).
 
-### Step 2. `scripts/ops/prepare_release.py` plus `make release-prep PART=...` (tooling)
+### Step 2. A new `scripts/ops/prepare_release.py`, run through a new `release-prep` Makefile target (tooling)
 
 A thin orchestrator over existing scripts, in the style of `scripts/dev/prepare_interface_release.py`. `make version-bump` stays unchanged. In order, on a clean named branch:
 1. Derive `UNITARES_PROJECTS_ROOT` from `git rev-parse --git-common-dir`.
