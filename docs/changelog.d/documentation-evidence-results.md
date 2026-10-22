@@ -1,0 +1,1 @@
+- **Evidence:** Lead with captured attribution and handoff behavior, review-driven corrections, and sustained deployment activity; consolidate evaluation limits and link technical provenance.

@@ -56,7 +56,7 @@ tail -f data/logs/mcp_server_error.log
    pkill -f "mcp_server"
    ```
 
-3. **Restart via launchd (macOS production):**
+3. **Restart via launchd (macOS LaunchAgent install; under Docker Compose use `docker compose restart governance-mcp`):**
    ```bash
    launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
    launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
@@ -269,10 +269,10 @@ The only place to "allow all" for the injected server is the **environment's per
 ### Issue 9: `consult` Says "Standard advisory consultation is unavailable"
 
 **Symptoms:**
-- `consult` fails with `Standard advisory consultation is unavailable` and the code `MODEL_PROVIDER_UNAVAILABLE`.
+- `consult` fails with `Standard advisory consultation is unavailable` and the code `MODEL_NOT_CONFIGURED` (no model named) or `MODEL_PROVIDER_UNAVAILABLE` (the named server does not answer).
 - `request_review` records the thesis, but no reviewer takes it.
 
-**Cause:** No model is reachable. UNITARES bundles none; `consult` and the local reviewer use the model server and model named by `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` (any OpenAI-compatible server; Ollama is the tested one). On a fresh install neither is set, which is expected: reviews then wait for a peer or the operator.
+**Cause:** No model is named, or the named one is not reachable. UNITARES bundles none and names none; `consult` and the local reviewer use the model server and model named by `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` (any OpenAI-compatible server; Ollama is the tested one). On a fresh install neither is set, which is expected: reviews then wait for a peer or the operator.
 
 **Solutions:**
 
@@ -375,7 +375,7 @@ python3 --version
 ### Service Restart
 
 ```bash
-# macOS launchd (production)
+# macOS LaunchAgent install (Docker Compose: docker compose restart governance-mcp)
 launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 

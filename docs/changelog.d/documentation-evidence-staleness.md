@@ -1,0 +1,1 @@
+- **Evidence:** Record the 2026-10-15 data-boundary amendment to the 2026-12-01 outcome read, list the two 2026-10-15 security advisories, and recount the dated repository figures.

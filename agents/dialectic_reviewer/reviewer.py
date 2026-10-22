@@ -39,9 +39,11 @@ from src.identity.lineage_semantics import LineageSpawnReason
 from src.local_inference_env import (
     no_redirect_http_client,
     EndpointNotLocalError,
+    ModelNotConfiguredError,
     default_local_model,
     model_base_url,
     require_local_endpoint,
+    require_local_model,
 )
 
 from .host_list import ListedHost, reviewer_host_plan
@@ -50,11 +52,13 @@ from .host_backends import (
     call_antigravity_backend,
     call_claude_backend,
     call_openai_compat_backend,
+    cli_env,
     codex_admin_config_conflict,
     codex_confinement_verified,
     codex_lane_config_overrides,
     codex_lane_workdir,
     codex_mcp_disable_overrides,
+    reap_group,
     resolve_host_cli,
 )
 
@@ -745,30 +749,26 @@ async def _run_codex_review(
             "-c",
             f'exec "$DR_CLI" exec --ephemeral {slots} '
             '--skip-git-repo-check "$DR_PROMPT" </dev/null',
-            env={
-                **os.environ,
-                "DR_CLI": cli_path,
-                "DR_PROMPT": prompt,
+            env=cli_env(
+                DR_CLI=cli_path,
+                DR_PROMPT=prompt,
                 **{f"DR_CODEX_C{i}": value for i, value in enumerate(overrides, start=1)},
-            },
+            ),
             cwd=workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            # Own process group, so a timeout reaches codex's sandboxed children.
+            start_new_session=True,
         )
     except Exception:  # noqa: BLE001 - selected-host failure falls back locally
         return None
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+        await reap_group(proc)
         return None
     except Exception:  # noqa: BLE001 - selected-host failure falls back locally
-        try:
-            proc.kill()
-            await proc.communicate()
-        except Exception:
-            pass
+        await reap_group(proc)
         return None
     if proc.returncode != 0:
         return None
@@ -911,16 +911,16 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
     }
     try:
         text = await call_reviewer_model(prompt)
-    except EndpointNotLocalError as exc:
+    except (EndpointNotLocalError, ModelNotConfiguredError) as exc:
         # The local fallback is the operator's own model by definition. When
-        # the endpoint does not classify local, nothing is sent: the empty text
+        # the endpoint is not local or no model is named, nothing is sent: the empty text
         # parses to no judgment, so the reviewer abstains, and the reason
         # travels in the provenance warnings recorded with the abstention.
         logger.warning("Dialectic reviewer local backend refused: %s", exc)
         refused = {
             "backend": "ollama",
             "host_id": "ollama:local",
-            "model_requested": DEFAULT_MODEL,
+            "model_requested": DEFAULT_MODEL or None,
             "models_used": [],
             "fallback_from": fallback_from,
             "warnings": [*warnings, f"{exc.code}: {exc}"],
@@ -943,18 +943,19 @@ async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> 
     return ReviewerText(text, floor, FLOOR)
 
 
-async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
+async def call_reviewer_model(prompt: str, model: Optional[str] = None) -> str:
     """Run the local heterogeneous model in THIS process (not via the server's
-    call_model tool, whose 30s timeout is shorter than gemma4's 43–70s budget).
-    Localhost Ollama, OpenAI-compat — no paid API.
+    call_model tool, whose 30s timeout is shorter than a local model's 43–70s).
+    The operator's OpenAI-compatible endpoint — no paid API.
 
     Uses the ASYNC client + ``await`` so the ~40-70s model call does not block the
     event loop (this is an ``async def`` driven by ``asyncio.run``)."""
     from openai import AsyncOpenAI  # local import: only the runner process needs it
 
     # privacy='local' by nature: raises EndpointNotLocalError, before any
-    # request, when the endpoint does not classify local.
+    # request, when the endpoint is not local; ModelNotConfiguredError, unnamed.
     require_local_endpoint(OLLAMA_BASE_URL)
+    model = require_local_model(model or DEFAULT_MODEL)
     client = AsyncOpenAI(
         base_url=OLLAMA_BASE_URL,
         api_key="ollama",

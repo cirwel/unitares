@@ -26,7 +26,8 @@ builds on it. All actions route through the consolidated `knowledge(...)` tool
    backend (`UNITARES_KNOWLEDGE_BACKEND=age`); on the default PostgreSQL
    backend only the relational `response_to_id` link exists.
 
-> Write discipline (see CLAUDE.md "Strict Identity"): **search before writing.**
+> Write discipline (see the shared agent contract, `AGENTS.md` / `CLAUDE.md`,
+> "Strict Identity"): **search before writing.**
 > If a related entry exists, prefer a linked correction or `supersede` over a
 > fresh note.
 
@@ -160,3 +161,14 @@ and reflects deletes/archival. It is deliberately **not** set in the `/metrics`
 handler, which must stay DB-free (no `await` on asyncpg in the scrape path).
 The refresh cadence follows the lifecycle task (startup + periodic); for
 on-demand size/usage breakdowns use `scripts/analysis/kg_usage_report.py`.
+
+## Reading `stats` and `audit` responses
+
+Two guides explain response fields that are easy to misread:
+
+- [Reading knowledge-graph statistics](../guides/kg-statistics.md): which
+  `knowledge(action="stats")` field is the corpus total, and why the legacy
+  `total_discoveries` is a lifecycle subtotal.
+- [Reading a bounded knowledge-graph audit](../guides/kg-audit-limits.md): the
+  `top_n` and 100-entry response limits on `knowledge(action="audit")`, and
+  which counts describe the whole scan.

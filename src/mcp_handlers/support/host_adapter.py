@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import json
+import math
 import os
 import shutil
 import sys
@@ -691,6 +692,21 @@ def extract_cli_result(
 _extract_cli_result = extract_cli_result
 
 
+# The orchestrator's ceiling on one await (agent_orchestrator http_router.ex,
+# await_timeout/1). A call longer than this re-awaits; see invoke_host_adapter.
+_AWAIT_WINDOW_S = 120
+
+#: Seconds past the caller's timeout_s at which the orchestrator itself stops
+#: the child (the spawn spec's max_runtime_ms). A caller that stopped waiting
+#: can rely on the child being gone by timeout_s plus this.
+ORCHESTRATOR_BACKSTOP_GRACE_S = 30
+#: Ceiling on the spawn request (POST /v1/agents).
+_SPAWN_REQUEST_TIMEOUT_S = 15.0
+#: Seconds an await request may run past the window it asked the orchestrator
+#: for, so an answer sent at the window's end is not cut off in transit.
+_AWAIT_REQUEST_GRACE_S = 15.0
+
+
 async def invoke_host_adapter(
     host_id: str,
     prompt: str,
@@ -699,6 +715,7 @@ async def invoke_host_adapter(
     sandbox: str = "read-only",
     cd: Optional[str] = None,
     model: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Invoke a strong-heterogeneous model host via the orchestrator. Async, fail-safe.
 
@@ -707,6 +724,12 @@ async def invoke_host_adapter(
     ``status="still_running"`` (with ``execution_id``) is returned on await-timeout so a
     caller can poll the orchestrator rather than block — strong models can exceed any
     single budget. Never raises.
+
+    ``deadline`` is an optional ``time.monotonic()`` instant by which this call
+    returns whatever the orchestrator has done. Each HTTP request is clipped
+    to the time left before it, so a stalled spawn or await cannot push the
+    reply past it; an await cut off there reports ``still_running`` with the
+    execution id, like an orchestrator 504.
     """
     # ``dispatch_phase`` is a safety signal consumed by delegated inference.
     # Only ``preflight`` and an explicit HTTP ``spawn_rejected`` response prove
@@ -768,9 +791,27 @@ async def invoke_host_adapter(
             "dispatch_phase": dispatch_phase,
             "error": f"CLI '{cli}' not found or not executable; set {override}",
         }
-    if host_id == "codex:host-adapter" and not await asyncio.to_thread(
-        codex_confinement_verified, cli_path
-    ):
+    if host_id == "codex:host-adapter":
+        # A cold probe runs codex subprocesses with their own 20s timeouts, so
+        # it is clipped to the call's deadline like every later step. The
+        # thread cannot be cancelled; it finishes in the background and
+        # caches its verdict for the next call.
+        probe = asyncio.to_thread(codex_confinement_verified, cli_path)
+        try:
+            if deadline is None:
+                confined = await probe
+            else:
+                confined = await asyncio.wait_for(
+                    probe, timeout=max(0.0, deadline - time.monotonic())
+                )
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": "call deadline reached during the codex sandbox probe",
+            }
+    if host_id == "codex:host-adapter" and not confined:
         return {
             "ok": False,
             "host_id": host_id,
@@ -855,7 +896,8 @@ async def invoke_host_adapter(
             "OPENAI_API_KEY": "",
         },
         "lease": False,  # read-only advisor lane, no presence/lineage
-        "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
+        # Orchestrator backstop.
+        "max_runtime_ms": int((timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S) * 1000),
     }
     if host_id == "codex:host-adapter":
         # The exec fallback's -c overrides; the app-server client computes the
@@ -882,9 +924,30 @@ async def invoke_host_adapter(
 
         started = time.monotonic()
 
+        def _bounded(budget_s: float) -> float:
+            """``budget_s`` clipped to the time left before ``deadline``."""
+            if deadline is None:
+                return budget_s
+            return max(0.0, min(budget_s, deadline - time.monotonic()))
+
+        if deadline is not None and deadline - time.monotonic() <= 0:
+            # Nothing has been sent, so no child can exist.
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": "call deadline reached before the spawn request",
+                "provenance": provenance,
+            }
         dispatch_phase = "spawn_request_started"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            sp = await client.post(f"{base}/v1/agents", json=spec, headers=headers)
+        spawn_budget_s = _bounded(_SPAWN_REQUEST_TIMEOUT_S)
+        async with httpx.AsyncClient(timeout=spawn_budget_s) as client:
+            # wait_for as well as the client timeout: httpx times each phase
+            # (connect, each read) separately, not the request as a whole.
+            sp = await asyncio.wait_for(
+                client.post(f"{base}/v1/agents", json=spec, headers=headers),
+                timeout=spawn_budget_s,
+            )
         if sp.status_code not in (200, 201, 202):
             return {
                 "ok": False,
@@ -906,13 +969,47 @@ async def invoke_host_adapter(
             }
 
         dispatch_phase = "spawned"
-        async with httpx.AsyncClient(timeout=timeout_s + 15.0) as client:
-            aw = await client.post(
-                f"{base}/v1/executions/{execution_id}/await",
-                json={"timeout_ms": int(timeout_s * 1000)},
-                headers=headers,
-            )
-        if aw.status_code == 504:
+        # The orchestrator clamps one await to _AWAIT_WINDOW_S (it holds a
+        # connection open for the duration), so a single await ended every
+        # call longer than that as still_running, whatever timeout_s said.
+        # Re-await in windows until this call's own deadline. The window count
+        # is bounded too, so an orchestrator that answers 504 at once cannot
+        # make this spin.
+        await_deadline = started + timeout_s
+        windows_left = max(1, math.ceil(timeout_s / _AWAIT_WINDOW_S))
+        await_cut_off = False
+        async with httpx.AsyncClient() as client:
+            while True:
+                window_s = min(
+                    max(await_deadline - time.monotonic(), 1.0), _AWAIT_WINDOW_S
+                )
+                # Per window, so a short call to an orchestrator that never
+                # answers still gives up shortly after its window, and never
+                # past the caller's overall deadline.
+                request_budget_s = _bounded(window_s + _AWAIT_REQUEST_GRACE_S)
+                try:
+                    aw = await asyncio.wait_for(
+                        client.post(
+                            f"{base}/v1/executions/{execution_id}/await",
+                            json={"timeout_ms": int(window_s * 1000)},
+                            headers=headers,
+                            timeout=request_budget_s,
+                        ),
+                        timeout=request_budget_s,
+                    )
+                except (TimeoutError, httpx.TimeoutException):
+                    # The child was accepted and has not reported back: the
+                    # same state as a 504, reported the same way, id included.
+                    await_cut_off = True
+                    break
+                windows_left -= 1
+                if (
+                    aw.status_code != 504
+                    or windows_left <= 0
+                    or time.monotonic() >= await_deadline
+                ):
+                    break
+        if await_cut_off or aw.status_code == 504:
             return {
                 "ok": False,
                 "host_id": host_id,

@@ -1,1 +1,0 @@
-- Record approved attribution-first GitHub App rollout with a prefilled registration, minimal repository permissions and explicit pending credential validation; actor authorization stays deferred.

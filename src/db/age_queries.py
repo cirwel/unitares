@@ -326,16 +326,25 @@ def query_cross_agent_knowledge_flow(
     """
     Build Cypher query to find cross-agent knowledge flow.
 
+    One row per (builder, source) agent pair: ``builder`` authored a discovery
+    whose RELATED_TO edge points at a discovery ``source`` authored. The store
+    path writes RELATED_TO from the new discovery to the ones it cites, so the
+    direction reads "builder built on source". ``links`` counts those edges.
+
+    graph_query maps one return expression to its single result column, so the
+    row is a map literal; a bare multi-column RETURN fails on column arity.
+
     Returns:
         (cypher_query, params_dict)
     """
     safe_limit = max(1, int(limit))
 
     cypher = f"""
-        MATCH (a1:Agent)-[:AUTHORED]->(d1:Discovery)-[:RELATED_TO]-(d2:Discovery)<-[:AUTHORED]-(a2:Agent)
+        MATCH (a1:Agent)-[:AUTHORED]->(d1:Discovery)-[:RELATED_TO]->(d2:Discovery)<-[:AUTHORED]-(a2:Agent)
         WHERE a1.id <> a2.id
-        RETURN a1.id AS from_agent, a2.id AS to_agent, count(*) AS shared_insights
-        ORDER BY shared_insights DESC
+        WITH a1.id AS builder, a2.id AS source, count(*) AS links
+        RETURN {{builder: builder, source: source, links: links}}
+        ORDER BY links DESC
         LIMIT {safe_limit}
     """
 
@@ -348,7 +357,10 @@ def query_entropy_work_correlation(
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query: What was agent working on when entropy peaked?
-    
+
+    Each row is one map, ``{timestamp, entropy, work_summary}``: graph_query
+    reads a single result column, so a multi-column RETURN fails on arity.
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -362,8 +374,9 @@ def query_entropy_work_correlation(
         WHERE state.eisv_s > ${min_entropy}
         MATCH (state)-[:TEMPORALLY_NEAR]->(work:Discovery)
         WHERE work.type <> 'self_observation'
-        RETURN state.timestamp, state.eisv_s, work.summary
+        WITH state, work
         ORDER BY state.timestamp DESC
+        RETURN {timestamp: state.timestamp, entropy: state.eisv_s, work_summary: work.summary}
     """
     
     return cypher, params
@@ -375,7 +388,10 @@ def query_unresolved_questions_with_entropy(
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query: Find unresolved questions with high-entropy context.
-    
+
+    Each row is one map, ``{summary, agent_id, context_entropy}``: graph_query
+    reads a single result column, so a multi-column RETURN fails on arity.
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -388,9 +404,10 @@ def query_unresolved_questions_with_entropy(
         MATCH (q:Discovery {{type: 'question', status: 'open'}})
         OPTIONAL MATCH (q)<-[:RESPONDS_TO]-(state:Discovery {{type: 'self_observation'}})
         WHERE state.eisv_s > ${{min_entropy}}
-        RETURN q.summary, q.agent_id, state.eisv_s AS context_entropy
+        WITH q, state.eisv_s AS context_entropy
         ORDER BY context_entropy DESC
         LIMIT {safe_limit}
+        RETURN {{summary: q.summary, agent_id: q.agent_id, context_entropy: context_entropy}}
     """
 
     return cypher, params
@@ -439,12 +456,16 @@ def query_tags_with_discoveries() -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query to return all (Tag.name, Discovery.id) pairs.
 
+    ``graph_query`` declares a single ``result agtype`` output column, so the
+    pair is returned as one map literal; a two-column ``RETURN a, b`` fails
+    every run with a column-arity error.
+
     Returns:
         (cypher_query, params_dict)
     """
     cypher = """
         MATCH (d:Discovery)-[:TAGGED]->(t:Tag)
-        RETURN t.name AS tag_name, d.id AS discovery_id
+        RETURN {tag_name: t.name, discovery_id: d.id}
     """
     return cypher, {}
 
@@ -521,7 +542,8 @@ def create_concept_relates_to_edge(
     cypher = """
         MATCH (c1:Concept {id: ${c1_id}})
         MATCH (c2:Concept {id: ${c2_id}})
-        MERGE (c1)-[r:RELATES_TO {strength: ${strength}}]->(c2)
+        MERGE (c1)-[r:RELATES_TO]->(c2)
+        SET r.strength = ${strength}
         RETURN r
     """
     return cypher, params

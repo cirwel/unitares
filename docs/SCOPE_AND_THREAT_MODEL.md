@@ -1,21 +1,42 @@
 # Scope, threat model, and signal limits
 
-This is the deeper justification that used to live in the repo README. It answers
-three questions a careful evaluator asks: *who is this for*, *what anchors the
-signal*, and *what is it not robust against yet*.
+**UNITARES is a self-hosted, single-operator federation kernel for agent
+identity, claims and evidence, review, outcomes, and reconstruction.** EISV is
+one instrument inside it: each check-in returns a behavioral state estimate and
+a policy action.
 
-For how the numbers are actually computed, see [How EISV is computed](EISV_COMPUTATION.md);
+This document owns the scope and threat model: who the deployment is for, what
+anchors its records and signals, and what it is not robust against yet. The
+[product definition](PRODUCT_DEFINITION.md) owns the product statement and the
+[evidence and limitations](EVIDENCE_AND_LIMITS.md) page owns the claims ledger.
+For how the EISV numbers are computed, see [How EISV is computed](EISV_COMPUTATION.md);
 for the cold-evaluator path and the falsifiability harness, see the
 [Reviewer Guide](REVIEWER_GUIDE.md).
 
 ## Who should integrate this
 
-UNITARES is for you if you run **multiple long-lived autonomous agents** —
-tool-using, multi-step, doing real work over hours or days — and you've watched
-an agent quietly drift without anyone noticing until something visible broke. The
-check-in loop makes mid-run state changes inspectable. Whether those changes
-predict a later incident or support effective prevention is an open evaluation
-question, not a premise of the integration.
+Agents are direct users. One operator running several long-lived agents
+controls the deployment and chooses their runtimes and infrastructure. The
+goal is a retrievable record of claims, evidence, reviews, outcomes, and policy
+decisions that lets a later process continue the work.
+
+“Federation” here means independent runtimes sharing one operator-controlled
+server and authority domain. Each runtime keeps its own models, tools, and
+execution loop, and communicates with peers through its own transport or A2A.
+Nothing in UNITARES replicates state across independent servers.
+
+**Not designed for** teams that can't instrument their agent loop: automatic
+onboarding, check-ins, and policy actuation require host integration beyond
+connecting an MCP client.
+
+### EISV scope: check-in count, not duration
+
+The EISV instrument suits **long-lived autonomous agents**: tool-using,
+multi-step, doing real work over hours or days, where an agent can quietly
+drift without anyone noticing until something visible broke. The check-in loop
+makes mid-run state changes inspectable. Whether those changes predict a later
+incident or support effective prevention is an open evaluation question, not a
+premise of the integration.
 
 **The threshold that matters is check-in count, not wall-clock time.**
 With the current constants, the cold-start prior owns check-ins 1–2, behavioral
@@ -26,11 +47,10 @@ units of work — over an hour or a week — crosses it; one that does three and
 exits never does. That's the real line for "is my session long enough to
 benefit," not a duration.
 
-**Not designed for** short-lived chatbot turns, which end before self-relative
-scoring starts at check-in 25, or for teams that can't instrument their agent
-loop.
+**The EISV instrument is not designed for** short-lived chatbot turns, which
+end before self-relative scoring starts at check-in 25.
 
-## What grounds confidence — and where that boundary fails
+## What grounds EISV confidence — and where that boundary fails
 
 Self-reported confidence is only one input. UNITARES can also consume outcomes
 such as test pass/fail, exit codes, tool results, CI labels, or operator review
@@ -77,7 +97,10 @@ responses enter the behavioral sensor's decision history, so later readings can
 reflect those responses. The [computation reference](EISV_COMPUTATION.md)
 separates the observations, assessment and final policy inputs. The ODE's
 research derivation is in
-[Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159).
+[Paper v6](https://github.com/cirwel/unitares-paper-v6); its DOI,
+[10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159), identifies
+a public preprint. Reliability, faithfulness under intervention, and
+calibration work are tracked in the [roadmap](ROADMAP.md).
 
 ## What anchors the signal
 
@@ -95,18 +118,25 @@ codebase and papers this is called *dialectic*.) See
 
 ## Scope and threat model
 
-**What the instrument is, stated once.** UNITARES is a state instrument, not an
-outcome oracle: it does not decide whether an output is correct or ethical, and
-it cannot detect deliberate concealment without independent evidence. The
-mathematical formulation in the companion paper is a parallel research path, not
-the deployed policy mechanism. "Operating layer" is likewise an architectural
-description and not a claim of universal enforcement: UNITARES can refuse writes
-at the surfaces it owns, and it does not trap every action an agent can take
-through its host.
+**What UNITARES is and is not, stated once.** UNITARES is a self-hosted,
+single-operator federation kernel for agent identity, claims and evidence,
+review, outcomes, and reconstruction. It is not an outcome oracle: it does not
+decide whether an output is correct or ethical, and it cannot detect deliberate
+concealment without independent evidence. Its EISV instrument is a state
+instrument, not a verdict on outcomes: the deployed policy path uses behavioral
+state estimation, and the mathematical formulation in the companion paper is a
+research target and parallel diagnostic path, not the deployed policy
+mechanism. "Operating layer" is likewise an architectural description and not
+a claim of universal enforcement: UNITARES can refuse writes at the surfaces it
+owns, and it does not trap every action an agent can take through its host. A
+capable process can conceal or optimize behavior outside the monitored signals;
+correctness, safety, and resistance to a motivated attacker require independent
+evidence and controls.
 
-These four sentences used to be repeated as a tail on several README sections.
-They are stated here instead, because a caveat restated in every section reads as
-hedging and a caveat stated once in the document that owns it reads as a boundary.
+These boundary statements used to be repeated as a tail on several README
+sections. They are stated here instead, because a caveat restated in every
+section reads as hedging and a caveat stated once in the document that owns it
+reads as a boundary.
 
 UNITARES exposes several adversarial boundaries rather than claiming to close
 them. Trusted external outcomes are harder for a monitored agent to forge than
@@ -235,11 +265,13 @@ therefore which verification semantics a multi-principal deployment requires;
 what key material that implies follows from it, and is not settled here. No
 multi-principal trust work is scheduled to settle it: D3a of the
 [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
-records it as not scheduled, because as of 2026-09-25 no second principal and
-no external verifier exist. The recorded wake condition is a real outside
-party, a person or organisation with its own administrative root, asking to
-verify a record from this deployment. Custody for the receipt key is deferred
-behind that wake (D3b).
+records it as not scheduled without external funding or an outside principal,
+because as of 2026-09-25 no second principal and no external verifier exist.
+The recorded wake conditions are a real outside party, a person or
+organisation with its own administrative root, asking to verify a record from
+this deployment, or, per the record's 2026-10-19 addendum, external funding
+for, or an outside principal joining, the multi-principal testbed. Custody for
+the receipt key is deferred behind D3a waking (D3b).
 
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant

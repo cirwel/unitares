@@ -15,7 +15,7 @@ Background: on 2026-04-11, immediately after shipping the Watcher agent
 
 Both fixes shipped in the same commit as these tests, per the project
 standing rule "every behavioral change ships with tests covering the new
-behavior" (see ~/.claude memory feedback_tests-with-fixes.md).
+behavior".
 """
 
 from __future__ import annotations
@@ -1402,6 +1402,59 @@ def test_main_resolve_routes_through_findings_lease_wrapper(
 
     assert rc == 0
     assert seen == {"intent": "resolve aaaaaaaa", "holder_agent_id": resolver}
+
+
+@pytest.mark.parametrize("flag", ["--resolve", "--dismiss"])
+def test_main_refuses_non_uuid_agent_id_before_mutating(
+    watcher_module, monkeypatch, capsys, flag
+):
+    """A free-form --agent-id used to land verbatim in ``resolved_by``. On
+    2026-10-14 a dogfood probe confirmed a live finding as
+    ``cron-unitares-dogfood-test``. The value is now refused at parse time,
+    before identity resolution, the findings lease or any status change."""
+    _seed_findings(watcher_module, [_make_raw_entry("aaaaaaaaaaaaaaaa")])
+    before = watcher_module.FINDINGS_FILE.read_text()
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("refused --agent-id must not reach a mutation")
+
+    monkeypatch.setattr(watcher_module, "_make_identity_client", must_not_run)
+    monkeypatch.setattr(
+        watcher_module, "_run_with_watcher_findings_lease", must_not_run
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        watcher_module.main(
+            [flag, "aaaaaaaa", "--agent-id", "cron-unitares-dogfood-test"]
+        )
+
+    assert exc.value.code == 2
+    assert "must be a governance agent UUID" in capsys.readouterr().err
+    assert watcher_module.FINDINGS_FILE.read_text() == before
+
+
+def test_main_refuses_non_uuid_agent_id_before_legacy_migration(
+    watcher_module, monkeypatch
+):
+    """Legacy-state migration creates shared state files, so it must not run
+    for an invocation argparse is about to refuse."""
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("a refused invocation must not migrate state")
+
+    monkeypatch.setattr(watcher_module, "migrate_legacy_watcher_state", must_not_run)
+
+    with pytest.raises(SystemExit) as exc:
+        watcher_module.main(
+            ["--resolve", "aaaaaaaa", "--agent-id", "cron-unitares-dogfood-test"]
+        )
+
+    assert exc.value.code == 2
+
+
+def test_governance_agent_uuid_normalizes_valid_values(watcher_module):
+    value = uuid4()
+    assert watcher_module._governance_agent_uuid(f" {str(value).upper()} ") == str(value)
 
 
 def test_main_print_unresolved_is_read_only_and_unleased(watcher_module, monkeypatch):

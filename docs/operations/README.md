@@ -10,7 +10,6 @@ or [User Manual](../manual/README.md).
 - [`DEFINITIVE_PORTS.md`](DEFINITIVE_PORTS.md) — service and port registry.
 - [`database_architecture.md`](database_architecture.md) — PostgreSQL/schema
   ownership and Redis posture.
-- [`DATA_NOTES.md`](DATA_NOTES.md) — operational data dictionary.
 - [`DEPLOYMENT_DATA_CAVEAT.md`](DEPLOYMENT_DATA_CAVEAT.md) — limits on what
   maintainer-deployment counts establish.
 
@@ -18,11 +17,10 @@ or [User Manual](../manual/README.md).
 
 - [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — server, SDK, container, and
   deployment release checklist.
+- [`deployment-env-overlay.md`](deployment-env-overlay.md) — external reviewed
+  environment configuration required by the managed MCP deploy.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
-- [`merge-automation-plan.md`](merge-automation-plan.md) — SUPERSEDED
-  historical plan; do not apply it. Landing now goes through the merge queue
-  (`github-workflow-conventions.md` §4).
 - [`ci-issue-surfacing.md`](ci-issue-surfacing.md) — deduplicated CI finding
   experiment.
 - [`automation-overrides.md`](automation-overrides.md) — operator metadata for
@@ -31,8 +29,8 @@ or [User Manual](../manual/README.md).
   setup behind the dashboard registry.
 - [`branch-hygiene-runbook.md`](branch-hygiene-runbook.md) — safe resident
   branch-hygiene sweep.
-- [`test-suite-triage.md`](test-suite-triage.md) — test-gate state and known
-  triaged suites.
+- [`ci-coverage-validation.md`](ci-coverage-validation.md) — CI shard layout,
+  coverage measurements, and the opt-in drills that skip in the default gate.
 
 ## Runtime services and residents
 
@@ -49,11 +47,10 @@ or [User Manual](../manual/README.md).
 - [`dialectic-resolution-effects.md`](dialectic-resolution-effects.md) —
   read-only inventory and state-specific recovery for interrupted dialectic
   runtime effects.
-- [`public-site.md`](public-site.md) — public landing page and ontology glossary publishing path.
+- [`../public-site/README.md`](../public-site/README.md) — public landing page
+  and ontology glossary publishing path (`public-site.md` here is a locator).
 - [`dormant-capability-registry.md`](dormant-capability-registry.md) — built but
   unwired capabilities and their disposition.
-- [`kg-lineage-dashboard-handoff.md`](kg-lineage-dashboard-handoff.md) — deferred
-  KG lineage dashboard handoff.
 
 ## Validation and evidence records
 
@@ -76,13 +73,22 @@ or [User Manual](../manual/README.md).
   — historical measurement record, superseded for current lift claims.
 - [`self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)
   — dated verdict-provenance worked example with an inline correction.
-- [`stateless-mcp-consumer-ux-2026-07-04.md`](stateless-mcp-consumer-ux-2026-07-04.md)
-  — dated first-contact consumer UX report; preserve as history, not current
-  identity guidance.
 - [`resident-validation-cohort.md`](resident-validation-cohort.md) — experimental
-  resident validation tick contract.
-- [`resident-validation-supervised-invocation.md`](resident-validation-supervised-invocation.md)
-  — local supervised canary invocation.
+  resident validation tick contract and its local supervised canary invocation
+  (`resident-validation-supervised-invocation.md` is now a locator).
+- Dialectic reviewer evidence (the 2026-08-09 verdict cohort and the 2026-08-19
+  antithesis labels, split at 2026-07-02 and never pooled) lives in
+  [`../evaluations/dialectic-reviewer/`](../evaluations/dialectic-reviewer/README.md).
+
+## Archive
+
+- [`archive/README.md`](archive/README.md) — superseded plans, deferred
+  handoffs and dated snapshots retired from current guidance: the superseded
+  merge-automation plan, the deferred KG lineage dashboard handoff, the
+  2026-07-04 consumer UX report, the 2026-04-10 data dictionary (`DATA_NOTES.md`;
+  for the current schema read `db/postgres/schema.sql` and
+  [`database_architecture.md`](database_architecture.md)), and the 2026-06-14
+  test-suite triage.
 
 The [top-level documentation index](../README.md) owns audience routing. This
 file owns the inventory of operator-internal documents.

@@ -132,7 +132,7 @@ INDIRECT_FLAGS = (
         "src/local_inference_env.py",
         "MODEL_ENV",
         "''",
-        "Model id the local model endpoint serves; default gemma4:latest",
+        "Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED)",
     ),
     IndirectFlag(
         "src/local_inference_env.py",

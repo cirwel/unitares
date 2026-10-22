@@ -1,12 +1,12 @@
 # Surface Lease Plane Operator Runbook
 
-Status: **LIVE — Phase A shipped 2026-05-03 (PR #305).** Service `com.unitares.lease-plane` runs on `127.0.0.1:8788` via launchd. Bearer-auth fail-closed (HTTPAuth → 503 if `LEASE_PLANE_BEARER_TOKEN` is unset).
+Status: **Shipped component** (Phase A landed in PR #305 on 2026-05-03). Where a deployment runs it, the lease plane is a separate BEAM service listening on `127.0.0.1:8788` by default: the `lease-plane` service in the Compose stack, or the `com.unitares.lease-plane` launchd template on a native macOS install. Bearer auth fails closed (HTTPAuth → 503 while `LEASE_PLANE_BEARER_TOKEN` is unset).
 
 This runbook teaches what the BEAM node does, not Elixir-the-language. PRs will read clearly enough without prior fluency once these terms are familiar.
 
 ## What the lease plane is
 
-A standalone Elixir/OTP application running on the governance MCP host (Mac). It owns coordination state for shared mutable surfaces (file paths, dialectic sessions, resident lifecycles, capture windows). Backed by Postgres for durable truth. Single-node by design — there is no Erlang clustering across Mac↔Pi.
+A standalone Elixir/OTP application running on the governance MCP host (a Mac on the reference deployment). It owns coordination state for shared mutable surfaces (file paths, dialectic sessions, resident lifecycles, capture windows). Backed by Postgres for durable truth. Single-node by design — there is no Erlang clustering across Mac↔Pi.
 
 It does not own EISV, calibration, KG, or identity issuance. Those stay in Python. (RFC §2 invariant.)
 
@@ -22,9 +22,9 @@ It does not own EISV, calibration, KG, or identity issuance. Those stay in Pytho
 
 ## Start
 
-The service runs from a **dedicated deploy worktree pinned to `origin/master`** — `$HOME/projects/unitares-deploy` — **never the dev checkout**. Running `mix run` against a developer tree drifts: stale feature branches, uncommitted edits to the very files being served. See "Updating the running code" below.
+The service runs from a **dedicated deploy worktree pinned to `origin/master`** — e.g. `$HOME/projects/unitares-deploy` on the reference host, which is the current default in `scripts/ops/deploy-lease-plane.sh` (override with `UNITARES_LEASE_PLANE_DEPLOY`; the dev checkout defaults to `$HOME/projects/unitares`, override with `UNITARES_REPO`) — **never the dev checkout**. Running `mix run` against a developer tree drifts: stale feature branches, uncommitted edits to the very files being served. See "Updating the running code" below.
 
-One-time install:
+One-time install (macOS LaunchAgent install; substitute your own checkout paths):
 
 ```bash
 # 1. Create the dedicated deploy worktree (clean, on master)
@@ -71,6 +71,12 @@ attestation and the wrapper also refuses while either writer LaunchAgent is
 still loaded. Run the script again without either flag only when the rollout
 order below reaches the BEAM restart step.
 
+`UNITARES_DEPLOY_APPLY_MIGRATIONS=1`, as a `deploy-apply.sh` sweep exports it,
+does not select the schema-only mode on its own here: the script deploys code
+when the schema is in sync and still refuses over a gap. Only together with
+`--dialectic-writers-quiesced` does the variable stand in for
+`--apply-migrations`.
+
 For the dialectic resolution-effect/frontier rollout, the safe order is:
 
 1. Quiesce dialectic writers: block new dialectic submissions and stop/drain
@@ -111,8 +117,8 @@ elixir/lease_plane/scripts/ops/hot-reload.sh --changed
 elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
 ```
 
-The full deploy command above fast-forwards
-`$HOME/projects/unitares-deploy` to `origin/master`, verifies the schema,
+The full deploy command above fast-forwards the deploy worktree
+(default `$HOME/projects/unitares-deploy`) to `origin/master`, verifies the schema,
 recompiles, restarts the LaunchAgent, and verifies `/v1/health`. The hot-reload
 helper does only the in-place compile/module swap: it neither applies or checks
 migrations nor restarts the service, so never use it for schema-dependent or
@@ -120,7 +126,7 @@ supervision-tree changes. Because the service runs from the dedicated
 worktree, "is the merged fix actually live?" has a clean answer:
 `git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
 
-> Incident 2026-06-02: a merged fix (#568) was **not** live because the service ran from the dev checkout, which sat on a feature branch with uncommitted edits to the same file. The dedicated worktree exists to make running-code == `origin/master` by construction. This is the running-process-vs-master-commit drift class (`feedback_running-process-vs-master-commit.md`).
+> Incident 2026-06-02: a merged fix (#568) was **not** live because the service ran from the dev checkout, which sat on a feature branch with uncommitted edits to the same file. The dedicated worktree exists to make running-code == `origin/master` by construction. This is the running-process-vs-master-commit drift class.
 
 ## Stop
 
@@ -163,7 +169,7 @@ database is in trouble, not the health probe.
 
 - **Synthetic acquire check** — the `com.unitares.lease-plane-acquire-healthcheck` LaunchAgent runs `elixir/lease_plane/scripts/ops/lease_plane_acquire_healthcheck.sh` every 300s. Each run does a real acquire and release against a dedicated probe surface, so it catches "process up, acquires failing," which neither health route can. Consecutive-failure state persists across runs: it alerts to `$UNITARES_ALERT_LOG` (and posts a governance finding) only after `MAX_FAILURES` failures in a row, and notes recovery once. Restart-on-failure is opt-in via `LEASE_PLANE_HEALTHCHECK_AUTORESTART=1`.
 - **Deep-health snapshot** — `checks["lease_plane"]` reports `healthy`, `warning` (with the client's reason), `unavailable` (no bearer configured) or `error` (the probe itself raised) from the `/v1/health` call above, refreshed every 30s.
-- **Sentinel** — both Sentinels poll `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route.
+- **Sentinel reference resident (optional)** — if a deployment runs it, either Sentinel implementation polls `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route. Without it, nothing alarms on forced releases.
 
 **What none of these cover**
 
@@ -342,7 +348,7 @@ Force-release is a separate authority from regular lease access. It uses its own
 **Where the token lives**
 
 ```
-$SECRETS_FILE                   # mode 600, local-Mac-only (resolved below)
+$SECRETS_FILE                   # mode 600, local-host-only (resolved below)
 export LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
 ```
 
@@ -361,7 +367,7 @@ fi
 
 The `export` is **required**, not cosmetic: `start.sh` does `source secrets.env` then `exec mix run`, and a sourced-but-not-exported variable is a shell local the exec'd BEAM process never sees — so without `export`, force-release silently stays 503 even though the line is present. Every key in `secrets.env` already uses `export` for this reason.
 
-This follows the existing secrets env file convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-Mac-only by design** — there is no off-host force-release path. If the operator is travelling, they SSH to the Mac or wait for the lease's TTL.
+This follows the existing secrets env file convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-host-only by design** — there is no off-host force-release path. An operator away from the host SSHes to it or waits for the lease's TTL.
 
 **Initial provisioning**
 
@@ -503,7 +509,7 @@ TBD. Will include:
 
 ## Hot code reload (the BEAM thing that matters operationally)
 
-When a new version of a module is deployed, the BEAM node can swap it in place without dropping leases. This directly addresses `feedback_running-process-vs-master-commit.md` — the running-process-vs-master-commit drift class:
+When a new version of a module is deployed, the BEAM node can swap it in place without dropping leases. This directly addresses the running-process-vs-master-commit drift class:
 
 - Old: `ps -o etime` + `git log --since=` to figure out if the resident has the fix you think it has
 - New: deploy = module swap = the running node *has the fix*. The "is this code running?" question becomes "what version is loaded?", which `:application.loaded_applications/0` answers directly.
@@ -518,7 +524,7 @@ then on the node runs named + cookied, distribution pinned to loopback.
 Reload after pulling new code into the deploy worktree:
 
 ```bash
-cd "$HOME/projects/unitares-deploy" && git pull --ff-only
+cd "$HOME/projects/unitares-deploy" && git pull --ff-only   # your deploy worktree
 elixir/lease_plane/scripts/ops/hot-reload.sh --changed
 # or name modules:
 elixir/lease_plane/scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter

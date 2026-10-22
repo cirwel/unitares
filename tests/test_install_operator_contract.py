@@ -25,7 +25,7 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
         '3. Install dependencies: '
         '`pip install -e ".[full]" -c constraints.txt`'
     )
-    start = '5. Start: `python src/mcp_server.py --port 8767`'
+    start = 'Start: `python src/mcp_server.py --port 8767`'
 
     for relative in ("AGENTS.md", "CLAUDE.md"):
         setup = _read(relative).split("## Setup\n", 1)[1].split("\n## ", 1)[0]
@@ -241,7 +241,7 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert 'test -n "$unitares_runtime_setup" &&' in cloud_runbook
     assert 'bash -s -- --verify-runtime <<<"$unitares_runtime_setup"' in cloud_runbook
     assert "./scripts/dev/review.sh review" not in cloud_runbook
-    assert "machine with the reviewer CLI can run `./scripts/dev/review.sh`." in cloud_runbook
+    assert "machine with the reviewer CLI can run `./scripts/dev/review.sh --reviewer PROVIDER`." in cloud_runbook
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 

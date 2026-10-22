@@ -2282,6 +2282,448 @@ class TestHandleOnboardV2:
         ), "identity() v2 gate must NOT fire when client_session_id is presented"
 
     @pytest.mark.asyncio
+    async def test_cosmetic_name_alone_does_not_bypass_identity_v2_gate(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog
+    ):
+        """#2708: passing only cosmetic `name` to identity() must NOT count as
+        a proof signal for the S13 fresh-instance gate."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_identity_adapter
+
+        existing_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Victim_20260207",
+            "label": "VictimLabel",
+        }
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident-2708", metadata={}),
+        ]
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+            result = await handle_identity_adapter({"name": "CosmeticOnly"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["identity_status"] == "created"
+        assert data["uuid"] != existing_uuid
+        assert any(
+            "[FRESH_INSTANCE]" in record.getMessage()
+            and "identity()" in record.getMessage()
+            for record in caplog.records
+        ), "identity(name=...) with no proof signal must fire the S13 fresh-instance gate (#2708)"
+
+        # Also verify the full-pipeline case where resolve_identity + inject_identity
+        # stamped proof_origin="server_inferred" (e.g. sticky IP:UA cache hit)
+        # and injected arguments["agent_id"] = existing_uuid without a session header.
+        from src.mcp_handlers.context import set_session_proof_origin
+        caplog.clear()
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident-2708-inferred", metadata={}),
+        ]
+        set_session_proof_origin("server_inferred")
+        try:
+            with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+                inferred_result = await handle_identity_adapter(
+                    {"name": "CosmeticOnlyInferred", "agent_id": existing_uuid}
+                )
+        finally:
+            set_session_proof_origin(None)
+
+        inferred_data = parse_result(inferred_result)
+        assert inferred_data["success"] is True
+        assert inferred_data["identity_status"] == "created"
+        assert inferred_data["uuid"] != existing_uuid
+        assert any(
+            "[FRESH_INSTANCE]" in record.getMessage()
+            and "identity()" in record.getMessage()
+            for record in caplog.records
+        ), "server_inferred middleware-injected agent_id must not bypass S13 gate for identity(name=...)"
+
+    @pytest.mark.asyncio
+    async def test_onboard_parent_agent_id_with_proof_signal_mints_fresh(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog
+    ):
+        """#2670: onboard(parent_agent_id=..., name=...) or alongside a session
+        signal must promote to force_new=true and mint a fresh child rather than
+        resuming the existing session identity and dropping parent_agent_id."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        existing_uuid = str(uuid.uuid4())
+        parent_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Existing_20260207",
+            "label": "ExistingAgent",
+        }
+        mock_db.get_identity.return_value = SimpleNamespace(
+            identity_id="new-child-ident",
+            metadata={},
+        )
+        mock_db.find_agent_by_label.return_value = None
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+            result = await handle_onboard_v2({
+                "name": "ChildAgent",
+                "client_session_id": "existing-session-slot",
+                "parent_agent_id": parent_uuid,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["is_new"] is True
+        assert data["uuid"] != existing_uuid
+        assert any(
+            "#2670" in record.getMessage() for record in caplog.records
+        ), "onboard with parent_agent_id must log promotion to force_new=true (#2670)"
+        upsert_calls = mock_db.upsert_agent.await_args_list
+        assert any(
+            call.kwargs.get("parent_agent_id") == parent_uuid for call in upsert_calls
+        ), f"Expected parent_agent_id={parent_uuid} in upsert_agent calls; got {upsert_calls!r}"
+
+    @pytest.mark.asyncio
+    async def test_identity_force_new_persists_under_own_key_without_old_handle_bleed(
+        self, patch_onboard_deps, mock_db, mock_redis, caplog, monkeypatch
+    ):
+        """#2707: identity(force_new=true) called with an existing session key
+        must persist the new agent under its own make_client_session_id(new_uuid)
+        and never hydrate handles or collide with the caller's old session key."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_identity_adapter
+        from src.mcp_handlers.identity.persistence import ensure_agent_persisted
+        from src.mcp_handlers.identity.shared import _session_identities, make_client_session_id
+        from src.mcp_handlers.identity.stable_session import classify
+
+        old_uuid = str(uuid.uuid4())
+        old_session_key = f"agent-{old_uuid[:12]}"
+        _session_identities[old_session_key] = {
+            "bound_agent_id": old_uuid,
+            "agent_uuid": old_uuid,
+            "display_agent_id": "OldDisplay_20260101",
+            "public_agent_id": "OldDisplay_20260101",
+            "agent_label": "OldAgentLabel",
+            "label": "OldAgentLabel",
+            "spawn_reason": "old_spawn_reason",
+        }
+        mock_redis.get.side_effect = lambda key: (
+            {
+                "agent_id": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            if key == old_session_key
+            else None
+        )
+        mock_db.get_identity.side_effect = [
+            None,
+            SimpleNamespace(identity_id="new-ident-2707", metadata={}),
+        ]
+        mock_db.get_agent.return_value = None
+        mock_db.create_session = AsyncMock(return_value=True)
+
+        try:
+            with caplog.at_level(logging.WARNING):
+                result = await handle_identity_adapter({
+                    "client_session_id": old_session_key,
+                    "force_new": True,
+                    "model_type": "claude-opus-4",
+                })
+            data = parse_result(result)
+            new_uuid = data["uuid"]
+            expected_new_key = f"agent-{new_uuid[:12]}"
+
+            assert data["success"] is True
+            assert data["identity_status"] == "created"
+            assert new_uuid != old_uuid
+            assert not any(
+                "S21A_PG_SESSION_COLLISION" in r.getMessage() for r in caplog.records
+            )
+
+            create_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert expected_new_key in create_session_keys
+            assert old_session_key not in create_session_keys
+
+            upsert_id_kwargs = mock_db.upsert_identity.await_args.kwargs
+            assert upsert_id_kwargs.get("spawn_reason") != "old_spawn_reason"
+            meta_written = upsert_id_kwargs.get("metadata") or {}
+            assert meta_written.get("public_agent_id") == data["agent_id"]
+            assert meta_written.get("public_agent_id") != "OldDisplay_20260101"
+            assert meta_written.get("label") and meta_written["label"].endswith(f"_{new_uuid[:8]}")
+            assert meta_written.get("label") != "OldAgentLabel"
+
+            # Post-restart scenario: old binding survives ONLY in Redis
+            # (_session_identities is empty), and caller invokes force_new=true
+            # on an unkeyed session key. New agent must still persist its own
+            # public_agent_id and auto-label under its own keyed session id.
+            _session_identities.clear()
+            unkeyed_old = "unkeyed-redis-only-slot"
+            unkeyed_old_scoped = f"{unkeyed_old}:claude"
+            mock_redis.get.side_effect = lambda key: (
+                {
+                    "agent_id": old_uuid,
+                    "display_agent_id": "OldDisplay_20260101",
+                    "label": "OldAgentLabel",
+                    "spawn_reason": "old_spawn_reason",
+                }
+                if key in (unkeyed_old, unkeyed_old_scoped)
+                else None
+            )
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="restart-ident-2707", metadata={}),
+            ]
+            restart_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            restart_data = parse_result(restart_res)
+            restart_uuid = restart_data["uuid"]
+            restart_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert restart_meta.get("public_agent_id") == restart_data["agent_id"]
+            assert restart_meta.get("label") and restart_meta["label"].endswith(f"_{restart_uuid[:8]}")
+            assert _session_identities[f"agent-{restart_uuid[:12]}"]["bound_agent_id"] == restart_uuid
+            restart_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert f"agent-{restart_uuid[:12]}" in restart_session_keys
+            assert unkeyed_old not in restart_session_keys
+            assert unkeyed_old_scoped not in restart_session_keys
+
+            # In-memory unkeyed collision: when _session_identities[unkeyed_old_scoped]
+            # already holds old_uuid and mint_guard refuses overwriting it, the
+            # mirror under the new agent's own key must still record the new
+            # agent as owner (via _cache_session), never copy old_uuid's entry.
+            _session_identities[unkeyed_old_scoped] = {
+                "bound_agent_id": old_uuid,
+                "agent_uuid": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "public_agent_id": "OldDisplay_20260101",
+                "agent_label": "OldAgentLabel",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="inmem-unkeyed-2707", metadata={}),
+            ]
+            inmem_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            inmem_data = parse_result(inmem_res)
+            inmem_uuid = inmem_data["uuid"]
+            assert _session_identities[unkeyed_old_scoped]["bound_agent_id"] == old_uuid
+            assert _session_identities[f"agent-{inmem_uuid[:12]}"]["bound_agent_id"] == inmem_uuid
+
+            # PostgreSQL-only session collision: when Redis and _session_identities
+            # are cold (e.g. post-restart or Redis TTL expiry) and unkeyed_old_scoped
+            # is still bound to old_uuid in PostgreSQL core.sessions, force_new
+            # must not overwrite unkeyed_old_scoped in memory/Redis or collide on
+            # db.create_session(unkeyed_old_scoped); it must bind and persist
+            # under the new agent's own client_session_id.
+            _session_identities.clear()
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
+            mock_db.get_session.side_effect = (
+                lambda sk: SimpleNamespace(agent_id=old_uuid)
+                if sk in (unkeyed_old, unkeyed_old_scoped)
+                else None
+            )
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="pg-only-2707", metadata={}),
+            ]
+            pg_only_res = await handle_identity_adapter({
+                "client_session_id": unkeyed_old,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            pg_only_data = parse_result(pg_only_res)
+            pg_only_uuid = pg_only_data["uuid"]
+            assert unkeyed_old not in _session_identities
+            assert unkeyed_old_scoped not in _session_identities
+            assert _session_identities[f"agent-{pg_only_uuid[:12]}"]["bound_agent_id"] == pg_only_uuid
+            pg_only_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert f"agent-{pg_only_uuid[:12]}" in pg_only_session_keys
+            assert unkeyed_old not in pg_only_session_keys
+            assert unkeyed_old_scoped not in pg_only_session_keys
+            mock_db.get_session.side_effect = None
+            mock_db.get_session.return_value = None
+
+            # Ordinary non-conflicting lazy mint (persist=False) only caches the
+            # transport key via _cache_session and does not add a second
+            # fingerprint-less entry under make_client_session_id(uuid).
+            from src.mcp_handlers.identity.resolution import resolve_session_identity
+
+            _session_identities.clear()
+            lazy_res = await resolve_session_identity("fresh-lazy-only-key", persist=False)
+            lazy_uuid = lazy_res["agent_uuid"]
+            assert "fresh-lazy-only-key" in _session_identities
+            assert f"agent-{lazy_uuid[:12]}" not in _session_identities
+
+            # Plain arg-less identity() on a fresh transport must both bind the
+            # fresh transport key (in memory and durable PG core.sessions) and
+            # persist its own public_agent_id/auto-label.
+            _session_identities.clear()
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="plain-ident-2707", metadata={}),
+                SimpleNamespace(identity_id="plain-ident-2707", metadata={}),
+            ]
+            plain_res = await handle_identity_adapter({"model_type": "claude-opus-4"})
+            plain_data = parse_result(plain_res)
+            plain_uuid = plain_data["uuid"]
+            plain_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert plain_meta.get("public_agent_id") == plain_data["agent_id"]
+            assert plain_meta.get("label") and plain_meta["label"].endswith(f"_{plain_uuid[:8]}")
+            assert _session_identities.get("test-ctx-key", {}).get("bound_agent_id") == plain_uuid
+            plain_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert "test-ctx-key" in plain_session_keys
+            assert f"agent-{plain_uuid[:12]}" in plain_session_keys
+
+            # Named fresh mint on a fresh transport must also write the
+            # transport key's durable PG core.sessions row (not only the
+            # agent's own client_session_id).
+            _session_identities.clear()
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+                SimpleNamespace(identity_id="named-fresh-2707", metadata={}),
+            ]
+            with patch(
+                "src.mcp_handlers.identity.persistence._find_agent_by_label",
+                new=AsyncMock(return_value=None),
+            ):
+                named_res = await handle_identity_adapter({
+                    "name": "NamedFresh2707",
+                    "model_type": "claude-opus-4",
+                })
+            named_data = parse_result(named_res)
+            named_uuid = named_data["uuid"]
+            named_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert "test-ctx-key" in named_session_keys
+            assert f"agent-{named_uuid[:12]}" in named_session_keys
+
+            # Production keyed client_session_id branch (UNITARES_CONTINUITY_TOKEN_SECRET
+            # set so classify() == "keyed"): when old_keyed_key has no live
+            # entry in _session_identities or Redis (e.g. TTL expiry/restart),
+            # force_new with old_uuid's keyed id must still refuse to bind or
+            # persist old_keyed_key for the new agent.
+            from src.mcp_handlers.identity.handlers import _choose_fresh_persist_session_key
+
+            monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret-for-keyed-csid-2707")
+            old_keyed_key = make_client_session_id(old_uuid)
+            assert classify(old_keyed_key) == "keyed"
+            _session_identities.clear()
+            mock_redis.get.side_effect = None
+            mock_redis.get.return_value = None
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.create_session.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="keyed-ident-2707", metadata={}),
+            ]
+            keyed_res = await handle_identity_adapter({
+                "client_session_id": old_keyed_key,
+                "force_new": True,
+                "model_type": "claude-opus-4",
+            })
+            keyed_data = parse_result(keyed_res)
+            keyed_new_uuid = keyed_data["uuid"]
+            expected_keyed_new = make_client_session_id(keyed_new_uuid)
+            assert classify(expected_keyed_new) == "keyed"
+            assert old_keyed_key not in _session_identities
+            assert _session_identities[expected_keyed_new]["bound_agent_id"] == keyed_new_uuid
+            keyed_session_keys = [
+                call.kwargs.get("session_id")
+                for call in mock_db.create_session.await_args_list
+            ]
+            assert expected_keyed_new in keyed_session_keys
+            assert old_keyed_key not in keyed_session_keys
+
+            # Direct check on _choose_fresh_persist_session_key's keyed arm:
+            # even if _session_identities[old_keyed_key] were bound to
+            # keyed_new_uuid, sk_foreign_stable must still reject old_keyed_key.
+            _session_identities[old_keyed_key] = {
+                "bound_agent_id": keyed_new_uuid,
+                "agent_uuid": keyed_new_uuid,
+            }
+            assert (
+                await _choose_fresh_persist_session_key(old_keyed_key, keyed_new_uuid)
+                == expected_keyed_new
+            )
+            _session_identities.pop(old_keyed_key, None)
+            monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET", raising=False)
+
+            # Also verify direct ensure_agent_persisted(other_uuid, old_session_key)
+            # refuses to hydrate handles from old_uuid's cached session entry.
+            _session_identities[old_session_key] = {
+                "bound_agent_id": old_uuid,
+                "agent_uuid": old_uuid,
+                "display_agent_id": "OldDisplay_20260101",
+                "public_agent_id": "OldDisplay_20260101",
+                "agent_label": "OldAgentLabel",
+                "label": "OldAgentLabel",
+                "spawn_reason": "old_spawn_reason",
+            }
+            direct_uuid = str(uuid.uuid4())
+            mock_db.upsert_agent.reset_mock()
+            mock_db.upsert_identity.reset_mock()
+            mock_db.get_identity.side_effect = [
+                None,
+                SimpleNamespace(identity_id="direct-ident-2707", metadata={}),
+            ]
+            await ensure_agent_persisted(direct_uuid, old_session_key)
+            direct_meta = mock_db.upsert_identity.await_args.kwargs.get("metadata") or {}
+            assert direct_meta.get("public_agent_id") != "OldDisplay_20260101"
+            assert direct_meta.get("label") != "OldAgentLabel"
+            assert mock_db.upsert_agent.await_args.kwargs.get("spawn_reason") != "old_spawn_reason"
+        finally:
+            _session_identities.pop(old_session_key, None)
+
+    @pytest.mark.asyncio
     @patch(
         "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
         return_value=(True, "test_caller_owns_target"),
@@ -2641,7 +3083,7 @@ class TestHandleOnboardV2:
         mock_db.find_agent_by_label.return_value = None
         mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
 
-        parent_uuid = "da300b4a-5320-480d-bac3-d029cd062842"
+        parent_uuid = "4389d62d-383f-505d-b0e4-b30bd97a768d"
         spawn_reason = "new_session"
 
         result = await handle_onboard_v2({
@@ -2689,7 +3131,7 @@ class TestHandleOnboardV2:
         mock_db.find_agent_by_label.return_value = None
         mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
 
-        parent_uuid = "da300b4a-5320-480d-bac3-d029cd062842"
+        parent_uuid = "4389d62d-383f-505d-b0e4-b30bd97a768d"
         parent_thread_id = "t-parent-thread"
 
         async def thread_info(agent_id):

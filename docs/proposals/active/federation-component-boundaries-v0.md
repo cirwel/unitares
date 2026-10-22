@@ -18,8 +18,8 @@ until then.
 **Scope of "federation".** As in
 [`PRODUCT_DEFINITION.md`](../../PRODUCT_DEFINITION.md): many runtimes sharing
 one operator-controlled server and authority domain. Trust across
-administrative roots stays unscheduled
-([D3a](federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
+administrative roots stays unscheduled without external funding or an outside
+principal ([D3a](federation-trust-decisions-2026-09-25.md#d3a-multi-principal-trust-is-not-scheduled));
 nothing here wakes it.
 **Inputs:** the survival audit's keep/interface/freeze list
 ([`../../ontology/competitive-survival-audit-2026-09.md`](../../ontology/competitive-survival-audit-2026-09.md));
@@ -372,7 +372,7 @@ deprecates or disables a capability.
 ## 12. What this document does not claim
 
 - It does not establish that a federation member exists outside the operator's
-  own fleet; D3a's wake condition is unchanged.
+  own fleet; D3a's wake conditions are unchanged by this document.
 - It does not claim the coupling figures are complete. They are one
   measurement; the guard is what keeps them honest.
 - It does not rank components by value. Dispositions follow from where each sits

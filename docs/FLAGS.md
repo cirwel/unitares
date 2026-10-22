@@ -41,11 +41,12 @@ additions merge cleanly. -->
 | `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
-| `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
+| `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py, src/resident_progress/registry.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
 | `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
+| `UNITARES_AUTOMATION_STATE_DIR` | `None (no reader fallback)` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
@@ -96,7 +97,7 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR` | `''` | The operator's ordered reviewer host list, read as a plan | agents/dialectic_reviewer/host_list.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `None (no reader fallback)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
-| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than a local model's 4 | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S` | `''` | read by _dialectic_sweep_cycle_timeout_s() | src/background_tasks.py |
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
@@ -104,8 +105,9 @@ additions merge cleanly. -->
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:253, agents/vigil/agent.py) | True when the operator named a model, asking for semantic search | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:79); `False` (src/retrieval.py:89); `''` (agents/vigil/agent.py) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_RELATED_EXPANSION` | varies: `None (no reader fallback)` (src/retrieval.py:77, agents/vigil/agent.py); `False` (src/retrieval.py:78) | True when related-finding expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
@@ -138,6 +140,8 @@ additions merge cleanly. -->
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_SYNTHESIS_INTERVAL_HOURS` | `str(DEFAULT_INTERVAL_HOURS)` | Hours between scheduled synthesis cycles; a non-positive value falls back to the default. | src/kg_synthesis_schedule.py |
+| `UNITARES_KG_SYNTHESIS_SCHEDULE` | `DEFAULT_MODE` | Scheduled synthesis mode | src/kg_synthesis_schedule.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LEASE_ATTESTATION_AUDIENCE` | `None (no reader fallback)` | Return the exact lease-plane deployment this token may authorize. | src/lease_attestation.py |
 | `UNITARES_LEASE_ATTESTATION_ISSUER` | `None (no reader fallback)` | read by configured_issuer() | src/lease_attestation.py |
@@ -160,7 +164,7 @@ additions merge cleanly. -->
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
-| `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; default gemma4:latest | src/local_inference_env.py |
+| `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
 | `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:372); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:404, src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:372); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:404, src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |

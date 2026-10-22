@@ -11,7 +11,7 @@ Claude Code runs through a plugin-style harness. The hook lifecycle is owned by 
 Three layers fire on Claude lifecycle events, and it matters which one produced what you are looking at:
 
 - **Plugin hooks** — `hooks/session-start`, `hooks/post-edit`, `hooks/post-stop`. The per-turn check-in is the plugin's `post-stop`, which submits `epistemic_class="substrate_interpretation"` for **both** Claude and Codex: a substrate reading of turn shape, not an agent-authored report.
-- **User-level `~/.claude/hooks/`**, wired in `~/.claude/settings.json` (auto-test, watcher-hook, watcher-chime, stop-milestone-audit, …). Watcher findings at session start or in a chime block come from this chain, not from the plugin's `post-edit`.
+- **User-level hooks** under `~/.claude/hooks/`, wired in `~/.claude/settings.json`. They are machine-local and differ per operator. On a host that wires a Watcher hook, Watcher findings at session start or in a chime block come from this chain, not from the plugin's `post-edit`.
 - **A file on disk under `hooks/` is not evidence that it runs.** Retired hooks stay on disk; check `settings.json` before assuming a user-level hook is live.
 
 To close a Watcher finding (the agent itself lives in this repo):
@@ -68,9 +68,9 @@ A zero cannot distinguish four states, and only the last is "no value":
 3. **Not recorded** — the instrument was blind to the transport.
 4. Surfaced, reachable, recorded, and genuinely unused.
 
-Operator, 2026-08-01, on the #1387 adoption gate: *"i think our kill criterion
-too aggressive because frequently features are not wired up or buggy … id
-rather work and improve on things rather than killing everything."* That gate's
+On 2026-08-01 the operator ruled the #1387 adoption gate's kill criterion too
+aggressive: features are often unwired or buggy, so the default is to improve a
+capability rather than remove it. That gate's
 zero was produced three times in one month by surface defects — #1414 (auth
 rejected the caller while reporting `tier: strong`), #1424 (`audit.tool_usage`
 never recorded `/mcp` or `/sse` at all), #1442 (timeout) — and never once by
@@ -141,9 +141,16 @@ dispatch key. Behavior is discriminated by capability — `embodied`, `persisten
   `tests/test_residentless_install.py` for the empty roster — the path every
   adopter runs and the one nothing else exercises.
 
-`agents/` (the reference residents) and `scripts/ops/` (this operator's fleet
-control plane) are deliberately NOT agnostic and are outside the guard. The
-boundary is the shipped artifact, not the repo.
+**Neutrality applies to the whole repository**, including `agents/`,
+`scripts/ops/`, documentation, examples, and configuration templates. The guard's
+current scan roots are enforcement coverage, not exemptions. Optional reference
+implementations and supported vendor integrations may remain, but must not
+silently select an operator's residents, hosts, workspace, or personal workflow.
+Keep actual fleet manifests, schedules, and workstation procedures in the
+operator's separate deployment repository (fleet-ops for the maintainer).
+Synthetic test fixtures, dated empirical evidence, project attribution, and
+repository contributor policy retain their provenance; neutrality is not a
+reason to rewrite history or remove supported integrations.
 
 ## Agents are the users: who decides, how to describe, where memory lives
 
@@ -203,18 +210,20 @@ EISV is one instrument inside it, not its definition: each check-in returns a be
 ## Stack
 
 - Python 3.14+, asyncio
-- PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) + pgvector via Homebrew (the Docker image `db/postgres/Dockerfile.age-vector` ships PG18; both are supported)
+- PostgreSQL 17+ with AGE 1.7.0 (Apache Graph Extension) and pgvector: the Docker image `db/postgres/Dockerfile.age-vector` ships PG18, and a native install (for example Homebrew PostgreSQL@17, `docs/install/PLAYBOOK.md`) is also supported
 - Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/archive/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
 - MCP (Model Context Protocol) server
 
 ## Setup
 
-1. Install PostgreSQL@17 with the AGE and pgvector extensions
+On a fresh machine the quickest path is Docker: `docker compose up -d --wait --build` starts Postgres + AGE + pgvector, Redis, the lease plane and the server (`.github/CONTRIBUTING.md`). For a native install:
+
+1. Install PostgreSQL 17+ with the AGE and pgvector extensions
 2. Create a `governance` database
 3. Install dependencies: `pip install -e ".[full]" -c constraints.txt`
-4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
-5. Start: `python src/mcp_server.py --port 8767`
+4. Start: `python src/mcp_server.py --port 8767`
+5. Optional, to run it as a service: on macOS, copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments); elsewhere, use the host's service manager
 
 ## Before Starting Work on a Single-Writer Surface
 
@@ -245,7 +254,7 @@ This section protects against wasted parallel work across agents, not just mista
 - If you do a mechanical refactor (renames, import changes), update affected test mocks before committing
 - The pre-push hook will block pushes with test failures
 - **Review is collaboration, proportional to the change (operator direction, 2026-10-14).** Substantive work gets a useful independent perspective when available: a fresh-context reviewer, a human, or a council that examined the actual diff and relevant context. These are alternative ways to do the review. Record a completed council or subagent review with `review.sh record FILE --reviewer-name <actual reviewer> --independent`; do not run a second review merely because the first used a different workflow. Design advice alone is not implementation review. Sensitive paths in `review_policy.json` still require coverage from two actual model families; a council name or synthesis does not invent family coverage.
-- **Review is advisory and best-effort; it does not gate merging, except on auth paths (operator decision, 2026-10-08).** Local and cloud authors can request the same shared runner by adding `review-requested` to their PR (drafts stay draft). The opted-in host posts diff-bound results on the PR and supplies required model families one attempt per tick, within existing budgets. `no-auto-review` holds the request. A label is a request, not proof that a host is running. Direct local review with `./scripts/dev/review.sh` remains available. Read completed findings and fix or `dispose` them. When none can run (a cloud session, a disabled provider in `scripts/dev/review_providers.json`, exit 2), say so in the PR body and continue; exit 3 (a sensitive diff with one passing family of two) is different, since that check stays `action_required` and the PR stays parked until a second eligible family passes or the operator grants a waiver; never retry an unavailable provider repeatedly, and never record a review you did not get. A neutral `review` check means "unreviewed", not "failed", and the merge queue no longer waits on it (`PR_QUEUE_REQUIRED_CHECKS=review` restores that), except when the diff touches a `review_policy.json` `second_family_paths` file: there the queue arms only once `review` passes. A `review` of `action_required` still parks the PR in the queue: undisposed findings, or a `review_policy.json` path with one passing model family of two. Findings on a diff you know about are yours to fix or `dispose` before marking ready. Preserve completed full reviews: bounded corrections and clarifications receive independent review of the complete follow-up delta, which retains the original model-family coverage. Material scope changes, invalidated prior reasoning, serious findings or uncertainty require a full pass. Follow-ups do not consume full cycles. Budget three full review cycles, each allowing up to two distinct model families on the same revision; a cycle that found a P0/P1 (or unlabelled) finding does not count toward the three, and ten cycles in all is the backstop. Repeating a family or changing the revision starts another cycle. An operator can delegate one additional cycle to the App with a revision-bound, expiring PR comment; `--review-cycle-grant COMMENT_ID` consumes it. Operator waivers remain separate. Neither budget nor approval is a reason to repeat unchanged review work. Details: [Review workflow](docs/operations/github-workflow-conventions.md#review-workflow).
+- **Review is advisory and best-effort; it does not gate merging, except on auth paths (operator decision, 2026-10-08).** Local and cloud authors can request the same shared runner by adding `review-requested` to their PR (drafts stay draft). The opted-in host posts diff-bound results on the PR and supplies required model families one attempt per tick, within existing budgets. `no-auto-review` holds the request. A label is a request, not proof that a host is running. Direct local review with `./scripts/dev/review.sh` remains available. Read completed findings and fix or `dispose` them. When none can run (a cloud session, a disabled provider in `scripts/dev/review_providers.json`, exit 2), say so in the PR body and continue; exit 3 (a sensitive diff with one passing family of two) is different, since that check stays `action_required` and the PR stays parked until a second eligible family passes or the operator grants a waiver; never retry an unavailable provider repeatedly, and never record a review you did not get. A neutral `review` check means "unreviewed", not "failed", and the merge queue no longer waits on it (`PR_QUEUE_REQUIRED_CHECKS=review` restores that), except when the diff touches a `review_policy.json` `second_family_paths` file: there the queue arms only once `review` passes. A `review` of `action_required` still parks the PR in the queue: undisposed findings, or a `review_policy.json` path with one passing model family of two. Findings on a diff you know about are yours to fix or `dispose` before marking ready. Preserve completed full reviews: bounded corrections and clarifications receive independent review of the complete follow-up delta, which retains the original model-family coverage. Material scope changes, invalidated prior reasoning, serious findings or uncertainty require a full pass. Follow-ups do not consume full cycles. Budget three full review cycles, each allowing up to two distinct model families on the same revision; a cycle that found a P0/P1 (or unlabelled) finding does not count toward the three, and ten cycles in all triggers a convergence warning and scope reassessment, not an automatic stop (operator refinement, 2026-10-21). The three-cycle redundancy budget, provider limits and mandatory model-family coverage still apply. Repeating a family or changing the revision starts another cycle. An operator can delegate one additional cycle to the App with a revision-bound, expiring PR comment; `--review-cycle-grant COMMENT_ID` consumes it. Operator waivers remain separate. Neither budget nor approval is a reason to repeat unchanged review work. Details: [Review workflow](docs/operations/github-workflow-conventions.md#review-workflow).
 
 ## Architecture Patterns
 
@@ -256,8 +265,8 @@ This section protects against wasted parallel work across agents, not just mista
 
 ## Database
 
-- PostgreSQL@17 on port 5432 with AGE graph extension
-- Requires `brew services start postgresql@17`
+- PostgreSQL 17+ on port 5432 with AGE graph extension
+- Use the instance already running on the host (check below). Start one only on a fresh install: the compose `postgres-age` service, or a native service such as `brew services start postgresql@17`
 - Check connectivity: `pg_isready -h localhost -p 5432`
 - Do NOT create additional PostgreSQL instances, databases, or migration layers
 
@@ -275,7 +284,7 @@ Codex and Claude share one delivery contract so concurrent sessions stay predict
 - **Delivery — draft PR for everything:** every session lands its work as a draft PR, regardless of agent and regardless of whether the change is runtime code or docs/tests. The merge queue is the merge gate (next bullet), and the maintainer can veto. Do NOT direct-push to a shared branch. `ship.sh` enforces this: its default `auto` route opens a draft PR for every change (`--direct` opts out for docs/tests-only pushes; `--auto-merge` only when a maintainer explicitly asks).
 - **Landing goes through the merge queue, entered by the owning agent's label:** once your PR is ready (below), apply the `approved-to-merge` label in the same step. The operator's `scripts/ops/pr-babysitter.sh` arms one labelled PR at a time in label order, and waits on any "merge after #N"; GitHub merges it when the required checks pass. The label covers the PR's content as it stood: after a further push, once validation passes again, renew it by removing and re-adding it (`gh pr edit <n> --remove-label approved-to-merge`, then `--add-label approved-to-merge`); adding a label that is already there records nothing. Never label another agent's PR, and never arm with `gh pr merge --auto` yourself: the queue disarms any arm it did not make (the operator's own arm needs the `operator-armed` label first), and two armed PRs are the parallel CI re-run the queue exists to prevent. The maintainer vetoes by removing the label, and a PR labelled `governance-sensitive` (CI applies it to PRs touching enforcement constants) is never armed by the queue: the operator merges it by hand. This applies to `cirwel/unitares` only; `unitares-governance-plugin` disallows auto-merge. The gate exists for coordination, which the queue does more reliably than hand-merging (operator decision, 2026-09-27). Once labelled, a PR lands without anyone touching it, so an unmerged green PR is never a reason to watch.
 - **Never babysit the queue.** Do not poll a PR on a timer, and do not hand-merge the base into your own branch merely to clear `behind` — that burns a full CI cycle without advancing readiness. `docs/operations/github-workflow-conventions.md` §4 is explicit: *do not write or run an update-branch babysitter for this repo.* Ready PRs are updated one at a time by the operator's queue. Drafts stay pinned to their reviewed head; `.github/workflows/draft-base-refresh.yml` is a manual, one-PR recovery action, never a schedule or all-draft sweep. Use `no-base-refresh` when a deliberately pinned draft must also reject that manual action. If a draft is green and behind, say so once and stop. Sync once only for an actual conflict repair or when the PR becomes ready and the queue requests it; a moving base does not invalidate unchanged evidence.
-- **A PR branch belongs to the session that opened it:** End every PR body with `UNITARES agent: <uuid>`, the owning session's UNITARES identity, which is how a later session finds the owner and checks it against the server. A harness session link may sit beside it; the session-link guard was removed on 2026-10-14 (operator). Do not push commits to another session's PR branch — a shared `claude/` prefix or commit author does not make it yours. Comment on the PR, or branch from its head and open your own draft PR with "merge after #N"; an explicit handover in a PR comment transfers ownership. If your push is rejected because the remote has commits you did not author, keep a local `backup/*` branch, build on the remote head, and never force-push over it. A queued PR stuck for 12 hours with no word from its owner may be adopted (next bullet). Full rule: `docs/operations/github-workflow-conventions.md` (*Branch ownership*).
+- **A PR branch belongs to the session that opened it:** End every PR body with `UNITARES agent: <uuid>`, the owning session's UNITARES identity, which is how a later session finds the owner and checks it against the server. Do not push commits to another session's PR branch — a shared `claude/` prefix or commit author does not make it yours. Comment on the PR, or branch from its head and open your own draft PR with "merge after #N"; an explicit handover in a PR comment transfers ownership. If your push is rejected because the remote has commits you did not author, keep a local `backup/*` branch, build on the remote head, and never force-push over it. A queued PR stuck for 12 hours with no word from its owner may be adopted (next bullet). Full rule: `docs/operations/github-workflow-conventions.md` (*Branch ownership*).
 - **A stuck queued PR may be adopted:** when a PR carrying `approved-to-merge` has been stuck for 12 hours (conflicting, a required check failing or unreviewed, or its approval stale) with no activity on the PR at all in that time (no commit, comment, review or label change from anyone, since sessions share one GitHub account and cannot be told apart), any agent may take it over. First post a handover comment on the PR saying so; that comment is the handover. Then fix it on the same branch with fast-forward pushes only (merge the base in, never rebase or force-push), run the review, and renew the label (remove, then add) once validation passes. If the owner replies on the PR, stop and hand it back. Sessions rarely leave a trace that identifies them, so waiting for an owner nobody can find is what this replaces (operator decision, 2026-09-27).
 - **Delivery requests authorize delivery:** when a maintainer asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, the working agent may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
 - **Classify before readiness:** the owning agent puts `fix` or `capability` in the PR body. A `capability` that adds a tool, action, instrument or model channel is operator-reserved (table above) and stays a draft until the operator rules; fixes, friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature freeze was lifted by the operator on 2026-10-15 (KG decision `2026-10-15T06:03:44.876094+00:00`). Disagreement belongs in a review comment. Reserved auth, identity, scientific and governance-sensitive gates remain.

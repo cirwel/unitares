@@ -20,8 +20,8 @@ import pytest
 
 from src.http_api import _resolve_http_bound_agent
 
-AGENT_UUID = "eb9420ca-6256-460d-bdb6-cf8ed90e1931"
-SESSION_KEY = "agent-eb9420ca-625"
+AGENT_UUID = "e88b050b-73c5-58c5-9e93-0d6afda38186"
+SESSION_KEY = "agent-e88b050b-625"
 
 
 def _no_consult():

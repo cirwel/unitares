@@ -733,7 +733,7 @@ def enrich_onboarding_info(ctx: UpdateContext) -> None:
 
             ctx.response_data["welcome"] = (
                 "Welcome to the governance system! This is your first update. "
-                "The system tracks your work's thermodynamic state (E, I, S, V) and provides "
+                "The system keeps a behavioral state estimate of your work (E, I, S, V) and provides "
                 "supportive feedback. Use the metrics and sampling parameters as helpful guidance, "
                 "not requirements. The knowledge graph contains discoveries from other agents - "
                 "feel free to explore it when relevant. "
@@ -2361,7 +2361,7 @@ async def enrich_agent_profile(ctx: UpdateContext) -> None:
 
 
 # =================================================================
-# Grounding enrichment — spec docs/specs/2026-04-17-eisv-grounding-design.md
+# Grounding enrichment — design note: git show ce8879dc3^:docs/specs/2026-04-17-eisv-grounding-design.md
 # =================================================================
 # Runs at order=75, AFTER gating (phases.py) but BEFORE mirror.
 # Copies legacy E/I/S/coherence into *_legacy, then overwrites E/I/S/coherence

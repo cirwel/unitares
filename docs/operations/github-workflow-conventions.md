@@ -31,13 +31,14 @@ change. This document collapses that to one rule set, and `ship.sh`'s default
 
 ## The convention
 
-### 1. Branch naming — one pattern, agent-prefixed
+### 1. Branch naming — one pattern, author-prefixed
 
 ```
-<agent>/<topic>-<short-id>
+<author>/<topic>-<short-id>
 ```
 
-- `<agent>` is `claude` or `codex` — kept as a prefix so a branch is
+- `<author>` identifies who is making the change: an agent (`claude`,
+  `codex`, …) or a contributor handle. It is kept as a prefix so a branch is
   self-identifying at a glance, which matters when several sessions run in
   parallel.
 - `<topic>` is a short kebab-case slug of the change.
@@ -45,7 +46,7 @@ change. This document collapses that to one rule set, and `ship.sh`'s default
 
 Both existing generators already satisfy this shape:
 
-- `ship.sh` mints `<agent>/auto/<timestamp>-<slug>` (the agent prefix is
+- `ship.sh` mints `<author>/auto/<timestamp>-<slug>` (the agent prefix is
   detected from `CLAUDECODE`, or set via `UNITARES_SHIP_AGENT`).
 - The web/cloud harness hands Claude a `claude/<topic>-<id>` branch.
 
@@ -76,9 +77,7 @@ veto by removing the label.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
   opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
   session's UNITARES identity: a later session finds the owner by it and can
-  check it against the server. A harness session link may sit beside it; the
-  guard that refused session links in bodies, commits and files was removed on
-  2026-10-14 at the operator's direction. Do not push commits to another session's PR branch, even to
+  check it against the server. Do not push commits to another session's PR branch, even to
   fix something small. The `claude/` prefix does not tell sessions apart, and
   neither does the commit author reliably: local sessions commit as the
   operator, web sessions as `Claude`, and two web sessions look identical.
@@ -172,7 +171,7 @@ holds automatic review, even when a request is present.
 The opted-in shared host reviews a quiet PR and posts the existing diff-bound
 review record on that PR. One provider attempt runs per scheduled tick. For
 an explicitly requested sensitive diff, a later tick selects an eligible
-missing model family; the normal cycle budget, provider pauses and retry
+missing model family from the host's configured choices; the normal cycle budget, provider pauses and retry
 limits still apply. Findings require author action before another family is
 started. A request never authorizes extra cycles or an operator waiver.
 
@@ -184,7 +183,7 @@ Ordinary work may still proceed after validation with that fact in the body;
 sensitive paths retain their required coverage. `approved-to-merge` remains
 the owning author's separate readiness declaration.
 
-On this operator's host, `com.unitares.review-sweep` is the designated runner.
+On the reference deployment, `com.unitares.review-sweep` is the designated runner.
 `scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
 clean checkout of merged `origin/master`, reads PR heads separately, and uses
 `unitares-github` for this repository's fetches and review publication. It
@@ -204,7 +203,17 @@ that account is an agent act, never an operator act. The
 `agent-via-operator-login` label (`operator-login-agent-pr.yml`) records this
 on `claude/*` and `codex/*` PRs. The footer stays the owner pointer: such a
 session onboards and ends the body with its own `UNITARES agent: <uuid>`,
-never a uuid copied from another session.
+never a uuid copied from another session. `agent-pr-relay.yml` then reopens
+the PR under the `unitares-pr-relay` App, which can write pull requests on
+this repository and nothing else. The original is closed with a link to its
+replacement. Branch, commits, labels and footer carry over, except the
+queue labels `approved-to-merge` and `operator-armed`, which are earned on
+the new PR. The new body opens by
+saying the branch was pushed through the operator login, so the record keeps
+the credential path while the operator account stops being the author. The
+session keeps pushing to the same branch and does its follow-ups (review,
+ready, label) on the new number. Label a PR `relay-hold` to keep it where it
+is; a failed relay reopens the original with that label.
 Direct local `./scripts/dev/review.sh` remains available and shares the same
 per-PR lock and evidence, so it joins an in-flight host review.
 
@@ -239,7 +248,7 @@ sequence of model invocations. Choose the review that helps the change:
 
 | Work | Appropriate scrutiny |
 |---|---|
-| Substantive implementation | One completed independent review when available: human, fresh-context model, or council |
+| Substantive implementation | One completed independent review when available: human, fresh-context model, or a panel of independent reviewers ("council") |
 | Bounded corrections after review | Independent review of the cumulative delta and interactions; retain prior full coverage |
 | Material scope or security-assumption change | Full review of the changed work |
 | Sensitive paths | Coverage from two actual model families, under the existing rules |
@@ -261,12 +270,13 @@ review in the body, some in a comment, most in neither, and nothing could tell
 which. It is now a command and a status check, the way `test-cache.sh` made
 the test run one.
 
-- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
-  reviewer session, defaulting to pinned Codex Sol medium, read-only, within
+- `./scripts/dev/review.sh --reviewer PROVIDER` reviews the PR diff for `HEAD`
+  in a fresh reviewer session, read-only, within
   a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
-  requests the shared host or runs the same command locally. If a review
+  chooses the provider and requests a configured shared host or runs the same
+  command locally. Set `UNITARES_REVIEWER` when using `ship.sh`. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
@@ -337,8 +347,8 @@ there is no automatic paid cascade. Temporary provider disables may name a
 restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
 
-Native Codex is an optional default for an operator who has enabled GitHub
-code review. On this operator's UNITARES repo, native requests are owned by
+Native Codex is an optional route for a caller who selects Codex and enables GitHub
+code review. On the reference deployment's UNITARES repo, native requests are owned by
 the author/sweep workflow: repository auto review is **Follow personal**, and
 the shared account's personal **Auto review is off**. Explicit native review
 requests remain available, with exhaustive review and credit overage off.
@@ -355,8 +365,9 @@ had already passed native review. The command-owned request avoids both
 retriggers. Authors run `review.sh` for changed diffs as part of delivery;
 the operator does not need to request reviews or chase their comments.
 
-`review.sh` first reads native completion evidence for the current commit. If
-nothing has started after 30 seconds, it posts one `@codex review` request
+`review.sh` reads native completion evidence regardless of provider choice.
+With `UNITARES_REVIEWER=codex` and `review.native=true`, if nothing has started
+after 30 seconds, it posts one `@codex review` request
 bound to the head and diff; this covers drafts that automatic review misses.
 It waits up to ten minutes within the total review budget. A known running
 native review returns pending rather than starting a local fallback, including
@@ -364,6 +375,9 @@ with `--fresh` or `--reviewer`. Only absent/terminal unavailable native runs
 allow a local attempt. Existing requests are reused, and an expired request is not
 posted again on each sweep. `--reviewer` selects the local provider (without overlapping native work);
 `--fresh` can re-review clean evidence but cannot bypass unresolved findings.
+The sweep passes its selected provider through `UNITARES_REVIEWER` for the
+first pass, preserving this optional native route when it selects Codex.
+Required-family passes use an explicit local provider and `--fresh`.
 
 The adapter recognizes the official Codex bot's submitted reviews and explicit
 clean comments naming the reviewed commit. It also joins a completed activity
@@ -417,7 +431,12 @@ before (a re-review of the same unchanged diff does not). Only posted review
 records can show a serious finding; an unposted local run always counts.
 Clean cycles and cycles with only lesser findings count. The cap stops review that
 has stopped finding serious problems, not review that keeps finding them; a
-backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
+convergence warning at ten total cycles asks the agent to reassess scope and
+recurring findings (operator refinement, 2026-10-21). Total count alone no longer
+blocks verification of useful fixes. Narrow the work or change the independent
+perspective when a review is not converging; do not repeat unchanged review work.
+The three-cycle redundancy budget, provider cooldown/retry limits, actual
+findings and mandatory model-family coverage remain authoritative. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle. The second family can finish cycle three
@@ -447,8 +466,13 @@ author edit, including resolutions and reversions. The complete base integration
 diff is supplied separately for checking interactions, alongside the original
 and current PR diffs. Upstream file count alone is not expanded PR scope, and an
 empty author delta does not prove that prior reasoning still applies. If Git
-cannot reconstruct the integration conflict-free, the reviewer receives the
-complete unseparated delta and must decline uncertain scope.
+reconstructs conflicts, the reviewer sees each actual resolution against both
+the reviewed side and the integrated base. Other paths use the automatic merge
+baseline. Keeping the old PR version therefore still exposes an upstream fix
+that the resolution rejected, without classifying every upstream file as new
+author work. Unreadable reconstruction falls back to the complete unseparated
+delta. Reviewers still decline uncertain scope; this changes input preparation,
+not review authority or coverage requirements.
 
 A bounded follow-up preserves the original design and security assumptions.
 The reviewer explicitly confirms that scope and reviews every changed line.
@@ -510,11 +534,91 @@ qualify. Findings remain visible for the proposal's author; design suggestions
 do not block merging a proposal. Merging it does not authorize implementation,
 which requires correctness review under the ordinary/security rules above.
 
+#### Reviewer selection is an agent decision
+
+The authoring agent chooses a reviewer for the actual change. Consider useful
+independent perspective (including another model family), prior-review continuity
+for bounded corrections, provider availability, budgets, and required family
+coverage. No provider is preferred universally. Briefly explain the choice in
+the PR body or review handoff; no additional model call is needed to select one.
+Findings still require fixes or dispositions regardless of the chosen provider.
+
+Pass `--reviewer codex`, `--reviewer claude`, or `--reviewer antigravity` to
+`review.sh`. A caller may instead set `UNITARES_REVIEWER` to one of those names;
+the command-line choice wins. For example, when choosing Claude for a fresh
+perspective on this change:
+
+```bash
+unitares-github -- review --reviewer claude
+# Or pass the selection through the delivery workflow:
+UNITARES_REVIEWER=claude ./scripts/dev/ship.sh "fix: describe the change"
+```
+
+Without a choice, `review.sh` can join/read existing evidence and report findings,
+but starts no new local or native review. If new review is needed it returns
+UNREVIEWED (exit 2) and asks the agent to choose. A proposal-only advisory result
+is still not implementation review; host/environment configuration preserves
+that advisory shortcut. Use an explicit `--reviewer` flag or `--fresh` (with a
+provider selected) to request implementation review of a proposal. Missing choice does not waive sensitive
+coverage or erase earlier findings. Existing council/human review remains valid.
+
+Unattended callers make their policy explicit: `review.sh sweep --reviewer claude
+--reviewer antigravity --worktree PATH` supplies an ordered fallback list chosen
+by that caller. The sweep filters that list by availability, cooldown, retry
+budget and missing model family, and attempts only one provider per tick. A
+local Codex CLI cooldown does not prevent its separately enabled native route. It
+never adds providers to the list. `UNITARES_REVIEWER` supplies a single choice
+when no flags are given. With neither, it reports the missing configuration and
+starts nothing. The installer requires at least one `--reviewer` and saves the
+choices in the job arguments. Existing jobs need that explicit configuration
+before this driver is deployed; updating repository code does not modify or
+reload installed jobs. Candidate lists printed by the runner are alphabetical
+for display, not a ranking.
+The legacy Python helper names remain importable: `PROVIDER_ORDER` is that
+display inventory, and `default_reviewer` returns only the environment choice
+or `None`; neither supplies a built-in preference.
+
+The native-route cooldown exception retains an existing scheduling limitation:
+if a selected Codex native request has expired or is unavailable while the local
+CLI is cooling down, that PR can consume subsequent sweep ticks without moving
+to the next configured provider. There is no same-tick cascade. Select another
+provider first for that host or have the author explicitly choose another
+provider; this selection change does not redesign native retry scheduling.
+
+**Migrating an existing launchd sweep.** Its bootstrap refreshes the driver from
+`origin/master` on every tick, so merging this change deploys the new requirement.
+Stage a single explicit environment choice before merge: the old driver ignores
+it and the new driver honors it. Choose the provider for this host; `claude`
+below is an example. Wait for any active review to finish before unloading the
+job, and preserve its other settings:
+
+```bash
+review_plist="$HOME/Library/LaunchAgents/com.unitares.review-sweep.plist"
+launchctl bootout "gui/$(id -u)" "$review_plist"
+python3 - "$review_plist" claude <<'PY'
+import pathlib, plistlib, sys
+path = pathlib.Path(sys.argv[1])
+config = plistlib.loads(path.read_bytes())
+config.setdefault("EnvironmentVariables", {})["UNITARES_REVIEWER"] = sys.argv[2]
+path.write_bytes(plistlib.dumps(config))
+PY
+launchctl bootstrap "gui/$(id -u)" "$review_plist"
+```
+
+After the new driver is available, a host wanting an ordered list can wait for
+the active review to finish, unload the job with the same `bootout` command,
+and run `install-review-sweep.py --repo PATH --reviewer PROVIDER` with additional
+`--reviewer` arguments as desired. The installer bootstraps the replacement;
+it deliberately refuses to overwrite a loaded job. A single configured family
+cannot satisfy a sensitive diff by itself; configure another eligible family
+or have the author explicitly request it. These are deployment steps, not
+actions performed by a source-only PR.
+
 #### Review provider availability
 
 `scripts/dev/review_providers.json` is the one repo-wide switch for reviewers
 that are down. A provider listed under `disabled` is skipped by
-`review.sh`'s default choice, by its local fallback, and (for Codex) by native
+local attempts, configured sweep choices, and (for Codex) native
 review, in every checkout, so an outage no longer costs each session a failed
 attempt per hour of cooldown. Agents without local tooling read the same file
 before posting `@codex review`. Explicit `--reviewer` does not retry a disabled
@@ -573,9 +677,10 @@ family then found two P2 defects; the `agy` isolation hole (standing grants in
 
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
-used only when the `agy` command is installed. The default ordering is Codex, then Antigravity, then Claude, minus unavailable
-providers. Only one is attempted per invocation; selecting a distinct family
-for a sensitive diff remains explicit.
+used only when the `agy` command is installed. Select it with
+`--reviewer antigravity`; there is no universal provider preference. Only one
+is attempted per invocation; selecting a distinct family for a sensitive diff
+remains explicit.
 
 It is deliberately **not** run inside the checkout. A PR can carry
 `.agents/` hooks, rules and project permission rules, and `agy` loads those
@@ -613,7 +718,7 @@ self-contained prompt, keeps the ~120 KB argument cap, and does not read
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy        # once, interactively: sign in, then /exit
-./scripts/dev/review.sh --reviewer antigravity   # or let the default pick it
+./scripts/dev/review.sh --reviewer antigravity   # explicit caller choice
 ```
 
 Antigravity's terms let Google collect interaction data unless you opt out in
@@ -649,11 +754,12 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   cycles that found no P0/P1, stop redundant full-review requests and escalate
    unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
-   coverage from two families. P0/P1 remain blockers, and an additional full
-   cycle requires explicit operator authorization with a recorded reason.
+   coverage from two families. P0/P1 remain blockers, and fixes of serious
+   findings still earn a full pass. Ten total cycles warn and prompt scope
+   reassessment; only the redundancy budget requires additional-cycle approval.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -717,7 +823,7 @@ the reviewer honestly in `--reviewer-name`.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
-(`review.sh --background`) is useful while the agent does other work, but the
+(`review.sh --background --reviewer PROVIDER`) is useful while the agent does other work, but the
 agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
 explicitly defers this step and prints the author's next action. If review
 cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
@@ -727,10 +833,12 @@ so it may still be marked ready (section above). Exit 3 is not this case: it sta
 The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
-The fallback needs an actual scheduler installation. On the operator's Mac:
+The fallback needs an actual scheduler installation. On a macOS LaunchAgent
+install such as the reference deployment (`--repo` defaults to
+`~/projects/unitares`; pass your own checkout):
 
 ```bash
-python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares
+python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares --reviewer claude --reviewer antigravity
 launchctl print gui/$(id -u)/com.unitares.review-sweep
 unitares-automations census --grep review-sweep --all
 ```
@@ -768,6 +876,71 @@ every change** — runtime, docs, or tests:
   skip the PR.
 - `--auto-merge` remains available for the rare case where the operator
   explicitly wants auto-merge-on-green; it is not the default.
+
+For an already-pushed docs/tests/tooling fix, resume delivery from the named branch:
+
+```bash
+UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer claude --wait
+```
+
+This joins the existing diff-bound review, waits for CI when `--wait` is set,
+runs `git prepr`, declares readiness and adds `approved-to-merge`, then runs
+strict closeout. It uses the installed GitHub App runner when available;
+this optional command also requires the shared host `git-prepr` and
+`git-closeout` tools (or equivalent Git aliases). Those tools are installed
+separately, not supplied by this checkout; missing prerequisites park before
+any review spending. Other hosts need those tools plus an explicitly
+provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
+It refuses an implicit fallback to the interactive `gh` login.
+It neither commits nor pushes, starts no local full test run, and never updates
+the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
+Without `--wait`, pending validation exits 2 with the command to resume later.
+An error after approval can leave the PR ready and queued: inspect the live
+state and journal before retrying. A lost readiness receipt can cause label
+renewal on retry and change queue order. Ambiguous failed reviewer transcripts
+may conservatively retain echoed finding titles as open findings; inspect and
+dispose those with reasons rather than treating an uncertain failure as clean.
+Disposal answers the alleged findings but does not complete an interrupted review.
+Run `./scripts/dev/review.sh --fresh --reviewer PROVIDER` with a healthy provider
+(within the spending budget), then resume delivery. Automatic resume deliberately
+parks incomplete/full-required evidence instead of inferring completed coverage.
+
+The ownership footer must match the bound UUID. Automatic completion is limited
+to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
+`scripts/diagnostics/`, and `.github/workflows/`. Scientific proposals, registered
+stop rules, identity ontology and public-site prose remain outside that lane,
+along with runtime authentication/identity enforcement and their operator decisions.
+Review-controller and review-workflow tooling listed in `second_family_paths`
+remains eligible within this technical tooling lane only after passing its
+required two-family review; the advisory exception never substitutes for that
+coverage.
+Dirty work, a different local or remote head, open findings, pending review or CI,
+incomplete mandatory family coverage, explicit holds, capability classification,
+and governance-sensitive paths park delivery. An unavailable selected reviewer
+parks automatic delivery. For an ordinary fix the owning agent may document
+the advisory exception in the PR body and complete the normal prepr/readiness
+steps under existing authority. That is an explicit owner decision; resume
+never infers it from a failed process. Mandatory family coverage remains required. A head/base change during validation
+requires another inspection. Successful readiness is recorded against the head
+on the PR; repeating resume rechecks the live evidence without renewing the
+queue label. Approval-removal event history is read across all PR heads, even
+when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
+after validation, covering a follow-up push. Renewal intent is journalled before
+removal, binding the head, previous label event, writer and server timestamp.
+The visible label must agree with the pre-removal history, and a successful
+removal acknowledgement is recorded before any recovery can re-add approval.
+An unconfirmed intent cannot adopt a later same-login veto. A matching removal
+can resume after API lag or a failed addition. A different
+actor, an ambiguous event sequence or a later external veto stays parked. Removing approval
+after a recorded readiness parks the command rather than undoing the removal. Surface claims
+must already be released; ownership handoffs and operator decisions remain
+explicit prerequisites.
+
+Delivery proceeds only after the review command succeeds. Incomplete history,
+provider failures, pending review, declined scope and partial findings park
+automatic delivery; there is no provider-failure approval fallback. Missing base objects
+are fetched through the App/read-only route before policy and diff inspection;
+the plan can refresh that base history too.
 
 ### 3. Parallel / simultaneous work
 
@@ -1032,7 +1205,8 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done | Escalate redundant full-review requests; fixes of serious findings retain their exemption ([round cap](#round-cap)) |
+| Tenth total cycle or later | Reassess scope and recurring findings; total count warns without blocking useful fix verification |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

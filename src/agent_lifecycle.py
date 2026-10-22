@@ -53,7 +53,8 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
             # we've seen prior activity — fresh-onboard agents stay update_count=0
             # so downstream "no measured trajectory" guards still trigger.
             # Lineage is recorded via meta.parent_agent_id but never transplants
-            # state; see docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
+            # state; design note: `git show ce8879dc3^:docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md`
+            # (removed from the public tree in ce8879dc3)
             monitor._needs_hydration = prior_activity
             if prior_activity:
                 monitor._cold_start_confirmation_lineage_status = "hydration_pending"
@@ -99,7 +100,6 @@ def _agent_update_count(meta: AgentMetadata) -> int:
 _UUID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I,
 )
-_EPHEMERAL_LABEL = re.compile(r'^claude_\w+_\d{8}', re.I)
 _PROTECTED_TIERS = frozenset({"verified", "established", "trusted"})
 _SYSTEM_AGENT_IDS: frozenset[str] = frozenset()
 _AUTO_ARCHIVAL_ENV = "UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL"
@@ -159,12 +159,14 @@ def classify_for_archival(
     Agents that have never checked in (``updates == 0``) are treated as
     *initializing*, not orphaned — they stay visible as ghosts rather than
     being swept under the rug, which used to hide onboarding bugs behind
-    an aggressive 1h UUID auto-archive.
+    an aggressive 1h UUID auto-archive. Named agents enter the low-activity
+    branch only with an explicit ``archive-eligible`` tag. The automatically
+    assigned ``ephemeral`` class and display labels do not opt an agent in.
     """
     label = getattr(meta, 'label', None) or getattr(meta, 'display_name', None) or ""
     has_label = bool(label)
     is_uuid_named = bool(_UUID_PATTERN.match(agent_id))
-    is_ephemeral = bool(_EPHEMERAL_LABEL.match(label))
+    archive_eligible = "archive-eligible" in (getattr(meta, "tags", None) or ())
 
     age_hours = _agent_age_hours(meta)
     if age_hours is None:
@@ -181,8 +183,8 @@ def classify_for_archival(
         return True, f"unlabeled agent, {updates} updates, {age_hours:.1f}h old"
     if is_uuid_named and not has_label and updates >= 2 and age_hours >= unlabeled_hours:
         return True, f"stale UUID agent, {updates} updates, {age_hours:.1f}h old"
-    if is_ephemeral and updates <= ephemeral_max_updates and age_hours >= ephemeral_hours:
-        return True, f"ephemeral session agent '{label}', {updates} updates, {age_hours:.1f}h old"
+    if archive_eligible and updates <= ephemeral_max_updates and age_hours >= ephemeral_hours:
+        return True, f"archive-eligible agent '{label}', {updates} updates, {age_hours:.1f}h old"
     return False, ""
 
 
@@ -198,7 +200,7 @@ async def auto_archive_orphan_agents(
     _monitors: dict | None = None,
 ) -> list[dict]:
     """
-    Identify orphan and ephemeral agents without archiving by default.
+    Identify orphan and explicitly archive-eligible agents without archiving by default.
 
     Delegates classification to ``classify_for_archival`` and protection
     checks to ``is_agent_protected``. Automatic mutation is disabled unless

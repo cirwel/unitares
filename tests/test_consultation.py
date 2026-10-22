@@ -129,6 +129,7 @@ class TestConsultSchema:
             "allow_degraded",
             "response_mode",
             "host_id",
+            "host_ids",
         }
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ConsultParams(brief="help", provider="hf")
@@ -2308,3 +2309,345 @@ async def test_failover_with_no_next_host_records_nothing_after_the_last_tried(m
         {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
     assert calls == ["claude:host-adapter"]
     assert "skipped" not in parsed
+
+
+# --- council (host_ids) -----------------------------------------------------
+
+
+def _council_args(**overrides):
+    return {
+        "brief": _BRIEF_SENTINEL,
+        "host_ids": ["codex:host-adapter", "antigravity:host-adapter"],
+        "privacy": "cloud_allowed",
+        **overrides,
+    }
+
+
+@pytest.mark.asyncio
+async def test_council_asks_each_host_once_and_records_each(monkeypatch, audit_sinks):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    calls = _thorough_as(monkeypatch, caller=SessionSignals(reported_harness_type="claude-code"),
+                         available=_ALL_HOSTS,
+                         results={h: _served_by(h) for h in _ALL_HOSTS})
+    parsed = _payload(await co.handle_consult(_council_args()))
+
+    assert parsed["success"] is True
+    assert parsed["schema"] == "unitares.consultation_council.v1"
+    assert parsed["status"] == "completed"
+    assert (parsed["answered"], parsed["asked"]) == (2, 2)
+    assert sorted(calls) == ["antigravity:host-adapter", "codex:host-adapter"]
+    members = parsed["members"]
+    assert [m["host_id"] for m in members] == ["codex:host-adapter", "antigravity:host-adapter"]
+    assert all(m["status"] == "completed" and m["advice"] for m in members)
+    assert [m["family"] for m in members] == ["openai", "google"]
+    assert len({m["consultation_id"] for m in members}) == 2
+    assert len({m["record"]["hash_key"] for m in members}) == 2
+    assert parsed["authority"]["can_satisfy_peer_review"] is False
+
+    _, pg = await audit_sinks()
+    records = sorted((e["details"] for e in pg), key=lambda r: r["request"]["host_id"])
+    assert [r["request"]["host_id"] for r in records] == [
+        "antigravity:host-adapter", "codex:host-adapter"]
+    assert {r["council_id"] for r in records} == {parsed["council_id"]}
+    assert _BRIEF_SENTINEL not in json.dumps(pg)
+
+
+@pytest.mark.asyncio
+async def test_council_members_run_in_parallel(monkeypatch):
+    import asyncio
+
+    started = []
+    both_started = asyncio.Event()
+
+    async def fake(request):
+        started.append(request.host_id)
+        if len(started) == 2:
+            both_started.set()
+        # Each member waits for the other: run one after the other, this times out.
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_council_returns_partial_answers_and_never_fails_over(monkeypatch, audit_sinks):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    calls = _thorough_as(monkeypatch, caller=SessionSignals(), available=_ALL_HOSTS, results={
+        "codex:host-adapter": _quota_failure(),
+        "antigravity:host-adapter": _served_by("antigravity:host-adapter"),
+        "claude:host-adapter": _served_by("claude:host-adapter"),
+    })
+    parsed = _payload(await co.handle_consult(_council_args()))
+
+    assert parsed["success"] is True
+    assert parsed["status"] == "partial"
+    assert parsed["answered"] == 1
+    # A member is pinned: codex's usage limit does not send its brief to claude.
+    assert "claude:host-adapter" not in calls
+    codex, agy = parsed["members"]
+    assert codex["status"] == "failed" and "advice" not in codex
+    assert codex["failure"]["code"] == "DELEGATED_INFERENCE_FAILED"
+    assert codex["recovery"]["action"]
+    assert "failover" not in codex
+    assert agy["status"] == "completed"
+    _, pg = await audit_sinks()
+    assert sorted(e["details"]["status"] for e in pg) == ["completed", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_council_with_no_answer_fails_with_every_member(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(return_value=_failure("INFERENCE_HOST_UNAVAILABLE")))
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "CONSULT_COUNCIL_FAILED"
+    assert len(parsed["members"]) == 2
+    _, pg = await audit_sinks()
+    assert len(pg) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("overrides", "code"), [
+    ({"host_id": "claude:host-adapter"}, "CONSULT_POLICY_UNSATISFIED"),
+    ({"host_ids": ["codex:host-adapter"]}, "INVALID_CONSULT_COUNCIL"),
+    ({"host_ids": ["codex:host-adapter", "codex:host-adapter"]}, "INVALID_CONSULT_COUNCIL"),
+    ({"host_ids": [*sorted(_ALL_HOSTS), "claude:host-adapter"]}, "INVALID_CONSULT_COUNCIL"),
+    ({"host_ids": "codex:host-adapter"}, "INVALID_CONSULT_COUNCIL"),
+    ({"host_ids": ["codex:host-adapter", "ollama:local"]}, "INFERENCE_HOST_NOT_FOUND"),
+    ({"host_ids": ["codex:host-adapter", "external:acme/glm"]}, "INFERENCE_HOST_NOT_FOUND"),
+    ({"privacy": "local"}, "CONSULT_POLICY_UNSATISFIED"),
+    ({"effort": "standard"}, "CONSULT_POLICY_UNSATISFIED"),
+    ({"allow_degraded": True}, "CONSULT_POLICY_UNSATISFIED"),
+    ({"purpose": "vote"}, "INVALID_CONSULT_PURPOSE"),
+])
+async def test_council_refusals_contact_no_host_and_leave_no_record(
+    monkeypatch, audit_sinks, overrides, code
+):
+    standard, thorough = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult(_council_args(**overrides)))
+    assert parsed["success"] is False
+    assert parsed["error_code"] == code
+    standard.assert_not_awaited()
+    thorough.assert_not_awaited()
+    _, pg = await audit_sinks()
+    assert not pg
+
+
+@pytest.mark.asyncio
+async def test_council_needs_a_resolved_caller(monkeypatch):
+    thorough = AsyncMock()
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(co, "get_context_resolved_agent_id", lambda: None)
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["error_code"] == "CONSULT_IDENTITY_REQUIRED"
+    thorough.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_council_member_outside_the_job_is_refused_alone(monkeypatch, hosts_file, audit_sinks):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [codex:host-adapter] }\n")
+    calls = _thorough_as(monkeypatch, caller=SessionSignals(), available=_ALL_HOSTS,
+                         results={"codex:host-adapter": _served_by("codex:host-adapter")})
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["status"] == "partial"
+    assert calls == ["codex:host-adapter"]
+    assert parsed["members"][1]["failure"]["code"] == "CONSULT_HOST_NOT_IN_JOB"
+    _, pg = await audit_sinks()
+    assert len(pg) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_member_that_raises_fails_alone(monkeypatch, audit_sinks):
+    async def fake(request):
+        if request.host_id == "codex:host-adapter":
+            raise RuntimeError("adapter bug")
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    # run_consultation's guard already turns this into a failure; take the
+    # guard away to reach the council's own.
+    monkeypatch.setattr(co, "_guarded_inference", lambda lane, invoke: invoke())
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["status"] == "partial"
+    assert parsed["members"][0]["failure"]["code"] == "INTERNAL_INFERENCE_CONTRACT"
+    _, pg = await audit_sinks()
+    assert sorted((e["details"]["request"]["host_id"], e["details"]["status"]) for e in pg) == [
+        ("antigravity:host-adapter", "completed"), ("codex:host-adapter", "failed")]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_council_cancels_and_records_every_member(monkeypatch, audit_sinks):
+    import asyncio
+
+    both_running = asyncio.Event()
+    running = []
+
+    async def fake(request):
+        running.append(request.host_id)
+        if len(running) == 2:
+            both_running.set()
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    # The guard turns an exception into a failure but must let cancellation through.
+    task = asyncio.ensure_future(co.handle_consult(_council_args()))
+    await asyncio.wait_for(both_running.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, pg = await audit_sinks()
+    assert sorted(e["details"]["request"]["host_id"] for e in pg) == [
+        "antigravity:host-adapter", "codex:host-adapter"]
+    assert {e["details"]["status"] for e in pg} == {"cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_council_member_on_the_wrong_route_returns_no_advice(monkeypatch, audit_sinks):
+    async def fake(request):
+        # codex's brief comes back from claude: the member's postcondition refuses it.
+        served = "claude:host-adapter" if request.host_id == "codex:host-adapter" else request.host_id
+        return _served_by(served)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    parsed = _payload(await co.handle_consult(_council_args()))
+    codex, agy = parsed["members"]
+    assert codex["failure"]["code"] == "CONSULT_ROUTE_POSTCONDITION_FAILED"
+    assert "advice" not in codex
+    assert agy["status"] == "completed"
+    _, pg = await audit_sinks()
+    by_host = {e["details"]["request"]["host_id"]: e["details"] for e in pg}
+    assert by_host["codex:host-adapter"]["route"]["host_id"] == "claude:host-adapter"
+
+
+def test_council_size_is_left_to_the_handler_and_json_text_is_accepted():
+    params = ConsultParams(brief="q", host_ids=["codex:host-adapter", "claude:host-adapter"])
+    assert params.effort == "thorough"
+    # A wrong size passes the schema so the handler can refuse it with the
+    # valid hosts (test_council_refusals_contact_no_host_and_leave_no_record),
+    # instead of a schema error that also blames effort's default.
+    for size in (["codex:host-adapter"], ["a", "b", "c", "d"]):
+        assert ConsultParams(brief="q", host_ids=size).effort == "thorough"
+    # REST and use_tool deliver a list as JSON text.
+    text = ConsultParams(brief="q", host_ids='["codex:host-adapter", "claude:host-adapter"]')
+    assert text.host_ids == ["codex:host-adapter", "claude:host-adapter"]
+    assert text.effort == "thorough"
+    # An empty council still defaults to thorough, so the handler refuses it
+    # for its size rather than its effort.
+    assert ConsultParams(brief="q", host_ids=[]).effort == "thorough"
+    assert ConsultParams(brief="q", host_ids="[]").effort == "thorough"
+    # A lone host id becomes a one-item list: the handler refuses it with the
+    # valid hosts instead of a schema error that blames effort.
+    assert ConsultParams(brief="q", host_ids="codex:host-adapter").host_ids == ["codex:host-adapter"]
+
+
+@pytest.mark.asyncio
+async def test_direct_handler_reads_json_text_host_ids(monkeypatch):
+    calls = []
+
+    async def fake(request):
+        calls.append(request.host_id)
+        return _served_by(request.host_id)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    parsed = _payload(await co.handle_consult(
+        _council_args(host_ids='["codex:host-adapter", "antigravity:host-adapter"]')))
+    assert parsed["status"] == "completed"
+    assert sorted(calls) == ["antigravity:host-adapter", "codex:host-adapter"]
+    assert parsed["request"]["host_ids"] == ["codex:host-adapter", "antigravity:host-adapter"]
+
+
+def test_abridged_briefs_state_the_council_requirements():
+    fields = ConsultParams.model_fields
+    assert "cloud_allowed" in fields["host_ids"].json_schema_extra["brief"]
+    effort_brief = fields["effort"].json_schema_extra["brief"]
+    assert "host_ids" in effort_brief and "thorough" in effort_brief
+
+
+@pytest.mark.asyncio
+async def test_cancelled_council_keeps_no_hashes_for_an_answer_never_delivered(
+    monkeypatch, audit_sinks
+):
+    import asyncio
+
+    codex_answered = asyncio.Event()
+
+    async def fake(request):
+        if request.host_id == "codex:host-adapter":
+            codex_answered.set()
+            return _served_by(request.host_id)
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    task = asyncio.ensure_future(co.handle_consult(_council_args()))
+    await asyncio.wait_for(codex_answered.wait(), timeout=2)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, pg = await audit_sinks()
+    records = {e["details"]["request"]["host_id"]: e["details"] for e in pg}
+    assert set(records) == {"codex:host-adapter", "antigravity:host-adapter"}
+    # codex answered, but the caller never got the answer or its key.
+    assert {r["status"] for r in records.values()} == {"cancelled"}
+    assert all(r["hashes"] is None for r in records.values())
+
+
+@pytest.mark.asyncio
+async def test_a_council_refused_member_by_member_is_a_validation_error(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [claude:host-adapter] }\n")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    parsed = _payload(await co.handle_consult(_council_args()))
+    assert parsed["error_code"] == "CONSULT_COUNCIL_FAILED"
+    assert parsed["error_category"] == "validation_error"
+    assert {m["failure"]["code"] for m in parsed["members"]} == {"CONSULT_HOST_NOT_IN_JOB"}
+
+
+@pytest.mark.asyncio
+async def test_council_and_single_consult_share_the_hosts_file_refusal(monkeypatch, hosts_file):
+    hosts_file("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    monkeypatch.setattr(co, "run_delegated_inference",
+                        AsyncMock(side_effect=AssertionError("must not delegate")))
+    single = _payload(await co.handle_consult(
+        {"brief": "q", "host_id": "codex:host-adapter", "privacy": "cloud_allowed"}))
+    council = _payload(await co.handle_consult(_council_args()))
+    assert single["error_code"] == "INFERENCE_CONFIG_INVALID"
+    member = council["members"][0]
+    assert member["failure"]["code"] == "INFERENCE_CONFIG_INVALID"
+    assert member["message"] == single["error"]
+    # A council cannot fall back to standard effort, so it is not offered.
+    assert "Standard effort still works" in single["recovery"]["action"]
+    assert "Standard effort" not in member["recovery"]["action"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_council_keeps_a_members_policy_refusal(monkeypatch, hosts_file, audit_sinks):
+    import asyncio
+
+    hosts_file("version: 1\njobs:\n  consult.thorough: { prefer: [antigravity:host-adapter] }\n")
+    started = asyncio.Event()
+
+    async def fake(request):
+        started.set()
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    task = asyncio.ensure_future(co.handle_consult(_council_args()))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, pg = await audit_sinks()
+    records = {e["details"]["request"]["host_id"]: e["details"] for e in pg}
+    # codex was refused before any host was contacted; cancelling does not
+    # turn that into "cancelled", which would suggest the brief went out.
+    assert records["codex:host-adapter"]["status"] == "failed"
+    assert records["codex:host-adapter"]["failure"]["code"] == "CONSULT_HOST_NOT_IN_JOB"
+    assert records["antigravity:host-adapter"]["status"] == "cancelled"
+    # Nothing reached the caller, so no row keeps hashes under an unseen key.
+    assert all(r["hashes"] is None for r in records.values())

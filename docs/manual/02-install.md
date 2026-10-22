@@ -16,11 +16,50 @@ The clone pin below names the latest verified public release, which can lag
 the source version while a release is being prepared.
 
 ```bash
-git clone --branch v3.3.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.4.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
 ```
+
+### Managed checkout alternative
+
+With Docker running, Git, curl and a POSIX shell, the launcher creates and
+starts a shallow release checkout without a manual clone:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/scripts/install/launch.sh | sh
+```
+
+It resolves `PUBLISHED_VERSION`, keeps the checkout at `~/.unitares/stack`,
+copies `.env.example` to `.env` only when missing, starts the release images,
+and requires deep health `healthy` or `moderate`. Python for this health check
+runs inside the container. Repeating the command preserves `.env` and the
+installed release; Compose leaves unchanged running containers alone. It does
+not upgrade an existing installation. A failed start can be retried after
+fixing the reported problem. No package is installed or published by this path.
+To inspect the script first, download that URL to a file and run `sh` on it.
+
+Set `UNITARES_STACK_DIR` to an absolute path to choose a different directory
+(pass it to `sh`, not just to `curl`, when using the pipeline). Set port or
+credential overrides in that checkout's `.env` before starting a shared
+installation. The launcher refuses containers owned by a different checkout.
+The managed clone includes `db/postgres`, which Compose mounts for database
+initialization, and the Git metadata used by the existing update command.
+
+After startup, run the coordination acceptance demo using host Python 3
+(the demo uses only its standard library). Python 3 and curl on the host are
+also needed by the existing update CLI:
+
+```sh
+cd ~/.unitares/stack
+python3 scripts/demo/coordination_demo.py
+./scripts/unitares update --check
+```
+
+Use `./scripts/unitares update` from this directory for upgrades, following
+the update instructions below; rerunning the launcher never moves Git or runs upgrade migrations.
+The launcher URL becomes available when the launcher change lands on master.
 
 On a release checkout, Compose pulls the server, the coordination lease plane
 and the database as the images published from that release tag
@@ -58,6 +97,11 @@ Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
 exercise self-relative scoring or establish predictive value.
 
+The quickstart leaves several capabilities off, among them graph edges in shared
+memory, semantic search, a model for `consult`, and cross-family review.
+[§2.4](#24-quickstart-defaults-and-a-full-setup) lists each one, how to turn it
+on, and what is missing without it.
+
 When it completes:
 
 - MCP: `http://localhost:8767/mcp/`
@@ -88,8 +132,9 @@ there. If one half really is on its default port, set that port explicitly.
 UNITARES bundles no model. Naming one turns on two things: `consult` answers
 from it, and a `request_review` that no peer has claimed can be taken by the
 in-process local reviewer, which drafts the antithesis and a proposed
-synthesis. Without a reachable model, `consult` answers "Standard advisory
-consultation is unavailable" (`MODEL_PROVIDER_UNAVAILABLE`), and
+synthesis. Without a model, `consult` answers "Standard advisory
+consultation is unavailable", with `MODEL_NOT_CONFIGURED` when none is named and
+`MODEL_PROVIDER_UNAVAILABLE` when the named server does not answer, and
 `request_review` records the thesis and leaves the review
 waiting for a peer or the operator. That also happens with a model when the
 thesis is about the review system itself (recusal), when the model runs past
@@ -115,7 +160,7 @@ settings:
 | Setting | Meaning | Default |
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | `http://localhost:11434/v1` (Ollama on the same machine) |
-| `UNITARES_MODEL_ID` | Model id the server serves | `gemma4:latest`, a default a later release removes |
+| `UNITARES_MODEL_ID` | Model id the server serves | None: unset, the local lane has no model and refuses with `MODEL_NOT_CONFIGURED` (through v3.4.0 it fell back to `gemma4:latest`) |
 
 Ollama is the server these steps are tested with. Other servers that speak the
 same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
@@ -165,15 +210,15 @@ with `--build`.
 The older names `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (for
 the endpoint) and `UNITARES_LLM_MODEL` (for the model) were removed in v3.3.0.
 Nothing reads them any more, and nothing warns about them: an install that
-still sets only those uses the defaults (Ollama on `localhost:11434` and
-`gemma4:latest`). Rename them to `UNITARES_MODEL_BASE_URL` and
+still sets only those uses the default endpoint (Ollama on `localhost:11434`)
+and has no model. Rename them to `UNITARES_MODEL_BASE_URL` and
 `UNITARES_MODEL_ID`, in `.env` or in the LaunchAgent plist. An Ollama root URL
 can be moved over as it is: a base with no path gets `/v1` added. Running
 `./scripts/unitares model` rewrites `.env` with the new names and removes the old
 `UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
 
-**Where the prompt goes.** `consult` and `call_model` default to
-`privacy='local'`, and the in-process reviewer, check-in coaching and
+**Where the prompt goes.** `consult` (and the deprecated `call_model`, removed
+no earlier than 2026-12-02) default to `privacy='local'`, and the in-process reviewer, check-in coaching and
 knowledge synthesis always count as local. The server sends those only to an
 endpoint it classifies as local, and it decides that from the URL alone,
 never from DNS:
@@ -196,8 +241,8 @@ until you add that range to `UNITARES_TRUSTED_NETWORKS`. On a source install
 that also lets callers from that network reach the REST API without a token;
 under Compose, callers arrive through the Docker bridge, so it changes only
 which model endpoints count as local.
-`consult(privacy='cloud_allowed')` and `call_model(privacy='auto')` may still
-use an external endpoint.
+`consult(privacy='cloud_allowed')` (or the deprecated
+`call_model(privacy='auto')`) may still use an external endpoint.
 
 ### Reinstalling and side-by-side installs
 
@@ -265,19 +310,163 @@ non-zero unless deep health comes back healthy or moderate. A checkout already
 on the target release goes through the same steps without moving the code.
 
 Releases before this command existed shipped a `scripts/unitares update` that
-posted a check-in instead. From one of those, move the code once by hand and
-let the new `update` do the rest:
+posted a check-in instead, and the `update` in v3.0.0 to v3.3.0 runs
+migrations without the attestation that migrations 077 and 078 require, so
+moving from any of them to v3.4.0 or later refuses and rolls back. From any of
+those releases, move the code once by hand and let the new `update` do the
+rest:
 
 ```bash
 git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
 git checkout --detach vX.Y.Z
-docker compose up -d --build --wait postgres-age
+docker compose up -d --build --wait postgres-age   # only from a release before `update` existed
 ./scripts/unitares update --to vX.Y.Z
 ```
 
-The database starts first so the new server never runs against the old
-schema; `update` then applies the release's migrations and rebuilds, restarts
-and health-checks the stack.
+From a release before `update` existed, the database starts first so the new
+server never runs against the old schema. From v3.0.0 to v3.3.0, leave that
+line out: the new `update` stops the server and the lease plane before it
+starts the database. `update` then applies the release's migrations and
+rebuilds, restarts and health-checks the stack. If it stops before a release's
+protected migrations are applied (077 and 078 for v3.4.0), it restarts the
+stack from the checked-out Compose file; to run the previous release instead,
+check that release out and run `docker compose up -d --wait`.
+
+#### Updating a bare-metal or LaunchAgent install
+
+`update` manages only a Compose stack, so on a [bare-metal install](#22-bare-metal-installation)
+or a [LaunchAgent](03-running-the-server.md#37-run-at-login-macos-launchagent)
+you run the same steps by hand, from the checkout. Set `DB_POSTGRES_URL` to
+the URL your server uses (the playbook's is shown):
+
+```bash
+export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
+git status --porcelain --untracked-files=no     # must print nothing
+git ls-files --others --exclude-standard -- db/postgres   # must print nothing
+PREV=$(git rev-parse HEAD)                      # the release you are leaving
+TAG="v$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)"
+echo "$TAG"                                     # the newest release; set TAG yourself to pick another
+git fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+```
+
+The `db/postgres` check matters because the migration tool applies every
+`NNN_*.sql` file it finds under `db/postgres/migrations/`, so an untracked file
+there would reach the database even though the release does not ship it. Move
+or delete anything it lists first.
+
+Confirm this is not a downgrade. The first number is the database's schema,
+the second the newest migration the release ships; if the first is larger,
+stop, because moving to an older release is not supported:
+
+```bash
+psql "$DB_POSTGRES_URL" -Atqc "SELECT COALESCE(MAX(version), 0) FROM core.schema_migrations"
+git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
+  | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1 | sed 's/^0*//'
+```
+
+Stop the server, and the lease plane if you run one, so nothing writes while
+the schema changes: unload each LaunchAgent you use, and press Ctrl-C in the
+terminal of a server started in the foreground. Note which ones were running;
+you start the same ones again at the end. Confirm they are gone by service
+registration, process and listening port, not by an unanswered health check,
+which a timeout would also produce. Then move the code and its Python
+dependencies:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # if you use it
+launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you use it
+launchctl list | grep -E 'com\.unitares\.(governance-mcp|lease-plane)'    # must print nothing
+pgrep -fl 'src/mcp_server\.py|mix run --no-halt'                          # must print nothing
+lsof -nP -iTCP:8767 -iTCP:8788 -sTCP:LISTEN                               # must print nothing
+git checkout --detach "$TAG"
+source .venv/bin/activate
+pip install -r requirements-full.txt -c constraints.txt
+```
+
+Back the database up, list the pending migrations, then apply them:
+
+```bash
+mkdir -p ~/.unitares/backups && chmod 700 ~/.unitares/backups
+( set -o pipefail; umask 077
+  pg_dump "$DB_POSTGRES_URL" | gzip > ~/.unitares/backups/unitares-$(date +%Y%m%d-%H%M%S)-before-$TAG.sql.gz ) \
+  && echo "backup ok"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL"
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --dialectic-writers-quiesced
+```
+
+Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
+statement that the server and lease plane are stopped; migrations 077 and 078
+refuse to apply without it, and the tool does not check it for you, so pass it
+only once the three checks above printed nothing. Those checks cover the whole
+machine, so they also list another UNITARES instance, and the `mix run` pattern
+matches any Elixir service. Look at what each listed process is
+(`ps -o command= -p <pid>`), and stop anything that writes to this database. The migration tool calls
+`psql`, which the Homebrew PostgreSQL install puts on your `PATH`.
+
+If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
+shows changes, carry them into your installed plist by hand before loading it.
+Do not render it again with the [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
+command: that writes new tokens and secrets and resets the database URL and
+any other setting you changed, so clients stop authenticating and the server
+can start against a database other than the one you just migrated.
+
+The lease plane runs from whatever checkout its plist's `WorkingDirectory`
+names, and the [lease-plane runbook](../operations/lease-plane-operator-runbook.md)
+uses a separate deploy checkout for it. If that is not this checkout, move it
+to the same release before you load the plist, or the previous release's
+lease plane starts over the migrated schema:
+
+```bash
+plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+LP=$(git -C "$(plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist)" rev-parse --show-toplevel)
+git -C "$LP" fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+git -C "$LP" checkout --detach "$TAG"
+```
+
+Then start what you stopped. The lease plane fetches its dependencies and
+compiles at boot, so its first start on a new release takes longer. Deep
+health should report `healthy` or `moderate`, and the lease plane's
+`build_sha` should match the release:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or: python src/mcp_server.py --port 8767
+launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist      # if you stopped it
+./scripts/unitares health
+curl -s http://localhost:8767/health/deep
+curl -s http://127.0.0.1:8788/health; git rev-parse --short "$TAG^{commit}"   # if you run the lease plane
+```
+
+If a migration fails, do not start the previous release over the database
+until you know where the schema stopped (the `psql` query above). If it did not
+cross 077 or 078 during this update, you can go back with
+`git checkout --detach "$PREV"`, reinstall its dependencies and start what
+you stopped again. If it crossed either one, or you cannot read the version,
+stay on the new release, fix the cause the error names and run the `--apply`
+line again; the backup is the way back.
+
+#### Updating the agent plugin
+
+The [governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+is installed into each agent client, not the server, so neither path above
+touches it. It publishes a new version alongside each server release, whose
+release notes name the server version its skills match; update it after the
+server. Claude Code
+does not auto-update third-party marketplaces unless you turn that on under
+`/plugin` > Marketplaces.
+
+```bash
+# Claude Code
+claude plugin marketplace update unitares-governance
+claude plugin update unitares-governance@unitares-governance
+
+# Codex
+codex plugin marketplace upgrade unitares-governance
+```
+
+In Codex, open `/plugins` and confirm the new version is installed, then open
+`/hooks` to review and trust any hooks that changed. In both clients, hooks
+load when a session starts: running sessions keep the old ones until you start
+a new session (or run `/reload-plugins` in Claude Code).
 
 ### Tool discovery (interface 1.13.0 and later)
 
@@ -335,6 +524,42 @@ For a shared deployment, replace the Compose-only development Ed25519 seed in
 issuer-to-HTTPS `/v1/lease-holder/keys` entry in
 `UNITARES_LEASE_TRUSTED_ISSUERS`. Never copy a private seed or continuity token
 into the lease plane.
+
+To see what the quickstart leaves off and how to turn each part on, read
+[§2.4](#24-quickstart-defaults-and-a-full-setup).
+
+## 2.4 Quickstart defaults and a full setup
+
+The Docker quickstart runs the server, PostgreSQL (with the AGE and pgvector
+extensions installed), Redis and the lease plane. Several capabilities are off
+in it, either because they need something the stack does not start (a model
+server, the agent orchestrator, the embeddings package) or because they change
+live decisions and wait on an operator. Each row names what the quickstart
+does, how to turn the capability on, and what is missing while it is off. Set a
+variable in `.env` and recreate the service (`docker compose up -d
+governance-mcp`), or `--build` where the row says the image changes.
+
+| Capability | Quickstart default | How to enable | Without it | Source |
+|---|---|---|---|---|
+| Knowledge graph backend | `postgres`: findings and full-text search in relational tables | `UNITARES_KNOWLEDGE_BACKEND=age`. The quickstart database already has the AGE extension and graph schema | No graph edges (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`); a superseded finding is flagged in search but carries no `superseded_by` pointer; no semantic search | `docker-compose.yml`; `src/knowledge_graph.py` (`get_knowledge_graph`); `UNITARES_KNOWLEDGE_BACKEND` |
+| Semantic search | Off: the image omits `sentence-transformers` and no embedding model is named | Uncomment `sentence-transformers` in `requirements-docker.txt` and rebuild (`--build`); set `UNITARES_EMBEDDING_MODEL` (for example `bge-m3`) and the `age` backend. Findings stored before then have no vector until `scripts/migration/reembed_corpus.py` fills them | Search matches terms only; a query worded differently from the finding does not find it | `requirements-docker.txt`; `src/embeddings.py`; `src/storage/knowledge_graph_age.py` (`semantic_search`); `UNITARES_EMBEDDING_MODEL` |
+| Hybrid ranking | Off | `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
+| Cross-encoder reranker | Off | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed; `UNITARES_RERANKER_MODEL` picks the model | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
+| Search related-finding expansion | Off | `UNITARES_ENABLE_RELATED_EXPANSION=1`. Read the `related_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`related_expansion_enabled`); `UNITARES_ENABLE_RELATED_EXPANSION` |
+| Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_PROVIDER_UNAVAILABLE`; `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
+| CLI hosts for `consult(effort='thorough')` and `delegate_inference` | Not available: no Compose service starts the agent orchestrator | Run the agent orchestrator, then set `UNITARES_HOST_ADAPTER_ENABLED=1`, `AGENT_ORCHESTRATOR_BEARER_TOKEN`, and an authenticated Codex, Claude or Antigravity CLI | Those calls fail and say the extension is not configured; `list_inference_hosts` reports it under `extensions.agent_orchestrator` | `src/mcp_handlers/support/inference_registry.py`; `UNITARES_HOST_ADAPTER_ENABLED` |
+| Orchestrated and cross-family dialectic review | Off: reviews run in-process | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1` with the agent orchestrator reachable at `AGENT_ORCHESTRATOR_URL`; `UNITARES_DIALECTIC_REVIEWER_HOST` (or `_HOSTS`) picks the reviewer backend | Reviews come from the in-process reviewer (with a model) or a peer; no separately identified reviewer process from another model family. Any dispatch failure falls back to in-process | `src/mcp_handlers/dialectic/orchestrator_dispatch.py` (`orchestrated_review_enabled`); `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` |
+| Lease-holder attestations (Ed25519) | On, signed with a published development seed and issuer `unitares-local` | Set your own `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, a stable `UNITARES_LEASE_ATTESTATION_ISSUER`, and `UNITARES_LEASE_TRUSTED_ISSUERS` (see §2.3) | With the published seed, anyone holding the compose file can sign an attestation the stack accepts; it is for a loopback install only | `docker-compose.yml`; `docs/DEPLOYMENT_SECURITY.md`; `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` |
+| Grounded E/I/S shadow | Off | `UNITARES_GROUNDING_SHADOW=1` | No `grounding_shadow` audit events comparing grounded values with the heuristic ones | `config/governance_config.py`; `UNITARES_GROUNDING_SHADOW` |
+| Grounded E/I/S apply | Off | `UNITARES_GROUNDING_APPLY=1`. It changes coherence, E, I and S for every agent; its wake condition is in the [dormant-capability registry](../operations/dormant-capability-registry.md), Theme 6 | Canonical metrics come from the heuristic and ODE path | `config/governance_config.py` (`grounding_apply_enabled`); `UNITARES_GROUNDING_APPLY` |
+| Cold-start risk confirmation actuation | Shadow on, actuation off | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION=true`; the flag alone does not actuate until the registry's Theme 6 conditions are met (`actuation_ready=false`) | A fallback-owned `risk_pause` actuates without waiting for adjacent evidence; the shadow still counts what would have been deferred | `config/governance_config.py`; `GOVERNANCE_COLD_START_RISK_CONFIRMATION_*` |
+| Verification floor | Shadow on, floor off | `GOVERNANCE_VERIFICATION_FLOOR=true`; council-gated, see `docs/proposals/active/verification-weighted-verdict-v0.md` | The independent verification signal is recorded in shadow and does not change verdicts | `config/governance_config.py`; `src/verification_floor_shadow.py`; `GOVERNANCE_VERIFICATION_FLOOR` |
+
+Two related flags are on by default and need nothing: `UNITARES_PHI_TELEMETRY_ONLY`
+(the behavioral verdict is authoritative and Φ is telemetry) and
+`GOVERNANCE_NON_AUTHORED_COLD_START_GUARD`. Turning either off is a rollback, not
+a setup step; the registry's Theme 6 says what each does. The generated
+[flag catalog](../FLAGS.md) lists every variable the server reads.
 
 ---
 

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Annotated, Optional, Union, Literal, Dict, Any, List
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
@@ -867,7 +868,7 @@ class GetWorkspaceHealthParams(AgentIdentityMixin):
 class CallModelParams(AgentIdentityMixin):
     """Parameters for call_model"""
     prompt: str = Field(..., description="The prompt/question to send to the model (required)")
-    model: str = Field("auto", description="Model to use. For ollama: a model the configured local endpoint serves (default UNITARES_MODEL_ID, else gemma4:latest). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
+    model: str = Field("auto", description="Model to use. For ollama: a model the configured local endpoint serves (default UNITARES_MODEL_ID; none is built in). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
     provider: Literal["auto", "hf", "ollama"] = Field("auto", description="Provider to use. Options: auto (ollama first, hf fallback), hf (the Hugging Face router), ollama (the configured local endpoint: an OpenAI-compatible server, Ollama by default). Default: auto")
     host_id: Optional[str] = Field(
         None,
@@ -880,6 +881,29 @@ class CallModelParams(AgentIdentityMixin):
     max_tokens: float = Field(500, description="Maximum tokens in response. Default: 500")
     temperature: float = Field(0.7, description="Temperature (creativity). Range: 0.0-1.0. Default: 0.7")
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
+
+
+#: The per-tool budget many MCP clients give one call (the client in #2285
+#: did). A client that gives up first receives a bare transport error with no
+#: execution id, so delegate_inference's default must answer inside it.
+DELEGATE_INFERENCE_CLIENT_BUDGET_S = 60
+#: Seconds of that budget kept free for serialising and delivering the reply.
+DELEGATE_INFERENCE_RESPONSE_HEADROOM_S = 5
+#: Seconds past timeout_s that one call may spend on host resolution, the
+#: spawn request and a stalled await before it answers anyway. Every call
+#: answers within timeout_s plus this: it is one wall-clock deadline that the
+#: per-request HTTP timeouts are clipped to, not added to.
+DELEGATE_INFERENCE_OVERHEAD_S = 10
+#: delegate_inference's default timeout_s: the server-side await window, and
+#: the child's runtime budget, when the caller names none. Derived so the
+#: whole default call, overhead included, ends inside the client budget with
+#: the headroom to spare. A larger value stays accepted for clients that wait
+#: longer (the Python SDK sizes its transport timeout to timeout_s + 75).
+DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S = (
+    DELEGATE_INFERENCE_CLIENT_BUDGET_S
+    - DELEGATE_INFERENCE_RESPONSE_HEADROOM_S
+    - DELEGATE_INFERENCE_OVERHEAD_S
+)
 
 
 class DelegateInferenceParams(AgentIdentityMixin):
@@ -917,16 +941,39 @@ class DelegateInferenceParams(AgentIdentityMixin):
         description="Advisory task classification.",
     )
     timeout_s: int = Field(
-        240,
+        DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S,
         ge=5,
         le=420,
         description=(
-            "Server-side await window in seconds for the delegated CLI result. "
-            "Many MCP clients enforce their own per-tool timeout (often ~60s); "
-            "a client timeout returns no execution id, so keep this at or "
-            "below the client's limit when it is known."
+            "Seconds the server waits for the delegated CLI's answer; the "
+            "orchestrator stops the child 30s after that. The default 45 "
+            "fits an MCP client that gives one tool call ~60s, a common "
+            "limit: on timeout you get the structured failure with the "
+            "execution id. Set a larger value only when your client's own "
+            "per-tool timeout exceeds it by ~15s; otherwise the client gives "
+            "up first, sees no execution id, and the child runs on."
         ),
     )
+
+
+def council_host_ids(value: Any) -> Any:
+    """consult's host_ids as a list where text can be read as one.
+
+    REST and use_tool deliver a list typed into a text field as JSON text,
+    which /mcp/ parses itself. A lone host id becomes a one-item list, so the
+    handler refuses it with the valid hosts. /mcp/ builds its argument model
+    from the advertised schema, which has no string branch, so there a lone
+    host id fails as a parameter error before this runs. The handler applies
+    the same reading for direct callers.
+    """
+    if isinstance(value, str):
+        if value.lstrip().startswith("["):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        return [value]
+    return value
 
 
 class ConsultParams(AgentIdentityMixin):
@@ -947,6 +994,20 @@ class ConsultParams(AgentIdentityMixin):
         ),
         json_schema_extra={"brief": "Pin a host; omitted effort follows it. External needs cloud_allowed; no fallback."},
     )
+    # No size bounds here: the handler refuses a wrong size with the valid
+    # host ids and a recovery, which a schema error cannot carry.
+    host_ids: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Council: ask 2 or 3 distinct CLI hosts (claude:host-adapter, "
+            "codex:host-adapter, antigravity:host-adapter) the same brief in "
+            "parallel; each answer comes back separately under members, with "
+            "its own audit record. Needs cloud_allowed; effort is thorough, "
+            "allow_degraded false, and host_id unset. Nothing combines the "
+            "answers. No fallback or same-family exclusion: you choose the hosts."
+        ),
+        json_schema_extra={"brief": "Council of 2-3 CLI hosts; needs cloud_allowed."},
+    )
 
     brief: str = Field(
         ...,
@@ -962,20 +1023,22 @@ class ConsultParams(AgentIdentityMixin):
         ),
     )
     effort: Literal["standard", "thorough"] = Field(
-        # host_id is declared first, so it is validated before this factory.
-        # Keep the schema free of an unconditional default: clients must not
-        # insert standard before we can infer a selected CLI host's lane.
+        # host_id and host_ids are declared first, so they are validated before
+        # this factory. Keep the schema free of an unconditional default:
+        # clients must not insert standard before we can infer a selected CLI
+        # host's lane.
         default_factory=lambda data: (
-            "thorough" if data.get("host_id") in (
+            "thorough" if data.get("host_ids") is not None or data.get("host_id") in (
                 "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter",
             ) else "standard"
         ),
         description=(
-            "Omit to infer from host_id, or use standard when no host is selected. "
+            "Omit to infer from host_id (thorough for host_ids), or use standard "
+            "when no host is selected. "
             "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
             "An explicit value must match the selected host. Neither is a latency SLA."
         ),
-        json_schema_extra={"brief": "Omit: follows host_id, otherwise standard. Explicit effort must match the host."},
+        json_schema_extra={"brief": "Omit: thorough for a CLI host_id or host_ids, else standard. Explicit effort must match."},
     )
     privacy: Literal["local", "cloud_allowed"] = Field(
         "local",
@@ -998,6 +1061,11 @@ class ConsultParams(AgentIdentityMixin):
             "a single diagnostics object with route and inference provenance."
         ),
     )
+
+    @field_validator("host_ids", mode="before")
+    @classmethod
+    def host_ids_from_json_text(cls, value: Any) -> Any:
+        return council_host_ids(value)
 
     @field_validator("brief")
     @classmethod

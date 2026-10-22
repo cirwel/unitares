@@ -6,6 +6,40 @@ The measured speedup is useful evidence for retaining the optimization.
 Full-suite tracer equivalence has not been established by the published CI
 comparison. This note corrects the original #2101 interpretation.
 
+## Four-shard rebalance, 2026-10-20
+
+The alphabetical boundaries are now `a-d`, `e-k`, `l-r`, and `s-z` with
+nested tests and `agents/` in the last shard. All tests, four isolated
+database-backed jobs, sysmon coverage, and the combined 75% floor remain.
+
+Three completed runs motivated the change:
+
+| Run | Old a-e / f-m / n-t / u-z+agents test steps (seconds) |
+| --- | --- |
+| [39395963945](https://github.com/cirwel/unitares/actions/runs/39395963945) | 411 / 337 / 314 / 145 |
+| [39397715551](https://github.com/cirwel/unitares/actions/runs/39397715551) | 486 / 422 / 384 / 144 |
+| [39399058287](https://github.com/cirwel/unitares/actions/runs/39399058287) | 475 / 422 / 451 / 146 |
+
+For each shard log, subtract consecutive timestamped pytest file-progress
+lines and sum those intervals by the file's first letter. Exclude the first
+file in each job, whose preceding interval contains collection and startup.
+Assign nested/agent file intervals to the last group. On the latest run,
+these file-progress intervals total approximately 403 / 359 / 391 / 125
+seconds under the old layout, and 303 / 342 / 328 / 305 under the new one.
+The other two runs also favor these boundaries: their modeled maximum drops
+from 355 to 282 seconds and from 414 to 340 seconds, respectively.
+
+These are scheduling estimates, not measured executions of the new shards:
+log buffering, collection, coverage finalization, runner differences and
+changed test order can affect the result. Compare the subsequent CI test
+steps before claiming an end-to-end saving. Re-cut from fresh timings when
+the distribution drifts; adding runners is not necessary for this rebalance.
+
+`tests/test_ci_test_gate.py` executes the workflow's Bash target selector and
+checks that every test file belongs to exactly one shard. Deliberately
+missing and overlapping selections exercise the guard. This checks the
+actual selector rather than a separate Python copy of its letter ranges.
+
 ## What the CI runs establish
 
 | Run | Actual checkout | Combined statements / missing | Coverage |
@@ -52,6 +86,28 @@ for that subset.
 Unset, empty and explicit `sysmon` select the same coverage run; changing to
 `ctrace` invalidates its cache. Use `--fresh` for an intentional repeat even
 when the selected core and source inputs have not changed.
+
+## Opt-in drills outside the default gate
+
+Some suites skip in the default gate (`./scripts/dev/test-cache.sh` locally,
+the sharded workflow in CI) because they need live services or registered
+state. A default skip should be one of these opt-in drills, not stale unit
+coverage hidden behind an unconditional `pytest.mark.skip`. Each runs only
+when its environment flag is set:
+
+| Area | Default reason | Opt-in |
+| --- | --- | --- |
+| Governance failure-mode drills | Requires running governance/Pi MCP endpoints | `RUN_GOVERNANCE_DRILLS=1 pytest tests/drills/test_failure_modes.py -v` |
+| OpenAI-compatible HTTP endpoints | Requires running REST server and explicit endpoint opt-in | `RUN_OPENAI_ENDPOINT_TESTS=1 pytest tests/test_openai_endpoints.py -v` |
+| Legacy dialectic protocol drill | Requires registered live test agents/session state | `RUN_DIALECTIC_PROTOCOL_TESTS=1 pytest tests/test_dialectic_protocol.py -v` |
+| Wave 3a live BEAM round-trip | Operator-led BEAM/MCP drill | `WAVE_3A_RUN_LIVE_ROUNDTRIP=true pytest tests/integration/test_wave_3a_response_parity.py -k test_health_check_live -v` |
+| Live AGE knowledge-graph singleton | Requires an AGE-enabled `governance_test` database | `UNITARES_TEST_AGE_SINGLETON=1`, described in the next section |
+
+Skip counts move with the suite, so none is recorded here; read the current
+count from a test run. The dated 2026-06-14 triage that first listed these
+drills, with its follow-up candidates, is archived at
+[`archive/test-suite-triage.md`](archive/test-suite-triage.md). A green
+ordinary run says nothing about any drill in this table.
 
 ## Knowledge graph lifetime and the live AGE gap
 

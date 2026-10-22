@@ -2693,7 +2693,12 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         # a failed payload fall through to the `else` branch below and be
         # labelled "thesis recorded". This must stay ABOVE the resolution read
         # so no later branch can reach a failed payload.
-        if payload.get("success") is False:
+        # A payload that itself says thesis_recorded=True (the facilitation
+        # mark was refused after the thesis committed, #2905) is not this case.
+        if (
+            payload.get("success") is False
+            and payload.get("thesis_recorded") is not True
+        ):
             payload["thesis_recorded"] = False
             payload["session_created"] = True
             payload["whose_move"] = (
@@ -2704,7 +2709,32 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             )
             return success_response(payload, arguments=arguments)
         resolution = payload.get("resolution") or {}
-        if payload.get("phase") == "resolved" or resolution:
+        if payload.get("thesis_recorded") is True and payload.get("effect_pending"):
+            # #2905 review: a terminal decision committed while the fallback
+            # ran, but its durable effect is not confirmed applied. Not
+            # "resolved in this call" until someone reconciles it.
+            payload["review_verdict"] = resolution.get("action") or payload.get(
+                "terminal_status"
+            )
+            payload["whose_move"] = (
+                "an operator's — thesis recorded and a terminal decision "
+                "committed, but its effect is not confirmed; reconcile with "
+                "dialectic(action='reconcile_effect', "
+                f"session_id='{session.session_id}')"
+            )
+        elif (
+            payload.get("thesis_recorded") is True
+            and payload.get("terminal_status") == "failed"
+        ):
+            payload["review_verdict"] = (
+                payload.get("action") or resolution.get("action") or "failed"
+            )
+            payload["whose_move"] = (
+                "nobody — thesis recorded; the review ended in a terminal "
+                "failure. Read the recorded reason before starting a "
+                "replacement review"
+            )
+        elif payload.get("phase") == "resolved" or resolution:
             payload["review_verdict"] = resolution.get("action") or "resolved"
             payload["whose_move"] = "nobody — review resolved in this call"
         elif payload.get("reviewer_dispatch"):
@@ -2712,6 +2742,26 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "the reviewer's — an independent reviewer was spawned; poll "
                 f"dialectic(action='get', session_id='{session.session_id}') "
                 "for its antithesis/synthesis"
+            )
+        elif payload.get("state_reload_required"):
+            payload["whose_move"] = (
+                "unknown — thesis recorded, but the session changed before its "
+                "state could be confirmed; reload with "
+                f"dialectic(action='get', session_id='{session.session_id}') "
+                "before another write"
+            )
+        elif payload.get("spawned_reviewer_exited"):
+            payload["whose_move"] = (
+                "unknown — thesis recorded; the reviewer this request spawned "
+                "exited, and the reviewer now holding the slot may be that one; "
+                f"check dialectic(action='get', session_id='{session.session_id}') "
+                "and reassign or request facilitation if it does not move"
+            )
+        elif payload.get("session_advanced"):
+            payload["whose_move"] = (
+                "the reviewer's — thesis recorded and a reviewer has already "
+                "taken the session; poll "
+                f"dialectic(action='get', session_id='{session.session_id}')"
             )
         else:
             payload["whose_move"] = (
@@ -3280,7 +3330,7 @@ def _synthetic_reviewer_provenance(llm_result: Dict[str, Any]) -> Dict[str, Any]
     return _reviewer_provenance_stamp(
         {
             "backend": "local_ollama",
-            "model_used": default_local_model(),
+            "model_used": default_local_model() or None,
             "source": llm_result.get("source"),
             "structured": llm_result.get("_structured"),
             "note": llm_result.get("_note"),
@@ -3975,6 +4025,232 @@ async def _run_synthetic_review(
     }
 
 
+@dataclass(frozen=True)
+class _TerminalReadback:
+    """Terminal-decision and durable-effect state read back from a session row."""
+
+    terminal: bool
+    terminal_status: Optional[str]
+    effect_state: Optional[str]
+    effect_pending: bool
+    resolution: Dict[str, Any]
+    hard_limit_blocked: bool
+
+
+def _read_terminal_readback(
+    persisted: Optional[Dict[str, Any]],
+) -> _TerminalReadback:
+    """Classify a re-read row (``load_session_as_dict``) for a caller that did
+    not itself observe the terminal write: a late synthetic commit after a
+    timeout, or another reviewer that finished while the fallback ran."""
+    row = persisted or {}
+    phase = str(row.get("phase") or "").lower()
+    status = str(row.get("status") or "").lower()
+    terminal_states = {"resolved", "failed"}
+    terminal_status = (
+        status if status in terminal_states
+        else phase if phase in terminal_states
+        else None
+    )
+    effect_state = row.get("resolution_effect_state")
+    resolution = row.get("resolution")
+    if not isinstance(resolution, dict):
+        resolution = {}
+    return _TerminalReadback(
+        terminal=terminal_status is not None,
+        terminal_status=terminal_status,
+        effect_state=effect_state,
+        effect_pending=(
+            effect_state in {"pending", "applying", "unknown_partial"}
+            or (terminal_status == "resolved" and effect_state != "applied")
+        ),
+        resolution=resolution,
+        hard_limit_blocked=(
+            terminal_status == "failed" and resolution.get("action") == "block"
+        ),
+    )
+
+
+def _terminal_readback_next_step(
+    readback: _TerminalReadback, session_id: str
+) -> Optional[str]:
+    """Guidance for a terminal readback, or None when the row is not terminal."""
+    if readback.terminal_status == "resolved":
+        return (
+            "The terminal decision committed. An operator should "
+            "inspect its durable effect with "
+            "dialectic(action='reconcile_effect', "
+            f"session_id='{session_id}')."
+        )
+    if readback.terminal_status == "failed":
+        return (
+            "The terminal failure committed. Review the durable "
+            "failure reason before starting any replacement review."
+        )
+    return None
+
+
+def _apply_terminal_readback(
+    result: Dict[str, Any],
+    readback: _TerminalReadback,
+    *,
+    default_failure_reason: str,
+) -> None:
+    """Copy terminal and effect state into a response without overstating it.
+
+    A terminal row whose durable runtime effect is not confirmed applied is not
+    a successful operation yet, and neither is a terminal failure.
+    """
+    result["terminal_committed"] = True if readback.terminal else None
+    result["terminal_status"] = readback.terminal_status
+    result["effect_pending"] = readback.effect_pending
+    result["resolution_effect_state"] = readback.effect_state
+    if readback.effect_pending:
+        result["success"] = False
+    if readback.terminal_status:
+        result["phase"] = readback.terminal_status
+    if readback.terminal_status == "failed":
+        result["success"] = False
+        result["action"] = readback.resolution.get("action", "failed")
+        result["reason"] = readback.resolution.get(
+            "reason", default_failure_reason
+        )
+        result["hard_limit_blocked"] = readback.hard_limit_blocked
+        result["hard_limit_violation"] = (
+            readback.resolution.get("reason")
+            if readback.hard_limit_blocked
+            else None
+        )
+
+
+def _thesis_session_advanced(
+    session: DialecticSession, persisted: Optional[Dict[str, Any]]
+) -> bool:
+    """Whether the durable row moved past the post-thesis state held in memory.
+
+    Any of a claimed reviewer slot, a different phase or a later transcript
+    revision means another writer, usually a reviewer that claimed the slot,
+    acted after the thesis was recorded.
+    """
+    if not persisted:
+        return False
+    persisted_phase = str(persisted.get("phase") or "").lower()
+    return bool(
+        persisted.get("reviewer") is not None
+        or (persisted_phase and persisted_phase != session.phase.value)
+        or int(persisted.get("transcript_revision") or 0)
+        > int(getattr(session, "transcript_revision", 0))
+    )
+
+
+async def _thesis_recorded_after_facilitation_refused(
+    session: DialecticSession,
+    result: Dict[str, Any],
+    *,
+    spawned_reviewer_exited: bool = False,
+) -> Sequence[TextContent]:
+    """Report a recorded thesis whose facilitation request was refused.
+
+    The facilitation mark is a compare-and-set against the post-thesis snapshot.
+    It is refused when the session moved on while the automated review paths
+    ran: an orchestrated reviewer that claimed the slot and then exited inside
+    the fast-crash wait, or one spawned by a dispatch call that timed out on
+    its side (#2905). The thesis append committed before any of that, so the
+    refusal is never evidence that the thesis is missing. Re-read the row and
+    report what is there instead of failing the whole call.
+    """
+    session_id = session.session_id
+    try:
+        persisted = await load_session_as_dict(session_id)
+    except Exception as exc:
+        logger.warning(
+            "Could not reload %s after a refused facilitation mark: %s",
+            session_id[:16],
+            type(exc).__name__,
+        )
+        persisted = None
+
+    result["thesis_recorded"] = True
+    result["awaiting_facilitation"] = bool(
+        (persisted or {}).get("awaiting_facilitation", False)
+    )
+    poll = f"dialectic(action='get', session_id='{session_id}')"
+    if _thesis_session_advanced(session, persisted):
+        persisted_phase = str(persisted.get("phase") or "").lower()
+        persisted_reviewer = persisted.get("reviewer")
+        result["success"] = True
+        result["session_advanced"] = True
+        result["reviewer_agent_id"] = persisted_reviewer
+        result["phase"] = persisted_phase
+        if persisted.get("resolution"):
+            result["resolution"] = persisted["resolution"]
+        holder = (
+            f"reviewer {persisted_reviewer} holds the slot"
+            if persisted_reviewer
+            else "another writer changed it"
+        )
+        result["note"] = (
+            "The thesis is recorded. The session moved on while the automated "
+            f"fallback ran ({holder}; phase is now '{persisted_phase}'), so the "
+            "fallback stood down."
+        )
+        # The other writer may already have committed a terminal decision. A
+        # terminal failure, or a decision whose durable effect is not confirmed
+        # applied, is reported exactly as the synthetic timeout path reports
+        # it: unsuccessful, with reconciliation guidance. thesis_recorded stays.
+        readback = _read_terminal_readback(persisted)
+        _apply_terminal_readback(
+            result,
+            readback,
+            default_failure_reason=(
+                "The session's reviewer committed a terminal failure."
+            ),
+        )
+        result["next_step"] = (
+            _terminal_readback_next_step(readback, session_id)
+            or f"Follow the review with {poll}."
+        )
+        if spawned_reviewer_exited and persisted_reviewer and not readback.terminal:
+            # The reviewer this call spawned exited inside the fast-crash wait.
+            # Nothing here links that execution to the identity now holding
+            # the slot, so the holder may be the exited reviewer or a live one
+            # that claimed it since. Say so rather than naming the holder as
+            # the next to move or marking the session on a guess; a stalled
+            # synthesis is raised for facilitation by the timeout sweep.
+            result["spawned_reviewer_exited"] = True
+            result["note"] = (
+                "The thesis is recorded. Reviewer "
+                f"{persisted_reviewer} holds the slot (phase is now "
+                f"'{persisted_phase}'), but the reviewer this call spawned "
+                "exited inside the fast-crash wait, and the holder may be that "
+                "reviewer. If the session does not move, reassign the reviewer "
+                "or ask for facilitation."
+            )
+            result["next_step"] = (
+                f"Check the session with {poll}; if the reviewer does not "
+                "act, use dialectic(action='reassign') or request facilitation."
+            )
+        logger.info(
+            "[DIALECTIC] session %s advanced during the thesis fallback "
+            "(phase=%s); reporting the recorded thesis",
+            session_id[:16],
+            persisted_phase,
+        )
+    else:
+        # The refusal is real but the re-read cannot say who moved the row (or
+        # the re-read failed). The slot may still be open with no facilitation
+        # request on record, so this is not a clean success either.
+        result["success"] = False
+        result["state_reload_required"] = True
+        result["note"] = (
+            "The thesis is recorded, but the session changed before the request "
+            "for facilitation could be recorded. Reload the session before "
+            "another write."
+        )
+        result["next_step"] = f"Reload with {poll}."
+    return success_response(result)
+
+
 # register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 @mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=False)
@@ -4142,6 +4418,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # reviewer. ANY dispatch failure falls through to the in-process path
             # below (the orchestrator being down never breaks dialectic).
             review_path_failure_reason = "no_automated_reviewer"
+            # Set when the spawned reviewer exits inside the fast-crash wait;
+            # the in-process fallback below overwrites the failure reason.
+            orchestrated_reviewer_exited = False
             if session.reviewer_agent_id is None:
                 from .orchestrator_dispatch import (
                     orchestrated_review_enabled,
@@ -4242,17 +4521,13 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 "agent_id": execution_id_spawned,
                                 "via": "agent-orchestrator",
                             }
-                            try:
-                                await _set_awaiting_facilitation(session, False)
-                            except Exception:
-                                result["success"] = False
-                                result["state_reload_required"] = True
-                                result["note"] = (
-                                    "The independent reviewer was dispatched, but "
-                                    "the facilitation flag could not be reconciled. "
-                                    "Reload the session before another write."
-                                )
-                                return success_response(result)
+                            # No facilitation reconcile here. The thesis append
+                            # above already cleared any stale flag, so a
+                            # compare-and-set against the pre-dispatch snapshot
+                            # could not change state, only fail: it was refused
+                            # whenever the session moved on during the wait,
+                            # usually because the spawned reviewer had already
+                            # claimed the slot (dialectic canary, 2026-10-18).
                             await _emit_dialectic_event(
                                 "dialectic_reviewer_dispatched",
                                 session,
@@ -4269,6 +4544,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                             return success_response(result)
                         # reviewer crashed fast → fall through to in-process
                         review_path_failure_reason = "reviewer_crashed_fast"
+                        orchestrated_reviewer_exited = True
                     # dispatch failed → fall through to in-process synthetic reviewer
 
             # End-to-end completion: when no independent live reviewer has claimed
@@ -4337,40 +4613,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     persisted_phase = str(
                         (persisted or {}).get("phase") or ""
                     ).lower()
-                    persisted_status = str(
-                        (persisted or {}).get("status") or ""
-                    ).lower()
                     persisted_reviewer = (persisted or {}).get("reviewer")
-                    effect_state = (persisted or {}).get(
-                        "resolution_effect_state"
-                    )
-                    terminal = (
-                        persisted_phase in {"resolved", "failed"}
-                        or persisted_status in {"resolved", "failed"}
-                    )
-                    terminal_status = (
-                        persisted_status
-                        if persisted_status in {"resolved", "failed"}
-                        else persisted_phase
-                        if persisted_phase in {"resolved", "failed"}
-                        else None
-                    )
-                    persisted_resolution = (persisted or {}).get("resolution")
-                    if not isinstance(persisted_resolution, dict):
-                        persisted_resolution = {}
-                    hard_limit_blocked = (
-                        terminal_status == "failed"
-                        and persisted_resolution.get("action") == "block"
-                    )
-                    readback_effect_pending = (
-                        effect_state in {
-                            "pending", "applying", "unknown_partial"
-                        }
-                        or (
-                            terminal_status == "resolved"
-                            and effect_state != "applied"
-                        )
-                    )
+                    readback = _read_terminal_readback(persisted)
+                    terminal = readback.terminal
                     facilitation_written = False
                     if (
                         persisted
@@ -4414,18 +4659,11 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 reason=synthetic_abort_reason,
                             )
 
-                    if terminal_status == "resolved":
-                        next_step = (
-                            "The terminal decision committed. An operator should "
-                            "inspect its durable effect with "
-                            "dialectic(action='reconcile_effect', "
-                            f"session_id='{session_id}')."
-                        )
-                    elif terminal_status == "failed":
-                        next_step = (
-                            "The terminal failure committed. Review the durable "
-                            "failure reason before starting any replacement review."
-                        )
+                    terminal_next_step = _terminal_readback_next_step(
+                        readback, session_id
+                    )
+                    if terminal_next_step:
+                        next_step = terminal_next_step
                     elif facilitation_written:
                         next_step = (
                             "The timed-out review is marked for facilitation. "
@@ -4441,37 +4679,22 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     result.update({
                         "synthetic_review": True,
                         "reviewer_agent_id": persisted_reviewer,
-                        "terminal_committed": True if terminal else None,
-                        "terminal_status": terminal_status,
-                        "effect_pending": readback_effect_pending,
-                        "resolution_effect_state": effect_state,
                         "awaiting_facilitation": facilitation_written,
                         "terminal_state_unknown": not terminal
                         and not facilitation_written,
                         "next_step": next_step,
                     })
-                    if result["effect_pending"] or result["terminal_state_unknown"]:
-                        # A terminal row without its durable runtime effect is
-                        # not a successful operation yet.  Neither is a lost
-                        # readback/CAS that proves no durable state at all.
+                    if result["terminal_state_unknown"]:
+                        # A lost readback/CAS proves no durable state at all,
+                        # so it is not a successful operation either.
                         result["success"] = False
-                    if terminal_status:
-                        result["phase"] = terminal_status
-                    if terminal_status == "failed":
-                        result["success"] = False
-                        result["action"] = persisted_resolution.get(
-                            "action", "failed"
-                        )
-                        result["reason"] = persisted_resolution.get(
-                            "reason",
-                            "The synthetic review committed a terminal failure.",
-                        )
-                        result["hard_limit_blocked"] = hard_limit_blocked
-                        result["hard_limit_violation"] = (
-                            persisted_resolution.get("reason")
-                            if hard_limit_blocked
-                            else None
-                        )
+                    _apply_terminal_readback(
+                        result,
+                        readback,
+                        default_failure_reason=(
+                            "The synthetic review committed a terminal failure."
+                        ),
+                    )
                     return success_response(result)
 
                 # The coroutine may have persisted its reviewer claim before a
@@ -4573,9 +4796,21 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # declined, crashed, timed out, or was disabled. This is the first
             # point at which a human-facilitation request is truthful.
             if session.reviewer_agent_id is None:
-                await _set_awaiting_facilitation(
-                    session, True, reason=review_path_failure_reason
-                )
+                try:
+                    await _set_awaiting_facilitation(
+                        session, True, reason=review_path_failure_reason
+                    )
+                except _TranscriptAppendRefused:
+                    # The local snapshot says nobody claimed the slot, but the
+                    # durable row moved on: typically an orchestrated reviewer
+                    # that claimed it and then exited inside the fast-crash
+                    # wait, or one spawned by a dispatch call that timed out
+                    # after the spawn (#2905). The thesis is recorded either way.
+                    return await _thesis_recorded_after_facilitation_refused(
+                        session,
+                        result,
+                        spawned_reviewer_exited=orchestrated_reviewer_exited,
+                    )
                 result["awaiting_facilitation"] = True
                 result["note"] = (
                     "The thesis is recorded, but no automated reviewer could take "

@@ -25,8 +25,10 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
-# Every PR push runs ./scripts/dev/review.sh and joins its result, so the
-# working agent can act on findings before leaving. SHIP_NO_REVIEW=1 explicitly
+# Every PR push runs ./scripts/dev/review.sh and joins its result. Choose the
+# provider with UNITARES_REVIEWER=claude (or codex/antigravity) for this delivery.
+# Without a choice it reads existing evidence but starts no new review.
+# SHIP_NO_REVIEW=1 explicitly
 # defers review. Ordinary changes may proceed with an unreviewed note;
 # sensitive paths still require their review coverage before readiness.
 #
@@ -37,6 +39,13 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
+
+# A pushed PR already has durable GitHub evidence. Resume before loading local
+# secrets, staging, acquiring a ship lease, or creating another commit/branch.
+if [[ "${1:-}" == "--resume" ]]; then
+    shift
+    exec python3 scripts/dev/_ship_resume.py "$@"
+fi
 
 # Source operator secrets (LEASE_PLANE_BEARER_TOKEN, etc.) so the lease-advisory
 # helper below can authenticate. The lease plane fails closed without a token,
@@ -160,6 +169,7 @@ usage() {
 usage: ship.sh [--stage-all] [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
        ship.sh --classify
        ship.sh [--stage-all] --plan "commit message"
+       ship.sh --resume [--reviewer PROVIDER] [--wait] [--plan]
 
 Modes:
   auto         draft PR for everything (the default convention); runtime/detached
@@ -172,6 +182,10 @@ Modes:
   --direct    commit and push the current branch; refuses detached HEAD
   --stage-all stage the full current worktree before classifying/committing.
                With --plan, previews that route without mutating the index.
+  --resume    resume an owned, clean, pushed docs/tests/tooling PR from live evidence;
+               join review, check CI, run prepr, and declare readiness/queue it.
+               Requires UNITARES_AGENT_UUID matching the PR ownership footer.
+               --wait joins CI; --plan only inspects local/remote state.
 USAGE
 }
 
@@ -488,13 +502,14 @@ case "$DELIVERY" in
                     exit 3
                 fi
                 if [[ "$review_rc" == "2" ]]; then
-                    echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
+                    echo "[ship] WARNING: delivered but UNREVIEWED — see the review result above."
+                    echo "[ship] choose with UNITARES_REVIEWER for shipping, or review.sh --reviewer PROVIDER."
                     echo "[ship] note this in the PR body; ordinary changes may proceed after validation."
                     echo "[ship] request the shared host with review-requested; sensitive paths still require review coverage."
                     exit 2
                 fi
                 echo "[ship] branch pushed and PR opened; review needs author follow-up."
-                echo "[ship] address the result above, then run ./scripts/dev/review.sh before marking ready."
+                echo "[ship] address the result above, then run ./scripts/dev/review.sh --reviewer PROVIDER before marking ready."
                 exit 1
             fi
         else

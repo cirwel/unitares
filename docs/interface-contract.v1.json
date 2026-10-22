@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.49.0",
+  "version": "1.55.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,13 +20,13 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "84bbf383db3bb7be3e7c5a3e31a0967a29649c12e7a7b7c928e8feb4b63c8747",
+  "surface_sha256": "9018fe8018456aa4315205d88c675c43d05c57919bb9f8a0a553f0b2b676e92b",
   "capabilities": [
     {
       "name": "start_session",
       "implementation": "onboard",
       "kind": "workflow_alias",
-      "input_schema_sha256": "fdbe2f08ffa840cdee07d780bf25992aaa3f04f29050e2658f37adc9e948e83c",
+      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
       "transport_names": {
         "mcp_streamable_http": "start_session",
         "rest_v1_tools": "start_session",
@@ -290,7 +290,7 @@
       "name": "search_knowledge_graph",
       "implementation": "search_knowledge_graph",
       "kind": "canonical_tool",
-      "input_schema_sha256": "9850fc7be7e1814b3d282aebc7dd9074ae930398a6f54cf3427ccbf0778f2fbb",
+      "input_schema_sha256": "0d7e4c110bcc44d3d17bfdb46c8e8fb59c190f04d25567d0e630bde7a4d757cd",
       "transport_names": {
         "mcp_streamable_http": "search_knowledge_graph",
         "rest_v1_tools": "search_knowledge_graph",
@@ -334,7 +334,7 @@
       "name": "consult",
       "implementation": "consult",
       "kind": "canonical_tool",
-      "input_schema_sha256": "b985258864367c2070ec0e3ff4ec409bedf4a89041882d4f6beab40cb6b8a0c9",
+      "input_schema_sha256": "8ffef62011f8fe29940fe75d2efbf5c11838117d1722ca25936950f764893567",
       "transport_names": {
         "mcp_streamable_http": "consult",
         "rest_v1_tools": "consult",
@@ -345,7 +345,7 @@
       "name": "call_model",
       "implementation": "call_model",
       "kind": "canonical_tool",
-      "input_schema_sha256": "30760279f172944a25ddbe207d0c3a69f2846b361db6b35b6db0f18f9d5af86c",
+      "input_schema_sha256": "b900d9d4ccb2b6122d12ba16489b589c15bbfe96bb54d174167caf2e2bd2c699",
       "transport_names": {
         "mcp_streamable_http": "call_model",
         "rest_v1_tools": "call_model",
@@ -356,7 +356,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "ef9dcf3896b578362ae05942e67b40d4a5338af77d2b02131337fd684ee88937",
+      "input_schema_sha256": "8e1fba027073c0e00a677258dc198187a3ae59b5ec3745877dd928884d3652e0",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",
@@ -367,7 +367,7 @@
       "name": "onboard",
       "implementation": "onboard",
       "kind": "canonical_tool",
-      "input_schema_sha256": "fdbe2f08ffa840cdee07d780bf25992aaa3f04f29050e2658f37adc9e948e83c",
+      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
       "transport_names": {
         "mcp_streamable_http": "onboard",
         "rest_v1_tools": "onboard",

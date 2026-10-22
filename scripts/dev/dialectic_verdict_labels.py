@@ -50,7 +50,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LABELS_PATH = (
     REPO_ROOT
     / "docs"
-    / "operations"
+    / "evaluations"
+    / "dialectic-reviewer"
     / "dialectic-reviewer-verdict-labels-2026-08-09.json"
 )
 

@@ -38,9 +38,18 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
 )
 
+# Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
+# tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
+# to ~/Library/Logs/unitares-sentinel.log unless redirected before import.
+os.environ.setdefault(
+    "SENTINEL_LOG_FILE",
+    str(Path(tempfile.gettempdir()) / "unitares-sentinel-test.log"),
+)
+
 # The resident roster is now deployment config (UNITARES_RESIDENTS), empty by
 # default for user-agnostic installs. The test suite validates the resident
-# machinery against the canonical fleet, so configure it here BEFORE any test
+# machinery against historical reference-resident fixtures, so configure it
+# BEFORE any test
 # imports src.grounding.class_indicator (KNOWN_RESIDENT_LABELS is resolved at
 # module-import time from this env var). Tests that need a different roster set
 # the env var and call class_indicator.load_resident_labels() directly.
@@ -51,13 +60,13 @@ os.environ.setdefault(
 
 # The resident-progress registry is likewise deployment config, loaded from a
 # JSON manifest (UNITARES_RESIDENT_PROGRESS_MANIFEST), empty by default. Point
-# the suite at the canonical fleet manifest BEFORE any test imports
+# the suite at its isolated reference-resident fixture BEFORE any test imports
 # src.resident_progress.registry (RESIDENT_PROGRESS_REGISTRY is built at
 # module-import time). Tests that vary it call load_resident_progress_registry()
 # directly or patch the registry.
 os.environ.setdefault(
     "UNITARES_RESIDENT_PROGRESS_MANIFEST",
-    str(Path(__file__).resolve().parent.parent / "config" / "resident_progress.example.json"),
+    str(Path(__file__).resolve().parent / "resident_progress" / "reference_manifest.json"),
 )
 
 # Agent-state lock backend. Production defaults to the PostgreSQL advisory lock
@@ -918,7 +927,7 @@ def temp_db(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def live_postgres_backend():
+async def live_postgres_backend(monkeypatch):
     """
     Provide a real PostgresBackend connected to governance_test.
 
@@ -939,11 +948,13 @@ async def live_postgres_backend():
 
     await ensure_test_database_schema()
 
-    import os
-    os.environ["DB_POSTGRES_URL"] = TEST_DB_URL
-    os.environ["DB_POSTGRES_MIN_CONN"] = "1"
-    os.environ["DB_POSTGRES_MAX_CONN"] = "3"
-    os.environ["DB_AGE_GRAPH"] = "governance_graph"
+    # monkeypatch, not os.environ: these outlived the test before, and a
+    # later session-scoped server fixture copied the pool bounds into its
+    # subprocess (tests/env_leak_guard.py).
+    monkeypatch.setenv("DB_POSTGRES_URL", TEST_DB_URL)
+    monkeypatch.setenv("DB_POSTGRES_MIN_CONN", "1")
+    monkeypatch.setenv("DB_POSTGRES_MAX_CONN", "3")
+    monkeypatch.setenv("DB_AGE_GRAPH", "governance_graph")
 
     from src.db.postgres_backend import PostgresBackend
 

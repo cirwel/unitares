@@ -79,7 +79,11 @@ def _make_mock_client(
 # =============================================================================
 
 class TestRunGroundskeeper:
-    """Tests for the groundskeeper method."""
+    """Tests for the groundskeeper method, with its opt-in summary note enabled."""
+
+    @pytest.fixture(autouse=True)
+    def _notes_on(self, monkeypatch):
+        monkeypatch.setenv("VIGIL_GROUNDSKEEPER_NOTES", "1")
 
     @pytest.mark.asyncio
     async def test_groundskeeper_calls_audit(self):

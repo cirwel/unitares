@@ -139,6 +139,7 @@ When a tool is called, the dispatch entrypoint runs it through middleware steps 
 the `middleware/` package. The pipeline runner first normalizes MCP `kwargs` wrappers so
 identity and continuity inputs are visible before any session resolution or alias logic runs:
 
+<!-- mirrors: src/mcp_handlers/middleware/__init__.py::PRE_DISPATCH_STEPS,POST_VALIDATION_STEPS,POST_EXECUTION_STEPS -->
 ```
 unwrap_kwargs → strip_untrusted_dispatch_metadata → resolve_identity → verify_trajectory → resolve_alias → inject_identity → validate_params
     ↓ (handler lookup)
@@ -165,7 +166,7 @@ renders it). As of 2026-08-16:
 |-------------------|---------|---------|
 | `knowledge` | 12 | `knowledge(action='search')` |
 | `observe` | 9 | `observe(action='anomalies')` |
-| `admin` | 9 | `admin(action='health')` |
+| `admin` | 9 | `admin(action='server_info')` |
 | `dialectic` | 8 | `dialectic(action='list')` |
 | `agent` | 6 | `agent(action='list')` |
 | `calibration` | 4 | `calibration(action='check')` |
@@ -556,7 +557,7 @@ coverage does not establish argument or response compatibility:
 
 ### Reviewed candidates and open work
 
-`KNOWN_DEAD_ENDS` is empty. The four candidates inherited from #2119 are
+`KNOWN_DEAD_ENDS` <!-- mirrors: scripts/diagnostics/hint_target_advertisement.py::KNOWN_DEAD_ENDS --> is empty. The four candidates inherited from #2119 are
 resolved by the complete catalog, and the candidates the expanded inventory
 then found in structured names and previously unscanned fields are resolved
 too: most hints now name the advertised router and action, and the few that

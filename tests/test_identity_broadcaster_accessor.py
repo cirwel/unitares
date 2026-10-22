@@ -105,8 +105,8 @@ async def test_hijack_event_reaches_the_shared_broadcaster(tracked):
 async def test_resident_fork_event_reaches_the_shared_broadcaster(tracked):
     """An unlineaged collision on a persistent label, emitted through the
     unpatched persistence accessor."""
-    existing_uuid = "907e3195-c649-49db-b753-1edc1a105f33"
-    new_uuid = "7bf970d4-5713-4184-a6f8-58e798275f3f"
+    existing_uuid = "8a930180-9ef9-59c7-9267-fd7dd936dd58"
+    new_uuid = "0e6d210c-5828-5513-aafa-b325829beba3"
 
     mock_db = AsyncMock()
     mock_db.find_agent_by_label = AsyncMock(return_value=existing_uuid)

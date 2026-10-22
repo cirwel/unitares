@@ -197,10 +197,9 @@ defmodule UnitaresSentinel.FleetState do
   end
 
   defp verdict(event) do
-    case map_value(event, "decision") do
-      %{} = decision -> string_value(decision, "action")
-      _ -> ""
-    end
+    event
+    |> map_value("decision")
+    |> string_value("action")
   end
 
   defp number_value(map, key, default) do

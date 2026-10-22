@@ -6,8 +6,8 @@ variable, read by both the governance server and the agent SDK.
 
 ## Why this exists
 
-UNITARES ships with reference resident agents (Vigil, Sentinel, Watcher,
-Chronicler, plus the embodied Lumen on the canonical deployment). Earlier these
+Optional reference implementations live under `agents/`; installing the server
+does not select or start a resident fleet. Earlier a deployment's resident
 names were hardcoded in two places — `src/grounding/class_indicator.py`
 (`KNOWN_RESIDENT_LABELS`) and `agents/sdk/.../​_substrate.py`
 (`KNOWN_RESIDENT_NAMES`). That baked one operator's fleet into the framework,
@@ -26,9 +26,10 @@ Comma-separated labels, matching the `name` each resident onboards with
 (capitalized per the identity rules):
 
 ```
-UNITARES_RESIDENTS=Vigil,Sentinel,Watcher,Chronicler
+UNITARES_RESIDENTS=ExampleWriter,ExampleMonitor
 ```
 
+These are synthetic names. Replace them with the agents you actually deploy.
 Unset or empty ⇒ no named residents.
 
 **Order matters.** The roster is an ordered list, and `/v1/residents` presents
@@ -43,19 +44,15 @@ roster ordered to an empty list while the response still reported
 The value **must be consistent** across the processes that classify or emit for
 residents:
 
-- **Governance server** (`com.unitares.governance-mcp.plist`) — classifies
-  every agent, so it needs the full roster.
-- **Each resident agent** (`com.unitares.{vigil,sentinel,sentinel-beam,chronicler,vigil-hygiene}.plist`)
-  — the SDK gates substrate-state emission on the resident's own name being in
-  the roster.
+- **Governance server** — classifies every agent, so it needs the full roster.
+- **Each resident agent** — the SDK gates substrate-state emission on the
+  resident's own name being in the roster.
 
-The checked-in governance-server plist
-(`scripts/ops/com.unitares.governance-mcp.plist`) ships an **empty** roster;
-the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Chronicler`) appears there
-only as a comment example. The five per-resident `*.plist.template` files
-listed above do not: each ships that canonical fleet as its value. A
-deployment sets these to its own roster, or empties the resident templates to
-match the server's empty value for a residentless install.
+Set the variable in each process's environment or service-manager configuration.
+The server default is **empty**. Copy only the optional service templates you
+intend to use, and configure their roster, paths, and schedule for that
+deployment before enabling them. Keep the resulting configuration in your
+deployment repository; no reference resident or maintainer fleet is required.
 
 ### Non-obvious consequence: privileged tags
 
@@ -67,12 +64,27 @@ exemption. The grant happens in `src/grounding/onboard_classifier.py`, which
 stamps `RESIDENT_DEFAULT_TAGS` at mint time when the onboarding `name` matches
 the roster **exactly**.
 
-So a resident onboarded under a name that is not in the roster comes up
-untagged, and the orphan sweep archives it — silently, later, after anything
-anchored to it has started attributing to a ghost. If you are adding a resident,
-add it to the roster and restart the governance server *before* it first
-onboards. `scripts/ops/provision_doctor_identity.py` is the worked example: it
-refuses to write its anchor when the read-back shows the tags were not granted.
+A resident onboarded under a name that is not in the roster instead receives
+the `ephemeral` class tag and lacks those resident protections. That class tag
+does not authorize archival. If you are adding a resident, add it to the roster
+and restart the governance server *before* it first onboards.
+`scripts/ops/provision_doctor_identity.py` is the worked example: it refuses to
+write its anchor when the read-back shows the tags were not granted.
+
+### Optional automated agent archival
+
+To opt a named agent into the low-activity archival candidate check, explicitly
+add `archive-eligible` to its metadata tags, preserving its other tags. Remove
+that tag to withdraw the opt-in. Neither its display name nor the automatically
+assigned `ephemeral` / `engaged_ephemeral` class tags opt it in; class promotion
+does not add or remove the archival marker.
+
+The existing limits still apply: at least one and at most five updates, and at
+least six hours since last activity by default. Zero-update agents are excluded;
+the sweep still protects `persistent`, `protected`, and `pioneer` agents and
+verified, established, or trusted tiers. The separate stale-unlabeled checks
+remain unchanged. Automatic mutation is off unless the deployment explicitly
+sets `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=1`; a dry run never archives.
 
 ### Anchoring a resident that was minted without the SDK
 
@@ -166,7 +178,7 @@ credential, not merely a lookup hint.
   knob you want.
 - **`UNITARES_RESIDENT_SILENCE_SECONDS`** — per-label dashboard silence
   thresholds, `label=seconds` comma-separated
-  (e.g. `vigil=2400,sentinel=900,lumen=600,watcher=86400,chronicler=108000`).
+  (e.g. `examplewriter=2400,examplemonitor=900`).
   Empty by default. This is a **fallback that should shrink to nothing**: the
   generic path is a `cadence.*` tag on the agent, which sets the threshold with
   no label lookup at all. Tag the agent rather than adding an entry here. Both
@@ -182,9 +194,13 @@ string literal in any of its four scanned roots — `src/`, `governance_core/`,
 Two things bound that reach. In code, a literal is flagged only when it *is* a
 name, so a route such as `/v1/sentinel/backlog` passes. And it carries a
 `NOT_IDENTITIES` list of files whose matches are homonyms rather than agent
-names — "steward" as a role in `VALID_ROLES`, and the legacy `data/watcher`
-path component in `src/watcher_state_reader.py` — which are skipped outright
-rather than flagged.
+names, which are skipped outright rather than flagged:
+
+<!-- mirrors: scripts/dev/check_fleet_identity_leak.py::NOT_IDENTITIES -->
+- `src/evaluation/resident_validation/model.py`: "steward" as a role in
+  `VALID_ROLES`, unrelated to the agent of that name.
+- `src/watcher_state_reader.py`: the legacy `data/watcher` path component,
+  read only to migrate off the pre-#595 location.
 
 Text the server delivers verbatim is held to a stricter rule, because it has
 no comments and every word reaches a reader: a resident name anywhere in it, as
@@ -199,18 +215,19 @@ Python that becomes tool input schemas: a `Field`'s `description=` and
 `json_schema_extra` `"brief"`, a schema model's docstring, and the alias
 overrides in `src/alias_schema.py`. `NOT_IDENTITIES` does not apply to that
 text. Served files that already named residents when the rule arrived were
-listed in `SERVED_KNOWN_COUPLINGS`, each with the exact names it held, and
-reported on every run (currently none: the last entry,
-`src/tool_descriptions.json`, had its example mentions replaced with generic
-ones on 2026-09-27), so no served file is exempt from these rules. Schema text
-has no such entries.
+reported on every run rather than failed, each with the exact names it held, in
+`SERVED_KNOWN_COUPLINGS` <!-- mirrors: scripts/dev/check_fleet_identity_leak.py::SERVED_KNOWN_COUPLINGS -->
+(currently none: the last entry, `src/tool_descriptions.json`, had its example
+mentions replaced with generic ones on 2026-09-27), so no served file is exempt
+from these rules. Schema text has no such entries.
 
 Provenance in a **comment** is deliberately not flagged — a note explaining that
 a threshold has its value because of what a particular resident did on a
 particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
-The guard also prints the couplings that already exist and have not been fixed
+The guard also prints the couplings that already exist and have not been fixed,
+its `KNOWN_COUPLINGS` <!-- mirrors: scripts/dev/check_fleet_identity_leak.py::KNOWN_COUPLINGS -->
 (currently none: the last one, the resident-specific Vigil route module, moved
 to `agents/vigil/routes.py` on 2026-09-27) on every run, passing or failing —
 these are reported but do not fail the build. It does not silence them: a guard
@@ -305,14 +322,16 @@ resident: a metric source, window, threshold, and heartbeat cadence. It is
 loaded from a JSON manifest pointed to by `UNITARES_RESIDENT_PROGRESS_MANIFEST`,
 **empty by default** (no residents probed).
 
-The canonical fleet ships as `config/resident_progress.example.json`. Point the
-env var at it (or a deployment-specific copy):
+`config/resident_progress.example.json` illustrates the schema with synthetic
+residents. Copy it into your deployment configuration and replace the names,
+sources, windows, thresholds, and cadences to match the agents you operate.
+Point the environment variable at that copy:
 
 ```
-UNITARES_RESIDENT_PROGRESS_MANIFEST=/path/to/unitares/config/resident_progress.example.json
+UNITARES_RESIDENT_PROGRESS_MANIFEST=/path/to/deployment/resident-progress.json
 ```
 
-Set this on the **governance server** plist (the probe runs there). Each entry's
+Set this in the **governance server's** environment (the probe runs there). Each entry's
 `source` must match either a first-party source built in `src/background_tasks.py`
 (`kg_writes`, `watcher_findings`, `eisv_sync_rows`, `metrics_series`,
 `sentinel_pulse`, `agent_checkins`) or a third-party source discovered via entry
@@ -396,7 +415,7 @@ Three rules, all enforced at load:
   be the same string.** A mismatch is rejected rather than silently re-keyed —
   that is how a source ends up installed but referenced by nothing.
 - **First-party names win.** A plugin claiming `kg_writes` is rejected; it could
-  otherwise redefine what "Vigil made progress" means with identical-looking
+  otherwise redefine what a resident's progress means with identical-looking
   snapshot rows.
 - **A broken plugin is skipped, not fatal.** It is logged at WARNING as
   `[PROGRESS_FLAT] source plugin rejected: …` and the probe starts without it.
@@ -404,13 +423,13 @@ Three rules, all enforced at load:
   presents as a resident that never progresses.
 
 Install the distribution into the **governance server's** environment (the probe
-runs in-process there, issuing SQL against the governance DB). No plist edit is
+runs in-process there, issuing SQL against the governance DB). No service-config edit is
 needed; installing is sufficient. Set
 `UNITARES_RESIDENT_PROGRESS_PLUGINS=0` to disable discovery entirely.
 
 This differs from `VIGIL_CHECK_PLUGINS` below, which uses colon-separated module
-paths and lets a bad plugin raise. Vigil runs `--once` on a timer so a crash
-retries next cycle; the progress probe is a long-lived task that is not
+paths and lets a bad plugin raise. A scheduled `agents/vigil/agent.py --once` invocation can
+retry next cycle; the progress probe is a long-lived task that is not
 restartable, so it contains failures and reports them instead.
 
 `UNITARES_RESIDENTS` (names/calibration) and this manifest (progress probing)
@@ -421,15 +440,15 @@ listing the same residents in each.
 
 Vigil's health checks are pluggable (`VIGIL_CHECK_PLUGINS`, see
 `agents/vigil/checks/registry.py`). The built-in checks are governance health,
-resident-tag hygiene, plugin-hook liveness, and stalled draft PRs (`StalledDraftPR`); the **Lumen/anima health check
-is an external plugin**, not shipped in this repo — a residentless install
-simply doesn't register it (Vigil reports Lumen as `not configured` and
-healthy, so nothing breaks).
+resident-tag hygiene, plugin-hook liveness, and stalled draft PRs (`StalledDraftPR`).
+Deployment-specific service checks belong in external plugins and are enabled
+only by the deployment that needs them. Installing the server alone does not
+run Vigil or its checks.
 
 Any health check a deployment registers — its own `redis`, `gateway`, etc. —
 now gets full per-service bookkeeping (`{svc}_healthy` / `_detail` /
 `_up_cycles` / `_down_streak`) and outage/recovery/sustained-outage change
-notes, the same treatment Lumen gets. `detect_changes` in `agents/vigil/agent.py`
+notes. `detect_changes` in `agents/vigil/agent.py`
 discovers services from the `{svc}_healthy` keys rather than listing them; the
 one service key it names is in its exclusion set `CONDITION_SERVICE_KEYS`
 (`github`, the stalled-draft-PR check's key). That flag records a condition

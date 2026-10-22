@@ -8,7 +8,9 @@ Uses PostgreSQL + AGE for native graph queries.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
+import logging
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
@@ -69,6 +71,38 @@ def _log_embedding_skipped(discovery_id: str, op: str) -> None:
         "run will not rewrite; pass --rebuild to re-embed every row). "
         "Further skips log at debug."
     )
+
+
+# A failure while embeddings ARE available is a fault, not the install's
+# default state, so each one logs at WARNING with the discovery id (#2293).
+# These used to log at debug, which hid a row left without a vector (store) or
+# with a stale one (refresh) exactly as the unavailable branch once did.
+_BACKFILL_MISSING_HINT = (
+    "semantic search will not find it until it is re-embedded "
+    "(python scripts/migration/reembed_corpus.py fills rows with no vector)"
+)
+_BACKFILL_STALE_HINT = (
+    "its previous vector, if any, stays in place "
+    "(python scripts/migration/reembed_corpus.py --rebuild rewrites it)"
+)
+
+
+def _log_store_task_failure(discovery_id: str, task: "asyncio.Task") -> None:
+    """Done-callback for a background _store_embedding task.
+
+    _store_embedding logs its own insert failures; this catches anything raised
+    before the insert (resolving the table or model). A cancelled task, at
+    shutdown for instance, is not a failure and must not raise from
+    task.exception().
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(
+            f"Embedding store failed for {discovery_id}: {exc}; "
+            f"{_BACKFILL_MISSING_HINT}"
+        )
 
 
 class KnowledgeGraphAGE:
@@ -722,13 +756,21 @@ class KnowledgeGraphAGE:
                     emb = await embeddings.embed(text)
                     if emb is not None:
                         task = asyncio.create_task(self._store_embedding(discovery.id, emb))
-                        task.add_done_callback(lambda t: logger.debug(f"_store_embedding failed: {t.exception()}") if t.exception() else None)
+                        task.add_done_callback(
+                            functools.partial(_log_store_task_failure, discovery.id)
+                        )
                     else:
-                        logger.debug(f"Embedding returned None for {discovery.id}, skipping storage")
+                        logger.warning(
+                            f"Embedding returned None for {discovery.id}; stored "
+                            f"without a vector, so {_BACKFILL_MISSING_HINT}"
+                        )
                 else:
                     _log_embedding_skipped(discovery.id, "store")
             except Exception as e:
-                logger.debug(f"Failed to create embedding for {discovery.id}: {e}")
+                logger.warning(
+                    f"Failed to create embedding for {discovery.id}: {e}; "
+                    f"{_BACKFILL_MISSING_HINT}"
+                )
 
         logger.debug(f"Added discovery {discovery.id} to AGE graph")
 
@@ -1112,6 +1154,7 @@ class KnowledgeGraphAGE:
         exclude_cold: bool = False,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> List[DiscoveryNode]:
         """
         Query discoveries with filters, newest first.
@@ -1126,6 +1169,9 @@ class KnowledgeGraphAGE:
             exclude_archived: Drop archived rows when no explicit status filter
             exclude_cold: Drop cold-storage rows when no explicit status filter
             created_after / created_before: exclusive bounds on created_at
+            raise_on_error: re-raise a failed SQL read instead of returning no
+                rows, for a caller that must not read a failure as "none" (the
+                postgres backend always raises)
         """
         db = await self._get_db()
 
@@ -1152,7 +1198,7 @@ class KnowledgeGraphAGE:
                 # window", which is how a timed-out write's recovery settles
                 # that it saved nothing (error_helpers). A failed read must
                 # not give that answer; the postgres backend raises here too.
-                raise_on_error=bool(created_after or created_before),
+                raise_on_error=raise_on_error or bool(created_after or created_before),
             )
 
         # Check if graph is available
@@ -1173,6 +1219,7 @@ class KnowledgeGraphAGE:
                 limit=limit,
                 exclude_archived=exclude_archived,
                 exclude_cold=exclude_cold,
+                raise_on_error=raise_on_error,
             )
 
         # Build query
@@ -1258,6 +1305,7 @@ class KnowledgeGraphAGE:
             limit=limit,
             exclude_archived=exclude_archived,
             exclude_cold=exclude_cold,
+            raise_on_error=raise_on_error,
         )
 
     async def _query_sql_fallback(
@@ -2267,8 +2315,21 @@ class KnowledgeGraphAGE:
 
             return [(row['discovery_id'], float(row['similarity'])) for row in rows]
 
-    async def _store_embedding(self, discovery_id: str, embedding: List[float]) -> None:
-        """Store embedding in the pgvector table for the active model."""
+    async def _store_embedding(
+        self,
+        discovery_id: str,
+        embedding: List[float],
+        failure_level: int = logging.WARNING,
+        failure_hint: str = _BACKFILL_MISSING_HINT,
+    ) -> None:
+        """Store embedding in the pgvector table for the active model.
+
+        An insert failure logs at ``failure_level``: WARNING for a write or
+        refresh (the row is left without a current vector), DEBUG for the
+        search path's opportunistic caching, which can touch dozens of rows per
+        query and would otherwise repeat one fault dozens of times.
+        ``failure_hint`` names the backfill that repairs it.
+        """
         from src.embeddings import get_active_table_name, get_embeddings_service
         db = await self._get_db()
         table = get_active_table_name()
@@ -2292,7 +2353,11 @@ class KnowledgeGraphAGE:
                     discovery_id, embedding_str, model_name,
                 )
         except Exception as e:
-            logger.debug(f"Failed to store embedding for {discovery_id}: {e}")
+            logger.log(
+                failure_level,
+                f"Failed to store embedding for {discovery_id} in {table}: {e}; "
+                f"{failure_hint}",
+            )
 
     def _schedule_embedding_refresh(self, discovery_id: str) -> None:
         """Refresh the embedding in a background task once an update has committed.
@@ -2304,8 +2369,8 @@ class KnowledgeGraphAGE:
         loaded, and the load finished after the reply, so its model was thrown
         away. The embedding is best-effort derived data: the update's result
         never depended on it. _refresh_embedding and _store_embedding catch
-        their own failures and log them at debug, as they did when the update
-        awaited the refresh.
+        their own failures and log them (at WARNING with the discovery id since
+        #2293), as they did when the update awaited the refresh.
 
         One pass runs at a time per discovery. A pass reads the row before it
         encodes, so two overlapping passes could store the older text last and
@@ -2363,10 +2428,19 @@ class KnowledgeGraphAGE:
             text = f"{discovery.summary}\n{discovery.details[:EMBED_DETAILS_WINDOW] if discovery.details else ''}"
             emb = await embeddings.embed(text)
             if emb is None:
+                logger.warning(
+                    f"Embedding refresh for {discovery_id} returned None; "
+                    f"{_BACKFILL_STALE_HINT}"
+                )
                 return
-            await self._store_embedding(discovery_id, emb)
+            await self._store_embedding(
+                discovery_id, emb, failure_hint=_BACKFILL_STALE_HINT
+            )
         except Exception as e:
-            logger.debug(f"Failed to refresh embedding for {discovery_id}: {e}")
+            logger.warning(
+                f"Failed to refresh embedding for {discovery_id}: {e}; "
+                f"{_BACKFILL_STALE_HINT}"
+            )
 
     async def get_connectivity_score(self, discovery_id: str) -> float:
         """
@@ -2788,8 +2862,15 @@ class KnowledgeGraphAGE:
         # Store embeddings for future pgvector use (async, best-effort)
         if use_pgvector:
             for discovery, emb in valid_candidates:
-                task = asyncio.create_task(self._store_embedding(discovery.id, emb))
-                task.add_done_callback(lambda t: logger.debug(f"_store_embedding failed: {t.exception()}") if t.exception() else None)
+                task = asyncio.create_task(
+                    self._store_embedding(
+                        discovery.id, emb, failure_level=logging.DEBUG
+                    )
+                )
+                task.add_done_callback(
+                    lambda t: logger.debug(f"_store_embedding failed: {t.exception()}")
+                    if not t.cancelled() and t.exception() else None
+                )
 
         # Rank by similarity
         scored = await embeddings.rank_by_similarity(

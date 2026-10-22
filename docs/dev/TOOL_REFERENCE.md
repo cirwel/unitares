@@ -94,7 +94,7 @@ Name/model fields are cosmetic/contextual. The returned uuid is your identity an
 - **Timeout:** 10s
 - **Related:** `onboard`, `process_agent_update`, `agent(action='list')`
 
-Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= skips that gate and can instead infer a co-located binding — pass client_session_id to get your own back. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
+Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= — with no session or ownership signal and no explicit session header — is also gated to a fresh mint — pass client_session_id to read or rename your own session. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
 
 Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. identity(client_session_id='...', name='...') sets a cosmetic display label.
 
@@ -750,16 +750,16 @@ EXAMPLE RESPONSE:
 - **Timeout:** 30s
 - **Related:** `agent`, `agent(action='list')`
 
-Classify agents fleet-wide as orphan or ephemeral-session archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, non-ephemeral labels, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
+Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
 
-TARGETS (classified as candidates):
+TARGETS (classified as candidates; agents with more than max_updates updates, default 3, are skipped first):
 - Unlabeled agents with 1 update after 3 hours
 - Unlabeled UUID agents with 2+ updates after 6 hours
-- Ephemeral session-labeled agents after 6 hours
+- Agents tagged archive-eligible, labeled or not, with at most 5 updates, after 6 hours
 
 NEVER AUTO-ARCHIVED:
 - Agents with 0 updates (still initializing - never checked in)
-- Agents with labels/display names
+- Labeled agents without the archive-eligible tag
 - Agents with "pioneer" / "persistent" / "protected" tags
 - Agents with verified/established/trusted trust_tier
 
@@ -922,7 +922,7 @@ RELATED TOOLS:
 - knowledge(action='get'): Get agent's knowledge
 
 VALID ENUM VALUES:
-- discovery_type: "bug_found" | "insight" | "pattern" | "improvement" | "question" | "answer" | "note" | "exploration"
+- discovery_type: the values listed in the discovery_type parameter description (describe_tool)
 - severity: "low" | "medium" | "high" | "critical"
 - status: "open" | "resolved" | "archived" | "disputed"
 
@@ -930,7 +930,7 @@ VALID ENUM VALUES:
 EXAMPLE REQUEST:
 {
   "tags": ["security", "bug"],
-  "discovery_type": "bug_found",  # Valid: "bug_found" | "insight" | "pattern" | "improvement" | "question" | "answer" | "note" | "exploration"
+  "discovery_type": "bug_found",  # Valid values: see the discovery_type parameter description
   "severity": "high",  # Valid: "low" | "medium" | "high" | "critical"
   "limit": 10
 }
@@ -1272,7 +1272,7 @@ Read accepts_host_id_from, not available, to learn which tool will take it. An u
 
 Ask a model for advice, no review record; effort='thorough' needs cloud privacy and an operator extension; on-record: request_review.
 
-Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable, unless host_id explicitly pins an existing host. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless automatic routing uses allow_degraded=true, which returns a local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. host_id pins a host and infers omitted effort (standard for Ollama/HF, thorough for CLI); an explicit effort must match. External hosts require cloud_allowed and pinned calls require allow_degraded=false. No host fallback or same-family exclusion applies to explicit selection. Use delegate_inference for model or timeout control on a CLI host. consult takes no model or sampling control by design; the deprecated call_model, removed no earlier than 2026-12-02, is the last tool with them for an HTTP host. Full diagnostics explain tokens_used: backend aggregate usage, not answer length or comparable billed cost.
+Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable, unless host_id explicitly pins an existing host. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless automatic routing uses allow_degraded=true, which returns a local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. host_id pins a host and infers omitted effort (standard for Ollama/HF, thorough for CLI); an explicit effort must match. External hosts require cloud_allowed and pinned calls require allow_degraded=false. No host fallback or same-family exclusion applies to explicit selection. host_ids asks a council of 2 or 3 CLI hosts the same brief in parallel: each answers separately under members, with its own record, and nothing combines the answers. Use delegate_inference for model or timeout control on a CLI host. consult takes no model or sampling control by design; the deprecated call_model, removed no earlier than 2026-12-02, is the last tool with them for an HTTP host. Full diagnostics explain tokens_used: backend aggregate usage, not answer length or comparable billed cost.
 
 ### `call_model`
 
@@ -1296,7 +1296,7 @@ Still callable until its removal, no earlier than 2026-12-02. Its model, tempera
 
 Hand a bounded task to a strong-model CLI host (operator extension, off by default); for a local completion use consult.
 
-Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s, below the 240s default); past that the client sees a bare transport timeout with no id, so set timeout_s under the client's limit. consult at effort='thorough' takes this same lane with optional host_id selection. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing; the orchestrator stops it 30s after timeout_s regardless. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s): the 45s default timeout_s fits that. A larger timeout_s (up to 420) is only for a client that waits longer; otherwise the client sees a bare transport timeout with no id. consult at effort='thorough' takes this same lane with optional host_id selection. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 
@@ -1464,7 +1464,7 @@ System administration, health checks, and diagnostics
 - **Timeout:** 5s; not applied to a REST call by this exact name (see Timeouts above)
 - **Related:** `admin(action='server_info')`, `admin(action='telemetry')`
 
-Reads the last cached snapshot of this governance server's own subsystems. Nothing is probed at call time, so the answer lags the ~30s refresh, is flagged stale past 90s, and before the first probe lands the call returns an error instead of a snapshot. Needs no identity binding. For the host checkout and MCP config files use get_workspace_health; for one agent's governance state use get_governance_metrics.
+Reads the last cached snapshot of this governance server's own subsystems. Nothing is probed at call time, so the answer lags the ~30s refresh, is flagged stale past 90s, and before the first probe lands the call returns an error instead of a snapshot. Needs no identity binding. For installed Python dependencies and server-module availability use get_workspace_health; for one agent's governance state use get_governance_metrics.
 
 USE CASES:
 - Monitor system health and component status
@@ -1509,13 +1509,13 @@ SEE ALSO:
 - get_governance_metrics - Agent-specific metrics (EISV, risk, coherence)
 - admin(action='server_info') - Detailed server process information (PID, uptime, version)
 - admin(action='connections') - MCP connection status (transport-level)
-- get_workspace_health - Comprehensive workspace health (file system, dependencies)
+- get_workspace_health - Installation dependency and server-module checks
 
 ALTERNATIVES:
 - Want agent metrics? → Use get_governance_metrics() (agent-level, not system)
 - Want server details? → Use admin(action='server_info') (process info, PID, uptime)
 - Want connection status? → Use admin(action='connections') (MCP transport health)
-- Want workspace health? → Use get_workspace_health() (file system, dependencies)
+- Want workspace health? → Use get_workspace_health() (installation dependencies and server-module availability)
 
 RELATED TOOLS:
 - admin(action='server_info'): Get detailed server process information
@@ -1606,7 +1606,7 @@ Returns the server-authored governance skill bundle, read fresh from disk on eve
 - **Timeout:** 20s for the router; some actions stop sooner (table below)
 - **Related:** `health_check`, `observe`, `config`
 
-Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; admin(action='reset_monitor') drops just the in-memory monitor, which rebuilds from persisted state.
+Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health checks installed Python dependencies and server-module availability on the server, never the caller's machine; it does not discover desktop clients or require a development checkout. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; admin(action='reset_monitor') drops just the in-memory monitor, which rebuilds from persisted state.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
@@ -1631,93 +1631,31 @@ Workspace health and file validation
 - **Timeout:** 20s
 - **Related:** `health_check`, `admin(action='server_info')`
 
-Grades the checkout and MCP client config files on the machine the server runs on, reporting missing expected docs, scripts and config examples plus the server names found in the Cursor and Claude Desktop configs. It never sees the caller's own machine, mcp_servers_responding is an import probe rather than a live ping, and the security block is fixed by-design constants, not a scan. For the running server's subsystems use health_check.
+Checks this server installation's Python dependencies and server-module availability. The default call works in headless, container, and packaged installs: it does not discover desktop clients, read personal configuration files, or require development-checkout documents. It never sees the caller's own machine and does not probe live server responsiveness. Use health_check for cached running-subsystem health.
 
-USE CASES:
-- Get baseline workspace state before starting work
-- Validate MCP server configuration
-- Check documentation coherence
-- Verify workspace setup and dependencies
-- Onboarding new agents (run first to avoid confusion)
-
-~~~text
 RETURNS:
-{
-  "success": true,
-  "mcp_status": {
-    "cursor_servers": ["string"],
-    "claude_desktop_servers": ["string"],
-    "active_count": int,
-    "notes": "string"
-  },
-  "documentation_coherence": {
-    "server_counts_match": boolean,
-    "file_references_valid": boolean,
-    "paths_current": boolean,
-    "total_issues": int,
-    "details": []
-  },
-  "security": {
-    "exposed_secrets": boolean,
-    "api_keys_secured": boolean,
-    "notes": "string"
-  },
-  "workspace_status": {
-    "scripts_executable": boolean,
-    "dependencies_installed": boolean,
-    "mcp_servers_responding": boolean
-  },
-  "last_validated": "ISO timestamp",
-  "health": "healthy" | "moderate" | "critical",
-  "recommendation": "string"
-}
-~~~
+- health: healthy, moderate, unhealthy, or error; grades only the checks actually performed
+- workspace_status: dependencies_installed, missing_dependencies, server_module_available
+- mcp_status: status=not_requested and clients={} on a normal tool call
+- documentation_coherence: status=not_requested on a normal tool call
+- security: status=not_assessed; exposed_secrets and api_keys_secured are null
+- last_validated and recommendation
 
-RELATED TOOLS:
-- health_check: Quick system health overview (governance system)
-- admin(action='server_info'): Get detailed server process information
+COMPATIBILITY:
+The existing response blocks remain. Legacy scripts_executable, mcp_servers_responding, server_counts_match, paths_current, and unrequested file_references_valid are null because those facts were not checked. mcp_status retains cursor_servers and claude_desktop_servers as empty compatibility lists by default. active_count is the legacy alias of configured_count; neither is a running-server count.
+
+OPTIONAL LOCAL DIAGNOSTICS:
+Python embedding callers can explicitly supply client_config_paths (arbitrary client labels mapped to JSON files containing mcpServers) or required_files plus workspace_root. Results appear in mcp_status.clients and documentation_coherence, including missing or invalid files. These Python-only options are not remote tool parameters.
 
 ~~~text
 EXAMPLE REQUEST:
 {}
 ~~~
 
-~~~text
-EXAMPLE RESPONSE:
-{
-  "success": true,
-  "mcp_status": {
-    "cursor_servers": ["GitHub", "date-context", "unitares-governance"],
-    "claude_desktop_servers": ["date-context"],
-    "active_count": 3,
-    "notes": "Count based on config files. Actual runtime status may vary."
-  },
-  "documentation_coherence": {
-    "server_counts_match": true,
-    "file_references_valid": true,
-    "paths_current": true,
-    "total_issues": 0,
-    "details": []
-  },
-  "security": {
-    "exposed_secrets": false,
-    "api_keys_secured": true,
-    "notes": "Plain text API keys by design (honor system). This is intentional, not a security flaw."
-  },
-  "workspace_status": {
-    "scripts_executable": true,
-    "dependencies_installed": true,
-    "mcp_servers_responding": true
-  },
-  "last_validated": "2025-11-25T23:45:00Z",
-  "health": "healthy",
-  "recommendation": "All systems operational. Workspace ready for development."
-}
-~~~
-
-DEPENDENCIES:
-- No dependencies - safe to call anytime
-- Recommended: Run this tool first when onboarding to a new workspace
+RELATED TOOLS:
+- health_check: Cached server subsystem health
+- admin(action='server_info'): Server process and version details
+- admin(action='connections'): MCP transport connections
 
 ## Dialectic
 

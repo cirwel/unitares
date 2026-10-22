@@ -67,7 +67,7 @@ async def test_run_query_maps_cli_flags_to_serving_handler(monkeypatch):
         observed["arguments"] = dict(arguments)
         observed["env"] = {
             "UNITARES_ENABLE_HYBRID": os.environ.get("UNITARES_ENABLE_HYBRID"),
-            "UNITARES_ENABLE_GRAPH_EXPANSION": os.environ.get("UNITARES_ENABLE_GRAPH_EXPANSION"),
+            "UNITARES_ENABLE_RELATED_EXPANSION": os.environ.get("UNITARES_ENABLE_RELATED_EXPANSION"),
             "UNITARES_ENABLE_RERANKER": os.environ.get("UNITARES_ENABLE_RERANKER"),
         }
         return _text_payload({
@@ -93,7 +93,7 @@ async def test_run_query_maps_cli_flags_to_serving_handler(monkeypatch):
     }
     assert observed["env"] == {
         "UNITARES_ENABLE_HYBRID": "1",
-        "UNITARES_ENABLE_GRAPH_EXPANSION": "1",
+        "UNITARES_ENABLE_RELATED_EXPANSION": "1",
         "UNITARES_ENABLE_RERANKER": "1",
     }
     assert ranked == ["disc-a"]

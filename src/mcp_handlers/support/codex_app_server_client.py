@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, TextIO
+from typing import Any, Mapping, Sequence, TextIO
 
 
 RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
@@ -121,18 +121,36 @@ def new_profile_name() -> str:
     return PERMISSION_PROFILE_PREFIX + secrets.token_hex(8)
 
 
-def lane_config_overrides(cli: str, profile: str | None = None) -> list[str]:
+def lane_config_overrides(
+    cli: str,
+    profile: str | None = None,
+    *,
+    extra_read: Sequence[str] = (),
+    extra_deny: Sequence[str] = (),
+    set_env: Mapping[str, str] | None = None,
+) -> list[str]:
     """The ``-c key=value`` overrides every codex lane runs with, in order.
 
     Pass each as its own ``-c`` argument. They replace ``--sandbox read-only``,
-    which would select the legacy sandbox and ignore the profile. The list has
-    the same length for every ``cli``, so a shell template can name each slot.
-    ``profile`` defaults to a fresh name (``new_profile_name``)."""
+    which would select the legacy sandbox and ignore the profile. With the
+    defaults, the list has the same length for every ``cli``, so a shell
+    template can name each slot. ``profile`` defaults to a fresh name
+    (``new_profile_name``).
+
+    A lane that must read more (the PR review lane reads a checkout) passes
+    ``extra_read`` paths and ``extra_deny`` globs, applied after them, and
+    ``set_env`` for commands: each name is also added to the environment
+    allow-list, which would otherwise drop it."""
     profile = profile or new_profile_name()
     entries = {":root": "deny", ":minimal": "read"}
     for root in codex_readable_roots(cli):
         entries[root] = "read"
+    for path in extra_read:
+        entries[path] = "read"
+    for pattern in extra_deny:
+        entries[pattern] = "deny"
     table = ", ".join(f"{json.dumps(k)}={json.dumps(v)}" for k, v in entries.items())
+    env = dict(set_env or {})
     return [
         f'default_permissions="{profile}"',
         f"permissions.{profile}.filesystem={{{table}}}",
@@ -141,7 +159,8 @@ def lane_config_overrides(cli: str, profile: str | None = None) -> list[str]:
         # what bounds the agent's environment (an ``inherit`` alone left a
         # configured ``set`` variable reaching commands; verified 2026-10-15).
         'shell_environment_policy.inherit="core"',
-        f"shell_environment_policy.include_only={json.dumps(list(_COMMAND_ENV_NAMES))}",
+        f"shell_environment_policy.include_only={json.dumps([*_COMMAND_ENV_NAMES, *env])}",
+        *(f"shell_environment_policy.set.{name}={json.dumps(value)}" for name, value in env.items()),
         *(f"features.{name}=false" for name in _DISABLED_FEATURES),
     ]
 

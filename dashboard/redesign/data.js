@@ -441,6 +441,28 @@
       });
     },
 
+    // Who built on whose findings (/v1/knowledge/flow, AGE graph). A graph with
+    // no cross-agent links is live and empty; `graphAvailable: false` means the
+    // backend has no graph at all, which the view says differently. A failed
+    // graph probe is a 503 and degrades to "unavailable", never to no-graph.
+    async knowledgeFlow(limit) {
+      const n = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.round(limit))) : 25;
+      return withFallback(async () => {
+        const j = await authFetch("/v1/knowledge/flow?limit=" + n);
+        if (!j || !j.success || !Array.isArray(j.flows)) return null;
+        return {
+          graphAvailable: j.graph_available !== false,
+          flows: j.flows.map((f) => ({
+            builder: f.builder, source: f.source, links: f.links,
+            builderLabel: f.builder_label || null, sourceLabel: f.source_label || null,
+          })),
+        };
+      }, () => {
+        const k = S().knowledgeFlow || {};
+        return { graphAvailable: k.graphAvailable !== false, flows: k.flows || [] };
+      });
+    },
+
     async dialectic() {
       return withFallback(async () => {
         const r = await callTool("dialectic", { action: "list", limit: 50 });

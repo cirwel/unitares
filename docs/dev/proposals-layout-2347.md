@@ -75,7 +75,7 @@ The companion-repository scan inspected committed trees of the governance
 plugin, public site, four paper repositories, and the reproduction repository.
 Their exact revisions are in the JSON. The digital-proprioception paper names
 the outcome-grounding stop rule; its old locator is retained. The two preexisting
-Wave 1 and Wave 3a compatibility locators also remain. Council review added the
+Wave 1 and Wave 3a compatibility locators also remain. Independent review added the
 accountable-testbeds paper and verified its public
 [Zenodo deposit](https://zenodo.org/records/21930162): the deposited manuscript's
 reference [29] cites the original v0 metrics-preregistration path, and the
@@ -106,8 +106,8 @@ folder-wide exception or historical prose rewrite is introduced.
 
 ## Reader check and remaining scope
 
-A fresh Claude CLI reader was requested, but returned its weekly-limit message
-without reading the files. The fallback was a local `gemma4:latest` consultation
+A fresh Claude CLI reader was requested but was unavailable and did not read
+the files. The fallback was a local `gemma4:latest` consultation
 given the two guide texts, with no filesystem or browser access. Its first
 route-finding response sent current research through the history path. That
 finding led to an explicit current-research row in `docs/README.md` and the
@@ -128,9 +128,8 @@ The model returned relative paths and expressed uncertainty about their roots.
 Link resolution is checked separately by the deterministic guards. This is
 advisory evidence from supplied text, **not** a traversed-link usability test,
 governed review, independent PR approval, or measured human-reader improvement.
-The requested Claude route was unavailable because of its weekly limit.
 
-The subsequent independent council used three fresh Codex contexts for
+The subsequent independent review used three fresh Codex contexts for
 provenance, tooling, and navigation; the author did not serve as a reviewer.
 Before reading the migration report or diff, the navigation reviewer followed
 the repository links from `README.md` through all five categories and into

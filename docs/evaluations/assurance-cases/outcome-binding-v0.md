@@ -6,7 +6,7 @@ fix to #2247.
 **Frozen revision:** `master` at `2be3322b5f8ea90a7e00d3fc51b31fe50659d7f1`.
 Every path, test name and default below refers to that revision.
 **Origin:** first assurance case recommended in
-[`docs/ontology/frontier-brief-2026-09-24.md`](../../ontology/frontier-brief-2026-09-24.md)
+[`docs/ontology/archive/frontier-brief-2026-09-24.md`](../../ontology/archive/frontier-brief-2026-09-24.md)
 §2. The operator delegated the choice on 2026-09-25 (see that note's *Operator
 disposition*).
 **Form:** narrow, pre-stated claim with evidence, as in OpenAI's 2026-09-22
@@ -112,7 +112,7 @@ layer, not this case.
 
 All tests below run in CI (`.github/workflows/tests.yml`).
 
-- The real-Postgres suite runs in the `tests-u-z-and-agents` shard, which
+- The real-Postgres suite runs in the `tests-s-z-and-agents` shard, which
   includes `tests/*/`, against a `pgvector/pgvector:pg17` service.
 - The same suite **skips itself when no test database is reachable**, which is
   the usual case locally. An assessor must confirm from the CI logs that it ran

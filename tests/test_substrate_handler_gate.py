@@ -39,7 +39,7 @@ from src.substrate.verification import (
 # =============================================================================
 
 
-def _make_claim(agent_id: str = "f92dcea8-4786-412a-a0eb-362c273382f5") -> SubstrateClaim:
+def _make_claim(agent_id: str = "02e168be-4264-527b-9643-9c737dd309e4") -> SubstrateClaim:
     return SubstrateClaim(
         agent_id=agent_id,
         expected_launchd_label="com.unitares.sentinel",
