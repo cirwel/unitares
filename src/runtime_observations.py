@@ -24,8 +24,14 @@ from typing import Any
 
 
 RUNTIME_EVENT_PREFIX = "runtime_observation."
-VALID_KINDS = {"activity_rollup", "heartbeat"}
-RUNTIME_EVENT_TYPES = tuple(RUNTIME_EVENT_PREFIX + kind for kind in sorted(VALID_KINDS))
+# Kinds the activity read model summarizes. A context compaction is a host
+# lifecycle event, not activity: it is recorded on the same identity-bound
+# path but read by ``src/identity/compaction_outcomes.py``, never here.
+ACTIVITY_KINDS = ("activity_rollup", "heartbeat")
+COMPACTION_KIND = "context_compaction"
+VALID_KINDS = {*ACTIVITY_KINDS, COMPACTION_KIND}
+RUNTIME_EVENT_TYPES = tuple(RUNTIME_EVENT_PREFIX + kind for kind in ACTIVITY_KINDS)
+COMPACTION_EVENT_TYPE = RUNTIME_EVENT_PREFIX + COMPACTION_KIND
 RUNTIME_RECENT_SECONDS = 3600.0
 EXECUTION_MODES = {"interactive", "automation", "ephemeral", "unknown"}
 EXECUTION_MODE_SOURCES = {
@@ -727,11 +733,10 @@ def _normalize(
         ),
         "plugin_version": str(payload.get("plugin_version") or "")[:64],
         "epistemic_class": "substrate_observation",
-        "measurement_scope": (
-            "hook_parent_process_liveness"
-            if kind == "heartbeat"
-            else "completed_tool_event_receipts"
-        ),
+        "measurement_scope": {
+            "heartbeat": "hook_parent_process_liveness",
+            COMPACTION_KIND: "host_reported_context_compaction",
+        }.get(kind, "completed_tool_event_receipts"),
         "host_process_scope": "hook_parent" if kind == "heartbeat" else None,
         "session_activity_evidence": False,
         "agent_runtime_evidence": False,
@@ -744,6 +749,10 @@ def _normalize(
                 "heartbeat requires 'host_process_alive': true"
             )
         normalized["host_process_alive"] = True
+    elif kind == COMPACTION_KIND:
+        # The host replaced this session's context with a summary and kept
+        # running. That is not tool activity and must not extend the session.
+        normalized["tool_delta"] = 0
     else:
         normalized["session_activity_evidence"] = normalized["tool_delta"] > 0
 

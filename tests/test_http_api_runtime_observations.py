@@ -127,6 +127,37 @@ def test_activity_rollup_has_completed_tool_scope(client, recorder):
     assert rows[0][0]["details"]["agent_runtime_evidence"] is False
 
 
+def test_context_compaction_is_recorded_without_activity(client, recorder):
+    rows, db = recorder
+    payload = _payload("context_compaction")
+    payload["host_family"] = "claude"
+
+    response = client.post("/v1/runtime/observe", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["eisv_written"] is False
+    # Even a payload carrying tool counts is not activity for a compaction.
+    assert response.json()["session_activity_refreshed"] is False
+    assert db.touched == []
+    entry = rows[0][0]
+    assert entry["event_type"] == "runtime_observation.context_compaction"
+    assert entry["details"]["measurement_scope"] == "host_reported_context_compaction"
+    assert entry["details"]["host_family"] == "claude"
+    assert entry["details"]["tool_delta"] == 0
+    assert entry["details"]["session_activity_evidence"] is False
+    assert entry["details"]["host_process_scope"] is None
+
+
+def test_context_compaction_stays_out_of_the_activity_read_model():
+    from src.runtime_observations import COMPACTION_EVENT_TYPE, RUNTIME_EVENT_TYPES
+
+    assert COMPACTION_EVENT_TYPE not in RUNTIME_EVENT_TYPES
+    assert set(RUNTIME_EVENT_TYPES) == {
+        "runtime_observation.activity_rollup",
+        "runtime_observation.heartbeat",
+    }
+
+
 def test_runtime_model_is_versioned_and_sensitive_values_are_not_persisted(
     client, recorder
 ):
