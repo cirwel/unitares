@@ -30,6 +30,9 @@ try:
 except Exception:
     sys.exit(1)
 for k in sys.argv[1].split("."):
+    if isinstance(v, list) and k.isdigit() and int(k) < len(v):
+        v = v[int(k)]
+        continue
     if not isinstance(v, dict) or k not in v:
         sys.exit(1)
     v = v[k]
@@ -84,6 +87,27 @@ echo "<string>/dev/checkout/prog.py</string>" > "$P"
   && bad "mismatched plist refuses when allow-env unset" || ok "mismatched plist refuses when allow-env unset"
 ( set -euo pipefail; export MY_ALLOW=1; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" --allow-env MY_ALLOW ) >/dev/null 2>&1 \
   && ok "mismatched plist passes with allow-env=1" || bad "mismatched plist passes with allow-env=1"
+L="$SB/launch.sh"
+write_launcher_plist() {
+  cat > "$P" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key><array><string>$1</string><string>--port</string></array>
+</dict></plist>
+EOF
+}
+printf '#!/bin/sh\nexec python3 /deploy/needle/prog.py "$@"\n' > "$L"
+write_launcher_plist "$L"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && ok "launcher that names the target passes" || bad "launcher that names the target passes"
+printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"\n' > "$L"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "launcher that names another path refuses" || ok "launcher that names another path refuses"
+write_launcher_plist "$SB/no-such-launcher"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "missing launcher refuses" || ok "missing launcher refuses"
+echo "<string>/dev/checkout/prog.py</string>" > "$P"
 preflight_out="$(
   set +e
   ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" \

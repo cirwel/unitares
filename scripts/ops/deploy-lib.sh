@@ -118,6 +118,18 @@ deploy_lib_require_plist_target() {
 
   grep -q "$needle" "$plist" && return 0
 
+  # A launcher script as ProgramArguments[0] (for example one that reads a
+  # token from the Keychain and then execs the server) moves the target path
+  # out of the plist. Follow exactly one level: the launcher must be a regular
+  # file whose own text names the target. Anything else still refuses.
+  local launcher=""
+  if command -v plutil >/dev/null 2>&1; then
+    launcher="$(plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)"
+  fi
+  if [[ -n "$launcher" && -f "$launcher" ]] && grep -q "$needle" "$launcher"; then
+    return 0
+  fi
+
   echo "[$tag] REFUSING: the LaunchAgent plist does not point at the deploy worktree ($needle)." >&2
   echo "[$tag] kickstart would restart the OLD code and this script would lie about success." >&2
   echo "[$tag] One-time migration (interactive login shell — a RELOAD, kickstart won't re-read the plist):" >&2
