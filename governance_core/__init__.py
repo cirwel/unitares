@@ -12,8 +12,8 @@ ODE-derived coherence, regime, and history inputs still feed the behavioral
 sensor, and ODE state remains involved in warmup fallback and structural
 pause gates.
 
-See docs/EISV_COMPUTATION.md for the current formulas and coupling, and
-docs/UNIFIED_ARCHITECTURE.md for the full pipeline.
+See docs/EISV_COMPUTATION.md for the current formulas, coupling and the full
+check-in pipeline, and docs/UNIFIED_ARCHITECTURE.md for where this layer sits.
 
 Authoritative version is ``__version__`` at the end of this module.
 """

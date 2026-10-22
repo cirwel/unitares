@@ -1,0 +1,1 @@
+- `unitares update` and the install launcher name the installed release (`Installed: v3.4.0`) instead of the SDK tag that shares the release commit (`Installed: sdk-v0.5.0`). Only the message was wrong: the update has always compared commits, not tag names.

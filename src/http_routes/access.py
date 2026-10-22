@@ -1087,7 +1087,32 @@ async def _resolve_http_bound_agent(
             for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
         )
     )
-    if unnamed_destructive:
+    # Knowledge reads take the same treatment for a different reason: an
+    # omitted agent_id must stay omitted, because the handler reads agent_id
+    # as an AUTHOR FILTER. Stamped with the caller it answered every bound REST
+    # search with the caller's own rows only, under a success envelope (0 of 20
+    # operator decisions, 2026-10-20). /mcp/ never stamps these. Only the
+    # knowledge subset of /mcp/'s browsable set is exempt here: dialectic
+    # list/get read an omitted agent_id as "the caller's sessions" on REST, and
+    # changing that is a separate decision. The view dispatch finally acts on
+    # must be a knowledge read, and no depth may name another action, so a
+    # write wrapped inside a read keeps its stamp.
+    from src.mcp_handlers.middleware.params_step import is_knowledge_read
+
+    views = [
+        unwrapped_view(arguments, depth)
+        for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
+    ]
+    unnamed_browsable = (
+        is_knowledge_read(tool_name, views[-1])
+        and not views[-1].get("agent_id")
+        and all(
+            is_knowledge_read(tool_name, view)
+            for view in views
+            if view.get("action") or view.get("op")
+        )
+    )
+    if unnamed_destructive or unnamed_browsable:
         try:
             return await _resolve_http_bound_caller(arguments, signals, tool_name)
         finally:

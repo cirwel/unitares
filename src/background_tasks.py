@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.background_task_health import record_failure, record_success
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -316,8 +317,11 @@ async def periodic_matview_refresh():
                 await conn.execute(
                     "REFRESH MATERIALIZED VIEW CONCURRENTLY core.mv_latest_agent_states"
                 )
+            record_success("matview_refresh", log=logger)
         except Exception as e:
-            logger.debug(f"Matview refresh skipped: {e}")
+            # Every 60s: record_failure warns on the first failure and on a
+            # changed error, not on each repeat.
+            record_failure("matview_refresh", e, log=logger)
         await asyncio.sleep(60)
 
 
@@ -335,8 +339,9 @@ async def periodic_partition_maintenance():
             async with db.acquire() as conn:
                 result = await conn.fetchval("SELECT audit.partition_maintenance()")
             logger.info(f"Partition maintenance completed: {result}")
+            record_success("partition_maintenance", log=logger)
         except Exception as e:
-            logger.debug(f"Partition maintenance skipped: {e}")
+            record_failure("partition_maintenance", e, log=logger)
         await asyncio.sleep(7 * 24 * 3600)
 
 
@@ -1024,6 +1029,7 @@ async def periodic_server_log_rotation(interval_hours: float = 24.0, max_size_mb
     log_files = ["mcp_server.log", "mcp_server_error.log"]
 
     while True:
+        failed: list[str] = []
         for log_name in log_files:
             log_path = log_dir / log_name
             try:
@@ -1053,8 +1059,14 @@ async def periodic_server_log_rotation(interval_hours: float = 24.0, max_size_mb
                 _prune_log_archives(archive_dir, stem, keep_months=6)
 
             except Exception as e:
-                logger.debug(f"[ROTATION] {log_name} rotation failed: {e}")
+                # A real copy or truncate failure: the log keeps growing past
+                # max_size_mb until someone notices, so it is not a debug event.
+                failed.append(f"{log_name}: {type(e).__name__}: {e}")
 
+        if failed:
+            record_failure("server_log_rotation", "; ".join(failed), log=logger)
+        else:
+            record_success("server_log_rotation", log=logger)
         await asyncio.sleep(interval_hours * 3600)
 
 
@@ -1406,8 +1418,37 @@ async def _log_resident_silence_finding(
             status="open",
         )
         await graph.add_discovery(note)
+        record_success("silence_finding_write", log=logger)
     except Exception as e:
-        logger.debug(f"[SILENCE] KG finding write failed: {e}")
+        record_failure("silence_finding_write", e, log=logger)
+
+
+# Agents whose last close attempt failed. The health record is one task for
+# every agent, so a success for one agent must not clear another's failure:
+# the task stays failing while any agent here is still pending.
+_silence_close_pending: dict[str, str] = {}
+
+
+def _record_silence_close(agent_id: str, error: "BaseException | str | None") -> None:
+    if error is None:
+        _silence_close_pending.pop(agent_id, None)
+    else:
+        _silence_close_pending[agent_id] = (
+            f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
+        )
+    if not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
+        return
+    # A successful close for another agent is not another failed attempt.
+    # Keep the pending failure visible without advancing its streak or time.
+    if error is None:
+        return
+    pending = sorted(_silence_close_pending.items())
+    record_failure(
+        "silence_finding_close",
+        "; ".join(f"{agent}: {reason}" for agent, reason in pending),
+        log=logger,
+    )
 
 
 async def _close_resident_silence_findings(agent_id: str, reconnected_at: datetime) -> bool:
@@ -1446,6 +1487,10 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             and getattr(d, "agent_id", agent_id) == agent_id
         ]
         if not rows:
+            # A completed lookup with nothing to close is a success for this
+            # agent: without recording it, its earlier failure would stay on
+            # the health record after the caller stops checking it.
+            _record_silence_close(agent_id, None)
             return True
         now = datetime.now(timezone.utc)
         reconnect_iso = reconnected_at.isoformat()
@@ -1474,9 +1519,13 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             })
             if landed is False:
                 all_landed = False
+        _record_silence_close(
+            agent_id,
+            None if all_landed else "the knowledge graph rejected a resolve update; retried next pass",
+        )
         return all_landed
     except Exception as e:
-        logger.debug(f"[SILENCE] KG finding close failed: {e}")
+        _record_silence_close(agent_id, e)
         return False
 
 
@@ -1696,6 +1745,17 @@ async def _silence_check_iteration() -> None:
     _silence_critical_alerted.intersection_update(active_ids)
     _silence_duplicate_warned.intersection_update(active_ids)
     _silence_close_checked.intersection_update(active_ids)
+    # Inactive agents are no longer eligible for retries in this loop. Keep
+    # their KG findings untouched and report that tracking has stopped.
+    inactive_pending = set(_silence_close_pending) - active_ids
+    for agent_id in sorted(inactive_pending):
+        _silence_close_pending.pop(agent_id)
+        logger.warning(
+            "[SILENCE] stopped close retries for inactive agent %s; "
+            "its finding remains unresolved", agent_id,
+        )
+    if inactive_pending and not _silence_close_pending:
+        record_success("silence_finding_close", log=logger)
 
 
 async def _resident_pause_check_iteration() -> None:
@@ -1779,13 +1839,15 @@ async def check_agent_silence():
     while True:
         try:
             await _silence_check_iteration()
+            record_success("silence_check", log=logger)
         except Exception as e:
-            logger.debug(f"[SILENCE] Check failed: {e}")
+            record_failure("silence_check", e, log=logger)
 
         try:
             await _resident_pause_check_iteration()
+            record_success("resident_pause_check", log=logger)
         except Exception as e:
-            logger.debug(f"[RESIDENT_PAUSE] Check failed: {e}")
+            record_failure("resident_pause_check", e, log=logger)
 
         await asyncio.sleep(600)  # every 10 minutes
 

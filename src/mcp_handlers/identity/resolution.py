@@ -1362,7 +1362,7 @@ async def resolve_session_identity(
                     # Fall through to PATH 3 (create new). Fingerprint match is a routing
                     # hint only, never a succession claim — we do NOT record the cached
                     # agent as the new identity's predecessor.
-                    # See docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
+                    # Design note: git show ce8879dc3^:docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
                     if resume:
 
                         # S19 extension (#802): refuse a substrate-anchored UUID
@@ -1485,7 +1485,7 @@ async def resolve_session_identity(
 
         # IDENTITY HONESTY: When resume=False, don't return PG identity.
         # Fingerprint match is a routing hint only, never a succession claim.
-        # See docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
+        # Design note: git show ce8879dc3^:docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
         try:
 
             db = get_db()

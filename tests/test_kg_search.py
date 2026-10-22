@@ -714,7 +714,7 @@ class TestSearchKnowledgeGraph:
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
 
-        monkeypatch.setenv("UNITARES_ENABLE_GRAPH_EXPANSION", "1")
+        monkeypatch.setenv("UNITARES_ENABLE_RELATED_EXPANSION", "1")
         seed = make_discovery(id="seed", summary="search finding", tags=["kg-search"])
         seed.related_to = ["neighbor"]
         neighbor = make_discovery(id="neighbor", summary="linked but untagged", tags=["other"])
