@@ -121,8 +121,10 @@ deploy_lib_require_plist_target() {
   # A launcher script may stand between launchd and the service, for example
   # one that reads a credential from the OS keychain and then execs the
   # program, so the plist itself names only the launcher. Follow the plist's
-  # program one step: accept it when it is a readable text file that names the
-  # deploy worktree. A binary is never searched (-I), and nothing is printed.
+  # program one step: accept it only when a readable text launcher EXECs the
+  # deploy worktree. A mention elsewhere (a comment, an unused variable) does
+  # not count, since the launcher could still exec another checkout. A binary
+  # is never searched (-I), and nothing is printed.
   local program
   program="$(python3 - "$plist" 2>/dev/null <<'PY' || true
 import plistlib, sys
@@ -136,7 +138,9 @@ except Exception:
 PY
 )"
   if [[ -n "$program" && -f "$program" && -r "$program" ]] \
-      && grep -Iq -- "$needle" "$program" 2>/dev/null; then
+      && grep -Iq '' "$program" 2>/dev/null \
+      && grep -E '^[[:space:]]*exec[[:space:]]' "$program" 2>/dev/null \
+         | sed 's/[[:space:]]#.*$//' | grep -Fq -- "$needle"; then
     return 0
   fi
 

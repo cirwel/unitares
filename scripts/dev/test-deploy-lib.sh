@@ -101,6 +101,15 @@ EOF
 printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"\n' > "$LAUNCHER"
 ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
   && bad "launcher naming another checkout refuses" || ok "launcher naming another checkout refuses"
+# Only the exec'd target counts: an incidental mention does not prove it.
+printf '#!/bin/sh\n# previously /deploy/needle/prog.py\nOLD=/deploy/needle/prog.py\nexec python3 /dev/checkout/prog.py "$@"\n' > "$LAUNCHER"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "launcher mentioning the worktree outside its exec refuses" \
+  || ok "launcher mentioning the worktree outside its exec refuses"
+printf '#!/bin/sh\nexec python3 /dev/checkout/prog.py "$@"  # was /deploy/needle/prog.py\n' > "$LAUNCHER"
+( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
+  && bad "a trailing comment on the exec line does not count" \
+  || ok "a trailing comment on the exec line does not count"
 printf '\000\001/deploy/needle/prog.py\000' > "$LAUNCHER"
 ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" ) >/dev/null 2>&1 \
   && bad "binary program is not searched" || ok "binary program is not searched"
