@@ -351,7 +351,9 @@ Operational rules:
    threading on the next call:
    `check_working_state(client_session_id=...)` returning your `uuid` as
    `agent_uuid`, or `identity(client_session_id=...)` reporting
-   `caller_proven` true.
+   `caller_proven` true. A context compaction is the same running process:
+   keep the `uuid` and its `client_session_id` rather than minting
+   (`docs/ontology/identity.md`, *Compaction*).
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
    `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`.
    Use this only for a real handoff from a finished predecessor. `explicit` is
