@@ -116,7 +116,10 @@ def _failure(
 class TestConsultSchema:
     def test_schema_is_bounded_and_forbids_route_controls(self):
         """Keep the CI node id stable. host_id is a bounded string checked at
-        runtime against the registry (interface contract 1.41.0), not an enum."""
+        runtime against the registry (interface contract 1.41.0), not an enum.
+        model (interface contract 1.56.0, operator decision 2026-10-21) is a
+        bounded string checked at runtime against the models the local
+        endpoint serves; the sampling and routing controls stay hidden."""
         fields = set(ConsultParams.model_fields)
         assert fields == {
             "agent_id",
@@ -130,6 +133,7 @@ class TestConsultSchema:
             "response_mode",
             "host_id",
             "host_ids",
+            "model",
         }
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ConsultParams(brief="help", provider="hf")
@@ -144,8 +148,12 @@ class TestConsultSchema:
         host_schema = schema["properties"]["host_id"]["anyOf"][0]
         assert host_schema["type"] == "string" and host_schema["maxLength"] == 128
         assert "enum" not in host_schema
-        for hidden_control in ("provider", "model", "temperature", "timeout_s"):
+        for hidden_control in ("provider", "temperature", "max_tokens", "timeout_s"):
             assert hidden_control not in schema["properties"]
+        model_schema = schema["properties"]["model"]["anyOf"][0]
+        assert model_schema["type"] == "string" and model_schema["maxLength"] == 200
+        with pytest.raises(ValidationError):
+            ConsultParams(brief="help", model="")
         with pytest.raises(ValidationError):
             ConsultParams(brief="help", host_id="x" * 129)
         # An unknown id passes the schema; the handler refuses it with the valid
@@ -254,6 +262,123 @@ async def test_standard_cloud_allowed_is_local_first_auto(monkeypatch):
     assert request.privacy == "auto"
     assert parsed["request"]["privacy"] == "cloud_allowed"
     assert parsed["delivery"]["external_processing"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_chosen_model_is_sent_to_the_configured_endpoint(monkeypatch):
+    """Operator decision 2026-10-21: the agent picks the local model. A model
+    the endpoint lists is passed through, and naming one pins the call to the
+    configured endpoint (no Hugging Face fallback)."""
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("gemma4:latest", "qwen3:8b"))
+
+    _payload(await co.handle_consult({
+        "brief": "Answer this",
+        "privacy": "cloud_allowed",
+        "model": "qwen3:8b",
+    }))
+
+    request = standard.await_args.args[0]
+    assert request.model == "qwen3:8b"
+    assert request.provider == "ollama"
+    # cloud_allowed is kept; the named model pins the endpoint, not the privacy.
+    assert request.privacy == "auto"
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_keeps_the_callers_privacy(monkeypatch):
+    """Review finding (P2) on #2994: under cloud_allowed, naming a model pins
+    the configured endpoint without forcing privacy='local', so an endpoint
+    that classifies external is still reachable."""
+    standard = AsyncMock(return_value=_completed(privacy_class="external"))
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("remote:70b",))
+
+    _payload(await co.handle_consult({
+        "brief": "Answer this",
+        "privacy": "cloud_allowed",
+        "model": "remote:70b",
+    }))
+
+    request = standard.await_args.args[0]
+    assert request.model == "remote:70b"
+    assert request.provider == "ollama"
+    assert request.privacy == "auto"
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_under_local_privacy_stays_local(monkeypatch):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("qwen3:8b",))
+
+    _payload(await co.handle_consult({"brief": "Answer this", "model": "qwen3:8b"}))
+
+    request = standard.await_args.args[0]
+    assert (request.provider, request.privacy) == ("ollama", "local")
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_under_local_privacy_asks_no_external_endpoint(monkeypatch):
+    """Review finding on #2994: under privacy='local' an external endpoint is
+    refused from its URL alone, so it is not asked for its model list first."""
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "https://models.example.com/v1")
+    for name in ("UNITARES_MODEL_PRIVACY", "UNITARES_MODEL_LOCAL_HOSTS",
+                 "UNITARES_TRUSTED_NETWORKS"):
+        monkeypatch.delenv(name, raising=False)
+
+    def asked():
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(co, "served_models", asked)
+
+    _payload(await co.handle_consult({"brief": "Answer this", "model": "qwen3:8b"}))
+
+    request = standard.await_args.args[0]
+    assert (request.provider, request.privacy) == ("ollama", "local")
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_endpoint_does_not_serve_is_refused(monkeypatch):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "served_models", lambda: ("gemma4:latest",))
+
+    parsed = _payload(await co.handle_consult({"brief": "Answer this", "model": "llama3:70b"}))
+
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "MODEL_NOT_SERVED"
+    assert "gemma4:latest" in json.dumps(parsed)
+    standard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_without_a_model_the_default_route_is_unchanged(monkeypatch):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+
+    _payload(await co.handle_consult({"brief": "Answer this"}))
+
+    assert standard.await_args.args[0].model == "auto"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [
+    {"effort": "thorough", "privacy": "cloud_allowed"},
+    {"host_id": "hf:router", "privacy": "cloud_allowed"},
+])
+async def test_model_outside_the_local_standard_lane_is_refused(monkeypatch, extra):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+
+    parsed = _payload(await co.handle_consult({"brief": "x", "model": "qwen3:8b", **extra}))
+
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "INVALID_CONSULT_MODEL"
+    standard.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.55.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.56.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1090,3 +1090,33 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
   hashed schema.
 - **Client action:** a client that treated `MODEL_PROVIDER_UNAVAILABLE` as
   the only "no model" answer should also handle `MODEL_NOT_CONFIGURED`.
+
+## 1.56.0 (2026-10-21)
+
+- **What changed:** `consult` gains an optional `model` input (operator
+  decision 2026-10-21: the agent picks the local model). It applies to the
+  standard lane only and names a model the configured endpoint serves;
+  naming one pins the call to that endpoint (no Hugging Face fallback)
+  without changing the caller's privacy: `privacy='local'` still requires
+  the endpoint to classify local, and `cloud_allowed` may reach an external
+  one. `list_inference_hosts` now
+  reports the endpoint's served models (`GET {base}/models`, cached 30 s)
+  for `ollama:local` while it is reachable, and the configured default
+  otherwise. Without `model`, a call uses `UNITARES_MODEL_ID`, else the
+  endpoint's only served model, else is refused with `MODEL_NOT_CONFIGURED`.
+  The dialectic reviewers (in-process and agent), the local resident runner
+  and the internal lane still need a named model (`UNITARES_MODEL_ID`): they
+  record the configured model as provenance, so they take none from the
+  endpoint. Their refusal names only the operator's fix.
+- **New refusals:** `MODEL_NOT_SERVED` (the endpoint lists models and the
+  chosen one is not among them; the recovery names the served models) and
+  `INVALID_CONSULT_MODEL` (`model` with `effort='thorough'`, a council, or
+  `host_id='hf:router'`).
+- **Compatibility:** additive. A call without `model` routes as before.
+  `consult` still takes no sampling controls; `call_model`'s
+  `temperature` and `max_tokens` still retire with that tool.
+- **Schema digests:** `consult`'s input digest and the surface digest move.
+  `consult`'s and `call_model`'s tool descriptions change; they are outside
+  the input digests.
+- **Client action:** none required. To choose a model, read `models` on
+  `ollama:local` from `list_inference_hosts` and pass one as `model`.
