@@ -7,8 +7,10 @@
 
 ### Accountability infrastructure for long-running AI agents.
 
-Give every process an identity. Keep claims, evidence, reviews, and outcomes
-connected. Recover work across restarts, context loss, and handoffs.
+**Many agents, one record.**
+
+When an agent restarts, hands off, or loses its context, the next one can see
+who claimed what, on what evidence, who challenged it, and what replaced it.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.14+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
@@ -17,131 +19,116 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 </div>
 
-UNITARES is self-hosted accountability infrastructure for operators running
-multiple AI agents. Its single-operator federation kernel connects independent
-runtimes to one operator-controlled server over MCP or HTTP, where they share a
-durable record while keeping their own models, tools, and runtimes. They
-interoperate with each other over their own transports or A2A; UNITARES is the
-record behind them, not the transport between them.
+Agent work outlives the process that started it. A coding session restarts, a
+research agent loses its context, a task moves to another runtime. Logs show
+each run, but not the thread between them, so the next agent repeats work,
+trusts a claim that was already corrected, or cannot tell who decided what.
 
-Across Claude Code, Codex, Hermes Agent, and custom MCP or REST clients, agent
-work remains attributable, reviewable, and recoverable even when the process
-that started it is gone.
+UNITARES is a server you run that keeps that thread. Claude Code, Codex, Hermes
+Agent, and any MCP or HTTP client write their findings, reviews, and results to
+one operator-owned record. A later agent, or you, can read it back and see
+where each piece came from.
 
-## What UNITARES gives you
+## What the record answers
 
-- **Identity and lineage** — bind every write to the process that made it and
-  record where inherited work came from. Process identity is an attribution
-  record, not a credential; platform workload identity remains the credential
-  layer.
-- **Claims and evidence** — retain durable findings, corrections, and provenance
-  outside any single context window, distinct from transient check-in text.
-- **Shared memory as a graph** — with the AGE backend, each finding links to the
-  process that wrote it, to findings that share its tags, and to any newer
-  finding that supersedes it, so a stale result carries its replacement's id.
-  Search is semantic on `age` and full-text on `postgres`; [hybrid and reranked
-  search](docs/manual/03-running-the-server.md#search-and-retrieval-flags) are opt-in.
-- **Governed review** — preserve objections, conditions, and resolution on the
-  work record rather than treating a review request as approval.
-- **Cross-vendor second opinions** — ask another connected model (Claude, Codex,
-  Antigravity, local Ollama) for advisory `consult` feedback or on-record
-  review, and keep the exchange attached to the task.
-- **Outcome grounding** — connect bounded test, build, or task results back to
-  earlier check-ins and predictions.
-- **Runtime policy** — return a checkpoint action (`proceed`, `guide`, or
-  `pause`), reason, and next step to gate governed writes when review or
-  recovery is needed.
-- **Reconstruction** — let a successor process query prior findings, active
-  review conditions, and outcomes before continuing earlier work.
+| Question | Mechanism |
+|---|---|
+| **Who said it?** | **Identity and lineage**: every write is bound to the process that made it, and a successor declares which process it continues. |
+| **What supports it?** | **Claims and evidence**: findings keep their sources and corrections outside any single context window. A finding that replaces another points to it, so a stale claim carries its correction. |
+| **Who challenged it?** | **Governed review**: objections, conditions, and their resolution stay on the work they concern. Asking for review is not the same as passing it. |
+| **What happened?** | **Outcome grounding**: test, build, and task results are recorded against the check-ins that predicted them. |
+| **What can a successor recover?** | **Reconstruction**: search, review history, and export let a new process pick up the work before it acts. |
 
-Together, these form an operator-owned accountability layer across coding,
-research, background, and resident agents. What it adds to an activity log is
-adjudication: disagreement, conditions, and outcomes remain bound to the process
-that made the claim. The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) gives the
-evidence status of each measured result.
+Two more pieces sit around the record. **Runtime policy**: each check-in returns
+`proceed`, `guide`, or `pause`, with a reason, and a pause holds writes until
+review or recovery. **Second opinions**: `consult` asks another connected model
+(Claude, Codex, Antigravity, or a local Ollama model) and keeps the answer with
+the task.
 
-## How it works
+## See it
 
-When a task spans a process restart or handoff, the shared record connects the
-work across both processes (full trace in the
-[captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md)):
+Agent A finds a bug, records it, and exits. Agent B starts fresh after a
+restart, finds A's finding before touching the code, and continues A's work
+under its own identity. If A's finding was later corrected, B gets the
+correction, not the stale claim.
 
 ```text
-# Process A — bind identity, record finding, check in, log outcome, close, and exit
-start_session        {"force_new": true, "name": "upload-fixer"}        -> agent_uuid_A, client_session_id_A
-store_finding        {"client_session_id": ..., "discovery_type": "bug_found", "summary": "..."} -> discovery_id
-sync_state           {"client_session_id": ..., "complexity": 0.4, "confidence": 0.7} -> action: "proceed", prediction_id
-record_result        {"client_session_id": ..., "outcome_type": "test_passed", "prediction_id": ...}
-use_tool             {"tool_name": "update_finding", "arguments": {"discovery_id": ..., "status": "resolved", "closure_class": "fix_verified", ...}}
-use_tool             {"tool_name": "agent", "arguments": {"action": "release_presence", "client_session_id": ...}}
+# Agent A
+start_session   {"force_new": true}                                  -> agent A's id
+store_finding   {"summary": "upload retry test is flaky: ...", ...}  -> finding id
+record_result   {"outcome_type": "test_passed", ...}
 
-# Process B (after restart) — recover A's record before acting, then declare lineage
-search_shared_memory {"query": "flaky upload retry test"}               -> A's resolved finding and agent_uuid_A
-start_session        {"force_new": true, "parent_agent_id": agent_uuid_A, "spawn_reason": "explicit"}
+# Agent B, after a restart
+search_shared_memory {"query": "flaky upload retry test"}            -> A's finding, and any correction
+start_session   {"force_new": true, "parent_agent_id": "<A's id>", "spawn_reason": "explicit"}
 ```
 
-Alongside findings and outcomes, agents can request structured review
-(`request_review`) or cross-vendor advice (`consult`). The server runs beside
-evals, sandboxes, and guardrails without taking over the agent's execution loop.
-Core storage is self-hosted on PostgreSQL (with AGE and pgvector) and Redis with
-no required external model API. Each `sync_state` check-in returns a policy
-action derived from an EISV behavioral state estimate, a form of
-runtime [proprioception](docs/ontology/eisv-proprioception-contract.md); that
-estimator is moving out of the core record into an optional policy module.
+The [captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md)
+shows every call and response.
 
 ## Install
 
 With Git, curl, and Docker Compose installed, one command starts the latest
-verified release of the local operator stack (the server, PostgreSQL with AGE
-and pgvector, Redis, and the coordination plane):
+verified release of the local stack (the server, PostgreSQL with AGE and
+pgvector, Redis, and the coordination plane):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
 
-Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
-`http://localhost:8767/dashboard`. If port 8767 or 8788 is taken, set
-`GOVERNANCE_HOST_PORT` and `LEASE_PLANE_HOST_PORT`; see
+Then connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard
+at `http://localhost:8767/dashboard`. Ports, volumes, models, and upgrades:
 [Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
 
-**Connect your agents** (see [Integrating agents](docs/manual/04-integrating-agents.md)):
-- **Claude Code & Codex:** install the [governance plugin](https://github.com/cirwel/unitares-governance-plugin) for MCP wiring, lifecycle hooks, and surface leases.
-- **Hermes Agent & OpenAI-compatible clients:** install the [host adapter](https://github.com/cirwel/unitares-host-adapter).
-- **Custom runtimes & scripts:** connect directly over [Streamable HTTP MCP](docs/integration/MCP_CLIENTS.md), install the [Python SDK](agents/sdk/README.md) (`pip install unitares-sdk`), or use the [resident agent runtime](https://github.com/cirwel/unitares-resident).
+**Connect your agents** ([Integrating agents](docs/manual/04-integrating-agents.md)):
+- **Claude Code and Codex:** the [governance plugin](https://github.com/cirwel/unitares-governance-plugin) wires MCP, lifecycle hooks, and edit leases.
+- **Hermes Agent and OpenAI-compatible clients:** the [host adapter](https://github.com/cirwel/unitares-host-adapter).
+- **Anything else:** [Streamable HTTP MCP](docs/integration/MCP_CLIENTS.md), the [Python SDK](agents/sdk/README.md) (`pip install unitares-sdk`), or the [resident agent runtime](https://github.com/cirwel/unitares-resident).
 
-**Volumes, models, and updates:**
-- **Data persistence:** Data lives in Docker named volumes keyed to the checkout
-  directory name (`unitares`). Re-running the one-liner reuses an earlier
-  install's database; for a clean start, run `docker compose down -v` first. See
-  [Reinstalling](docs/manual/02-install.md#reinstalling-and-side-by-side-installs).
-- **Local reviewer model (optional):** `./scripts/unitares model` points the
-  server at a local Ollama model for advisory `consult` answers and first-pass
-  dialectic reviews; without one, reviews wait for a peer or the operator. See
-  [Choose a model](docs/manual/02-install.md#choose-a-model-optional).
-- **Upgrades:** `./scripts/unitares update` backs up the database, applies
-  migrations, restarts, and checks health. See
-  [Updating](docs/manual/02-install.md#updating), including the one-time step
-  for installs made before `update` existed.
+## Who it is for
 
-## Where it is going
+For an operator running several long-lived AI agents, across vendors, on
+infrastructure they control, who needs the agents' shared account of the work
+to survive restarts and handoffs.
 
-UNITARES is working toward bringing a heterogeneous fleet under accountable
-operation in one step: identities are configured, handoffs are enforceable,
-important evidence survives context loss, reviews bind to the work they govern,
-and outcomes are recorded where the next decision can use them—so agent systems
-can accumulate experience without losing authorship, challenge, or operational
-control.
+Not a sandbox, an output validator, or a hosted agent platform. It runs beside
+your evals and guardrails and replaces neither, and it never takes over an
+agent's own execution loop.
+
+## How it fits together
+
+UNITARES is self-hosted accountability infrastructure for operators running
+multiple AI agents. Its single-operator federation kernel connects independent
+runtimes to one operator-controlled server over MCP or HTTP, where they share a
+durable record while keeping their own models, tools, and runtimes. They
+interoperate with each other over their own transports or A2A; UNITARES is the
+record behind them, not the transport between them. Together this is an
+operator-owned accountability layer for coding, research, background, and
+resident agents. What it adds to an activity log is adjudication: claims,
+challenges, and outcomes stay bound to the process that made the claim, for
+review and for reconstruction later.
+
+Storage is PostgreSQL (with AGE for the finding graph and pgvector for semantic
+search) and Redis, with no required external model API. The check-in's policy
+action comes from a behavioral state estimate, a form of
+runtime [proprioception](docs/ontology/eisv-proprioception-contract.md); that
+estimator is moving out of the core record into an optional module.
+
+What each claim has been measured to do, and what has not been measured, is in
+[Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) and the
+[Reviewer Guide](docs/REVIEWER_GUIDE.md).
 
 ## Start here
 
 | Goal | Guide |
 |---|---|
+| Try it | [Install](#install) → [two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md) |
+| Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Operate a deployment | [Operator manual](docs/manual/README.md) |
-| Connect an agent or application | [Captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md) · [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
-| Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
+| Research behind it | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Paper](https://doi.org/10.5281/zenodo.19647159) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
 | Contribute | [Contributing](.github/CONTRIBUTING.md) · [Development guide](AGENTS.md) |
-| Everything else | [Documentation index](docs/README.md): deployment profiles, operations, security, compatibility, research, and the full tool surface |
+| Everything else | [Documentation index](docs/README.md) |
 
 ## Citation and license
 
