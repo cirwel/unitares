@@ -254,12 +254,12 @@ def restart_resume(state: dict, compose: list[str]) -> dict:
     subprocess.run([*compose, "restart", "governance-mcp"], check=True, capture_output=True, timeout=180)
     ready = wait_ready(240)
     if not ready["ok"]:
-        return {"ok": False, "error": "not ready after restart"}
+        return {"ok": False, "restarted": True, "error": "not ready after restart"}
     metrics = call("get_governance_metrics", {"client_session_id": state["csid"]})
     checkin = call("process_agent_update", {"client_session_id": state["csid"], "response_text": "after restart",
                                             "complexity": 0.3, "confidence": 0.7, "response_mode": "compact"})
     error = failed(metrics) or failed(checkin) or resolved_as(metrics, state["uuid"], "after restart")
-    return {"ok": error is None, "error": error}
+    return {"ok": error is None, "restarted": True, "error": error}
 
 
 def log_signatures(compose: list[str]) -> dict:
@@ -322,7 +322,7 @@ def crash_restarts(r: dict) -> str:
         row = (r.get(phase) or {}).get("unitares-governance-mcp")
         return None if row is None else int(row.get("restarts", 0))
     before, end = count("containers_before_restart"), count("containers_end")
-    if before is not None:
+    if before is not None and (r.get("restart_resume") or {}).get("restarted"):
         return str(before + (end or 0))
     for value in (end, count("containers_start")):
         if value is not None:

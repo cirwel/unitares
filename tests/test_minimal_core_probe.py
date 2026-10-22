@@ -72,7 +72,8 @@ def test_crash_restarts_survive_the_probe_restart_reset():
     # `docker compose restart` resets RestartCount: 3 crashes before it, then 0.
     r = {"containers_start": {"unitares-governance-mcp": {"restarts": 3}},
          "containers_before_restart": {"unitares-governance-mcp": {"restarts": 3}},
-         "containers_end": {"unitares-governance-mcp": {"restarts": 0}}}
+         "containers_end": {"unitares-governance-mcp": {"restarts": 0}},
+         "restart_resume": {"ok": True, "restarted": True}}
     assert probe.crash_restarts(r) == "3"
     r["containers_end"]["unitares-governance-mcp"]["restarts"] = 2
     assert probe.crash_restarts(r) == "5"
@@ -90,3 +91,10 @@ def test_database_failure_is_not_ok(monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k: Out())
     result = probe.database()
     assert result["ok"] is False and "not running" in result["error"]
+
+
+def test_crash_restarts_not_doubled_when_the_restart_was_skipped():
+    r = {"containers_before_restart": {"unitares-governance-mcp": {"restarts": 3}},
+         "containers_end": {"unitares-governance-mcp": {"restarts": 3}},
+         "restart_resume": {"ok": False, "error": "no identity"}}
+    assert probe.crash_restarts(r) == "3"
