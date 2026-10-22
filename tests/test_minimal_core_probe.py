@@ -73,7 +73,7 @@ def test_crash_restarts_survive_the_probe_restart_reset():
     r = {"containers_start": {"unitares-governance-mcp": {"restarts": 3}},
          "containers_before_restart": {"unitares-governance-mcp": {"restarts": 3}},
          "containers_end": {"unitares-governance-mcp": {"restarts": 0}},
-         "restart_resume": {"ok": True, "restarted": True}}
+         "manual_restart": True}
     assert probe.crash_restarts(r) == "3"
     r["containers_end"]["unitares-governance-mcp"]["restarts"] = 2
     assert probe.crash_restarts(r) == "5"
@@ -96,5 +96,18 @@ def test_database_failure_is_not_ok(monkeypatch):
 def test_crash_restarts_not_doubled_when_the_restart_was_skipped():
     r = {"containers_before_restart": {"unitares-governance-mcp": {"restarts": 3}},
          "containers_end": {"unitares-governance-mcp": {"restarts": 3}},
-         "restart_resume": {"ok": False, "error": "no identity"}}
+         "manual_restart": False}
     assert probe.crash_restarts(r) == "3"
+
+
+def test_restart_evidence_survives_a_later_exception(monkeypatch):
+    # The restart ran, then a request raised: the flag is set in state first.
+    state = {"csid": "c", "uuid": "u"}
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "wait_ready", lambda s: {"ok": True})
+    def boom(*a, **k):
+        raise ConnectionError("reset")
+    monkeypatch.setattr(probe, "call", boom)
+    results = {}
+    probe.probe("restart_resume", results, lambda: probe.restart_resume(state, ["docker", "compose"]))
+    assert results["restart_resume"]["ok"] is False and state["manual_restart"] is True

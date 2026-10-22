@@ -252,14 +252,15 @@ def restart_resume(state: dict, compose: list[str]) -> dict:
     if not state.get("csid"):
         return {"ok": False, "error": "no identity"}
     subprocess.run([*compose, "restart", "governance-mcp"], check=True, capture_output=True, timeout=180)
+    state["manual_restart"] = True  # recorded before anything later can raise
     ready = wait_ready(240)
     if not ready["ok"]:
-        return {"ok": False, "restarted": True, "error": "not ready after restart"}
+        return {"ok": False, "error": "not ready after restart"}
     metrics = call("get_governance_metrics", {"client_session_id": state["csid"]})
     checkin = call("process_agent_update", {"client_session_id": state["csid"], "response_text": "after restart",
                                             "complexity": 0.3, "confidence": 0.7, "response_mode": "compact"})
     error = failed(metrics) or failed(checkin) or resolved_as(metrics, state["uuid"], "after restart")
-    return {"ok": error is None, "restarted": True, "error": error}
+    return {"ok": error is None, "error": error}
 
 
 def log_signatures(compose: list[str]) -> dict:
@@ -297,6 +298,7 @@ def run(config: str, out: Path, compose: list[str], up_rc: int) -> None:
                          ("containers_before_restart", lambda: containers(compose)),
                          ("restart_resume", lambda: restart_resume(state, compose))]:
             probe(name, results, fn)
+            results["manual_restart"] = bool(state.get("manual_restart"))
             flush()
     for name, fn in [("logs", lambda: log_signatures(compose)), ("containers_end", lambda: containers(compose))]:
         probe(name, results, fn)
@@ -322,7 +324,7 @@ def crash_restarts(r: dict) -> str:
         row = (r.get(phase) or {}).get("unitares-governance-mcp")
         return None if row is None else int(row.get("restarts", 0))
     before, end = count("containers_before_restart"), count("containers_end")
-    if before is not None and (r.get("restart_resume") or {}).get("restarted"):
+    if before is not None and r.get("manual_restart"):
         return str(before + (end or 0))
     for value in (end, count("containers_start")):
         if value is not None:
