@@ -857,12 +857,12 @@ async def test_a_host_switched_off_in_the_hosts_file_is_refused(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host_ids", [[], ["claude:host-adapter", "codex:host-adapter"]])
-async def test_no_preference_refuses_missing_or_ambiguous_hosts(monkeypatch, host_ids):
+async def test_no_preference_refuses_ambiguous_hosts(monkeypatch):
     from unittest.mock import AsyncMock
     from src import inference_config
 
     monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    host_ids = ["claude:host-adapter", "codex:host-adapter"]
     hosts = [dict(_claude_host(), host_id=hid) for hid in host_ids]
     monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
     invoke = AsyncMock()
@@ -872,6 +872,26 @@ async def test_no_preference_refuses_missing_or_ambiguous_hosts(monkeypatch, hos
     assert parsed["execution_started"] is False
     assert parsed["eligible_hosts"] == host_ids
     assert "consult.thorough.prefer" in parsed["recovery"]["action"]
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed", [False, True])
+async def test_no_eligible_host_reports_the_missing_host(monkeypatch, listed):
+    from unittest.mock import AsyncMock
+    from src import inference_config
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    # Listed but neither configured nor available, as on a default install.
+    hosts = [_claude_host(configured=False, available=False)] if listed else []
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
+    invoke = AsyncMock()
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "review"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert parsed["reason"] == "no_eligible_host"
+    assert parsed["execution_started"] is False
+    assert "consult(effort='standard')" in parsed["recovery"]["action"]
     invoke.assert_not_awaited()
 
 

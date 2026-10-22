@@ -271,6 +271,28 @@ async def run_delegated_inference(
                     and hid not in host_adapter_disabled_hosts()
                 ]
                 host_id = candidates[0] if len(candidates) == 1 else None
+            if not candidates:
+                # Nothing to choose between: report the missing host rather
+                # than a selection that passing host_id could not satisfy.
+                needs_extension = not host_adapter_lane_configured() and any(
+                    item.get("extension") == HOST_ADAPTER_EXTENSION
+                    for item in reachable.values()
+                )
+                return InferenceOutcome.failed(
+                    "No enabled, configured and available inference host can "
+                    "serve delegate_inference",
+                    code="INFERENCE_HOST_UNAVAILABLE",
+                    category="system_error",
+                    details={"reason": "no_eligible_host"},
+                    recovery={
+                        "action": (
+                            "Use consult(effort='standard') for the local lane. "
+                            + (HOST_ADAPTER_EXTENSION_NOTE if needs_extension else
+                               "Configure and enable a host listed by list_inference_hosts.")
+                        ),
+                        "related_tools": ["consult", "list_inference_hosts"],
+                    },
+                )
             if host_id is None:
                 return InferenceOutcome.failed(
                     "Delegated inference needs an explicit or unambiguous host selection",

@@ -139,7 +139,7 @@ async def test_thorough_consult_on_a_default_install_points_at_standard(
     }))
 
     assert parsed["success"] is False
-    assert parsed["error_code"] == "CONSULT_HOST_SELECTION_REQUIRED"
+    assert parsed["error_code"] == "CONSULT_NO_ELIGIBLE_HOST"
     assert "consult.thorough.prefer" in parsed["recovery"]["action"]
     assert "standard local answer" in parsed["recovery"]["action"]
     standard.assert_not_awaited()

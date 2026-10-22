@@ -175,7 +175,8 @@ def _thorough_plan(
         peers=peers,
         skipped=tuple(static for _, static in walk if static is not None),
         job_configured=job is not None,
-        selection_required=job is None and len(peers) != 1,
+        # Zero peers is a missing host, not an ambiguity a selection resolves.
+        selection_required=job is None and len(peers) > 1,
         order=tuple(walk),
     )
 
@@ -1151,7 +1152,7 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 request,
                 message=("A thorough consultation needs an explicit or unambiguous host selection"
                          if selection_required else
-                         "No host in the consult.thorough job is eligible for this caller"),
+                         "No thorough-lane host is eligible for this caller"),
                 code=reason_code,
                 category="system_error",
                 recovery_action=(

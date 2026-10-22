@@ -2661,8 +2661,11 @@ async def test_cancelled_council_keeps_a_members_policy_refusal(monkeypatch, hos
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("available", [set(), _ALL_HOSTS])
-async def test_unconfigured_host_order_refuses_missing_or_ambiguous_peers(monkeypatch, available):
+@pytest.mark.parametrize("available,code", [
+    (set(), "CONSULT_NO_ELIGIBLE_HOST"),
+    (_ALL_HOSTS, "CONSULT_HOST_SELECTION_REQUIRED"),
+])
+async def test_unconfigured_host_order_refuses_missing_or_ambiguous_peers(monkeypatch, available, code):
     monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     monkeypatch.setattr(co, "_caller_family", lambda: None)
     monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid in available)
@@ -2671,7 +2674,7 @@ async def test_unconfigured_host_order_refuses_missing_or_ambiguous_peers(monkey
     parsed = _payload(await co.handle_consult({
         "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
     }))
-    assert parsed["error_code"] == "CONSULT_HOST_SELECTION_REQUIRED"
+    assert parsed["error_code"] == code
     assert "consult.thorough.prefer" in parsed["recovery"]["action"]
     assert co._thorough_host_for_caller() is None
     thorough.assert_not_awaited()

@@ -1101,10 +1101,13 @@ schema remains `unitares.interface-contract.v1`. No tool or argument is removed.
   enablement, provenance and egress rules. Standard local consultation is
   unchanged. Old SDKs that send their historical default as an explicit
   `host_id` keep making that pinned request; upgraded SDKs no longer add it.
-  An ambiguous or unconfigured omitted-host request now reports
-  `INFERENCE_HOST_SELECTION_REQUIRED` for delegation, or
-  `CONSULT_HOST_SELECTION_REQUIRED` for thorough consultation (an explicitly
-  configured job with no eligible peer reports `CONSULT_NO_ELIGIBLE_HOST`).
+  An ambiguous omitted-host request (several eligible hosts and no
+  preference) now reports `INFERENCE_HOST_SELECTION_REQUIRED` for delegation,
+  or `CONSULT_HOST_SELECTION_REQUIRED` for thorough consultation. When no host
+  is eligible at all, as on a default install, delegation reports
+  `INFERENCE_HOST_UNAVAILABLE` with `reason: no_eligible_host` and thorough
+  consultation reports `CONSULT_NO_ELIGIBLE_HOST`, with or without a
+  configured job.
   Consultation uses a standard local fallback only when the caller permits
   degradation; none of these choices creates a metered default.
 - **Client/operator action:** to preserve a fixed provider, pass `host_id`
