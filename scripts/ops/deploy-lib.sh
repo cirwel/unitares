@@ -124,12 +124,12 @@ deploy_lib_require_plist_target() {
   # whose own text names the target. Anything else still refuses. launchd runs
   # `Program` when it is set and only falls back to ProgramArguments[0], which
   # is otherwise just argv[0]; resolve it the same way.
+  # Trust plutil's exit status, not empty output, for a missing key.
   local launcher=""
   if command -v plutil >/dev/null 2>&1; then
-    launcher="$(plutil -extract Program raw -o - "$plist" 2>/dev/null || true)"
-    if [[ -z "$launcher" ]]; then
-      launcher="$(plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)"
-    fi
+    launcher="$(plutil -extract Program raw -o - "$plist" 2>/dev/null)" \
+      || launcher="$(plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null)" \
+      || launcher=""
   fi
   if [[ -n "$launcher" && -f "$launcher" ]] && grep -q "$needle" "$launcher"; then
     return 0
