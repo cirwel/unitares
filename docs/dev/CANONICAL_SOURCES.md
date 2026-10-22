@@ -1,6 +1,6 @@
 # Canonical Sources
 
-**Last Updated:** 2026-08-17 (re-verified: all listed runtime sources and thin-doc targets resolve)
+**Last Updated:** 2026-10-20 (architecture doc rebuilt record-first; EISV and policy-action owners named; all listed runtime sources and thin-doc targets resolve)
 
 Use this page to resolve architecture disputes and doc drift.
 
@@ -59,7 +59,7 @@ These files are the canonical runtime sources for current behavior:
 
 Use this page differently depending on the task:
 
-- If you are summarizing the system, read `README.md`, then `docs/UNIFIED_ARCHITECTURE.md`, then confirm the relevant claims in the runtime files listed above.
+- If you are summarizing the system, read `docs/PRODUCT_DEFINITION.md` for the product framing, then `docs/UNIFIED_ARCHITECTURE.md` for the layered architecture, then confirm the relevant claims in the runtime files listed above. The architecture summary copies the product definition's headline sentence; `README.md` owns the public tagline and opening definition (see the public product sentence row above).
 - If you are debugging a discrepancy between docs and behavior, skip straight to the runtime files and treat prose as secondary evidence.
 - If you are changing architecture docs, update the relevant live doc and then verify that the runtime source still supports the wording.
 - If you are changing runtime semantics, update this file only if the authority map or doc classifications have changed.
@@ -73,7 +73,10 @@ These docs should stay aligned with the runtime sources above:
 | Doc | Status | Intended use |
 |-----|--------|--------------|
 | `README.md` | live overview | Public-facing summary and top-level framing |
-| `docs/UNIFIED_ARCHITECTURE.md` | canonical prose summary | Human-readable architecture explanation |
+| `docs/PRODUCT_DEFINITION.md` | canonical product framing | What UNITARES is: the one-sentence product, the five questions the record answers, the Core/userland boundary, and the honest limits |
+| `docs/UNIFIED_ARCHITECTURE.md` | canonical prose summary | Human-readable architecture explanation: the record's layers, the check-in and policy action, transports, and storage |
+| `docs/EISV_COMPUTATION.md` | canonical instrument reference | Owner of the EISV instrument: inputs, smoothing, warmup, risk, margin, the ODE coupling, and its evidence caveats |
+| `docs/manual/05-reading-the-signals.md` §5.3 | canonical agent-facing reference | Owner of agent-facing policy-action handling: what each `action` / `sub_action` asks the agent to do |
 | `docs/guides/TROUBLESHOOTING.md` | live troubleshooting guide | Failure diagnosis and practical remediation |
 | `docs/operations/OPERATOR_RUNBOOK.md` | live operator guide | Startup, health checks, and operator procedures |
 | `docs/guides/START_HERE.md` | thin compatibility entrypoint | Minimal workflow and links outward; should stay short |

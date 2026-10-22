@@ -87,6 +87,28 @@ Unset, empty and explicit `sysmon` select the same coverage run; changing to
 `ctrace` invalidates its cache. Use `--fresh` for an intentional repeat even
 when the selected core and source inputs have not changed.
 
+## Opt-in drills outside the default gate
+
+Some suites skip in the default gate (`./scripts/dev/test-cache.sh` locally,
+the sharded workflow in CI) because they need live services or registered
+state. A default skip should be one of these opt-in drills, not stale unit
+coverage hidden behind an unconditional `pytest.mark.skip`. Each runs only
+when its environment flag is set:
+
+| Area | Default reason | Opt-in |
+| --- | --- | --- |
+| Governance failure-mode drills | Requires running governance/Pi MCP endpoints | `RUN_GOVERNANCE_DRILLS=1 pytest tests/drills/test_failure_modes.py -v` |
+| OpenAI-compatible HTTP endpoints | Requires running REST server and explicit endpoint opt-in | `RUN_OPENAI_ENDPOINT_TESTS=1 pytest tests/test_openai_endpoints.py -v` |
+| Legacy dialectic protocol drill | Requires registered live test agents/session state | `RUN_DIALECTIC_PROTOCOL_TESTS=1 pytest tests/test_dialectic_protocol.py -v` |
+| Wave 3a live BEAM round-trip | Operator-led BEAM/MCP drill | `WAVE_3A_RUN_LIVE_ROUNDTRIP=true pytest tests/integration/test_wave_3a_response_parity.py -k test_health_check_live -v` |
+| Live AGE knowledge-graph singleton | Requires an AGE-enabled `governance_test` database | `UNITARES_TEST_AGE_SINGLETON=1`, described in the next section |
+
+Skip counts move with the suite, so none is recorded here; read the current
+count from a test run. The dated 2026-06-14 triage that first listed these
+drills, with its follow-up candidates, is archived at
+[`archive/test-suite-triage.md`](archive/test-suite-triage.md). A green
+ordinary run says nothing about any drill in this table.
+
 ## Knowledge graph lifetime and the live AGE gap
 
 `tests/test_knowledge_graph_singleton.py` checks that the factory starts each
