@@ -60,6 +60,7 @@ store_finding  {"summary": "upload retry test is flaky", ...}           -> findi
 record_result  {"outcome_type": "test_failed", ...}
 
 # Agent B (Claude Code), in its own session, later
+start_session  {"force_new": true}                                     -> agent B's id
 store_finding  {"summary": "upload retry fails on clock skew", ...}     -> finding b
 use_tool       {"tool_name": "knowledge", "arguments": {"action": "supersede", "discovery_id": "<b>", "supersedes_id": "<a>"}}
 
