@@ -269,3 +269,19 @@ class TestSingleton:
             assert rl1 is rl2
         finally:
             mod._rate_limiter = old
+
+
+# ============================================================================
+# record(): one member per operation
+# ============================================================================
+
+class TestRecordUniqueness:
+
+    @pytest.mark.asyncio
+    async def test_record_counts_two_writes_in_one_second(self, limiter, fake_redis):
+        """Regression: members were f"{int(now)}:{id(self)}" on a singleton, so
+        every write in one second overwrote the last."""
+        with patch("src.cache.rate_limiter.time.time", return_value=1_800_000_000.0):
+            await limiter.record("agent-5", 3600)
+            await limiter.record("agent-5", 3600)
+        assert await fake_redis.zcard(f"{RATE_LIMIT_PREFIX}default:agent-5") == 2

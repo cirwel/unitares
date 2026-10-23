@@ -32,6 +32,8 @@ def _clean_env(monkeypatch):
         "UNITARES_TRUSTED_NETWORKS",
     ):
         monkeypatch.delenv(name, raising=False)
+    # No model is built in; the routing tests below need one named.
+    monkeypatch.setenv(env.MODEL_ENV, "test-model:latest")
     env._ollama_detect_cache.clear()
     from src.mcp_handlers.support import llm_delegation
 
@@ -336,6 +338,35 @@ async def test_local_resident_runner_refuses(monkeypatch):
     monkeypatch.setattr(runner, "OLLAMA_BASE_URL", EXTERNAL_BASE)
     with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
         with pytest.raises(env.EndpointNotLocalError):
+            await runner.call_local_model("prompt")
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_reviewer_abstains_without_a_named_model(monkeypatch):
+    """No model is built in: with none named, the local floor sends nothing
+    and abstains, and the reason travels in the provenance warnings."""
+    from agents.dialectic_reviewer import reviewer
+
+    monkeypatch.setattr(reviewer, "DEFAULT_MODEL", "")
+    monkeypatch.delenv(env.MODEL_ENV, raising=False)
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOST", raising=False)
+    with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
+        text = await reviewer.obtain_reviewer_text("prompt")
+    assert text == ""
+    assert reviewer.parse_reviewer_verdict(text).judgment_formed is False
+    provenance = reviewer.reviewer_backend_provenance()
+    assert provenance["model_requested"] is None
+    assert any("MODEL_NOT_CONFIGURED" in w for w in provenance["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_local_resident_runner_refuses_without_a_named_model(monkeypatch):
+    from agents.local_resident import runner
+
+    monkeypatch.setattr(runner, "DEFAULT_MODEL", "")
+    monkeypatch.delenv(env.MODEL_ENV, raising=False)
+    with patch("openai.AsyncOpenAI", side_effect=AssertionError("client built")):
+        with pytest.raises(env.ModelNotConfiguredError):
             await runner.call_local_model("prompt")
 
 

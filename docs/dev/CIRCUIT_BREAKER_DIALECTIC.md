@@ -197,8 +197,9 @@ The system provides internal LLM delegation via `src/mcp_handlers/support/llm_de
 - knowledge-graph synthesis helper
 
 **Configuration:**
-- `UNITARES_MODEL_ID` — override default model (env var; its older name `UNITARES_LLM_MODEL` was removed in v3.3.0 and is ignored)
-- Default: `gemma4:latest`. There is no model fallback tier; the tunable that
+- `UNITARES_MODEL_ID` — the model to use (env var; its older name `UNITARES_LLM_MODEL` was removed in v3.3.0 and is ignored)
+- No default: unset, the lane sends nothing and these helpers report the model
+  unavailable (`MODEL_NOT_CONFIGURED`). There is no model fallback tier; the tunable that
   exists is the reviewer timeout, `UNITARES_DIALECTIC_REVIEWER_TIMEOUT`
   (default 120s).
 

@@ -121,9 +121,11 @@ def test_current_era_is_the_newest_splitting_entry(tmp_path):
     path = _write_registry(tmp_path, [
         _entry("X1", "2026-01-01T00:00:00Z"),
         _entry("X2", "2026-02-01T00:00:00Z"),
+        _entry("C1", "2026-02-15T00:00:00Z", kind="population", config_hash="92a47c19ddf301d8"),
         _entry("L", "2026-03-01T00:00:00Z", kind="label_only"),
     ])
     assert eisv_eras.current_era_id(path) == "X2"
+    assert eisv_eras.current_era_window_start(path) == (_t("2026-02-15"), None)
 
 
 # ---------------------------------------------------------------------------
@@ -579,11 +581,11 @@ def test_basin_read_refuses_a_crossing_window(capsys):
 
 def test_current_era_window_start_for_the_live_registry():
     start, stamp_era = eisv_eras.current_era_window_start()
-    current = next(b for b in eisv_eras.load_boundaries() if b.id == eisv_eras.current_era_id())
+    current = next(b for b in reversed(eisv_eras.load_boundaries()) if b.splits)
     if current.interval is not None:
         assert (start, stamp_era) == (current.interval[1], None)
     else:
-        assert stamp_era == current.id
+        assert stamp_era == eisv_eras.current_era_id()
     assert eisv_eras.boundaries_crossed(
         start, start + timedelta(days=1), stamp_filtered=stamp_era is not None) == []
 

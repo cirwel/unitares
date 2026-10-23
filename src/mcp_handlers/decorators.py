@@ -467,7 +467,11 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
       "default"        — neither; the tool's ``default_action`` filled in
       None             — no action resolved at all
 
-    ``source`` is load-bearing for telemetry, not for any gate. ``dialectic``
+    ``source`` is load-bearing for telemetry and for the REST strict-identity
+    gate (``http_tool_service._strict_identity_refusal_or_none``), which
+    checks every ``kwargs`` depth whose action is "explicit" or
+    "alias_injected": reclassifying a source (the ``op`` synonym, say) changes
+    which wrapped actions that gate judges. ``dialectic``
     has ``default_action="list"``, so a bare ``dialectic()`` and an explicit
     ``dialectic(action="list")`` produce identical (canonical, action) pairs;
     only the source separates "an agent asked" from "the router defaulted".

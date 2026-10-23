@@ -432,7 +432,18 @@ cmd_status() {
         esac
     done
 
-    local health residents tiers latest errbuf auth_hint=0
+    local health residents tiers latest errbuf endpoint auth_hint=0
+    # Attribute the remote report to its endpoint, not to this CLI's install.
+    # Never echo URL credentials, query parameters or fragments in status.
+    endpoint=$(STATUS_URL="$UNITARES_URL" python3 -c '
+import os
+from urllib.parse import urlsplit, urlunsplit
+try:
+    url = urlsplit(os.environ["STATUS_URL"])
+    print(urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")))
+except ValueError:
+    print("[invalid endpoint URL]")
+')
     # /health is the one required panel — but its 503 during the post-restart
     # warmup window (connection-tracker middleware) is a legitimate state, not
     # an error, and a restart is the single most likely moment to run a status
@@ -445,8 +456,9 @@ cmd_status() {
             # front of the server — say so instead of over-claiming.
             rm -f "$errbuf"
             if [ "$json_mode" = "1" ]; then
-                printf '%s\n' '{"health": {"status": "warming_up"}, "residents": null, "tiers": null, "auth_required": false, "release": {"current": null, "latest": null, "comparison": "unknown"}}'
+                STATUS_ENDPOINT="$endpoint" python3 -c 'import json, os; print(json.dumps({"endpoint": os.environ["STATUS_ENDPOINT"], "health": {"status": "warming_up"}, "residents": None, "tiers": None, "auth_required": False, "release": {"current": None, "latest": None, "comparison": "unknown"}}))'
             else
+                printf 'Endpoint: %s\n' "$endpoint"
                 echo "UNITARES warming up — /health answered 503 (server starting, or a proxy error); retry shortly"
             fi
             return 0
@@ -538,7 +550,7 @@ for rel in releases:
 
     HEALTH="$health" RESIDENTS="$residents" TIERS="$tiers" LATEST="$latest" \
     RELEASE_STATE="$release_state" AUTH_HINT="$auth_hint" \
-    JSON_MODE="$json_mode" python3 -c '
+    JSON_MODE="$json_mode" STATUS_ENDPOINT="$endpoint" python3 -c '
 import json, os, sys
 
 def load(name):
@@ -581,6 +593,7 @@ if latest:
 
 if os.environ.get("JSON_MODE") == "1":
     print(json.dumps({
+        "endpoint": os.environ["STATUS_ENDPOINT"],
         "health": health,
         "residents": residents,
         "tiers": tiers,
@@ -603,6 +616,7 @@ if build:
     head += " (" + build + ")"
 head += " · up " + str(uptime) + " · db " + str(db.get("status", "?"))
 print(head)
+print("Endpoint: " + os.environ["STATUS_ENDPOINT"])
 
 # One message per failure cause: a 401/403 on the auth-gated panels means
 # "set UNITARES_TOKEN", while a missing route means "older server" — the two
