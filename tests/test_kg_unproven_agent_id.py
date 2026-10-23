@@ -902,6 +902,13 @@ class TestServerInferredBindingOnUngatedHandlers:
         assert f"knowledge(action='{action}')" in data["next_step"], data["next_step"]
         calls = " ".join(option.get("call", "") for option in data["safe_options"])
         assert "update_finding" not in calls and "store_finding" not in calls, calls
+        retries = [
+            option["call"] for option in data["safe_options"]
+            if option["action"] in ("retry_with_client_session_id", "rebind_then_retry")
+        ]
+        assert len(retries) == 2, data["safe_options"]
+        for call in retries:
+            assert f"knowledge(action='{action}', ..., client_session_id=" in call, call
 
     @pytest.mark.asyncio
     async def test_exempt_resident_inferred_binding_still_supersedes(self, patch_common, inferred):

@@ -1365,28 +1365,36 @@ def _inferred_binding_refusal(
     else:
         retry_call = "store_finding"
         retry_label = "store_finding / knowledge(action='store')"
-    return success_response(
-        inferred_binding_refusal_payload(
-            "knowledge",
-            retry_call=retry_call,
-            retry_label=retry_label,
-            identity_assurance=None,
-            read_only_option={
-                "action": "stay_read_only",
-                "call": "search_shared_memory(query=<what you need>)",
-                "when": (
-                    "You want to read shared memory without writing. "
-                    "Knowledge reads need no identity."
-                ),
-            },
-            surface_context={
-                "transport_surface": "knowledge",
-                "session_resolution_source": get_session_resolution_source(),
-                "proof_origin": get_session_proof_origin(),
-                "lifecycle_automation": "not_confirmed",
-            },
-        )
-    )[0]
+    payload = inferred_binding_refusal_payload(
+        "knowledge",
+        retry_call=retry_call,
+        retry_label=retry_label,
+        identity_assurance=None,
+        read_only_option={
+            "action": "stay_read_only",
+            "call": "search_shared_memory(query=<what you need>)",
+            "when": (
+                "You want to read shared memory without writing. "
+                "Knowledge reads need no identity."
+            ),
+        },
+        surface_context={
+            "transport_surface": "knowledge",
+            "session_resolution_source": get_session_resolution_source(),
+            "proof_origin": get_session_proof_origin(),
+            "lifecycle_automation": "not_confirmed",
+        },
+    )
+    if action:
+        # knowledge has no default action, so a retry route without one fails
+        # with "action parameter required": write it into every route.
+        for option in payload.get("safe_options", []):
+            call = option.get("call")
+            if isinstance(call, str):
+                option["call"] = call.replace(
+                    "knowledge(...", f"knowledge(action='{action}', ..."
+                )
+    return success_response(payload)[0]
 
 
 def _unproven_agent_id_refusal(
