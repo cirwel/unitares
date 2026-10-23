@@ -18,7 +18,8 @@
 #
 # Why this exists: on 2026-04-19 the ad-hoc rotation runbook wiped the
 # anchors/ dir wholesale. Every resident then fresh-onboarded with a new
-# UUID. Preserve anchor identity while rotating only the selected credentials.
+# UUID. See the 2026-04-19 identity audit and the anchor-resilience series
+# plan in the knowledge graph.
 
 set -euo pipefail
 
@@ -26,6 +27,7 @@ ANCHOR_DIR="${HOME}/.unitares/anchors"
 LAUNCHAGENTS_DIR="${HOME}/Library/LaunchAgents"
 GOVERNANCE_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.governance-mcp.plist"
 SENTINEL_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.sentinel-beam.plist"
+GOVERNANCE_SOCKET="${UNITARES_UDS_SOCKET:-${HOME}/.unitares/governance.sock}"
 DATE_STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${HOME}/.unitares/rotation-backup-${DATE_STAMP}"
 OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -43,9 +45,12 @@ die()  { printf '\033[1;31m[rotate]\033[0m %s\n' "$*" >&2; exit 1; }
 [[ -f "${GOVERNANCE_PLIST}" ]] || die "governance plist missing: ${GOVERNANCE_PLIST}"
 
 # PlistBuddy's `Set` fails when a key is absent. Historically that error was
-# suppressed for every plist, so a template-created Sentinel could remain on
-# the old/missing bearer after an otherwise successful rotation. Refuse before
-# writing any plist if an installed Sentinel is not structurally rotatable.
+# suppressed for every plist, so a governance job whose bearer lives outside
+# the plist (e.g. a Keychain launcher) or a template-created Sentinel could
+# remain on the old/missing bearer after an otherwise successful rotation.
+# Refuse before writing any file if either LaunchAgent is not rotatable.
+python3 "${SENTINEL_PLIST_TOOL}" rotation-preflight \
+  --plist "${GOVERNANCE_PLIST}" --allow-external-store
 if [[ -f "${SENTINEL_PLIST}" ]]; then
   python3 "${SENTINEL_PLIST_TOOL}" rotation-preflight --plist "${SENTINEL_PLIST}"
 fi
@@ -85,12 +90,53 @@ new_http_api_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32
 # stops the rotation under set -e.
 secrets_files="$(python3 "${SENTINEL_PLIST_TOOL}" secrets-files)"
 backed_up=0
+declare -a backed_up_secrets_paths=()
 while IFS= read -r secrets_file; do
   [[ -n "${secrets_file}" ]] || continue
   backed_up=$((backed_up + 1))
   cp -p "${secrets_file}" "${BACKUP_DIR}/secrets-${backed_up}.env"
+  backed_up_secrets_paths+=("${secrets_file}")
   log "backed up ${secrets_file} as secrets-${backed_up}.env"
 done <<< "${secrets_files}"
+
+for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
+  [[ -e "$plist" ]] || continue
+  cp -p "$plist" "${BACKUP_DIR}/$(basename "$plist")"
+done
+
+rotation_committed=0
+rollback_pre_launch_state() {
+  local rc=$?
+  if (( rc != 0 && rotation_committed == 0 )); then
+    warn "rotation failed before service reload; restoring secrets, plists, and anchors from ${BACKUP_DIR}..."
+    local idx=0
+    for secrets_file in "${backed_up_secrets_paths[@]+"${backed_up_secrets_paths[@]}"}"; do
+      idx=$((idx + 1))
+      if [[ -e "${BACKUP_DIR}/secrets-${idx}.env" ]]; then
+        cp -p "${BACKUP_DIR}/secrets-${idx}.env" "${secrets_file}" || true
+      fi
+    done
+    for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
+      [[ -e "$plist" ]] || continue
+      local bname
+      bname="$(basename "$plist")"
+      if [[ -e "${BACKUP_DIR}/${bname}" ]]; then
+        cp -p "${BACKUP_DIR}/${bname}" "$plist" || true
+      fi
+    done
+    if [[ -d "${BACKUP_DIR}/anchors" ]]; then
+      for f in "${BACKUP_DIR}/anchors"/*.json; do
+        [[ -e "$f" ]] || continue
+        cp -p "$f" "${ANCHOR_DIR}/$(basename "$f")" || true
+      done
+    fi
+    warn "rollback complete; backup retained at ${BACKUP_DIR}"
+  elif (( rc != 0 )); then
+    warn "post-reload verification failed; backup retained at ${BACKUP_DIR}"
+  fi
+}
+trap rollback_pre_launch_state EXIT
+
 if (( backed_up > 0 )); then
   printf '%s' "${new_continuity_secret}" | \
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_CONTINUITY_TOKEN_SECRET
@@ -98,11 +144,9 @@ if (( backed_up > 0 )); then
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_HTTP_API_TOKEN
 fi
 
-# --- Write into installed com.unitares.*.plist files ---
 log "rotating secrets in LaunchAgents plists..."
 for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
-  [[ -e "$plist" ]] || continue
-  cp "$plist" "${BACKUP_DIR}/$(basename "$plist")"
+  [[ -e "$plist" && "$plist" != "${GOVERNANCE_PLIST}" ]] || continue
   "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
   if [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
     # stdin keeps the bearer out of argv and the helper requires the key to
@@ -136,10 +180,29 @@ os.replace(tmp, path)
 PY
 done
 
+# --- Rotate governance-mcp last among mutations so an earlier file/plist/anchor
+#     error never leaves an external store updated while files roll back, and an
+#     external-store hook failure rolls back all local files from ${BACKUP_DIR}. ---
+"${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "${GOVERNANCE_PLIST}" 2>/dev/null || true
+printf '%s' "${new_http_api_token}" | \
+  python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "${GOVERNANCE_PLIST}" --allow-external-store
+
 # --- Bounce governance-mcp so it picks up the new secrets. ---
+rotation_committed=1
+had_governance_socket=0
+[[ -S "${GOVERNANCE_SOCKET}" ]] && had_governance_socket=1
 log "restarting governance-mcp..."
 "${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
 "${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
+
+if (( had_governance_socket == 1 )) || [[ -S "${GOVERNANCE_SOCKET}" || "${UNITARES_ROTATE_VERIFY_LIVE:-0}" == "1" ]]; then
+  log "verifying governance-mcp accepts the rotated bearer over ${GOVERNANCE_SOCKET}..."
+  printf '%s' "${new_http_api_token}" | \
+    python3 "${SENTINEL_PLIST_TOOL}" verify-bearer \
+      --socket "${GOVERNANCE_SOCKET}" \
+      --governance-plist "${GOVERNANCE_PLIST}" \
+      --wait-seconds "${UNITARES_ROTATE_VERIFY_WAIT_SECONDS:-15}"
+fi
 
 # Wrapped jobs read the secrets file only when they start; a long-running one
 # keeps the old value until it is reloaded. Names only: grep -q never prints.

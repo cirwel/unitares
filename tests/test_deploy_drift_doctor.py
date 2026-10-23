@@ -352,3 +352,217 @@ def test_explicit_surface_configuration_selects_only_declared_paths(tmp_path, mo
     path.write_text('[{"name":"custom","path":"relative","branch":"main"}]')
     with pytest.raises(ValueError, match='absolute'):
         ddd.configured_surfaces()
+
+
+def test_preflight_refusal_is_diagnosed_and_fingerprinted_by_service_and_refusal(
+    tmp_path, monkeypatch
+):
+    """#3020: scheduled deploy preflights surface host-config refusals before
+    the next deploy, keyed by service and refusal text so repeats dedupe while
+    distinct refusals stay separate."""
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    import plistlib
+
+    with plist.open("wb") as handle:
+        plistlib.dump(
+            {
+                "Label": "com.unitares.governance-mcp",
+                "ProgramArguments": ["/Users/op/projects/unitares/src/mcp_server.py"],
+                "EnvironmentVariables": {
+                    "DB_POSTGRES_URL": "postgresql://localhost/governance",
+                    "UNITARES_HTTP_API_TOKEN": "",
+                },
+            },
+            handle,
+        )
+
+    spec = ddd.PreflightSpec(
+        "governance-mcp",
+        str(plist),
+        ["/Users/op/projects/unitares-deploy/src/mcp_server.py"],
+        require_exists=True,
+        require_env_keys=["DB_POSTGRES_URL"],
+        check_governance_bearer=True,
+    )
+    found = ddd.diagnose_preflight(spec, make_io())
+    assert len(found) == 2
+    assert all(d.condition == "preflight_refused" for d in found)
+    assert any("does not point at the deploy worktree" in d.detail for d in found)
+    assert any("no usable EnvironmentVariables:UNITARES_HTTP_API_TOKEN" in d.detail for d in found)
+    assert found[0].fingerprint_parts != found[1].fingerprint_parts
+    assert found[0].fingerprint_parts == [
+        "deploy-drift",
+        "governance-mcp",
+        "preflight_refused",
+        "wrong_worktree:/Users/op/projects/unitares-deploy/src/mcp_server.py",
+    ]
+    assert found[1].fingerprint_parts == [
+        "deploy-drift",
+        "governance-mcp",
+        "preflight_refused",
+        "governance_bearer",
+    ]
+
+
+def test_sentinel_preflight_refusal_alerts_as_critical_and_resolves(tmp_path):
+    """#3020: a Sentinel check refusal alerts as critical on the doctor schedule,
+    dedupes under cooldown, and closes when the refusal clears."""
+    plist = tmp_path / "com.unitares.sentinel-beam.plist"
+    plist.write_text("<plist>/srv/unitares-deploy</plist>")
+    spec = ddd.PreflightSpec(
+        "sentinel-beam",
+        str(plist),
+        ["/srv/unitares-deploy"],
+        check_sentinel_plist=True,
+        governance_plist=str(tmp_path / "gov.plist"),
+        uds_socket=str(tmp_path / "gov.sock"),
+    )
+
+    io = make_io(behind=0)
+    io["sentinel_plist_check"] = (
+        lambda p, g, s: "the running governance service rejected the Sentinel bearer (HTTP 401)"
+    )
+    doc = ddd.Doctor(surfaces=[], preflights=[spec], io=io)
+    doc.run()
+    assert len(posted) == 1
+    assert posted[0]["severity"] == "critical"
+    assert "sentinel-beam" in posted[0]["message"]
+    assert "HTTP 401" in posted[0]["message"]
+
+    # Repeat run within cooldown suppresses duplicate alert even when the OS
+    # error text shifts during a restart/flap.
+    io["sentinel_plist_check"] = (
+        lambda p, g, s: "the running governance service could not be reached: [Errno 61] Connection refused"
+    )
+    ddd.Doctor(surfaces=[], preflights=[spec], io=io).run()
+    assert len(posted) == 1
+
+    # Once the preflight passes, the open finding resolves.
+    io["sentinel_plist_check"] = lambda p, g, s: None
+    doc_clean = ddd.Doctor(surfaces=[], preflights=[spec], io=io)
+    doc_clean.run()
+    assert doc_clean.state.get("open") == {}
+
+
+def test_optional_missing_plist_and_allow_env_do_not_refuse(tmp_path, monkeypatch):
+    """Optional uninstalled services stay silent, and --allow-env=1 suppresses
+    the target needle refusal just like deploy_lib_require_plist_target."""
+    missing_optional = ddd.PreflightSpec(
+        "wave3a-handlers",
+        str(tmp_path / "absent.plist"),
+        ["/srv/unitares-deploy"],
+        require_exists=False,
+    )
+    assert ddd.diagnose_preflight(missing_optional, make_io()) == []
+
+    missing_required = ddd.PreflightSpec(
+        "governance-mcp",
+        str(tmp_path / "absent-gov.plist"),
+        ["/srv/unitares-deploy/src/mcp_server.py"],
+        require_exists=True,
+    )
+    refused = ddd.diagnose_preflight(missing_required, make_io())
+    assert len(refused) == 1
+    assert "not installed" in refused[0].detail
+
+    dev_plist = tmp_path / "com.unitares.gateway-mcp.plist"
+    dev_plist.write_text("<plist>/srv/unitares-dev/src/gateway_server.py</plist>")
+    allow_spec = ddd.PreflightSpec(
+        "gateway-mcp",
+        str(dev_plist),
+        ["/srv/unitares-deploy/src/gateway_server.py"],
+        allow_env="UNITARES_GATEWAY_ALLOW_DEV",
+    )
+    assert len(ddd.diagnose_preflight(allow_spec, make_io())) == 1
+    monkeypatch.setenv("UNITARES_GATEWAY_ALLOW_DEV", "1")
+    assert ddd.diagnose_preflight(allow_spec, make_io()) == []
+
+
+def test_preflights_come_only_from_explicit_configuration(tmp_path, monkeypatch):
+    monkeypatch.delenv("UNITARES_DEPLOY_PREFLIGHTS", raising=False)
+    assert ddd.configured_preflights() == []
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([
+        {"service": "governance-mcp", "plist": "/srv/agents/governance.plist",
+         "needles": ["/srv/custom-mcp/src/mcp_server.py"], "require_exists": True,
+         "require_env_keys": ["DB_POSTGRES_URL"]},
+        {"service": "orchestrator", "plist": "/srv/agents/orchestrator.plist",
+         "needles": ["/srv/custom-orch/elixir/agent_orchestrator"], "require_exists": True,
+         "allow_env": "ORCH_ALLOW_DEV"},
+    ]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    by_service = {s.service: s for s in ddd.configured_preflights()}
+    assert set(by_service) == {"governance-mcp", "orchestrator"}
+    assert by_service["governance-mcp"].needles == ["/srv/custom-mcp/src/mcp_server.py"]
+    assert by_service["governance-mcp"].require_env_keys == ["DB_POSTGRES_URL"]
+    assert by_service["orchestrator"].require_exists is True
+    assert by_service["orchestrator"].allow_env == "ORCH_ALLOW_DEV"
+
+
+@pytest.mark.parametrize("entry", [
+    {"service": "x"},                                         # no plist
+    {"service": "x", "plist": "relative.plist"},              # not absolute
+    {"service": "x", "plist": "/a.plist", "needles": "/one"},  # needles not a list
+    {"service": "x", "plist": "/a.plist", "require_exists": "yes"},
+    {"service": "x", "plist": "/a.plist", "unknown": 1},
+])
+def test_invalid_preflight_configuration_is_refused(tmp_path, monkeypatch, entry):
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([entry]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    with pytest.raises(ValueError):
+        ddd.configured_preflights()
+
+
+def test_configured_preflights_run_without_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(ddd, "DEFAULT_SURFACES", [])
+    monkeypatch.delenv("UNITARES_DEPLOY_DRIFT_SURFACES", raising=False)
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([{"service": "svc", "plist": str(tmp_path / "missing.plist")}]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    doctor = ddd.Doctor(io=make_io(), dry_run=True)
+    assert [s.service for s in doctor.preflights] == ["svc"]
+
+
+def test_non_utf8_secrets_file_is_a_preflight_refusal_not_a_crash(tmp_path):
+    """A wrapped governance plist whose explicitly selected secrets file is not
+    UTF-8 produces a preflight_refused diagnosis rather than crashing."""
+    bad_file = tmp_path / "bad-values.env"
+    bad_file.write_bytes(b"\xff\xfeUNITARES_HTTP_API_TOKEN=broken\n")
+    bad_file.chmod(0o600)
+    wrapper = "/usr/local/bin/secrets-wrapper"
+    plist = tmp_path / "governance.plist"
+    import plistlib
+
+    with plist.open("wb") as handle:
+        plistlib.dump(
+            {
+                "Label": "governance",
+                "ProgramArguments": [
+                    wrapper,
+                    "--keys",
+                    "UNITARES_HTTP_API_TOKEN",
+                    "--",
+                    "/srv/unitares-deploy/src/mcp_server.py",
+                ],
+                "EnvironmentVariables": {
+                    "DB_POSTGRES_URL": "postgresql://localhost/governance",
+                    "UNITARES_SECRETS_WRAPPER": wrapper,
+                    "UNITARES_SECRETS_ENV": str(bad_file),
+                },
+            },
+            handle,
+        )
+    spec = ddd.PreflightSpec(
+        "governance-mcp",
+        str(plist),
+        ["/srv/unitares-deploy/src/mcp_server.py"],
+        require_exists=True,
+        require_env_keys=["DB_POSTGRES_URL"],
+        check_governance_bearer=True,
+    )
+    found = ddd.diagnose_preflights([spec], make_io())
+    assert len(found) == 1
+    assert found[0].condition == "preflight_refused"
+    assert "cannot read secrets file" in found[0].detail
+

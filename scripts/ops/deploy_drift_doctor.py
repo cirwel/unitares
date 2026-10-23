@@ -54,8 +54,10 @@ See ``--help`` for the identity caveat.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import time
@@ -63,8 +65,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+OPS_DIR = Path(__file__).resolve().parent
+for _p in (str(REPO_ROOT), str(OPS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:  # pragma: no cover - exercised by the very failure it guards against
     from agents.common.findings import (
@@ -191,6 +195,91 @@ def configured_surfaces() -> List[Surface]:
     return surfaces
 
 
+class PreflightSpec:
+    """Read-only deploy preflight for a LaunchAgent-backed service (#3020).
+
+    Mirrors ``deploy_lib_require_plist_target`` and the per-service read-only
+    checks (``sentinel-plist.py check`` in ``deploy-sentinel.sh`` and
+    ``governance-mcp``'s ``DB_POSTGRES_URL`` check in ``deploy-mcp.sh:145-150``)
+    so a host-configuration change that invalidates a deploy preflight surfaces
+    on the doctor schedule instead of waiting to block ``deploy-apply.sh`` at
+    the next deploy.
+    """
+
+    def __init__(
+        self,
+        service: str,
+        plist: str,
+        needles: List[str],
+        *,
+        require_exists: bool = False,
+        allow_env: Optional[str] = None,
+        require_env_keys: Optional[List[str]] = None,
+        check_governance_bearer: bool = False,
+        check_sentinel_plist: bool = False,
+        governance_plist: Optional[str] = None,
+        uds_socket: Optional[str] = None,
+    ):
+        self.service = service
+        self.plist = os.path.expanduser(plist)
+        self.needles = [os.path.expanduser(n) for n in needles]
+        self.require_exists = require_exists
+        self.allow_env = allow_env
+        self.require_env_keys = list(require_env_keys or [])
+        self.check_governance_bearer = check_governance_bearer
+        self.check_sentinel_plist = check_sentinel_plist
+        self.governance_plist = (
+            os.path.expanduser(governance_plist) if governance_plist else None
+        )
+        self.uds_socket = os.path.expanduser(uds_socket) if uds_socket else None
+
+
+_PREFLIGHT_FIELDS = {
+    "service", "plist", "needles", "require_exists", "allow_env", "require_env_keys",
+    "check_governance_bearer", "check_sentinel_plist", "governance_plist", "uds_socket",
+}
+DEFAULT_PREFLIGHTS: List[PreflightSpec] = []
+
+
+def configured_preflights() -> List[PreflightSpec]:
+    """Read the deployment's preflight list; an unset configuration selects none.
+
+    ``UNITARES_DEPLOY_PREFLIGHTS`` names a JSON array of objects with
+    ``PreflightSpec``'s fields. Which services a host runs, and where their
+    plists and checkouts live, is deployment configuration, not shipped code."""
+    path = os.environ.get("UNITARES_DEPLOY_PREFLIGHTS", "")
+    if not path:
+        return DEFAULT_PREFLIGHTS
+    values = json.loads(Path(path).read_text())
+    if not isinstance(values, list):
+        raise ValueError("deploy preflights must be a JSON array")
+    specs = []
+    services = set()
+    for item in values:
+        if not isinstance(item, dict) or set(item) - _PREFLIGHT_FIELDS:
+            raise ValueError("unexpected deploy preflight fields")
+        if any(not isinstance(item.get(key), str) or not item[key] for key in ("service", "plist")):
+            raise ValueError("deploy preflights require service and plist")
+        if item["service"] in services:
+            raise ValueError("deploy preflight services must be unique")
+        if not Path(os.path.expanduser(item["plist"])).is_absolute():
+            raise ValueError("deploy preflight plist paths must be absolute")
+        for key in ("needles", "require_env_keys"):
+            if key in item and (not isinstance(item[key], list)
+                                or not all(isinstance(v, str) and v for v in item[key])):
+                raise ValueError(f"{key} must be a list of strings")
+        for key in ("require_exists", "check_governance_bearer", "check_sentinel_plist"):
+            if key in item and not isinstance(item[key], bool):
+                raise ValueError(f"{key} must be boolean")
+        for key in ("allow_env", "governance_plist", "uds_socket"):
+            if item.get(key) is not None and not isinstance(item[key], str):
+                raise ValueError(f"{key} must be a string or null")
+        services.add(item["service"])
+        fields = {k: v for k, v in item.items() if k not in ("service", "plist", "needles")}
+        specs.append(PreflightSpec(item["service"], item["plist"], item.get("needles", []), **fields))
+    return specs
+
+
 # ---------------------------------------------------------------------------
 # IO seam — injected so the diagnosis logic is testable without a live fleet.
 # ---------------------------------------------------------------------------
@@ -279,12 +368,34 @@ def io_post_outcome(args: Dict[str, Any]) -> None:
         pass
 
 
+def io_sentinel_plist_check(
+    plist: str, governance_plist: str, uds_socket: str
+) -> Optional[str]:
+    """Run ``sentinel-plist.py``'s read-only validation, returning refusal text or None."""
+    try:
+        sentinel_tool = OPS_DIR / "sentinel-plist.py"
+        spec = importlib.util.spec_from_file_location("sentinel_plist", sentinel_tool)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.validate_plist(
+            plist=Path(plist),
+            governance_plist=Path(governance_plist),
+            expected_socket=Path(uds_socket),
+        )
+        return None
+    except Exception as exc:
+        return str(exc)
+
+
 DEFAULT_IO: Dict[str, Callable[..., Any]] = {
     "git": io_git,
     "fetch": io_fetch,
     "process_start_epoch": io_process_start_epoch,
     "post_finding": io_post_finding,
     "post_outcome": io_post_outcome,
+    "sentinel_plist_check": io_sentinel_plist_check,
 }
 
 
@@ -297,14 +408,30 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 class Diagnosis:
-    def __init__(self, surface: str, condition: str, detail: str, behind: int = 0):
+    def __init__(
+        self,
+        surface: str,
+        condition: str,
+        detail: str,
+        behind: int = 0,
+        *,
+        subkind: Optional[str] = None,
+    ):
         self.surface = surface
-        self.condition = condition  # "branch_mismatch" | "behind_origin" | "restart_pending"
+        self.condition = condition  # "branch_mismatch" | "behind_origin" | "restart_pending" | "version_lag" | "preflight_refused"
         self.detail = detail
         self.behind = behind
+        self.subkind = subkind
 
     @property
     def fingerprint_parts(self) -> List[str]:
+        if self.condition == "preflight_refused":
+            return [
+                "deploy-drift",
+                self.surface,
+                self.condition,
+                self.subkind or "preflight",
+            ]
         return ["deploy-drift", self.surface, self.condition]
 
 
@@ -455,6 +582,137 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
     return found
 
 
+def diagnose_preflight(
+    spec: PreflightSpec, io: Dict[str, Callable[..., Any]]
+) -> List[Diagnosis]:
+    """Run one service's read-only deploy preflight (#3020).
+
+    Side-effect free by construction: inspects only the installed LaunchAgent
+    plist, any referenced secrets file, and (when ``sentinel-plist.py check``
+    needs to verify an external-store governance bearer) the read-only
+    ``GET /v1/tools`` UDS endpoint.
+    """
+    found: List[Diagnosis] = []
+    plist_path = Path(spec.plist)
+    if not plist_path.is_file():
+        if spec.require_exists:
+            found.append(
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    f"{spec.plist} not installed",
+                    subkind="plist_missing",
+                )
+            )
+        return found
+
+    try:
+        raw_text = plist_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        found.append(
+            Diagnosis(
+                spec.service,
+                "preflight_refused",
+                f"cannot read {spec.plist}: {exc}",
+                subkind="plist_unreadable",
+            )
+        )
+        return found
+
+    allow_dev = bool(spec.allow_env and os.environ.get(spec.allow_env) == "1")
+    if not allow_dev:
+        for needle in spec.needles:
+            if needle not in raw_text:
+                found.append(
+                    Diagnosis(
+                        spec.service,
+                        "preflight_refused",
+                        f"LaunchAgent plist {spec.plist} does not point at the deploy worktree ({needle})",
+                        subkind=f"wrong_worktree:{needle}",
+                    )
+                )
+
+    if spec.require_env_keys or spec.check_governance_bearer:
+        try:
+            with plist_path.open("rb") as handle:
+                payload = plistlib.load(handle)
+        except Exception as exc:
+            found.append(
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    f"cannot parse {spec.plist}: {exc}",
+                    subkind="plist_invalid",
+                )
+            )
+            return found
+        env = payload.get("EnvironmentVariables") if isinstance(payload, dict) else None
+        for key in spec.require_env_keys:
+            val = env.get(key) if isinstance(env, dict) else None
+            if not isinstance(val, str) or not val.strip():
+                found.append(
+                    Diagnosis(
+                        spec.service,
+                        "preflight_refused",
+                        f"{spec.plist} has no readable EnvironmentVariables/{key}",
+                        subkind=f"missing_env:{key}",
+                    )
+                )
+        if spec.check_governance_bearer:
+            try:
+                from governance_bearer import resolve_plist_bearer
+
+                resolve_plist_bearer(plist_path)
+            except Exception as exc:
+                found.append(
+                    Diagnosis(
+                        spec.service,
+                        "preflight_refused",
+                        str(exc),
+                        subkind="governance_bearer",
+                    )
+                )
+
+    if spec.check_sentinel_plist:
+        checker = io.get("sentinel_plist_check", io_sentinel_plist_check)
+        gov_plist = spec.governance_plist or os.path.expanduser(
+            "~/Library/LaunchAgents/com.unitares.governance-mcp.plist"
+        )
+        uds = spec.uds_socket or os.path.expanduser("~/.unitares/governance.sock")
+        refusal = checker(spec.plist, gov_plist, uds)
+        if refusal:
+            found.append(
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    refusal,
+                    subkind="sentinel_plist_check",
+                )
+            )
+
+    return found
+
+
+def diagnose_preflights(
+    specs: List[PreflightSpec], io: Dict[str, Callable[..., Any]]
+) -> List[Diagnosis]:
+    """Run all configured read-only service deploy preflights."""
+    found: List[Diagnosis] = []
+    for spec in specs:
+        try:
+            found.extend(diagnose_preflight(spec, io))
+        except Exception as exc:
+            found.append(
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    str(exc),
+                    subkind="preflight_error",
+                )
+            )
+    return found
+
+
 # ---------------------------------------------------------------------------
 # Doctor
 # ---------------------------------------------------------------------------
@@ -462,8 +720,13 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
 class Doctor:
     def __init__(self, surfaces: Optional[List[Surface]] = None,
                  io: Optional[Dict[str, Callable[..., Any]]] = None,
-                 dry_run: bool = False):
+                 dry_run: bool = False,
+                 preflights: Optional[List[PreflightSpec]] = None):
         self.surfaces = surfaces if surfaces is not None else configured_surfaces()
+        if preflights is not None:
+            self.preflights = preflights
+        else:
+            self.preflights = configured_preflights() if surfaces is None else []
         self.io = {**DEFAULT_IO, **(io or {})}
         self.dry_run = dry_run
         self.state = self._load_state()
@@ -492,8 +755,8 @@ class Doctor:
             return hashlib.sha256("|".join(d.fingerprint_parts).encode()).hexdigest()[:16]
 
     def run(self) -> int:
-        if not self.surfaces:
-            log("no deployment surfaces configured; no checks or resolutions performed")
+        if not self.surfaces and not self.preflights:
+            log("no deployment surfaces or preflights configured; no checks or resolutions performed")
             return 2
         open_findings: Dict[str, Any] = self.state.setdefault("open", {})
         seen: set[str] = set()
@@ -506,6 +769,13 @@ class Doctor:
                 seen.add(fp)
                 log(f"DRIFT {d.surface} [{d.condition}] {d.detail}")
                 self._escalate(d, fp, open_findings)
+
+        for d in diagnose_preflights(self.preflights, self.io):
+            drift_count += 1
+            fp = self._fingerprint(d)
+            seen.add(fp)
+            log(f"DRIFT {d.surface} [{d.condition}] {d.detail}")
+            self._escalate(d, fp, open_findings)
 
         # Resolution: anything previously open that is no longer drifting has
         # been deployed. Close it — an open finding nobody closes is how a

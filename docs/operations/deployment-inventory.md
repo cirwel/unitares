@@ -67,7 +67,12 @@ is probed by default.
 
 The optional drift doctor separately accepts `UNITARES_DEPLOY_DRIFT_SURFACES`,
 a JSON array with `name`, absolute `path`, `branch`, nullable `launchd_label`,
-and optional boolean `check_behind`/`check_version` fields. No configured surfaces
-means no checks and no finding resolutions; it never reports an empty inventory
-as a healthy fleet. The one-time plist migration helper also requires explicit
+and optional boolean `check_behind`/`check_version` fields. Its read-only deploy
+preflights (#3020) come from `UNITARES_DEPLOY_PREFLIGHTS` the same way: a JSON
+array of objects with `service`, absolute `plist`, and optional `needles` and
+`require_env_keys` (lists of strings), `require_exists`, `check_governance_bearer`
+and `check_sentinel_plist` (booleans), and `allow_env`, `governance_plist` and
+`uds_socket` (strings). Neither list ships with a default roster. With no
+configured surfaces and no preflights it performs no checks and no finding
+resolutions; it never reports an empty inventory as a healthy fleet. The one-time plist migration helper also requires explicit
 `UNITARES_DEPLOY_MIGRATE_LABELS` alongside source and deployment paths.
