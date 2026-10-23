@@ -705,6 +705,31 @@ def test_render_keeps_an_installed_wrapper_and_never_writes_the_bearer_back(
     assert environment["UNITARES_SECRETS_ENV"] == str(job_file)
 
 
+def test_render_refuses_a_wrapped_sentinel_whose_wrapper_is_not_named(tmp_path: Path) -> None:
+    # A plist wrapped before UNITARES_SECRETS_WRAPPER existed: rendering must
+    # not drop the wrapper and write the bearer back into it.
+    home = tmp_path / "home"
+    root = tmp_path / "unitares-deploy"
+    output = home / "Library/LaunchAgents/com.unitares.sentinel-beam.plist"
+    governance = home / "Library/LaunchAgents/com.unitares.governance-mcp.plist"
+    token = "current-governance-bearer"
+    _write_plist(governance, {"UNITARES_HTTP_API_TOKEN": token})
+    _write_plist(output, {"UNITARES_HTTP_API_TOKEN": token})
+    _wrap(output, "UNITARES_HTTP_API_TOKEN")
+    with output.open("rb") as handle:
+        payload = plistlib.load(handle)
+    del payload["EnvironmentVariables"]["UNITARES_SECRETS_WRAPPER"]
+    with output.open("wb") as handle:
+        plistlib.dump(payload, handle, sort_keys=False)
+    before = output.read_bytes()
+
+    result = _run("render", "--home", home, "--root", root, env=_clean_env(HOME=str(home)))
+    assert result.returncode != 0
+    assert "does not name" in result.stderr and "UNITARES_SECRETS_WRAPPER" in result.stderr
+    assert output.read_bytes() == before
+    assert token.encode() not in output.read_bytes()
+
+
 def test_set_secret_rewrites_only_the_named_key(tmp_path: Path) -> None:
     secrets_file = tmp_path / "secrets.env"
     before = (

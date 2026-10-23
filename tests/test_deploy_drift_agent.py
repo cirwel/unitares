@@ -116,6 +116,54 @@ def test_reports_drift_in_checkin(agent_mod, monkeypatch):
     assert "live-thing:behind_origin" in res.summary
 
 
+def _configure_preflights(monkeypatch, tmp_path, n=1):
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([
+        {"service": f"svc-{i}", "plist": str(tmp_path / f"svc-{i}.plist")} for i in range(n)
+    ]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+
+
+class _Refused:
+    surface, condition = "sentinel-beam", "preflight_refused"
+
+
+def test_a_refused_preflight_is_reported_even_when_every_surface_is_clean(
+        agent_mod, monkeypatch, tmp_path):
+    _configure_preflights(monkeypatch, tmp_path)
+    agent = agent_mod._build_agent_cls()()
+    monkeypatch.setattr(agent_mod, "diagnose", lambda s, io: [])
+    monkeypatch.setattr(agent_mod, "diagnose_preflights", lambda specs, io: [_Refused()])
+    monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
+    monkeypatch.setattr(agent_mod.os.path, "isdir", lambda p: True)
+    res = asyncio.run(agent.run_cycle(None))
+    assert "running merged code" not in res.summary
+    assert "sentinel-beam:preflight_refused" in res.summary
+
+
+def test_preflights_without_surfaces_are_reported_not_called_unreadable(
+        agent_mod, monkeypatch, tmp_path):
+    monkeypatch.delenv("UNITARES_DEPLOY_DRIFT_SURFACES")
+    _configure_preflights(monkeypatch, tmp_path)
+    agent = agent_mod._build_agent_cls()()
+    monkeypatch.setattr(agent_mod, "diagnose_preflights", lambda specs, io: [_Refused()])
+    monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
+    res = asyncio.run(agent.run_cycle(None))
+    assert "no surfaces readable" not in res.summary
+    assert "sentinel-beam:preflight_refused" in res.summary
+
+
+def test_passing_preflights_are_counted_in_a_clean_report(agent_mod, monkeypatch, tmp_path):
+    _configure_preflights(monkeypatch, tmp_path, n=3)
+    agent = agent_mod._build_agent_cls()()
+    monkeypatch.setattr(agent_mod, "diagnose", lambda s, io: [])
+    monkeypatch.setattr(agent_mod, "diagnose_preflights", lambda specs, io: [])
+    monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
+    monkeypatch.setattr(agent_mod.os.path, "isdir", lambda p: True)
+    res = asyncio.run(agent.run_cycle(None))
+    assert "1/1 surfaces running merged code, 3/3 preflights passed" in res.summary
+
+
 def test_unreadable_fleet_lowers_confidence_not_a_clean_report(agent_mod, monkeypatch):
     """A cycle that could observe nothing must not report a clean fleet —
     that would be claiming a result never measured."""

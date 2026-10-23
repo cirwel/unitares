@@ -34,6 +34,8 @@ checked, drift conditions raised, findings closed. It is not a heartbeat
 manufactured to look governed; a cycle that finds nothing says so, and
 confidence reflects whether every surface could actually be read (a checkout
 that has vanished or a process that could not be inspected lowers it).
+Configured deploy preflights count the same way: a refused preflight is a
+reported condition, never folded into "running merged code".
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ for p in (str(REPO_ROOT), str(REPO_ROOT / "agents" / "sdk" / "src")):
 from scripts.ops.deploy_drift_doctor import (  # noqa: E402
     Doctor,
     diagnose,
+    diagnose_preflights,
 )
 
 
@@ -86,14 +89,16 @@ def _build_agent_cls():
                         continue
                     readable += 1
                     drifts.extend(diagnose(surface, doctor.io))
+                drifts.extend(diagnose_preflights(doctor.preflights, doctor.io))
                 doctor.run()
-                return readable, len(doctor.surfaces), drifts
+                return readable, len(doctor.surfaces), len(doctor.preflights), drifts
 
-            readable, total, drifts = await asyncio.get_running_loop().run_in_executor(
+            readable, total, preflights, drifts = await asyncio.get_running_loop().run_in_executor(
                 None, _work
             )
+            checked = f"{readable}/{total} surfaces, {preflights} preflight(s)"
 
-            if not readable:
+            if not readable and not preflights:
                 # Nothing could be inspected — say so plainly rather than
                 # reporting a clean fleet we did not actually observe.
                 return CycleResult(
@@ -104,13 +109,14 @@ def _build_agent_cls():
             if drifts:
                 detail = "; ".join(f"{d.surface}:{d.condition}" for d in drifts)
                 return CycleResult(
-                    summary=f"deploy-drift: {len(drifts)} drift condition(s) — {detail}",
+                    summary=f"deploy-drift: {len(drifts)} drift condition(s) across {checked} — {detail}",
                     complexity=0.4,
                     # Full confidence only when every surface was readable.
                     confidence=0.85 if readable == total else 0.6,
                 )
             return CycleResult(
-                summary=f"deploy-drift: {readable}/{total} surfaces running merged code",
+                summary=(f"deploy-drift: {readable}/{total} surfaces running merged code"
+                         + (f", {preflights}/{preflights} preflights passed" if preflights else "")),
                 complexity=0.2,
                 confidence=0.85 if readable == total else 0.6,
             )

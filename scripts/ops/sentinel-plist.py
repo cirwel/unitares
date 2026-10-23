@@ -95,6 +95,23 @@ def _rotation_files() -> list[Path]:
     return rotation_files()
 
 
+def _launches_unconfigured_wrapper(payload: dict[str, Any]) -> bool:
+    """Whether ``ProgramArguments`` has the ``<wrapper> --keys …BEARER… --``
+    launch shape for the bearer while the environment names no wrapper."""
+    arguments = payload.get("ProgramArguments")
+    environment = payload.get("EnvironmentVariables") or {}
+    return (
+        isinstance(arguments, list)
+        and len(arguments) >= 5
+        and all(isinstance(argument, str) for argument in arguments[:4])
+        and arguments[1] == "--keys"
+        and arguments[3] == "--"
+        and HTTP_TOKEN_KEY in arguments[2].split(",")
+        and isinstance(environment, dict)
+        and SECRETS_WRAPPER_ENV not in environment
+    )
+
+
 def _check_private(path: Path) -> None:
     check_private(path)
 
@@ -207,6 +224,14 @@ def render_plist(
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
             wrapper_file = str(_wrapper_secrets_file(_environment(installed, output)))
+        elif _launches_unconfigured_wrapper(installed):
+            # Rendering now would drop the wrapper and write the bearer into
+            # a plist that was deliberately moved off holding it.
+            raise PlistConfigError(
+                f"{output} launches through a secrets wrapper ({installed['ProgramArguments'][0]}) "
+                f"that its environment does not name; set {SECRETS_WRAPPER_ENV} to that "
+                f"wrapper and {SECRETS_FILE_ENV} to the file it reads, then re-render"
+            )
     if token is None and not wrapper:
         raise PlistConfigError(
             f"{governance_plist} keeps no {HTTP_TOKEN_KEY}, so there is no bearer to "
