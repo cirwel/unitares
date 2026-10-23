@@ -144,13 +144,7 @@ if (( backed_up > 0 )); then
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_HTTP_API_TOKEN
 fi
 
-# --- Rotate governance-mcp first so an external-store hook failure aborts
-#     before any client plist is rewritten (and triggers rollback above). ---
 log "rotating secrets in LaunchAgents plists..."
-"${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "${GOVERNANCE_PLIST}" 2>/dev/null || true
-printf '%s' "${new_http_api_token}" | \
-  python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "${GOVERNANCE_PLIST}" --allow-external-store
-
 for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
   [[ -e "$plist" && "$plist" != "${GOVERNANCE_PLIST}" ]] || continue
   "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
@@ -186,13 +180,22 @@ os.replace(tmp, path)
 PY
 done
 
+# --- Rotate governance-mcp last among mutations so an earlier file/plist/anchor
+#     error never leaves an external store updated while files roll back, and an
+#     external-store hook failure rolls back all local files from ${BACKUP_DIR}. ---
+"${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "${GOVERNANCE_PLIST}" 2>/dev/null || true
+printf '%s' "${new_http_api_token}" | \
+  python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "${GOVERNANCE_PLIST}" --allow-external-store
+
 # --- Bounce governance-mcp so it picks up the new secrets. ---
 rotation_committed=1
+had_governance_socket=0
+[[ -S "${GOVERNANCE_SOCKET}" ]] && had_governance_socket=1
 log "restarting governance-mcp..."
 "${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
 "${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
 
-if [[ -S "${GOVERNANCE_SOCKET}" || "${UNITARES_ROTATE_VERIFY_LIVE:-0}" == "1" ]]; then
+if (( had_governance_socket == 1 )) || [[ -S "${GOVERNANCE_SOCKET}" || "${UNITARES_ROTATE_VERIFY_LIVE:-0}" == "1" ]]; then
   log "verifying governance-mcp accepts the rotated bearer over ${GOVERNANCE_SOCKET}..."
   printf '%s' "${new_http_api_token}" | \
     python3 "${SENTINEL_PLIST_TOOL}" verify-bearer \

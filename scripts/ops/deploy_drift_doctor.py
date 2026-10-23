@@ -180,10 +180,11 @@ class PreflightSpec:
     """Read-only deploy preflight for a LaunchAgent-backed service (#3020).
 
     Mirrors ``deploy_lib_require_plist_target`` and the per-service read-only
-    checks (such as ``sentinel-plist.py check`` and ``governance-mcp``'s
-    ``DB_POSTGRES_URL`` / bearer config check) so a host-configuration change
-    that invalidates a deploy preflight surfaces on the doctor schedule instead
-    of waiting to block ``deploy-apply.sh`` at the next deploy.
+    checks (``sentinel-plist.py check`` in ``deploy-sentinel.sh`` and
+    ``governance-mcp``'s ``DB_POSTGRES_URL`` check in ``deploy-mcp.sh:145-150``)
+    so a host-configuration change that invalidates a deploy preflight surfaces
+    on the doctor schedule instead of waiting to block ``deploy-apply.sh`` at
+    the next deploy.
     """
 
     def __init__(
@@ -246,7 +247,6 @@ def default_preflights(env: Optional[Dict[str, str]] = None) -> List[PreflightSp
             [f"{mcp_deploy}/src/mcp_server.py"],
             require_exists=True,
             require_env_keys=["DB_POSTGRES_URL"],
-            check_governance_bearer=True,
         ),
         PreflightSpec(
             "sentinel-beam",
@@ -479,16 +479,30 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 class Diagnosis:
-    def __init__(self, surface: str, condition: str, detail: str, behind: int = 0):
+    def __init__(
+        self,
+        surface: str,
+        condition: str,
+        detail: str,
+        behind: int = 0,
+        *,
+        subkind: Optional[str] = None,
+    ):
         self.surface = surface
         self.condition = condition  # "branch_mismatch" | "behind_origin" | "restart_pending" | "version_lag" | "preflight_refused"
         self.detail = detail
         self.behind = behind
+        self.subkind = subkind
 
     @property
     def fingerprint_parts(self) -> List[str]:
         if self.condition == "preflight_refused":
-            return ["deploy-drift", self.surface, self.condition, self.detail]
+            return [
+                "deploy-drift",
+                self.surface,
+                self.condition,
+                self.subkind or "preflight",
+            ]
         return ["deploy-drift", self.surface, self.condition]
 
 
@@ -658,6 +672,7 @@ def diagnose_preflight(
                     spec.service,
                     "preflight_refused",
                     f"{spec.plist} not installed",
+                    subkind="plist_missing",
                 )
             )
         return found
@@ -670,6 +685,7 @@ def diagnose_preflight(
                 spec.service,
                 "preflight_refused",
                 f"cannot read {spec.plist}: {exc}",
+                subkind="plist_unreadable",
             )
         )
         return found
@@ -683,6 +699,7 @@ def diagnose_preflight(
                         spec.service,
                         "preflight_refused",
                         f"LaunchAgent plist {spec.plist} does not point at the deploy worktree ({needle})",
+                        subkind=f"wrong_worktree:{needle}",
                     )
                 )
 
@@ -696,6 +713,7 @@ def diagnose_preflight(
                     spec.service,
                     "preflight_refused",
                     f"cannot parse {spec.plist}: {exc}",
+                    subkind="plist_invalid",
                 )
             )
             return found
@@ -708,6 +726,7 @@ def diagnose_preflight(
                         spec.service,
                         "preflight_refused",
                         f"{spec.plist} has no readable EnvironmentVariables/{key}",
+                        subkind=f"missing_env:{key}",
                     )
                 )
         if spec.check_governance_bearer:
@@ -717,7 +736,12 @@ def diagnose_preflight(
                 resolve_plist_bearer(plist_path)
             except Exception as exc:
                 found.append(
-                    Diagnosis(spec.service, "preflight_refused", str(exc))
+                    Diagnosis(
+                        spec.service,
+                        "preflight_refused",
+                        str(exc),
+                        subkind="governance_bearer",
+                    )
                 )
 
     if spec.check_sentinel_plist:
@@ -729,7 +753,12 @@ def diagnose_preflight(
         refusal = checker(spec.plist, gov_plist, uds)
         if refusal:
             found.append(
-                Diagnosis(spec.service, "preflight_refused", refusal)
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    refusal,
+                    subkind="sentinel_plist_check",
+                )
             )
 
     return found
@@ -744,7 +773,14 @@ def diagnose_preflights(
         try:
             found.extend(diagnose_preflight(spec, io))
         except Exception as exc:
-            found.append(Diagnosis(spec.service, "preflight_refused", str(exc)))
+            found.append(
+                Diagnosis(
+                    spec.service,
+                    "preflight_refused",
+                    str(exc),
+                    subkind="preflight_error",
+                )
+            )
     return found
 
 

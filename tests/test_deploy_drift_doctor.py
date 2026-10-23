@@ -369,7 +369,13 @@ def test_preflight_refusal_is_diagnosed_and_fingerprinted_by_service_and_refusal
         "deploy-drift",
         "governance-mcp",
         "preflight_refused",
-        found[0].detail,
+        "wrong_worktree:/Users/op/projects/unitares-deploy/src/mcp_server.py",
+    ]
+    assert found[1].fingerprint_parts == [
+        "deploy-drift",
+        "governance-mcp",
+        "preflight_refused",
+        "governance_bearer",
     ]
 
 
@@ -398,7 +404,11 @@ def test_sentinel_preflight_refusal_alerts_as_critical_and_resolves(tmp_path):
     assert "sentinel-beam" in posted[0]["message"]
     assert "HTTP 401" in posted[0]["message"]
 
-    # Repeat run within cooldown suppresses duplicate alert.
+    # Repeat run within cooldown suppresses duplicate alert even when the OS
+    # error text shifts during a restart/flap.
+    io["sentinel_plist_check"] = (
+        lambda p, g, s: "the running governance service could not be reached: [Errno 61] Connection refused"
+    )
     ddd.Doctor(surfaces=[], preflights=[spec], io=io).run()
     assert len(posted) == 1
 
