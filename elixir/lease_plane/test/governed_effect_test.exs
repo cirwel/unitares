@@ -1212,6 +1212,74 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute File.exists?(path)
       assert lease_rows(surface) == [{false, nil}]
     end
+
+    test "a same-key retry after a pre-admission request crash acquires fresh custody and commits (#2620)" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-crash2620-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+      proposer = "00000000-0000-0000-0000-0000000000b1"
+      key = tracked_key()
+      parent = self()
+
+      on_exit(fn ->
+        File.rm(path)
+        LeaseTestHelpers.cleanup_surface(canonical(surface))
+      end)
+
+      set_file_write_flags(true)
+
+      body =
+        base(%{
+          "idempotency_key" => key,
+          "custody_mode" => "execute",
+          "surface" => surface,
+          "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+          "payload" => %{"path" => path, "content" => "recovered after pre-admission crash\n"},
+          "proposer" => %{"agent_uuid" => proposer}
+        })
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.CustodyChangeGovernanceVeto
+      )
+
+      {req_pid, req_ref} =
+        spawn_monitor(fn ->
+          Process.put(:change_effect_custody, fn _env ->
+            send(parent, {:in_veto, self()})
+
+            receive do
+              :continue -> :ok
+            end
+          end)
+
+          GovernedEffect.handle(body)
+        end)
+
+      assert_receive {:in_veto, ^req_pid}, 2_000
+      assert {:ok, active_lease} = UnitaresLeasePlane.Repo.status(canonical(surface))
+      assert is_binary(active_lease.lease_id)
+
+      Process.exit(req_pid, :kill)
+      assert_receive {:DOWN, ^req_ref, :process, ^req_pid, :killed}, 2_000
+
+      wait_until_released(surface)
+      assert lease_rows(surface) == [{true, "normal"}]
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.AllowGovernanceVeto
+      )
+
+      assert {:ok, committed} = GovernedEffect.handle(body)
+      assert committed.ok == true
+      assert committed.result.bytes_written == 36
+      assert File.read!(path) == "recovered after pre-admission crash\n"
+      assert lease_rows(surface) == [{true, "normal"}, {true, "normal"}]
+    end
   end
 
   describe "execute / agent_spawn (first execute slice)" do
@@ -1521,6 +1589,20 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     unless waiting do
       Process.sleep(10)
       wait_for_admission(backend, attempts - 1)
+    end
+  end
+
+  defp wait_until_released(surface, attempts \\ 200)
+  defp wait_until_released(_surface, 0), do: flunk("pre-admission lease was not released after crash")
+
+  defp wait_until_released(surface, attempts) do
+    case UnitaresLeasePlane.Repo.status(canonical(surface)) do
+      {:ok, nil} ->
+        :ok
+
+      _ ->
+        Process.sleep(10)
+        wait_until_released(surface, attempts - 1)
     end
   end
 

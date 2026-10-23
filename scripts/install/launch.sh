@@ -230,3 +230,5 @@ PY
 printf '\nManage this install from: %s\n' "$stack"
 printf 'Check updates (host Python 3 required): ./scripts/unitares update --check\n'
 printf 'Coordination acceptance: see docs/manual/02-install.md in the checkout.\n'
+printf 'Optional: connect a model for advice and local reviews with ./scripts/unitares model.\n'
+printf 'Ollama is one supported choice; core startup does not require a model.\n'

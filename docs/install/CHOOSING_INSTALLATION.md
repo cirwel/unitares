@@ -85,6 +85,47 @@ URL credentials and query parameters are omitted from the displayed endpoint.
 UNITARES_URL=http://localhost:18767 unitares status
 ```
 
+## Control a configured Homebrew installation
+
+The CLI bundled in a Homebrew package selects its native services for `start`,
+`stop`, and `logs`. From a source checkout, select them explicitly:
+
+```sh
+unitares start --homebrew --check
+unitares start --homebrew
+unitares logs --homebrew server --no-follow
+unitares logs --homebrew lease-plane
+unitares stop --homebrew
+```
+
+This controls the current macOS user's local Homebrew installation. The
+formulae, a private `$(brew --prefix)/etc/unitares/native.env`, and the database
+must already be configured. Startup checks port ownership, starts missing
+PostgreSQL/Redis services, verifies the installed package's schema without
+applying migrations, then starts the lease plane and server and checks deep
+health. Existing services are reused. `--check` reports the plan without
+changing services; it does not claim that an offline database passed its schema
+check.
+
+Stop shuts down the server and lease plane and leaves PostgreSQL/Redis running.
+If startup fails, only writers newly started by that invocation are stopped;
+shared dependencies and pre-existing writers are retained. Inspect the error
+and logs before retrying. Neither start nor stop upgrades packages, creates a
+database, changes configuration, or runs migrations.
+
+This initial native path supports local PostgreSQL on 5432, Redis on 6379, and
+the packaged server on 8767. Both writers must name the same database with an
+explicit URL-encoded username and password. Configure the lease-plane port
+consistently in its bind setting and both client URLs. Configuration values
+must be single-line literal shell assignments, optionally quoted; shell
+expansion is refused. Custom Homebrew per-service environment files and custom
+writer commands require their existing service procedure. A shell-only
+`UNITARES_NATIVE_ENV` override cannot select a different launchd configuration.
+
+Native upgrades still use the documented stop/backup/migrate/restart procedure.
+`unitares update` and Docker model configuration refuse a Homebrew package;
+invoke the CLI in the owning Docker checkout to manage that stack.
+
 Before switching the primary installation, identify its database and connected
 clients, take and verify a backup, stop its writers, and validate the replacement
 before moving clients. Retain the old data until that validation passes. Do not

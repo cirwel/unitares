@@ -1,0 +1,1 @@
+- Interface contract 1.56.1: Automatic local model selection requires an explicitly configured endpoint; fresh installs stay model-free.

@@ -129,6 +129,11 @@ there. If one half really is on its default port, set that port explicitly.
 
 ### Choose a model (optional)
 
+Start and verify the core installation first. A fresh install has no default
+model connected; Ollama is optional. An unrelated Ollama installation on the
+same machine does not become UNITARES's model just because it serves one model.
+Agents can still discover available models and explicitly choose one for a call.
+
 UNITARES bundles no model. Naming one turns on two things: `consult` answers
 from it, and a `request_review` that no peer has claimed can be taken by the
 in-process local reviewer, which drafts the antithesis and a proposed
@@ -159,8 +164,8 @@ settings:
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | `http://localhost:11434/v1` (Ollama on the same machine) |
-| `UNITARES_MODEL_ID` | The default model, used when an agent names none | None. An agent picks with `consult(model=...)` from the models `list_inference_hosts` lists; with no default and none picked, the endpoint's only model is used, else the call is refused with `MODEL_NOT_CONFIGURED` (through v3.4.0 it fell back to `gemma4:latest`) |
+| `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | Explicit model requests use `http://localhost:11434/v1` when unset. Set this explicitly to enable automatic selection of the endpoint's sole served model. |
+| `UNITARES_MODEL_ID` | The default model, used when an agent names none | None. An agent can pick with `consult(model=...)`. Otherwise use this configured default, or the sole model at an explicitly configured endpoint; without either, return `MODEL_NOT_CONFIGURED`. |
 
 Ollama is the server these steps are tested with. Other servers that speak the
 same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
@@ -182,6 +187,18 @@ server is Ollama, it also gives Ollama's hints, such as `ollama pull`. `--help`
 shows the non-interactive flags; `--no-docker` prints the two settings for a
 source install instead. To run it as plain `unitares`, link it onto your `PATH`
 once: `ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
+
+For Homebrew or a source installation, `unitares model --no-docker` prints the
+settings. Save them in the server's own environment (Homebrew uses
+`$(brew --prefix)/etc/unitares/native.env`) and restart the native server through
+its service manager. The core installation remains usable when this step is skipped.
+
+**Optional fallback:** after configuring local inference, a caller can use
+`consult(effort='thorough', allow_degraded=True)` to permit standard local advice
+when the thorough lane cannot run and its safety checks permit degradation.
+The response records that degradation. `allow_degraded` is false by default;
+this is not a universal retry switch for every provider or review workflow.
+Configuring Ollama does not grant permission to send prompts to a cloud provider.
 
 To do the same by hand with Ollama on the Docker host, pull a model and name
 both in `.env`:
@@ -575,7 +592,7 @@ before it.
 | Hybrid ranking | Off | `docker-compose.full.yml` sets `UNITARES_ENABLE_HYBRID=1`, on top of semantic search | Results come from one ranking (semantic, or full-text when semantic is off), not a fusion of both | `src/retrieval.py` (`hybrid_enabled`); `UNITARES_ENABLE_HYBRID` |
 | Cross-encoder reranker | Off, also in `docker-compose.full.yml` | `UNITARES_ENABLE_RERANKER=1`, with `sentence-transformers` installed (the full override's image has it); `UNITARES_RERANKER_MODEL` picks the model. It scores every candidate with a second model on each search | The first-stage order is the final order | `src/reranker.py` (`reranker_enabled`); `UNITARES_ENABLE_RERANKER` |
 | Search related-finding expansion | Off | `UNITARES_ENABLE_RELATED_EXPANSION=1`. Read the `related_expansion_enabled` docstring first: it adds each top result's stored `related_to` neighbours, which lets a finding's retrievability grow with its own link count | Results are not padded with related findings | `src/retrieval.py` (`related_expansion_enabled`); `UNITARES_ENABLE_RELATED_EXPANSION` |
-| Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_NOT_CONFIGURED` (no model named, and the endpoint lists no single model to fall back on); `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
+| Model for `consult` and the local reviewer | None named | `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` ([Choose a model](#choose-a-model-optional)), or `./scripts/unitares model` | `consult` answers `MODEL_NOT_CONFIGURED` (no model chosen and no explicitly configured endpoint with a sole served model); `request_review` records the thesis and waits for a peer or the operator | `docker-compose.yml`; `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` |
 | CLI hosts for `consult(effort='thorough')` and `delegate_inference` | Not available: no Compose service starts the agent orchestrator | Run the agent orchestrator, then set `UNITARES_HOST_ADAPTER_ENABLED=1`, `AGENT_ORCHESTRATOR_BEARER_TOKEN`, and an authenticated Codex, Claude or Antigravity CLI | Those calls fail and say the extension is not configured; `list_inference_hosts` reports it under `extensions.agent_orchestrator` | `src/mcp_handlers/support/inference_registry.py`; `UNITARES_HOST_ADAPTER_ENABLED` |
 | Orchestrated and cross-family dialectic review | Off: reviews run in-process | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1` with the agent orchestrator reachable at `AGENT_ORCHESTRATOR_URL`; `UNITARES_DIALECTIC_REVIEWER_HOST` (or `_HOSTS`) picks the reviewer backend | Reviews come from the in-process reviewer (with a model) or a peer; no separately identified reviewer process from another model family. Any dispatch failure falls back to in-process | `src/mcp_handlers/dialectic/orchestrator_dispatch.py` (`orchestrated_review_enabled`); `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` |
 | Lease-holder attestations (Ed25519) | On, signed with a published development seed and issuer `unitares-local` | Set your own `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, a stable `UNITARES_LEASE_ATTESTATION_ISSUER`, and `UNITARES_LEASE_TRUSTED_ISSUERS` (see §2.3) | With the published seed, anyone holding the compose file can sign an attestation the stack accepts; it is for a loopback install only | `docker-compose.yml`; `docs/DEPLOYMENT_SECURITY.md`; `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` |
