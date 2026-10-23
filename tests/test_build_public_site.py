@@ -102,7 +102,7 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert "docs/evaluations/accountability-journey/result-v0.md" in demo
     assert "both scored 1.000" in demo_text
     # Reachable from the landing hero and the nav.
-    assert 'href="demo.html"' in landing
+    assert 'class="primary" href="demo.html"' in landing
     assert 'href="demo.html" class="active"' in demo
 
 
@@ -121,6 +121,12 @@ def test_demo_build_fails_on_unfilled_placeholder():
     fixture["questions"] = [{"question_id": "who", "fact_key": "a"}]
     with pytest.raises(ValueError):
         render_demo_md("{{questions_table}}", fixture)
+    # A record whose value disagrees with the oracle fails, not the oracle shown.
+    fixture["questions"] = [{"question_id": "who", "fact_key": "a"}]
+    fixture["arms"]["unitares"]["records"] = [{"record_id": "r1", "facts": {"a": "y"}}]
+    with pytest.raises(ValueError):
+        render_demo_md("{{questions_table}}", fixture)
+    fixture["arms"]["unitares"]["records"] = []
     # A mistyped link name would publish a broken relative link.
     fixture["questions"] = []
     with pytest.raises(ValueError):

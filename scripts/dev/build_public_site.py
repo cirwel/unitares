@@ -169,17 +169,26 @@ def render_demo_md(demo_md: str, fixture: dict) -> str:
     for relation in relations:
         text = text.replace("{{relation.%s}}" % relation, relation)
 
-    holders: dict[str, str] = {}
+    # The answer shown is the record's own value; one that disagrees with the
+    # oracle fails the build rather than printing the oracle beside it.
+    holders: dict[str, dict] = {}
     for record in fixture["arms"]["unitares"]["records"]:
         for key in record.get("facts", {}):
-            holders.setdefault(key, record["record_id"])
+            holders.setdefault(key, record)
     rows = ["| Question | Answer from the record | Record |", "|---|---|---|"]
     for question in fixture["questions"]:
         key = question["fact_key"]
         if key not in holders:
             raise ValueError(f"demo: no record answers {question['question_id']!r}")
+        record = holders[key]
+        answer = record["facts"][key]
+        if str(answer) != str(facts[key]):
+            raise ValueError(
+                f"demo: record {record['record_id']!r} answers {question['question_id']!r} "
+                "differently from the oracle"
+            )
         label = question["question_id"].replace("_", " ").capitalize() + "?"
-        rows.append(f"| {label} | {facts[key]} | `{holders[key]}` |")
+        rows.append(f"| {label} | {answer} | `{record['record_id']}` |")
     text = text.replace("{{questions_table}}", "\n".join(rows))
 
     for name, url in DEMO_LINKS.items():
