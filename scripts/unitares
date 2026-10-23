@@ -967,6 +967,22 @@ _compose() {
     docker compose --project-directory "$(_repo_root)" "$@"
 }
 
+_is_homebrew_package() {
+    local root
+    root="$(_repo_root)"
+    case "$root" in
+        */libexec/app) [ -x "$root/../../bin/unitares-server" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+_homebrew_service() {
+    local action="$1"
+    shift
+    [ "${1:-}" != "--homebrew" ] || shift
+    python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "$@"
+}
+
 _env_value() {
     # A Compose setting as Compose resolves it: a value exported in this shell
     # first, then the checkout's .env, then the given default. Only simple
@@ -994,6 +1010,11 @@ _require_compose_install() {
     # $1: "existing" to also require this checkout's governance-mcp container.
     local root
     root="$(_repo_root)"
+    if _is_homebrew_package; then
+        echo "error: this CLI belongs to a Homebrew package; this operation requires a Docker checkout." >&2
+        echo "       Native upgrades still require stopping both writers, backup and explicit migration. See docs/install/CHOOSING_INSTALLATION.md." >&2
+        return 1
+    fi
     if [ "$(uname -s)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.unitares.governance-mcp" >/dev/null 2>&1; then
         echo "error: this machine runs UNITARES as a launchd service, not the Docker Compose stack." >&2
         echo "       Use that deployment's own start/stop/update procedure." >&2
@@ -1025,16 +1046,28 @@ cmd_model() {
 }
 
 cmd_start() {
+    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+        _homebrew_service start "$@"
+        return $?
+    fi
     _require_compose_install || return 1
     _compose up -d --wait "$@"
 }
 
 cmd_stop() {
+    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+        _homebrew_service stop "$@"
+        return $?
+    fi
     _require_compose_install existing || return 1
     _compose stop "$@"
 }
 
 cmd_logs() {
+    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+        _homebrew_service logs "$@"
+        return $?
+    fi
     _require_compose_install existing || return 1
     if [ $# -eq 0 ]; then
         _compose logs -f --tail=100 governance-mcp
@@ -1530,8 +1563,18 @@ Install (Docker Compose install in this checkout):
   model [--model NAME] [--yes]      Pick the local Ollama model for consult
                                     and dialectic reviews (writes .env,
                                     rebuilds, checks the server reaches it)
-  start | stop                      Start or stop the stack
-  logs [service]                    Follow logs (default: governance-mcp)
+  start | stop                      Start or stop this installation
+  logs [service]                    Follow this installation's logs
+
+Homebrew service control (automatic from a Homebrew package):
+  start --homebrew [--check]         Start missing services; verify the schema
+                                    before starting either writer
+  stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
+  logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
+                                    Read native service logs
+  From a source checkout, --homebrew explicitly selects the installed native
+  services. Configuration/bootstrap must already be complete. No migrations
+  run during start. Native update is still a separate backed-up procedure.
 
 Commands:
   tui [--interval N] [--once [--json]]
