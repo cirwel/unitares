@@ -127,7 +127,8 @@ expansion is refused. Custom Homebrew per-service environment files and custom
 writer commands require their existing service procedure. A shell-only
 `UNITARES_NATIVE_ENV` override cannot select a different launchd configuration.
 
-Native upgrades still use the documented stop/backup/migrate/restart procedure.
+Native upgrades use the tap's documented
+[stop/backup/migrate/restart procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 `unitares update` and Docker model configuration refuse a Homebrew package;
 invoke the CLI in the owning Docker checkout to manage that stack.
 

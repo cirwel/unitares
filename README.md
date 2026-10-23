@@ -98,6 +98,8 @@ brew update && brew tap cirwel/unitares && brew trust cirwel/unitares
 brew install cirwel/unitares/unitares && brew pin unitares unitares-lease-plane
 ```
 
+The published tap includes native setup/service CLI backports; its package revision differs from the server's upstream version.
+
 Complete the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup), then run `unitares start`. Database provisioning and backed-up upgrades remain explicit preview steps; package installation alone does not make the server ready.
 
 **Docker Compose:** for container deployments and other platforms, Git, curl and Docker Compose start the latest verified full stack. An opt-in [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the server and database:

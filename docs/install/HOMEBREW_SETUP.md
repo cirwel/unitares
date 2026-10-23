@@ -5,8 +5,9 @@ provides the server and native dependencies for Apple Silicon Macs. Install it
 with the tap's documented `brew update`, `brew tap`, `brew trust` and
 `brew install` steps. Its [first-time setup instructions](https://github.com/cirwel/homebrew-unitares#first-time-setup)
 cover deliberate role/database creation and the installed bootstrap; no Docker
-or model server is required. These commands apply to a package containing the
-setup helper.
+or model server is required. Public tap revision `3.5.0_5` includes the native
+setup and service-control backports; the server still reports upstream version
+`3.5.0`. Use `brew info cirwel/unitares/unitares` to inspect the package revision.
 From a source checkout, `--homebrew` selects the installed native package;
 a packaged CLI selects it automatically.
 
@@ -76,6 +77,6 @@ For commands that accept a database URL, pass its password through libpq's
 `PGPASSWORD` environment instead of including it in process arguments. Setup's
 own probes do this automatically and suppress raw database error output.
 
-Native upgrades remain the separate backed-up procedure in
-[Choosing an installation](CHOOSING_INSTALLATION.md). Setup does not switch
+Native upgrades use the tap's separate backed-up
+[upgrade and recovery procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery). Setup does not switch
 clients, copy a Docker database, or change which installation owns your data.

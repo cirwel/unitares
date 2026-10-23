@@ -22,6 +22,10 @@ brew install cirwel/unitares/unitares
 brew pin unitares unitares-lease-plane
 ```
 
+The published tap revision `3.5.0_5` includes native CLI backports beyond the
+upstream v3.5.0 archive. The running server still reports `3.5.0`; inspect the
+package revision with `brew info cirwel/unitares/unitares`.
+
 Continue with the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup).
 Package installation does not create a role/database or apply bootstrap SQL.
 `unitares setup --apply` prepares missing private configuration, preserving any
