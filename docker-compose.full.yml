@@ -1,0 +1,40 @@
+# Full search setup: semantic search and hybrid ranking on top of the quickstart.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up -d --wait --build
+#
+# Use both files on every later command too (exec, logs, down), or set
+# COMPOSE_FILE=docker-compose.yml:docker-compose.full.yml in .env.
+#
+# What it changes, and nothing else:
+# - builds the governance-mcp image locally with sentence-transformers (CPU
+#   torch), tagged unitares:full-local so the published image is left alone;
+# - turns on the bge-m3 embedding model and hybrid ranking (reciprocal rank
+#   fusion of semantic and full-text results);
+# - keeps the model cache on the governance-data volume, so the first start
+#   downloads it once (a few GB, network required) and later starts reuse it;
+# - mounts ./scripts read-only, for the one-time re-embed below.
+#
+# The knowledge backend must be `age` (the quickstart default): semantic search
+# runs only on the AGE backend. The cross-encoder reranker and graph expansion
+# stay off; see docs/manual/02-install.md for what each flag does.
+#
+# Findings stored before this override have no vector, and nothing adds one on
+# its own. Embed them once after the first start:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml \
+#     exec governance-mcp python scripts/migration/reembed_corpus.py --only-missing
+
+services:
+  governance-mcp:
+    image: unitares:full-local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_EMBEDDINGS: "1"
+    environment:
+      UNITARES_EMBEDDING_MODEL: bge-m3
+      UNITARES_ENABLE_HYBRID: "1"
+      HF_HOME: /app/data/hf
+    volumes:
+      - ./scripts:/app/scripts:ro
