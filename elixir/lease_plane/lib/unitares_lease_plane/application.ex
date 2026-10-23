@@ -31,6 +31,8 @@ defmodule UnitaresLeasePlane.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     if Application.get_env(:lease_plane, :start_application, true) do
@@ -49,6 +51,8 @@ defmodule UnitaresLeasePlane.Application do
     if token = System.get_env("LEASE_PLANE_BEARER_TOKEN") do
       Application.put_env(:lease_plane, :bearer_token, token)
     end
+
+    for warning <- boot_warnings(), do: Logger.warning(warning)
 
     # RFC §7.10 — separate elevated bearer for force-release (operator-only).
     # Distinct config key + env var so the regular bearer can't authorize
@@ -374,6 +378,105 @@ defmodule UnitaresLeasePlane.Application do
 
     %{username: user, password: pass, host: host, port: port, database: database}
   end
+
+  # sha256 of the LEASE_PLANE_BEARER_TOKEN default docker-compose.yml publishes.
+  # A digest, not the literal, as in src/insecure_defaults.py; both are pinned
+  # to the compose file by tests (tests/test_insecure_defaults.py and
+  # published_default_test.exs).
+  @published_bearer_sha256 "46378d16b298ff0b584fb7f7d9d11d74b36914788d9bf23c6426197bbff3322f"
+
+  @doc false
+  def published_bearer_sha256, do: @published_bearer_sha256
+
+  @doc """
+  Boot warnings for a bearer token still at its published compose default.
+
+  Names the variable, never its value. Warn-only: inside the compose container
+  the lease plane binds every interface by design and only Docker's host port
+  mapping, which this process cannot see, decides reachability, so the bind
+  address cannot justify a refusal there. Outside a container, a bind beyond
+  loopback adds a second, stronger warning. `http_ip` is the address the
+  listener resolves (the environment variable, else `config :lease_plane,
+  http_ip:`), as a tuple, a `:gen_tcp` atom (`:any`, `:loopback`) or a Unix
+  socket (`{:local, path}`, never beyond loopback); a string is parsed for
+  convenience. The governance server applies the
+  configuration-signalled refusal (src/insecure_defaults.py).
+  """
+  def published_default_warnings(token, http_ip, in_container?) do
+    http_ip = if is_binary(http_ip), do: parse_ip_or_nil(http_ip), else: http_ip
+
+    if published_default_bearer?(token) do
+      base =
+        "LEASE_PLANE_BEARER_TOKEN is still set to the published docker-compose.yml " <>
+          "default, which anyone can read. That suits only a single-user local " <>
+          "evaluation. Set your own value, the same one in the lease plane and " <>
+          "the governance server (docs/DEPLOYMENT_SECURITY.md)."
+
+      if not in_container? and beyond_loopback?(http_ip) do
+        [
+          base,
+          "The lease plane binds beyond loopback (UNITARES_LEASE_PLANE_HTTP_IP, else " <>
+            "config :lease_plane, http_ip:) while LEASE_PLANE_BEARER_TOKEN is the " <>
+            "published default: anyone who can reach this port can acquire and " <>
+            "release leases."
+        ]
+      else
+        [base]
+      end
+    else
+      []
+    end
+  end
+
+  defp published_default_bearer?(token) when is_binary(token) do
+    trimmed = String.trim(token)
+
+    trimmed != "" and
+      Base.encode16(:crypto.hash(:sha256, trimmed), case: :lower) == @published_bearer_sha256
+  end
+
+  defp published_default_bearer?(_), do: false
+
+  defp parse_ip_or_nil(raw) do
+    case :inet.parse_address(String.to_charlist(raw)) do
+      {:ok, address} -> address
+      {:error, _} -> nil
+    end
+  end
+
+  # What start_full/0 logs: the live token, bind and container check.
+  @doc false
+  def boot_warnings do
+    published_default_warnings(
+      System.get_env("LEASE_PLANE_BEARER_TOKEN"),
+      resolved_http_ip(),
+      File.exists?("/.dockerenv")
+    )
+  end
+
+  # The address the listener will bind: the environment variable, else app
+  # config, as http_children/0 resolves it. An unparseable variable is left
+  # for http_children/0 to refuse; here it reads as "not known to be exposed".
+  @doc false
+  def resolved_http_ip do
+    parse_http_ip(
+      System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+      Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+    )
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp beyond_loopback?({127, _, _, _}), do: false
+  defp beyond_loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: false
+  # IPv4-mapped loopback, ::ffff:127.0.0.0/104.
+  defp beyond_loopback?({0, 0, 0, 0, 0, 0xFFFF, hi, _}) when div(hi, 256) == 127, do: false
+  # A Unix domain socket has no network port to reach.
+  defp beyond_loopback?({:local, _path}), do: false
+  defp beyond_loopback?(ip) when is_tuple(ip), do: true
+  # :gen_tcp also takes these atoms for `ip:`; :any binds every interface.
+  defp beyond_loopback?(:any), do: true
+  defp beyond_loopback?(_), do: false
 
   @doc false
   def parse_http_ip(nil, default), do: default

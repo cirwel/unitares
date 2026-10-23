@@ -78,7 +78,7 @@ fi
 printf '%s\n' "${*//$'\n'/ }" >> "$d/calls.log"
 if [ -f "$d/fail" ]; then
   while IFS= read -r pattern; do
-    [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && exit 1
+    [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && { echo "fake gh refused: $pattern" >&2; exit 1; }
   done < "$d/fail"
 fi
 exit 0
@@ -437,7 +437,60 @@ def test_a_retry_that_started_nothing_is_not_spent(tmp_path: Path) -> None:
         "run rerun 77 --failed -R o/r",
         f"pr edit 9 -R o/r --remove-label {RETRIED}",
     ]
-    assert "retry not spent" in out
+    assert "retry not spent (1 of 3)" in out
+    assert "run 77 did not re-run: fake gh refused: run rerun" in out
+
+
+def _refused(tmp_path: Path, *lines: str) -> None:
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    (state / "approvals.reruns").write_text("".join(f"{line}\n" for line in lines))
+
+
+def test_a_rerun_refused_on_every_try_leaves_the_marker_on(tmp_path: Path) -> None:
+    # Toggling the marker every tick buried #2975's timeline (#3036).
+    _refused(tmp_path, "9 sha9", "9 sha9")
+    calls, out = _run(
+        tmp_path, [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])], fail=("run rerun",)
+    )
+    assert calls == [
+        f"pr edit 9 -R o/r --add-label {RETRIED}",
+        "run rerun 77 --failed -R o/r",
+    ]
+    assert f"no re-run started in 3 tries on sha9; leaving {RETRIED} on" in out
+    assert (tmp_path / "state" / "approvals.reruns").read_text().count("9 sha9") == 3
+
+
+def test_a_refusal_that_cannot_be_recorded_leaves_the_marker_on(tmp_path: Path) -> None:
+    # Uncounted refusals would never run out of tries.
+    (tmp_path / "state" / "approvals.reruns").mkdir(parents=True)
+    calls, out = _run(
+        tmp_path, [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])], fail=("run rerun",)
+    )
+    assert calls == [
+        f"pr edit 9 -R o/r --add-label {RETRIED}",
+        "run rerun 77 --failed -R o/r",
+    ]
+    assert "the refusal could not be recorded" in out
+
+
+def test_refused_tries_count_per_head(tmp_path: Path) -> None:
+    _refused(tmp_path, "9 old", "9 old", "9 old", "10 sha9")
+    calls, out = _run(
+        tmp_path, [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])], fail=("run rerun",)
+    )
+    assert calls[-1] == f"pr edit 9 -R o/r --remove-label {RETRIED}"
+    assert "retry not spent (1 of 3)" in out
+
+
+def test_a_marker_left_on_after_refusals_does_not_claim_a_retry(tmp_path: Path) -> None:
+    _refused(tmp_path, "9 sha9", "9 sha9", "9 sha9")
+    calls, out = _run(
+        tmp_path, [_pr(9, labels=(LABEL, RETRIED), state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])]
+    )
+    assert calls == []
+    assert "GitHub would not re-run its failed checks on sha9" in out
+    assert "still failing after one retry" not in out
 
 
 def test_failing_status_context_without_a_run_is_skipped(tmp_path: Path) -> None:
