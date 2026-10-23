@@ -28,6 +28,7 @@ function fixture(nAgents = 30) {
   events.push({ kind: "lifecycle", ts: iso(120), agent_id: uid(1), event_type: "lifecycle_paused", reason: "risk over threshold", event_id: "l-1" });
   events.push({ kind: "lifecycle", ts: iso(90), agent_id: uid(1), event_type: "lifecycle_resumed", reason: "self_recovery", event_id: "l-2" });
   events.push({ kind: "lineage", ts: iso(60), agent_id: uid(29), parent_agent_id: uid(0), successor_class: "ephemeral", event_id: "g-1" });
+  if (nAgents === 30) Object.assign(agents[29], { spawn_reason: "subagent", parent_agent_id: uid(0) });
   events.sort((a, b) => a.ts.localeCompare(b.ts));
   return {
     hours: 6, window: { start: iso(360), end: iso(0), hours: 6 }, events, agents,
@@ -65,6 +66,26 @@ describe("Timeline tab", () => {
     expect(child.classList.contains("child")).toBe(true);
     expect(child.querySelector(".tl-sub").textContent).toContain("subagent of agent-0");
     expect(t.rows()[0].querySelector(".tl-mk.lineage")).not.toBeNull();
+  });
+
+  it("labels a succession as a successor, not a subagent", async () => {
+    const r = fixture(30);
+    r.agents[29].spawn_reason = "explicit";
+    const t = await mount(r);
+    const child = t.rows()[1];
+    expect(child.querySelector(".tl-sub").textContent).toContain("successor of agent-0");
+    expect(child.querySelector(".tl-sub").textContent).not.toContain("subagent");
+    t.rows()[0].querySelector(".tl-mk.lineage").click();
+    const detail = t.doc.getElementById("tl-detail").textContent;
+    expect(detail).toContain("Handed off to a successor");
+    expect(detail).toContain("succession (handoff)");
+  });
+
+  it("does not call an unregistered spawn reason a subagent", async () => {
+    const r = fixture(30);
+    r.agents[29].spawn_reason = null;
+    const t = await mount(r);
+    expect(t.rows()[1].querySelector(".tl-sub").textContent).toContain("declared lineage from agent-0");
   });
 
   it("filters rows by label or id", async () => {

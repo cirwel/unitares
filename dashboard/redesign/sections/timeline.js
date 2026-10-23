@@ -45,11 +45,27 @@
     return "proceed";
   }
 
+  // How a lineage child relates to its parent, by its spawn_reason. Mirrors
+  // src/identity/lineage_semantics.py: only dispatched children are
+  // subagents; explicit/new_session are successions (a handoff from a
+  // finished predecessor) and compaction continues the same work.
+  const RELATION = {
+    subagent: "dispatched", dialectic_reviewer: "dispatched", dispatch: "dispatched",
+    compaction: "continuation", explicit: "succession", new_session: "succession",
+  };
+  const relationOf = (spawnReason) => RELATION[spawnReason] || "unknown";
+  const RELATION_TEXT = {
+    dispatched: { mark: "Started a subagent", row: "subagent of", name: "dispatched subagent" },
+    succession: { mark: "Handed off to a successor", row: "successor of", name: "succession (handoff)" },
+    continuation: { mark: "Continued after compaction", row: "continues", name: "context continuation" },
+    unknown: { mark: "Declared lineage", row: "declared lineage from", name: "declared, kind not registered" },
+  };
+
   const KIND_TITLE = {
     checkin: (e) => e.authored_by === "agent" ? `Check-in · ${e.action || "unknown"}` : "Hook observation",
     outcome: (e) => `Outcome · ${e.is_bad ? "failed" : "passed"}`,
     knowledge: () => "Finding shared",
-    lineage: () => "Started a subagent",
+    lineage: (e) => RELATION_TEXT[e.relation || "unknown"].mark,
     lifecycle: (e) => String(e.event_type || "lifecycle").replace(/^lifecycle_/, "").replace(/_/g, " "),
     dialectic: () => "Dialectic review",
     pause: () => "Paused",
@@ -89,9 +105,12 @@
       if (!e || !e.agent_id || isNaN(Date.parse(e.ts))) return;
       const t = Date.parse(e.ts);
       if (e.kind === "lineage" && e.parent_agent_id) {
-        rowOf(e.agent_id).parent = e.parent_agent_id;
+        const child = rowOf(e.agent_id);
+        child.parent = e.parent_agent_id;
+        const spawnReason = (meta[e.agent_id] || {}).spawn_reason || null;
+        const le = Object.assign({}, e, { spawn_reason: spawnReason, relation: relationOf(spawnReason) });
         const p = rowOf(e.parent_agent_id);
-        p.marks.push({ key: keep(e), cls: "lineage", left: pct(e.ts), e });
+        p.marks.push({ key: keep(le), cls: "lineage", left: pct(e.ts), e: le });
         p.last = Math.max(p.last, t);
         return;
       }
@@ -133,6 +152,8 @@
       r.label = m.label || shortId(r.id);
       r.meta = m;
       if (!r.parent && m.parent_agent_id) r.parent = m.parent_agent_id;
+      if (r.parent === r.id) r.parent = null;
+      r.relation = relationOf(m.spawn_reason);
     });
     const byRecency = Object.values(rows).sort((a, b) => b.last - a.last);
     const ordered = [];
@@ -156,7 +177,7 @@
 
   function rowHtml(r, labels) {
     const sub = r.child && r.parent
-      ? `↳ subagent of ${esc(labels[r.parent] || shortId(r.parent))}`
+      ? `↳ ${RELATION_TEXT[r.relation].row} ${esc(labels[r.parent] || shortId(r.parent))}`
       : [r.meta.model_type, r.meta.trust_tier, `${r.checkins} check-in${r.checkins === 1 ? "" : "s"}`].filter(Boolean).map(esc).join(" · ");
     const bands = r.bands.map((b) => `<button type="button" class="tl-band ${b.cls}${state.sel === b.key ? " sel" : ""}" style="left:${b.left.toFixed(3)}%;width:${b.width.toFixed(3)}%" data-k="${esc(b.key)}" aria-label="${esc(title(b.e))}, ${esc(r.label)}"></button>`).join("");
     const marks = r.marks.map((m) => {
@@ -201,7 +222,8 @@
       } else if (e.kind === "knowledge") {
         rows.push(["Summary", e.summary || "—"], ["Type", e.discovery_type || "—"]);
       } else if (e.kind === "lineage") {
-        rows.push(["Subagent", name(e.agent_id)], ["Started by", name(e.parent_agent_id)]);
+        rows.push(["Child", name(e.agent_id)], ["Parent", name(e.parent_agent_id)],
+          ["Relationship", RELATION_TEXT[e.relation || "unknown"].name], ["Spawn reason", e.spawn_reason || "not recorded"]);
         rows[0] = ["Agent", name(e.parent_agent_id)];
       } else if (e.kind === "lifecycle") {
         rows.push(["Event", String(e.event_type || "—").replace(/_/g, " ")], ["Reason", e.reason || "—"]);
@@ -235,7 +257,7 @@
         <span><span class="tl-mk outcome"><span class="tl-dot">✓</span></span>outcome passed</span>
         <span><span class="tl-mk outcome bad"><span class="tl-dot">✕</span></span>outcome failed</span>
         <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
-        <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>started a subagent</span>
+        <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage (subagent or successor)</span>
         <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
         <span><span class="tl-band pause"></span>paused</span>
         <span><span class="tl-band dialectic"></span>dialectic review</span>
