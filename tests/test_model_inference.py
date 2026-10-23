@@ -139,6 +139,7 @@ class TestInferenceHostRegistry:
     async def test_explicit_full_inventory_includes_unconfigured_hosts(self):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
+             patch("src.mcp_handlers.support.inference_registry.served_models", return_value=None), \
              patch.dict(os.environ, {"UNITARES_MODEL_ID": "test-local:latest"}, clear=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
             result = await handle_list_inference_hosts({"include_unconfigured": True})
@@ -577,9 +578,33 @@ class TestOllamaRouting:
         mock_openai.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("privacy", ["local", "auto"])
+    async def test_fresh_install_never_uses_an_incidental_ollama_model(self, monkeypatch, privacy):
+        for name in ("UNITARES_MODEL_ID", "UNITARES_MODEL_BASE_URL", "HF_TOKEN", "HUGGINGFACE_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(_mi, "_ollama_available", lambda: True)
+        discovery = MagicMock(side_effect=AssertionError("unexpected default-model discovery"))
+        monkeypatch.setattr("src.local_inference_env.served_models", discovery)
+        client = MagicMock()
+        monkeypatch.setattr(_mi, "OPENAI_AVAILABLE", True)
+        monkeypatch.setattr(_mi, "OpenAI", client)
+
+        result = await _mi.handle_call_model({
+            "prompt": "Do not send this to an incidental local model",
+            "model": "auto", "provider": "auto", "privacy": privacy,
+        })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "MODEL_NOT_CONFIGURED"
+        discovery.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_auto_uses_the_endpoints_only_served_model(self, monkeypatch):
-        """No default configured and one model served: that model is used."""
+        """An explicitly connected endpoint can supply its sole served model."""
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
         monkeypatch.setattr(
             "src.local_inference_env.served_models", lambda *a, **k: ("only:1b",)
         )

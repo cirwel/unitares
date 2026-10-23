@@ -294,7 +294,8 @@ def _static_hosts() -> list[InferenceHost]:
                         f"Without one, {ollama_model} (UNITARES_MODEL_ID) is used."
                         if ollama_model
                         else "No default is configured (UNITARES_MODEL_ID); without "
-                        "a model, a call uses the endpoint's only served model, "
+                        "a model, a call uses the sole served model only when "
+                        "UNITARES_MODEL_BASE_URL is explicitly configured, "
                         "or is refused with MODEL_NOT_CONFIGURED."
                     )
                 )
