@@ -352,17 +352,15 @@ $SECRETS_FILE                   # mode 600, local-host-only (resolved below)
 export LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
 ```
 
-`$SECRETS_FILE` is the one secrets env file every launcher and CLI reads, in
-this order: `$UNITARES_SECRETS_ENV`; else `~/.config/unitares/secrets.env`;
-else the legacy `~/.config/cirwel/secrets.env` when only that one exists.
-Resolve it the same way before writing, so a token never lands in a file
-nothing reads:
+`$SECRETS_FILE` is the file the lease plane's job names in `UNITARES_SECRETS_ENV`
+(an absolute path to a regular, readable file). The launchers read only that file:
+no default or legacy location is discovered, and with the variable unset the
+lease plane starts without its tokens and answers 503. Write the token to the
+file the job names, so it never lands in a file nothing reads:
 
 ```bash
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
-fi
+SECRETS_FILE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:UNITARES_SECRETS_ENV' \
+    ~/Library/LaunchAgents/com.unitares.lease-plane.plist)"
 ```
 
 The `export` is **required**, not cosmetic: `start.sh` does `source secrets.env` then `exec mix run`, and a sourced-but-not-exported variable is a shell local the exec'd BEAM process never sees — so without `export`, force-release silently stays 503 even though the line is present. Every key in `secrets.env` already uses `export` for this reason.
