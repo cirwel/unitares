@@ -310,8 +310,35 @@ def _strict_identity_refusal_or_none(
     # detect_anomalies canonicalize to observe(anomalies) at dispatch,
     # and mixed tools split read/write by action — judge the canonical
     # CALL, not the tool string (#425 action-level fold).
-    from src.mcp_handlers.decorators import get_call_identity_requirement
-    if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
+    from src.mcp_handlers.decorators import (
+        get_call_identity_requirement,
+        resolve_canonical_action_and_source,
+    )
+
+    # This gate runs before dispatch unwraps ``kwargs``, so an action or
+    # agent_id inside a wrapper only surfaces later, merged over the outer
+    # keys. Judge every depth a wrapper can be unwrapped to (some handlers
+    # unwrap a JSON-string one again): a store wrapped in a search, or an
+    # inner null over the outer name the exemption below read, otherwise
+    # passes here and runs unbound.
+    views = [arguments]
+    if isinstance(arguments, dict):
+        from src.mcp_handlers.middleware.params_step import unwrapped_views
+
+        views = unwrapped_views(arguments)
+
+    def _pre_onboard(view) -> bool:
+        return get_call_identity_requirement(tool_name, view) == "pre_onboard"
+
+    # The view dispatch acts on must be a pre-onboard read, and no depth may
+    # name an action that is not one. A depth that only fell back to the
+    # tool's default action names nothing, so a wrapped read still passes.
+    if _pre_onboard(views[-1]) and all(
+        _pre_onboard(view)
+        for view in views
+        if resolve_canonical_action_and_source(tool_name, view)[2]
+        in ("explicit", "alias_injected")
+    ):
         return None
     try:
         from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -320,14 +347,13 @@ def _strict_identity_refusal_or_none(
             return None
     except Exception:
         pass
-    if (
-        tool_name != "consult"
-        and isinstance(arguments, dict)
-        and arguments.get("agent_id")
+    if tool_name != "consult" and all(
+        isinstance(view, dict) and view.get("agent_id") for view in views
     ):
         from src.http_routes.access import _looks_like_uuid
 
-        if not _looks_like_uuid(arguments["agent_id"]):
+        # A name at every depth, so whichever one dispatch acts on carries it.
+        if not any(_looks_like_uuid(view["agent_id"]) for view in views):
             return None
     logger.info(
         "[HTTP] %s unbound under STRICT_IDENTITY_REQUIRED — returning "
