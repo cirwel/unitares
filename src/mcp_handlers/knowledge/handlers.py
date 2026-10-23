@@ -1383,7 +1383,7 @@ def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
 
 
 def _unproven_agent_id_refusal(
-    arguments: Dict[str, Any], *, allow_pseudonym: bool = True
+    arguments: Dict[str, Any], *, administrative: bool = False
 ) -> Optional[TextContent]:
     """Refuse a write naming an agent_id this call has not proven, under strict identity.
 
@@ -1394,9 +1394,13 @@ def _unproven_agent_id_refusal(
     update could edit or close another agent's finding. Bound callers are
     unaffected: dispatch injects their own id, and ``inject_identity`` already
     refuses a different one. The anonymous pseudonym this module derives is
-    let through when it is written back into the same arguments, unless
-    ``allow_pseudonym`` is false: a pseudonym is an anonymous writer's label,
-    not an identity, so it never authorizes an administrative write.
+    let through when it is written back into the same arguments.
+
+    ``administrative`` is for handlers with no anonymous writer: any call
+    without a resolved binding is refused, with or without an agent_id. A
+    missing agent_id is no evidence that the gate saw none (REST dispatch
+    unwraps ``kwargs`` after the gate, which can null the name the gate
+    passed), and a pseudonym is an anonymous writer's label, not an identity.
     """
     from ..context import (
         get_context_resolved_agent_id,
@@ -1411,9 +1415,12 @@ def _unproven_agent_id_refusal(
     if not is_strict_identity_required():
         return None
     claimed = arguments.get("agent_id")
-    if not claimed or get_context_resolved_agent_id():
+    if get_context_resolved_agent_id() or (not claimed and not administrative):
         return None
-    if allow_pseudonym and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX):
+    if (
+        not administrative
+        and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX)
+    ):
         rest = {k: v for k, v in arguments.items() if k != "agent_id"}
         if claimed == _derive_anonymous_writer_id(rest):
             return None
