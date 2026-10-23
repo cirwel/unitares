@@ -59,7 +59,7 @@ defmodule Wave3aHandlers.MixProject do
       # exercise success/error paths without a live Python probe surface.
       # Same library as standard Elixir mocking convention; no Erlang
       # build dependencies beyond OTP.
-      {:meck, "~> 0.9", only: :test}
+      {:meck, "~> 1.2", only: :test}
     ]
   end
 end
