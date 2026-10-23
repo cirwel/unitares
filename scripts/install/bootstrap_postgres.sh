@@ -93,11 +93,13 @@ record_checksum_if_supported() {
     [ "$column_exists" = "t" ] || return 0
 
     checksum="$(shasum -a 256 "$path" | awk '{print $1}')"
+    # psql expands variables in stdin/file input, but not in a -c SQL command.
     "${PSQL[@]}" \
         -v migration_version="$version" \
         -v migration_checksum="$checksum" \
-        -q -c \
-        "UPDATE core.schema_migrations SET checksum = :'migration_checksum' WHERE version = :migration_version AND checksum IS NULL;"
+        -q <<'SQL'
+UPDATE core.schema_migrations SET checksum = :'migration_checksum' WHERE version = :migration_version AND checksum IS NULL;
+SQL
 }
 
 run_migration() {
