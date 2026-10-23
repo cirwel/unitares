@@ -512,6 +512,7 @@ def test_served_models_is_none_when_the_endpoint_does_not_answer(monkeypatch, fr
 
 
 def test_resolve_local_model_order(monkeypatch, fresh_served_cache):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setattr(env, "served_models", lambda: ("only:1b",))
     assert env.resolve_local_model() == "only:1b"
     monkeypatch.setenv("UNITARES_MODEL_ID", "configured:7b")
@@ -520,10 +521,27 @@ def test_resolve_local_model_order(monkeypatch, fresh_served_cache):
 
 
 def test_resolve_local_model_guesses_nothing_among_several(monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setattr(env, "served_models", lambda: ("a:1b", "b:1b"))
     assert env.resolve_local_model() == ""
     monkeypatch.setattr(env, "served_models", lambda: None)
     assert env.resolve_local_model() == ""
+
+
+@pytest.mark.parametrize("setting", [None, "", "  "])
+def test_unconfigured_install_never_discovers_a_default_model(monkeypatch, setting):
+    if setting is not None:
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", setting)
+        monkeypatch.setenv("UNITARES_MODEL_ID", setting)
+
+    def unexpected_discovery():
+        raise AssertionError("An unconfigured install must not probe Ollama for a default")
+
+    monkeypatch.setattr(env, "served_models", unexpected_discovery)
+    assert env.resolve_local_model() == ""
+    assert env.resolve_local_model("chosen:3b") == "chosen:3b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "configured:7b")
+    assert env.resolve_local_model() == "configured:7b"
 
 
 def test_require_local_model_does_not_ask_the_endpoint(monkeypatch):

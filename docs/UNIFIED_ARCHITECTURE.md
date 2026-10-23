@@ -151,7 +151,7 @@ Identity is **not** auto-resumed across process boundaries. Per the v2 identity 
 
 ## Knowledge Graph
 
-Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonical retrieval backend** (`UNITARES_KNOWLEDGE_BACKEND=auto`, the default, resolves to `postgres`); routing the knowledge store through Apache AGE is **opt-in** (`UNITARES_KNOWLEDGE_BACKEND=age`) for queries that benefit from cypher-style traversal. The AGE *extension* is required either way — lineage and other graph reads use it through `graph_query`. The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
+Agents contribute discoveries to a shared store. **The relational rows are canonical.** The Docker quickstart and `.env.example` set `UNITARES_KNOWLEDGE_BACKEND=age`, which also writes the graph over those rows in Apache AGE; unset, a native install resolves to `postgres` (`auto` with `DB_BACKEND=postgres`), which serves the rows and full-text search without the graph. The AGE *extension* is required either way — lineage and other graph reads use it through `graph_query`. The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
 
 - Discoveries tagged with agent state, severity, and type
 - Searchable across all agents and sessions; hybrid RRF (vector + FTS) requires the AGE backend — `KnowledgeGraphPostgres` exposes no `semantic_search`, and `UNITARES_ENABLE_HYBRID` defaults off

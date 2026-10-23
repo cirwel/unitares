@@ -2,8 +2,9 @@
 """Build the public UNITARES site from canonical repository markdown.
 
 Single-source by construction: this renders ``docs/public-site/index.md``,
-``docs/ontology/glossary.md``, and the latest ``glossary-drift-audit-*.md``
-directly to HTML, and generates the interactive glossary viewer from a
+``docs/public-site/demo.md`` (filled from the accountability-journey test
+fixture), ``docs/ontology/glossary.md``, and the latest
+``glossary-drift-audit-*.md`` directly to HTML, and generates the interactive glossary viewer from a
 structured parse of the same ``glossary.md`` (``scripts/dev/glossary_data.py``).
 It never holds its own copy of the page content, so the published site cannot
 drift from the repository markdown.
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -39,6 +41,18 @@ FAVICON = SITE / "favicon.svg"
 REPO_URL = "https://github.com/cirwel/unitares"
 LANDING_BLOB = f"{REPO_URL}/blob/master/docs/public-site/index.md"
 GLOSSARY_BLOB = f"{REPO_URL}/blob/master/docs/ontology/glossary.md"
+DEMO_BLOB = f"{REPO_URL}/blob/master/docs/public-site/demo.md"
+# The demo page tells one incident. Its quoted facts, record ids and link names
+# come from the fixture the accountability-journey test runs against, the build
+# fails on any it cannot fill, and public-pages.yml redeploys when the fixture
+# changes. The narration between them is hand-written.
+JOURNEY_FIXTURE = PROJECT_ROOT / "tests" / "accountability_journey" / "incident-v0.json"
+DEMO_LINKS = {
+    "fixture_blob": f"{REPO_URL}/blob/master/tests/accountability_journey/incident-v0.json",
+    "result_blob": f"{REPO_URL}/blob/master/docs/evaluations/accountability-journey/result-v0.md",
+    "evidence_blob": f"{REPO_URL}/blob/master/docs/EVIDENCE_AND_LIMITS.md",
+    "walkthrough_blob": f"{REPO_URL}/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md",
+}
 
 # Public-facing framing prepended to the glossary page so a cold visitor is not
 # dropped into internal jargon. Kept short; the discipline speaks for itself.
@@ -107,6 +121,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   <span class="brand">UNITARES</span>
   <nav>
     <a href="index.html"{home_active}>Home</a>
+    <a href="demo.html"{demo_active}>Demo</a>
     <a href="glossary.html"{glossary_active}>Glossary</a>
     <a href="glossary-viewer.html">Viewer</a>
     <a href="drift-audit.html"{audit_active}>Drift audit</a>
@@ -133,6 +148,57 @@ def render(md_text: str) -> str:
     return md.convert(md_text)
 
 
+def render_demo_md(demo_md: str, fixture: dict) -> str:
+    """Fill demo.md's placeholders from the journey fixture.
+
+    ``{{facts.<key>}}`` takes the oracle fact; ``{{relation.<name>}}`` takes a
+    link name from the oracle's edges; ``{{questions_table}}`` lists each
+    question with the answer and the UNITARES-arm record that holds it. Any
+    placeholder left unfilled, a question no record answers, or an edge relation
+    the page never names fails the build rather than publishing a gap.
+    """
+    facts = fixture["oracle"]["facts"]
+    text = demo_md
+    for key, value in facts.items():
+        text = text.replace("{{facts.%s}}" % key, str(value))
+
+    relations = {edge["relation"] for edge in fixture["oracle"].get("edges", [])}
+    unnamed = sorted(r for r in relations if "{{relation.%s}}" % r not in text)
+    if unnamed:
+        raise ValueError(f"demo: docs/public-site/demo.md never names the fixture's {unnamed} links")
+    for relation in relations:
+        text = text.replace("{{relation.%s}}" % relation, relation)
+
+    # The answer shown is the record's own value; one that disagrees with the
+    # oracle fails the build rather than printing the oracle beside it.
+    holders: dict[str, dict] = {}
+    for record in fixture["arms"]["unitares"]["records"]:
+        for key in record.get("facts", {}):
+            holders.setdefault(key, record)
+    rows = ["| Question | Answer from the record | Record |", "|---|---|---|"]
+    for question in fixture["questions"]:
+        key = question["fact_key"]
+        if key not in holders:
+            raise ValueError(f"demo: no record answers {question['question_id']!r}")
+        record = holders[key]
+        answer = record["facts"][key]
+        if str(answer) != str(facts[key]):
+            raise ValueError(
+                f"demo: record {record['record_id']!r} answers {question['question_id']!r} "
+                "differently from the oracle"
+            )
+        label = question["question_id"].replace("_", " ").capitalize() + "?"
+        rows.append(f"| {label} | {answer} | `{record['record_id']}` |")
+    text = text.replace("{{questions_table}}", "\n".join(rows))
+
+    for name, url in DEMO_LINKS.items():
+        text = text.replace("{%s}" % name, url)
+    # Any {name} left over is a placeholder nobody filled, a typo included.
+    if "{{" in text or re.search(r"\{[A-Za-z_][\w.]*\}", text):
+        raise ValueError("demo: unfilled placeholder in docs/public-site/demo.md")
+    return text
+
+
 def latest_drift_audit() -> Path | None:
     audits = sorted(ONTOLOGY.glob("glossary-drift-audit-*.md"))
     return audits[-1] if audits else None
@@ -149,6 +215,7 @@ def build(out_dir: Path, cname: str | None) -> None:
         PAGE_TEMPLATE.format(
             title="UNITARES — Accountability infrastructure for long-running AI agents",
             home_active=' class="active"',
+            demo_active="",
             glossary_active="",
             audit_active="",
             repo=REPO_URL,
@@ -159,11 +226,32 @@ def build(out_dir: Path, cname: str | None) -> None:
         encoding="utf-8",
     )
 
+    # Read-only demo: one incident from the tested fixture, nothing to install.
+    demo_md = render_demo_md(
+        (SITE / "demo.md").read_text(encoding="utf-8"),
+        json.loads(JOURNEY_FIXTURE.read_text(encoding="utf-8")),
+    )
+    out_dir.joinpath("demo.html").write_text(
+        PAGE_TEMPLATE.format(
+            title="UNITARES demo: one incident, as the record holds it",
+            home_active="",
+            demo_active=' class="active"',
+            glossary_active="",
+            audit_active="",
+            repo=REPO_URL,
+            source_path="docs/public-site/demo.md",
+            blob=DEMO_BLOB,
+            body=render(demo_md),
+        ),
+        encoding="utf-8",
+    )
+
     # Glossary page (with the public intro prepended).
     out_dir.joinpath("glossary.html").write_text(
         PAGE_TEMPLATE.format(
             title="UNITARES Glossary",
             home_active="",
+            demo_active="",
             glossary_active=' class="active"',
             audit_active="",
             repo=REPO_URL,
@@ -194,6 +282,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             PAGE_TEMPLATE.format(
                 title="UNITARES Glossary — Drift Audit",
                 home_active="",
+                demo_active="",
                 glossary_active="",
                 audit_active=' class="active"',
                 repo=REPO_URL,
