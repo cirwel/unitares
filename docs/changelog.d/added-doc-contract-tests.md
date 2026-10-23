@@ -1,1 +1,0 @@
-- Doc contract tests hold living docs to the code: release and interface-contract versions, deployment-template claims, CI path and scope-guard parity, tool action names, and documented npm/make/CLI commands. Each one catches drift that a denylist of known-bad phrasings cannot.

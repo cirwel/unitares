@@ -868,7 +868,7 @@ class GetWorkspaceHealthParams(AgentIdentityMixin):
 class CallModelParams(AgentIdentityMixin):
     """Parameters for call_model"""
     prompt: str = Field(..., description="The prompt/question to send to the model (required)")
-    model: str = Field("auto", description="Model to use. For ollama: a model the configured local endpoint serves (default UNITARES_MODEL_ID, else gemma4:latest). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
+    model: str = Field("auto", description="Model to use. For ollama: a model the configured local endpoint serves (default UNITARES_MODEL_ID; none is built in). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
     provider: Literal["auto", "hf", "ollama"] = Field("auto", description="Provider to use. Options: auto (ollama first, hf fallback), hf (the Hugging Face router), ollama (the configured local endpoint: an OpenAI-compatible server, Ollama by default). Default: auto")
     host_id: Optional[str] = Field(
         None,
@@ -1013,6 +1013,20 @@ class ConsultParams(AgentIdentityMixin):
         min_length=1,
         max_length=32_000,
         description="Question or material to send for advisory model help.",
+    )
+    model: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Standard lane only: the local model to use, one of the models "
+            "list_inference_hosts reports for ollama:local. A model the endpoint "
+            "does not list is refused (MODEL_NOT_SERVED). Naming one routes the "
+            "call to the configured endpoint (no Hugging Face fallback); privacy "
+            "still applies. Omitted: the operator's UNITARES_MODEL_ID, else the "
+            "endpoint's only served model."
+        ),
+        json_schema_extra={"brief": "Standard lane: a model ollama:local lists."},
     )
     purpose: Literal["answer", "critique", "summarize", "generate"] = Field(
         "answer",

@@ -151,19 +151,36 @@ prs=$(gh pr list -R "$REPO" --state open --limit 500 \
   --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
+# gh pr list caps statusCheckRollup at 100 entries per PR (no GraphQL pagination
+# on nested contexts); gh pr view paginates. Re-read any capped rollup before
+# evaluating checks (#3016).
+for n in $(jq -r '.[] | select((.statusCheckRollup | length) >= 100) | .number' <<<"$prs"); do
+  full_rollup=$(gh pr view "$n" -R "$REPO" --json statusCheckRollup 2>/dev/null) \
+    && prs=$(jq --argjson n "$n" --argjson r "$full_rollup" \
+      'map(if .number == $n then .statusCheckRollup = $r.statusCheckRollup else . end)' <<<"$prs") \
+    || { log "#$n statusCheckRollup hit 100-entry cap and gh pr view failed; nothing done"; exit 1; }
+done
+
 # Shared jq vocabulary. A check has FAILED when a finished run concluded badly
 # (CheckRun) or a status context reports failure (StatusContext); it is PENDING
 # while queued or running; ACTION_REQUIRED is a run parked for approval, which
-# a re-run cannot clear.
+# a re-run cannot clear. A head whose CI was re-run or retriggered carries
+# earlier entries alongside the current run in statusCheckRollup; `rollup`
+# keeps only the newest non-SKIPPED entry per check name (#3016).
 JQ_DEFS='
 def labelled($l): any(.labels[]?; .name == $l);
-def failed: [.statusCheckRollup[]?
+def rollup: [(.statusCheckRollup // [])
+  | group_by(.name // .context)[]
+  | ((map(select((.conclusion // "") != "SKIPPED")) | if length > 0 then . else null end) // .)
+  | (map([(.startedAt // .completedAt // ""), (.completedAt // "")]) | max) as $newest
+  | .[] | select([(.startedAt // .completedAt // ""), (.completedAt // "")] == $newest)];
+def failed: [rollup[]
   | select(((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
            or ((.state // "") | test("^(FAILURE|ERROR)$")))];
-def pending: [.statusCheckRollup[]?
+def pending: [rollup[]
   | select(((.status // "") | test("^(QUEUED|IN_PROGRESS|PENDING|WAITING|REQUESTED)$"))
            or ((.state // "") | test("^(PENDING|EXPECTED)$")))];
-def parked: [.statusCheckRollup[]? | select((.conclusion // "") == "ACTION_REQUIRED")];
+def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 '
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
@@ -245,7 +262,7 @@ unmet_required_checks() {
     *) auth=$(auth_path "$(jq -r .headRefOid <<<"$1")") && checks+=" review" || auth="" ;;
   esac
   for check in $checks; do
-    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
+    state=$(q -r --arg c "$check" '[rollup[] | select((.name // .context) == $c)
              | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
              | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
                else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")

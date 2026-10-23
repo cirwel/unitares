@@ -11,8 +11,9 @@ Settings (the documented names):
   server, including ``/v1`` (``http://localhost:11434/v1`` for Ollama on this
   machine, which is the default). A value with no path at all gets ``/v1``
   added, so a bare Ollama root still works.
-- ``UNITARES_MODEL_ID``: the model id the endpoint serves. Default
-  ``gemma4:latest`` for now; a later release removes the default.
+- ``UNITARES_MODEL_ID``: the model id the endpoint serves. No default: unset,
+  the local lane has no model, and every reader refuses with
+  ``MODEL_NOT_CONFIGURED`` before sending anything (``require_local_model``).
 - ``UNITARES_MODEL_LOCAL_HOSTS`` and ``UNITARES_MODEL_PRIVACY``: see
   ``classify_endpoint`` below.
 
@@ -25,9 +26,8 @@ release its row names; ``tests/test_local_inference_env.py`` fails once
 ``VERSION`` reaches it. The table is empty since v3.3.0, which removed
 ``UNITARES_OLLAMA_BASE``, ``UNITARES_OLLAMA_BASE_URL`` and
 ``UNITARES_LLM_MODEL``: nothing reads them, so an install that still sets only
-those gets the defaults. An empty value counts as unset, so a compose file that
-passes ``${VAR:-}`` through keeps the default instead of producing a model of
-``""``.
+those gets the default endpoint and no model. An empty value counts as unset, so a compose file that
+passes ``${VAR:-}`` through reads exactly as an unset one.
 
 Stdlib only and outside ``src/mcp_handlers``: the agent processes import this,
 and importing anything under ``src.mcp_handlers`` loads the whole handler
@@ -54,7 +54,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_BASE = "http://localhost:11434"
 DEFAULT_MODEL_BASE_URL = DEFAULT_OLLAMA_BASE + "/v1"
-DEFAULT_LOCAL_MODEL = "gemma4:latest"
 
 MODEL_BASE_URL_ENV = "UNITARES_MODEL_BASE_URL"
 MODEL_ENV = "UNITARES_MODEL_ID"
@@ -226,8 +225,13 @@ def ollama_openai_base_url() -> str:
 
 def default_local_model() -> str:
     """Model for local inference: ``UNITARES_MODEL_ID``, else an alias from
-    ``SETTING_ALIASES`` (none since v3.3.0), else gemma4:latest."""
-    return _resolve(MODEL_ENV, lambda _name, v: v.strip()) or DEFAULT_LOCAL_MODEL
+    ``SETTING_ALIASES`` (none since v3.3.0), else ``""``: no model is named.
+
+    A server cannot know which models an operator's endpoint serves, so it
+    names none. (Through v3.4.0 it fell back to ``gemma4:latest``, which inside
+    a container usually reached nothing.) Callers that send a request use
+    ``require_local_model``."""
+    return _resolve(MODEL_ENV, lambda _name, v: v.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +241,7 @@ def default_local_model() -> str:
 LOCAL = "local"
 EXTERNAL = "external"
 ENDPOINT_NOT_LOCAL = "MODEL_ENDPOINT_NOT_LOCAL"
+MODEL_NOT_CONFIGURED = "MODEL_NOT_CONFIGURED"
 
 _BUILTIN_LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal"})
 _warned_bad_privacy: set[str] = set()
@@ -519,6 +524,45 @@ def local_refusal_message(classification: EndpointPrivacy) -> str:
     )
 
 
+class ModelNotConfiguredError(RuntimeError):
+    """A local-lane request with no model named (``UNITARES_MODEL_ID`` unset)."""
+
+    code = MODEL_NOT_CONFIGURED
+
+    def __init__(self):
+        # Raised for internal callers (the reviewers, the resident runner, the
+        # internal lane), which have no model argument to pass and take none
+        # from the endpoint: they record the configured model as provenance.
+        super().__init__(
+            f"No local model is configured: have the operator set {MODEL_ENV} "
+            "(`unitares model` writes it)."
+        )
+
+
+def model_not_configured_message() -> str:
+    """Why a tool call has no model, and what fixes it: the caller can pass
+    ``model``. Internal callers raise ``ModelNotConfiguredError`` instead."""
+    return (
+        "No local model is chosen: pass model (one the endpoint serves; "
+        "list_inference_hosts lists them), or have the operator set "
+        f"{MODEL_ENV} (`unitares model` writes it) or serve exactly one model "
+        "at the endpoint."
+    )
+
+
+def require_local_model(model: str | None = None) -> str:
+    """``model`` if given, else the configured one; raise
+    ``ModelNotConfiguredError`` when neither names a model. No network call.
+
+    Deliberately not ``resolve_local_model``: its callers (the reviewers, the
+    resident runner) record the model they name as provenance, so a model the
+    endpoint picked would go unrecorded, and they call it on the event loop."""
+    resolved = (model or "").strip() or default_local_model()
+    if not resolved:
+        raise ModelNotConfiguredError()
+    return resolved
+
+
 def display_url(url: str) -> str:
     """``url`` without any ``user:password@`` part, for text an agent or a log
     reader sees: a base URL can carry credentials in its userinfo."""
@@ -635,3 +679,66 @@ def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_
     with _ollama_detect_lock:
         _ollama_detect_cache[root] = (time.monotonic(), result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Which models the endpoint serves, and which one a call uses
+# ---------------------------------------------------------------------------
+
+MODEL_NOT_SERVED = "MODEL_NOT_SERVED"
+# A model list changes when the operator pulls or removes one; half a minute
+# keeps a busy server from re-asking on every call without hiding a pull for long.
+_SERVED_MODELS_TTL_S = 30.0
+_served_models_cache: dict[str, tuple[float, tuple[str, ...] | None]] = {}
+_served_models_lock = threading.Lock()
+
+
+def served_models(
+    url: str | None = None, *, timeout: float = LOCAL_PROBE_TIMEOUT_S
+) -> tuple[str, ...] | None:
+    """Model ids the endpoint lists on ``GET {base}/models``, sorted, or None
+    when it does not answer in the OpenAI-compatible shape. Cached for 30 s.
+
+    Blocking; async callers run it with ``asyncio.to_thread``. Sends no prompt:
+    a local endpoint is reached directly, ignoring HTTP_PROXY, and any other
+    through the environment's proxy, as the inference clients do.
+    """
+    base = url or model_base_url()
+    now = time.monotonic()
+    with _served_models_lock:
+        cached = _served_models_cache.get(base)
+        if cached is not None and (now - cached[0]) < _SERVED_MODELS_TTL_S:
+            return cached[1]
+    opener = direct_urlopen if classify_endpoint(base).is_local else _proxied_urlopen
+    ids: tuple[str, ...] | None
+    try:
+        with opener(urllib.request.Request(base + "/models"), timeout=timeout) as resp:
+            payload = json.load(resp)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            ids = None
+        else:
+            ids = tuple(sorted({
+                m["id"] for m in data
+                if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
+            }))
+    except (urllib.error.URLError, OSError, ValueError):
+        ids = None
+    with _served_models_lock:
+        _served_models_cache[base] = (time.monotonic(), ids)
+    return ids
+
+
+def resolve_local_model(requested: str | None = None) -> str:
+    """The model a local-route call uses, or ``""`` when none can be chosen.
+
+    In order: the model the agent asked for; ``UNITARES_MODEL_ID``; the
+    endpoint's only served model, when it lists exactly one. With several
+    served and none named, nothing is guessed. Blocking (it may ask the
+    endpoint); async callers run it with ``asyncio.to_thread``.
+    """
+    chosen = (requested or "").strip() or default_local_model()
+    if chosen:
+        return chosen
+    listed = served_models()
+    return listed[0] if listed is not None and len(listed) == 1 else ""

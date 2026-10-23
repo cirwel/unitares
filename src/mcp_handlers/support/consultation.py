@@ -43,7 +43,13 @@ from . import host_availability
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
 from src import inference_config
-from src.local_inference_env import ENDPOINT_NOT_LOCAL
+from src.local_inference_env import (
+    ENDPOINT_NOT_LOCAL,
+    MODEL_NOT_CONFIGURED,
+    MODEL_NOT_SERVED,
+    classify_endpoint,
+    served_models,
+)
 from .model_inference import (
     CallModelRequest,
     _provider_timeout_s,
@@ -223,6 +229,9 @@ class ConsultRequest:
     allow_degraded: bool = False
     response_mode: str = "compact"
     host_id: str | None = None
+    # The local model the caller chose (standard lane only); None uses the
+    # operator's default or the endpoint's only served model.
+    model: str | None = None
     # Explicitly pinned, or selected from the deployment policy.
     thorough_host_id: str | None = None
     # The caller's eligible peers in preference order (never its own family);
@@ -677,11 +686,38 @@ async def _run_standard(
     *,
     force_local: bool,
 ) -> InferenceOutcome:
+    # Under privacy='local' an endpoint that classifies external is not asked
+    # for its model list either: run_model_inference refuses it from the URL
+    # alone, before any request.
+    may_ask = not force_local or classify_endpoint().is_local
+    if request.model is not None and may_ask:
+        # The agent's choice is bounded by what the endpoint serves. When the
+        # list cannot be read, the call goes ahead and the endpoint answers.
+        listed = await asyncio.to_thread(served_models)
+        if listed is not None and request.model not in listed:
+            return InferenceOutcome.failed(
+                f"The local endpoint does not serve '{request.model}'",
+                code=MODEL_NOT_SERVED,
+                category="validation_error",
+                details={"served_models": list(listed)},
+                recovery={
+                    "action": (
+                        "Choose one of served_models, or omit model to use the "
+                        "default."
+                    ),
+                    "related_tools": ["list_inference_hosts"],
+                },
+            )
+    # A named model pins the configured endpoint (no Hugging Face fallback)
+    # without changing the caller's privacy: under privacy='local' the endpoint
+    # must classify local, and cloud_allowed may reach an external one.
+    pin_endpoint = force_local or request.model is not None
     return await run_model_inference(CallModelRequest(
         prompt=prompt,
         requesting_agent_uuid=request.requester_uuid,
         host_id=request.host_id,
-        provider="ollama" if force_local else "auto",
+        model=request.model or "auto",
+        provider="ollama" if pin_endpoint else "auto",
         privacy="local" if force_local else "auto",
         task_type=_STANDARD_TASK_TYPES[request.purpose],
         max_tokens=2048,
@@ -988,6 +1024,19 @@ def _recovery_for_upstream(
             "privacy='local' brief was not sent. Use privacy='cloud_allowed', or "
             "have the operator reclassify the endpoint (UNITARES_TRUSTED_NETWORKS, "
             "UNITARES_MODEL_LOCAL_HOSTS or UNITARES_MODEL_PRIVACY)."
+        )
+    if failure.code == MODEL_NOT_CONFIGURED:
+        return (
+            "No local model is chosen. Pass model with one that "
+            "list_inference_hosts reports for ollama:local, or have the "
+            "operator set UNITARES_MODEL_ID (`unitares model`), then retry."
+        )
+    if failure.code == MODEL_NOT_SERVED:
+        served = [str(m) for m in failure.details.get("served_models") or []][:20]
+        return (
+            "Choose a model the local endpoint serves"
+            + (f" ({', '.join(served)})" if served else "")
+            + ", or omit model to use the default."
         )
     if failure.code in {
         "INFERENCE_HOST_NOT_FOUND",
@@ -1609,6 +1658,20 @@ def _argument_refusal(request: ConsultRequest) -> ConsultationOutcome | None:
             category="validation_error",
             recovery_action="Use compact or full.",
         )
+    if request.model is not None and (
+        request.effort != "standard" or request.host_id == "hf:router"
+    ):
+        return _failed(
+            request,
+            message="model chooses a local model and applies to the standard local lane only",
+            code="INVALID_CONSULT_MODEL",
+            category="validation_error",
+            recovery_action=(
+                "Omit model for thorough, council or hf:router calls; use it with "
+                "effort='standard' (optionally host_id='ollama:local')."
+            ),
+            failure_details={"reason": "model_outside_local_standard_lane"},
+        )
     if request.host_id is not None and request.host_id not in _SELECTABLE_HOST_ROUTES:
         return _failed(
             request,
@@ -1761,6 +1824,7 @@ async def _handle_council(
         privacy=str(arguments.get("privacy", "local")),
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
+        model=_requested_model(arguments),
         council_id=council_id,
     )
     data: dict[str, Any] = {
@@ -1868,6 +1932,12 @@ async def _handle_council(
     return success_response(data, agent_id=requester_uuid, arguments=arguments)
 
 
+def _requested_model(arguments: Dict[str, Any]) -> str | None:
+    value = arguments.get("model")
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
 @mcp_tool("consult", timeout=CONSULT_TIMEOUT_S)
 async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Ask for advisory model help without creating a governed review record."""
@@ -1924,6 +1994,7 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
         host_id=selected_host,
+        model=_requested_model(arguments),
         # Only a thorough consult delegates; a standard one never probes hosts.
         **thorough_fields,
         policy_refusal=policy_refusal,

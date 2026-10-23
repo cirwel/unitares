@@ -20,6 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-bootstrap:
+    uses: ./.github/workflows/native-bootstrap.yml
+
   smoke:
     runs-on: ubuntu-latest
     steps:
@@ -325,7 +328,7 @@ jobs:
     # macos-platform rides on this context so its identity-proof tests block
     # a merge without a second protected check; it finishes well inside the
     # slowest shard, so the gate waits no longer.
-    needs: [test_shard, macos-platform]
+    needs: [test_shard, macos-platform, native-bootstrap]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -337,6 +340,12 @@ jobs:
       EXPECTED_SHARD_LEGS: '4'
 
     steps:
+    - name: Require native bootstrap and recovery acceptance to pass
+      if: ${{ needs.native-bootstrap.result != 'success' }}
+      run: |
+        echo "native bootstrap/recovery acceptance failed or was cancelled" >&2
+        exit 1
+
     - name: Require every test shard to pass
       if: ${{ needs.test_shard.result != 'success' }}
       run: |
@@ -367,10 +376,15 @@ jobs:
       # a success. That is what closes the masking hazard: a leg whose most
       # recent execution failed cannot be hidden behind a re-run of another.
       # It does not require every leg to have run within one attempt.
+      # This job starts only after every leg finished, so a leg the API still
+      # lists with a null conclusion is API lag, not a running test: on
+      # 2026-10-22 GitHub reported finished legs as null for over 90 seconds
+      # and the gate failed every PR. Lag and failed reads get about three
+      # minutes; a leg that finished without success fails the gate at once.
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        max_attempts=12
+        max_attempts=36
         attempt=1
         while true; do
           # Guard the command itself: Actions uses bash -e, and pagination
@@ -382,8 +396,14 @@ jobs:
             cat shard-legs.tsv
             legs=$(wc -l < shard-legs.tsv | tr -d ' ')
             bad=$(grep -vc '^success' shard-legs.tsv || true)
+            pending=$(grep -c '^null' shard-legs.tsv || true)
             if [ "$legs" = "$EXPECTED_SHARD_LEGS" ] && [ "$bad" = "0" ]; then
               break
+            fi
+            if [ "$bad" != "$pending" ]; then
+              echo "a shard leg finished without success:" >&2
+              grep -v -e '^success' -e '^null' shard-legs.tsv >&2
+              exit 1
             fi
             failure_reason="Actions job list is not complete yet ($legs/$EXPECTED_SHARD_LEGS, $bad not successful)"
           else

@@ -1073,7 +1073,57 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
 - **Client action:** none. A client that treats every result as current
   should check `retrieval_tier` or `status` before relying on a row.
 
-## 2.0.0 (2026-10-19)
+## 1.55.0 (2026-10-20)
+
+- **What changed:** the server names no local model by default. With
+  `UNITARES_MODEL_ID` unset, a local-route `call_model` or `consult` with
+  `model='auto'` is refused with the new code `MODEL_NOT_CONFIGURED` before
+  any request; auto routing that allows cloud falls back to Hugging Face
+  when `HF_TOKEN` is set. `list_inference_hosts` reports `ollama:local` with
+  an empty `models` list. `call_model`'s `model` description and tool
+  description no longer name `gemma4:latest` as a default.
+- **Compatibility:** an install that relied on the implicit
+  `gemma4:latest` loses its local model until it sets `UNITARES_MODEL_ID`
+  (setting it to `gemma4:latest` restores the old behaviour). A call that
+  passes an explicit `model` is unchanged. No capability, parameter name,
+  type, default or requiredness changed.
+- **Schema digests:** `call_model`'s `input_schema_sha256` and the surface
+  digest move, because the `model` parameter description is inside the
+  hashed schema.
+- **Client action:** a client that treated `MODEL_PROVIDER_UNAVAILABLE` as
+  the only "no model" answer should also handle `MODEL_NOT_CONFIGURED`.
+
+## 1.56.0 (2026-10-21)
+
+- **What changed:** `consult` gains an optional `model` input (operator
+  decision 2026-10-21: the agent picks the local model). It applies to the
+  standard lane only and names a model the configured endpoint serves;
+  naming one pins the call to that endpoint (no Hugging Face fallback)
+  without changing the caller's privacy: `privacy='local'` still requires
+  the endpoint to classify local, and `cloud_allowed` may reach an external
+  one. `list_inference_hosts` now
+  reports the endpoint's served models (`GET {base}/models`, cached 30 s)
+  for `ollama:local` while it is reachable, and the configured default
+  otherwise. Without `model`, a call uses `UNITARES_MODEL_ID`, else the
+  endpoint's only served model, else is refused with `MODEL_NOT_CONFIGURED`.
+  The dialectic reviewers (in-process and agent), the local resident runner
+  and the internal lane still need a named model (`UNITARES_MODEL_ID`): they
+  record the configured model as provenance, so they take none from the
+  endpoint. Their refusal names only the operator's fix.
+- **New refusals:** `MODEL_NOT_SERVED` (the endpoint lists models and the
+  chosen one is not among them; the recovery names the served models) and
+  `INVALID_CONSULT_MODEL` (`model` with `effort='thorough'`, a council, or
+  `host_id='hf:router'`).
+- **Compatibility:** additive. A call without `model` routes as before.
+  `consult` still takes no sampling controls; `call_model`'s
+  `temperature` and `max_tokens` still retire with that tool.
+- **Schema digests:** `consult`'s input digest and the surface digest move.
+  `consult`'s and `call_model`'s tool descriptions change; they are outside
+  the input digests.
+- **Client action:** none required. To choose a model, read `models` on
+  `ollama:local` from `list_inference_hosts` and pass one as `model`.
+
+## 2.0.0 (2026-10-23)
 
 Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default. Workspace diagnostics check the server installation without discovering desktop clients or assuming a development checkout.
 

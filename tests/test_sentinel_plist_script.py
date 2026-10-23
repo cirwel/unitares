@@ -369,6 +369,140 @@ def test_probe_uses_bearer_over_uds_and_distinguishes_outer_401(
     short_socket_dir.cleanup()
 
 
+def _governance_without_bearer(path: Path) -> None:
+    """A governance plist whose launcher loads the bearer from outside the
+    plist, as a keychain launcher does: neither the key nor the wrapper."""
+    _write_plist(path, {"HOME": "/srv/operator"})
+    with path.open("rb") as handle:
+        payload = plistlib.load(handle)
+    payload["ProgramArguments"] = [
+        "/srv/operator/bin/governance-launch",
+        "/usr/bin/python3",
+        "/srv/unitares/src/mcp_server.py",
+    ]
+    with path.open("wb") as handle:
+        plistlib.dump(payload, handle, sort_keys=False)
+
+
+@pytest.mark.parametrize("status,expected_code", [(200, 0), (401, 2)])
+def test_check_asks_the_running_service_when_governance_keeps_no_bearer(
+    tmp_path: Path, status: int, expected_code: int
+) -> None:
+    token = "sentinel-bearer-token"
+    short_socket_dir = tempfile.TemporaryDirectory(prefix="unitares-uds-", dir="/tmp")
+    socket_path = Path(short_socket_dir.name) / "governance.sock"
+    governance = tmp_path / "governance.plist"
+    sentinel = tmp_path / "sentinel.plist"
+    _governance_without_bearer(governance)
+    _write_plist(
+        sentinel,
+        {"UNITARES_HTTP_API_TOKEN": token, "UNITARES_UDS_SOCKET": str(socket_path)},
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    captured: list[bytes] = []
+    errors: list[BaseException] = []
+    thread = threading.Thread(
+        target=_serve_one_uds_response,
+        args=(listener, status, captured, errors),
+        daemon=True,
+    )
+    thread.start()
+
+    result = _run(
+        "check", "--plist", sentinel, "--governance-plist", governance, "--socket", socket_path
+    )
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert not errors
+    assert result.returncode == expected_code, result.stderr
+    assert token not in result.stdout + result.stderr
+    assert len(captured) == 1
+    # A read-only listing, never a tool call: the check touches no identity.
+    assert captured[0].startswith(b"GET /v1/tools HTTP/1.1")
+    assert f"Authorization: Bearer {token}".encode() in captured[0]
+    if status == 401:
+        assert "rejected the Sentinel bearer (HTTP 401)" in result.stderr
+    short_socket_dir.cleanup()
+
+
+def test_live_check_never_echoes_a_bearer_that_is_not_a_valid_header(
+    tmp_path: Path,
+) -> None:
+    short_socket_dir = tempfile.TemporaryDirectory(prefix="unitares-uds-", dir="/tmp")
+    socket_path = Path(short_socket_dir.name) / "governance.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    governance = tmp_path / "governance.plist"
+    sentinel = tmp_path / "sentinel.plist"
+    _governance_without_bearer(governance)
+    _write_plist(
+        sentinel,
+        {"UNITARES_HTTP_API_TOKEN": "leaky\nbearer", "UNITARES_UDS_SOCKET": str(socket_path)},
+    )
+
+    result = _run(
+        "check", "--plist", sentinel, "--governance-plist", governance, "--socket", socket_path
+    )
+    listener.close()
+    short_socket_dir.cleanup()
+
+    assert result.returncode == 2
+    assert "is not a valid header value" in result.stderr
+    assert "leaky" not in result.stdout + result.stderr
+
+
+def test_check_refuses_when_governance_keeps_no_bearer_and_is_unreachable(
+    tmp_path: Path,
+) -> None:
+    governance = tmp_path / "governance.plist"
+    sentinel = tmp_path / "sentinel.plist"
+    socket_path = tmp_path / "absent.sock"
+    # No EnvironmentVariables at all is the same case as no bearer key.
+    with governance.open("wb") as handle:
+        plistlib.dump({"Label": "com.unitares.governance-mcp", "ProgramArguments": ["/srv/launch"]}, handle)
+    _write_plist(
+        sentinel,
+        {"UNITARES_HTTP_API_TOKEN": "sentinel-bearer", "UNITARES_UDS_SOCKET": str(socket_path)},
+    )
+
+    result = _run(
+        "check", "--plist", sentinel, "--governance-plist", governance, "--socket", socket_path
+    )
+
+    assert result.returncode == 2
+    assert "could not be reached to check the Sentinel bearer" in result.stderr
+    assert "sentinel-bearer" not in result.stdout + result.stderr
+
+
+def test_render_refuses_an_unwrapped_sentinel_when_governance_keeps_no_bearer(
+    tmp_path: Path,
+) -> None:
+    governance = tmp_path / "governance.plist"
+    output = tmp_path / "sentinel.plist"
+    _governance_without_bearer(governance)
+
+    result = _run(
+        "render",
+        "--root",
+        tmp_path / "deploy",
+        "--output",
+        output,
+        "--governance-plist",
+        governance,
+        "--socket",
+        tmp_path / "governance.sock",
+    )
+
+    assert result.returncode == 2
+    assert "keeps no UNITARES_HTTP_API_TOKEN, so there is no bearer to copy" in result.stderr
+    assert not output.exists()
+
+
 def _write_fake_command(path: Path, body: str = "exit 0") -> None:
     path.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n")
     path.chmod(0o755)

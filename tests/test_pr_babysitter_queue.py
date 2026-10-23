@@ -32,7 +32,11 @@ case "$1 $2" in
     : > "$d/listed_once"
     exit 0 ;;
   "pr view")
-    f="$d/state_${5//\//_}_$3"
+    if [ "${7:-}" = "statusCheckRollup" ]; then
+      f="$d/rollup_$3.json"
+    else
+      f="$d/state_${5//\//_}_$3"
+    fi
     [ -f "$f" ] && { cat "$f"; exit 0; }
     exit 1 ;;
 esac
@@ -91,14 +95,27 @@ def _iso(minutes_ago: float) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _check(name: str, conclusion: str = "SUCCESS", run: int = 100, status: str = "COMPLETED") -> dict:
-    return {
+def _check(
+    name: str,
+    conclusion: str = "SUCCESS",
+    run: int = 100,
+    status: str = "COMPLETED",
+    *,
+    started_min_ago: float | None = None,
+    completed_min_ago: float | None = None,
+) -> dict:
+    entry = {
         "__typename": "CheckRun",
         "name": name,
         "status": status,
         "conclusion": conclusion,
         "detailsUrl": f"https://github.com/o/r/actions/runs/{run}/job/{run * 10}",
     }
+    if started_min_ago is not None:
+        entry["startedAt"] = _iso(started_min_ago)
+    if completed_min_ago is not None:
+        entry["completedAt"] = _iso(completed_min_ago)
+    return entry
 
 
 def _pr(
@@ -180,6 +197,7 @@ def _run(
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
     compares: dict[str, dict | None] | None = None,
+    rollups: dict[int, list[dict] | None] | None = None,
     timeline_fails: tuple[int, ...] = (),
     arms: dict[int, float] | None = None,
     expect_rc: int = 0,
@@ -207,6 +225,11 @@ def _run(
         target = d / f"compare_{sha}.json"
         # None: GitHub will not return it (unknown SHA, API error).
         target.write_text("not json" if payload is None else json.dumps(payload))
+    for stale in d.glob("rollup_*.json"):
+        stale.unlink()
+    for number, full_checks in (rollups or {}).items():
+        if full_checks is not None:
+            (d / f"rollup_{number}.json").write_text(json.dumps({"statusCheckRollup": full_checks}))
     state_file = tmp_path / "state" / "approvals"
     if arms:
         # Arms this script made: the arming time GitHub reports must match.
@@ -1263,3 +1286,64 @@ def test_queue_requires_an_explicit_repository_before_using_github(tmp_path):
     result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
     assert result.returncode != 0
     assert "Set PR_BABYSITTER_REPO" in result.stderr
+
+
+# --- #3016: 100-check rollup cap and superseded check runs -----------------------
+
+
+def test_a_rollup_capped_at_100_checks_is_reread_via_pr_view(tmp_path: Path) -> None:
+    # gh pr list returns at most 100 statusCheckRollup entries per PR, so
+    # `review` can fall off the end on a retriggered head (#3004 / #3016).
+    capped = [_check(f"job-{i}", "SUCCESS", run=100 + i) for i in range(100)]
+    full = capped + [_check("review", "SUCCESS", run=900)]
+    pr = _pr(1, review=None, checks=capped)
+    calls, _ = _run(tmp_path, [pr], rollups={1: full})
+    assert calls == [_arm(1)]
+
+
+def test_a_capped_rollup_whose_pr_view_fails_arms_nothing(tmp_path: Path) -> None:
+    capped = [_check(f"job-{i}", "SUCCESS", run=100 + i) for i in range(100)]
+    pr = _pr(1, review=None, checks=capped)
+    calls, out = _run(tmp_path, [pr], rollups={1: None}, expect_rc=1)
+    assert calls == []
+    assert "hit 100-entry cap and gh pr view failed" in out
+
+
+def test_a_superseded_failure_does_not_block_a_passing_rerun(tmp_path: Path) -> None:
+    # Earlier attempt on the same head failed `test (3.12)` and posted `review`
+    # NEUTRAL; the newer run on the same head passed both.
+    checks = [
+        _check("test (3.12)", "FAILURE", run=70, started_min_ago=30, completed_min_ago=25),
+        _check("test (3.12)", "SUCCESS", run=71, started_min_ago=10, completed_min_ago=5),
+        _check("review", "NEUTRAL", run=80, started_min_ago=30, completed_min_ago=29),
+        _check("review", "SUCCESS", run=81, started_min_ago=9, completed_min_ago=8),
+    ]
+    calls, _ = _run(tmp_path, [_pr(1, review=None, checks=checks)])
+    assert calls == [_arm(1)]
+
+
+def test_a_newer_failure_still_blocks_after_an_earlier_success(tmp_path: Path) -> None:
+    # Even if listed earlier in the array, a newer run (by startedAt) wins.
+    checks = [
+        _check("test (3.12)", "FAILURE", run=88, started_min_ago=5, completed_min_ago=2),
+        _check("test (3.12)", "SUCCESS", run=77, started_min_ago=30, completed_min_ago=25),
+    ]
+    calls, out = _run(tmp_path, [_pr(1, checks=checks)])
+    assert calls == [f"pr edit 1 -R o/r --add-label {RETRIED}", "run rerun 88 --failed -R o/r"]
+    assert "re-ran 1 run(s) once" in out
+
+
+def test_a_later_skipped_run_does_not_mask_an_earlier_result(tmp_path: Path) -> None:
+    # Workflows that also trigger on `labeled` (with a job-level `if:` that
+    # skips) add a newer SKIPPED CheckRun for the same job name when the
+    # approval label is applied. That SKIPPED entry must neither clear an
+    # earlier FAILURE nor overwrite an earlier SUCCESS required check.
+    checks = [
+        _check("test (3.12)", "FAILURE", run=77, started_min_ago=20, completed_min_ago=15),
+        _check("test (3.12)", "SKIPPED", run=78, started_min_ago=5, completed_min_ago=5),
+        _check("review", "SUCCESS", run=80, started_min_ago=20, completed_min_ago=19),
+        _check("review", "SKIPPED", run=81, started_min_ago=5, completed_min_ago=5),
+    ]
+    calls, _ = _run(tmp_path, [_pr(1, review=None, checks=checks)])
+    assert calls == [f"pr edit 1 -R o/r --add-label {RETRIED}", "run rerun 77 --failed -R o/r"]
+

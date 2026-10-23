@@ -1,0 +1,11 @@
+# Lease plane off. The bearer must be empty inside the container: an empty
+# .env value is replaced by the ${...:-default} in docker-compose.yml.
+services:
+  lease-plane:
+    profiles: ["off"]
+  governance-mcp:
+    environment:
+      LEASE_PLANE_BEARER_TOKEN: ""
+    depends_on: !override
+      postgres-age: {condition: service_healthy}
+      redis: {condition: service_healthy}

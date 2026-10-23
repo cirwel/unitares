@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "15de4e7008ac5e8d03ce38af23805147d1bfd3140d6588576f6c824a522e215c",
+  "surface_sha256": "b2bda4590d582a76068f6fc70850bd1dfd83435009f5ada9c3bd0c4737ee56eb",
   "capabilities": [
     {
       "name": "start_session",
@@ -334,7 +334,7 @@
       "name": "consult",
       "implementation": "consult",
       "kind": "canonical_tool",
-      "input_schema_sha256": "8ffef62011f8fe29940fe75d2efbf5c11838117d1722ca25936950f764893567",
+      "input_schema_sha256": "891774d8d6c3a1e24e424536cb602767c65577c16f15a17fb1f787ac149f1b74",
       "transport_names": {
         "mcp_streamable_http": "consult",
         "rest_v1_tools": "consult",
@@ -345,7 +345,7 @@
       "name": "call_model",
       "implementation": "call_model",
       "kind": "canonical_tool",
-      "input_schema_sha256": "30760279f172944a25ddbe207d0c3a69f2846b361db6b35b6db0f18f9d5af86c",
+      "input_schema_sha256": "b900d9d4ccb2b6122d12ba16489b589c15bbfe96bb54d174167caf2e2bd2c699",
       "transport_names": {
         "mcp_streamable_http": "call_model",
         "rest_v1_tools": "call_model",
