@@ -19,6 +19,7 @@ const SECTIONS = [
   ["KnowledgeFlow", "knowledge-flow", "kflow-mount"],
   ["Dialectic", "dialectic", "dlc-mount"],
   ["Activity", "activity", "act-mount"],
+  ["Timeline", "timeline", "tl-mount"],
   ["EISV", "eisv", "eisv-mount"],
   ["Risk", "risk", "risk-mount"],
   ["Security", "security", "security-mount"],

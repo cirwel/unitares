@@ -68,8 +68,8 @@ worked reference. It is still a core module for
 
 ## Core or extension? Decide first
 
-The shipped tabs are Overview, Agents, Discoveries, Dialectic, Activity, EISV,
-Risk and Security. A new tab belongs in core only if **any install** can read
+The shipped tabs are Overview, Agents, Discoveries, Dialectic, Activity,
+Timeline, EISV, Risk and Security. A new tab belongs in core only if **any install** can read
 it: it renders on an empty roster, names no resident, and describes product
 state rather than one deployment's instruments. Otherwise it is an
 **extension**: it lives outside this repo, in the directory named by

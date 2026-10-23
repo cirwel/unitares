@@ -111,6 +111,7 @@
     <a href="#discoveries" data-section="discoveries">Discoveries</a>
     <a href="#dialectic" data-section="dialectic">Dialectic</a>
     <a href="#activity" data-section="activity">Activity</a>
+    <a href="#timeline" data-section="timeline">Timeline</a>
     <a href="#eisv" data-section="eisv">EISV</a>
     <a href="#risk" data-section="risk">Risk</a>
     <a href="#security" data-section="security">Security</a>
@@ -181,6 +182,11 @@
       <div id="act-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
 
+    <section class="section" data-pane="timeline" hidden>
+      <h2 class="section-title">Timeline</h2>
+      <div id="tl-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
+
     <!-- Sections built in later increments -->
     <section class="section" data-pane="eisv" hidden>
       <h2 class="section-title">EISV</h2>
@@ -208,6 +214,7 @@
 <script src="./sections/knowledge-flow.js"></script>
 <script src="./sections/dialectic.js"></script>
 <script src="./sections/activity.js"></script>
+<script src="./sections/timeline.js"></script>
 <script src="./sections/eisv.js"></script>
 <script src="./sections/risk.js"></script>
 <script src="./sections/security.js"></script>
@@ -262,6 +269,7 @@ function lazyLoad(id) {
   if (id === "discoveries" && window.KnowledgeFlow) window.KnowledgeFlow.load();
   if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
+  if (id === "timeline" && window.Timeline) { loaded[id] = true; window.Timeline.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
   if (id === "risk" && window.Risk) { loaded[id] = true; window.Risk.load(); }
   if (id === "security" && window.Security) { loaded[id] = true; window.Security.load(); }
@@ -279,6 +287,9 @@ const STATS_REFRESH_MS = 30000; // headline batch (4 sources) — gentler cadenc
 const RELOAD = {
   overview: () => window.Landing && window.Landing.refresh(),
   activity: () => window.Activity && window.Activity.load(),
+  // Timeline refetches its 1h/6h windows (~65 ms for 6h); its refresh() is a
+  // no-op on the 24h window, a several-hundred-KB read that loads on demand.
+  timeline: () => window.Timeline && window.Timeline.refresh(),
   eisv: () => window.EISV && window.EISV.load(),
   // Risk is NOT auto-refreshed: its trend is /v1/governance/trend, seven-day
   // windows that move daily and are cached server-side for ten minutes, so a

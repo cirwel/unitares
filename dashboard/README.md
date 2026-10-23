@@ -18,7 +18,7 @@ in `skills/unitares-dashboard/SKILL.md`; extensions in [`EXTENSIONS.md`](EXTENSI
 ## Core tabs and extensions
 
 The shipped tabs are the ones any install can read: Overview, Agents,
-Discoveries, Dialectic, Activity, EISV, Risk and Security. A deployment adds
+Discoveries, Dialectic, Activity, Timeline, EISV, Risk and Security. A deployment adds
 its own tabs as extensions, kept outside this repo and served from
 `UNITARES_DASHBOARD_EXT_DIR`; see [`EXTENSIONS.md`](EXTENSIONS.md). The
 Residents, Automations, Adjudication, Telemetry, Metrics and Enforcement tabs

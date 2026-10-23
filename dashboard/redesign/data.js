@@ -463,6 +463,30 @@
       });
     },
 
+    // Every agent's events in one window (/v1/timeline): check-ins, outcomes,
+    // lifecycle, knowledge writes, lineage and dialectic sessions, oldest
+    // first, plus the agents they name. An empty window is live ("nothing
+    // happened"); only a failed or malformed response falls back.
+    async timeline(opts) {
+      const o = opts || {};
+      const h = Number.isFinite(o.hours) ? Math.max(1, Math.min(168, Math.round(o.hours))) : 6;
+      const sub = o.includeSubstrate !== false;
+      return withFallback(async () => {
+        const j = await authFetch("/v1/timeline?hours=" + h + "&include_substrate=" + (sub ? "1" : "0"));
+        if (!j || !j.success || !Array.isArray(j.events)) return null;
+        return {
+          hours: h, window: j.window || null, events: j.events, agents: j.agents || [],
+          truncated: j.truncated || [], counts: j.counts || {}, limitPerKind: j.limit_per_kind || null,
+        };
+      }, () => {
+        const t = S().timeline || {};
+        return {
+          hours: h, window: t.window || null, events: t.events || [], agents: t.agents || [],
+          truncated: t.truncated || [], counts: t.counts || {}, limitPerKind: null,
+        };
+      });
+    },
+
     async dialectic() {
       return withFallback(async () => {
         const r = await callTool("dialectic", { action: "list", limit: 50 });

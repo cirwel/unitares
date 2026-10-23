@@ -1,0 +1,186 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
+
+// The Timeline tab (sections/timeline.js) over a /v1/timeline response:
+// rows bounded and ordered by recency, the filter, the detail panel, the
+// empty and unavailable states, and the app.html wiring.
+
+const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+const sectionSource = read("../redesign/sections/timeline.js");
+const dataSource = read("../redesign/data.js");
+
+const END = Date.parse("2026-10-23T18:00:00Z");
+const iso = (minAgo) => new Date(END - minAgo * 60e3).toISOString();
+const uid = (i) => `${String(i).padStart(8, "0")}-0000-4000-8000-000000000000`;
+
+function fixture(nAgents = 30) {
+  const agents = [];
+  const events = [];
+  for (let i = 0; i < nAgents; i++) {
+    agents.push({ agent_id: uid(i), label: `agent-${i}`, model_type: null, trust_tier: "emerging", parent_agent_id: null });
+    // agent-0 is the most recent, agent-(n-1) the oldest.
+    events.push({ kind: "checkin", ts: iso(10 + i * 5), agent_id: uid(i), authored_by: "agent", action: "approve", verdict: "safe", risk_score: 0.1 });
+  }
+  events.push({ kind: "checkin", ts: iso(5), agent_id: uid(0), authored_by: "agent", action: "guide", verdict: "safe", risk_score: 0.3, report_excerpt: "Ready to merge; tests green." });
+  events.push({ kind: "checkin", ts: iso(4), agent_id: uid(0), authored_by: "substrate", action: "approve", verdict: "safe", risk_score: null });
+  events.push({ kind: "outcome", ts: iso(3), agent_id: uid(0), outcome_id: "o-1", outcome_type: "test_failed", is_bad: true, reported_confidence: 0.9, verification_source: "external_signal" });
+  events.push({ kind: "lifecycle", ts: iso(120), agent_id: uid(1), event_type: "lifecycle_paused", reason: "risk over threshold", event_id: "l-1" });
+  events.push({ kind: "lifecycle", ts: iso(90), agent_id: uid(1), event_type: "lifecycle_resumed", reason: "self_recovery", event_id: "l-2" });
+  events.push({ kind: "lineage", ts: iso(60), agent_id: uid(29), parent_agent_id: uid(0), successor_class: "ephemeral", event_id: "g-1" });
+  events.sort((a, b) => a.ts.localeCompare(b.ts));
+  return {
+    hours: 6, window: { start: iso(360), end: iso(0), hours: 6 }, events, agents,
+    truncated: [], counts: { checkin: nAgents + 2, outcome: 1, dialectic: 0 }, limitPerKind: 500,
+  };
+}
+
+async function mount(response, source = "live") {
+  const dom = new JSDOM(`<div id="tl-mount"></div>`, { runScripts: "outside-only", url: "https://gov.example/dashboard" });
+  const calls = [];
+  dom.window.DATA = { timeline: async (opts) => { calls.push(opts); return { source, data: response }; } };
+  dom.window.eval(sectionSource);
+  await dom.window.Timeline.load();
+  const doc = dom.window.document;
+  const rows = () => [...doc.querySelectorAll(".tl-row:not(.tl-axis)")];
+  const names = () => rows().map((r) => r.querySelector(".tl-name").textContent);
+  return { dom, doc, calls, rows, names, text: () => doc.getElementById("tl-mount").textContent };
+}
+
+describe("Timeline tab", () => {
+  it("shows the 25 most recent agents first, then all on request", async () => {
+    const t = await mount(fixture(30));
+    // agent-29 is nested under agent-0 as its subagent, so it follows it.
+    expect(t.names().slice(0, 3)).toEqual(["agent-0", "agent-29", "agent-1"]);
+    expect(t.rows()).toHaveLength(25);
+    const all = t.doc.getElementById("tl-all");
+    expect(all.textContent).toContain("show all 30 agents");
+    all.click();
+    expect(t.rows()).toHaveLength(30);
+  });
+
+  it("nests a subagent under its parent and says so", async () => {
+    const t = await mount(fixture(30));
+    const child = t.rows()[1];
+    expect(child.classList.contains("child")).toBe(true);
+    expect(child.querySelector(".tl-sub").textContent).toContain("subagent of agent-0");
+    expect(t.rows()[0].querySelector(".tl-mk.lineage")).not.toBeNull();
+  });
+
+  it("filters rows by label or id", async () => {
+    const t = await mount(fixture(30));
+    const input = t.doc.getElementById("tl-filter");
+    input.value = "agent-2";
+    input.dispatchEvent(new t.dom.window.Event("input"));
+    expect(t.names().every((n) => n.includes("agent-2"))).toBe(true);
+    expect(t.names()).toContain("agent-21");
+    input.value = uid(7).slice(0, 8);
+    input.dispatchEvent(new t.dom.window.Event("input"));
+    expect(t.names()).toEqual(["agent-7"]);
+    input.value = "nobody";
+    input.dispatchEvent(new t.dom.window.Event("input"));
+    expect(t.text()).toContain("No agent matches");
+  });
+
+  it("draws marks by kind and a pause band from the paused/resumed pair", async () => {
+    const t = await mount(fixture(30));
+    const first = t.rows()[0];
+    expect(first.querySelector(".tl-mk.checkin.guide")).not.toBeNull();
+    expect(first.querySelector(".tl-mk.checkin.substrate")).not.toBeNull();
+    expect(first.querySelector(".tl-mk.outcome.bad").textContent).toBe("✕");
+    const paused = t.rows().find((r) => r.querySelector(".tl-name").textContent === "agent-1");
+    expect(paused.querySelector(".tl-band.pause")).not.toBeNull();
+  });
+
+  it("shows a check-in's report excerpt, or says it was not retained", async () => {
+    const t = await mount(fixture(30));
+    const detail = () => t.doc.getElementById("tl-detail").textContent;
+    t.rows()[0].querySelector(".tl-mk.checkin.guide").click();
+    expect(detail()).toContain("Ready to merge; tests green.");
+    expect(detail()).toContain("UTC");
+    t.rows()[0].querySelector(".tl-mk.checkin.proceed").click();
+    expect(detail()).toContain("Report text not retained for this check-in.");
+    t.rows()[0].querySelector(".tl-mk.checkin.substrate").click();
+    expect(detail()).toContain("A hook, not the agent");
+  });
+
+  it("shows an outcome's reported confidence against its result", async () => {
+    const t = await mount(fixture(30));
+    t.rows()[0].querySelector(".tl-mk.outcome").click();
+    const detail = t.doc.getElementById("tl-detail").textContent;
+    expect(detail).toContain("0.90");
+    expect(detail).toContain("failed");
+  });
+
+  it("names the kinds the server truncated", async () => {
+    const r = fixture(3);
+    r.truncated = ["checkin"];
+    const t = await mount(r);
+    expect(t.text()).toContain("checkin");
+    expect(t.text()).toContain("Only the newest 500 rows");
+  });
+
+  it("renders an empty window as live and empty", async () => {
+    const t = await mount({ hours: 6, window: null, events: [], agents: [], truncated: [], counts: {} });
+    expect(t.text()).toContain("No agent events in the last 6h");
+    expect(t.doc.getElementById("tl-src").textContent).toBe("live");
+  });
+
+  it("says the server is not answering when the source is unavailable", async () => {
+    const t = await mount({ hours: 6, window: null, events: [], agents: [], truncated: [], counts: {} }, "unavailable");
+    expect(t.text()).toContain("Server not answering");
+    expect(t.text()).not.toContain("No agent events");
+  });
+
+  it("refetches on the live tick for short windows only", async () => {
+    const t = await mount(fixture(3));
+    await t.dom.window.Timeline.refresh();
+    expect(t.calls).toHaveLength(2);
+    t.doc.querySelector('.tl-win[data-h="24"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.calls.at(-1).hours).toBe(24);
+    const n = t.calls.length;
+    await t.dom.window.Timeline.refresh();
+    expect(t.calls).toHaveLength(n);
+  });
+
+  it("keeps the selection across a refresh", async () => {
+    const t = await mount(fixture(30));
+    t.rows()[0].querySelector(".tl-mk.outcome").click();
+    await t.dom.window.Timeline.refresh();
+    expect(t.rows()[0].querySelector(".tl-mk.outcome").classList.contains("sel")).toBe(true);
+  });
+
+  it("escapes labels from the server", async () => {
+    const r = fixture(1);
+    r.agents[0].label = '<img src=x onerror="alert(1)">';
+    const t = await mount(r);
+    expect(t.doc.querySelector("#tl-mount img")).toBeNull();
+    expect(t.names()[0]).toContain("<img");
+  });
+});
+
+describe("DATA.timeline", () => {
+  it("asks for the window and the substrate choice", async () => {
+    const dom = new JSDOM("<div></div>", { runScripts: "outside-only", url: "https://gov.example/dashboard" });
+    const urls = [];
+    dom.window.fetch = async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ success: true, events: [], agents: [], truncated: [], counts: {} }) }; };
+    dom.window.eval(dataSource);
+    const r = await dom.window.DATA.timeline({ hours: 24, includeSubstrate: false });
+    expect(urls[0]).toBe("/v1/timeline?hours=24&include_substrate=0");
+    expect(r.source).toBe("live");
+    expect(r.data.events).toEqual([]);
+  });
+});
+
+describe("app.html wiring", () => {
+  const html = read("../redesign/app.html");
+  it("has the nav link, pane, script, lazy load and live tick", () => {
+    expect(html).toContain('<a href="#timeline" data-section="timeline">Timeline</a>');
+    expect(html).toContain('data-pane="timeline"');
+    expect(html).toContain('id="tl-mount"');
+    expect(html).toContain('<script src="./sections/timeline.js"></script>');
+    expect(html).toContain('id === "timeline" && window.Timeline');
+    expect(html).toContain("timeline: () => window.Timeline && window.Timeline.refresh()");
+  });
+});
