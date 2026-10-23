@@ -405,7 +405,11 @@ async def main():
         )
 
     from src.continuity_secret import ensure_generated_secret
-    from src.insecure_defaults import running_in_container, startup_warnings
+    from src.insecure_defaults import (
+        published_default_refusal,
+        running_in_container,
+        startup_warnings,
+    )
 
     try:
         ensure_generated_secret()
@@ -422,6 +426,13 @@ async def main():
         in_container=running_in_container(),
     ):
         print(f"[FastMCP] WARNING: {_warning}", file=sys.stderr, flush=True)
+    # Judged before bootstrap, like the auth-gate refusal above: bootstrap's
+    # lease acquisition SIGTERMs a running predecessor, so refusing after it
+    # would turn a configuration mistake into an outage.
+    _published_refusal = published_default_refusal()
+    if _published_refusal:
+        print(f"[FastMCP] ERROR: {_published_refusal}", file=sys.stderr, flush=True)
+        raise SystemExit(1)
 
     from src.services.mcp_server_bootstrap import (
         ServerStartupError,
