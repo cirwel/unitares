@@ -352,6 +352,8 @@ def test_setup_creates_private_roundtrippable_shared_config(manager, monkeypatch
     output = capsys.readouterr().out
     assert url not in output and config['LEASE_PLANE_BEARER_TOKEN'] not in output
     assert 'unknown' in output and 'empty at inspection' not in output
+    assert str(ROOT / 'docs/install/HOMEBREW_SETUP.md') in output
+    assert str(brew.app / 'docs/install/HOMEBREW_SETUP.md') not in output
 
 
 @pytest.mark.parametrize('kind', ['invalid', 'symlink', 'dangling', 'world-readable'])

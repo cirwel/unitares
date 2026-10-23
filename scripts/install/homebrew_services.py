@@ -237,7 +237,7 @@ class Homebrew:
         return public_url, env
 
     def setup_next_step(self, records):
-        guide = self.app / 'docs/install/HOMEBREW_SETUP.md'
+        guide = Path(__file__).resolve().parents[2] / 'docs/install/HOMEBREW_SETUP.md'
         if not records['postgresql@17'].get('running'):
             print('Database readiness: unknown (Homebrew PostgreSQL is stopped). Start that dependency, then rerun setup. This does not establish that the database is empty.')
         else:
