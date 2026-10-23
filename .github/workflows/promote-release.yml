@@ -324,8 +324,15 @@ jobs:
             echo "Promotion waits for approval on the \`$PROMOTION_ENVIRONMENT\` environment."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  promote:
+  native-bootstrap:
     needs: verify
+    uses: ./.github/workflows/native-bootstrap.yml
+    with:
+      source-ref: ${{ needs.verify.outputs.source_sha }}
+      postgres-image: ${{ needs.verify.outputs.postgres_digest && format('ghcr.io/{0}-postgres@{1}', github.repository, needs.verify.outputs.postgres_digest) || 'ghcr.io/cirwel/unitares-postgres:v3.5.0' }}
+
+  promote:
+    needs: [verify, native-bootstrap]
     runs-on: ubuntu-latest
     environment: release-promotion
     permissions:

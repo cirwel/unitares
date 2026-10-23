@@ -57,7 +57,8 @@ if [ "$APPLY" -eq 1 ] && ! command -v psql >/dev/null 2>&1; then
     exit 2
 fi
 
-PSQL=(psql -v ON_ERROR_STOP=1 "$DB_URL")
+# A startup file must not reconnect this explicit bootstrap to another DB.
+PSQL=(psql -X -v ON_ERROR_STOP=1 "$DB_URL")
 
 run_file() {
     local relative="$1"
