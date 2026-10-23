@@ -3823,6 +3823,36 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
     return sorted(out, key=lambda p: p["updatedAt"])
 
 
+# The agent prefixes of the branch-naming convention, matched exactly, so a
+# contributor branch such as `sonnet/fix` or `codex-tools/fix` names no author.
+_AUTHOR_PREFIX_FAMILY = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "gemini": "google",
+    "agy": "google",
+    "antigravity": "google",
+}
+
+
+def branch_author_family(branch: str) -> str | None:
+    """The model family an agent branch names in its author prefix
+    (`codex/…`, `claude/…`, `gemini/…`), or None for any other branch.
+
+    The sweep skips configured reviewers of that family, judged by the model
+    each would run here (agy by its configured model), so each PR is read by
+    another model family than the one that wrote it (operator direction,
+    2026-10-23). The prefix is the branch-naming convention, not proof of
+    authorship; a branch without one is reviewed in the configured order."""
+    prefix, sep, _ = (branch or "").partition("/")
+    return _AUTHOR_PREFIX_FAMILY.get(prefix) if sep else None
+
+
+def _skips_author_family(provider: str, authored_by: str | None) -> bool:
+    """Whether the sweep passes over ``provider`` for a PR its family wrote.
+    Only a known author family excludes: an unknown one matches nothing."""
+    return authored_by is not None and provider_family(provider) == authored_by
+
+
 def cmd_sweep(args) -> int:
     """Review at most ONE PR per run: bounded cost, and launchd never overlaps
     a job with itself. Runs THIS script (the caller's trusted checkout) with
@@ -3840,6 +3870,7 @@ def cmd_sweep(args) -> int:
         reviewer = None
         required_family = False
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
+        authored_by = branch_author_family(p["headRefName"])
         git("fetch", "--quiet", "--no-tags", "origin",
             f"+refs/heads/{base}:refs/remotes/origin/{base}",
             f"+refs/pull/{n}/head:refs/review-gate/pr-{n}")
@@ -3873,7 +3904,8 @@ def cmd_sweep(args) -> int:
                                                f"origin/{base}", head)
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], families, comments, key))
-                    selected = next((p for p in choices if p in eligible), None)
+                    selected = next((p for p in choices if p in eligible
+                                     and not _skips_author_family(p, authored_by)), None)
                     if selected:
                         reviewer = selected
                         required_family = True
@@ -3901,11 +3933,13 @@ def cmd_sweep(args) -> int:
             usable = reviewer_candidates(p["headRefName"])
             reviewer = next((provider for provider in choices
                              if provider in usable
+                             and not _skips_author_family(provider, authored_by)
                              and ((provider == "codex" and native_enabled())
                                   or not provider_cooldown(provider))
                              and failed_runs(comments, key, provider) < SWEEP_MAX_FAILED), None)
         if reviewer is None:
-            print(f"[sweep] PR #{n}: configured reviewers unavailable; no review started")
+            outside = " outside the author's family" if authored_by else ""
+            print(f"[sweep] PR #{n}: configured reviewers{outside} unavailable; no review started")
             continue
         reason = f"needs required family via {reviewer}" if required_family else f"needs review via {reviewer}"
         print(f"[sweep] PR #{n} ({p['headRefName']}) {reason} for {key[:12]}")
