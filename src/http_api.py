@@ -114,6 +114,7 @@ from src.http_routes.overview import (
     http_activity,
     http_taxonomy,
 )
+from src.http_routes.timeline import http_timeline
 from src.http_routes.metrics_api import (
     http_post_metric,
     http_get_metrics,
@@ -308,6 +309,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/agents", http_eisv_agents, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
+    app.routes.append(Route("/v1/timeline", http_timeline, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
     app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))
