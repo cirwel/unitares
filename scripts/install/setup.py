@@ -496,6 +496,7 @@ def render_text(result: dict, use_color: bool) -> str:
     lines.append("2. Start the HTTP server with `python src/mcp_server.py --port 8767`.")
     lines.append("3. Verify with `./scripts/unitares health` and `./scripts/unitares onboard install-smoke`.")
     lines.append("4. Use docs/integration/MCP_CLIENTS.md as the canonical client configuration source.")
+    lines.append("Optional, after the core is running: connect a model for advice and local reviews. See docs/manual/02-install.md#choose-a-model-optional; Ollama is one supported choice.")
 
     return "\n".join(lines)
 

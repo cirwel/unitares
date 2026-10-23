@@ -15,6 +15,31 @@ logger = get_logger(__name__)
 class StateMixin:
     """Agent state (EISV) snapshot operations."""
 
+    async def read_state_model_observation_candidates(
+        self, agent_id: str, *, observed_before, limit: int = 32,
+    ) -> List[Dict[str, Any]]:
+        """Model-bearing non-synthetic state, using the identity owner's lookup."""
+        identity = await self.get_identity(agent_id)
+        if identity is None:
+            return []
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT recorded_at AS observed_at, state_id::text AS record_id,
+                       'agent_state'::text AS record_kind,
+                       state_json#>'{provenance_context,runtime_provenance}' AS provenance
+                FROM core.agent_state
+                WHERE identity_id = $1 AND COALESCE(synthetic, false) = false
+                  AND recorded_at <= $2
+                  AND state_json#>>'{provenance_context,runtime_provenance,schema}' = 's22.runtime_provenance.v1'
+                  AND jsonb_typeof(state_json#>'{provenance_context,runtime_provenance,model,identifier}') = 'string'
+                  AND length(state_json#>>'{provenance_context,runtime_provenance,model,identifier}') BETWEEN 1 AND 160
+                ORDER BY recorded_at DESC, state_id DESC LIMIT $3
+                """,
+                identity.identity_id, observed_before, max(1, min(limit, 32)),
+            )
+        return [dict(row) for row in rows]
+
     async def record_agent_state(
         self,
         identity_id: int,
@@ -451,3 +476,36 @@ class StateMixin:
             epistemic_class=epistemic_class,
             state_json=sj,
         )
+
+
+async def fetch_timeline_checkins(
+    conn,
+    *,
+    start,
+    identity_ids: Optional[List[int]],
+    classes: List[str],
+    limit: int,
+) -> list:
+    """Measured check-ins since `start`, newest first, for GET /v1/timeline.
+
+    `identity_ids` None reads every agent. `classes` filters on the epistemic
+    class (agent report vs substrate). Synthetic bootstrap rows are excluded.
+    """
+    return await conn.fetch(
+        """
+        SELECT s.recorded_at, s.identity_id,
+               coalesce(s.epistemic_class,
+                        s.state_json->>'epistemic_class') AS epistemic_class,
+               s.state_json->>'action' AS action,
+               s.state_json->>'verdict' AS verdict,
+               s.risk_score
+        FROM core.agent_state s
+        WHERE s.recorded_at >= $1 AND s.synthetic = false
+          AND ($2::bigint[] IS NULL OR s.identity_id = ANY($2::bigint[]))
+          AND coalesce(s.epistemic_class,
+                       s.state_json->>'epistemic_class') = ANY($3::text[])
+        ORDER BY s.recorded_at DESC
+        LIMIT $4
+        """,
+        start, identity_ids, classes, limit,
+    )

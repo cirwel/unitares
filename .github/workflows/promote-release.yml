@@ -507,6 +507,10 @@ jobs:
           python3 scripts/ci/compat_published_row.py --version "$VERSION" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --release-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          # The plugin and SDK rows and the public site's SDK pins, from the
+          # newest sdk-v* tag in the release and its plugin-bundle-recut marker;
+          # it fails if PyPI or the plugin release does not serve them.
+          python3 scripts/ci/compat_component_rows.py --version "$VERSION" --release-tag "$RELEASE_TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898+github-actions[bot]@users.noreply.github.com"
           git add PUBLISHED_VERSION
