@@ -689,7 +689,11 @@ while read -r _ n head; do
       fi
     done
     if [ "$started" -eq 0 ]; then
-      record_refused_rerun "$n" "$head"
+      if ! record_refused_rerun "$n" "$head"; then
+        # Uncounted, the tries never run out: keep the marker rather than loop.
+        log "#$n: no re-run started, and the refusal could not be recorded ($RERUNS_FILE); leaving $RETRIED_LABEL on"
+        continue
+      fi
       tries=$(refused_reruns "$n" "$head")
       if [ "$tries" -ge "$RERUN_TRIES" ]; then
         # Toggling the label every tick would bury the PR's timeline (#3036).

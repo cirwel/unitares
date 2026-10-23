@@ -461,6 +461,19 @@ def test_a_rerun_refused_on_every_try_leaves_the_marker_on(tmp_path: Path) -> No
     assert (tmp_path / "state" / "approvals.reruns").read_text().count("9 sha9") == 3
 
 
+def test_a_refusal_that_cannot_be_recorded_leaves_the_marker_on(tmp_path: Path) -> None:
+    # Uncounted refusals would never run out of tries.
+    (tmp_path / "state" / "approvals.reruns").mkdir(parents=True)
+    calls, out = _run(
+        tmp_path, [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])], fail=("run rerun",)
+    )
+    assert calls == [
+        f"pr edit 9 -R o/r --add-label {RETRIED}",
+        "run rerun 77 --failed -R o/r",
+    ]
+    assert "the refusal could not be recorded" in out
+
+
 def test_refused_tries_count_per_head(tmp_path: Path) -> None:
     _refused(tmp_path, "9 old", "9 old", "9 old", "10 sha9")
     calls, out = _run(
