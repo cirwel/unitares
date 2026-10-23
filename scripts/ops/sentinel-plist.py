@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
-import os
 import secrets
 import stat
 import sys
@@ -45,9 +44,7 @@ if str(OPS_DIR) not in sys.path:
 from governance_bearer import (  # noqa: E402
     EXTERNAL_ROTATE_CMD_ENV,
     HTTP_TOKEN_KEY,
-    INVALID_TOKENS,
     PLACEHOLDER_RE,
-    SECRET_KEY_RE,
     SECRETS_WRAPPER,
     TOKEN_PLACEHOLDER,
     UDS_SOCKET_KEY,
@@ -56,7 +53,6 @@ from governance_bearer import (  # noqa: E402
     UnixHTTPConnection as _UnixHTTPConnection,
     check_bearer_live as _shared_check_bearer_live,
     check_private,
-    classify_bearer_shape,
     default_home as _default_home,
     defines_key,
     encode_secret_value,
@@ -66,7 +62,6 @@ from governance_bearer import (  # noqa: E402
     plist_environment as _environment,
     read_secret,
     replace_secret_line,
-    resolve_plist_bearer,
     rotate_token as _shared_rotate_token,
     rotation_files,
     rotation_preflight as _shared_rotation_preflight,
