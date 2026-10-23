@@ -30,13 +30,18 @@ def launcher(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     commands = {
+        "brew": '#!/bin/sh\nprintf "%s" "$TEST_BREW_PREFIX"\n',
         "curl": '#!/bin/sh\nprintf "%s" "${TEST_VERSION:-3.4.0}"\n',
         "docker": '''#!/bin/sh
 printf '%s\n' "$*" >> "$TEST_DOCKER_LOG"
 case "$*" in
   info) exit "${TEST_DAEMON_RC:-0}" ;;
-  inspect*) [ -n "${TEST_OWNER:-}" ] && printf '%s' "$TEST_OWNER"; exit 0 ;;
+  inspect*)
+    [ "${TEST_UNLABELLED:-0}" = 1 ] && exit 0
+    [ -n "${TEST_OWNER:-}" ] || exit 1
+    printf '%s' "$TEST_OWNER"; exit 0 ;;
   "compose pull"*) exit "${TEST_PULL_RC:-0}" ;;
+  "compose up"*) printf '%s %s' "${GOVERNANCE_HOST_PORT:-}" "${LEASE_PLANE_HOST_PORT:-}" > "$TEST_PORTS_LOG" ;;
   *exec*) cat > "$TEST_HEALTH_CODE"; exit "${TEST_HEALTH_RC:-0}" ;;
 esac
 ''',
@@ -53,12 +58,14 @@ exec "{git}" "$@"
         path.write_text(content)
         path.chmod(0o755)
     stack = tmp_path / "managed space" / "stack"
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", HOME=str(tmp_path / 'home'),
+               TEST_BREW_PREFIX=str(tmp_path / 'brew'), UNITARES_NATIVE_ENV='',
                UNITARES_STACK_DIR=str(stack), TEST_SOURCE=str(source),
                TEST_DOCKER_LOG=str(tmp_path / "docker.log"),
+               TEST_PORTS_LOG=str(tmp_path / "ports.log"),
                TEST_HEALTH_CODE=str(tmp_path / "health.py"))
-    def launch(**overrides):
-        return subprocess.run(["sh", str(SCRIPT)], env=env | overrides,
+    def launch(*args, **overrides):
+        return subprocess.run(["sh", str(SCRIPT), *args], env=env | overrides,
                               text=True, capture_output=True)
     return stack, env, launch
 
@@ -109,11 +116,102 @@ def test_existing_directory_not_adopted(launcher):
 
 
 def test_foreign_container_refused_before_up(launcher):
-    _, env, launch = launcher
+    stack, env, launch = launcher
     result = launch(TEST_OWNER="/another/checkout")
     assert result.returncode != 0
     assert "belongs to" in result.stderr
     assert "up -d" not in Path(env["TEST_DOCKER_LOG"]).read_text()
+    assert not stack.parent.exists()
+
+
+def test_unlabelled_container_is_not_adopted(launcher):
+    stack, _, launch = launcher
+    result = launch(TEST_UNLABELLED='1')
+    assert result.returncode != 0
+    assert 'unknown checkout' in result.stderr
+    assert not stack.parent.exists()
+
+
+def test_existing_homebrew_refused_before_docker_or_filesystem_changes(launcher):
+    stack, env, launch = launcher
+    native = Path(env['TEST_BREW_PREFIX']) / 'opt/unitares'
+    native.mkdir(parents=True)
+    result = launch(TEST_DAEMON_RC='1')
+    assert result.returncode != 0
+    assert str(native) in result.stderr
+    assert '--separate' in result.stderr
+    assert not stack.parent.exists()
+    assert not Path(env['TEST_DOCKER_LOG']).exists()
+
+
+def test_native_config_detected_without_reading_or_executing_it(launcher, tmp_path):
+    stack, env, launch = launcher
+    config = tmp_path / 'native.env'
+    marker = tmp_path / 'must-not-exist'
+    content = f'DB_POSTGRES_URL=secret-value\ntouch "{marker}"\n'
+    config.write_text(content)
+    result = launch(UNITARES_NATIVE_ENV=str(config))
+    assert result.returncode != 0
+    assert str(config) in result.stderr
+    assert 'secret-value' not in result.stderr + result.stdout
+    assert not marker.exists()
+    assert config.read_text() == content
+    assert not stack.parent.exists()
+
+
+def test_native_launchagent_is_detected(launcher):
+    stack, env, launch = launcher
+    plist = Path(env['HOME']) / 'Library/LaunchAgents/com.unitares.governance-mcp.plist'
+    plist.parent.mkdir(parents=True)
+    plist.write_text('fixture')
+    result = launch()
+    assert result.returncode != 0
+    assert str(plist) in result.stderr
+    assert not stack.parent.exists()
+
+
+@pytest.mark.parametrize('server,lease', [('', ''), ('18767', ''), ('', '18788'),
+    ('8767', '18788'), ('8788', '18788'), ('18767', '8767'), ('18767', '8788'),
+    ('18767', '18767'), ('0', '18788'), ('65536', '18788'), ('1;bad', '18788'),
+    ('018767', '18788'), ('9' * 100, '18788')])
+def test_separate_install_requires_two_valid_alternate_ports(launcher, server, lease):
+    stack, env, launch = launcher
+    result = launch('--separate', GOVERNANCE_HOST_PORT=server, LEASE_PLANE_HOST_PORT=lease)
+    assert result.returncode != 0
+    assert not stack.parent.exists()
+    assert not Path(env['TEST_DOCKER_LOG']).exists()
+
+
+def test_explicit_separate_install_preserves_native_install(launcher):
+    stack, env, launch = launcher
+    native = Path(env['TEST_BREW_PREFIX']) / 'opt/unitares'
+    native.mkdir(parents=True)
+    marker = native / 'keep'
+    marker.write_text('native data')
+    for _ in range(2):
+        result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
+        assert result.returncode == 0, result.stderr
+        assert 'Installation: Docker Compose' in result.stdout
+        assert 'server port 18767, lease-plane port 18788' in result.stdout
+    assert Path(env['TEST_PORTS_LOG']).read_text() == '18767 18788'
+    assert marker.read_text() == 'native data'
+    config = (stack / '.env').read_text()
+    assert 'GOVERNANCE_HOST_PORT=18767\n' in config
+    assert 'LEASE_PLANE_HOST_PORT=18788\n' in config
+    changed = launch('--separate', GOVERNANCE_HOST_PORT='28767', LEASE_PLANE_HOST_PORT='28788')
+    assert changed.returncode != 0
+    assert 'existing configuration was not changed' in changed.stderr
+    assert (stack / '.env').read_text() == config
+
+
+def test_separate_rejects_later_conflicting_dotenv_assignment(launcher):
+    stack, _, launch = launcher
+    assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
+    with (stack / '.env').open('a') as stream:
+        stream.write('export GOVERNANCE_HOST_PORT = 8767\n')
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
+    assert result.returncode != 0
+    assert 'Set the literal GOVERNANCE_HOST_PORT=18767' in result.stderr
 
 
 def test_pull_failure_stops_before_up(launcher):
