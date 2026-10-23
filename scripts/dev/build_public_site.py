@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -183,7 +184,8 @@ def render_demo_md(demo_md: str, fixture: dict) -> str:
 
     for name, url in DEMO_LINKS.items():
         text = text.replace("{%s}" % name, url)
-    if "{{" in text or any("{%s}" % name in text for name in DEMO_LINKS):
+    # Any {name} left over is a placeholder nobody filled, a typo included.
+    if "{{" in text or re.search(r"\{[A-Za-z_][\w.]*\}", text):
         raise ValueError("demo: unfilled placeholder in docs/public-site/demo.md")
     return text
 

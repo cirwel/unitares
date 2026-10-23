@@ -121,6 +121,10 @@ def test_demo_build_fails_on_unfilled_placeholder():
     fixture["questions"] = [{"question_id": "who", "fact_key": "a"}]
     with pytest.raises(ValueError):
         render_demo_md("{{questions_table}}", fixture)
+    # A mistyped link name would publish a broken relative link.
+    fixture["questions"] = []
+    with pytest.raises(ValueError):
+        render_demo_md("[the result]({result_blobb})", fixture)
 
 
 def test_demo_link_names_must_match_the_fixture_edges():

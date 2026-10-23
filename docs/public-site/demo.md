@@ -30,8 +30,8 @@ A deterministic smoke test runs afterwards and records its result:
 
 > {{facts.deterministic_evidence}}
 
-The evidence is linked to the claim it contradicts (`{{relation.contradicts}}`),
-and the outcome, recorded as `{{facts.outcome}}`, grades it
+The evidence is linked to the claim it contradicts (`{{relation.contradicts}}`).
+The outcome, recorded as `{{facts.outcome}}`, grades the claim
 (`{{relation.grades}}`). The claim and the evidence against it now sit side by
 side.
 
