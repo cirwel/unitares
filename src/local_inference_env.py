@@ -545,8 +545,8 @@ def model_not_configured_message() -> str:
     return (
         "No local model is chosen: pass model (one the endpoint serves; "
         "list_inference_hosts lists them), or have the operator set "
-        f"{MODEL_ENV} (`unitares model` writes it) or serve exactly one model "
-        "at the endpoint."
+        f"{MODEL_ENV} (`unitares model` writes it), or explicitly configure "
+        f"{MODEL_BASE_URL_ENV} for an endpoint serving exactly one model."
     )
 
 
@@ -733,12 +733,16 @@ def resolve_local_model(requested: str | None = None) -> str:
     """The model a local-route call uses, or ``""`` when none can be chosen.
 
     In order: the model the agent asked for; ``UNITARES_MODEL_ID``; the
-    endpoint's only served model, when it lists exactly one. With several
-    served and none named, nothing is guessed. Blocking (it may ask the
-    endpoint); async callers run it with ``asyncio.to_thread``.
+    explicitly configured endpoint's only served model, when it lists exactly
+    one. A fresh install never selects an incidental model at the default
+    Ollama address. With several served and none named, nothing is guessed.
+    Blocking (it may ask the endpoint); async callers run it with
+    ``asyncio.to_thread``.
     """
     chosen = (requested or "").strip() or default_local_model()
     if chosen:
         return chosen
+    if not _resolve(MODEL_BASE_URL_ENV, _normalize_base_setting):
+        return ""
     listed = served_models()
     return listed[0] if listed is not None and len(listed) == 1 else ""
