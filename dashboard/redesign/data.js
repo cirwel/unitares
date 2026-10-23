@@ -479,11 +479,16 @@
           truncated: j.truncated || [], counts: j.counts || {}, limitPerKind: j.limit_per_kind || null,
         };
       }, () => {
+        // Offline: apply the window and the hook toggle to the bundled six
+        // hours, as the server would, so the controls do what they say.
         const t = S().timeline || {};
-        return {
-          hours: h, window: t.window || null, events: t.events || [], agents: t.agents || [],
-          truncated: t.truncated || [], counts: t.counts || {}, limitPerKind: null,
-        };
+        const end = t.window ? Date.parse(t.window.end) : NaN;
+        const from = isNaN(end) ? -Infinity : end - h * 3600e3;
+        const events = (t.events || []).filter((e) => Date.parse(e.ts) >= from && (sub || e.authored_by !== "substrate"));
+        const counts = {};
+        events.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+        const win = isNaN(end) ? null : { start: new Date(from).toISOString(), end: t.window.end, hours: h };
+        return { hours: h, window: win, events, agents: t.agents || [], truncated: t.truncated || [], counts, limitPerKind: null };
       });
     },
 

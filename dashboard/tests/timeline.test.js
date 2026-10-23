@@ -194,6 +194,26 @@ describe("DATA.timeline", () => {
   });
 });
 
+describe("DATA.timeline offline", () => {
+  it("applies the window and the hook toggle to the bundled snapshot", async () => {
+    const dom = new JSDOM("<div></div>", { runScripts: "outside-only", url: "file:///tmp/app.html" });
+    dom.window.fetch = async () => { throw new TypeError("Failed to fetch"); };
+    dom.window.eval(read("../redesign/snapshot.js"));
+    dom.window.eval(dataSource);
+    const six = await dom.window.DATA.timeline({ hours: 6 });
+    const one = await dom.window.DATA.timeline({ hours: 1 });
+    const noHooks = await dom.window.DATA.timeline({ hours: 6, includeSubstrate: false });
+    expect(six.source).toBe("snapshot");
+    expect(one.data.events.length).toBeLessThan(six.data.events.length);
+    expect(one.data.window.hours).toBe(1);
+    const start = Date.parse(one.data.window.start);
+    expect(one.data.events.every((e) => Date.parse(e.ts) >= start)).toBe(true);
+    expect(six.data.events.some((e) => e.authored_by === "substrate")).toBe(true);
+    expect(noHooks.data.events.some((e) => e.authored_by === "substrate")).toBe(false);
+    expect(noHooks.data.counts.checkin).toBe(noHooks.data.events.filter((e) => e.kind === "checkin").length);
+  });
+});
+
 describe("app.html wiring", () => {
   const html = read("../redesign/app.html");
   it("has the nav link, pane, script, lazy load and live tick", () => {
