@@ -1,1 +1,0 @@
-- **README:** drop the opening warm-up anecdote, add a compact two-process continuity trace in `How it works`, and surface the client integration paths alongside `Install` while preserving the pinned product and evidence contracts.
