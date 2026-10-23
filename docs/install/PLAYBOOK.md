@@ -1,9 +1,10 @@
 # UNITARES Advanced Bare-Metal Install Playbook (macOS)
 
-> **Tier-1 installs use the release-tagged Docker Compose quickstart in the
-> repository README.** This playbook is the advanced source-based path for an
-> operator who deliberately wants Homebrew services and a native Python
-> process. It is maintained, but it is not the default installation contract.
+> **This is the advanced source-checkout path.** For packaged Apple Silicon
+> Mac installations, use the [public Homebrew preview](https://github.com/cirwel/homebrew-unitares)
+> and its first-time setup steps. For containers, use the manual's
+> [Docker quickstart](../manual/02-install.md#21-docker-quickstart). Do not apply
+> this page's manual extension builds or pip commands inside a Homebrew keg.
 
 **Goal:** take a blank macOS install to a state where the governance MCP server is serving on `http://localhost:8767`, an MCP client can perform a check-in successfully, and the dashboard is reachable.
 
@@ -75,7 +76,9 @@ operator continuity.
 
 ## Step 2 — Build Apache AGE and pgvector against PostgreSQL 17
 
-AGE is not in Homebrew. You build it from source against the exact `pg_config` from your Homebrew Postgres.
+AGE is not in Homebrew core; the UNITARES tap provides a managed formula.
+This source-checkout path builds it manually against the exact `pg_config`
+from your Homebrew Postgres. Do not combine it with a tap-managed AGE install.
 
 ```bash
 export PG_CONFIG="$(brew --prefix postgresql@17)/bin/pg_config"
