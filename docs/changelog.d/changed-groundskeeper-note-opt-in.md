@@ -1,1 +1,0 @@
-- **vigil:** the groundskeeper's per-change KG summary note ("Groundskeeper: N stale …") is now opt-in with `VIGIL_GROUNDSKEEPER_NOTES=1`. The audit, lifecycle cleanup, staleness-spike finding and log line are unchanged.

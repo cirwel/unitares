@@ -1,1 +1,0 @@
-- **product definition:** the evidence section now leads with what is demonstrated (attribution, outcome binding, successor retrieval, review-driven fixes, delivered pauses) and states its scope once; the remaining unmeasured items moved to the evidence ledger, which already owns them. Documentation only.

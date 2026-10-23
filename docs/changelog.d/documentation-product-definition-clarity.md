@@ -1,1 +1,0 @@
-- **Product definition:** shorten the overview, connect its evidence summary to captured workflows and review corrections, and link detailed evaluation history while retaining product, integration, and research boundaries.
