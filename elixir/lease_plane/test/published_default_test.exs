@@ -61,9 +61,27 @@ defmodule UnitaresLeasePlane.PublishedDefaultTest do
   end
 
   test "loopback binds do not add it" do
-    for ip <- [nil, "", "127.0.0.1", "::1"] do
+    for ip <- [nil, "", "127.0.0.1", "::1", "::ffff:127.0.0.1", "::ffff:127.255.0.9"] do
       assert [_] = LeaseApplication.published_default_warnings(published_default(), ip, false)
     end
+  end
+
+  test "a Unix socket bind has no port, so it does not add it" do
+    assert [_] =
+             LeaseApplication.published_default_warnings(
+               published_default(),
+               {:local, "/run/lease.sock"},
+               false
+             )
+  end
+
+  test "an IPv4-mapped address beyond loopback still adds it" do
+    assert [_, _] =
+             LeaseApplication.published_default_warnings(
+               published_default(),
+               "::ffff:10.0.0.5",
+               false
+             )
   end
 end
 
