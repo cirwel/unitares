@@ -571,8 +571,34 @@ def _build_pin_fingerprint_candidates(
 # ("we pin by UA_hash ONLY"), so unrelated callers behind one proxy pool or a
 # common client string share the slot. A key from this source must never be used
 # as the DESTINATION of a session bind: it would attach this agent's uuid to a
-# stranger's session. Every other ladder source names the caller's own transport.
+# stranger's session.
 FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
+
+# Explicit allowlist of ladder sources that name the caller's own request or
+# transport slot rather than a store lookup of another agent's session (#2147):
+# - Caller-supplied transport/argument sources (`mcp_session_id`, `x_session_id`,
+#   `oauth_client_id`, `x_client_id`, `explicit_client_session_id`,
+#   `explicit_client_session_id_scoped`, `continuity_token`): if a caller places
+#   another agent's `agent-{uuid12}` into one of these, `FOREIGN_STABLE_SESSION_ID`
+#   below still refuses it independent of source.
+# - Transport-slot fallbacks (`ip_ua_fingerprint`, `context_mcp_session_id`,
+#   `context_session_key`, `stdio_fallback`): `bind_session` derives its
+#   destination with `arguments=None` after verifying `credentials_issuable` to
+#   bridge headerless transports onto the caller's slot.
+# Any new ladder step not added here fails closed in `bind_destination_refusal`.
+OWN_TRANSPORT_SOURCES = frozenset({
+    "mcp_session_id",
+    "x_session_id",
+    "oauth_client_id",
+    "x_client_id",
+    "ip_ua_fingerprint",
+    "context_mcp_session_id",
+    "context_session_key",
+    "stdio_fallback",
+    "explicit_client_session_id",
+    "explicit_client_session_id_scoped",
+    "continuity_token",
+})
 
 # Transport-carried session sources that a pre-onboard read accepts as proof
 # that the caller named its OWN process session. Only X-Session-ID qualifies:
@@ -642,12 +668,15 @@ def bind_destination_refusal(
       ``UNDECLARED_DESTINATION_PROVENANCE``. The #2142 bind reached its
       helper with exactly this shape, so an undeclared destination fails
       closed rather than repeating it.
+    - Any source not explicitly classified in ``OWN_TRANSPORT_SOURCES`` fails
+      closed, returning the source name (#2147).
     - A key in stable-id shape (``agent-...``) that is not the caller's own
       is refused as ``FOREIGN_STABLE_SESSION_ID`` whatever its declared
       source: resolution maps it to the agent whose uuid it prefixes.
 
-    Any other key under a declared ladder source is taken as the caller's own
-    transport key. This is a provenance check, not a live-owner lookup.
+    Any other key under a declared ``OWN_TRANSPORT_SOURCES`` ladder source is
+    taken as the caller's own transport key. This is a provenance check, not a
+    live-owner lookup.
     """
     if session_key:
         from .shared import make_client_session_id
@@ -664,6 +693,8 @@ def bind_destination_refusal(
         return key_source
     if key_source is None:
         return UNDECLARED_DESTINATION_PROVENANCE
+    if key_source not in OWN_TRANSPORT_SOURCES:
+        return key_source
     if session_key and session_key.startswith("agent-"):
         return FOREIGN_STABLE_SESSION_ID
     return None

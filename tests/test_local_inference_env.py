@@ -19,6 +19,7 @@ enforces.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -99,13 +100,13 @@ def test_documented_name_with_or_without_v1(monkeypatch, value):
     ],
 )
 def test_removed_names_are_ignored(monkeypatch, caplog, removed):
-    """v3.3.0: an install still setting only an old name gets the defaults,
-    and nothing is logged about it."""
+    """v3.3.0: an install still setting only an old name gets the default
+    endpoint and no model, and nothing is logged about it."""
     for name, value in removed.items():
         monkeypatch.setenv(name, value)
     with caplog.at_level(logging.DEBUG, logger=env.__name__):
         _both("http://localhost:11434")
-        assert env.default_local_model() == "gemma4:latest"
+        assert env.default_local_model() == ""
     assert caplog.records == []
     assert env.old_names_in_use() == []
 
@@ -136,7 +137,7 @@ def test_empty_values_count_as_unset(monkeypatch, stand_in_aliases):
     for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL_ID", OLD_BASE, OLDER_BASE, OLD_MODEL):
         monkeypatch.setenv(name, "")
     _both("http://localhost:11434")
-    assert env.default_local_model() == "gemma4:latest"
+    assert env.default_local_model() == ""
 
 
 def test_empty_documented_name_falls_through_to_alias(monkeypatch, stand_in_aliases):
@@ -145,10 +146,23 @@ def test_empty_documented_name_falls_through_to_alias(monkeypatch, stand_in_alia
     _both("http://b:11434")
 
 
-def test_model_override_and_default(monkeypatch):
-    assert env.default_local_model() == "gemma4:latest"
+def test_model_override_and_no_default(monkeypatch):
+    """No model is built in: unset reads as "", and the setting names one."""
+    assert env.default_local_model() == ""
     monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     assert env.default_local_model() == "qwen3:8b"
+
+
+def test_require_local_model_refuses_when_none_is_named(monkeypatch):
+    monkeypatch.setattr(env, "served_models", lambda *a, **k: None)
+    with pytest.raises(env.ModelNotConfiguredError) as raised:
+        env.require_local_model()
+    assert raised.value.code == env.MODEL_NOT_CONFIGURED == "MODEL_NOT_CONFIGURED"
+    assert "UNITARES_MODEL_ID" in str(raised.value)
+    assert env.require_local_model("explicit:1b") == "explicit:1b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+    assert env.require_local_model() == "qwen3:8b"
+    assert env.require_local_model("  ") == "qwen3:8b"
 
 
 def test_server_registry_uses_the_shared_resolver(monkeypatch):
@@ -254,12 +268,12 @@ def test_orchestrator_forwards_the_servers_resolved_host_for_an_alias_only_serve
 
 def test_orchestrator_does_not_forward_a_removed_name(monkeypatch):
     """v3.3.0: a server still setting only the removed names forwards the
-    defaults, not the old values."""
+    default endpoint and no model, not the old values."""
     monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://gpu:11434/v1")
     monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
     spawn = _reviewer_spawn_env()
     assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
-    assert spawn["UNITARES_MODEL_ID"] == "gemma4:latest"
+    assert spawn["UNITARES_MODEL_ID"] == ""
     for old in REMOVED_NAMES:
         assert old not in spawn
 
@@ -275,9 +289,10 @@ def test_orchestrator_forwards_the_new_name_when_several_are_set(monkeypatch):
 def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
     monkeypatch, unset_value
 ):
-    """A server on defaults still forwards its resolved endpoint and model, so
-    the child cannot fall back to a stale value in the orchestrator's own
-    environment. Older names are never forwarded; the new ones outrank them."""
+    """A server on defaults still forwards its resolved endpoint and model (""
+    when none is named), so the child cannot fall back to a stale value in the
+    orchestrator's own environment. Older names are never forwarded; the new
+    ones outrank them."""
     names = ("UNITARES_MODEL_BASE_URL", "UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL",
              "UNITARES_MODEL_ID", "UNITARES_LLM_MODEL")
     if unset_value is not None:
@@ -285,7 +300,7 @@ def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
             monkeypatch.setenv(name, unset_value)
     spawn = _reviewer_spawn_env()
     assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
-    assert spawn["UNITARES_MODEL_ID"] == "gemma4:latest"
+    assert spawn["UNITARES_MODEL_ID"] == ""
     for name in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
         assert name not in spawn
 
@@ -449,3 +464,103 @@ def test_the_flag_catalog_lists_each_alias_with_its_removal_release():
         assert f"| `{name}` |" in flags
     for name in REMOVED_NAMES:
         assert f"| `{name}` |" not in flags
+
+
+# --- served models and the agent's choice (operator decision 2026-10-21) ------
+
+
+class _ModelsResp:
+    def __init__(self, ids):
+        self._body = json.dumps({"object": "list", "data": [{"id": i} for i in ids]}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, *a):
+        return self._body
+
+
+@pytest.fixture
+def fresh_served_cache():
+    env._served_models_cache.clear()
+    yield
+    env._served_models_cache.clear()
+
+
+def test_served_models_reads_the_list_and_caches_it(monkeypatch, fresh_served_cache):
+    calls = []
+
+    def fake_open(request, *, timeout):
+        calls.append(request.full_url)
+        return _ModelsResp(["qwen3:8b", "gemma4:latest", "qwen3:8b"])
+
+    monkeypatch.setattr(env, "direct_urlopen", fake_open)
+    assert env.served_models() == ("gemma4:latest", "qwen3:8b")
+    assert env.served_models() == ("gemma4:latest", "qwen3:8b")
+    assert calls == ["http://localhost:11434/v1/models"]
+
+
+def test_served_models_is_none_when_the_endpoint_does_not_answer(monkeypatch, fresh_served_cache):
+    def refuse(request, *, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(env, "direct_urlopen", refuse)
+    assert env.served_models() is None
+
+
+def test_resolve_local_model_order(monkeypatch, fresh_served_cache):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setattr(env, "served_models", lambda: ("only:1b",))
+    assert env.resolve_local_model() == "only:1b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "configured:7b")
+    assert env.resolve_local_model() == "configured:7b"
+    assert env.resolve_local_model("chosen:3b") == "chosen:3b"
+
+
+def test_resolve_local_model_guesses_nothing_among_several(monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setattr(env, "served_models", lambda: ("a:1b", "b:1b"))
+    assert env.resolve_local_model() == ""
+    monkeypatch.setattr(env, "served_models", lambda: None)
+    assert env.resolve_local_model() == ""
+
+
+@pytest.mark.parametrize("setting", [None, "", "  "])
+def test_unconfigured_install_never_discovers_a_default_model(monkeypatch, setting):
+    if setting is not None:
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", setting)
+        monkeypatch.setenv("UNITARES_MODEL_ID", setting)
+
+    def unexpected_discovery():
+        raise AssertionError("An unconfigured install must not probe Ollama for a default")
+
+    monkeypatch.setattr(env, "served_models", unexpected_discovery)
+    assert env.resolve_local_model() == ""
+    assert env.resolve_local_model("chosen:3b") == "chosen:3b"
+    monkeypatch.setenv("UNITARES_MODEL_ID", "configured:7b")
+    assert env.resolve_local_model() == "configured:7b"
+
+
+def test_require_local_model_does_not_ask_the_endpoint(monkeypatch):
+    """Review finding on #2994: the reviewers record the model they name, so
+    require_local_model never takes the endpoint's only served model (that
+    model went unrecorded) and makes no network call on the event loop."""
+    monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
+
+    def asked(*a, **k):
+        raise AssertionError("served_models called")
+
+    monkeypatch.setattr(env, "served_models", asked)
+    with pytest.raises(env.ModelNotConfiguredError):
+        env.require_local_model()
+    assert env.require_local_model("chosen:3b") == "chosen:3b"
+
+
+def test_not_configured_message_matches_what_the_caller_can_do():
+    tool = env.model_not_configured_message()
+    assert "pass model" in tool and "UNITARES_MODEL_ID" in tool
+    assert "pass model" not in str(env.ModelNotConfiguredError())
+    assert "UNITARES_MODEL_ID" in str(env.ModelNotConfiguredError())

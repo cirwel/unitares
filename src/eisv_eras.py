@@ -50,6 +50,7 @@ class Boundary:
     summary: str
     ambiguous_from: Optional[datetime] = None
     ambiguous_until: Optional[datetime] = None
+    config_hash: Optional[str] = None
 
     @property
     def splits(self) -> bool:
@@ -107,15 +108,22 @@ def load_boundaries(path: Path = REGISTRY_PATH) -> tuple[Boundary, ...]:
             summary=entry.get("summary", ""),
             ambiguous_from=_parse(entry.get("ambiguous_from")),
             ambiguous_until=_parse(entry.get("ambiguous_until")),
+            config_hash=entry.get("config_hash"),
         )
         for entry in load_registry(path)["eras"]
     )
 
 
 def current_era_id(path: Path = REGISTRY_PATH) -> str:
-    """The latest splitting entry: the era that new rows belong to."""
+    """The latest code-era splitting entry: the era prefix that new rows carry.
+
+    Entries with ``config_hash`` set record a runtime/plist configuration
+    change whose digest already moved ``state_json.eisv_instrument.id`` under
+    the active code era; keeping the code-era prefix avoids a second stamp
+    transition when the registry entry is committed afterwards.
+    """
     for boundary in reversed(load_boundaries(path)):
-        if boundary.splits:
+        if boundary.splits and boundary.config_hash is None:
             return boundary.id
     raise ValueError("era registry has no splitting entry")
 
@@ -247,20 +255,21 @@ def require_single_instrument(
 def current_era_window_start(path: Path = REGISTRY_PATH) -> tuple[datetime, Optional[str]]:
     """Where a default "current era" read starts, and the stamp era to filter on.
 
-    For a timed current era: its interval end and ``None``. For an untimed one
-    (recorded only by the stamp, typically before its deploy time is written
+    For a timed current boundary: its interval end and ``None``. For an untimed
+    one (recorded only by the stamp, typically before its deploy time is written
     down): the latest timed boundary's interval end, and the era id, so the
     caller keeps only rows stamped with it.
     """
-    current = current_era_id(path)
     boundaries = load_boundaries(path)
-    entry = next(b for b in boundaries if b.id == current)
+    entry = next((b for b in reversed(boundaries) if b.splits), None)
+    if entry is None:
+        raise ValueError("era registry has no splitting entry")
     if entry.interval is not None:
         return entry.interval[1], None
     timed = [b.interval[1] for b in boundaries if b.splits and b.interval is not None]
     if not timed:
         raise ValueError("era registry has no timed splitting entry")
-    return max(timed), current
+    return max(timed), current_era_id(path)
 
 
 # ---------------------------------------------------------------------------

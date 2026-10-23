@@ -134,7 +134,13 @@ def registered_agent(mock_mcp_server):
     meta.created_at = "2026-01-01T00:00:00"
     meta.paused_at = None
     mock_mcp_server.agent_metadata[agent_uuid] = meta
-    return agent_uuid
+    # The registered agent is the bound caller writing as itself: under strict
+    # identity a knowledge write naming agent_id needs a resolved binding.
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
+        return_value=agent_uuid,
+    ):
+        yield agent_uuid
 
 
 # ============================================================================
@@ -714,7 +720,7 @@ class TestSearchKnowledgeGraph:
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
 
-        monkeypatch.setenv("UNITARES_ENABLE_GRAPH_EXPANSION", "1")
+        monkeypatch.setenv("UNITARES_ENABLE_RELATED_EXPANSION", "1")
         seed = make_discovery(id="seed", summary="search finding", tags=["kg-search"])
         seed.related_to = ["neighbor"]
         neighbor = make_discovery(id="neighbor", summary="linked but untagged", tags=["other"])

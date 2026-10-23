@@ -1622,65 +1622,42 @@ class TestHealthCheck:
 class TestCheckRateLimit:
 
     @pytest.mark.asyncio
-    async def test_redis_path_success(self):
-        """Should pass when Redis rate limit check succeeds."""
+    async def test_redis_is_not_consulted(self):
+        """The store budget is enforced in PostgreSQL only; Redis is not a ledger."""
         kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(None))
+        mock_conn.fetchval.return_value = "agent-1"
 
-        mock_limiter = AsyncMock()
-        mock_limiter.check = AsyncMock(return_value=True)
-        mock_limiter.record = AsyncMock()
-
-        with patch("src.cache.get_rate_limiter", return_value=mock_limiter):
-            # Should not raise
+        with patch("src.cache.get_rate_limiter", side_effect=AssertionError("Redis consulted")):
             await kg._check_rate_limit("agent-1")
-            mock_limiter.check.assert_awaited_once()
-            mock_limiter.record.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_redis_path_rate_exceeded(self):
-        """Should raise ValueError when Redis rate limit is exceeded."""
-        kg, mock_db = make_kg_with_mock_db()
-
-        mock_limiter = AsyncMock()
-        mock_limiter.check = AsyncMock(return_value=False)
-        mock_limiter.get_count = AsyncMock(return_value=25)
-
-        with patch("src.cache.get_rate_limiter", return_value=mock_limiter):
-            with pytest.raises(ValueError, match="Rate limit exceeded"):
-                await kg._check_rate_limit("agent-1")
 
     @pytest.mark.asyncio
     async def test_postgres_fallback_under_limit(self):
-        """Should fall back to PostgreSQL when Redis is unavailable."""
+        """Should admit through the PostgreSQL ledger when under the limit."""
         kg, mock_db = make_kg_with_mock_db()
         mock_conn = mock_db._mock_conn
-        mock_conn.fetchval.return_value = 5  # Under limit
+        mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(None))
+        mock_conn.fetchval.return_value = "agent-1"  # the guarded INSERT returned a row
 
-        with patch(
-            "src.cache.get_rate_limiter",
-            side_effect=ImportError("no redis"),
-        ):
-            # Should not raise
-            await kg._check_rate_limit("agent-1")
-            mock_conn.fetchval.assert_awaited_once()
-            # Should record the store
-            assert mock_conn.execute.await_count >= 1
+        # Should not raise
+        await kg._check_rate_limit("agent-1")
+        # The store is recorded by the guarded INSERT
+        mock_conn.fetchval.assert_awaited_once()
+        assert "INSERT INTO audit.rate_limits" in mock_conn.fetchval.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_postgres_fallback_over_limit(self):
-        """Should raise ValueError when PostgreSQL fallback rate limit exceeded."""
+        """Should raise ValueError when the PostgreSQL ledger is spent."""
         kg, mock_db = make_kg_with_mock_db()
         mock_conn = mock_db._mock_conn
+        mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(None))
         # Atomic INSERT returns None when limit exceeded (no row inserted),
         # then the follow-up COUNT query returns the actual count
         mock_conn.fetchval.side_effect = [None, 20]
 
-        with patch(
-            "src.cache.get_rate_limiter",
-            side_effect=ImportError("no redis"),
-        ):
-            with pytest.raises(ValueError, match="Rate limit exceeded"):
-                await kg._check_rate_limit("agent-1")
+        with pytest.raises(ValueError, match="Rate limit exceeded"):
+            await kg._check_rate_limit("agent-1")
 
 
 # ============================================================================

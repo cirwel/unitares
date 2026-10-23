@@ -25,7 +25,7 @@ PostgreSQL+AGE (5432)            Redis (6379)
   lease_plane.* (lease plane state)
 ```
 
-Operational guidance: do **not** create additional PostgreSQL instances, databases, or migration layers — it's a single-Postgres / schema-isolation model ([`../operations/database_architecture.md`](../operations/database_architecture.md)). The current schema is [`db/postgres/schema.sql`](../../db/postgres/schema.sql) plus [`db/postgres/migrations/`](../../db/postgres/migrations/); [`../operations/DATA_NOTES.md`](../operations/DATA_NOTES.md) is a dated (2026-04-10) data dictionary of the reference deployment and omits schemas added since.
+Operational guidance: do **not** create additional PostgreSQL instances, databases, or migration layers — it's a single-Postgres / schema-isolation model ([`../operations/database_architecture.md`](../operations/database_architecture.md)). The current schema is [`db/postgres/schema.sql`](../../db/postgres/schema.sql) plus [`db/postgres/migrations/`](../../db/postgres/migrations/); the dated (2026-04-10) data dictionary of one deployment, archived at [`../operations/archive/DATA_NOTES.md`](../operations/archive/DATA_NOTES.md), omits schemas added since.
 
 ## 6.2 Resident agents
 
@@ -70,7 +70,7 @@ Most readers can skip these; reach for them when the need is specific.
 | [`RELEASE_PROCESS.md`](../operations/RELEASE_PROCESS.md) | How releases are cut and promoted |
 | [`DEFINITIVE_PORTS.md`](../operations/DEFINITIVE_PORTS.md) | Port assignments across services |
 | [`database_architecture.md`](../operations/database_architecture.md) | Single-Postgres / schema-isolation model |
-| [`DATA_NOTES.md`](../operations/DATA_NOTES.md) | Dated (2026-04-10) data dictionary of the reference deployment |
+| [`schema.sql`](../../db/postgres/schema.sql) | The current database schema; [`database_architecture.md`](../operations/database_architecture.md) gives ownership. The dated 2026-04-10 data dictionary is archived at [`archive/DATA_NOTES.md`](../operations/archive/DATA_NOTES.md) |
 | [`DEPLOYMENT_DATA_CAVEAT.md`](../operations/DEPLOYMENT_DATA_CAVEAT.md) | What the cited deployment numbers do and don't mean |
 | [`resident-roster.md`](../operations/resident-roster.md) | Configuring the resident set |
 | [`branch-hygiene-runbook.md`](../operations/branch-hygiene-runbook.md) | Resident branch-hygiene sweep |

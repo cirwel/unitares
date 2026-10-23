@@ -1107,6 +1107,14 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     except Exception as e:
         checks["data_directory"] = {"status": "error", "error": str(e)}
 
+    # Background loops that catch their own failures (src/background_task_health.py).
+    try:
+        from src.background_task_health import health_check as _background_task_health
+
+        checks["background_tasks"] = _background_task_health()
+    except Exception as e:
+        checks["background_tasks"] = {"status": "error", "error": str(e)}
+
     effective_checks = dict(checks)
     redis_check = effective_checks.get("redis_cache")
     if (

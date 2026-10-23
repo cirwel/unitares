@@ -1,6 +1,6 @@
 # Surface Lease Plane Operator Runbook
 
-Status: **LIVE — Phase A shipped 2026-05-03 (PR #305).** Service `com.unitares.lease-plane` runs on `127.0.0.1:8788` via launchd. Bearer-auth fail-closed (HTTPAuth → 503 if `LEASE_PLANE_BEARER_TOKEN` is unset).
+Status: **Shipped component** (Phase A landed in PR #305 on 2026-05-03). Where a deployment runs it, the lease plane is a separate BEAM service listening on `127.0.0.1:8788` by default: the `lease-plane` service in the Compose stack, or the `com.unitares.lease-plane` launchd template on a native macOS install. Bearer auth fails closed (HTTPAuth → 503 while `LEASE_PLANE_BEARER_TOKEN` is unset).
 
 This runbook teaches what the BEAM node does, not Elixir-the-language. PRs will read clearly enough without prior fluency once these terms are familiar.
 
@@ -169,7 +169,7 @@ database is in trouble, not the health probe.
 
 - **Synthetic acquire check** — the `com.unitares.lease-plane-acquire-healthcheck` LaunchAgent runs `elixir/lease_plane/scripts/ops/lease_plane_acquire_healthcheck.sh` every 300s. Each run does a real acquire and release against a dedicated probe surface, so it catches "process up, acquires failing," which neither health route can. Consecutive-failure state persists across runs: it alerts to `$UNITARES_ALERT_LOG` (and posts a governance finding) only after `MAX_FAILURES` failures in a row, and notes recovery once. Restart-on-failure is opt-in via `LEASE_PLANE_HEALTHCHECK_AUTORESTART=1`.
 - **Deep-health snapshot** — `checks["lease_plane"]` reports `healthy`, `warning` (with the client's reason), `unavailable` (no bearer configured) or `error` (the probe itself raised) from the `/v1/health` call above, refreshed every 30s.
-- **Sentinel** — both Sentinels poll `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route.
+- **Sentinel reference resident (optional)** — if a deployment runs it, either Sentinel implementation polls `lease_plane.lease_plane_events` for forced-release alarms (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`); neither probes an HTTP health route. Without it, nothing alarms on forced releases.
 
 **What none of these cover**
 

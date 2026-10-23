@@ -84,7 +84,9 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     _assert_shard_partition(yaml.safe_load(workflow), PROJECT_ROOT)
 
     assert "name: test (3.12)" in workflow
-    assert "needs: [test_shard, macos-platform]" in workflow
+    assert "needs: [test_shard, macos-platform, native-bootstrap]" in workflow
+    assert "needs.native-bootstrap.result != 'success'" in workflow
+    assert "uses: ./.github/workflows/native-bootstrap.yml" in workflow
     assert "needs.test_shard.result != 'success'" in workflow
     assert "needs.macos-platform.result != 'success'" in workflow
     assert "python -m coverage combine coverage-data" in workflow
@@ -252,7 +254,7 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     assert len(api_steps) == 1
     api_script = api_steps[0]["run"]
     assert "$EXPECTED_SHARD_LEGS" in api_script
-    assert "max_attempts=12" in api_script
+    assert "max_attempts=36" in api_script
     assert 'if [ "$attempt" -ge "$max_attempts" ]' in api_script
     assert "attempt=$((attempt + 1))" in api_script
     assert "sleep 5" in api_script
@@ -264,6 +266,9 @@ _SUCCESSFUL_SHARDS = "".join(
 )
 _MISSING_SHARD = _SUCCESSFUL_SHARDS.rsplit("success", 1)[0]
 _FAILED_SHARD = _SUCCESSFUL_SHARDS.replace("success", "failure", 1)
+# A finished leg the jobs API has not caught up with yet (2026-10-22).
+_LAGGING_SHARD = _SUCCESSFUL_SHARDS.replace("success", "null", 1)
+_LAGGING_AND_FAILED = _LAGGING_SHARD.replace("success", "cancelled", 1)
 
 
 @pytest.mark.parametrize(
@@ -280,13 +285,23 @@ _FAILED_SHARD = _SUCCESSFUL_SHARDS.replace("success", "failure", 1)
         # A paginated command can emit matching rows before a later page fails.
         # Even four successful rows cannot authorize passing on a failed read.
         pytest.param(
-            [(1, _SUCCESSFUL_SHARDS)], False, 12, id="failed-read-with-output"
+            [(1, _SUCCESSFUL_SHARDS)], False, 36, id="failed-read-with-output"
         ),
-        pytest.param([(0, _FAILED_SHARD)], False, 12, id="failed-shard"),
-        pytest.param([(0, _MISSING_SHARD)], False, 12, id="missing-shard"),
+        # A finished failure is final: no retry budget is spent on it.
+        pytest.param([(0, _FAILED_SHARD)], False, 1, id="failed-shard"),
+        pytest.param([(0, _LAGGING_AND_FAILED)], False, 1, id="lag-does-not-mask-failure"),
+        pytest.param([(0, _MISSING_SHARD)], False, 36, id="missing-shard"),
         pytest.param(
-            [(0, _MISSING_SHARD), (1, "")], False, 12, id="shared-retry-budget"
+            [(0, _MISSING_SHARD), (1, "")], False, 36, id="shared-retry-budget"
         ),
+        # More than the old 12-read budget of API lag, then the truth.
+        pytest.param(
+            [(0, _LAGGING_SHARD)] * 20 + [(0, _SUCCESSFUL_SHARDS)],
+            True,
+            21,
+            id="api-lag-then-success",
+        ),
+        pytest.param([(0, _LAGGING_SHARD)], False, 36, id="lag-never-clears"),
     ],
 )
 def test_shard_gate_retries_without_accepting_failed_reads(

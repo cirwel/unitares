@@ -29,10 +29,24 @@ def hybrid_enabled() -> bool:
     return _flag_enabled("UNITARES_ENABLE_HYBRID", default=False)
 
 
-def graph_expansion_enabled() -> bool:
-    """True when 1-hop typed-edge expansion should run. UNITARES_ENABLE_GRAPH_EXPANSION.
+RELATED_EXPANSION_ENV = "UNITARES_ENABLE_RELATED_EXPANSION"
+# The flag's old name, read as a fallback. It was renamed (operator delegation,
+# 2026-10-20) because this path never traversed the graph: it reads each
+# result's stored `related_to` list, not the AGE RELATED_TO edges.
+DEPRECATED_RELATED_EXPANSION_ENV = "UNITARES_ENABLE_GRAPH_EXPANSION"
+_warned_deprecated_related_expansion = False
 
-    Read this before flipping it on — it is not only a retrieval-quality knob.
+
+def related_expansion_enabled() -> bool:
+    """True when related-finding expansion should run. UNITARES_ENABLE_RELATED_EXPANSION.
+
+    What it does: after first-stage retrieval, it adds the findings each top
+    seed lists in its stored `related_to` column (the tag-overlap links the
+    store path writes). It does not read the AGE graph edges, which is why it
+    was renamed from UNITARES_ENABLE_GRAPH_EXPANSION; the old name is still read,
+    with a one-time deprecation warning, when the new one is unset.
+
+    Read this before switching it on — it is not only a retrieval-quality knob.
 
     Ranking today has no usage feedback: `ts_rank_cd` + recency + embedding
     similarity, and nothing in `src/` reads a retrieval count. A discovery does
@@ -40,8 +54,8 @@ def graph_expansion_enabled() -> bool:
     incidental — nobody chose it — but it is what keeps the KG from selecting
     on its own past output.
 
-    Expansion closes that loop. It pulls 1-hop neighbors of the top seeds, so a
-    discovery's retrievability rises with its inbound edge count; and the store
+    Expansion closes that loop. It pulls the neighbors of the top seeds, so a
+    discovery's retrievability rises with how often it is linked; and the store
     path writes `related_to` on every new discovery from a tag-overlap
     `find_similar` (`src/mcp_handlers/knowledge/handlers.py`, in
     `_link_similar_store_discoveries`). Retrieve A -> work the topic -> store B
@@ -56,14 +70,28 @@ def graph_expansion_enabled() -> bool:
     a decision about propagation rights, not a tuning change, and wants a
     corresponding write-side constraint rather than a contamination detector
     bolted on afterward. See `src/storage/kg_write_budget.py` for the
-    write-side half.
-
-    Separately open: `docs/operations/dormant-capability-registry.md` flags
-    that this path reads the `related_to` SQL field, not the RELATED_TO Cypher
-    edges, so it is not currently graph expansion in the sense the name
-    implies.
+    write-side half. Expansion over the AGE edges themselves is a separate,
+    unbuilt option (`docs/operations/dormant-capability-registry.md`, Theme 1).
     """
-    return _flag_enabled("UNITARES_ENABLE_GRAPH_EXPANSION", default=False)
+    global _warned_deprecated_related_expansion
+    if os.getenv(RELATED_EXPANSION_ENV) is not None:
+        return _flag_enabled(RELATED_EXPANSION_ENV, default=False)
+    if os.getenv(DEPRECATED_RELATED_EXPANSION_ENV) is None:
+        return False
+    if not _warned_deprecated_related_expansion:
+        _warned_deprecated_related_expansion = True
+        logger.warning(
+            "%s is deprecated; set %s instead. The path reads each finding's "
+            "related_to list, not the graph edges.",
+            DEPRECATED_RELATED_EXPANSION_ENV,
+            RELATED_EXPANSION_ENV,
+        )
+    return _flag_enabled(DEPRECATED_RELATED_EXPANSION_ENV, default=False)
+
+
+def graph_expansion_enabled() -> bool:
+    """Deprecated alias of related_expansion_enabled(), kept for existing callers."""
+    return related_expansion_enabled()
 
 
 def rrf_fuse(

@@ -43,7 +43,7 @@ services:
   postgres-age:
     # Pulled from this release's tag like the lease plane below, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares-postgres:v3.4.0
+    image: ghcr.io/cirwel/unitares-postgres:v3.5.0
     pull_policy: missing
     build:
       context: db/postgres
@@ -123,7 +123,7 @@ services:
     # published, or no registry access), Compose builds from the block below
     # instead. On a master checkout the tag names a release, not your source:
     # run `docker compose up --build` to build what you have checked out.
-    image: ghcr.io/cirwel/unitares-lease-plane:v3.4.0
+    image: ghcr.io/cirwel/unitares-lease-plane:v3.5.0
     pull_policy: missing
     build:
       context: .
@@ -174,7 +174,7 @@ services:
   governance-mcp:
     # Pulled from this release's tag like the lease plane above, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares:v3.4.0
+    image: ghcr.io/cirwel/unitares:v3.5.0
     pull_policy: missing
     build:
       context: .
@@ -193,8 +193,14 @@ services:
       DB_AGE_GRAPH: governance_graph
       UNITARES_TOOL_ADVERTISEMENT: ${UNITARES_TOOL_ADVERTISEMENT:-progressive}
       REDIS_URL: redis://redis:6379/0
-      # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
-      UNITARES_KNOWLEDGE_BACKEND: postgres
+      # PostgreSQL rows stay the canonical KG store; the AGE backend also writes
+      # the graph over them (AUTHORED, RELATED_TO, TAGGED, RESPONDS_TO,
+      # SUPERSEDES), which supersession pointers and semantic search need. The
+      # postgres-age image already ships the extension and graph schema. An
+      # install that ran with `postgres` rebuilds the graph from its rows on the
+      # first knowledge-graph access after the switch. Set `postgres` to store
+      # findings without the graph.
+      UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       # Coordination boundary used by governed clients and spawned workers.
       LEASE_PLANE_BASE_URL: http://lease-plane:8788

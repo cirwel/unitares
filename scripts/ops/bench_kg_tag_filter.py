@@ -28,6 +28,7 @@ for key, value in plist.get("EnvironmentVariables", {}).items():
 os.environ["PYTHONPATH"] = ROOT
 os.environ["UNITARES_ENABLE_HYBRID"] = "1"
 os.environ.pop("UNITARES_ENABLE_GRAPH_EXPANSION", None)
+os.environ.pop("UNITARES_ENABLE_RELATED_EXPANSION", None)
 os.environ.pop("UNITARES_ENABLE_RERANKER", None)
 
 from src.knowledge_graph import get_knowledge_graph  # noqa: E402

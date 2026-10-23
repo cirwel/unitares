@@ -555,7 +555,7 @@ from src.mcp_handlers.support.llm_delegation import (
 class TestGetDefaultModel:
     def test_default(self, monkeypatch):
         monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
-        assert _get_default_model() == "gemma4:latest"
+        assert _get_default_model() == ""
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("UNITARES_MODEL_ID", "custom:7b")
@@ -859,6 +859,11 @@ class TestRunFullDialectic:
 
 
 class TestIsLLMAvailable:
+    @pytest.fixture(autouse=True)
+    def _named_model(self, monkeypatch):
+        # No model is built in; these tests exercise a configured local lane.
+        monkeypatch.setenv("UNITARES_MODEL_ID", "test-model:latest")
+
     @pytest.mark.asyncio
     async def test_not_available_no_sdk(self):
         with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", False):
@@ -888,6 +893,11 @@ from src.mcp_handlers.support.model_inference import handle_call_model
 
 
 class TestHandleCallModel:
+    @pytest.fixture(autouse=True)
+    def _named_model(self, monkeypatch):
+        # No model is built in; these tests exercise a configured local lane.
+        monkeypatch.setenv("UNITARES_MODEL_ID", "test-model:latest")
+
     @pytest.mark.asyncio
     async def test_missing_openai_sdk(self):
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", False):
