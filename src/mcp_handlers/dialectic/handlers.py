@@ -3330,7 +3330,7 @@ def _synthetic_reviewer_provenance(llm_result: Dict[str, Any]) -> Dict[str, Any]
     return _reviewer_provenance_stamp(
         {
             "backend": "local_ollama",
-            "model_used": default_local_model(),
+            "model_used": default_local_model() or None,
             "source": llm_result.get("source"),
             "structured": llm_result.get("_structured"),
             "note": llm_result.get("_note"),

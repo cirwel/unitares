@@ -1,1 +1,0 @@
-- **commands:** `/governance-start` now passes the `--json` payload on its slot-cache write; without it `session_cache.py set` writes nothing and refuses a new slot. Same fix the companion plugin received in its #270.

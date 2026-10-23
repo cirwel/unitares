@@ -486,6 +486,12 @@ def test_each_declared_requirement_is_refused_when_missing(action, name):
     graph = AsyncMock(side_effect=AssertionError("reached the graph"))
     with (
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
+        # A bound caller: the administrative actions refuse an unbound call
+        # before they check their parameters.
+        patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="probe-agent",
+        ),
         patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", graph),
         patch(
             "src.mcp_handlers.knowledge.handlers.require_registered_agent",

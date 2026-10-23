@@ -57,7 +57,8 @@ if [ "$APPLY" -eq 1 ] && ! command -v psql >/dev/null 2>&1; then
     exit 2
 fi
 
-PSQL=(psql -v ON_ERROR_STOP=1 "$DB_URL")
+# A startup file must not reconnect this explicit bootstrap to another DB.
+PSQL=(psql -X -v ON_ERROR_STOP=1 "$DB_URL")
 
 run_file() {
     local relative="$1"
@@ -93,11 +94,13 @@ record_checksum_if_supported() {
     [ "$column_exists" = "t" ] || return 0
 
     checksum="$(shasum -a 256 "$path" | awk '{print $1}')"
+    # psql expands variables in stdin/file input, but not in a -c SQL command.
     "${PSQL[@]}" \
         -v migration_version="$version" \
         -v migration_checksum="$checksum" \
-        -q -c \
-        "UPDATE core.schema_migrations SET checksum = :'migration_checksum' WHERE version = :migration_version AND checksum IS NULL;"
+        -q <<'SQL'
+UPDATE core.schema_migrations SET checksum = :'migration_checksum' WHERE version = :migration_version AND checksum IS NULL;
+SQL
 }
 
 run_migration() {

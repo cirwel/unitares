@@ -333,6 +333,10 @@ def graph():
     graph.update_discovery = AsyncMock(return_value=True)
     with (
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
+        # The handler tests here stand for a bound caller ("a-1") writing as
+        # itself; strict identity refuses an agent_id with no resolved binding.
+        # Calls that pass no agent_id never consult this.
+        patch("src.mcp_handlers.context.get_context_resolved_agent_id", return_value="a-1"),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
         patch(
