@@ -1,0 +1,42 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-23T10:09:50Z",
+  "verified_date": "2026-10-23",
+  "verifier": "claude 3adf1802 (queue czar, adopted #2996): re-checked continuity_token / rebind / archived-recovery claims against the PR's recovery-text edits in identity_step.py and agent_auth.py after merging master; skills already say a token works only paired with agent_uuid via identity(resume=true) and onboard refuses it, which the new text matches",
+  "source_digests": {
+    "unitares/commands/closeout.md": "a295890758851260",
+    "unitares/src/agent_storage.py": "1540b45fea55bc08",
+    "unitares/src/db/mixins/identity.py": "dfa5d3ad40607c3c",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/governance_monitor.py": "165b38ccdd76283b",
+    "unitares/src/interface_contract.py": "ae4517b73ec9cc5c",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "d9c316bab3550511",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "5e235f4ac9993880",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4df92165a8969ee4",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "440496c9f67d2d6c",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/support/agent_auth.py": "f8e9124bf8bfe10b",
+    "unitares/src/mcp_handlers/support/pause_ttl.py": "2abc3f7d3c9432e7",
+    "unitares/src/mcp_handlers/tool_stability.py": "5471b6be3c292e93",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "cb3f512ccb38aed5",
+    "unitares/src/mcp_handlers/updates/phases.py": "cac530cfe6346eb2",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "fd5c6685c33f0d4d"
+  },
+  "skill_digest": "aa42c07935476c5f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/identity_step.py": [
+      "1818f867ac4aabf2"
+    ],
+    "unitares/src/mcp_handlers/support/agent_auth.py": [
+      "32ff869a5aa64f89"
+    ]
+  }
+}
