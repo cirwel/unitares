@@ -103,6 +103,8 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert "both scored 1.000" in demo_text
     # Reachable from the landing hero and the nav.
     assert 'class="primary" href="demo.html"' in landing
+    # The viewer has its own nav template; it links the demo too.
+    assert 'href="demo.html"' in (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
     assert 'href="demo.html" class="active"' in demo
 
 
