@@ -352,7 +352,7 @@ async def test_a_revocation_that_misses_the_store_is_logged(caplog):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [(None, True), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
+    [(None, False), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
 )
 def test_dynamic_registration_switch(monkeypatch, raw, expected):
     from src.mcp_listen_config import oauth_dynamic_registration_enabled

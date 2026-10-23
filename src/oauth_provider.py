@@ -27,9 +27,11 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlparse
 
 from mcp.server.auth.provider import (
     AccessToken,
+    AuthorizeError,
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     OAuthToken,
+    RegistrationError,
     TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
@@ -75,6 +77,15 @@ logger = logging.getLogger(__name__)
 #: auto-approved, anyone can still obtain a token (and so a stored client),
 #: which only UNITARES_OAUTH_DYNAMIC_REGISTRATION=false bounds.
 CLIENT_STATE_TTL = 30 * 86400
+
+# Process-local OAuth state is a cache, not an authority. Keep it bounded even
+# when Redis is unavailable or a caller abandons registration/authorization
+# flows. The limits are deliberately constructor-overridable for constrained
+# deployments and focused tests, but they are not caller-controlled.
+DEFAULT_MAX_DYNAMIC_CLIENTS = 256
+DEFAULT_MAX_AUTH_CODES = 1024
+DEFAULT_MAX_ACCESS_TOKENS = 2048
+DEFAULT_MAX_REFRESH_TOKENS = 2048
 
 
 class OAuthStateStore:
@@ -174,12 +185,20 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         auth_code_ttl: int = 300,
         static_clients: list[OAuthClientInformationFull] | None = None,
         store: OAuthStateStore | None = None,
+        max_dynamic_clients: int = DEFAULT_MAX_DYNAMIC_CLIENTS,
+        max_auth_codes: int = DEFAULT_MAX_AUTH_CODES,
+        max_access_tokens: int = DEFAULT_MAX_ACCESS_TOKENS,
+        max_refresh_tokens: int = DEFAULT_MAX_REFRESH_TOKENS,
     ):
         self._secret = secret or secrets.token_hex(32)
         self._auto_approve = auto_approve
         self._access_token_ttl = access_token_ttl
         self._refresh_token_ttl = refresh_token_ttl
         self._auth_code_ttl = auth_code_ttl
+        self._max_dynamic_clients = max(1, int(max_dynamic_clients))
+        self._max_auth_codes = max(1, int(max_auth_codes))
+        self._max_access_tokens = max(1, int(max_access_tokens))
+        self._max_refresh_tokens = max(1, int(max_refresh_tokens))
 
         # Pre-registered clients survive restarts because they come from the
         # environment, not from DCR. Connectors that cannot self-register
@@ -196,6 +215,47 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # store delete is awaited (and can fail), so without this a request
         # arriving meanwhile would reload the used token from the store.
         self._consumed_refresh: dict[str, float] = {}
+
+    def _prune_expired_state(self) -> None:
+        """Remove expired process-local entries before accepting new state."""
+        now = time.time()
+        self._auth_codes = {
+            code: entry
+            for code, entry in self._auth_codes.items()
+            if not entry.is_expired(self._auth_code_ttl)
+        }
+        self._access_tokens = {
+            token: entry
+            for token, entry in self._access_tokens.items()
+            if not entry.expires_at or entry.expires_at >= int(now)
+        }
+        self._refresh_tokens = {
+            token: entry
+            for token, entry in self._refresh_tokens.items()
+            if not entry.is_expired(self._refresh_token_ttl)
+        }
+        self._consumed_refresh = {
+            digest: expiry
+            for digest, expiry in self._consumed_refresh.items()
+            if expiry > now
+        }
+
+    def _dynamic_client_count(self) -> int:
+        return sum(client_id not in self._static_client_ids for client_id in self._clients)
+
+    def _ensure_token_capacity(self, *, replacing_refresh: bool = False) -> None:
+        self._prune_expired_state()
+        if len(self._access_tokens) >= self._max_access_tokens:
+            raise TokenError(
+                error="invalid_request",
+                error_description="OAuth access-token capacity reached; retry after expiry",
+            )
+        refresh_limit = self._max_refresh_tokens + int(replacing_refresh)
+        if len(self._refresh_tokens) >= refresh_limit:
+            raise TokenError(
+                error="invalid_request",
+                error_description="OAuth refresh-token capacity reached; retry after expiry",
+            )
 
     # -- persistence helpers ------------------------------------------------
 
@@ -265,7 +325,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     client = OAuthClientInformationFull.model_validate_json(raw)
                 except ValueError:
                     return None
-                self._clients[client_id] = client
+                self._prune_expired_state()
+                if self._dynamic_client_count() < self._max_dynamic_clients:
+                    self._clients[client_id] = client
         return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
@@ -275,12 +337,34 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             client_info.client_secret = secrets.token_hex(32)
         if not client_info.client_id_issued_at:
             client_info.client_id_issued_at = int(time.time())
+        if (
+            client_info.client_id not in self._clients
+            and self._dynamic_client_count() >= self._max_dynamic_clients
+        ):
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description="dynamic client capacity reached",
+            )
         # Memory only until a token is issued to it (see CLIENT_STATE_TTL).
         self._clients[client_info.client_id] = client_info
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams,
     ) -> str:
+        if not self._auto_approve and client.client_id not in self._static_client_ids:
+            raise AuthorizeError(
+                error="access_denied",
+                error_description=(
+                    "dynamic OAuth clients require explicit operator approval; "
+                    "pre-register this client or enable auto-approval deliberately"
+                ),
+            )
+        self._prune_expired_state()
+        if len(self._auth_codes) >= self._max_auth_codes:
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="authorization-code capacity reached; retry after expiry",
+            )
         code = secrets.token_hex(24)
 
         entry = AuthCodeEntry(
@@ -318,6 +402,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry,
     ) -> OAuthToken:
+        self._ensure_token_capacity()
         # Claim the code before minting anything, as exchange_refresh_token
         # claims its token: load_authorization_code only reads, so two
         # requests carrying the same code could both pass it. Whichever pops
@@ -397,6 +482,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token: RefreshTokenEntry,
         scopes: list[str],
     ) -> OAuthToken:
+        self._ensure_token_capacity(replacing_refresh=True)
         # Claim before any await: load_refresh_token awaits the store, so two
         # requests with the same token can both pass it. Only the one that
         # pops the entry proceeds; the other gets invalid_grant. Recording the
@@ -410,10 +496,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             raise TokenError(
                 error="invalid_grant", error_description="refresh token already used"
             )
-        now = time.time()
-        self._consumed_refresh = {
-            d: exp for d, exp in self._consumed_refresh.items() if exp > now
-        }
         self._consumed_refresh[digest] = refresh_token.created_at + self._refresh_token_ttl
         if self._store is not None and not await self._store.delete(f"rt:{digest}"):
             # This process refuses it (consumed set); another process, or this
@@ -464,7 +546,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     entry = AccessToken.model_validate({**json.loads(raw), "token": token})
                 except (ValueError, TypeError):
                     return None
-                self._access_tokens[token] = entry
+                self._prune_expired_state()
+                if len(self._access_tokens) < self._max_access_tokens:
+                    self._access_tokens[token] = entry
         if entry is None:
             return None
         if entry.expires_at and entry.expires_at < int(time.time()):

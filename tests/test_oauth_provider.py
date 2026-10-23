@@ -18,13 +18,20 @@ import time
 
 import pytest
 
-from mcp.server.auth.provider import AccessToken, AuthorizationParams
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizeError,
+    AuthorizationParams,
+    RegistrationError,
+    TokenError,
+)
 from mcp.shared.auth import OAuthClientInformationFull
 
 from src.oauth_provider import (
     GovernanceOAuthProvider,
     AuthCodeEntry,
     RefreshTokenEntry,
+    build_static_client,
 )
 
 # mcp 1.x let `client_id` be unset on the registered-client record (the provider
@@ -118,6 +125,18 @@ class TestRegisterClient:
     async def test_unknown_client_is_none(self, provider):
         assert await provider.get_client("nope") is None
 
+    @pytest.mark.asyncio
+    async def test_dynamic_registration_is_bounded(self):
+        provider = GovernanceOAuthProvider(max_dynamic_clients=2)
+        await provider.register_client(_client("client-1"))
+        await provider.register_client(_client("client-2"))
+
+        with pytest.raises(RegistrationError) as refused:
+            await provider.register_client(_client("client-3"))
+
+        assert refused.value.error == "invalid_client_metadata"
+        assert len(provider._clients) == 2
+
 
 # --------------------------------------------------------------------------- #
 # Authorization code issuance + redirect
@@ -148,6 +167,45 @@ class TestAuthorize:
         assert entry is not None
         assert entry.client_id == client.client_id
         assert entry.code_challenge == "challenge-abc"
+
+    @pytest.mark.asyncio
+    async def test_dynamic_client_requires_deliberate_auto_approval(self):
+        provider = GovernanceOAuthProvider(auto_approve=False)
+        client = _client()
+        await provider.register_client(client)
+
+        with pytest.raises(AuthorizeError) as refused:
+            await provider.authorize(client, _auth_params())
+
+        assert refused.value.error == "access_denied"
+        assert provider._auth_codes == {}
+
+    @pytest.mark.asyncio
+    async def test_static_client_is_explicitly_preapproved(self):
+        client = build_static_client(
+            "static-client", "secret", ["https://app.example/cb"]
+        )
+        provider = GovernanceOAuthProvider(
+            auto_approve=False,
+            static_clients=[client],
+        )
+
+        redirect = await provider.authorize(client, _auth_params())
+
+        assert "code=" in redirect
+
+    @pytest.mark.asyncio
+    async def test_authorization_code_cache_prunes_expired_entries(self):
+        provider = GovernanceOAuthProvider(max_auth_codes=1)
+        client = _client()
+        first = await provider.authorize(client, _auth_params())
+        first_code = first.split("code=")[1].split("&")[0]
+        provider._auth_codes[first_code].created_at = time.time() - 10_000
+
+        second = await provider.authorize(client, _auth_params())
+
+        assert first_code not in provider._auth_codes
+        assert second.split("code=")[1].split("&")[0] in provider._auth_codes
 
 
 # --------------------------------------------------------------------------- #
@@ -237,6 +295,42 @@ class TestExchangeAuthorizationCode:
         token = await provider.exchange_authorization_code(client, entry)
         loaded = await provider.load_access_token(token.access_token)
         assert loaded.scopes == ["mcp:tools"]
+
+    @pytest.mark.asyncio
+    async def test_token_caches_prune_expired_entries_before_issuance(self):
+        provider = GovernanceOAuthProvider(
+            max_access_tokens=1,
+            max_refresh_tokens=1,
+        )
+        client = _client()
+        first_entry = await self._issue_code(provider, client)
+        first = await provider.exchange_authorization_code(client, first_entry)
+        provider._access_tokens[first.access_token].expires_at = int(time.time()) - 1
+        provider._refresh_tokens[first.refresh_token].created_at = time.time() - 700_000
+
+        second_entry = await self._issue_code(provider, client)
+        second = await provider.exchange_authorization_code(client, second_entry)
+
+        assert list(provider._access_tokens) == [second.access_token]
+        assert list(provider._refresh_tokens) == [second.refresh_token]
+
+    @pytest.mark.asyncio
+    async def test_live_token_capacity_refuses_new_issuance(self):
+        provider = GovernanceOAuthProvider(
+            max_access_tokens=1,
+            max_refresh_tokens=1,
+        )
+        client = _client()
+        first_entry = await self._issue_code(provider, client)
+        await provider.exchange_authorization_code(client, first_entry)
+        second_entry = await self._issue_code(provider, client)
+
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(client, second_entry)
+
+        assert refused.value.error == "invalid_request"
+        assert len(provider._access_tokens) == 1
+        assert len(provider._refresh_tokens) == 1
 
 
 # --------------------------------------------------------------------------- #
