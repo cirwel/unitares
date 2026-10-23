@@ -146,16 +146,26 @@ if [ "$separate" = 1 ]; then
     # Save fresh choices above so later CLI updates keep the same ports. An
     # existing file is operator-owned: require literal matching assignments,
     # rather than silently rewriting it or evaluating dotenv expressions.
+    # Ask Compose what a later invocation will use without this command's
+    # port overrides. Never print the resolved environment; retain only the
+    # two non-secret settings. This also catches multiline dotenv context that
+    # the CLI's deliberately small line reader cannot interpret.
+    compose_environment=$(
+        unset GOVERNANCE_HOST_PORT LEASE_PLANE_HOST_PORT
+        docker compose --project-directory "$stack" config --environment
+    ) || fail 'Cannot resolve the saved Compose configuration; no services were started'
+    persisted_ports=$(printf '%s\n' "$compose_environment" | awk '/^(GOVERNANCE_HOST_PORT|LEASE_PLANE_HOST_PORT)=/ { print }')
+    unset compose_environment
     for key in GOVERNANCE_HOST_PORT LEASE_PLANE_HOST_PORT; do
         saved=$(awk -v key="$key" '
             /^[[:space:]]*#/ { next }
             { line=$0; sub(/^[[:space:]]*export[[:space:]]+/, "", line)
               if (line ~ ("^[[:space:]]*" key "([[:space:]]*(#.*)?)?$")) invalid=1
+              if (line ~ ("^[[:space:]]*" key "[[:space:]]*:")) invalid=1
               pos=index(line, "="); name=substr(line, 1, pos-1)
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
               if (pos && name==key) {
-                  # Detect every Compose-style assignment, but accept only
-                  # the syntax the existing CLI port reader also recognizes.
+                  # Reject assignment forms the CLI port reader skips.
                   if ($0 !~ ("^[[:space:]]*" key "=")) invalid=1
                   value=substr(line, pos+1)
               } }
@@ -170,6 +180,9 @@ if [ "$separate" = 1 ]; then
         case "$key" in GOVERNANCE_HOST_PORT) expected=$GOVERNANCE_HOST_PORT ;; *) expected=$LEASE_PLANE_HOST_PORT ;; esac
         [ "$saved" = "$expected" ] \
             || fail "Set the literal $key=$expected in $stack/.env before retrying; existing configuration was not changed"
+        resolved=$(printf '%s\n' "$persisted_ports" | awk -v key="$key" 'index($0, key "=")==1 { value=substr($0, length(key)+2) } END { print value }')
+        [ "$resolved" = "$expected" ] \
+            || fail "Compose and the CLI disagree on saved $key; use a single literal assignment in $stack/.env before retrying"
     done
 fi
 cd "$stack"
