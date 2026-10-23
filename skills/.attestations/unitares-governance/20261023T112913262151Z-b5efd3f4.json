@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-10-23T11:29:13Z",
+  "verified_date": "2026-10-23",
+  "verifier": "claude-opus-5-5 (UNITARES agent 0590b7f9): re-read the skill against the bounded check-in excerpt change (report_excerpt in state rows, reworded server instructions); no claim of non-retention remains, lifecycle skill now describes the excerpt",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "8ff33f0244de1008",
+    "unitares/skills/governance-fundamentals/SKILL.md": "70c13df4ac961e92",
+    "unitares/skills/governance-lifecycle/SKILL.md": "5e8e92be07ebd021",
+    "unitares/skills/knowledge-graph/SKILL.md": "677b0b168871d63b",
+    "unitares/skills/unitares-dashboard/SKILL.md": "c411e35531a6fba8",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "d9c316bab3550511",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4df92165a8969ee4",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "440496c9f67d2d6c",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/schemas/identity.py": "fb2cfdb6cefabaa2",
+    "unitares/src/mcp_handlers/tool_stability.py": "5471b6be3c292e93",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "4d6ff40918bbc4e5"
+  },
+  "skill_digest": "37d30ae82a43f30b",
+  "superseded_digests": {
+    "unitares/skills/governance-lifecycle/SKILL.md": [
+      "aa42c07935476c5f"
+    ],
+    "unitares/src/tool_modes.py": [
+      "fd5c6685c33f0d4d"
+    ]
+  }
+}
