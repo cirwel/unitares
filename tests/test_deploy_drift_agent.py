@@ -116,7 +116,11 @@ def test_reports_drift_in_checkin(agent_mod, monkeypatch):
     assert "live-thing:behind_origin" in res.summary
 
 
-def _configure_preflights(monkeypatch, tmp_path, n=1):
+def _configure_preflights(monkeypatch, tmp_path, n=1, installed=None):
+    """``installed`` (default: all) names which preflights' plists exist."""
+    installed = range(n) if installed is None else installed
+    for i in installed:
+        (tmp_path / f"svc-{i}.plist").write_text("")
     config = tmp_path / "preflights.json"
     config.write_text(json.dumps([
         {"service": f"svc-{i}", "plist": str(tmp_path / f"svc-{i}.plist")} for i in range(n)
@@ -162,6 +166,22 @@ def test_passing_preflights_are_counted_in_a_clean_report(agent_mod, monkeypatch
     monkeypatch.setattr(agent_mod.os.path, "isdir", lambda p: True)
     res = asyncio.run(agent.run_cycle(None))
     assert "1/1 surfaces running merged code, 3/3 preflights passed" in res.summary
+    assert res.confidence == 0.85
+
+
+def test_a_preflight_whose_plist_is_not_installed_is_skipped_not_passed(
+        agent_mod, monkeypatch, tmp_path):
+    # Not required and not installed: the doctor checks nothing for it.
+    _configure_preflights(monkeypatch, tmp_path, n=3, installed=[0, 2])
+    agent = agent_mod._build_agent_cls()()
+    monkeypatch.setattr(agent_mod, "diagnose", lambda s, io: [])
+    monkeypatch.setattr(agent_mod, "diagnose_preflights", lambda specs, io: [])
+    monkeypatch.setattr(agent_mod.Doctor, "run", lambda self: 0)
+    monkeypatch.setattr(agent_mod.os.path, "isdir", lambda p: True)
+    res = asyncio.run(agent.run_cycle(None))
+    assert "2/3 preflights passed" in res.summary
+    assert "skipped, not installed: svc-1" in res.summary
+    assert res.confidence == 0.6
 
 
 def test_unreadable_fleet_lowers_confidence_not_a_clean_report(agent_mod, monkeypatch):

@@ -90,15 +90,24 @@ def _build_agent_cls():
                     readable += 1
                     drifts.extend(diagnose(surface, doctor.io))
                 drifts.extend(diagnose_preflights(doctor.preflights, doctor.io))
+                # diagnose_preflight checks nothing for a plist that is not
+                # installed and not required: skipped, not passed.
+                skipped = [spec.service for spec in doctor.preflights
+                           if not spec.require_exists and not Path(spec.plist).is_file()]
                 doctor.run()
-                return readable, len(doctor.surfaces), len(doctor.preflights), drifts
+                return readable, len(doctor.surfaces), len(doctor.preflights), skipped, drifts
 
-            readable, total, preflights, drifts = await asyncio.get_running_loop().run_in_executor(
+            readable, total, preflights, skipped, drifts = await asyncio.get_running_loop().run_in_executor(
                 None, _work
             )
-            checked = f"{readable}/{total} surfaces, {preflights} preflight(s)"
+            ran = preflights - len(skipped)
+            checked = f"{readable}/{total} surfaces, {ran}/{preflights} preflight(s)"
+            not_run = f"; skipped, not installed: {', '.join(skipped)}" if skipped else ""
+            # Full confidence only when every surface was readable and every
+            # configured preflight actually ran.
+            confidence = 0.85 if readable == total and not skipped else 0.6
 
-            if not readable and not preflights:
+            if not readable and not ran:
                 # Nothing could be inspected — say so plainly rather than
                 # reporting a clean fleet we did not actually observe.
                 return CycleResult(
@@ -109,16 +118,16 @@ def _build_agent_cls():
             if drifts:
                 detail = "; ".join(f"{d.surface}:{d.condition}" for d in drifts)
                 return CycleResult(
-                    summary=f"deploy-drift: {len(drifts)} drift condition(s) across {checked} — {detail}",
+                    summary=f"deploy-drift: {len(drifts)} drift condition(s) across {checked} — {detail}{not_run}",
                     complexity=0.4,
-                    # Full confidence only when every surface was readable.
-                    confidence=0.85 if readable == total else 0.6,
+                    confidence=confidence,
                 )
             return CycleResult(
                 summary=(f"deploy-drift: {readable}/{total} surfaces running merged code"
-                         + (f", {preflights}/{preflights} preflights passed" if preflights else "")),
+                         + (f", {ran}/{preflights} preflights passed" if preflights else "")
+                         + not_run),
                 complexity=0.2,
-                confidence=0.85 if readable == total else 0.6,
+                confidence=confidence,
             )
 
     return DeployDriftAgent
