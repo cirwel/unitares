@@ -169,7 +169,9 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # adjudication (2026-09-27). Its two POST siblings were never counted here.
 # 53 -> 54: /v1/knowledge/flow (cross-agent knowledge flow from the AGE graph,
 # for the Discoveries panel). Gated.
-EXPECTED_GET_ROUTES = 54
+# 54 -> 55: /v1/timeline (every agent's check-ins, outcomes, lifecycle,
+# knowledge, lineage and dialectic events in one window). Gated.
+EXPECTED_GET_ROUTES = 55
 
 
 def test_route_registry_is_readable():
