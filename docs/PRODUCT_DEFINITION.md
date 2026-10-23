@@ -17,7 +17,7 @@ The shared record answers five questions:
 | Question | Deployed mechanism |
 |---|---|
 | **Who said it?** | Process identity and explicit lineage attribute work and handoffs. Platform workload identity supplies credentials; lineage grants no authority. |
-| **What supports it?** | Durable findings retain claims, corrections, and provenance. The original `sync_state` report text is transient; durable claims require a finding. |
+| **What supports it?** | Durable findings retain claims, corrections, and provenance. Each `sync_state` check-in keeps a bounded excerpt of its report text, the agent's own words rather than a verified claim; durable claims require a finding. |
 | **Who challenged it?** | Structured review preserves positions, objections, conditions, and resolution. Requesting review does not complete it. |
 | **What happened?** | Typed outcome events preserve reported results and evidence grades, with prediction binding when supplied. |
 | **What can a successor recover?** | Knowledge search, review reads, history export, and authorized outcome-evidence reads let a client reconstruct the work from available records. |

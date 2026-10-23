@@ -245,7 +245,7 @@ An agent calls `process_agent_update` (advertised to agents as `sync_state`) wit
 - `complexity` — optional reflective self-report [0, 1]
 - `confidence` — optional reflective self-report [0, 1]
 
-At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer (`src/dual_log/`) compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available. The original report text is transient; durable claims belong in a finding.
+At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer (`src/dual_log/`) compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available. Each check-in keeps a bounded excerpt of its report text (`src/report_excerpt.py`), not the full text; durable claims belong in a finding.
 
 The check-in returns an EISV behavioral state estimate and a policy action. The decision engine (`src/monitor_decision.py`) returns one of two actions, `proceed` or `pause`; `guide` is a `sub_action` of `proceed` that the response surfaces as its own policy action:
 

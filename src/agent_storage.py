@@ -640,6 +640,7 @@ async def record_agent_state(
     eisv_telemetry: Optional[Mapping[str, Any]] = None,
     coherence_form: Optional[str] = None,
     eisv_instrument: Optional[Mapping[str, Any]] = None,
+    report_excerpt: Optional[str] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -768,6 +769,12 @@ async def record_agent_state(
     # on it instead of on deploy times; absent on rows written before it shipped.
     if eisv_instrument:
         state_json["eisv_instrument"] = dict(eisv_instrument)
+    # A bounded, credential-scrubbed excerpt of the check-in's report text
+    # (src/report_excerpt.py), so a later reader can see what the agent said
+    # beside the state it was given. The agent's own words, not a verified
+    # claim. Absent when retention is off or the check-in carried no text.
+    if report_excerpt:
+        state_json["report_excerpt"] = report_excerpt
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,
