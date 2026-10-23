@@ -1,3 +1,0 @@
-- **inference (thorough lane):** a delegated call to a CLI host (Claude, Codex, Antigravity) now gets its full `timeout_s`, not 120 seconds.
-  - **The problem:** the agent orchestrator caps one await at 120 s, and the host adapter awaited once. So every call longer than that returned `still_running` after 120 s, whatever its timeout said. That covered thorough `consult` attempts (240 s), council members and `delegate_inference`.
-  - **The fix:** the adapter re-awaits in 120-second windows until the call's own deadline, as dispatch_beam's council already did. The number of windows is bounded, so an orchestrator answering at once cannot make it spin.

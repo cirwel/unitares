@@ -662,3 +662,49 @@ def test_rest_prebind_still_defaults_other_calls_to_the_caller(name, arguments, 
     _bound_to, sent = _rest_prebind(name, arguments, path, monkeypatch)
     assert sent["agent_id"] == CALLER
 
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("knowledge", {"action": "search", "tags": ["operator-decision"]}),
+        ("knowledge", {"action": "details", "discovery_id": "d"}),
+        ("knowledge", {"kwargs": {"action": "search", "query": "x"}}),
+        ("search_knowledge_graph", {"query": "x"}),
+    ],
+)
+def test_rest_prebind_leaves_a_browsable_read_unfiltered(name, arguments, path, monkeypatch):
+    """A knowledge search reads agent_id as an author filter. Over REST the
+    prebind stamped the caller into it, so a bound search returned only the
+    caller's own rows (0 of 20 operator decisions, 2026-10-20). /mcp/ never
+    stamps browsable calls; REST now matches it. The caller is still bound."""
+    bound_to, sent = _rest_prebind(name, arguments, path, monkeypatch)
+    assert bound_to == CALLER
+    assert "agent_id" not in sent, sent
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "search", "agent_id": TARGET},                 # an explicit author filter stays
+        {"action": "store", "summary": "s"},                     # a write keeps its stamp
+        {"action": "search", "kwargs": {"action": "store", "summary": "s"}},  # a write wrapped in a read
+    ],
+)
+def test_rest_prebind_keeps_writes_and_named_filters(arguments, path, monkeypatch):
+    from src.mcp_handlers.middleware.params_step import unwrapped_view
+
+    _bound_to, sent = _rest_prebind("knowledge", arguments, path, monkeypatch)
+    expected = TARGET if arguments.get("agent_id") else CALLER
+    assert unwrapped_view(sent)["agent_id"] == expected
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize("arguments", [{"action": "list"}, {"action": "get"}])
+def test_rest_prebind_keeps_dialectic_reads_scoped_to_the_caller(arguments, path, monkeypatch):
+    """dialectic list/get read an omitted agent_id as the caller's sessions on
+    REST; the knowledge-read exemption must not change that."""
+    _bound_to, sent = _rest_prebind("dialectic", arguments, path, monkeypatch)
+    assert sent["agent_id"] == CALLER

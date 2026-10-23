@@ -26,6 +26,25 @@ _BROWSABLE_CALLS = call_set(
     actions={("knowledge", action) for action in ("search", "list", "stats", "details", "get")},
 )
 
+
+
+# The knowledge subset of _BROWSABLE_CALLS, where an omitted agent_id must stay
+# omitted because the handler reads agent_id as an AUTHOR FILTER. The REST
+# prebind uses this narrower set: dialectic list/get treat an omitted agent_id
+# as "the caller's sessions" there, and changing that is a separate decision.
+_KNOWLEDGE_READS = call_set(
+    "rest_prebind.knowledge_reads",
+    tools={"search_knowledge_graph"},
+    actions={("knowledge", action) for action in ("search", "list", "stats", "details", "get")},
+)
+
+
+def is_knowledge_read(name: str, arguments: dict) -> bool:
+    """Whether this call is a knowledge read that must not be author-filtered
+    to the bound agent. Public for the REST prebind (http_routes/access.py)."""
+    return _KNOWLEDGE_READS.matches(name, arguments)
+
+
 # Tools that act on OTHER agents (dashboard resume/archive/observe), so a
 # different agent_id is a target, not impersonation. Until 2026-09 this set
 # also named observe_agent and archive_agent, and a separate set named
@@ -171,6 +190,17 @@ def unwrapped_view(
         view.update({k: v for k, v in wrapped.items() if k != "kwargs"})
         wrapped = wrapped.get("kwargs")
     return view
+
+
+def unwrapped_views(
+    arguments: Dict[str, Any], depth: int = _RESERVED_KEY_KWARGS_DEPTH,
+) -> list:
+    """``unwrapped_view`` at every depth from 0 to ``depth``, outermost first.
+
+    For a gate that runs before dispatch unwraps and must hold whichever
+    depth a call is finally acted on at.
+    """
+    return [unwrapped_view(arguments, level) for level in range(depth + 1)]
 
 
 async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:

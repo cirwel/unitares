@@ -38,6 +38,14 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
 )
 
+# Same leak, Sentinel's log (#2942). Even though Python Sentinel is retired,
+# tests under agents/sentinel/tests/ call run_cycle() and log fixture findings
+# to ~/Library/Logs/unitares-sentinel.log unless redirected before import.
+os.environ.setdefault(
+    "SENTINEL_LOG_FILE",
+    str(Path(tempfile.gettempdir()) / "unitares-sentinel-test.log"),
+)
+
 # The resident roster is now deployment config (UNITARES_RESIDENTS), empty by
 # default for user-agnostic installs. The test suite validates the resident
 # machinery against historical reference-resident fixtures, so configure it
@@ -287,6 +295,23 @@ def _isolate_db_backend(monkeypatch):
     mock_conn.fetchval.return_value = None
     mock_conn.fetchrow.return_value = None
     mock_conn.execute.return_value = "SELECT 0"
+    # KG store budget (src/storage/kg_write_budget.py): with no Redis in the
+    # suite, every knowledge store charges the PostgreSQL fallback, which opens
+    # a transaction on the pooled connection and runs a guarded INSERT. An
+    # explicit transaction() avoids the AsyncMock auto-child coroutine leak,
+    # and the guarded INSERT returns a row so a store reads as admitted; every
+    # other fetchval keeps returning None.
+    mock_conn.transaction = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=None),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+
+    async def _fetchval(query="", *args, **kwargs):
+        if "INSERT INTO audit.rate_limits" in str(query):
+            return args[0] if args else "admitted"
+        return None
+
+    mock_conn.fetchval.side_effect = _fetchval
     mock_backend.acquire = MagicMock(return_value=AsyncMock(
         __aenter__=AsyncMock(return_value=mock_conn),
         __aexit__=AsyncMock(return_value=False),

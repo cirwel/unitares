@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Optional
 
 from .redis_client import get_redis
@@ -36,6 +37,13 @@ class RateLimiter:
     Uses Redis sorted sets (ZSET) for efficient sliding window tracking.
     Falls back to PostgreSQL if Redis is unavailable.
     """
+
+    @staticmethod
+    def _member() -> str:
+        # One member per operation. A member built from whole seconds and the
+        # singleton's id() made every operation in the same second overwrite
+        # the previous one, so ZCARD counted busy seconds, not operations.
+        return f"{time.time_ns()}:{uuid.uuid4().hex}"
 
     async def check(
         self,
@@ -56,10 +64,14 @@ class RateLimiter:
         
         Returns:
             True if within limit, False if exceeded
+
+        Not an enforcement primitive: it answers True with no Redis and when
+        Redis errors, and a separate record() leaves a check-then-act gap. The
+        knowledge store budget (src/storage/kg_write_budget.py) enforces in
+        PostgreSQL for that reason.
         """
         redis = await get_redis()
         if redis is None:
-            # Fallback: assume allowed (PostgreSQL backend will enforce)
             return True
         
         key = f"{RATE_LIMIT_PREFIX}{operation}:{resource_id}"
@@ -109,10 +121,7 @@ class RateLimiter:
         now = int(time.time())
         
         try:
-            # Add current timestamp as score (sorted set member)
-            # Use timestamp as both score and member (unique per operation)
-            member = f"{now}:{id(self)}"  # Ensure uniqueness
-            await redis.zadd(key, {member: now})
+            await redis.zadd(key, {self._member(): now})
             
             # Set expiration to window + buffer (cleanup safety margin)
             await redis.expire(key, window + 60)

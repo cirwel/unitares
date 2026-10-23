@@ -1,0 +1,7 @@
+# Combine with no-age-image.yml: replace only the init script with a copy that
+# skips graph_schema.sql (the one AGE step). The workflow writes that copy to
+# $NOAGE_INITDB; volumes merge by container path, so the other mounts stay.
+services:
+  postgres-age:
+    volumes:
+      - ${NOAGE_INITDB:?set NOAGE_INITDB}:/docker-entrypoint-initdb.d/01-unitares-init.sh:ro

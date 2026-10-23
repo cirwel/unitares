@@ -118,7 +118,7 @@ Initial advisory-only registrations. None are enforced in v0; the service logs i
 
 | Surface kind | Example ID | Holder model | Notes |
 |---|---|---|---|
-| Repo file path | `file:///Users/cirwel/projects/unitares/src/x.py` | Agent UUID | Hermes / Claude / Codex worker writes |
+| Repo file path | `file:///path/to/unitares/src/x.py` | Agent UUID | Hermes / Claude / Codex worker writes |
 | Dialectic session | `dialectic:/95c9ddfd6bb09308` | Agent UUID | Avoids reviewer assignment races |
 | Resident lifecycle | `resident:/sentinel` | Process PID + UUID | Coordinates restart/upgrade windows |
 | Capture window | `capture:/A,B,C` | Agent UUID | Calibration capture session ownership |
@@ -510,7 +510,7 @@ Authored once here; §3.3 surface enumeration MUST stay consistent with this lis
 | `capture:/` | `capture` | active | calibration capture windows |
 | `td:/` | `td` | reserved | TouchDesigner regions; not implemented v0 |
 
-Single-slash form (`scheme:/path`) is canonical for all schemes *except* `file://` (kept double-slash for `file://` filesystem-URI tradition; the trailing `/` of an absolute path provides the third slash, e.g., `file:///Users/cirwel/...`).
+Single-slash form (`scheme:/path`) is canonical for all schemes *except* `file://` (kept double-slash for `file://` filesystem-URI tradition; the trailing `/` of an absolute path provides the third slash, e.g., `file:///path/to/...`).
 
 #### 7.2.2 Grammar enforcement (defense-in-depth)
 
@@ -894,7 +894,7 @@ Council pass v0.8 found three-voice ground-truth findings that the v0.7 tentativ
 
 **Authority: server-side.** The lease plane re-canonicalizes on receipt against its own filesystem semantics. Caller-side canonicalization (via the helper) is a perf optimization, not load-bearing. This commits to (i) per the council BLOCK-G options.
 
-Multi-host implication: if a caller on Linux (case-sensitive FS) sends `file:///Users/cirwel/Foo.py` and the Mac-hosted server canonicalizes against APFS (case-insensitive), the server-side lowercase produces `file:///users/cirwel/foo.py`. Both Linux and Mac callers see the same canonical form. The cost: on a future v1 with multi-server deployment, server-side authority requires all servers to share the same canonicalization rules; this is acceptable for v0 (single Mac BEAM node per §2 invariant).
+Multi-host implication: if a caller on Linux (case-sensitive FS) sends `file:///Path/To/Foo.py` and the Mac-hosted server canonicalizes against APFS (case-insensitive), the server-side lowercase produces `file:///path/to/foo.py`. Both Linux and Mac callers see the same canonical form. The cost: on a future v1 with multi-server deployment, server-side authority requires all servers to share the same canonicalization rules; this is acceptable for v0 (single Mac BEAM node per §2 invariant).
 
 For `file://` surfaces, the server-side canonicalization steps (in order):
 
@@ -1291,7 +1291,7 @@ Each row below is a Phase A blocker. All tests live under `tests/test_lease_plan
 - [x] **§7.2 — invalid scheme rejected at storage layer** — INSERT with `surface_id='not_a_scheme:foo'` raises CHECK violation. Test name: `test_invalid_uri_scheme_rejected_at_storage` (`tests/test_lease_plane_section_9_gaps.py`).
 - [x] **§7.2 — Pydantic field_validator rejects invalid scheme** — `AcquireRequest(surface_id='potato:foo', ...)` raises ValidationError. Test name: `test_acquire_request_rejects_invalid_scheme` (`tests/test_lease_plane_section_9_gaps.py`).
 - [x] **§7.2.3 — surface_kind drift impossible** — INSERT with `surface_id='file:///x.py'` produces `surface_kind='file'` automatically (generated column); caller cannot supply a conflicting value. Test names: `test_surface_kind_derived_from_scheme`, `test_acquire_request_has_no_surface_kind_field` (post-removal). Both in `tests/test_lease_plane_section_9_gaps.py`.
-- [x] **§7.12.1 — case-insensitive file:// canonicalization** — `acquire(file:///Users/cirwel/X.py)` and `acquire(file:///Users/cirwel/x.py)` produce identical canonical form on case-insensitive APFS; second acquire returns `held_by_other` (or `idempotent: true` if same holder). Test name: `test_file_canonicalization_case_insensitive_apfs` (`tests/test_lease_plane_canonicalize.py`).
+- [x] **§7.12.1 — case-insensitive file:// canonicalization** — `acquire(file:///path/to/X.py)` and `acquire(file:///path/to/x.py)` produce identical canonical form on case-insensitive APFS; second acquire returns `held_by_other` (or `idempotent: true` if same holder). Test name: `test_file_canonicalization_case_insensitive_apfs` (`tests/test_lease_plane_canonicalize.py`).
 - [x] **§7.12.1 — `..`-path canonicalization** — `acquire(file:///x/../y/z.py)` canonicalizes to `file:///y/z.py`. Test name: `test_file_canonicalization_relative_components` (`tests/test_lease_plane_canonicalize.py`).
 - [x] **§7.3.2 — extended `held_by_other` shape** — response includes `surface_id`, `blocking_lease_id`, `retry_after_hint_ms`. Test names: `test_held_by_other_echoes_surface_id`, `test_held_by_other_returns_blocking_lease_id`, `test_held_by_other_includes_retry_hint` (all in `tests/test_lease_plane_held_by_other_v0_8.py`).
 - [x] **§7.3.3 — `acquire_with_retry()` honors backoff** — jittered exponential, floor 100ms, ceiling 5s. Test name: `test_acquire_with_retry_jittered_backoff` (`tests/test_lease_plane_retry_and_transport.py`).
