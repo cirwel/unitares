@@ -1,8 +1,0 @@
-- **consult council (follow-up to #2900):** fixes from an adversarial review of the council:
-  - The Python SDK keeps council answers. `ConsultResult` gains `members`, `council_id`, `answered` and `asked`, and `consult()` takes `host_ids`. Before this, the SDK dropped every member's answer.
-  - A wrong-size `host_ids` gets the council's own refusal, with the valid hosts listed.
-  - `host_ids` sent as JSON text is accepted on every transport, including REST and `use_tool`. The SDK always sends a list.
-  - The abridged schema says a council needs `cloud_allowed`.
-  - A council whose members were all refused for caller-correctable reasons reports `validation_error`.
-  - A cancelled council keeps no hashes in any member's record. Members that answered or were still running are recorded as cancelled; members already refused keep their refusal.
-  - Interface contract 1.52.0.
