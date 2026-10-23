@@ -93,7 +93,7 @@ estimator is moving out of the core record into an optional policy module.
 
 With Git, curl, and Docker Compose installed, one command starts the latest
 verified release of the local operator stack (the server, PostgreSQL with AGE
-and pgvector, Redis, and the coordination plane):
+and pgvector, Redis, and the coordination plane; the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the first two):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
@@ -114,11 +114,6 @@ Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
   directory name (`unitares`). Re-running the one-liner reuses an earlier
   install's database; for a clean start, run `docker compose down -v` first. See
   [Reinstalling](docs/manual/02-install.md#reinstalling-and-side-by-side-installs).
-- **Smaller stack (optional):** the core profile runs only the server and
-  PostgreSQL, without Redis and the coordination plane. Some session state
-  does not survive a restart, onboard pins do not work, and there are no
-  surface leases or agent messages. See
-  [A smaller stack](docs/manual/02-install.md#a-smaller-stack-the-core-profile).
 - **Local reviewer model (optional):** `./scripts/unitares model` points the
   server at a local Ollama model for advisory `consult` answers and first-pass
   dialectic reviews; without one, reviews wait for a peer or the operator. See
