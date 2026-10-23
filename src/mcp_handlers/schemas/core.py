@@ -1024,7 +1024,7 @@ class ConsultParams(AgentIdentityMixin):
             "does not list is refused (MODEL_NOT_SERVED). Naming one routes the "
             "call to the configured endpoint (no Hugging Face fallback); privacy "
             "still applies. Omitted: the operator's UNITARES_MODEL_ID, else the "
-            "endpoint's only served model."
+            "sole served model at an explicitly configured UNITARES_MODEL_BASE_URL."
         ),
         json_schema_extra={"brief": "Standard lane: a model ollama:local lists."},
     )

@@ -193,8 +193,14 @@ services:
       DB_AGE_GRAPH: governance_graph
       UNITARES_TOOL_ADVERTISEMENT: ${UNITARES_TOOL_ADVERTISEMENT:-progressive}
       REDIS_URL: redis://redis:6379/0
-      # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
-      UNITARES_KNOWLEDGE_BACKEND: postgres
+      # PostgreSQL rows stay the canonical KG store; the AGE backend also writes
+      # the graph over them (AUTHORED, RELATED_TO, TAGGED, RESPONDS_TO,
+      # SUPERSEDES), which supersession pointers and semantic search need. The
+      # postgres-age image already ships the extension and graph schema. An
+      # install that ran with `postgres` rebuilds the graph from its rows on the
+      # first knowledge-graph access after the switch. Set `postgres` to store
+      # findings without the graph.
+      UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       # Coordination boundary used by governed clients and spawned workers.
       LEASE_PLANE_BASE_URL: http://lease-plane:8788

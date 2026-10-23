@@ -61,7 +61,6 @@ are missing at startup and `health_check` reports `status: degraded` with
 ### Configure Environment
 
 ```bash
-export DB_BACKEND=postgres
 export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
 export DB_AGE_GRAPH=governance_graph
 ```
@@ -79,19 +78,16 @@ PostgreSQL is the sole runtime backend (the SQLite and dual backends were remove
 
 | Backend | Value | Description |
 |---------|-------|-------------|
-| **PostgreSQL FTS** (recommended) | `postgres` | Canonical KG store using native PostgreSQL with tsvector full-text search |
-| **AGE** | `age` | Opt-in: route knowledge-graph traversal through Apache AGE |
-| **Auto** (default) | `auto` | Resolves to PostgreSQL FTS |
+| **AGE** | `age` | The relational rows plus the graph over them in Apache AGE (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`). The Docker quickstart and `.env.example` set it. Semantic search and replacement links need it |
+| **PostgreSQL FTS** | `postgres` | The relational rows and tsvector full-text search, without the graph |
+| **Auto** | `auto` | The value when the variable is unset, as on a native install: resolves to PostgreSQL FTS |
 
 ```bash
-# Recommended: PostgreSQL FTS canonical store
-export UNITARES_KNOWLEDGE_BACKEND=postgres
-
-# Default: resolves to PostgreSQL FTS
-export UNITARES_KNOWLEDGE_BACKEND=auto
-
-# Opt-in: knowledge-graph traversal through AGE
+# Quickstart default: rows plus the graph
 export UNITARES_KNOWLEDGE_BACKEND=age
+
+# Rows and full-text search only
+export UNITARES_KNOWLEDGE_BACKEND=postgres
 ```
 
 **Note:** This setting selects the *knowledge-graph* store only. The AGE
@@ -126,7 +122,7 @@ python scripts/migration/reembed_corpus.py --rebuild --dry-run
 
 ### Knowledge Schema (knowledge schema)
 
-When using PostgreSQL FTS backend (`UNITARES_KNOWLEDGE_BACKEND=postgres`):
+Written under either knowledge backend; the `age` backend also writes the AGE graph over these rows:
 
 - `knowledge.discoveries` - Knowledge discoveries with native tsvector FTS
 - `knowledge.discovery_tags` - Normalized tag storage
@@ -249,8 +245,8 @@ The response includes a `status_breakdown` field showing counts per status type.
 ## Current Storage Posture
 
 1. PostgreSQL is the canonical runtime store for agents, identities, sessions, dialectic, audit events, outcome events, and resident/coordination telemetry.
-2. Knowledge graph reads/writes default to PostgreSQL FTS (`UNITARES_KNOWLEDGE_BACKEND=postgres` or `auto` with `DB_BACKEND=postgres`).
-3. Apache AGE remains available for explicit graph traversal experiments; it is not the default KG read path.
+2. Knowledge findings live in relational tables under every backend. The Docker quickstart runs `UNITARES_KNOWLEDGE_BACKEND=age`, which also writes the graph over those rows; with the variable unset, a native install resolves to `postgres` and has no graph.
+3. The AGE extension is required under either backend: lineage and other graph reads use it through `graph_query`.
 4. SQLite/JSON files under `data/` are legacy or local runtime artifacts, not the source of truth for current production state.
 
 ## Troubleshooting

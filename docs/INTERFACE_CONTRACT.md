@@ -1123,6 +1123,23 @@ come back short (KG decision `2026-09-29T04:11:58.480600+00:00`, proposal 1).
 - **Client action:** none required. To choose a model, read `models` on
   `ollama:local` from `list_inference_hosts` and pass one as `model`.
 
+## 1.56.1 (2026-10-23)
+
+Automatic local model selection requires an explicitly configured endpoint; fresh installs stay model-free.
+
+- **Behavior:** when neither the caller nor `UNITARES_MODEL_ID` names a model,
+  sole-model discovery requires an explicitly configured `UNITARES_MODEL_BASE_URL`.
+  Unconfigured installs return `MODEL_NOT_CONFIGURED` without probing for a default.
+- **Compatibility:** explicit agent model picks, configured defaults, privacy
+  classification and opt-in consultation degradation retain their behavior.
+  An install relying on incidental discovery must explicitly set the endpoint.
+- **Descriptions:** the full `consult.model` description, registry notes and
+  refusal recovery explain the explicit endpoint requirement.
+- **Schema digests:** input and surface hashes are unchanged. The advertised
+  brief schema is unchanged; only its full explanatory description changes.
+- **Client action:** choose a model per call, set `UNITARES_MODEL_ID`, or explicitly
+  configure the endpoint to permit its sole-model default.
+
 ## 2.0.0 (2026-10-23)
 
 Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default. Workspace diagnostics check the server installation without discovering desktop clients or assuming a development checkout.
