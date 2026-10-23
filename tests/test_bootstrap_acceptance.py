@@ -59,10 +59,21 @@ def test_interruption_occurs_only_after_successful_062(delegate, migration, expe
     # Test the fault injector's exit handling, not SQL semantics. CI supplies
     # real psql and verifies the durable ledger after the injection.
     directory = tmp_path / "bin"
-    marker = acceptance.interruption_wrapper(directory, delegate)
+    marker = acceptance.psql_wrapper(directory, delegate, True)
     result = subprocess.run([str(directory / "psql"), "-f", migration], capture_output=True)
     assert result.returncode == expected
     assert marker.exists() is marked
+
+
+def test_psql_wrapper_disables_startup_files_without_injecting_failure(tmp_path):
+    delegate = tmp_path / "delegate"
+    delegate.write_text('#!/bin/sh\n[ "$1" = -X ] || exit 9\n')
+    delegate.chmod(0o755)
+    directory = tmp_path / "bin"
+    marker = acceptance.psql_wrapper(directory, str(delegate), False)
+    result = subprocess.run([str(directory / "psql"), "-f", "062_fixture.sql"])
+    assert result.returncode == 0
+    assert not marker.exists()
 
 
 def test_native_workflow_runs_both_scenarios_on_candidate_artifact():

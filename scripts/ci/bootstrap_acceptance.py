@@ -88,8 +88,12 @@ def run_logged(command: list[str], app: Path, env: dict, log: Path) -> int:
     return result.returncode
 
 
-def interruption_wrapper(directory: Path, psql: str) -> Path:
-    """Delegate every SQL call to real psql; fail after 062's committed -f call."""
+def psql_wrapper(directory: Path, psql: str, interrupt_after_62: bool) -> Path:
+    """Use real psql without startup files, optionally failing after 062 commits.
+
+    Older packaged bootstraps do not pass -X themselves. Enforce it here too:
+    ~/.psqlrc and the system psqlrc can otherwise reconnect after preflight.
+    """
     directory.mkdir()
     wrapper = directory / "psql"
     marker = directory / "interrupted"
@@ -98,8 +102,8 @@ import pathlib
 import subprocess
 import sys
 args = sys.argv[1:]
-result = subprocess.run([{psql!r}, *args])
-if result.returncode == 0 and '-f' in args:
+result = subprocess.run([{psql!r}, '-X', *args])
+if {interrupt_after_62!r} and result.returncode == 0 and '-f' in args:
     migration = pathlib.Path(args[args.index('-f') + 1]).name
     if migration.startswith('062_'):
         pathlib.Path({str(marker)!r}).touch()
@@ -129,7 +133,8 @@ def runtime_environment(work: Path, db_url: str, redis_url: str) -> dict[str, st
                 # Removing HOME alone is insufficient: Path.home() falls back
                 # to the account's home and the server loads ~/.env.mcp there.
                 # Use dotenv's supported opt-out and verify it before any DDL.
-                "PYTHON_DOTENV_DISABLED": "1", "UNITARES_SECRETS_ENV": "/dev/null",
+                "PYTHON_DOTENV_DISABLED": "1", "PYTHONNOUSERSITE": "1",
+                "UNITARES_SECRETS_ENV": "/dev/null",
                 "UNITARES_ANCHORS_DIR": str(work / "anchors"),
                 "UNITARES_WATCHER_DATA_DIR": str(work / "watcher"),
                 "UNITARES_KNOWLEDGE_BACKEND": "postgres", "UNITARES_DIALECTIC_BACKEND": "postgres",
@@ -217,11 +222,11 @@ def main() -> None:
     bootstrap = ["bash", str(app / "scripts/install/bootstrap_postgres.sh"), "--apply", "--db-url", args.db_url]
     runner = [sys.executable, str(app / "scripts/dev/apply_migrations.py"), "--db-url", args.db_url]
     interrupted = args.scenario == "interrupted"
+    wrapper_dir = work / "psql-bin"
+    marker = psql_wrapper(wrapper_dir, psql, interrupted)
+    env["PATH"] = f"{wrapper_dir}{os.pathsep}{env['PATH']}"
     if interrupted:
-        wrapper_dir = work / "fault-bin"
-        marker = interruption_wrapper(wrapper_dir, psql)
-        fault_env = {**env, "PATH": f"{wrapper_dir}{os.pathsep}{env['PATH']}"}
-        rc = run_logged(bootstrap, app, fault_env, work / "bootstrap.log")
+        rc = run_logged(bootstrap, app, env, work / "bootstrap.log")
         require(rc == 97 and marker.exists(), "Bootstrap did not stop at the injected migration-62 interruption")
         before = ledger(psql, args.db_url)
         require(max(row["version"] for row in before) == 62, "Bootstrap advanced beyond the interrupted migration")
