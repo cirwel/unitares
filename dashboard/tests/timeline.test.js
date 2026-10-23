@@ -248,8 +248,58 @@ describe("DATA.timeline offline", () => {
   });
 });
 
+describe("live stream frames", () => {
+  const settle = (dom, ms = 30) => new Promise((r) => dom.window.setTimeout(r, ms));
+  // JSDOM reports a hidden document unless told otherwise; a live tab is visible.
+  const visible = (t) => Object.defineProperty(t.doc, "hidden", { value: false, configurable: true });
+
+  it("swallows frames the tab never shows without refetching", async () => {
+    const t = await mount(fixture(5));
+    visible(t);
+    const before = t.calls.length;
+    for (let i = 0; i < 50; i++) {
+      for (const type of ["knowledge_read", "identity_resolved", "dashboard_viewed"]) {
+        expect(t.dom.window.Timeline.applyEvent({ type })).toBe(true);
+      }
+    }
+    expect(t.dom.window.Timeline.applyEvent(null)).toBe(true);
+    await settle(t.dom);
+    expect(t.calls.length).toBe(before);
+  });
+
+  it("coalesces a burst of relevant frames into one refetch", async () => {
+    const t = await mount(fixture(5));
+    visible(t);
+    const before = t.calls.length;
+    for (const type of ["eisv_update", "eisv_update", "lifecycle_paused", "knowledge_write", "dialectic_resolved"]) {
+      expect(t.dom.window.Timeline.applyEvent({ type, agent_id: uid(0) })).toBe(true);
+    }
+    await settle(t.dom);
+    expect(t.calls.length).toBe(before + 1);
+    // The next relevant frame inside the throttle window queues, it does not fire.
+    t.dom.window.Timeline.applyEvent({ type: "eisv_update" });
+    await settle(t.dom);
+    expect(t.calls.length).toBe(before + 1);
+  });
+
+  it("leaves the on-demand 24h window alone", async () => {
+    const t = await mount(fixture(5));
+    visible(t);
+    t.doc.querySelector('.tl-win[data-h="24"]').click();
+    await settle(t.dom);
+    expect(t.calls.at(-1).hours).toBe(24);
+    const before = t.calls.length;
+    t.dom.window.Timeline.applyEvent({ type: "eisv_update" });
+    await settle(t.dom);
+    expect(t.calls.length).toBe(before);
+  });
+});
+
 describe("app.html wiring", () => {
   const html = read("../redesign/app.html");
+  it("routes stream frames to the tab instead of the refetch doorbell", () => {
+    expect(html).toContain("timeline: (msg) => window.Timeline && window.Timeline.applyEvent && window.Timeline.applyEvent(msg)");
+  });
   it("has the nav link, pane, script, lazy load and live tick", () => {
     expect(html).toContain('<a href="#timeline" data-section="timeline">Timeline</a>');
     expect(html).toContain('data-pane="timeline"');

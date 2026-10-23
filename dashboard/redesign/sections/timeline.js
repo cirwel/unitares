@@ -347,5 +347,27 @@
     return load();
   }
 
-  window.Timeline = { load, refresh };
+  // Stream frames (app.html APPLY). Without this every /ws/eisv frame fell
+  // through to the debounced full refetch, mostly for frames this tab never
+  // shows (knowledge_read, identity_*, dashboard_*). Frames that can change
+  // the view queue at most one refetch per LIVE_MIN_MS; everything is reported
+  // handled so the shell's doorbell never refetches on top.
+  const RELEVANT = /^(?:eisv_update$|lifecycle_|knowledge_write$|dialectic_)/;
+  const LIVE_MIN_MS = 15000;
+  let lastLive = 0;
+  let liveTimer = null;
+  function applyEvent(msg) {
+    const type = msg && msg.type;
+    if (!type || !RELEVANT.test(type) || state.hours > AUTO_MAX_HOURS || liveTimer) return true;
+    const wait = Math.max(0, lastLive + LIVE_MIN_MS - Date.now());
+    liveTimer = setTimeout(() => {
+      liveTimer = null;
+      if (document.hidden) return; // re-focus refreshes the active view
+      lastLive = Date.now();
+      refresh();
+    }, wait);
+    return true;
+  }
+
+  window.Timeline = { load, refresh, applyEvent };
 })();

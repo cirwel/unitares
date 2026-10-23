@@ -346,6 +346,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 const APPLY = {
   eisv: (msg) => window.EISV && window.EISV.applyEvent && window.EISV.applyEvent(msg),
   overview: (msg) => window.Landing && window.Landing.applyEvent && window.Landing.applyEvent(msg),
+  timeline: (msg) => window.Timeline && window.Timeline.applyEvent && window.Timeline.applyEvent(msg),
 };
 // Silence ticker — re-render the Overview residents strip from its in-memory
 // model so "ran Xago" accrues during quiet periods (no network). Visibility-
