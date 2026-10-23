@@ -193,6 +193,25 @@ def test_probe_answer_is_the_agents_report_and_not_activity(client, recorder):
     assert details["eisv_written"] is False
 
 
+@pytest.mark.parametrize(
+    "value", ["2026-08-02T08:59:58", "not a time", 12345]
+)
+def test_a_bad_compaction_time_is_named_in_the_error(client, recorder, value):
+    response = client.post(
+        "/v1/runtime/observe", json=_probe_payload(compaction_observed_at=value)
+    )
+    assert response.status_code == 400
+    assert "compaction_observed_at" in response.text
+
+
+def test_the_stored_time_comes_back_so_an_answer_can_name_it(client, recorder):
+    payload = _payload("context_compaction")
+    payload.pop("observed_at")
+    response = client.post("/v1/runtime/observe", json=payload)
+    rows, _db = recorder
+    assert response.json()["observed_at"] == rows[0][0]["details"]["observed_at"]
+
+
 def test_no_answer_is_the_hooks_observation_not_the_agents(client, recorder):
     rows, _db = recorder
 

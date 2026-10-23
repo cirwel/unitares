@@ -134,7 +134,7 @@ def _select_probe(
 
 
 def _probe_summary(
-    rows: list[dict[str, Any]], duplicates: int, unrelated: int
+    rows: list[dict[str, Any]], duplicates: int, unrelated: int, unmatched: int
 ) -> dict[str, Any]:
     asked = [row for row in rows if row["probe"] is not None]
     by_outcome = {
@@ -166,6 +166,7 @@ def _probe_summary(
         ),
         "duplicates_ignored": duplicates,
         "unrelated_ignored": unrelated,
+        "unmatched_ignored": unmatched,
         "scope": (
             "Answers given with the compaction guidance in context. kept is "
             "mostly produced by the Stop hook's own check-in, so same_process "
@@ -204,6 +205,7 @@ def classify_compaction_outcomes(
     """
     probe_index = _probes_by_compaction(probes)
     probe_duplicates = probe_unrelated = 0
+    matched_keys: set[tuple[str, datetime]] = set()
     by_agent: dict[str, list[tuple[datetime, Mapping[str, Any]]]] = {}
     excluded_at_cutoff = 0
     for row in compactions:
@@ -244,6 +246,7 @@ def classify_compaction_outcomes(
                 outcome = "no_later_activity"
             details = row.get("details") if isinstance(row.get("details"), Mapping) else {}
             reported_at = _utc(details.get("observed_at")) or at
+            matched_keys.add((agent_id, reported_at))
             probe, dupes, unrelated = _select_probe(
                 probe_index.get((agent_id, reported_at), []), {agent_id, *minted}
             )
@@ -274,7 +277,15 @@ def classify_compaction_outcomes(
             for host, counts in sorted(by_host.items())
         },
         "rows": rows,
-        "probe": _probe_summary(rows, probe_duplicates, probe_unrelated),
+        "probe": _probe_summary(
+            rows,
+            probe_duplicates,
+            probe_unrelated,
+            # Answers naming no classified compaction: before the window, past
+            # the cutoff, or a compaction whose stored time the adapter did
+            # not send back. Counted so none disappears silently.
+            sum(len(v) for k, v in probe_index.items() if k not in matched_keys),
+        ),
         "complete": through is None,
         "excluded_at_cutoff": excluded_at_cutoff,
         "scope": (

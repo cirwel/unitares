@@ -364,3 +364,15 @@ def test_a_child_that_is_not_this_compactions_successor_cannot_answer():
     by_event = {row["event_id"]: row for row in report["rows"]}
     assert by_event["first"]["probe"] is None
     assert report["probe"]["unrelated_ignored"] == 1
+
+
+def test_an_answer_naming_no_classified_compaction_is_counted_not_lost():
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0)],
+        [],
+        {PARENT: T0 + timedelta(hours=1)},
+        probes=[_probe(PARENT, T0 + timedelta(seconds=3), "same_process")],
+    )
+    assert report["rows"][0]["probe"] is None
+    assert report["probe"]["unmatched_ignored"] == 1
+    assert report["probe"]["asked"] == 0

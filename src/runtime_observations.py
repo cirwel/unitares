@@ -624,19 +624,19 @@ def _optional_bounded_float(value: Any, *, maximum: float) -> float | None:
     return _bounded_float(value, maximum=maximum)
 
 
-def _parse_observed_at(value: Any) -> datetime:
+def _parse_observed_at(value: Any, field: str = "observed_at") -> datetime:
     if value in (None, ""):
         return datetime.now(timezone.utc)
     if not isinstance(value, str):
-        raise RuntimeObservationError("'observed_at' must be an ISO 8601 string")
+        raise RuntimeObservationError(f"'{field}' must be an ISO 8601 string")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise RuntimeObservationError(
-            "'observed_at' must be an ISO 8601 string"
+            f"'{field}' must be an ISO 8601 string"
         ) from exc
     if parsed.tzinfo is None:
-        raise RuntimeObservationError("'observed_at' must include a timezone")
+        raise RuntimeObservationError(f"'{field}' must include a timezone")
     return parsed.astimezone(timezone.utc)
 
 
@@ -675,7 +675,9 @@ def _normalize_probe(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeObservationError("'compaction_agent_uuid' must be a UUID") from exc
     if payload.get("compaction_observed_at") in (None, ""):
         raise RuntimeObservationError("missing 'compaction_observed_at'")
-    compaction_observed_at = _parse_observed_at(payload.get("compaction_observed_at"))
+    compaction_observed_at = _parse_observed_at(
+        payload.get("compaction_observed_at"), "compaction_observed_at"
+    )
     guidance_present = payload.get("guidance_present")
     if not isinstance(guidance_present, bool):
         raise RuntimeObservationError("'guidance_present' must be a boolean")
@@ -939,6 +941,9 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
         "client_session_id": session_id,
         "epistemic_class": normalized["epistemic_class"],
         "measurement_scope": normalized["measurement_scope"],
+        # The stored time, which a probe answer names as its compaction's
+        # compaction_observed_at; the server stamps it when the post omits it.
+        "observed_at": normalized["observed_at"],
         "session_activity_refreshed": session_activity_refreshed,
         "agent_runtime_evidence": False,
         "eisv_written": False,
