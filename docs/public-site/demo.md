@@ -6,9 +6,11 @@ correction replaces it, and a fresh process that saw none of this reconstructs
 the whole chain from the record alone.
 
 !!! note "Where this comes from"
-    Every fact on this page is read, at build time, from the synthetic incident
-    fixture [`tests/accountability_journey/incident-v0.json`]({fixture_blob}),
-    the same file the repository's accountability-journey test runs against.
+    Every quoted fact, record id and link name on this page is read, at build
+    time, from the synthetic incident fixture
+    [`tests/accountability_journey/incident-v0.json`]({fixture_blob}), the
+    same file the repository's accountability-journey test runs against. The
+    narration between them is written by hand.
     Nothing here is a capture of a real deployment, and nothing on this page
     talks to a server.
 
@@ -19,7 +21,7 @@ records a finding:
 
 > {{facts.original_claim}}
 
-The record binds the finding to the process that wrote it (an `authored` link),
+The record binds the finding to the process that wrote it (an `{{relation.authored}}` link),
 so the claim never floats free of its author.
 
 ## 2. The evidence disagrees
@@ -28,9 +30,10 @@ A deterministic smoke test runs afterwards and records its result:
 
 > {{facts.deterministic_evidence}}
 
-The outcome is recorded as `{{facts.outcome}}`, linked to the claim it
-contradicts (`contradicts`) and grades (`grades`). The claim and the evidence
-against it now sit side by side.
+The evidence is linked to the claim it contradicts (`{{relation.contradicts}}`),
+and the outcome, recorded as `{{facts.outcome}}`, grades it
+(`{{relation.grades}}`). The claim and the evidence against it now sit side by
+side.
 
 ## 3. A reviewer challenges it
 
@@ -38,7 +41,7 @@ Process `{{facts.reviewer_process_id}}` raises an objection on the claim:
 
 > {{facts.challenge}}
 
-The challenge is attached to the claim (`challenged`), so anyone reading the
+The challenge is attached to the claim (`{{relation.challenged}}`), so anyone reading the
 claim later finds the objection with it.
 
 ## 4. A correction replaces it
@@ -47,7 +50,7 @@ The writer records what actually happened:
 
 > {{facts.correction}}
 
-The correction `supersedes` the original claim. The original is not deleted or
+The correction `{{relation.supersedes}}` the original claim. The original is not deleted or
 rewritten: it stays in the record, marked as replaced, and points to the
 correction.
 

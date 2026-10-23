@@ -41,9 +41,10 @@ REPO_URL = "https://github.com/cirwel/unitares"
 LANDING_BLOB = f"{REPO_URL}/blob/master/docs/public-site/index.md"
 GLOSSARY_BLOB = f"{REPO_URL}/blob/master/docs/ontology/glossary.md"
 DEMO_BLOB = f"{REPO_URL}/blob/master/docs/public-site/demo.md"
-# The demo page tells one incident, and every fact in it comes from the test
-# fixture the accountability-journey test runs against, so the page and the
-# tested scenario cannot drift apart.
+# The demo page tells one incident. Its quoted facts, record ids and link names
+# come from the fixture the accountability-journey test runs against, the build
+# fails on any it cannot fill, and public-pages.yml redeploys when the fixture
+# changes. The narration between them is hand-written.
 JOURNEY_FIXTURE = PROJECT_ROOT / "tests" / "accountability_journey" / "incident-v0.json"
 DEMO_LINKS = {
     "fixture_blob": f"{REPO_URL}/blob/master/tests/accountability_journey/incident-v0.json",
@@ -149,15 +150,23 @@ def render(md_text: str) -> str:
 def render_demo_md(demo_md: str, fixture: dict) -> str:
     """Fill demo.md's placeholders from the journey fixture.
 
-    ``{{facts.<key>}}`` takes the oracle fact; ``{{questions_table}}`` lists each
+    ``{{facts.<key>}}`` takes the oracle fact; ``{{relation.<name>}}`` takes a
+    link name from the oracle's edges; ``{{questions_table}}`` lists each
     question with the answer and the UNITARES-arm record that holds it. Any
-    placeholder left unfilled, or a question no record answers, fails the build
-    rather than publishing a gap.
+    placeholder left unfilled, a question no record answers, or an edge relation
+    the page never names fails the build rather than publishing a gap.
     """
     facts = fixture["oracle"]["facts"]
     text = demo_md
     for key, value in facts.items():
         text = text.replace("{{facts.%s}}" % key, str(value))
+
+    relations = {edge["relation"] for edge in fixture["oracle"].get("edges", [])}
+    unnamed = sorted(r for r in relations if "{{relation.%s}}" % r not in text)
+    if unnamed:
+        raise ValueError(f"demo: docs/public-site/demo.md never names the fixture's {unnamed} links")
+    for relation in relations:
+        text = text.replace("{{relation.%s}}" % relation, relation)
 
     holders: dict[str, str] = {}
     for record in fixture["arms"]["unitares"]["records"]:

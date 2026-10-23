@@ -59,7 +59,9 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
 
 def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
+    import html
     import json
+    import re
 
     build(tmp_path, None)
 
@@ -75,10 +77,26 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     # Every fact on the page comes from the fixture the journey test runs on.
     for value in fixture["oracle"]["facts"].values():
         assert str(value) in demo_text
-    record_ids = {r["record_id"] for r in fixture["arms"]["unitares"]["records"]}
+    # Each question's own row carries its answer and the record that holds it.
+    facts = fixture["oracle"]["facts"]
+    holders = {}
+    for record in fixture["arms"]["unitares"]["records"]:
+        for key in record.get("facts", {}):
+            holders.setdefault(key, record["record_id"])
+    cells = {}
+    for row in re.findall(r"<tr>(.*?)</tr>", demo, re.S):
+        tds = re.findall(r"<td>(.*?)</td>", row, re.S)
+        if len(tds) == 3:
+            cells[tds[0]] = tds[1:]
     for question in fixture["questions"]:
-        assert question["question_id"].replace("_", " ").capitalize() in demo_text
-    assert any(f"<code>{rid}</code>" in demo for rid in record_ids)
+        label = question["question_id"].replace("_", " ").capitalize() + "?"
+        assert cells.get(label) == [
+            html.escape(str(facts[question["fact_key"]]), quote=False),
+            f"<code>{holders[question['fact_key']]}</code>",
+        ], label
+    # The link names come from the fixture's edges.
+    for edge in fixture["oracle"]["edges"]:
+        assert f"<code>{edge['relation']}</code>" in demo
     assert "{{" not in demo and "{fixture_blob}" not in demo
     # The page shows the mechanism and says plainly it is not a win over git.
     assert "docs/evaluations/accountability-journey/result-v0.md" in demo
@@ -103,6 +121,25 @@ def test_demo_build_fails_on_unfilled_placeholder():
     fixture["questions"] = [{"question_id": "who", "fact_key": "a"}]
     with pytest.raises(ValueError):
         render_demo_md("{{questions_table}}", fixture)
+
+
+def test_demo_link_names_must_match_the_fixture_edges():
+    import pytest
+
+    from scripts.dev.build_public_site import render_demo_md
+
+    fixture = {
+        "oracle": {"facts": {}, "edges": [{"source": "p", "relation": "authored", "target": "c"}]},
+        "questions": [],
+        "arms": {"unitares": {"records": []}},
+    }
+    assert render_demo_md("an `{{relation.authored}}` link", fixture) == "an `authored` link"
+    # A relation the fixture does not have stays unfilled and fails the build.
+    with pytest.raises(ValueError):
+        render_demo_md("{{relation.authored}} {{relation.grades}}", fixture)
+    # A fixture relation the page never names fails it too.
+    with pytest.raises(ValueError):
+        render_demo_md("no links here", fixture)
 
 
 def test_build_generates_viewer_from_glossary_markdown(tmp_path):
