@@ -754,6 +754,15 @@ class TestLeaveNote:
 
 class TestCleanupKnowledgeGraph:
 
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Cleanup refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_cleanup_dry_run(self, patch_common):
         """Cleanup in dry run mode previews changes without applying."""
@@ -1200,6 +1209,15 @@ class TestLeaveNoteAdditional:
 # ============================================================================
 
 class TestSupersedeHandler:
+
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Supersede refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_supersede_success(self, patch_common):

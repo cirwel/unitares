@@ -145,8 +145,8 @@ def _existing_finding(agent_id: str, severity: str) -> DiscoveryNode:
     )
 
 
-def _assert_unproven_refusal(data: dict) -> None:
-    """The #425 typed refusal, success-shaped, naming the unproven agent_id."""
+def _assert_unproven_refusal(data: dict, reason: str = "unproven_agent_id") -> None:
+    """The #425 typed refusal, success-shaped, naming why the call is unproven."""
     from src.mcp_handlers.identity_bootstrap import identity_refusal_status
 
     assert identity_refusal_status(data) == "identity_required", data
@@ -156,7 +156,7 @@ def _assert_unproven_refusal(data: dict) -> None:
     assert data.get("success") is not False
     assert "error" not in data
     assert data["tool"] == "knowledge"
-    assert data["surface_context"]["reason"] == "unproven_agent_id"
+    assert data["surface_context"]["reason"] == reason
     assert "discovery_id" not in data
 
 
@@ -704,6 +704,25 @@ class TestEveryGatedHandlerRefuses:
         mock_graph.add_discovery.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_name,args", GATED_HANDLERS, ids=[h for h, _ in GATED_HANDLERS])
+    @pytest.mark.parametrize("agent_id", ["absent", None, ""])
+    async def test_unbound_call_without_agent_id_is_refused(
+        self, patch_common, unbound, handler_name, args, agent_id
+    ):
+        # A missing agent_id does not show the gate saw none: REST dispatch
+        # unwraps kwargs after the gate, which can null the name it passed.
+        _, mock_graph = patch_common
+        import src.mcp_handlers.knowledge.handlers as handlers
+
+        arguments = dict(args) if agent_id == "absent" else {**args, "agent_id": agent_id}
+        result = await getattr(handlers, handler_name)(arguments)
+
+        _assert_unproven_refusal(parse_result(result), reason="unbound")
+        mock_graph.supersede_discovery.assert_not_called()
+        mock_graph.update_discovery.assert_not_called()
+        mock_graph.add_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_supersede_without_notes_through_the_router_is_refused(self, patch_common, unbound):
         _, mock_graph = patch_common
         from src.mcp_handlers.consolidated import handle_knowledge
@@ -754,6 +773,32 @@ class TestRestEndToEnd:
         data = data.get("result", data) if isinstance(data, dict) else data
         _assert_unproven_refusal(data)
         mock_graph.add_discovery.assert_not_called()
+        mock_graph.supersede_discovery.assert_not_called()
+        mock_graph.update_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        {"action": "cleanup", "dry_run": False},
+        {"action": "supersede", "discovery_id": "new-1", "supersedes_id": "victim-finding-1"},
+    ], ids=["cleanup", "supersede"])
+    async def test_kwargs_unwrap_nulling_the_gate_name_is_refused(self, patch_common, unbound, monkeypatch, arguments):
+        # The gate passes the outer non-UUID name; dispatch then unwraps
+        # kwargs, which replaces it with null before the handler runs.
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        _, mock_graph = patch_common
+        from src.services.http_tool_service import execute_http_tool
+
+        with patch("src.knowledge_graph_lifecycle.run_kg_lifecycle_cleanup", new_callable=AsyncMock) as cleanup:
+            result = await execute_http_tool("knowledge", {
+                **arguments, "agent_id": "invented-rest-writer", "kwargs": {"agent_id": None},
+            })
+
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+
+        data = result if isinstance(result, dict) else parse_result(result)
+        data = data.get("result", data) if isinstance(data, dict) else data
+        assert identity_refusal_status(data) == "identity_required", data
+        cleanup.assert_not_called()
         mock_graph.supersede_discovery.assert_not_called()
         mock_graph.update_discovery.assert_not_called()
 

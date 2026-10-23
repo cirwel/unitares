@@ -303,10 +303,11 @@ Under strict identity, naming yourself is not proof. A knowledge write that
 passes an `agent_id` with no binding behind it (no `client_session_id`,
 continuity token or other proof this call resolved) is refused with the same
 typed `identity_required` refusal, whatever the severity, and nothing is
-written. `supersede`, `cleanup`, `synthesize`, `promote` and `audit` also
-refuse a server-inferred binding unless its agent is a substrate resident;
-they have no anonymous fallback. Leave `agent_id` out and pass the
-`client_session_id` from `start_session`.
+written. `supersede`, `cleanup`, `synthesize`, `promote` and `audit` have no
+anonymous fallback: they refuse any call without a binding, with or without
+an `agent_id`, and accept a server-inferred binding only for a substrate
+resident. Leave `agent_id` out and pass the `client_session_id` from
+`start_session`.
 
 ## Tagging Best Practices
 

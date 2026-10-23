@@ -561,6 +561,10 @@ class TestPromote:
         }
         with (
             patch(
+                "src.mcp_handlers.context.get_context_resolved_agent_id",
+                return_value="agent-a",
+            ),
+            patch(
                 "src.mcp_handlers.knowledge.handlers.require_registered_agent",
                 return_value=("agent-a", None),
             ),

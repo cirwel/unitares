@@ -339,6 +339,15 @@ class TestRunKgAudit:
 class TestHandleAuditKnowledgeGraph:
     """Tests for the MCP handler wrapper."""
 
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Audit refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_handler_returns_success(self):
         """Handler should return success response with audit data."""

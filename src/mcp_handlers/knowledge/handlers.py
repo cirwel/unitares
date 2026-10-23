@@ -1383,7 +1383,7 @@ def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
 
 
 def _unproven_agent_id_refusal(
-    arguments: Dict[str, Any], *, allow_pseudonym: bool = True
+    arguments: Dict[str, Any], *, administrative: bool = False
 ) -> Optional[TextContent]:
     """Refuse a write naming an agent_id this call has not proven, under strict identity.
 
@@ -1394,9 +1394,13 @@ def _unproven_agent_id_refusal(
     update could edit or close another agent's finding. Bound callers are
     unaffected: dispatch injects their own id, and ``inject_identity`` already
     refuses a different one. The anonymous pseudonym this module derives is
-    let through when it is written back into the same arguments, unless
-    ``allow_pseudonym`` is false: a pseudonym is an anonymous writer's label,
-    not an identity, so it never authorizes an administrative write.
+    let through when it is written back into the same arguments.
+
+    ``administrative`` is for handlers with no anonymous writer: any call
+    without a resolved binding is refused, with or without an agent_id. A
+    missing agent_id is no evidence that the gate saw none (REST dispatch
+    unwraps ``kwargs`` after the gate, which can null the name the gate
+    passed), and a pseudonym is an anonymous writer's label, not an identity.
     """
     from ..context import (
         get_context_resolved_agent_id,
@@ -1411,9 +1415,12 @@ def _unproven_agent_id_refusal(
     if not is_strict_identity_required():
         return None
     claimed = arguments.get("agent_id")
-    if not claimed or get_context_resolved_agent_id():
+    if get_context_resolved_agent_id() or (not claimed and not administrative):
         return None
-    if allow_pseudonym and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX):
+    if (
+        not administrative
+        and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX)
+    ):
         rest = {k: v for k, v in arguments.items() if k != "agent_id"}
         if claimed == _derive_anonymous_writer_id(rest):
             return None
@@ -1424,6 +1431,9 @@ def _unproven_agent_id_refusal(
                 "agent_id names an identity this call has not proven. Under strict "
                 "identity a knowledge write needs a binding: leave agent_id out and "
                 "pass the client_session_id that start_session returned."
+                if claimed
+                else "This knowledge action needs a bound caller under strict "
+                "identity: pass the client_session_id that start_session returned."
             ),
             next_step=(
                 "Retry without agent_id and with client_session_id=<from "
@@ -1432,7 +1442,7 @@ def _unproven_agent_id_refusal(
             ),
             surface_context={
                 "transport_surface": "knowledge",
-                "reason": "unproven_agent_id",
+                "reason": "unproven_agent_id" if claimed else "unbound",
                 "session_resolution_source": get_session_resolution_source(),
                 "proof_origin": get_session_proof_origin(),
                 "lifecycle_automation": "not_confirmed",
@@ -1570,13 +1580,14 @@ def _requires_proven_writer(handler):
     agent) is not proof that the caller is that agent, so under strict
     identity it is refused the way a high or critical write is, unless the
     resolved agent is exempt from caller proof (a substrate resident). These
-    handlers have no anonymous writer, so the anonymous pseudonym is refused
+    handlers have no anonymous writer, so under strict identity they need a
+    resolved binding: a missing agent_id or the anonymous pseudonym is refused
     like any other unproven agent_id.
     """
 
     @wraps(handler)
     async def guarded(arguments: Dict[str, Any], *args, **kwargs):
-        refusal = _unproven_agent_id_refusal(arguments, allow_pseudonym=False)
+        refusal = _unproven_agent_id_refusal(arguments, administrative=True)
         if refusal is None:
             refusal = _gated_write_refused_on_inferred_binding(
                 await _inferred_writer_exempt(), update=True
