@@ -1,0 +1,32 @@
+# Core profile: the server and PostgreSQL only. Opt-in; the default stack is
+# docker-compose.yml alone.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.core.yml up -d --wait
+#
+# To keep every later command on this profile (including `scripts/unitares
+# update`, which runs plain `docker compose`), put this line in `.env`:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.core.yml
+#
+# Redis and the lease plane do not start. What that costs, measured by the
+# Minimal Core Matrix workflow (it runs this file on every change to it):
+#
+# - Without Redis, sessions bound by a keyed client_session_id resolve from
+#   PostgreSQL and survive a restart. Everything Redis holds alone is kept in
+#   process memory and lost on restart: non-keyed session keys (X-Session-ID,
+#   Mcp-Session-Id, fingerprint pins), onboard pins, OAuth tokens and provider
+#   cooldowns. Use the default stack for a long-running deployment.
+# - Without the lease plane there are no surface leases or agent messages:
+#   coordination calls that need it fail. Check-ins, identity resumption, the
+#   knowledge graph and dialectic requests work.
+services:
+  redis:
+    profiles: ["off"]
+  lease-plane:
+    profiles: ["off"]
+  governance-mcp:
+    environment:
+      REDIS_ENABLED: "0"
+      LEASE_PLANE_BEARER_TOKEN: ""
+    depends_on: !override
+      postgres-age: {condition: service_healthy}
