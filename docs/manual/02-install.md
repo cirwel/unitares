@@ -516,6 +516,9 @@ compatibility; upgrade the server for those changes.
 Follow [`../install/PLAYBOOK.md`](../install/PLAYBOOK.md). It owns the exact
 PostgreSQL/AGE/pgvector versions, schema sequence, Python environment, expected
 outputs, and failure recovery. Do not copy commands from historical proposals.
+Bootstrap is for a new, empty database. If it stops partway through, follow
+[interrupted native bootstrap recovery](../install/PLAYBOOK.md#recovering-an-interrupted-native-bootstrap)
+instead of rerunning it; use the migration runner for existing databases.
 The `scripts/install/setup.py` helper only diagnoses and scaffolds this
 advanced path; it is not a replacement for the Docker quickstart or playbook.
 

@@ -150,7 +150,8 @@ def refusal(reason: str) -> Dict[str, Any]:
         "tag_mismatch": "This client_session_id is not valid for any agent.",
         "ambiguous_prefix": (
             "This client_session_id's uuid prefix matches more than one agent; "
-            "rebind with your continuity_token or start a new session."
+            "rebind with identity(agent_uuid=..., continuity_token=..., "
+            "resume=true) or call start_session(force_new=true)."
         ),
         "no_such_agent": "No active agent owns this client_session_id.",
         "agent_deleted": "The agent this client_session_id names was deleted.",
