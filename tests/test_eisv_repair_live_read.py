@@ -15,6 +15,7 @@ from src import eisv_eras
 
 UTC = timezone.utc
 POST_START = datetime(2026, 10, 16, 2, 59, 50, tzinfo=UTC)
+POST_END = datetime(2026, 10, 22, 14, 27, 20, tzinfo=UTC)
 BASE_START = datetime(2026, 10, 5, 22, 6, 59, tzinfo=UTC)
 BASE_END = datetime(2026, 10, 15, 13, 45, tzinfo=UTC)
 READ_AT = datetime(2026, 10, 23, 1, 0, tzinfo=UTC)
@@ -65,7 +66,7 @@ def _windows():
 
 def test_windows_are_the_rules_eras():
     post, baseline = _windows()
-    assert (post.era, post.start, post.end, post.stamped) == ("RK1", POST_START, READ_AT, True)
+    assert (post.era, post.start, post.end, post.stamped) == ("RK1", POST_START, POST_END, True)
     assert (baseline.era, baseline.start, baseline.end, baseline.stamped) == (
         "ID",
         BASE_START,
