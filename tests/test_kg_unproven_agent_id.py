@@ -20,6 +20,7 @@ stand-in store budget from ``add_discovery`` the way the real backends do
 be shown not to have touched the budget.
 """
 
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -801,6 +802,55 @@ class TestRestEndToEnd:
         cleanup.assert_not_called()
         mock_graph.supersede_discovery.assert_not_called()
         mock_graph.update_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        {"action": "store", "summary": "kw", "discovery_type": "note", "severity": "low",
+         "agent_id": "invented-rest-writer", "kwargs": {"agent_id": None}},
+        {"action": "note", "summary": "kw", "agent_id": "invented-rest-writer",
+         "kwargs": {"agent_id": None}},
+        {"action": "search", "kwargs": {"action": "store", "summary": "kw",
+                                        "discovery_type": "note", "severity": "low"}},
+        {"action": "search", "kwargs": {"kwargs": {"action": "note", "summary": "kw"}}},
+        {"action": "store", "summary": "kw", "discovery_type": "note", "severity": "low",
+         "agent_id": "invented-rest-writer", "kwargs": json.dumps({"agent_id": ""})},
+    ], ids=["store-null-name", "note-null-name", "search-wraps-store",
+            "search-wraps-note-two-deep", "string-kwargs-blank-name"])
+    async def test_the_gate_judges_the_call_dispatch_unwraps(self, patch_common, unbound, monkeypatch, arguments):
+        # Each of these got past the gate and wrote anonymously: the gate read
+        # the outer dict, and dispatch then unwrapped kwargs over it.
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        _, mock_graph = patch_common
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+        from src.services.http_tool_service import execute_http_tool
+
+        result = await execute_http_tool("knowledge", arguments)
+
+        data = result if isinstance(result, dict) else parse_result(result)
+        data = data.get("result", data) if isinstance(data, dict) else data
+        assert identity_refusal_status(data) == "identity_required", data
+        mock_graph.add_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arguments", [
+        {"kwargs": {"action": "search", "query": "x"}},
+        {"action": "search", "kwargs": {"query": "x"}},
+    ], ids=["wrapped-search", "search-with-wrapped-params"])
+    async def test_a_wrapped_read_still_serves_unbound(self, patch_common, unbound, monkeypatch, arguments):
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        from src.services.http_tool_service import _strict_identity_refusal_or_none
+
+        assert _strict_identity_refusal_or_none("knowledge", arguments) is None
+
+    @pytest.mark.asyncio
+    async def test_a_name_at_every_depth_still_passes_the_gate(self, patch_common, unbound, monkeypatch):
+        # The legacy name reference is left to the handlers, which refuse it.
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        from src.services.http_tool_service import _strict_identity_refusal_or_none
+
+        assert _strict_identity_refusal_or_none("knowledge", {
+            "action": "store", "agent_id": "outer", "kwargs": {"agent_id": "inner"},
+        }) is None
 
 
 class TestServerInferredBindingOnUngatedHandlers:
