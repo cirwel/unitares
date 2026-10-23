@@ -150,11 +150,17 @@ if [ "$separate" = 1 ]; then
         saved=$(awk -v key="$key" '
             /^[[:space:]]*#/ { next }
             { line=$0; sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+              if (line ~ ("^[[:space:]]*" key "([[:space:]]*(#.*)?)?$")) invalid=1
               pos=index(line, "="); name=substr(line, 1, pos-1)
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-              if (pos && name==key) value=substr(line, pos+1) }
+              if (pos && name==key) {
+                  # Detect every Compose-style assignment, but accept only
+                  # the syntax the existing CLI port reader also recognizes.
+                  if ($0 !~ ("^[[:space:]]*" key "=")) invalid=1
+                  value=substr(line, pos+1)
+              } }
             END {
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                if (invalid) { print "unsupported port assignment"; exit }
                 quote=substr(value, 1, 1)
                 if ((quote=="\"" || quote==sprintf("%c", 39)) && substr(value, length(value), 1)==quote)
                     value=substr(value, 2, length(value)-2)

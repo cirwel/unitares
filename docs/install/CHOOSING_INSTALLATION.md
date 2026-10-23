@@ -69,7 +69,8 @@ Docker checkout's fixed container names or volumes.
 For a new managed checkout the launcher saves these ports in `.env`, so later
 CLI updates keep them. For an existing checkout it requires matching numeric
 port assignments in `.env`, optionally surrounded by single or double quotes,
-and never rewrites the file. Inline comments and variable expressions are
+and never rewrites the file. Use `KEY=value` with no `export` prefix or spaces
+around `=` or the value. Inline comments and variable expressions are also
 rejected because the CLI's port reader does not resolve them. Repeat the same
 explicit command to rerun the launcher alongside the native installation.
 

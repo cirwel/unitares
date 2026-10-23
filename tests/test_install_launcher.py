@@ -256,11 +256,30 @@ def test_separate_accepts_quoted_numeric_ports_without_rewriting(launcher, quote
     assert (stack / '.env').read_text() == config
 
 
-@pytest.mark.parametrize('value', ['18767 # note', '${OTHER_PORT}', '"${OTHER_PORT}"'])
+@pytest.mark.parametrize('value', ['18767 # note', '${OTHER_PORT}', '"${OTHER_PORT}"',
+                                  ' 18767', '18767 ', '"18767" ', '18767\r'])
 def test_separate_refuses_port_forms_the_cli_cannot_resolve(launcher, value):
     stack, _, launch = launcher
     assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
     config = f'GOVERNANCE_HOST_PORT={value}\nLEASE_PLANE_HOST_PORT=18788\n'
+    (stack / '.env').write_text(config)
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
+    assert result.returncode != 0
+    assert (stack / '.env').read_bytes() == config.encode()
+
+
+@pytest.mark.parametrize('assignment', [
+    'export GOVERNANCE_HOST_PORT=18767',
+    'GOVERNANCE_HOST_PORT = 18767',
+    'GOVERNANCE_HOST_PORT=8767\nexport GOVERNANCE_HOST_PORT=18767',
+    'export GOVERNANCE_HOST_PORT=8767\nGOVERNANCE_HOST_PORT=18767',
+    'GOVERNANCE_HOST_PORT=18767\nGOVERNANCE_HOST_PORT',
+    'GOVERNANCE_HOST_PORT=18767\nexport GOVERNANCE_HOST_PORT # unset',
+])
+def test_separate_refuses_assignments_the_cli_skips(launcher, assignment):
+    stack, _, launch = launcher
+    assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
+    config = assignment + '\nLEASE_PLANE_HOST_PORT=18788\n'
     (stack / '.env').write_text(config)
     result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
     assert result.returncode != 0
