@@ -33,6 +33,7 @@ logger = get_logger(__name__)
 
 DEFAULT_STORES_PER_HOUR = 20
 WINDOW_SECONDS = 3600
+PRUNE_BATCH = 100  # expired ledger rows removed per charge, across all agents
 
 
 class WriteBudgetExceeded(ValueError):
@@ -65,72 +66,81 @@ async def check_store_budget(
     Raises ``WriteBudgetExceeded`` if the budget is spent. On success the write
     is recorded, so callers must treat this as a mutating operation.
 
+    The ledger is PostgreSQL alone (``audit.rate_limits``). An earlier Redis
+    fast path kept a second, independent ledger: a Redis outage reopened the
+    budget against an empty table, an error after Redis had refused a write
+    could still be admitted here, a Redis charge ignored the caller's
+    transaction, and its window ran on the application host's clock. At no
+    more than ``limit`` stores per agent per hour, one small transaction per
+    store is cheap.
+
     Args:
         agent_id: Agent whose budget is being charged.
-        db: Database backend, used for the PostgreSQL fallback path.
+        db: Database backend that supplies a connection when ``conn`` is None.
         limit: Stores permitted per hour.
         conn: Optional connection to reuse, so the caller can run the check
             inside its own transaction and have a rollback un-count the write.
             Backends without a transaction around the write pass ``None`` and
             accept that a failure after this point leaks one budget unit.
     """
-    # Fast path: Redis.
-    try:
-        from src.cache import get_rate_limiter
-
-        limiter = get_rate_limiter()
-
-        if not await limiter.check(
-            agent_id,
-            limit=limit,
-            window=WINDOW_SECONDS,
-            operation="kg_store",
-        ):
-            count = await limiter.get_count(agent_id, WINDOW_SECONDS, operation="kg_store")
-            raise WriteBudgetExceeded(_exceeded_message(agent_id, count, limit))
-
-        await limiter.record(agent_id, WINDOW_SECONDS, operation="kg_store")
-        return
-    except WriteBudgetExceeded:
-        raise
-    except Exception as exc:
-        logger.debug(f"Redis rate limiting failed, falling back to PostgreSQL: {exc}")
-
-    # Fallback: PostgreSQL, atomic check-and-insert to avoid a race between the
-    # count and the insert.
+    # The guarded INSERT alone is not atomic under READ COMMITTED (concurrent
+    # stores at count limit-1 all see room and all insert), so this agent's
+    # charges are serialized by a transaction-scoped advisory lock. Inside a
+    # caller's transaction the block below is a savepoint and the lock is held
+    # until the caller commits. Times are the database server's clock.
     async def _do_rate_limit_check(c):
-        from datetime import datetime, timedelta
-
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-
-        inserted = await c.fetchval(
-            """
-            INSERT INTO audit.rate_limits (agent_id, timestamp)
-            SELECT $1, $2
-            WHERE (
-                SELECT COUNT(*) FROM audit.rate_limits
-                WHERE agent_id = $1 AND timestamp > $3
-            ) < $4
-            RETURNING agent_id
-            """,
-            agent_id,
-            datetime.now(),
-            one_hour_ago,
-            limit,
-        )
-
-        if inserted is None:
-            count = await c.fetchval(
-                "SELECT COUNT(*) FROM audit.rate_limits WHERE agent_id = $1 AND timestamp > $2",
-                agent_id,
-                one_hour_ago,
+        async with c.transaction():
+            await c.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"kg-store-budget:{agent_id}",
             )
-            raise WriteBudgetExceeded(_exceeded_message(agent_id, count or 0, limit))
+            inserted = await c.fetchval(
+                """
+                INSERT INTO audit.rate_limits (agent_id, timestamp)
+                SELECT $1, clock_timestamp()
+                WHERE (
+                    SELECT COUNT(*) FROM audit.rate_limits
+                    WHERE agent_id = $1
+                      AND timestamp > clock_timestamp() - make_interval(secs => $2)
+                      AND timestamp <= clock_timestamp()
+                ) < $3
+                RETURNING agent_id
+                """,
+                agent_id,
+                float(WINDOW_SECONDS),
+                limit,
+            )
 
-        await c.execute(
-            "DELETE FROM audit.rate_limits WHERE timestamp < $1",
-            one_hour_ago,
-        )
+            if inserted is None:
+                count = await c.fetchval(
+                    "SELECT COUNT(*) FROM audit.rate_limits WHERE agent_id = $1 "
+                    "AND timestamp > clock_timestamp() - make_interval(secs => $2) "
+                    "AND timestamp <= clock_timestamp()",
+                    agent_id,
+                    float(WINDOW_SECONDS),
+                )
+                raise WriteBudgetExceeded(_exceeded_message(agent_id, count or 0, limit))
+
+            # Retention, not counting: the window above already ignores these
+            # rows. A bounded batch across all agents keeps the table from
+            # growing with every agent that stops writing, and SKIP LOCKED means
+            # it never waits on rows another store's transaction holds. Rows
+            # dated far ahead (an older version wrote the application host's
+            # naive local clock) are cleared here too; the count's upper bound
+            # already ignores them.
+            await c.execute(
+                """
+                DELETE FROM audit.rate_limits WHERE ctid IN (
+                    SELECT ctid FROM audit.rate_limits
+                    WHERE timestamp < clock_timestamp() - make_interval(secs => $1)
+                       OR timestamp > clock_timestamp() + make_interval(secs => $1)
+                    LIMIT $2
+                    FOR UPDATE SKIP LOCKED
+                )
+                """,
+                float(WINDOW_SECONDS),
+                PRUNE_BATCH,
+            )
 
     if conn is not None:
         await _do_rate_limit_check(conn)

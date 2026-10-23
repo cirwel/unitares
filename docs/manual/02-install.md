@@ -16,7 +16,7 @@ The clone pin below names the latest verified public release, which can lag
 the source version while a release is being prepared.
 
 ```bash
-git clone --branch v3.4.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.5.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
@@ -560,6 +560,39 @@ Two related flags are on by default and need nothing: `UNITARES_PHI_TELEMETRY_ON
 `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD`. Turning either off is a rollback, not
 a setup step; the registry's Theme 6 says what each does. The generated
 [flag catalog](../FLAGS.md) lists every variable the server reads.
+
+### A smaller stack: the core profile
+
+`docker-compose.core.yml` starts only the server and PostgreSQL: Redis and the
+lease plane do not run. It is opt-in, for trying the server out or for a
+machine that cannot spare the two extra services; the default stack stays
+`docker-compose.yml` alone.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.core.yml up -d --wait
+```
+
+To keep later commands on the core profile, including `./scripts/unitares
+update`, add this line to `.env` instead of passing `-f`:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.core.yml
+```
+
+What works and what does not, as measured by the Minimal Core Matrix workflow,
+which runs this file on every change to it:
+
+| | Core profile |
+|---|---|
+| Onboard, check-in, knowledge store and search, dialectic requests | Work |
+| Identity resumption across a server restart, by a keyed `client_session_id` | Works: that binding is stored in PostgreSQL |
+| Non-keyed session keys (`X-Session-ID`, `Mcp-Session-Id`, fingerprint pins), OAuth state, provider cooldowns | Kept in process memory, lost on restart |
+| Onboard pins (the continuity a client gets when it does not pass its `client_session_id`) | Not available: the pin has no fallback without Redis, so pass `client_session_id` |
+| Surface leases and agent messages (the lease plane) | Not available |
+
+Use the default stack for a deployment that runs for long, serves several
+clients, or uses coordination. To move to it, remove the `COMPOSE_FILE` line
+and run `docker compose up -d --wait`; the database is the same.
 
 ---
 

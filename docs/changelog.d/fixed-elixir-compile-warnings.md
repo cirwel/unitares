@@ -1,1 +1,0 @@
-- The Elixir apps (lease_plane, sentinel, agent_orchestrator, unitares_sdk) compile without warnings from their own code: unused `require Logger` lines and function clauses the compiler proves unreachable are removed. Every removed clause covered an input its callers already rule out, so behavior is unchanged.
