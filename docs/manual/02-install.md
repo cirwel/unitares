@@ -2,13 +2,40 @@
 
 [← Overview](01-overview.md) · [Manual index](README.md) · [Next: Running the server →](03-running-the-server.md)
 
-Choose one path:
+Choose one primary installation:
 
-- **Docker** is the Tier-1 install contract and brings up PostgreSQL, Redis, the
-  coordination lease plane, and the server together from a named release.
-- **Bare metal** is the advanced macOS operator path. The canonical, maintained
-  instructions live in the [install playbook](../install/PLAYBOOK.md); this
-  chapter does not duplicate them or present it as an equivalent default.
+- **Apple Silicon Mac: Homebrew preview.** The published native tap packages the
+  server, lease plane, PostgreSQL 17 with AGE/pgvector, and Redis. Database setup
+  and backed-up upgrades remain explicit; Docker is not required.
+- **Docker Compose:** the supported container path with automatic fresh database
+  initialization and a backed-up update command.
+- **Source checkout:** the advanced macOS operator/developer path in the
+  [source install playbook](../install/PLAYBOOK.md).
+
+## 2.0 Homebrew preview for Apple Silicon Macs
+
+```sh
+brew update
+brew tap cirwel/unitares
+brew trust cirwel/unitares
+brew install cirwel/unitares/unitares
+brew pin unitares unitares-lease-plane
+```
+
+Continue with the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup).
+Package installation does not create a role/database or apply bootstrap SQL.
+`unitares setup --apply` prepares missing private configuration, preserving any
+existing file. Only after the selected database is verified should you run
+`unitares start --check`, `unitares start`, and `unitares health`.
+
+The [Homebrew setup guide](../install/HOMEBREW_SETUP.md) explains readiness and
+recovery boundaries. The tap's [upgrade procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery)
+is stop/backup/migrate/restart; `unitares update` manages Docker Compose only.
+No model connection, Ollama instance or resident roster is enabled by default.
+The preview builds from source, has no bottles, and requires the Homebrew
+owner's logged-in macOS session. Intel macOS and Linux are outside its scope.
+Installing Homebrew alongside Docker does not copy data or switch clients;
+see [Choosing an installation](../install/CHOOSING_INSTALLATION.md).
 
 ## 2.1 Docker quickstart
 
@@ -495,6 +522,9 @@ profile on either does not reproduce this surface or its dispatch
 compatibility; upgrade the server for those changes.
 
 ## 2.2 Bare-metal installation
+
+This is the source-checkout path. Packaged Mac installs use the
+[Homebrew preview](#20-homebrew-preview-for-apple-silicon-macs) above.
 
 Follow [`../install/PLAYBOOK.md`](../install/PLAYBOOK.md). It owns the exact
 PostgreSQL/AGE/pgvector versions, schema sequence, Python environment, expected

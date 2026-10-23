@@ -91,37 +91,34 @@ estimator is moving out of the core record into an optional policy module.
 
 ## Install
 
-With Git, curl, and Docker Compose installed, one command starts the latest
-verified release of the local operator stack (the server, PostgreSQL with AGE
-and pgvector, Redis, and the coordination plane):
+**Apple Silicon Mac:** use the published [Homebrew preview](https://github.com/cirwel/homebrew-unitares) for the server, PostgreSQL with AGE/pgvector, Redis and the lease plane, without Docker.
+
+```sh
+brew update && brew tap cirwel/unitares && brew trust cirwel/unitares
+brew install cirwel/unitares/unitares && brew pin unitares unitares-lease-plane
+```
+
+Complete the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup), then run `unitares start`. Database provisioning and backed-up upgrades remain explicit preview steps; package installation alone does not make the server ready.
+
+**Docker Compose:** for container deployments and other platforms, Git, curl and Docker Compose start the latest verified release:
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
 
-Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
-`http://localhost:8767/dashboard`. If port 8767 or 8788 is taken, set
-`GOVERNANCE_HOST_PORT` and `LEASE_PLANE_HOST_PORT`; see
-[Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
+Both paths serve MCP at `http://localhost:8767/mcp/` and the dashboard at `http://localhost:8767/dashboard`. Choose one primary installation; see [installation choices](docs/install/CHOOSING_INSTALLATION.md) and [Docker ports and setup](docs/manual/02-install.md#21-docker-quickstart).
 
 **Connect your agents** (see [Integrating agents](docs/manual/04-integrating-agents.md)):
+
 - **Claude Code & Codex:** install the [governance plugin](https://github.com/cirwel/unitares-governance-plugin) for MCP wiring, lifecycle hooks, and surface leases.
 - **Hermes Agent & OpenAI-compatible clients:** install the [host adapter](https://github.com/cirwel/unitares-host-adapter).
 - **Custom runtimes & scripts:** connect directly over [Streamable HTTP MCP](docs/integration/MCP_CLIENTS.md), install the [Python SDK](agents/sdk/README.md) (`pip install unitares-sdk`), or use the [resident agent runtime](https://github.com/cirwel/unitares-resident).
 
-**Volumes, models, and updates:**
-- **Data persistence:** Data lives in Docker named volumes keyed to the checkout
-  directory name (`unitares`). Re-running the one-liner reuses an earlier
-  install's database; for a clean start, run `docker compose down -v` first. See
-  [Reinstalling](docs/manual/02-install.md#reinstalling-and-side-by-side-installs).
-- **Local reviewer model (optional):** `./scripts/unitares model` points the
-  server at a local Ollama model for advisory `consult` answers and first-pass
-  dialectic reviews; without one, reviews wait for a peer or the operator. See
-  [Choose a model](docs/manual/02-install.md#choose-a-model-optional).
-- **Upgrades:** `./scripts/unitares update` backs up the database, applies
-  migrations, restarts, and checks health. See
-  [Updating](docs/manual/02-install.md#updating), including the one-time step
-  for installs made before `update` existed.
+**Data, models, and updates:**
+
+- **Data persistence:** Homebrew uses the configured local PostgreSQL database; Docker uses named volumes. Installing another path does not migrate data or switch clients. See [installation choices](docs/install/CHOOSING_INSTALLATION.md).
+- **Models are optional:** no model connection is configured by default. Ollama and other endpoints are explicit opt-ins; see [Choose a model](docs/manual/02-install.md#choose-a-model-optional).
+- **Upgrades:** Homebrew uses the tap's [stop/backup/migrate/restart procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery). `./scripts/unitares update` manages Docker Compose only; see [Updating](docs/manual/02-install.md#updating).
 
 ## Where it is going
 
