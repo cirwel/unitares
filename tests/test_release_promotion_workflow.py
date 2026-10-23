@@ -133,7 +133,10 @@ def test_promotion_is_dispatched_by_hand_for_one_tag():
 
 def test_latest_moves_only_behind_the_approval_environment():
     assert JOBS["promote"]["environment"] == "release-promotion"
-    assert JOBS["promote"]["needs"] == "verify"
+    assert set(JOBS["promote"]["needs"]) == {"verify", "native-bootstrap"}
+    assert JOBS["native-bootstrap"]["needs"] == "verify"
+    assert JOBS["native-bootstrap"]["uses"] == "./.github/workflows/native-bootstrap.yml"
+    assert JOBS["native-bootstrap"]["with"]["source-ref"] == "${{ needs.verify.outputs.source_sha }}"
     assert set(JOBS["pin"]["needs"]) == {"verify", "promote"}
     assert "environment" not in JOBS["verify"]
     for job in ("verify", "pin"):
@@ -533,7 +536,7 @@ def test_an_existing_pin_branch_stops_the_run_before_approval():
 
 def test_workflow_inputs_never_reach_a_shell_unquoted():
     for job in JOBS.values():
-        for step in job["steps"]:
+        for step in job.get("steps", []):
             assert "${{" not in step.get("run", ""), step.get("name")
 
 
