@@ -358,3 +358,29 @@ async def audit_health_check_async() -> Dict[str, Any]:
     health = await db.health_check()
     health["component"] = "audit"
     return health
+
+
+async def fetch_timeline_audit_events(
+    conn,
+    *,
+    start,
+    agent_id: Optional[str],
+    event_types: List[str],
+    match_parent: bool,
+    limit: int,
+) -> list:
+    """Audit events of `event_types` since `start`, newest first, for
+    GET /v1/timeline. With `match_parent`, an `agent_id` filter also matches
+    rows whose payload names it as `parent_id` (lineage declarations)."""
+    return await conn.fetch(
+        """
+        SELECT ts, event_id, agent_id, event_type, payload
+        FROM audit.events
+        WHERE ts >= $1 AND event_type = ANY($3::text[])
+          AND ($2::text IS NULL OR agent_id = $2
+               OR ($4::boolean AND payload->>'parent_id' = $2))
+        ORDER BY ts DESC
+        LIMIT $5
+        """,
+        start, agent_id, event_types, match_parent, limit,
+    )

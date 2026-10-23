@@ -10,8 +10,8 @@ artifact in another.
 |---|---:|---|
 | UNITARES server | `v3.5.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.5.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 39898973063](https://github.com/cirwel/unitares/actions/runs/39898973063). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.5.0). |
-| `unitares-governance` plugin | `v0.4.21` | Carries the skills bundle for server `v3.4.0`: its `skills/` mirrors `3c12b1a8`, the v3.4.0 release commit, compared file by file (every file matches; the plugin adds only `SKILLS_MANIFEST.sha256`). This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.21). |
-| `unitares-sdk` | `0.5.0` | Published Python client for resident and custom integrations, released with server v3.4.0. A behavioral minor release over 0.4.0 that removes nothing public: it negotiates progressive tool listings on connect and sends calls to unadvertised tools through `use_tool`, fills `CheckinResult.metrics`, adds `consult()`, `ConsultResult` and a `retry` keyword on `call_tool`, sends `consult()` and `delegate_inference()` once without retrying, raises `GovernanceToolRefused` from the sync client too, adds the lease plane's `effect_in_progress` result, narrows `list_inference_hosts()` to configured hosts, and deprecates `call_model()`. The in-tree 0.4.1 that server v3.2.0 and v3.3.0 declared was never published. Install it with `pip install unitares-sdk==0.5.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
+| `unitares-governance` plugin | `v0.4.22` | Carries the skills bundle for server `v3.5.0`, whose changelog entry names it as the bundle carrier (`plugin-bundle-recut: v0.4.22`). The plugin's [release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.22) record the mirrored commit and the file-by-file comparison. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
+| `unitares-sdk` | `0.6.0` | Published Python client for resident and custom integrations. `sdk-v0.6.0` is the newest SDK tag in server `v3.5.0`, and PyPI serves it. Install it with `pip install unitares-sdk==0.6.0`; use a server Git tag only when deliberately testing an unreleased SDK build. What changed: [changelog](CHANGELOG.md). |
 | `unitares-host-adapter` | `0.3` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.3`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
 
@@ -35,6 +35,27 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.5.0 removes and renames no registered callable, action or input
+  parameter, and adds no database migration; the interface contract moves
+  from 1.50.0 to 1.56.0. Two changes can need an operator or client step.
+  `UNITARES_MODEL_ID` has no built-in default: through v3.4.0 an unset value
+  meant `gemma4:latest`. A local-route `consult` now uses the model the agent
+  names, then `UNITARES_MODEL_ID`, then the endpoint's only served model, and
+  otherwise refuses with `MODEL_NOT_CONFIGURED`; the dialectic reviewers and
+  internal enrichments need `UNITARES_MODEL_ID` itself. Setting it restores a
+  default model. Under strict identity, a knowledge write that names an
+  `agent_id` the call has not proven is refused with `identity_required`, and
+  `supersede`, `cleanup`, `synthesize`, `promote` and `audit` refuse every
+  unbound call ([GHSA-4m7p-grgw-vgmh](https://github.com/cirwel/unitares/security/advisories/GHSA-4m7p-grgw-vgmh)).
+  A client that wrote under an invented name binds first with
+  `start_session(force_new=true)` and passes the returned
+  `client_session_id`. `UNITARES_ENABLE_GRAPH_EXPANSION` is renamed
+  `UNITARES_ENABLE_RELATED_EXPANSION`; the old name is still read, with a
+  deprecation warning, when the new one is unset. Two search results change
+  without a setting: a bound REST knowledge search is no longer filtered to
+  the caller's own rows (#2980), and a search that finds fewer than 3 active
+  rows appends archived and cold rows after them. `unitares-sdk` 0.6.0 is an
+  additive minor over 0.5.0.
 - v3.4.0 removes and renames no registered callable, action or input
   parameter. The one retyped input, `delegate_inference`'s `host_id`, moves
   from an enum to a bounded string and still accepts every value it accepted

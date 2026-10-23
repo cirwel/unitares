@@ -137,18 +137,45 @@ the dashboard on a LAN address or a hostname also needs its origin in
   `docker-compose.yml`, each commented `# Development-only` /
   `# Known development-only` at its definition. Rotate both (and set a real
   `POSTGRES_PASSWORD`) before running this stack anywhere reachable beyond
-  your own loopback. `UNITARES_CONTINUITY_TOKEN_SECRET` no longer has a
+  your own loopback; the server refuses to start with either one once its
+  configuration says it is reachable (next item). `UNITARES_CONTINUITY_TOKEN_SECRET` no longer has a
   default: unset, the server generates its own key on the `governance-data`
   volume, and it ignores the value compose used to publish
   (`src/continuity_secret.py`).
-- **No production-mode boot guard.** Nothing here refuses to start on a
-  default credential, an unauthenticated Redis, or a missing MCP bearer —
-  the quickstart can be pointed at a non-loopback interface without
-  crossing any explicit "you are now in production" gate. `.github/SECURITY.md`
-  currently treats a non-loopback bind and local-host/local-process access as
-  operator responsibility and out of report scope, respectively; that framing
-  is a real decision, not an oversight, but it means the boot path itself
-  enforces none of it.
+- **The boot guard covers the two published secrets, judged from
+  configuration only.** The governance server refuses to start when
+  `LEASE_PLANE_BEARER_TOKEN` or `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` still
+  holds its published compose value (matched by digest, `src/insecure_defaults.py`)
+  and its configuration says clients reach it from beyond this host:
+  - `UNITARES_MCP_BEARER_TOKENS` has a member (hosted `/mcp` bearer gate and
+    strict REST);
+  - `UNITARES_MCP_ALLOWED_HOSTS` or `UNITARES_MCP_ALLOWED_ORIGINS` names a host
+    other than loopback;
+  - `UNITARES_DASHBOARD_RP_ID` (or, with it, `UNITARES_DASHBOARD_ORIGIN`) names
+    a host other than loopback;
+  - `UNITARES_OAUTH_ISSUER_URL` names a host other than loopback (this covers
+    the public OAuth listener, which needs an issuer).
+
+  The error names the variables, never their values. With none of these set,
+  as in the plain quickstart, the server only warns, as before. The process
+  cannot see Docker's host port mapping, and inside the container it binds
+  every interface by design, so a quickstart whose port mapping was widened
+  to `0.0.0.0` by hand is not detected; the warning still prints.
+  `UNITARES_ALLOW_PUBLISHED_DEFAULTS=1` (in `.env` for docker compose, which passes it through) turns the refusal back into a warning
+  for a deliberate demo and logs a second warning at every start while it is
+  set. The variable names in use also appear as the `insecure_defaults` check
+  in the `health_check` tool and the authenticated `/health/deep` snapshot that
+  the dashboard reads, so they are visible after boot; the public `/health`
+  route does not carry them.
+- **The guard does not cover the other services or other credentials.** The
+  lease plane loads `LEASE_PLANE_BEARER_TOKEN` at boot and serves with whatever
+  value it is given. It warns when that value is the published default, and
+  again when it binds beyond loopback outside a container, but it reads none of
+  the exposure configuration above, so it does not refuse. Nothing refuses an unauthenticated
+  Redis, the default Postgres password, or a missing MCP bearer on a
+  non-loopback bind. `.github/SECURITY.md` treats a non-loopback bind and
+  local-host/local-process access as operator responsibility and out of report
+  scope, respectively; that framing is a real decision, not an oversight.
 - **No image/repo split.** `governance-mcp`'s image ships the reference
   residents, research apparatus, and operator tooling alongside the core
   server; there's no separate minimal image for someone who only wants the
