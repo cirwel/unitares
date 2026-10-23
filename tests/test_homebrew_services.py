@@ -238,7 +238,15 @@ def test_schema_check_is_read_only_and_uses_installed_runtime(manager, monkeypat
     for path in (python, script):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    script.write_text('import os, sys\nassert sys.argv[1:]==["--check","--db-url",os.environ["DB_POSTGRES_URL"]]\n')
+    script.write_text("""import os, subprocess, sys
+assert sys.argv[1:] == ['--check', '--db-url', 'postgresql://probe@localhost:5432/governance']
+assert os.environ['PGPASSWORD'] == 'p@ss:word'
+# Exercise the checker's forwarding pattern in a nested subprocess too.
+subprocess.run([sys.executable, '-c',
+    'import os,sys; assert os.environ["PGPASSWORD"] not in str(sys.argv); assert sys.argv[1] == "postgresql://probe@localhost:5432/governance"',
+    sys.argv[-1]], check=True)
+""")
+    brew.runtime_env['DB_POSTGRES_URL'] = 'postgresql://probe:p%40ss%3Aword@localhost:5432/governance'
     calls = []
     def execute(args, **kwargs):
         calls.append((args, kwargs))
@@ -246,14 +254,15 @@ def test_schema_check_is_read_only_and_uses_installed_runtime(manager, monkeypat
     monkeypatch.setattr(native, 'run', execute)
     native.Homebrew.check_schema(brew)
     args, options = calls[0]
-    assert args[0] == str(python) and args[1] == '-c' and args[-1] == str(script)
-    assert 'postgresql://' not in ' '.join(args)
-    assert options['env']['DB_POSTGRES_URL'] == 'postgresql://probe:private@localhost:5432/governance'
+    assert args[:4] == [str(python), str(script), '--check', '--db-url']
+    assert 'p%40ss%3Aword' not in ' '.join(args) and 'p@ss:word' not in ' '.join(args)
+    assert options['env']['PGPASSWORD'] == 'p@ss:word'
 
 
-@pytest.mark.parametrize('packaged,explicit', [(True, False), (False, True)])
-@pytest.mark.parametrize('action', ['start', 'stop', 'logs'])
-def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, explicit, action):
+@pytest.mark.parametrize('packaged,explicit', [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize('flag_first', [True, False])
+@pytest.mark.parametrize('action,options', [('start', ['--check']), ('stop', ['--check']), ('logs', ['--no-follow', '--tail', '2']), ('start', []), ('stop', []), ('logs', [])])
+def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, explicit, flag_first, action, options):
     root = tmp_path / ('keg/libexec/app' if packaged else 'source')
     (root / 'scripts/install').mkdir(parents=True)
     cli = root / 'scripts/unitares'
@@ -264,8 +273,8 @@ def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, exp
         wrapper.parent.mkdir()
         wrapper.write_text('#!/bin/sh\n')
         wrapper.chmod(0o755)
-    options = ['--no-follow', '--tail', '2'] if action == 'logs' else ['--check']
-    args = [str(cli), action] + (['--homebrew'] if explicit else []) + options
+    selector = ['--homebrew'] if explicit else []
+    args = [str(cli), action] + (selector + options if flag_first else options + selector)
     result = subprocess.run(args, capture_output=True, text=True, env=dict(os.environ, HOME=str(tmp_path)))
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [action, *options]

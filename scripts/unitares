@@ -976,11 +976,22 @@ _is_homebrew_package() {
     esac
 }
 
+_has_homebrew_option() {
+    local arg
+    for arg in "$@"; do
+        [ "$arg" != "--homebrew" ] || return 0
+    done
+    return 1
+}
+
 _homebrew_service() {
-    local action="$1"
+    local action="$1" arg
+    local -a options=()
     shift
-    [ "${1:-}" != "--homebrew" ] || shift
-    python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "$@"
+    for arg in "$@"; do
+        [ "$arg" = "--homebrew" ] || options+=("$arg")
+    done
+    python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "${options[@]+"${options[@]}"}"
 }
 
 _env_value() {
@@ -1046,7 +1057,7 @@ cmd_model() {
 }
 
 cmd_start() {
-    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
         _homebrew_service start "$@"
         return $?
     fi
@@ -1055,7 +1066,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
         _homebrew_service stop "$@"
         return $?
     fi
@@ -1064,7 +1075,7 @@ cmd_stop() {
 }
 
 cmd_logs() {
-    if [ "${1:-}" = "--homebrew" ] || _is_homebrew_package; then
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
         _homebrew_service logs "$@"
         return $?
     fi

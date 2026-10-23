@@ -191,16 +191,13 @@ class Homebrew:
         script = self.app / 'scripts/dev/apply_migrations.py'
         if not python.is_file() or not script.is_file():
             raise Refusal('The installed package lacks the native schema check.')
-        # The packaged checker accepts --db-url but its default ignores
-        # DB_POSTGRES_URL. Supply it inside the child, keeping credentials out
-        # of the OS command line and using the checker's existing read-only gate.
-        runner = (
-            'import os,runpy,sys; script=sys.argv[1]; '
-            'sys.path.insert(0,os.path.dirname(script)); '
-            'sys.argv=[script,"--check","--db-url",os.environ["DB_POSTGRES_URL"]]; '
-            'runpy.run_path(script,run_name="__main__")'
-        )
-        result = run([str(python), '-c', runner, str(script)], env=self.runtime_env, timeout=60)
+        # The checker forwards its URL to psql. Keep the password in libpq's
+        # environment so neither Python nor nested psql argv contains it.
+        from urllib.parse import unquote, urlsplit, urlunsplit
+        db = urlsplit(self.runtime_env['DB_POSTGRES_URL'])
+        public_url = urlunsplit(db._replace(netloc=f'{db.username}@{db.hostname}:{db.port or 5432}'))
+        env = dict(self.runtime_env, PGPASSWORD=unquote(db.password))
+        result = run([str(python), str(script), '--check', '--db-url', public_url], env=env, timeout=60)
         if result.returncode:
             raise Refusal('The installed schema check failed. Bootstrap a fresh database or use the documented backed-up native upgrade procedure before starting writers.')
 
