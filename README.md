@@ -93,7 +93,7 @@ estimator is moving out of the core record into an optional policy module.
 
 With Git, curl, and Docker Compose installed, one command starts the latest
 verified release of the local operator stack (the server, PostgreSQL with AGE
-and pgvector, Redis, and the coordination plane):
+and pgvector, Redis, and the coordination plane; the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the first two):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait

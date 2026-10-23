@@ -110,7 +110,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 |---|---|
 | `DB_POSTGRES_URL` | PostgreSQL DSN (PostgreSQL is the only database backend) |
 | `DB_AGE_GRAPH` | AGE graph name (e.g. `governance_graph`) |
-| `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (default: findings and full-text search) or `age` (adds graph edges, semantic search and `superseded_by`; see below) |
+| `UNITARES_KNOWLEDGE_BACKEND` | `age` (the compose and `.env.example` default: adds graph edges, semantic search and `superseded_by`; see below) or `postgres` (findings and full-text search only); unset, a native install resolves to `postgres` |
 | `UNITARES_BIND_ALL_INTERFACES` / `UNITARES_MCP_HOST` | Bind beyond loopback |
 | `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS` | Host/Origin allowlists |
 | `UNITARES_MCP_BEARER_TOKENS` | Bearer auth (comma-separated, so old and new tokens can overlap during a rotation) |
@@ -133,7 +133,7 @@ related-finding expansion are opt-in.
 
 | Variable | Effect |
 |---|---|
-| `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (the compose default) stores findings and serves full-text search, with no graph edges. `age` stores the same rows and also writes the graph in Apache AGE: an `AUTHORED` edge from the writing process, `RELATED_TO` edges to earlier findings that share tags, `TAGGED`, `RESPONDS_TO` for a `response_to` link, and `SUPERSEDES` when a finding replaces another. Semantic search and the replacement id on a superseded result (`superseded_by`) both need `age`; a superseded result is flagged, and its replacement is not fetched into the results. |
+| `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (what a native install resolves to when the variable is unset) stores findings and serves full-text search, with no graph edges. `age` (the compose default) stores the same rows and also writes the graph in Apache AGE: an `AUTHORED` edge from the writing process, `RELATED_TO` edges to earlier findings that share tags, `TAGGED`, `RESPONDS_TO` for a `response_to` link, and `SUPERSEDES` when a finding replaces another. Semantic search and the replacement id on a superseded result (`superseded_by`) both need `age`; a superseded result is flagged, and its replacement is not fetched into the results. |
 | `UNITARES_EMBEDDING_MODEL` | Picks the embedding model for semantic search (for example `bge-m3`). Unset means `minilm` (all-MiniLM-L6-v2); it does not turn semantic search off. Semantic search needs `sentence-transformers` and the `age` backend. |
 | `UNITARES_ENABLE_HYBRID` | `1` fuses semantic and full-text results with reciprocal rank fusion. Off by default; needs semantic search. |
 | `UNITARES_ENABLE_RERANKER` | `1` re-scores the top candidates with a cross-encoder (`UNITARES_RERANKER_MODEL`). Off by default; needs `sentence-transformers`. |

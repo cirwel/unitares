@@ -193,8 +193,14 @@ services:
       DB_AGE_GRAPH: governance_graph
       UNITARES_TOOL_ADVERTISEMENT: ${UNITARES_TOOL_ADVERTISEMENT:-progressive}
       REDIS_URL: redis://redis:6379/0
-      # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
-      UNITARES_KNOWLEDGE_BACKEND: postgres
+      # PostgreSQL rows stay the canonical KG store; the AGE backend also writes
+      # the graph over them (AUTHORED, RELATED_TO, TAGGED, RESPONDS_TO,
+      # SUPERSEDES), which supersession pointers and semantic search need. The
+      # postgres-age image already ships the extension and graph schema. An
+      # install that ran with `postgres` rebuilds the graph from its rows on the
+      # first knowledge-graph access after the switch. Set `postgres` to store
+      # findings without the graph.
+      UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       # Coordination boundary used by governed clients and spawned workers.
       LEASE_PLANE_BASE_URL: http://lease-plane:8788
@@ -265,6 +271,10 @@ services:
       # Known development-only Ed25519 seed + issuer for the loopback quickstart.
       # Replace the seed and choose a globally stable issuer on shared installs.
       UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}
+      # Downgrades the startup refusal for a published default secret on an
+      # exposed configuration to a warning, for a deliberate demo only
+      # (src/insecure_defaults.py, docs/DEPLOYMENT_SECURITY.md).
+      UNITARES_ALLOW_PUBLISHED_DEFAULTS: ${UNITARES_ALLOW_PUBLISHED_DEFAULTS:-}
       UNITARES_LEASE_ATTESTATION_ISSUER: ${UNITARES_LEASE_ATTESTATION_ISSUER:-unitares-local}
       UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       # SDK continuity-proof exchanges may use HTTP only for this exact

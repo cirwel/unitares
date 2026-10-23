@@ -142,7 +142,7 @@ RECOVERY_PATTERNS = {
         "related_tools": ["identity", "onboard"],
         "workflow": [
             "1. Call identity(client_session_id='...') to inspect the current binding",
-            "2. Include continuity_token for a proof-owned UUID rebind when available",
+            "2. If this is the same live process, rebind with identity(agent_uuid=..., continuity_token=..., resume=true); a token alone is not accepted",
             "3. For a fresh process, call onboard(force_new=true) and use parent_agent_id for lineage"
         ]
     },
