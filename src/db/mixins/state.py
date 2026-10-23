@@ -451,3 +451,36 @@ class StateMixin:
             epistemic_class=epistemic_class,
             state_json=sj,
         )
+
+
+async def fetch_timeline_checkins(
+    conn,
+    *,
+    start,
+    identity_ids: Optional[List[int]],
+    classes: List[str],
+    limit: int,
+) -> list:
+    """Measured check-ins since `start`, newest first, for GET /v1/timeline.
+
+    `identity_ids` None reads every agent. `classes` filters on the epistemic
+    class (agent report vs substrate). Synthetic bootstrap rows are excluded.
+    """
+    return await conn.fetch(
+        """
+        SELECT s.recorded_at, s.identity_id,
+               coalesce(s.epistemic_class,
+                        s.state_json->>'epistemic_class') AS epistemic_class,
+               s.state_json->>'action' AS action,
+               s.state_json->>'verdict' AS verdict,
+               s.risk_score
+        FROM core.agent_state s
+        WHERE s.recorded_at >= $1 AND s.synthetic = false
+          AND ($2::bigint[] IS NULL OR s.identity_id = ANY($2::bigint[]))
+          AND coalesce(s.epistemic_class,
+                       s.state_json->>'epistemic_class') = ANY($3::text[])
+        ORDER BY s.recorded_at DESC
+        LIMIT $4
+        """,
+        start, identity_ids, classes, limit,
+    )

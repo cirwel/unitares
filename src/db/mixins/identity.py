@@ -1446,3 +1446,29 @@ class IdentityMixin:
             last_activity_at=row.get("last_activity_at"),
             metadata=json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"],
         )
+
+
+async def fetch_identity_ids_for_agent(conn, agent_id: str) -> List[int]:
+    """Every identity row carrying `agent_id`, for GET /v1/timeline's filter."""
+    rows = await conn.fetch(
+        "SELECT identity_id FROM core.identities WHERE agent_id = $1", agent_id
+    )
+    return [r["identity_id"] for r in rows]
+
+
+async def fetch_timeline_identities(
+    conn, *, identity_ids: List[int], agent_ids: List[str]
+) -> list:
+    """The agents a GET /v1/timeline response names, by identity or agent id."""
+    return await conn.fetch(
+        """
+        SELECT identity_id, agent_id, parent_agent_id, spawn_reason, created_at,
+               last_activity_at, status,
+               coalesce(metadata->>'display_name', metadata->>'label') AS label,
+               metadata->>'model_type' AS model_type,
+               metadata->'trust_tier'->>'name' AS trust_tier
+        FROM core.identities
+        WHERE identity_id = ANY($1::bigint[]) OR agent_id = ANY($2::text[])
+        """,
+        identity_ids, agent_ids,
+    )
