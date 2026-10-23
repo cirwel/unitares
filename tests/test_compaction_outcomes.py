@@ -186,7 +186,7 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     assert by_event["minted"]["probe"]["answer"] == "same_process"
     assert by_event["minted"]["probe"]["answered_by"] == "child"
     assert by_event["kept"]["probe"] is None
-    assert report["probe"]["disagree"] == 1
+    assert report["probe"]["inconsistent"] == 1
     assert report["probe"]["answered_by_other_identity"] == 1
     assert report["probe"]["complete"] is True
 
@@ -265,7 +265,7 @@ async def test_collector_pages_through_every_compaction(monkeypatch):
     assert len(calls) > 1
 
 
-def test_probe_answers_sit_beside_outcomes_and_agreement_is_counted():
+def test_probe_answers_sit_beside_outcomes_and_consistency_is_counted():
     kept, minted = PARENT, OTHER
     unsure = "99999999-8888-4777-8666-555555555555"
     report = classify_compaction_outcomes(
@@ -287,7 +287,7 @@ def test_probe_answers_sit_beside_outcomes_and_agreement_is_counted():
         "minted": 1, "kept": 1, "no_later_activity": 0,
     }
     # cannot_tell is counted, never scored either way.
-    assert (probe["decisive_pairs"], probe["agree"], probe["disagree"]) == (2, 1, 1)
+    assert (probe["decisive_pairs"], probe["consistent"], probe["inconsistent"]) == (2, 1, 1)
     assert probe["answered_by_other_identity"] == 1
 
 
@@ -306,7 +306,7 @@ def test_a_probe_attaches_only_to_the_compaction_it_names():
     by_event = {row["event_id"]: row for row in report["rows"]}
     assert by_event["first"]["probe"] is None
     assert by_event["second"]["probe"]["answer"] == "new_process"
-    assert (report["probe"]["agree"], report["probe"]["disagree"]) == (0, 1)
+    assert (report["probe"]["consistent"], report["probe"]["inconsistent"]) == (0, 1)
 
 
 def test_only_the_first_answer_to_a_compaction_is_read():

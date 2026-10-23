@@ -27,10 +27,14 @@ proof, so those compactions do not appear here at all.
 The agent's view is read separately, where an adapter asked for it: a
 ``context_compaction_probe`` row carries the agent's own answer (same process,
 new process, cannot tell) or the hook's note that it gave none, keyed to the
-compaction it answers. Each row then shows the answer beside the outcome. The
-answer was given with the operator's compaction guidance in the same context
-(``guidance_present``), so agreement between the two shows whether stated
-belief tracks what happened, not what the agent would say unprompted.
+compaction it answers. Each row then shows the answer beside the outcome. Read
+the pair with two limits in mind. The answer was given with the operator's
+compaction guidance in the same context (``guidance_present``), which says the
+process continues. And ``kept`` is mostly the hook's doing: the Stop hook that
+records the answer then checks in on the cached identity, which counts as the
+identity acting again. So ``same_process`` beside ``kept`` is what guidance and
+hook produce together. The informative cells are answers beside ``minted`` and
+any answer other than ``same_process``.
 
 The identity ontology (``docs/ontology/identity.md``, *Compaction*) says why
 the two outcomes are worth comparing.
@@ -50,9 +54,10 @@ from src.runtime_observations import (
 )
 
 OUTCOMES = ("minted", "kept", "no_later_activity")
-# The answer that matches each outcome. ``cannot_tell``, ``no_answer`` and
-# ``no_later_activity`` match nothing and are counted, not scored.
-AGREEING_ANSWER = {"kept": "same_process", "minted": "new_process"}
+# The answer consistent with each outcome. ``cannot_tell``, ``no_answer`` and
+# ``no_later_activity`` match nothing and are counted, not scored. Consistency
+# is not accuracy: see the module docstring on what produces ``kept``.
+CONSISTENT_ANSWER = {"kept": "same_process", "minted": "new_process"}
 # Audit rows written for an identity's own action: one ``auto_attest`` per
 # check-in (the agent checking in), ``knowledge_write`` (the author) and
 # ``consultation`` (the requester).
@@ -114,17 +119,17 @@ def _probe_summary(rows: list[dict[str, Any]], duplicates: int) -> dict[str, Any
     by_outcome = {
         answer: {name: 0 for name in OUTCOMES} for answer in PROBE_ANSWERS
     }
-    agree = disagree = 0
+    consistent = inconsistent = 0
     for row in asked:
         answer = row["probe"]["answer"]
         by_outcome[answer][row["outcome"]] += 1
-        expected = AGREEING_ANSWER.get(row["outcome"])
-        if expected is None or answer not in AGREEING_ANSWER.values():
+        expected = CONSISTENT_ANSWER.get(row["outcome"])
+        if expected is None or answer not in CONSISTENT_ANSWER.values():
             continue
         if answer == expected:
-            agree += 1
+            consistent += 1
         else:
-            disagree += 1
+            inconsistent += 1
     return {
         "asked": len(asked),
         "answers": {
@@ -132,16 +137,20 @@ def _probe_summary(rows: list[dict[str, Any]], duplicates: int) -> dict[str, Any
             for answer in PROBE_ANSWERS
         },
         "by_answer_and_outcome": by_outcome,
-        "decisive_pairs": agree + disagree,
-        "agree": agree,
-        "disagree": disagree,
+        "decisive_pairs": consistent + inconsistent,
+        "consistent": consistent,
+        "inconsistent": inconsistent,
         "answered_by_other_identity": sum(
             1 for row in asked if row["probe"]["answered_by"] != row["agent_id"]
         ),
         "duplicates_ignored": duplicates,
         "scope": (
-            "Answers given with the compaction guidance in context; agreement "
-            "pairs same_process with kept and new_process with minted."
+            "Answers given with the compaction guidance in context. kept is "
+            "mostly produced by the Stop hook's own check-in, so same_process "
+            "beside kept is expected; answers beside minted, and answers other "
+            "than same_process, carry the information. Consistency pairs "
+            "same_process with kept and new_process with minted; it is not "
+            "accuracy."
         ),
     }
 

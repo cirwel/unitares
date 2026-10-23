@@ -92,7 +92,7 @@ async def main() -> int:
             counts = probe["by_answer_and_outcome"][answer]
             print(f"  {answer:<13} " + " ".join(f"{name}={counts[name]}" for name in OUTCOMES))
         print(
-            f"  agree={probe['agree']} disagree={probe['disagree']} "
+            f"  consistent={probe['consistent']} inconsistent={probe['inconsistent']} "
             f"of {probe['decisive_pairs']} decisive; "
             f"answered by another identity={probe['answered_by_other_identity']}"
         )

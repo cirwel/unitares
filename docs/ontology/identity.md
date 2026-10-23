@@ -427,12 +427,16 @@ route (`observation_kind="context_compaction_probe"`), keyed to the
 compaction by the identity and time it was recorded on. A turn that ends
 without an answer is recorded as `no_answer`, which is the hook's note, not
 the agent's report. The report shows each answer beside its outcome and counts
-agreement: `same_process` with `kept`, `new_process` with `minted`. The
-question is asked with the compaction guidance above in the same context
-(`guidance_present`), so the probe cannot read what an agent would say
-unprompted. What it can read is whether stated belief tracks the act. A
-`same_process` answer beside a `minted` outcome points to a mechanical cause,
-such as a reconstructed `client_session_id`, rather than a belief.
+how often they are consistent: `same_process` with `kept`, `new_process` with
+`minted`. Consistency is not accuracy, for two reasons. The question is asked
+with the compaction guidance above in the same context (`guidance_present`),
+so the probe cannot read what an agent would say unprompted. And `kept` is
+mostly the hook's doing: the Stop hook that records the answer then checks in
+on the cached identity. So `same_process` beside `kept` is what guidance and
+hook produce together. The informative cells are the others. A `same_process`
+answer beside a `minted` outcome points to a mechanical cause, such as a
+reconstructed `client_session_id`, rather than a belief. A `new_process` or
+`cannot_tell` answer is the agent departing from the guidance it was given.
 
 ### Cross-role lineage envelope (role families)
 
