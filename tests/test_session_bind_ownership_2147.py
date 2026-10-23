@@ -13,6 +13,8 @@ shapes the live call sites produce are pinned here as still succeeding.
 
 from __future__ import annotations
 
+import inspect
+import re
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,18 +25,15 @@ from src.mcp_handlers.identity import handlers
 from src.mcp_handlers.identity.session import (
     FOREIGN_DESTINATION_SOURCES,
     FOREIGN_STABLE_SESSION_ID,
+    OWN_TRANSPORT_SOURCES,
     UNDECLARED_DESTINATION_PROVENANCE,
+    _derive_session_key_impl,
     bind_destination_refusal,
 )
 from src.mcp_handlers.identity.shared import make_client_session_id
 from tests.helpers import parse_result
 
 FOREIGN_KEY = "agent-FOREIGN-PRIOR-ONBOARD"
-OWN_TRANSPORT_SOURCES = [
-    "mcp_session_id", "x_session_id", "oauth_client_id", "x_client_id",
-    "ip_ua_fingerprint", "context_mcp_session_id", "context_session_key",
-    "stdio_fallback", "explicit_client_session_id", "continuity_token",
-]
 
 
 @pytest.fixture
@@ -102,6 +101,25 @@ class TestThePredicate:
         """make_client_session_id raises on a malformed uuid; the predicate
         must still answer, and it must not answer 'owned'."""
         assert bind_destination_refusal("short", "agent-short", None) == UNDECLARED_DESTINATION_PROVENANCE
+
+    def test_an_unclassified_source_fails_closed(self, agent_uuid):
+        """#2147 part 2: adding a new ladder step without classifying it in
+        OWN_TRANSPORT_SOURCES must fail closed rather than defaulting to owned."""
+        assert (
+            bind_destination_refusal(agent_uuid, "mcp:some-transport", "new_unclassified_ladder_step")
+            == "new_unclassified_ladder_step"
+        )
+
+    def test_every_derivation_ladder_source_is_explicitly_classified(self):
+        """Every winning _mark('...') source in _derive_session_key_impl must
+        be partitioned into either OWN_TRANSPORT_SOURCES or FOREIGN_DESTINATION_SOURCES."""
+        assert not (OWN_TRANSPORT_SOURCES & FOREIGN_DESTINATION_SOURCES)
+        src = inspect.getsource(_derive_session_key_impl)
+        marked = set(re.findall(r'_mark\("([^"]+)"\)', src))
+        # continuity_token_invalid is a transient failure marker before falling
+        # through to the winning source; it never returns a session key.
+        winning_sources = marked - {"continuity_token_invalid"}
+        assert winning_sources == (OWN_TRANSPORT_SOURCES | FOREIGN_DESTINATION_SOURCES)
 
 
 class TestTheHelperRefusesForAnyCaller:

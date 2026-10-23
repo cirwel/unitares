@@ -20,6 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-bootstrap:
+    uses: ./.github/workflows/native-bootstrap.yml
+
   smoke:
     runs-on: ubuntu-latest
     steps:
@@ -325,7 +328,7 @@ jobs:
     # macos-platform rides on this context so its identity-proof tests block
     # a merge without a second protected check; it finishes well inside the
     # slowest shard, so the gate waits no longer.
-    needs: [test_shard, macos-platform]
+    needs: [test_shard, macos-platform, native-bootstrap]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -337,6 +340,12 @@ jobs:
       EXPECTED_SHARD_LEGS: '4'
 
     steps:
+    - name: Require native bootstrap and recovery acceptance to pass
+      if: ${{ needs.native-bootstrap.result != 'success' }}
+      run: |
+        echo "native bootstrap/recovery acceptance failed or was cancelled" >&2
+        exit 1
+
     - name: Require every test shard to pass
       if: ${{ needs.test_shard.result != 'success' }}
       run: |
