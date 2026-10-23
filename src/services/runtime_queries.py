@@ -1107,6 +1107,16 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     except Exception as e:
         checks["data_directory"] = {"status": "error", "error": str(e)}
 
+    # Names only, never values. Kept off the public /health route: a list of
+    # credentials still at a value anyone can read is an attacker's checklist.
+    # The authenticated deep snapshot and the health_check tool carry it.
+    try:
+        from src.insecure_defaults import insecure_defaults_status
+
+        checks["insecure_defaults"] = insecure_defaults_status()
+    except Exception as e:
+        checks["insecure_defaults"] = {"status": "error", "error": str(e)}
+
     # Background loops that catch their own failures (src/background_task_health.py).
     try:
         from src.background_task_health import health_check as _background_task_health

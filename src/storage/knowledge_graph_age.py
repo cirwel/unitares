@@ -2027,22 +2027,30 @@ class KnowledgeGraphAGE:
                 """,
                 discovery_ids,
             )
+            # Rows already in AGE whose related_to arrays point at a missing row.
+            linking_rows = await conn.fetch(
+                """
+                SELECT id, related_to
+                FROM knowledge.discoveries
+                WHERE related_to && $1::text[]
+                  AND NOT (id = ANY($1::text[]))
+                """,
+                discovery_ids,
+            )
 
+        edges = self._related_edges_to_rebuild(
+            related_rows, [*discovery_rows, *linking_rows], only_touching=set(discovery_ids)
+        )
         async with db.transaction() as conn:
             for row in discovery_rows:
                 await self._import_discovery_row(conn, row)
-            for row in related_rows:
-                cypher, params = create_related_to_edge(
-                    from_discovery_id=row["src_id"],
-                    to_discovery_id=row["dst_id"],
-                    strength=row["weight"],
-                    reason=(row["metadata"] or {}).get("reason") if isinstance(row["metadata"], dict) else None,
-                )
+            for edge in edges:
+                cypher, params = create_related_to_edge(**edge)
                 await db.graph_query(cypher, params, conn=conn)
 
         return {
             "discoveries": len(discovery_rows),
-            "related_edges": len(related_rows),
+            "related_edges": len(edges),
         }
 
     async def _rehydrate_from_postgres(self) -> Dict[str, int]:
@@ -2066,22 +2074,61 @@ class KnowledgeGraphAGE:
                 """
             )
 
+        edges = self._related_edges_to_rebuild(related_rows, discovery_rows)
         async with db.transaction() as conn:
             for row in discovery_rows:
                 await self._import_discovery_row(conn, row)
-            for row in related_rows:
-                cypher, params = create_related_to_edge(
-                    from_discovery_id=row["src_id"],
-                    to_discovery_id=row["dst_id"],
-                    strength=row["weight"],
-                    reason=(row["metadata"] or {}).get("reason") if isinstance(row["metadata"], dict) else None,
-                )
+            for edge in edges:
+                cypher, params = create_related_to_edge(**edge)
                 await db.graph_query(cypher, params, conn=conn)
 
         return {
             "discoveries": len(discovery_rows),
-            "related_edges": len(related_rows),
+            "related_edges": len(edges),
         }
+
+    @staticmethod
+    def _related_edges_to_rebuild(
+        edge_rows, discovery_rows, only_touching: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """RELATED_TO edges for a rebuild, as ``create_related_to_edge`` kwargs.
+
+        Only this backend writes ``knowledge.discovery_edges``. The postgres
+        backend keeps a finding's links in its ``related_to`` array alone, so an
+        install that ran ``postgres`` and then switches to ``age`` has no edge
+        rows for them; the arrays are the record. Edge rows come first (they
+        carry strength and reason), then each array entry not already covered.
+        ``only_touching`` keeps edges with at least one endpoint in that set. An
+        endpoint with no Discovery vertex makes the edge's MATCH a no-op.
+        """
+        edges: List[Dict[str, Any]] = []
+        seen: Set[tuple] = set()
+
+        def add(src, dst, strength=None, reason=None):
+            if not src or not dst or src == dst or (src, dst) in seen:
+                return
+            if only_touching is not None and src not in only_touching and dst not in only_touching:
+                return
+            seen.add((src, dst))
+            edges.append({
+                "from_discovery_id": src,
+                "to_discovery_id": dst,
+                "strength": strength,
+                "reason": reason,
+            })
+
+        for row in edge_rows:
+            metadata = row["metadata"]
+            add(
+                row["src_id"],
+                row["dst_id"],
+                strength=row["weight"],
+                reason=metadata.get("reason") if isinstance(metadata, dict) else None,
+            )
+        for row in discovery_rows:
+            for dst in row.get("related_to") or []:
+                add(row["id"], dst)
+        return edges
 
     async def _import_discovery_row(self, conn, row) -> None:
         """Import one durable PostgreSQL discovery row into AGE without rate limiting."""

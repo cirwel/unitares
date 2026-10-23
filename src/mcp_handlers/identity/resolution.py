@@ -1781,7 +1781,8 @@ async def resolve_session_identity(
     # existing agent and was refused; minting here binds their write to a
     # phantom UUID nobody can ever resolve, with success:true masking the
     # refusal. Fail closed instead; the caller can re-onboard (force_new)
-    # or present a valid continuity_token. force_new callers never set the
+    # or rebind with agent_uuid plus continuity_token via identity(). A token
+    # alone is refused. force_new callers never set the
     # reason (guards live inside the `not force_new` block), so ordinary
     # fresh onboards are untouched.
     if resume_rejected_reason is not None:
@@ -1812,8 +1813,9 @@ async def resolve_session_identity(
                 f"by the identity hijack guard ({resume_rejected_reason}); "
                 f"refusing to silently mint a fresh identity in its place. "
                 f"Re-onboard with force_new=true (declaring parent_agent_id "
-                f"if this continues prior work), or present a valid "
-                f"continuity_token."
+                f"if this continues prior work). If this is the same live "
+                f"process, rebind with identity(agent_uuid=<uuid>, "
+                f"continuity_token=<token>, resume=true)."
             ),
         }
 

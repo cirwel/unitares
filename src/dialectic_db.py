@@ -2348,3 +2348,23 @@ async def get_active_sessions_async(
 async def get_sessions_awaiting_reviewer_async() -> List[Dict[str, Any]]:
     db = await get_dialectic_db()
     return await db.get_sessions_awaiting_reviewer()
+
+
+async def fetch_timeline_dialectic_sessions(
+    conn, *, start, agent_id: Optional[str], limit: int
+) -> list:
+    """Sessions updated since `start`, most recently updated first, for
+    GET /v1/timeline. `agent_id` matches the paused agent or the reviewer."""
+    return await conn.fetch(
+        """
+        SELECT session_id, paused_agent_id, reviewer_agent_id, status,
+               phase, session_type, created_at, updated_at
+        FROM core.dialectic_sessions
+        WHERE updated_at >= $1
+          AND ($2::text IS NULL OR paused_agent_id = $2
+               OR reviewer_agent_id = $2)
+        ORDER BY updated_at DESC
+        LIMIT $3
+        """,
+        start, agent_id, limit,
+    )
