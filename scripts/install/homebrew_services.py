@@ -139,6 +139,9 @@ class Homebrew:
             raise Refusal('This Homebrew service path requires loopback-only listeners.')
         for key in ('UNITARES_LEASE_PLANE_URL', 'LEASE_PLANE_BASE_URL'):
             local_url(config.get(key, 'http://127.0.0.1:8788'), ('http',), lease_port)
+        tokens = [token.strip() for token in config.get('UNITARES_MCP_BEARER_TOKENS', '').split(',') if token.strip()]
+        # Use the service's configuration, never a shell-only client credential.
+        self.health_token = tokens[0] if tokens else config.get('UNITARES_HTTP_API_TOKEN', '')
         self.runtime_env = dict(self.env, **config)
         self.runtime_env['PATH'] = f'{self.prefix}/opt/postgresql@17/bin:{self.env.get("PATH", "")}'
         self.ports = dict(zip(SERVICES, (5432, 6379, lease_port, 8767)))
@@ -226,10 +229,13 @@ class Homebrew:
                 self.wait_port(name, timeout)
             end = time.monotonic() + timeout
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            headers = {'Authorization': 'Bearer ' + self.health_token} if self.health_token else {}
+            request = urllib.request.Request('http://127.0.0.1:8767/health/deep', headers=headers)
             while time.monotonic() < end:
                 try:
-                    with opener.open('http://127.0.0.1:8767/health/deep', timeout=2) as response:
-                        status = json.load(response).get('status')
+                    with opener.open(request, timeout=2) as response:
+                        payload = json.load(response)
+                        status = payload.get('status') if isinstance(payload, dict) else None
                     if status in ('healthy', 'moderate'):
                         print(f'Deep health: {status}')
                         return

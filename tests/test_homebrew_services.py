@@ -264,7 +264,44 @@ def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, exp
         wrapper.parent.mkdir()
         wrapper.write_text('#!/bin/sh\n')
         wrapper.chmod(0o755)
-    args = [str(cli), action] + (['--homebrew'] if explicit else []) + ['--check']
+    options = ['--no-follow', '--tail', '2'] if action == 'logs' else ['--check']
+    args = [str(cli), action] + (['--homebrew'] if explicit else []) + options
     result = subprocess.run(args, capture_output=True, text=True, env=dict(os.environ, HOME=str(tmp_path)))
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [action, '--check']
+    assert json.loads(result.stdout) == [action, *options]
+
+
+@pytest.mark.parametrize('settings,expected', [
+    ("UNITARES_MCP_BEARER_TOKENS=' ,native-first, native-rotated'\nUNITARES_HTTP_API_TOKEN=local-token\n", 'Bearer native-first'),
+    ('UNITARES_HTTP_API_TOKEN=local-token\n', 'Bearer local-token'),
+    ('', None),
+])
+def test_health_uses_service_credentials_without_logging_them(manager, monkeypatch, capsys, settings, expected):
+    brew, _, _ = manager
+    brew.config.write_text(CONFIG + settings)
+    brew.env['UNITARES_MCP_BEARER_TOKENS'] = 'shell-only-token'
+    brew.env['UNITARES_HTTP_API_TOKEN'] = 'shell-only-api-token'
+    requests = []
+    def authenticated(request, **kwargs):
+        requests.append(request)
+        assert request.full_url == 'http://127.0.0.1:8767/health/deep'
+        assert request.get_header('Authorization') == expected
+        return io.StringIO('{"status":"healthy"}')
+    monkeypatch.setattr(native.urllib.request, 'build_opener', lambda *args: SimpleNamespace(open=authenticated))
+    brew.start()
+    assert len(requests) == 1
+    output = capsys.readouterr()
+    for secret in ('native-first', 'native-rotated', 'local-token', 'shell-only'):
+        assert secret not in output.out + output.err
+
+
+def test_invalid_health_payload_times_out_and_cleans_new_writers(manager, monkeypatch):
+    brew, records, calls = manager
+    ticks = iter((0, 0, 2))
+    monkeypatch.setattr(native.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(native.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(native.urllib.request, 'build_opener', lambda *args: SimpleNamespace(open=lambda *a, **k: io.StringIO('[]')))
+    with pytest.raises(native.Refusal, match='deep health'):
+        brew.start(timeout=1)
+    assert not records['unitares']['running'] and not records['unitares-lease-plane']['running']
+    assert calls[-2:] == [('services', 'stop', 'unitares'), ('services', 'stop', 'unitares-lease-plane')]
