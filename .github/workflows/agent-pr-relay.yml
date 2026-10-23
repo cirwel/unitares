@@ -116,11 +116,13 @@ jobs:
             agent/gemini) COLOUR=4285f4 DESCRIPTION="Opened by an agent running a Gemini model (agy)" ;;
             *) MODEL_LABEL="" ;;
           esac
+          # Created only when missing, so a colour set in the repository stays.
           if [ -n "$MODEL_LABEL" ]; then
             gh label create "$MODEL_LABEL" --repo "$REPO" --color "$COLOUR" \
-              --description "$DESCRIPTION" --force > /dev/null || true
+              --description "$DESCRIPTION" > /dev/null 2>&1 || true
           fi
-          jq -c --arg model "$MODEL_LABEL" '{labels: ([.labels[].name | select(. != "approved-to-merge" and . != "operator-armed")] + ["agent-via-operator-login"] + (if $model == "" then [] else [$model] end) | unique)}' \
+          # A copied family label gives way to the one the signature names.
+          jq -c --arg model "$MODEL_LABEL" '{labels: ([.labels[].name | select(. != "approved-to-merge" and . != "operator-armed" and (test("^agent/(claude|gpt|gemini)$") | not))] + ["agent-via-operator-login"] + (if $model == "" then [] else [$model] end) | unique)}' \
             "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/labels.json"
           GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/issues/$NEW/labels" \
             --input "$RUNNER_TEMP/labels.json" > /dev/null || echo "::warning::Labels were not copied to #$NEW."
