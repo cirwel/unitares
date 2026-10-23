@@ -171,6 +171,10 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
 
     with (
         patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="agent-a",
+        ),
+        patch(
             "src.mcp_handlers.knowledge.handlers.require_registered_agent",
             return_value=("agent-a", None),
         ),
@@ -223,6 +227,10 @@ async def test_promote_memory_rejects_memory_only_corroboration():
 
     with (
         patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="agent-a",
+        ),
+        patch(
             "src.mcp_handlers.knowledge.handlers.require_registered_agent",
             return_value=("agent-a", None),
         ),
@@ -270,6 +278,10 @@ async def test_promote_memory_claim_refused_while_paused():
     )
 
     with (
+        patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="agent-a",
+        ),
         patch(
             "src.mcp_handlers.knowledge.handlers.require_registered_agent",
             return_value=("agent-a", None),

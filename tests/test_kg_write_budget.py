@@ -37,65 +37,153 @@ def make_discovery(agent_id: str = "agent-1") -> DiscoveryNode:
     )
 
 
-def make_limiter(allowed: bool, count: int = 99) -> MagicMock:
-    limiter = MagicMock()
-    limiter.check = AsyncMock(return_value=allowed)
-    limiter.get_count = AsyncMock(return_value=count)
-    limiter.record = AsyncMock()
-    return limiter
+def make_conn(*fetchvals) -> MagicMock:
+    """A connection whose transaction() is an async context manager."""
+    conn = MagicMock()
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=None)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+    conn.fetchval = AsyncMock(side_effect=list(fetchvals))
+    conn.execute = AsyncMock()
+    return conn
 
 
 class TestCheckStoreBudget:
 
     @pytest.mark.asyncio
-    async def test_records_the_write_when_under_budget(self):
-        limiter = make_limiter(allowed=True)
-        with patch("src.cache.get_rate_limiter", return_value=limiter):
-            await check_store_budget("agent-1", db=MagicMock())
+    async def test_charges_the_postgres_ledger(self):
+        conn = make_conn("agent-1")  # guarded INSERT returned a row
+        await check_store_budget("agent-1", db=MagicMock(), conn=conn)
 
-        limiter.record.assert_awaited_once()
-        assert limiter.check.await_args.kwargs["limit"] == DEFAULT_STORES_PER_HOUR
-        assert limiter.check.await_args.kwargs["operation"] == "kg_store"
+        assert "INSERT INTO audit.rate_limits" in conn.fetchval.await_args.args[0]
+        assert conn.fetchval.await_args.args[3] == DEFAULT_STORES_PER_HOUR
 
     @pytest.mark.asyncio
     async def test_raises_when_budget_spent(self):
-        limiter = make_limiter(allowed=False, count=20)
-        with patch("src.cache.get_rate_limiter", return_value=limiter):
-            with pytest.raises(WriteBudgetExceeded, match="has stored 20"):
-                await check_store_budget("agent-1", db=MagicMock())
-
-        limiter.record.assert_not_awaited()
+        conn = make_conn(None, 20)  # INSERT blocked, then the count
+        with pytest.raises(WriteBudgetExceeded, match="has stored 20"):
+            await check_store_budget("agent-1", db=MagicMock(), conn=conn)
 
     @pytest.mark.asyncio
     async def test_stays_a_valueerror_for_existing_handlers(self):
         """Callers predating this module catch ValueError; keep that working."""
-        limiter = make_limiter(allowed=False)
-        with patch("src.cache.get_rate_limiter", return_value=limiter):
-            with pytest.raises(ValueError):
-                await check_store_budget("agent-1", db=MagicMock())
+        with pytest.raises(ValueError):
+            await check_store_budget("agent-1", db=MagicMock(), conn=make_conn(None, 20))
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_postgres_when_redis_unavailable(self):
-        conn = MagicMock()
-        conn.fetchval = AsyncMock(return_value="agent-1")  # insert succeeded
-        conn.execute = AsyncMock()
-
-        with patch("src.cache.get_rate_limiter", side_effect=RuntimeError("no redis")):
-            await check_store_budget("agent-1", db=MagicMock(), conn=conn)
-
-        assert conn.fetchval.await_count == 1
-        assert "audit.rate_limits" in conn.fetchval.await_args.args[0]
-
-    @pytest.mark.asyncio
-    async def test_postgres_fallback_raises_when_insert_blocked(self):
-        conn = MagicMock()
-        # First fetchval = the guarded INSERT (None -> blocked), second = the count.
-        conn.fetchval = AsyncMock(side_effect=[None, 20])
-        conn.execute = AsyncMock()
-
-        with patch("src.cache.get_rate_limiter", side_effect=RuntimeError("no redis")):
+    async def test_a_redis_allow_does_not_skip_the_ledger(self):
+        """Regression: a Redis fast path answered "allowed" (always, with no
+        Redis) and returned before the PostgreSQL ledger, so the budget was not
+        enforced. Even a limiter that admits everything must not bypass it."""
+        admit_all = MagicMock()
+        admit_all.check = AsyncMock(return_value=True)
+        admit_all.record = AsyncMock()
+        admit_all.get_count = AsyncMock(return_value=0)
+        conn = make_conn(None, 20)  # the ledger is spent
+        with patch("src.cache.get_rate_limiter", return_value=admit_all):
             with pytest.raises(WriteBudgetExceeded, match="has stored 20"):
                 await check_store_budget("agent-1", db=MagicMock(), conn=conn)
+
+    @pytest.mark.asyncio
+    async def test_prune_is_bounded_and_never_waits(self):
+        conn = make_conn("agent-1")
+        await check_store_budget("agent-1", db=MagicMock(), conn=conn)
+        prune_sql = conn.execute.await_args_list[-1].args[0]
+        assert "DELETE FROM audit.rate_limits" in prune_sql
+        assert "SKIP LOCKED" in prune_sql and "LIMIT $2" in prune_sql
+
+    @pytest.mark.asyncio
+    async def test_serializes_the_agent_before_counting(self):
+        conn = make_conn("agent-1")
+        await check_store_budget("agent-1", db=MagicMock(), conn=conn)
+
+        conn.transaction.assert_called_once()
+        lock_sql, lock_key = conn.execute.await_args_list[0].args
+        assert "pg_advisory_xact_lock" in lock_sql and lock_key == "kg-store-budget:agent-1"
+
+    @pytest.mark.asyncio
+    async def test_uses_the_callers_connection_when_given(self):
+        db = MagicMock()
+        await check_store_budget("agent-1", db=db, conn=make_conn("agent-1"))
+        db.acquire.assert_not_called()
+
+
+class TestPostgresBudgetLive:
+    """Against a real database: a store racing an uncommitted one may not overshoot."""
+
+    @pytest.mark.asyncio
+    async def test_store_racing_an_uncommitted_charge_is_refused(self, live_postgres_backend):
+        """Deterministic interleaving of the race the advisory lock closes.
+
+        A charges the 20th unit inside a transaction it holds open. Under READ
+        COMMITTED, B's guarded INSERT cannot see A's uncommitted row, so without
+        the lock B counts 19 and is admitted too (21 in the hour). With it, B
+        blocks on the lock (observed in pg_locks, not assumed from a sleep),
+        then counts 20 after A commits and is refused.
+        """
+        import asyncio
+        import uuid as _uuid
+
+        agent = f"budget-race-{_uuid.uuid4().hex[:12]}"
+        db = live_postgres_backend
+
+        async def advisory_waiters() -> int:
+            """Waiters on THIS agent's budget lock: a bigint advisory key is
+            split into classid (high 32 bits) and objid (low 32 bits)."""
+            async with db.acquire() as probe:
+                return await probe.fetchval(
+                    "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
+                    "AND classid::bigint = (hashtextextended($1, 0) >> 32) & 4294967295 "
+                    "AND objid::bigint = hashtextextended($1, 0) & 4294967295",
+                    f"kg-store-budget:{agent}",
+                )
+
+        try:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO audit.rate_limits (agent_id, timestamp) "
+                    "SELECT $1, clock_timestamp() - make_interval(secs => g) "
+                    "FROM generate_series(1, $2) AS g",
+                    agent, DEFAULT_STORES_PER_HOUR - 1,
+                )
+            async with db.acquire() as conn_a:
+                async with conn_a.transaction():
+                    await check_store_budget(agent, db=db, conn=conn_a)  # the 20th
+                    racer = asyncio.ensure_future(check_store_budget(agent, db=db))
+                    for _ in range(100):
+                        if racer.done() or await advisory_waiters():
+                            break
+                        await asyncio.sleep(0.05)
+                    assert not racer.done(), "the racing store ran while the 20th was uncommitted"
+                    assert await advisory_waiters() >= 1, "the racing store never waited on the lock"
+            with pytest.raises(WriteBudgetExceeded):
+                await asyncio.wait_for(racer, timeout=10)
+        finally:
+            async with db.acquire() as conn:
+                await conn.execute("DELETE FROM audit.rate_limits WHERE agent_id = $1", agent)
+
+    @pytest.mark.asyncio
+    async def test_future_dated_rows_do_not_count(self, live_postgres_backend):
+        """An older version wrote the application host's naive clock; on a host
+        ahead of the database those rows sit in the future and must not lock the
+        agent out until the database clock catches up."""
+        import uuid as _uuid
+
+        agent = f"budget-skew-{_uuid.uuid4().hex[:12]}"
+        db = live_postgres_backend
+        try:
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO audit.rate_limits (agent_id, timestamp) "
+                    "SELECT $1, clock_timestamp() + make_interval(mins => g) "
+                    "FROM generate_series(1, $2) AS g",
+                    agent, DEFAULT_STORES_PER_HOUR,
+                )
+            await check_store_budget(agent, db=db)  # admitted despite 20 future rows
+        finally:
+            async with db.acquire() as conn:
+                await conn.execute("DELETE FROM audit.rate_limits WHERE agent_id = $1", agent)
 
 
 class TestPostgresBackendChargesBudget:
