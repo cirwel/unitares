@@ -339,6 +339,15 @@ class TestRunKgAudit:
 class TestHandleAuditKnowledgeGraph:
     """Tests for the MCP handler wrapper."""
 
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Audit refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_handler_returns_success(self):
         """Handler should return success response with audit data."""
@@ -373,12 +382,15 @@ class TestHandleAuditKnowledgeGraph:
                        "thresholds": {},
                    }) as mock_audit:
             from src.mcp_handlers.knowledge.handlers import handle_audit_knowledge_graph
-            await handle_audit_knowledge_graph({
-                "scope": "all",
-                "top_n": "5",
-                "use_model": "true",
-                "agent_id": "test-agent",
-            })
+            # The caller is bound as test-agent; an unproven agent_id is refused.
+            with patch("src.mcp_handlers.context.get_context_resolved_agent_id",
+                       return_value="test-agent"):
+                await handle_audit_knowledge_graph({
+                    "scope": "all",
+                    "top_n": "5",
+                    "use_model": "true",
+                    "agent_id": "test-agent",
+                })
 
         mock_audit.assert_called_once_with(
             scope="all",
