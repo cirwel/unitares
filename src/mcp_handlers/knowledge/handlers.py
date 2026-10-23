@@ -1345,24 +1345,31 @@ def _inferred_binding_untrusted(inferred_exempt: Optional[bool]) -> bool:
     return get_session_proof_origin() == "server_inferred" and not inferred_exempt
 
 
-def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
+def _inferred_binding_refusal(
+    *, update: bool = False, action: Optional[str] = None
+) -> TextContent:
     """The strict gate's refusal, for a gated write on an inferred binding.
 
     ``update`` names the update tool in the retry routes, so a refused update
     is not sent to the store tool (which would mint a second finding).
+    ``action`` names any other knowledge action, so its retry repeats it.
     """
     from ..context import get_session_proof_origin, get_session_resolution_source
     from ..identity_bootstrap import inferred_binding_refusal_payload
 
+    if action:
+        retry_call, retry_label = "knowledge", f"knowledge(action='{action}')"
+    elif update:
+        retry_call = "update_finding"
+        retry_label = "update_finding / knowledge(action='update')"
+    else:
+        retry_call = "store_finding"
+        retry_label = "store_finding / knowledge(action='store')"
     return success_response(
         inferred_binding_refusal_payload(
             "knowledge",
-            retry_call="update_finding" if update else "store_finding",
-            retry_label=(
-                "update_finding / knowledge(action='update')"
-                if update
-                else "store_finding / knowledge(action='store')"
-            ),
+            retry_call=retry_call,
+            retry_label=retry_label,
             identity_assurance=None,
             read_only_option={
                 "action": "stay_read_only",
@@ -1554,7 +1561,7 @@ def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
 
 
 def _gated_write_refused_on_inferred_binding(
-    inferred_exempt: Optional[bool], *, update: bool = False
+    inferred_exempt: Optional[bool], *, update: bool = False, action: Optional[str] = None
 ) -> Optional[TextContent]:
     """The refusal for a high or critical write on an untrusted inferred binding.
 
@@ -1567,11 +1574,11 @@ def _gated_write_refused_on_inferred_binding(
     from ..identity_bootstrap import is_strict_identity_required
 
     if _inferred_binding_untrusted(inferred_exempt) and is_strict_identity_required():
-        return _inferred_binding_refusal(update=update)
+        return _inferred_binding_refusal(update=update, action=action)
     return None
 
 
-def _requires_proven_writer(handler):
+def _requires_proven_writer(action: str):
     """``_requires_proven_agent_id`` plus the inferred-binding refusal.
 
     For identity-gated knowledge handlers that reach their writes without the
@@ -1582,19 +1589,25 @@ def _requires_proven_writer(handler):
     resolved agent is exempt from caller proof (a substrate resident). These
     handlers have no anonymous writer, so under strict identity they need a
     resolved binding: a missing agent_id or the anonymous pseudonym is refused
-    like any other unproven agent_id.
+    like any other unproven agent_id. ``action`` is the knowledge action the
+    handler serves, which the refusal's retry repeats.
     """
 
-    @wraps(handler)
-    async def guarded(arguments: Dict[str, Any], *args, **kwargs):
-        refusal = _unproven_agent_id_refusal(arguments, administrative=True)
-        if refusal is None:
-            refusal = _gated_write_refused_on_inferred_binding(
-                await _inferred_writer_exempt(), update=True
-            )
-        if refusal is not None:
-            return [refusal]
-        return await handler(arguments, *args, **kwargs)
+    def decorate(handler):
+        @wraps(handler)
+        async def guarded(arguments: Dict[str, Any], *args, **kwargs):
+            refusal = _unproven_agent_id_refusal(arguments, administrative=True)
+            if refusal is None:
+                refusal = _gated_write_refused_on_inferred_binding(
+                    await _inferred_writer_exempt(), action=action
+                )
+            if refusal is not None:
+                return [refusal]
+            return await handler(arguments, *args, **kwargs)
+
+        return guarded
+
+    return decorate
 
     return guarded
 
@@ -6039,7 +6052,7 @@ async def handle_leave_note(
 
 
 @mcp_tool("cleanup_knowledge_graph", timeout=60.0, register=False)
-@_requires_proven_writer
+@_requires_proven_writer("cleanup")
 async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Run knowledge graph lifecycle cleanup.
 
@@ -6074,7 +6087,7 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
         return [error_response(f"Failed to run lifecycle cleanup: {str(e)}")]
 
 @mcp_tool("synthesize_knowledge_graph", timeout=120.0, register=False)
-@_requires_proven_writer
+@_requires_proven_writer("synthesize")
 async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compound discrete discoveries into rolled-up topic summaries (Issue #1).
 
@@ -6344,7 +6357,7 @@ async def _supersede_flip_details(
 
 
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
-@_requires_proven_writer
+@_requires_proven_writer("supersede")
 async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Mark a discovery as superseding another.
 
@@ -6439,7 +6452,7 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
 
 
 @mcp_tool("promote_memory_claim", timeout=20.0, register=False)
-@_requires_proven_writer
+@_requires_proven_writer("promote")
 async def handle_promote_memory_claim(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -6642,7 +6655,7 @@ async def handle_promote_memory_claim(
 
 
 @mcp_tool("audit_knowledge_graph", timeout=60.0, register=False)
-@_requires_proven_writer
+@_requires_proven_writer("audit")
 async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Audit knowledge graph for staleness and health.
 

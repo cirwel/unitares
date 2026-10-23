@@ -670,6 +670,14 @@ GATED_HANDLERS = [
     ("handle_audit_knowledge_graph", {"scope": "all"}),
 ]
 
+GATED_ACTIONS = {
+    "handle_supersede_discovery": "supersede",
+    "handle_cleanup_knowledge_graph": "cleanup",
+    "handle_synthesize_knowledge_graph": "synthesize",
+    "handle_promote_memory_claim": "promote",
+    "handle_audit_knowledge_graph": "audit",
+}
+
 
 class TestEveryGatedHandlerRefuses:
 
@@ -889,6 +897,11 @@ class TestServerInferredBindingOnUngatedHandlers:
         assert data.get("refused") is True, data
         mock_graph.supersede_discovery.assert_not_called()
         mock_graph.update_discovery.assert_not_called()
+        # The retry repeats the refused action, not a store or an update.
+        action = GATED_ACTIONS[handler_name]
+        assert f"knowledge(action='{action}')" in data["next_step"], data["next_step"]
+        calls = " ".join(option.get("call", "") for option in data["safe_options"])
+        assert "update_finding" not in calls and "store_finding" not in calls, calls
 
     @pytest.mark.asyncio
     async def test_exempt_resident_inferred_binding_still_supersedes(self, patch_common, inferred):
