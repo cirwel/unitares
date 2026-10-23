@@ -1382,7 +1382,9 @@ def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
     )[0]
 
 
-def _unproven_agent_id_refusal(arguments: Dict[str, Any]) -> Optional[TextContent]:
+def _unproven_agent_id_refusal(
+    arguments: Dict[str, Any], *, allow_pseudonym: bool = True
+) -> Optional[TextContent]:
     """Refuse a write naming an agent_id this call has not proven, under strict identity.
 
     An explicit ``agent_id`` with no resolved binding is the caller's word
@@ -1392,7 +1394,9 @@ def _unproven_agent_id_refusal(arguments: Dict[str, Any]) -> Optional[TextConten
     update could edit or close another agent's finding. Bound callers are
     unaffected: dispatch injects their own id, and ``inject_identity`` already
     refuses a different one. The anonymous pseudonym this module derives is
-    let through when it is written back into the same arguments.
+    let through when it is written back into the same arguments, unless
+    ``allow_pseudonym`` is false: a pseudonym is an anonymous writer's label,
+    not an identity, so it never authorizes an administrative write.
     """
     from ..context import (
         get_context_resolved_agent_id,
@@ -1409,7 +1413,7 @@ def _unproven_agent_id_refusal(arguments: Dict[str, Any]) -> Optional[TextConten
     claimed = arguments.get("agent_id")
     if not claimed or get_context_resolved_agent_id():
         return None
-    if str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX):
+    if allow_pseudonym and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX):
         rest = {k: v for k, v in arguments.items() if k != "agent_id"}
         if claimed == _derive_anonymous_writer_id(rest):
             return None
@@ -1565,12 +1569,14 @@ def _requires_proven_writer(handler):
     audit). A server-inferred binding (same address and User-Agent as some
     agent) is not proof that the caller is that agent, so under strict
     identity it is refused the way a high or critical write is, unless the
-    resolved agent is exempt from caller proof (a substrate resident).
+    resolved agent is exempt from caller proof (a substrate resident). These
+    handlers have no anonymous writer, so the anonymous pseudonym is refused
+    like any other unproven agent_id.
     """
 
     @wraps(handler)
     async def guarded(arguments: Dict[str, Any], *args, **kwargs):
-        refusal = _unproven_agent_id_refusal(arguments)
+        refusal = _unproven_agent_id_refusal(arguments, allow_pseudonym=False)
         if refusal is None:
             refusal = _gated_write_refused_on_inferred_binding(
                 await _inferred_writer_exempt(), update=True

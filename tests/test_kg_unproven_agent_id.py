@@ -686,6 +686,24 @@ class TestEveryGatedHandlerRefuses:
         mock_graph.add_discovery.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_name,args", GATED_HANDLERS, ids=[h for h, _ in GATED_HANDLERS])
+    async def test_own_derived_pseudonym_is_refused(self, patch_common, unbound, handler_name, args):
+        # The pseudonym an anonymous store would be written under, re-derived
+        # from these same arguments, is a label and not an identity: it must
+        # not authorize an administrative write.
+        _, mock_graph = patch_common
+        import src.mcp_handlers.knowledge.handlers as handlers
+
+        pseudonym = handlers._derive_anonymous_writer_id(dict(args))
+        assert pseudonym.startswith(handlers._ANONYMOUS_WRITER_PREFIX)
+        result = await getattr(handlers, handler_name)({**args, "agent_id": pseudonym})
+
+        _assert_unproven_refusal(parse_result(result))
+        mock_graph.supersede_discovery.assert_not_called()
+        mock_graph.update_discovery.assert_not_called()
+        mock_graph.add_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_supersede_without_notes_through_the_router_is_refused(self, patch_common, unbound):
         _, mock_graph = patch_common
         from src.mcp_handlers.consolidated import handle_knowledge
