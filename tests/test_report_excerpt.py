@@ -236,6 +236,6 @@ def test_long_values_and_compound_names_are_redacted(text, secret):
     assert secret not in scrub_credentials(text)
 
 
-def test_basic_in_prose_survives():
-    text = "basic authentication was the cause; Basic understanding helps"
+def test_basic_and_bearer_in_prose_survive():
+    text = "basic authentication was the cause; Fixed the Bearer authentication middleware"
     assert scrub_credentials(text) == text

@@ -56,9 +56,12 @@ _SECRET_PATTERNS = (
     # Credentials inside a URL: scheme://user:pass@host (the password may hold '@').
     re.compile(r"(?<=://)[^/\s:@]{1,128}:[^/\s]{1,256}(?=@[^/\s@]{1,256})"),
 )
-# `Bearer <token>` in any case; `Basic <base64>` only capitalised and with a
-# digit or base64 padding, so "basic authentication was the cause" survives.
-_BEARER = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]{12,1024}=*")
+# `Bearer <token>` in any case and `Basic <base64>` only capitalised, each
+# needing a digit or token punctuation in the value, so "the Bearer
+# authentication middleware" and "basic authentication" survive.
+_BEARER = re.compile(
+    r"(?i)\b(bearer\s+)(?=[A-Za-z0-9._~+/\-]{0,1023}[0-9=._~+/\-])[A-Za-z0-9._~+/\-]{12,1024}=*"
+)
 _BASIC = re.compile(r"\b(Basic\s+)(?=[A-Za-z0-9+/]{0,1023}(?:[0-9]|=))[A-Za-z0-9+/]{12,1024}=*")
 # `name=value`, `name: value`, `"name": "value"` where the NAME ENDS in a
 # secret-looking word, so `max_tokens=200000`, `test_token_refresh.py::x` and
