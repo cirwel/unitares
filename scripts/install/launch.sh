@@ -151,11 +151,11 @@ if [ "$separate" = 1 ]; then
             /^[[:space:]]*#/ { next }
             { line=$0; sub(/^[[:space:]]*export[[:space:]]+/, "", line)
               if (line ~ ("^[[:space:]]*" key "([[:space:]]*(#.*)?)?$")) invalid=1
+              if (line ~ ("^[[:space:]]*" key "[[:space:]]*:")) invalid=1
               pos=index(line, "="); name=substr(line, 1, pos-1)
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
               if (pos && name==key) {
-                  # Detect every Compose-style assignment, but accept only
-                  # the syntax the existing CLI port reader also recognizes.
+                  # Reject assignment forms the CLI port reader skips.
                   if ($0 !~ ("^[[:space:]]*" key "=")) invalid=1
                   value=substr(line, pos+1)
               } }
@@ -171,6 +171,19 @@ if [ "$separate" = 1 ]; then
         [ "$saved" = "$expected" ] \
             || fail "Set the literal $key=$expected in $stack/.env before retrying; existing configuration was not changed"
     done
+    # Check a later invocation without this command's port overrides resolves
+    # identically. Compare Compose's complete config internally: line-reading
+    # `config --environment` is ambiguous when a value contains newlines.
+    # Never print these configurations, which may contain credentials.
+    explicit_config=$(docker compose --project-directory "$stack" config) \
+        || fail 'Cannot resolve the Compose configuration; no services were started'
+    saved_config=$(
+        unset GOVERNANCE_HOST_PORT LEASE_PLANE_HOST_PORT
+        docker compose --project-directory "$stack" config
+    ) || fail 'Cannot resolve the saved Compose configuration; no services were started'
+    [ "$saved_config" = "$explicit_config" ] \
+        || fail "Compose and the CLI disagree on saved ports; use single literal assignments in $stack/.env before retrying"
+    unset explicit_config saved_config
 fi
 cd "$stack"
 printf 'Installation: Docker Compose\nInstalled: %s\nCheckout: %s\n' "$installed" "$stack"

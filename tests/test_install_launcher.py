@@ -40,6 +40,9 @@ case "$*" in
     [ "${TEST_UNLABELLED:-0}" = 1 ] && exit 0
     [ -n "${TEST_OWNER:-}" ] || exit 1
     printf '%s' "$TEST_OWNER"; exit 0 ;;
+  "compose --project-directory"*"config")
+    printf 'server: %s\\nlease: %s\\n' "${GOVERNANCE_HOST_PORT:-${TEST_SAVED_SERVER_PORT:-18767}}" "${LEASE_PLANE_HOST_PORT:-${TEST_SAVED_LEASE_PORT:-18788}}"
+    exit "${TEST_CONFIG_RC:-0}" ;;
   "compose pull"*) exit "${TEST_PULL_RC:-0}" ;;
   "compose up"*) printf '%s %s' "${GOVERNANCE_HOST_PORT:-}" "${LEASE_PLANE_HOST_PORT:-}" > "$TEST_PORTS_LOG" ;;
   *exec*) cat > "$TEST_HEALTH_CODE"; exit "${TEST_HEALTH_RC:-0}" ;;
@@ -275,6 +278,8 @@ def test_separate_refuses_port_forms_the_cli_cannot_resolve(launcher, value):
     'export GOVERNANCE_HOST_PORT=8767\nGOVERNANCE_HOST_PORT=18767',
     'GOVERNANCE_HOST_PORT=18767\nGOVERNANCE_HOST_PORT',
     'GOVERNANCE_HOST_PORT=18767\nexport GOVERNANCE_HOST_PORT # unset',
+    'GOVERNANCE_HOST_PORT=18767\nGOVERNANCE_HOST_PORT: 8767',
+    'GOVERNANCE_HOST_PORT=18767\nexport GOVERNANCE_HOST_PORT : 8767',
 ])
 def test_separate_refuses_assignments_the_cli_skips(launcher, assignment):
     stack, _, launch = launcher
@@ -284,6 +289,28 @@ def test_separate_refuses_assignments_the_cli_skips(launcher, assignment):
     result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
     assert result.returncode != 0
     assert (stack / '.env').read_text() == config
+
+
+def test_separate_checks_compose_resolution_without_port_overrides(launcher):
+    stack, env, launch = launcher
+    assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
+    # The CLI sees the port inside the quoted value; Compose does not.
+    config = "GOVERNANCE_HOST_PORT=8767\nNOTE='multiline\nGOVERNANCE_HOST_PORT=18767\n'\nLEASE_PLANE_HOST_PORT=18788\n"
+    (stack / '.env').write_text(config)
+    Path(env['TEST_DOCKER_LOG']).write_text('')
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788', TEST_SAVED_SERVER_PORT='8767')
+    assert result.returncode != 0
+    assert 'Compose and the CLI disagree' in result.stderr
+    assert 'compose pull' not in Path(env['TEST_DOCKER_LOG']).read_text()
+    assert (stack / '.env').read_text() == config
+
+
+def test_separate_refuses_failed_compose_resolution_even_with_partial_output(launcher):
+    _, env, launch = launcher
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788', TEST_CONFIG_RC='1')
+    assert result.returncode != 0
+    assert 'Cannot resolve the Compose configuration' in result.stderr
+    assert 'compose pull' not in Path(env['TEST_DOCKER_LOG']).read_text()
 
 
 def test_pull_failure_stops_before_up(launcher):
