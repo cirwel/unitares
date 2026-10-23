@@ -419,6 +419,28 @@ consult) or `no_later_activity`. The outcome
 describes the record, not the agent's view of itself, and a compaction without
 a usable binding cannot be recorded, so it does not appear.
 
+The agent's view is recorded beside it where an adapter asks for it. An
+opt-in continuity probe puts one question to the agent in the compaction
+context: same running process, new process, or cannot tell. The adapter then
+reads the agent's answer from the end of that turn and records it on the same
+route (`observation_kind="context_compaction_probe"`), keyed to the
+compaction by the identity and time it was recorded on. Any bound identity can
+post an answer naming any compaction, so the report counts only answers from
+the compacted identity or a `spawn_reason="compaction"` child it minted after
+that compaction; others are ignored and counted. A turn that ends
+without an answer is recorded as `no_answer`, which is the hook's note, not
+the agent's report. The report shows each answer beside its outcome and counts
+how often they are consistent: `same_process` with `kept`, `new_process` with
+`minted`. Consistency is not accuracy, for two reasons. The question is asked
+with the compaction guidance above in the same context (`guidance_present`),
+so the probe cannot read what an agent would say unprompted. And `kept` is
+mostly the hook's doing: the Stop hook that records the answer then checks in
+on the cached identity. So `same_process` beside `kept` is what guidance and
+hook produce together. The informative cells are the others. A `same_process`
+answer beside a `minted` outcome points to a mechanical cause, such as a
+reconstructed `client_session_id`, rather than a belief. A `new_process` or
+`cannot_tell` answer is the agent departing from the guidance it was given.
+
 ### Cross-role lineage envelope (role families)
 
 Lineage declaration is gated at onboard by a cross-role pre-check
