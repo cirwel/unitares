@@ -2011,8 +2011,20 @@ async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
         )
 
 
+def _auto_link_requested(value: Any) -> bool:
+    """Whether a store links the new row to similar ones. On unless explicitly false.
+
+    The params middleware validates through a Pydantic model whose
+    ``auto_link_related`` defaults to None and then merges ``model_dump()`` back
+    into the arguments, so an unsent flag arrives as a present None. Reading it
+    with ``.get(..., True)`` therefore saw None and skipped linking for every
+    validated store; a string "false" read raw was truthy the other way round.
+    """
+    return _optional_flag(value) is not False
+
+
 async def _link_similar_store_discoveries(state: _KnowledgeStoreState) -> None:
-    if not state.request.arguments.get("auto_link_related", True):
+    if not _auto_link_requested(state.request.arguments.get("auto_link_related")):
         return
     from .synthesis import is_rollup
 
@@ -5673,7 +5685,7 @@ async def _persist_batch_discovery(
     discovery = prepared.discovery
     _annotate_knowledge_confidence_authority(discovery)
 
-    if disc_data.get("auto_link_related", True):
+    if _auto_link_requested(disc_data.get("auto_link_related")):
         similar = await graph.find_similar(discovery, limit=3)
         discovery.related_to = [item.id for item in similar]
 
