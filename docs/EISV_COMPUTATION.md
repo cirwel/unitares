@@ -221,8 +221,10 @@ identity of EISV itself.
   proceeds). Verdict-level structural pauses for such states come from the
   diagnostic-ODE side of `monitor_decision.py` (basin/void/coherence pauses),
   which tracks the behavioral signal only through the sensor spring coupling,
-  with lag. Whether a lone floor breach should force at least `caution` is an
-  open calibration question — issue #1995.
+  with lag. Issue #1995 closed under Option 1 on 2026-10-23 keeping floors as
+  component bounds after the 2026-09-13 wake read (8,857 check-ins, 0 baselined
+  E/I/S breach-and-safe rows; 59 boundary |V| rows on one agent where an
+  un-hysteretic floor would induce false CIRS resonance).
 - Issue #1995 is measured without changing that policy. Every check-in adds a
   versioned `behavioral.absolute_floor_observation.v1` object to the full result
   at `behavioral.assessment.absolute_floor_observation` and to the existing
