@@ -15,6 +15,12 @@ plist the bearer is read exactly where the wrapper reads it: the job's
 and the one ``elixir/sentinel/scripts/start.sh`` and ``deploy-lease-plane.sh``
 source (``UNITARES_SECRETS_ENV``, else ``~/.config/unitares/secrets.env``, else
 the cirwel file).
+
+The governance plist may also keep no bearer at all, when its job loads the
+bearer from a store outside the plist before exec'ing the server. Then
+``check`` asks the running service, over the per-user socket, whether it
+accepts the Sentinel's bearer, and ``render`` requires a wrapped Sentinel,
+since there is no value to copy.
 """
 
 from __future__ import annotations
@@ -275,8 +281,22 @@ def _valid_token(value: object) -> bool:
     )
 
 
-def _governance_token(path: Path) -> str:
+def _governance_token(path: Path) -> str | None:
+    """The governance bearer, or None when the plist keeps none at all.
+
+    A governance job may launch through a program that loads the bearer from
+    a store outside the plist (an OS keychain, say) and exports it before
+    exec'ing the server. Such a plist names neither the key nor the secrets
+    wrapper, so there is nothing here to compare against; callers check the
+    bearer against the running service instead. A key that is present but
+    empty or a placeholder is still refused.
+    """
     payload = _load_plist(path)
+    environment = payload.get("EnvironmentVariables")
+    if not isinstance(environment, dict):
+        environment = {}
+    if HTTP_TOKEN_KEY not in environment and HTTP_TOKEN_KEY not in _wrapped_keys(payload):
+        return None
     token = _token_from(payload, path)
     if not _valid_token(token):
         if HTTP_TOKEN_KEY in _wrapped_keys(payload):
@@ -382,6 +402,12 @@ def render_plist(
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
             wrapper_file = str(_wrapper_secrets_file(_environment(installed, output)))
+    if token is None and not wrapper:
+        raise PlistConfigError(
+            f"{governance_plist} keeps no {HTTP_TOKEN_KEY}, so there is no bearer to "
+            "copy; launch the Sentinel through the secrets wrapper "
+            f"({SECRETS_WRAPPER} --keys {HTTP_TOKEN_KEY} -- ...) with the bearer in its secrets file"
+        )
     if audit_session is None:
         audit_session = existing.get(AUDIT_SESSION_KEY, "")
     if enforced_surface_kinds is None:
@@ -395,7 +421,8 @@ def render_plist(
             "__HOME__": str(home),
             "__SENTINEL_AUDIT_SESSION__": audit_session,
             "__LEASE_PLANE_ENFORCED_SURFACE_KINDS__": enforced_surface_kinds,
-            TOKEN_PLACEHOLDER: token,
+            # A wrapped job drops this entry below, so it needs no value.
+            TOKEN_PLACEHOLDER: token or "",
         },
     )
     environment = _environment(payload, template)
@@ -436,7 +463,7 @@ def validate_plist(
             f"{plist} has no usable EnvironmentVariables:{HTTP_TOKEN_KEY}; rerender it"
         )
     current_token = _governance_token(governance_plist)
-    if not secrets.compare_digest(token, current_token):
+    if current_token is not None and not secrets.compare_digest(token, current_token):
         raise PlistConfigError(
             f"{plist} bearer does not match the current governance bearer; rerender it"
         )
@@ -462,6 +489,48 @@ def validate_plist(
     if HTTP_TOKEN_KEY in environment and mode & 0o077:
         raise PlistConfigError(
             f"{plist} contains a bearer but mode is {oct(mode)}; rerender for mode 0o600"
+        )
+
+    if current_token is None:
+        _check_bearer_live(expected_socket, token, governance_plist=governance_plist)
+
+
+def _check_bearer_live(
+    socket_path: Path, token: str, *, governance_plist: Path, timeout: float = 5.0
+) -> None:
+    """Confirm the running governance service accepts ``token``.
+
+    Used when the governance plist keeps no bearer to compare against. A
+    read-only, bearer-gated route (the tool listing) over the per-user socket:
+    it answers 401 to a wrong bearer and touches no identity or session.
+    """
+    connection = _UnixHTTPConnection(socket_path, timeout)
+    try:
+        connection.request(
+            "GET", "/v1/tools", headers={"Authorization": f"Bearer {token}"}
+        )
+        response = connection.getresponse()
+        response.read(1_048_576)
+    except ValueError:
+        # http.client quotes the whole header value when it rejects one.
+        raise PlistConfigError(
+            f"the Sentinel {HTTP_TOKEN_KEY} is not a valid header value"
+        ) from None
+    except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        raise PlistConfigError(
+            f"{governance_plist} keeps no {HTTP_TOKEN_KEY}, and the running governance "
+            f"service could not be reached to check the Sentinel bearer instead: {exc}"
+        ) from exc
+    finally:
+        connection.close()
+    if response.status == 401:
+        raise PlistConfigError(
+            "the running governance service rejected the Sentinel bearer (HTTP 401); "
+            "it does not match the current governance bearer"
+        )
+    if response.status != 200:
+        raise PlistConfigError(
+            f"bearer check against the running governance service returned HTTP {response.status}"
         )
 
 
@@ -539,6 +608,9 @@ def probe_identity(plist: Path, *, timeout: float) -> None:
         )
         response = connection.getresponse()
         response_body = response.read(1_048_576)
+    except ValueError:
+        # http.client quotes the whole header value when it rejects one.
+        raise PlistConfigError(f"{plist} {HTTP_TOKEN_KEY} is not a valid header value") from None
     except (OSError, TimeoutError, http.client.HTTPException) as exc:
         raise PlistConfigError(f"authenticated UDS probe failed: {exc}") from exc
     finally:
