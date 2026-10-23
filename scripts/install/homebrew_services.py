@@ -5,16 +5,19 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import getpass
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
 import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -105,7 +108,7 @@ class Homebrew:
         except (ValueError, TypeError, KeyError) as exc:
             raise Refusal('Homebrew did not return a complete service inventory.') from exc
 
-    def configure(self):
+    def check_installation(self):
         override = os.environ.get('UNITARES_NATIVE_ENV')
         if override and Path(override).absolute() != self.config:
             raise Refusal('brew services uses its configured environment, not this shell’s UNITARES_NATIVE_ENV override. Use the canonical native.env.')
@@ -116,7 +119,10 @@ class Homebrew:
         for name, binary in (('unitares', 'unitares-server'), ('unitares-lease-plane', 'unitares-lease-plane'), ('postgresql@17', 'psql'), ('redis', 'redis-server')):
             if not os.access(self.prefix / 'opt' / name / 'bin' / binary, os.X_OK):
                 raise Refusal(f'Install the {name} formula before starting.')
-        config = read_config(self.config)
+    def configure(self, config=None):
+        self.check_installation()
+        if config is None:
+            config = read_config(self.config)
         required = ('DB_POSTGRES_URL', 'UNITARES_LEASE_PLANE_DATABASE_URL', 'LEASE_PLANE_BEARER_TOKEN', 'REDIS_URL')
         if any(not config.get(key) for key in required):
             raise Refusal('native.env is incomplete; configure both database URLs, Redis and the lease bearer.')
@@ -145,6 +151,113 @@ class Homebrew:
         self.runtime_env = dict(self.env, **config)
         self.runtime_env['PATH'] = f'{self.prefix}/opt/postgresql@17/bin:{self.env.get("PATH", "")}'
         self.ports = dict(zip(SERVICES, (5432, 6379, lease_port, 8767)))
+
+    def check_commands(self, records):
+        for name in WRITERS:
+            command = records[name].get('command', '')
+            binary = 'unitares-server' if name == 'unitares' else name
+            if shlex.split(command) != [str(self.prefix / 'opt' / name / 'bin' / binary)]:
+                raise Refusal(f'{name} has a custom service command; use its own procedure.')
+
+    def setup(self, apply=False, non_interactive=False):
+        """Create only a missing configuration; never start services or execute DDL."""
+        self.check_installation()
+        records = self.info()
+        self.check_commands(records)
+        print(f'Installation: Homebrew\nConfiguration: {self.config}')
+        # lexists includes dangling symlinks, which must never be replaced.
+        if os.path.lexists(self.config):
+            self.configure()
+            self.check_ports(records)
+            print('Existing configuration preserved. Shell database settings are ignored.')
+            self.setup_next_step(records)
+            return
+        self.ports = dict(zip(SERVICES, (5432, 6379, 8788, 8767)))
+        self.check_ports(records)
+        if any(records[name].get('running') or records[name].get('loaded') for name in WRITERS):
+            raise Refusal('A native writer is active without canonical configuration; stop and inspect that installation first.')
+        if not apply:
+            print('Plan: create a private native.env using your explicit PostgreSQL URL and a generated lease bearer. Models and residents remain optional. No database or service changes.')
+            print('Next: unitares setup --homebrew --apply (hidden database URL prompt; automation may supply DB_POSTGRES_URL in its environment).')
+            return
+        db_url = os.environ.get('DB_POSTGRES_URL', '')
+        if not db_url and not non_interactive and sys.stdin.isatty():
+            db_url = getpass.getpass('PostgreSQL URL for your chosen database (input hidden): ')
+        if not db_url:
+            raise Refusal('Supply DB_POSTGRES_URL in the environment, or run interactively for a hidden prompt. No configuration was written.')
+        # Keep generated values literal in both the Python reader and shell wrappers.
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in "'\"$`\\" for char in db_url):
+            raise Refusal('URL-encode database credentials; the URL must be a single literal value.')
+        config = {
+            'DB_POSTGRES_URL': db_url,
+            'DB_BACKEND': 'postgres',
+            'DB_AGE_GRAPH': 'governance_graph',
+            'REDIS_URL': 'redis://127.0.0.1:6379/0',
+            'UNITARES_KNOWLEDGE_BACKEND': 'postgres',
+            'UNITARES_DIALECTIC_BACKEND': 'postgres',
+            'UNITARES_LEASE_PLANE_DATABASE_URL': db_url,
+            'UNITARES_LEASE_PLANE_HTTP_IP': '127.0.0.1',
+            'UNITARES_LEASE_PLANE_HTTP_PORT': '8788',
+            'UNITARES_LEASE_PLANE_URL': 'http://127.0.0.1:8788',
+            'LEASE_PLANE_BASE_URL': 'http://127.0.0.1:8788',
+            'UNITARES_GOVERNANCE_URL': 'http://127.0.0.1:8767',
+            'LEASE_PLANE_BEARER_TOKEN': secrets.token_urlsafe(32),
+            'UNITARES_MODEL_BASE_URL': '',
+            'UNITARES_MODEL_ID': '',
+            'UNITARES_RESIDENTS': '',
+        }
+        self.configure(config)
+        directory = self.config.parent
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise Refusal('The native configuration directory must be owned by you, not a symlink or writable by others.')
+        # Publish a complete private file atomically, without replacing a racing creator.
+        fd, temporary = tempfile.mkstemp(prefix='.native-', dir=directory)
+        try:
+            with os.fdopen(fd, 'w') as output:
+                output.write('# UNITARES native services; private configuration.\n')
+                output.writelines(f'{key}={shlex.quote(value)}\n' for key, value in config.items())
+                output.flush()
+                os.fsync(output.fileno())
+            os.link(temporary, self.config)
+        finally:
+            os.unlink(temporary)
+        print('Created private configuration (mode 600). No services or databases were changed.')
+        self.setup_next_step(records)
+
+    def database_environment(self):
+        from urllib.parse import unquote, urlsplit, urlunsplit
+        db = urlsplit(self.runtime_env['DB_POSTGRES_URL'])
+        public_url = urlunsplit(db._replace(netloc=f'{db.username}@{db.hostname}:{db.port or 5432}'))
+        # libpq shell overrides (especially PGHOSTADDR) must not redirect this probe.
+        env = {key: value for key, value in self.runtime_env.items() if not key.startswith('PG')}
+        env.update(PGPASSWORD=unquote(db.password), PGCONNECT_TIMEOUT='5', DB_POSTGRES_URL=public_url,
+                   UNITARES_LEASE_PLANE_DATABASE_URL=public_url)
+        return public_url, env
+
+    def setup_next_step(self, records):
+        guide = self.app / 'docs/install/HOMEBREW_SETUP.md'
+        if not records['postgresql@17'].get('running'):
+            print('Database readiness: unknown (Homebrew PostgreSQL is stopped). Start that dependency, then rerun setup. This does not establish that the database is empty.')
+        else:
+            url, env = self.database_environment()
+            # Absence of our registry never proves absence of someone else's data.
+            query = "SELECT to_regclass('core.schema_migrations') IS NOT NULL"
+            result = run([str(self.prefix / 'opt/postgresql@17/bin/psql'), '-X', '-Atq',
+                          '-v', 'ON_ERROR_STOP=1', url, '-c', query], env=env)
+            if result.returncode or result.stdout.strip() not in ('t', 'f'):
+                print('Database readiness: unknown (connection or inspection failed). Verify the selected database and credentials; do not bootstrap an unknown database.')
+            elif result.stdout.strip() == 'f':
+                print('Database readiness: no UNITARES migration registry. Database contents and freshness are not established. Use fresh bootstrap only for a deliberately new empty database; otherwise inspect or restore the existing database first.')
+            else:
+                try:
+                    self.check_schema()
+                except Refusal:
+                    print('Database readiness: existing registry, schema not verified. Inspect the bootstrap stage and use backed-up migration recovery when the base schema is complete, never fresh bootstrap. Stop both writers before applying migrations.')
+                else:
+                    print('Database readiness: schema verified. Next: unitares start --homebrew --check, then unitares start --homebrew.')
+        print(f'Fresh bootstrap / existing-database recovery: {guide}')
 
     @contextlib.contextmanager
     def lock(self):
@@ -193,10 +306,7 @@ class Homebrew:
             raise Refusal('The installed package lacks the native schema check.')
         # The checker forwards its URL to psql. Keep the password in libpq's
         # environment so neither Python nor nested psql argv contains it.
-        from urllib.parse import unquote, urlsplit, urlunsplit
-        db = urlsplit(self.runtime_env['DB_POSTGRES_URL'])
-        public_url = urlunsplit(db._replace(netloc=f'{db.username}@{db.hostname}:{db.port or 5432}'))
-        env = dict(self.runtime_env, PGPASSWORD=unquote(db.password))
+        public_url, env = self.database_environment()
         result = run([str(python), str(script), '--check', '--db-url', public_url], env=env, timeout=60)
         if result.returncode:
             raise Refusal('The installed schema check failed. Bootstrap a fresh database or use the documented backed-up native upgrade procedure before starting writers.')
@@ -204,11 +314,7 @@ class Homebrew:
     def start(self, check=False, timeout=60):
         self.configure()
         records = self.info()
-        for name in WRITERS:
-            command = records[name].get('command', '')
-            binary = 'unitares-server' if name == 'unitares' else name
-            if shlex.split(command) != [str(self.prefix / 'opt' / name / 'bin' / binary)]:
-                raise Refusal(f'{name} has a custom service command; use its own procedure.')
+        self.check_commands(records)
         self.check_ports(records)
         print(f'Installation: Homebrew\nConfiguration: {self.config}\nEndpoint: http://127.0.0.1:8767')
         if check:
@@ -281,6 +387,9 @@ class Homebrew:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
+    setup = actions.add_parser('setup', help='inspect native setup; --apply creates missing private configuration only')
+    setup.add_argument('--apply', action='store_true')
+    setup.add_argument('--non-interactive', action='store_true')
     start = actions.add_parser('start')
     start.add_argument('--check', action='store_true', help='report the startup plan without changing services')
     start.add_argument('--timeout', type=int, default=60, help='readiness timeout per service, in seconds')
@@ -295,7 +404,13 @@ def main(argv=None):
         parser.error('timeout must be 1–300 seconds; tail must be 1–10000 lines')
     try:
         brew = Homebrew()
-        if args.action == 'logs':
+        if args.action == 'setup':
+            if args.apply:
+                with brew.lock():
+                    brew.setup(apply=True, non_interactive=args.non_interactive)
+            else:
+                brew.setup()
+        elif args.action == 'logs':
             brew.logs(args.service, not args.no_follow, args.tail)
         elif args.check:
             getattr(brew, args.action)(check=True)

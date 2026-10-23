@@ -261,7 +261,7 @@ subprocess.run([sys.executable, '-c',
 
 @pytest.mark.parametrize('packaged,explicit', [(True, False), (False, True), (True, True)])
 @pytest.mark.parametrize('flag_first', [True, False])
-@pytest.mark.parametrize('action,options', [('start', ['--check']), ('stop', ['--check']), ('logs', ['--no-follow', '--tail', '2']), ('start', []), ('stop', []), ('logs', [])])
+@pytest.mark.parametrize('action,options', [('start', ['--check']), ('stop', ['--check']), ('logs', ['--no-follow', '--tail', '2']), ('start', []), ('stop', []), ('logs', []), ('setup', []), ('setup', ['--apply', '--non-interactive'])])
 def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, explicit, flag_first, action, options):
     root = tmp_path / ('keg/libexec/app' if packaged else 'source')
     (root / 'scripts/install').mkdir(parents=True)
@@ -314,3 +314,145 @@ def test_invalid_health_payload_times_out_and_cleans_new_writers(manager, monkey
         brew.start(timeout=1)
     assert not records['unitares']['running'] and not records['unitares-lease-plane']['running']
     assert calls[-2:] == [('services', 'stop', 'unitares'), ('services', 'stop', 'unitares-lease-plane')]
+
+
+def test_setup_dry_run_does_not_create_config_or_lock(manager, monkeypatch, capsys):
+    brew, _, calls = manager
+    brew.config.unlink()
+    monkeypatch.setattr(native.getpass, 'getpass', lambda _: pytest.fail('dry run prompted'))
+    brew.setup()
+    assert not brew.config.exists()
+    assert not (brew.prefix / 'var').exists()
+    assert calls == []
+    assert 'Plan:' in capsys.readouterr().out
+
+
+def test_setup_creates_private_roundtrippable_shared_config(manager, monkeypatch, capsys):
+    brew, _, calls = manager
+    brew.config.unlink()
+    url = 'postgresql://probe:p%40ss%3Aword%27%24@localhost:5432/selected'
+    monkeypatch.setenv('DB_POSTGRES_URL', url)
+    brew.env['UNITARES_MODEL_BASE_URL'] = 'http://inherited.example'
+    brew.setup(apply=True, non_interactive=True)
+    config = native.read_config(brew.config)
+    assert config['DB_POSTGRES_URL'] == config['UNITARES_LEASE_PLANE_DATABASE_URL'] == url
+    assert len(config['LEASE_PLANE_BEARER_TOKEN']) >= 40
+    assert config['UNITARES_MODEL_BASE_URL'] == config['UNITARES_MODEL_ID'] == config['UNITARES_RESIDENTS'] == ''
+    assert brew.config.stat().st_mode & 0o777 == 0o600
+    # The formula shell-sources the file; verify actual shell interpretation too.
+    result = subprocess.run(['/bin/sh', '-c', 'set -a; . "$1"; exec "$2" -c \'import json,os; print(json.dumps(dict(os.environ)))\'', 'sh', str(brew.config), sys.executable], capture_output=True, text=True)
+    assert result.returncode == 0
+    sourced = json.loads(result.stdout)
+    assert all(sourced[key] == value for key, value in config.items())
+    before = brew.config.read_bytes()
+    monkeypatch.setenv('DB_POSTGRES_URL', 'ignored-invalid-shell-url')
+    brew.setup(apply=True)
+    assert brew.config.read_bytes() == before
+    assert calls == []
+    output = capsys.readouterr().out
+    assert url not in output and config['LEASE_PLANE_BEARER_TOKEN'] not in output
+    assert 'unknown' in output and 'empty at inspection' not in output
+
+
+@pytest.mark.parametrize('kind', ['invalid', 'symlink', 'dangling', 'world-readable'])
+def test_setup_preserves_invalid_existing_configuration(manager, kind):
+    brew, _, calls = manager
+    if kind == 'invalid':
+        brew.config.write_text('DB_POSTGRES_URL=$(touch /never)\n')
+    elif kind in ('symlink', 'dangling'):
+        target = brew.config.with_suffix('.other')
+        if kind == 'symlink':
+            brew.config.rename(target)
+        else:
+            brew.config.unlink()
+        brew.config.symlink_to(target)
+    else:
+        brew.config.chmod(0o644)
+    before = brew.config.lstat()
+    with pytest.raises(native.Refusal):
+        brew.setup(apply=True)
+    assert brew.config.lstat() == before
+    assert calls == []
+
+
+def test_setup_racing_file_is_never_replaced(manager, monkeypatch):
+    brew, _, _ = manager
+    brew.config.unlink()
+    monkeypatch.setenv('DB_POSTGRES_URL', 'postgresql://probe:secret@localhost:5432/selected')
+    link = os.link
+    def race(source, target):
+        target.write_text('other creator\n')
+        return link(source, target)
+    monkeypatch.setattr(native.os, 'link', race)
+    with pytest.raises(FileExistsError):
+        brew.setup(apply=True)
+    assert brew.config.read_text() == 'other creator\n'
+    assert list(brew.config.parent.glob('.native-*')) == []
+
+
+@pytest.mark.parametrize('url', ['', 'postgresql://probe@localhost/db', 'postgresql://probe:secret@elsewhere/db', 'postgresql://probe:raw secret@localhost/db', 'postgresql://probe:$(secret)@localhost/db'])
+def test_setup_refuses_missing_or_unsafe_database_url(manager, monkeypatch, url):
+    brew, _, calls = manager
+    brew.config.unlink()
+    monkeypatch.setenv('DB_POSTGRES_URL', url)
+    with pytest.raises(native.Refusal) as error:
+        brew.setup(apply=True, non_interactive=True)
+    assert 'secret' not in str(error.value)
+    assert not brew.config.exists()
+    assert calls == []
+
+
+def test_setup_foreign_listener_prevents_configuration_creation(manager, monkeypatch):
+    brew, records, _ = manager
+    brew.config.unlink()
+    monkeypatch.setattr(brew, 'check_ports', native.Homebrew.check_ports.__get__(brew))
+    monkeypatch.setattr(native.socket, 'create_connection', lambda *a, **k: io.StringIO())
+    monkeypatch.setattr(native, 'run', lambda *a, **k: SimpleNamespace(stdout='999\n'))
+    records['postgresql@17'].update(running=True, pid=123)
+    with pytest.raises(native.Refusal, match='occupied outside'):
+        brew.setup(apply=True)
+    assert not brew.config.exists()
+
+
+@pytest.mark.parametrize('inspection,schema,expected', [
+    ('f', True, 'freshness are not established'),
+    ('t', True, 'schema verified'),
+    ('t', False, 'existing registry, schema not verified'),
+    ('', True, 'unknown'),
+])
+def test_setup_database_readiness_is_read_only_and_redacted(manager, monkeypatch, capsys, inspection, schema, expected):
+    brew, records, calls = manager
+    records['postgresql@17']['running'] = True
+    brew.env['PGHOSTADDR'] = '203.0.113.1'
+    probes = []
+    def probe(args, **kwargs):
+        probes.append(args)
+        assert kwargs['env']['PGPASSWORD'] == 'private'
+        assert 'PGHOSTADDR' not in kwargs['env']
+        assert ':private@' not in repr(args)
+        assert kwargs['env']['DB_POSTGRES_URL'] == 'postgresql://probe@localhost:5432/governance'
+        return SimpleNamespace(returncode=0 if inspection else 1, stdout=inspection, stderr='private error')
+    monkeypatch.setattr(native, 'run', probe)
+    if not schema:
+        def refuse():
+            raise native.Refusal('private database detail')
+        monkeypatch.setattr(brew, 'check_schema', refuse)
+    before = brew.config.read_bytes()
+    brew.setup()
+    assert brew.config.read_bytes() == before
+    assert len(probes) == 1 and '-X' in probes[0]
+    assert calls == ([('schema',)] if inspection == 't' and schema else [])
+    output = capsys.readouterr().out
+    assert expected in output and 'private error' not in output and 'private database detail' not in output
+
+
+def test_setup_refuses_custom_service_environment_before_writing(manager, monkeypatch, tmp_path):
+    brew, _, _ = manager
+    brew.config.unlink()
+    home = tmp_path / 'custom'
+    (home / 'services').mkdir(parents=True)
+    (home / 'services/unitares.env').write_text('UNITARES_NATIVE_ENV=/another/file')
+    monkeypatch.setenv('HOMEBREW_USER_CONFIG_HOME', str(home))
+    with pytest.raises(native.Refusal, match='Custom Homebrew environment'):
+        brew.setup(apply=True)
+    assert not brew.config.exists()
