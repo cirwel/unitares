@@ -369,9 +369,13 @@ def test_setup_preserves_invalid_existing_configuration(manager, kind):
     else:
         brew.config.chmod(0o644)
     before = brew.config.lstat()
+    payload = os.readlink(brew.config) if brew.config.is_symlink() else brew.config.read_bytes()
     with pytest.raises(native.Refusal):
         brew.setup(apply=True)
-    assert brew.config.lstat() == before
+    after = brew.config.lstat()
+    # A read-only inspection can update atime on Linux; content/identity/mode cannot change.
+    assert (after.st_ino, after.st_mode, after.st_mtime_ns) == (before.st_ino, before.st_mode, before.st_mtime_ns)
+    assert (os.readlink(brew.config) if brew.config.is_symlink() else brew.config.read_bytes()) == payload
     assert calls == []
 
 
