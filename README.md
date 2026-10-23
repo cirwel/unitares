@@ -114,6 +114,11 @@ Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
   directory name (`unitares`). Re-running the one-liner reuses an earlier
   install's database; for a clean start, run `docker compose down -v` first. See
   [Reinstalling](docs/manual/02-install.md#reinstalling-and-side-by-side-installs).
+- **Smaller stack (optional):** the core profile runs only the server and
+  PostgreSQL, without Redis and the coordination plane. Some session state
+  does not survive a restart, onboard pins do not work, and there are no
+  surface leases or agent messages. See
+  [A smaller stack](docs/manual/02-install.md#a-smaller-stack-the-core-profile).
 - **Local reviewer model (optional):** `./scripts/unitares model` points the
   server at a local Ollama model for advisory `consult` answers and first-pass
   dialectic reviews; without one, reviews wait for a peer or the operator. See
