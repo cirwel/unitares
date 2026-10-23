@@ -59,14 +59,19 @@ def test_trailing_slash_and_default_port_are_normalized(monkeypatch):
     assert inference_registry._ollama_host_port() == ("localhost", 11434)
 
 
-def test_one_default_model_resolver(monkeypatch):
+def test_one_default_model_resolver(monkeypatch, tmp_path):
     """UNITARES_MODEL_ID resolves through exactly one function; the internal
     lane must not keep a private copy that can drift from the registry's."""
     monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+    monkeypatch.setenv(
+        "UNITARES_INFERENCE_HOSTS_FILE", str(tmp_path / "no-hosts.json")
+    )
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
     assert inference_registry.default_local_model() == "qwen3:8b"
     # The internal lane's resolver IS the registry's, not a lookalike.
     assert llm_delegation._get_default_model is inference_registry.default_local_model
-    # The host catalog advertises the same resolution.
+    # The host catalog advertises the same resolution without depending on a
+    # live local Ollama daemon or the operator's inference-hosts.json file.
     ollama_host = inference_registry.get_inference_host("ollama:local")
     assert ollama_host["models"] == ["qwen3:8b"]
 
