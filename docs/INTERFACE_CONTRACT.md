@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.56.1`
+**Current contract:** `unitares.interface-contract.v1`, version `1.57.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1137,3 +1137,24 @@ Automatic local model selection requires an explicitly configured endpoint; fres
   brief schema is unchanged; only its full explanatory description changes.
 - **Client action:** choose a model per call, set `UNITARES_MODEL_ID`, or explicitly
   configure the endpoint to permit its sole-model default.
+
+## 1.57.0 (2026-10-23)
+
+Knowledge details adds bounded response-chain depth, limit, and offset controls
+with deterministic pagination.
+
+- **What changed:** `knowledge(action="details")` now advertises
+  `max_chain_depth` (1-32, default 10), `response_chain_limit` (1-200,
+  default 100), and `response_chain_offset` (0-10,000, default 0). AGE
+  traversal deduplicates discoveries, orders them by minimum depth and id,
+  applies the requested page, and runs under a two-second database statement
+  timeout.
+- **Compatibility:** additive for ordinary details reads. Existing
+  `include_response_chain=true` calls keep their default depth and now return
+  at most 100 discoveries. Values outside the advertised bounds are rejected
+  by schema validation; direct storage callers are clamped defensively.
+- **Schema digests:** `knowledge` and its complete-catalog surface digest move
+  because the public input schema gains two fields and bounds the existing
+  depth field.
+- **Client action:** clients that need more than the first 100 chain members
+  should advance `response_chain_offset` in pages no larger than 200.

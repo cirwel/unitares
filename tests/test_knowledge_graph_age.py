@@ -148,6 +148,7 @@ def make_mock_db(graph_available: bool = True) -> AsyncMock:
     mock_conn.execute = AsyncMock()
     mock_conn.fetchval = AsyncMock(return_value=0)
     mock_conn.fetch = AsyncMock(return_value=[])
+    mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(mock_conn))
 
     db._pool.acquire = MagicMock(return_value=_AsyncContextManager(mock_conn))
     db.acquire = MagicMock(return_value=_AsyncContextManager(mock_conn))
@@ -1000,6 +1001,15 @@ class TestGetResponseChain:
         assert result[0].id == "disc-001"
 
     @pytest.mark.asyncio
+    async def test_single_node_fallback_honors_offset(self):
+        """SQL fallback does not repeat the root on later pages."""
+        kg, _mock_db = make_kg_with_mock_db(graph_available=False)
+        kg.get_discovery = AsyncMock(return_value=make_discovery(discovery_id="disc-001"))
+
+        assert await kg.get_response_chain("disc-001", offset=1) == []
+        kg.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_returns_ordered_chain_from_dict_results(self):
         """Should return chain ordered by depth (root first)."""
         kg, mock_db = make_kg_with_mock_db()
@@ -1023,6 +1033,34 @@ class TestGetResponseChain:
         assert result[0].id == "root"
         assert result[1].id == "reply1"
         assert result[2].id == "reply2"
+        mock_db._mock_conn.execute.assert_awaited_once_with(
+            "SET LOCAL statement_timeout = '2000ms'"
+        )
+        query_call = mock_db.graph_query.await_args
+        assert "*0..10" in query_call.args[0]
+        assert "LIMIT ${limit}" in query_call.args[0]
+        assert query_call.args[1] == {
+            "discovery_id": "root",
+            "offset": 0,
+            "limit": 100,
+        }
+        assert query_call.kwargs["conn"] is mock_db._mock_conn
+
+    @pytest.mark.asyncio
+    async def test_clamps_depth_limit_and_offset(self):
+        """Direct callers cannot exceed the hard graph traversal ceilings."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query.return_value = []
+
+        await kg.get_response_chain("root", max_depth=999, limit=999, offset=99_999)
+
+        query_call = mock_db.graph_query.await_args
+        assert "*0..32" in query_call.args[0]
+        assert query_call.args[1] == {
+            "discovery_id": "root",
+            "offset": 10_000,
+            "limit": 200,
+        }
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_smallest_depth(self):
