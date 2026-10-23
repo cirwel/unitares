@@ -18,8 +18,8 @@
 #
 # Why this exists: on 2026-04-19 the ad-hoc rotation runbook wiped the
 # anchors/ dir wholesale. Every resident then fresh-onboarded with a new
-# UUID. See memory/project_identity-audit-2026-04-19.md and the
-# anchor-resilience series plan.
+# UUID. See the 2026-04-19 identity audit and the anchor-resilience series
+# plan in the knowledge graph.
 
 set -euo pipefail
 
@@ -27,6 +27,7 @@ ANCHOR_DIR="${HOME}/.unitares/anchors"
 LAUNCHAGENTS_DIR="${HOME}/Library/LaunchAgents"
 GOVERNANCE_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.governance-mcp.plist"
 SENTINEL_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.sentinel-beam.plist"
+GOVERNANCE_SOCKET="${UNITARES_UDS_SOCKET:-${HOME}/.unitares/governance.sock}"
 DATE_STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${HOME}/.unitares/rotation-backup-${DATE_STAMP}"
 OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -44,9 +45,12 @@ die()  { printf '\033[1;31m[rotate]\033[0m %s\n' "$*" >&2; exit 1; }
 [[ -f "${GOVERNANCE_PLIST}" ]] || die "governance plist missing: ${GOVERNANCE_PLIST}"
 
 # PlistBuddy's `Set` fails when a key is absent. Historically that error was
-# suppressed for every plist, so a template-created Sentinel could remain on
-# the old/missing bearer after an otherwise successful rotation. Refuse before
-# writing any plist if an installed Sentinel is not structurally rotatable.
+# suppressed for every plist, so a governance job whose bearer lives outside
+# the plist (e.g. a Keychain launcher) or a template-created Sentinel could
+# remain on the old/missing bearer after an otherwise successful rotation.
+# Refuse before writing any file if either LaunchAgent is not rotatable.
+python3 "${SENTINEL_PLIST_TOOL}" rotation-preflight \
+  --plist "${GOVERNANCE_PLIST}" --allow-external-store
 if [[ -f "${SENTINEL_PLIST}" ]]; then
   python3 "${SENTINEL_PLIST_TOOL}" rotation-preflight --plist "${SENTINEL_PLIST}"
 fi
@@ -105,7 +109,10 @@ for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
   [[ -e "$plist" ]] || continue
   cp "$plist" "${BACKUP_DIR}/$(basename "$plist")"
   "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
-  if [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
+  if [[ "$plist" == "${GOVERNANCE_PLIST}" ]]; then
+    printf '%s' "${new_http_api_token}" | \
+      python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "$plist" --allow-external-store
+  elif [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
     # stdin keeps the bearer out of argv and the helper requires the key to
     # exist, so rotation cannot silently skip Sentinel again.
     printf '%s' "${new_http_api_token}" | \
@@ -141,6 +148,14 @@ done
 log "restarting governance-mcp..."
 "${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
 "${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
+
+if [[ -S "${GOVERNANCE_SOCKET}" || "${UNITARES_ROTATE_VERIFY_LIVE:-0}" == "1" ]]; then
+  log "verifying governance-mcp accepts the rotated bearer over ${GOVERNANCE_SOCKET}..."
+  printf '%s' "${new_http_api_token}" | \
+    python3 "${SENTINEL_PLIST_TOOL}" verify-bearer \
+      --socket "${GOVERNANCE_SOCKET}" \
+      --governance-plist "${GOVERNANCE_PLIST}"
+fi
 
 # Wrapped jobs read the secrets file only when they start; a long-running one
 # keeps the old value until it is reloaded. Names only: grep -q never prints.
