@@ -192,6 +192,17 @@ def unwrapped_view(
     return view
 
 
+def unwrapped_views(
+    arguments: Dict[str, Any], depth: int = _RESERVED_KEY_KWARGS_DEPTH,
+) -> list:
+    """``unwrapped_view`` at every depth from 0 to ``depth``, outermost first.
+
+    For a gate that runs before dispatch unwraps and must hold whichever
+    depth a call is finally acted on at.
+    """
+    return [unwrapped_view(arguments, level) for level in range(depth + 1)]
+
+
 async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Handle MCP clients that wrap arguments in kwargs."""
     if "kwargs" in arguments:

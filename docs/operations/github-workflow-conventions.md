@@ -208,8 +208,11 @@ the PR under the `unitares-pr-relay` App, which can write pull requests on
 this repository and nothing else. The original is closed with a link to its
 replacement. Branch, commits, labels and footer carry over, except the
 queue labels `approved-to-merge` and `operator-armed`, which are earned on
-the new PR. The new body opens by
-saying the branch was pushed through the operator login, so the record keeps
+the new PR. The relay also adds a model-family label, `agent/claude`,
+`agent/gpt` or `agent/gemini`, from the body's last `Model:` line, so PRs can
+be filtered by model family even though an App authors them all. The label
+comes from the body, so it is a filter, not verified provenance. The new
+body opens by saying the branch was pushed through the operator login, so the record keeps
 the credential path while the operator account stops being the author. The
 session keeps pushing to the same branch and does its follow-ups (review,
 ready, label) on the new number. Label a PR `relay-hold` to keep it where it

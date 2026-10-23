@@ -23,6 +23,7 @@ from src.local_inference_env import (
     model_base_url,
     no_redirect_http_client,
     require_local_endpoint,
+    require_local_model,
 )
 
 # Localhost Ollama's OpenAI-compatible endpoint. Not the server's `call_model`
@@ -81,6 +82,8 @@ async def call_local_model(
     # EndpointNotLocalError, before any request, when the endpoint does not
     # classify local (see src/local_inference_env.classify_endpoint).
     require_local_endpoint(OLLAMA_BASE_URL)
+    # No default model: raises ModelNotConfiguredError when none is named.
+    model = require_local_model(model or DEFAULT_MODEL)
     client = AsyncOpenAI(
         base_url=OLLAMA_BASE_URL,
         api_key="ollama",
@@ -91,7 +94,7 @@ async def call_local_model(
     # (including on cancellation) with its connections released.
     async with client:
         resp = await client.chat.completions.create(
-            model=model or DEFAULT_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,

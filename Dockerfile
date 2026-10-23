@@ -33,6 +33,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-docker.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 
+# Semantic search is opt-in: docker-compose.full.yml builds with
+# INSTALL_EMBEDDINGS=1. torch comes from the CPU wheel index first, because the
+# default Linux wheel pulls the NVIDIA CUDA stack (several GB) whether or not a
+# GPU exists. The published image keeps the default, 0.
+ARG INSTALL_EMBEDDINGS=0
+RUN if [ "$INSTALL_EMBEDDINGS" = "1" ]; then \
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+        && pip install --no-cache-dir "sentence-transformers>=2.2.0,<7.0.0" -c constraints.txt; \
+    fi
+
 # Copy application code. governance_core/ was folded back into this repo
 # in 2026-04-24 (was previously a separate compiled wheel) — no wheel install.
 COPY src/ src/

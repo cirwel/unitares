@@ -1345,41 +1345,144 @@ def _inferred_binding_untrusted(inferred_exempt: Optional[bool]) -> bool:
     return get_session_proof_origin() == "server_inferred" and not inferred_exempt
 
 
-def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
+def _inferred_binding_refusal(
+    *, update: bool = False, action: Optional[str] = None
+) -> TextContent:
     """The strict gate's refusal, for a gated write on an inferred binding.
 
     ``update`` names the update tool in the retry routes, so a refused update
     is not sent to the store tool (which would mint a second finding).
+    ``action`` names any other knowledge action, so its retry repeats it.
     """
     from ..context import get_session_proof_origin, get_session_resolution_source
     from ..identity_bootstrap import inferred_binding_refusal_payload
 
-    return success_response(
-        inferred_binding_refusal_payload(
-            "knowledge",
-            retry_call="update_finding" if update else "store_finding",
-            retry_label=(
-                "update_finding / knowledge(action='update')"
-                if update
-                else "store_finding / knowledge(action='store')"
+    if action:
+        retry_call, retry_label = "knowledge", f"knowledge(action='{action}')"
+    elif update:
+        retry_call = "update_finding"
+        retry_label = "update_finding / knowledge(action='update')"
+    else:
+        retry_call = "store_finding"
+        retry_label = "store_finding / knowledge(action='store')"
+    payload = inferred_binding_refusal_payload(
+        "knowledge",
+        retry_call=retry_call,
+        retry_label=retry_label,
+        identity_assurance=None,
+        read_only_option={
+            "action": "stay_read_only",
+            "call": "search_shared_memory(query=<what you need>)",
+            "when": (
+                "You want to read shared memory without writing. "
+                "Knowledge reads need no identity."
             ),
-            identity_assurance=None,
-            read_only_option={
-                "action": "stay_read_only",
-                "call": "search_shared_memory(query=<what you need>)",
-                "when": (
-                    "You want to read shared memory without writing. "
-                    "Knowledge reads need no identity."
-                ),
-            },
+        },
+        surface_context={
+            "transport_surface": "knowledge",
+            "session_resolution_source": get_session_resolution_source(),
+            "proof_origin": get_session_proof_origin(),
+            "lifecycle_automation": "not_confirmed",
+        },
+    )
+    if action:
+        # knowledge has no default action, so a retry route without one fails
+        # with "action parameter required": write it into every route.
+        for option in payload.get("safe_options", []):
+            call = option.get("call")
+            if isinstance(call, str):
+                option["call"] = call.replace(
+                    "knowledge(...", f"knowledge(action='{action}', ..."
+                )
+    return success_response(payload)[0]
+
+
+def _unproven_agent_id_refusal(
+    arguments: Dict[str, Any], *, administrative: bool = False
+) -> Optional[TextContent]:
+    """Refuse a write naming an agent_id this call has not proven, under strict identity.
+
+    An explicit ``agent_id`` with no resolved binding is the caller's word
+    alone. The REST gate lets a non-UUID one through as a legacy name
+    reference, and below high severity nothing then checks it, so every
+    invented name wrote as its own author with its own store budget, and an
+    update could edit or close another agent's finding. Bound callers are
+    unaffected: dispatch injects their own id, and ``inject_identity`` already
+    refuses a different one. The anonymous pseudonym this module derives is
+    let through when it is written back into the same arguments.
+
+    ``administrative`` is for handlers with no anonymous writer: any call
+    without a resolved binding is refused, with or without an agent_id. A
+    missing agent_id is no evidence that the gate saw none (REST dispatch
+    unwraps ``kwargs`` after the gate, which can null the name the gate
+    passed), and a pseudonym is an anonymous writer's label, not an identity.
+    """
+    from ..context import (
+        get_context_resolved_agent_id,
+        get_session_proof_origin,
+        get_session_resolution_source,
+    )
+    from ..identity_bootstrap import (
+        is_strict_identity_required,
+        strict_identity_refusal_payload,
+    )
+
+    if not is_strict_identity_required():
+        return None
+    claimed = arguments.get("agent_id")
+    if get_context_resolved_agent_id() or (not claimed and not administrative):
+        return None
+    if (
+        not administrative
+        and str(claimed).startswith(_ANONYMOUS_WRITER_PREFIX)
+    ):
+        rest = {k: v for k, v in arguments.items() if k != "agent_id"}
+        if claimed == _derive_anonymous_writer_id(rest):
+            return None
+    return success_response(
+        strict_identity_refusal_payload(
+            "knowledge",
+            hint=(
+                "agent_id names an identity this call has not proven. Under strict "
+                "identity a knowledge write needs a binding: leave agent_id out and "
+                "pass the client_session_id that start_session returned."
+                if claimed
+                else "This knowledge action needs a bound caller under strict "
+                "identity: pass the client_session_id that start_session returned."
+            ),
+            next_step=(
+                "Retry without agent_id and with client_session_id=<from "
+                "start_session>. If this process never called start_session, call "
+                "start_session(force_new=true) first."
+            ),
             surface_context={
                 "transport_surface": "knowledge",
+                "reason": "unproven_agent_id" if claimed else "unbound",
                 "session_resolution_source": get_session_resolution_source(),
                 "proof_origin": get_session_proof_origin(),
                 "lifecycle_automation": "not_confirmed",
             },
         )
     )[0]
+
+
+def _requires_proven_agent_id(handler):
+    """Apply ``_unproven_agent_id_refusal`` before an identity-gated knowledge handler.
+
+    The writer resolver already runs the check, but supersede (without notes),
+    cleanup, synthesize, promote and audit reach their writes without it, each
+    registered both as a router action and as a standalone tool. Gating every
+    such handler at its entry keeps one rule for all of them.
+    """
+
+    @wraps(handler)
+    async def guarded(arguments: Dict[str, Any], *args, **kwargs):
+        refusal = _unproven_agent_id_refusal(arguments)
+        if refusal is not None:
+            return [refusal]
+        return await handler(arguments, *args, **kwargs)
+
+    return guarded
 
 
 def _resolve_low_friction_writer(
@@ -1403,6 +1506,10 @@ def _resolve_low_friction_writer(
     check-in gate lets it through.
     """
     from ..context import get_context_agent_id
+
+    refusal = _unproven_agent_id_refusal(arguments)
+    if refusal is not None:
+        return "", refusal, False
 
     if _inferred_binding_untrusted(inferred_exempt):
         arguments.pop("agent_id", None)
@@ -1462,7 +1569,7 @@ def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
 
 
 def _gated_write_refused_on_inferred_binding(
-    inferred_exempt: Optional[bool], *, update: bool = False
+    inferred_exempt: Optional[bool], *, update: bool = False, action: Optional[str] = None
 ) -> Optional[TextContent]:
     """The refusal for a high or critical write on an untrusted inferred binding.
 
@@ -1475,8 +1582,40 @@ def _gated_write_refused_on_inferred_binding(
     from ..identity_bootstrap import is_strict_identity_required
 
     if _inferred_binding_untrusted(inferred_exempt) and is_strict_identity_required():
-        return _inferred_binding_refusal(update=update)
+        return _inferred_binding_refusal(update=update, action=action)
     return None
+
+
+def _requires_proven_writer(action: str):
+    """``_requires_proven_agent_id`` plus the inferred-binding refusal.
+
+    For identity-gated knowledge handlers that reach their writes without the
+    writer resolver (supersede without notes, cleanup, synthesize, promote,
+    audit). A server-inferred binding (same address and User-Agent as some
+    agent) is not proof that the caller is that agent, so under strict
+    identity it is refused the way a high or critical write is, unless the
+    resolved agent is exempt from caller proof (a substrate resident). These
+    handlers have no anonymous writer, so under strict identity they need a
+    resolved binding: a missing agent_id or the anonymous pseudonym is refused
+    like any other unproven agent_id. ``action`` is the knowledge action the
+    handler serves, which the refusal's retry repeats.
+    """
+
+    def decorate(handler):
+        @wraps(handler)
+        async def guarded(arguments: Dict[str, Any], *args, **kwargs):
+            refusal = _unproven_agent_id_refusal(arguments, administrative=True)
+            if refusal is None:
+                refusal = _gated_write_refused_on_inferred_binding(
+                    await _inferred_writer_exempt(), action=action
+                )
+            if refusal is not None:
+                return [refusal]
+            return await handler(arguments, *args, **kwargs)
+
+        return guarded
+
+    return decorate
 
 
 async def _resolve_store_writer(
@@ -1872,8 +2011,20 @@ async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
         )
 
 
+def _auto_link_requested(value: Any) -> bool:
+    """Whether a store links the new row to similar ones. On unless explicitly false.
+
+    The params middleware validates through a Pydantic model whose
+    ``auto_link_related`` defaults to None and then merges ``model_dump()`` back
+    into the arguments, so an unsent flag arrives as a present None. Reading it
+    with ``.get(..., True)`` therefore saw None and skipped linking for every
+    validated store; a string "false" read raw was truthy the other way round.
+    """
+    return _optional_flag(value) is not False
+
+
 async def _link_similar_store_discoveries(state: _KnowledgeStoreState) -> None:
-    if not state.request.arguments.get("auto_link_related", True):
+    if not _auto_link_requested(state.request.arguments.get("auto_link_related")):
         return
     from .synthesis import is_rollup
 
@@ -2022,6 +2173,7 @@ async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> 
 
 
 @mcp_tool("store_knowledge_graph", timeout=20.0, register=False)
+@_requires_proven_agent_id
 async def handle_store_knowledge_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5204,6 +5356,7 @@ async def _execute_discovery_update(
 
 
 @mcp_tool("update_discovery_status_graph", timeout=10.0, register=False)
+@_requires_proven_agent_id
 async def handle_update_discovery_status_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5532,7 +5685,7 @@ async def _persist_batch_discovery(
     discovery = prepared.discovery
     _annotate_knowledge_confidence_authority(discovery)
 
-    if disc_data.get("auto_link_related", True):
+    if _auto_link_requested(disc_data.get("auto_link_related")):
         similar = await graph.find_similar(discovery, limit=3)
         discovery.related_to = [item.id for item in similar]
 
@@ -5848,6 +6001,7 @@ async def _execute_note_write(
     return _build_note_response(request, note)
 
 
+@_requires_proven_agent_id
 async def handle_knowledge_note(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5905,6 +6059,7 @@ async def handle_knowledge_note(
     "leave_note",
     timeout=10.0,
 )
+@_requires_proven_agent_id
 async def handle_leave_note(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -5915,6 +6070,7 @@ async def handle_leave_note(
 
 
 @mcp_tool("cleanup_knowledge_graph", timeout=60.0, register=False)
+@_requires_proven_writer("cleanup")
 async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Run knowledge graph lifecycle cleanup.
 
@@ -5949,6 +6105,7 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
         return [error_response(f"Failed to run lifecycle cleanup: {str(e)}")]
 
 @mcp_tool("synthesize_knowledge_graph", timeout=120.0, register=False)
+@_requires_proven_writer("synthesize")
 async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compound discrete discoveries into rolled-up topic summaries (Issue #1).
 
@@ -6218,6 +6375,7 @@ async def _supersede_flip_details(
 
 
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
+@_requires_proven_writer("supersede")
 async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Mark a discovery as superseding another.
 
@@ -6312,6 +6470,7 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
 
 
 @mcp_tool("promote_memory_claim", timeout=20.0, register=False)
+@_requires_proven_writer("promote")
 async def handle_promote_memory_claim(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -6514,6 +6673,7 @@ async def handle_promote_memory_claim(
 
 
 @mcp_tool("audit_knowledge_graph", timeout=60.0, register=False)
+@_requires_proven_writer("audit")
 async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Audit knowledge graph for staleness and health.
 
