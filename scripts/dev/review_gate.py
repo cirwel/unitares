@@ -3823,6 +3823,17 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
     return sorted(out, key=lambda p: p["updatedAt"])
 
 
+# The agent prefixes of the branch-naming convention, matched exactly, so a
+# contributor branch such as `sonnet/fix` or `codex-tools/fix` names no author.
+_AUTHOR_PREFIX_FAMILY = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "gemini": "google",
+    "agy": "google",
+    "antigravity": "google",
+}
+
+
 def branch_author_family(branch: str) -> str | None:
     """The model family an agent branch names in its author prefix
     (`codex/…`, `claude/…`, `gemini/…`), or None for any other branch.
@@ -3833,7 +3844,13 @@ def branch_author_family(branch: str) -> str | None:
     2026-10-23). The prefix is the branch-naming convention, not proof of
     authorship; a branch without one is reviewed in the configured order."""
     prefix, sep, _ = (branch or "").partition("/")
-    return reviewer_family(prefix) if sep else None
+    return _AUTHOR_PREFIX_FAMILY.get(prefix) if sep else None
+
+
+def _skips_author_family(provider: str, authored_by: str | None) -> bool:
+    """Whether the sweep passes over ``provider`` for a PR its family wrote.
+    Only a known author family excludes: an unknown one matches nothing."""
+    return authored_by is not None and provider_family(provider) == authored_by
 
 
 def cmd_sweep(args) -> int:
@@ -3888,7 +3905,7 @@ def cmd_sweep(args) -> int:
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], families, comments, key))
                     selected = next((p for p in choices if p in eligible
-                                     and provider_family(p) != authored_by), None)
+                                     and not _skips_author_family(p, authored_by)), None)
                     if selected:
                         reviewer = selected
                         required_family = True
@@ -3916,7 +3933,7 @@ def cmd_sweep(args) -> int:
             usable = reviewer_candidates(p["headRefName"])
             reviewer = next((provider for provider in choices
                              if provider in usable
-                             and provider_family(provider) != authored_by
+                             and not _skips_author_family(provider, authored_by)
                              and ((provider == "codex" and native_enabled())
                                   or not provider_cooldown(provider))
                              and failed_runs(comments, key, provider) < SWEEP_MAX_FAILED), None)

@@ -569,8 +569,9 @@ Unattended callers make their policy explicit: `review.sh sweep --reviewer claud
 --reviewer antigravity --worktree PATH` supplies an ordered fallback list chosen
 by that caller. The sweep filters that list by availability, cooldown, retry
 budget and missing model family, and attempts only one provider per tick. It
-also skips providers from the family the PR's branch prefix names (`codex/`,
-`claude/`, `gemini/` or `agy/`), so a PR is read by another family than the one
+also skips providers from the family the PR's branch prefix names (exactly
+`codex/`, `claude/`, `gemini/`, `agy/` or `antigravity/`), judging agy by the
+model it is configured to run, so a PR is read by another family than the one
 that wrote it (operator direction, 2026-10-23). A list of all three providers,
 for example `--reviewer claude --reviewer codex --reviewer antigravity`, sends
 a Codex PR to Claude and then agy, an agy PR to Claude and then Codex, and a

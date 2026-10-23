@@ -1077,6 +1077,9 @@ def test_sweep_uses_only_callers_ordered_choices(monkeypatch, tmp_path, choices,
     ("agy/x", "google"),
     ("dependabot/npm_and_yarn/x", None),
     ("kenny/topic", None),
+    ("sonnet/fix", None),        # a model name is not an agent prefix
+    ("codex-tools/fix", None),   # matched exactly, not by token
+    ("antigravity/x", "google"),
     ("codex", None),  # no author prefix without a slash
     ("", None),
 ])
@@ -1140,6 +1143,18 @@ def test_sweep_judges_agy_by_the_model_it_would_run(monkeypatch, tmp_path, branc
     calls = _author_sweep(monkeypatch, tmp_path, branch, ["antigravity", "codex"],
                           agy_model="claude-sonnet-4-6")
     assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+def test_an_unknown_author_family_excludes_no_reviewer(monkeypatch, tmp_path):
+    # Neither side known: agy runs an unclassified model on a contributor branch.
+    calls = _author_sweep(monkeypatch, tmp_path, "kenny/x", ["antigravity"], agy_model="mystery-model")
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == "antigravity"
+
+
+@pytest.mark.parametrize("branch", ["sonnet/fix", "codex-tools/fix"])
+def test_contributor_prefixes_keep_the_configured_order(monkeypatch, tmp_path, branch):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, ["claude" if branch.startswith("sonnet") else "codex"])
+    assert len(calls) == 1
 
 
 def test_sweep_starts_no_review_when_only_the_authors_family_is_configured(monkeypatch, tmp_path, capsys):
