@@ -90,12 +90,53 @@ new_http_api_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32
 # stops the rotation under set -e.
 secrets_files="$(python3 "${SENTINEL_PLIST_TOOL}" secrets-files)"
 backed_up=0
+declare -a backed_up_secrets_paths=()
 while IFS= read -r secrets_file; do
   [[ -n "${secrets_file}" ]] || continue
   backed_up=$((backed_up + 1))
   cp -p "${secrets_file}" "${BACKUP_DIR}/secrets-${backed_up}.env"
+  backed_up_secrets_paths+=("${secrets_file}")
   log "backed up ${secrets_file} as secrets-${backed_up}.env"
 done <<< "${secrets_files}"
+
+for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
+  [[ -e "$plist" ]] || continue
+  cp -p "$plist" "${BACKUP_DIR}/$(basename "$plist")"
+done
+
+rotation_committed=0
+rollback_pre_launch_state() {
+  local rc=$?
+  if (( rc != 0 && rotation_committed == 0 )); then
+    warn "rotation failed before service reload; restoring secrets, plists, and anchors from ${BACKUP_DIR}..."
+    local idx=0
+    for secrets_file in "${backed_up_secrets_paths[@]+"${backed_up_secrets_paths[@]}"}"; do
+      idx=$((idx + 1))
+      if [[ -e "${BACKUP_DIR}/secrets-${idx}.env" ]]; then
+        cp -p "${BACKUP_DIR}/secrets-${idx}.env" "${secrets_file}" || true
+      fi
+    done
+    for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
+      [[ -e "$plist" ]] || continue
+      local bname
+      bname="$(basename "$plist")"
+      if [[ -e "${BACKUP_DIR}/${bname}" ]]; then
+        cp -p "${BACKUP_DIR}/${bname}" "$plist" || true
+      fi
+    done
+    if [[ -d "${BACKUP_DIR}/anchors" ]]; then
+      for f in "${BACKUP_DIR}/anchors"/*.json; do
+        [[ -e "$f" ]] || continue
+        cp -p "$f" "${ANCHOR_DIR}/$(basename "$f")" || true
+      done
+    fi
+    warn "rollback complete; backup retained at ${BACKUP_DIR}"
+  elif (( rc != 0 )); then
+    warn "post-reload verification failed; backup retained at ${BACKUP_DIR}"
+  fi
+}
+trap rollback_pre_launch_state EXIT
+
 if (( backed_up > 0 )); then
   printf '%s' "${new_continuity_secret}" | \
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_CONTINUITY_TOKEN_SECRET
@@ -103,16 +144,17 @@ if (( backed_up > 0 )); then
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_HTTP_API_TOKEN
 fi
 
-# --- Write into installed com.unitares.*.plist files ---
+# --- Rotate governance-mcp first so an external-store hook failure aborts
+#     before any client plist is rewritten (and triggers rollback above). ---
 log "rotating secrets in LaunchAgents plists..."
+"${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "${GOVERNANCE_PLIST}" 2>/dev/null || true
+printf '%s' "${new_http_api_token}" | \
+  python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "${GOVERNANCE_PLIST}" --allow-external-store
+
 for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
-  [[ -e "$plist" ]] || continue
-  cp "$plist" "${BACKUP_DIR}/$(basename "$plist")"
+  [[ -e "$plist" && "$plist" != "${GOVERNANCE_PLIST}" ]] || continue
   "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
-  if [[ "$plist" == "${GOVERNANCE_PLIST}" ]]; then
-    printf '%s' "${new_http_api_token}" | \
-      python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "$plist" --allow-external-store
-  elif [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
+  if [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
     # stdin keeps the bearer out of argv and the helper requires the key to
     # exist, so rotation cannot silently skip Sentinel again.
     printf '%s' "${new_http_api_token}" | \
@@ -145,6 +187,7 @@ PY
 done
 
 # --- Bounce governance-mcp so it picks up the new secrets. ---
+rotation_committed=1
 log "restarting governance-mcp..."
 "${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
 "${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
@@ -154,7 +197,8 @@ if [[ -S "${GOVERNANCE_SOCKET}" || "${UNITARES_ROTATE_VERIFY_LIVE:-0}" == "1" ]]
   printf '%s' "${new_http_api_token}" | \
     python3 "${SENTINEL_PLIST_TOOL}" verify-bearer \
       --socket "${GOVERNANCE_SOCKET}" \
-      --governance-plist "${GOVERNANCE_PLIST}"
+      --governance-plist "${GOVERNANCE_PLIST}" \
+      --wait-seconds "${UNITARES_ROTATE_VERIFY_WAIT_SECONDS:-15}"
 fi
 
 # Wrapped jobs read the secrets file only when they start; a long-running one

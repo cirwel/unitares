@@ -443,6 +443,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_home_and_paths(verify, plist=False)
     verify.add_argument("--timeout", type=float, default=5.0)
+    verify.add_argument(
+        "--wait-seconds",
+        type=float,
+        default=0.0,
+        help="seconds to poll across launchd restart races (connection errors or outgoing-process 401s)",
+    )
 
     set_file = commands.add_parser(
         "set-secret",
@@ -528,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
                 governance_plist=governance,
                 subject="the rotated",
                 timeout=args.timeout,
+                wait_seconds=args.wait_seconds,
             )
             print(f"verified {uds_socket}: running governance service accepts rotated bearer")
         elif args.command == "set-secret":

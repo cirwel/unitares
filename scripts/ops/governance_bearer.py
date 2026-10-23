@@ -27,6 +27,7 @@ import socket
 import stat
 import subprocess
 import tempfile
+import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -200,10 +201,17 @@ def encode_secret_value(value: str) -> str:
     return '"' + "".join("\\" + c if c in '\\"$`' else c for c in value) + '"'
 
 
+def _read_secrets_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PlistConfigError(f"cannot read secrets file {path}: {exc}") from exc
+
+
 def read_secret(key: str, path: Path) -> str | None:
     check_private(path)
     value = None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read_secrets_text(path).splitlines():
         parts = split_secret_line(line)
         if parts and parts[1] == key:
             value = parse_secret_value(parts[2])
@@ -213,7 +221,7 @@ def read_secret(key: str, path: Path) -> str | None:
 def defines_key(path: Path, key: str) -> bool:
     return any(
         (parts := split_secret_line(line)) is not None and parts[1] == key
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in _read_secrets_text(path).splitlines()
     )
 
 
@@ -229,7 +237,7 @@ def set_secret(key: str, value: str) -> list[Path]:
 
 
 def replace_secret_line(path: Path, key: str, value: str) -> bool:
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines = _read_secrets_text(path).splitlines(keepends=True)
     changed = False
     for index, line in enumerate(lines):
         parts = split_secret_line(line)
@@ -320,7 +328,16 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock = connection
 
 
-def check_bearer_live(
+def _plist_uses_external_store(governance_plist: Path | None) -> bool:
+    if governance_plist is None:
+        return False
+    try:
+        return classify_bearer_shape(load_plist(governance_plist)) is BearerShape.EXTERNAL_STORE
+    except PlistConfigError:
+        return True
+
+
+def _check_bearer_live_once(
     socket_path: Path,
     token: str,
     *,
@@ -328,7 +345,6 @@ def check_bearer_live(
     subject: str = "the Sentinel",
     timeout: float = 5.0,
 ) -> None:
-    """Confirm the running governance service accepts ``token`` over UDS."""
     connection = UnixHTTPConnection(socket_path, timeout)
     try:
         connection.request(
@@ -341,7 +357,7 @@ def check_bearer_live(
             f"{subject} {HTTP_TOKEN_KEY} is not a valid header value"
         ) from None
     except (OSError, TimeoutError, http.client.HTTPException) as exc:
-        if governance_plist is not None:
+        if governance_plist is not None and _plist_uses_external_store(governance_plist):
             raise PlistConfigError(
                 f"{governance_plist} keeps no {HTTP_TOKEN_KEY}, and the running governance "
                 f"service could not be reached to check {subject} bearer instead: {exc}"
@@ -360,6 +376,41 @@ def check_bearer_live(
         raise PlistConfigError(
             f"bearer check against the running governance service returned HTTP {response.status}"
         )
+
+
+def check_bearer_live(
+    socket_path: Path,
+    token: str,
+    *,
+    governance_plist: Path | None = None,
+    subject: str = "the Sentinel",
+    timeout: float = 5.0,
+    wait_seconds: float = 0.0,
+    poll_interval: float = 0.25,
+) -> None:
+    """Confirm the running governance service accepts ``token`` over UDS.
+
+    When ``wait_seconds > 0`` (used right after ``launchctl unload`` / ``load``),
+    polls until ``wait_seconds`` elapses so an asynchronous launchd teardown or
+    startup race (stale socket connection refused, or the outgoing process
+    briefly answering 401 with the pre-rotation token) does not fail a healthy
+    rotation.
+    """
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while True:
+        try:
+            _check_bearer_live_once(
+                socket_path,
+                token,
+                governance_plist=governance_plist,
+                subject=subject,
+                timeout=timeout,
+            )
+            return
+        except PlistConfigError as exc:
+            if "not a valid header value" in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(min(poll_interval, max(0.01, deadline - time.monotonic())))
 
 
 def write_plist(path: Path, payload: dict[str, Any], *, mode: int) -> None:

@@ -442,3 +442,65 @@ def test_optional_missing_plist_and_allow_env_do_not_refuse(tmp_path, monkeypatc
     monkeypatch.setenv("UNITARES_GATEWAY_ALLOW_DEV", "1")
     assert ddd.diagnose_preflight(allow_spec, make_io()) == []
 
+
+def test_default_preflights_honor_deploy_env_overrides_and_non_utf8_secrets_do_not_crash(
+    tmp_path, monkeypatch
+):
+    """default_preflights() honors the deploy-*.sh environment overrides, marks
+    agent-orchestrator require_exists=True, includes dispatch-beam, and a
+    non-UTF-8 secrets file produces a preflight_refused diagnosis rather than
+    crashing Doctor.run()."""
+    specs = ddd.default_preflights(
+        {
+            "UNITARES_MCP_DEPLOY": "/srv/custom-mcp",
+            "UNITARES_ORCHESTRATOR_DEPLOY": "/srv/custom-orch",
+            "DISPATCH_DEPLOY": "/srv/custom-dispatch",
+        }
+    )
+    by_service = {s.service: s for s in specs}
+    assert by_service["governance-mcp"].needles == ["/srv/custom-mcp/src/mcp_server.py"]
+    assert by_service["agent-orchestrator"].require_exists is True
+    assert by_service["agent-orchestrator"].needles == [
+        "/srv/custom-orch/elixir/agent_orchestrator"
+    ]
+    assert "dispatch-beam" in by_service
+    assert by_service["dispatch-beam"].needles == ["/srv/custom-dispatch"]
+
+    bad_secrets = tmp_path / "bad-secrets.env"
+    bad_secrets.write_bytes(b"\xff\xfeUNITARES_HTTP_API_TOKEN=broken\n")
+    bad_secrets.chmod(0o600)
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    import plistlib
+
+    with plist.open("wb") as handle:
+        plistlib.dump(
+            {
+                "Label": "com.unitares.governance-mcp",
+                "ProgramArguments": [
+                    "/usr/local/bin/with-cirwel-secrets",
+                    "--keys",
+                    "UNITARES_HTTP_API_TOKEN",
+                    "--",
+                    "/srv/unitares-deploy/src/mcp_server.py",
+                ],
+                "EnvironmentVariables": {
+                    "DB_POSTGRES_URL": "postgresql://localhost/governance",
+                    "CIRWEL_SECRETS_FILE": str(bad_secrets),
+                },
+            },
+            handle,
+        )
+    spec = ddd.PreflightSpec(
+        "governance-mcp",
+        str(plist),
+        ["/srv/unitares-deploy/src/mcp_server.py"],
+        require_exists=True,
+        require_env_keys=["DB_POSTGRES_URL"],
+        check_governance_bearer=True,
+    )
+    found = ddd.diagnose_preflights([spec], make_io())
+    assert len(found) == 1
+    assert found[0].condition == "preflight_refused"
+    assert "cannot read secrets file" in found[0].detail
+
+

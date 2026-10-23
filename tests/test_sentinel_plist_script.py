@@ -1018,6 +1018,7 @@ def test_rotate_script_runs_external_store_hook_and_verifies_live_socket(
         **_rotation_env(home, plist_buddy=fake, launchctl=fake),
         "UNITARES_EXTERNAL_BEARER_ROTATE_CMD": f"cat > {hook_capture!s}",
         "UNITARES_UDS_SOCKET": str(socket_path),
+        "UNITARES_ROTATE_VERIFY_WAIT_SECONDS": "0",
     }
 
     result = subprocess.run(
@@ -1041,4 +1042,118 @@ def test_rotate_script_runs_external_store_hook_and_verifies_live_socket(
     assert f"Authorization: Bearer {rotated_token}".encode() in captured[0]
     if status == 401:
         assert "rejected the rotated bearer (HTTP 401)" in result.stderr
+
+
+def test_rotate_script_rolls_back_when_external_store_hook_fails(
+    tmp_path: Path,
+) -> None:
+    """When UNITARES_EXTERNAL_BEARER_ROTATE_CMD exits non-zero, rotate-secrets.sh
+    aborts before rewriting client plists and restores the backed-up secrets file."""
+    home, sentinel = _rotation_home(tmp_path, include_sentinel_token=False)
+    governance = home / "Library/LaunchAgents/com.unitares.governance-mcp.plist"
+    _governance_without_bearer(governance)
+    client_plist = home / "Library/LaunchAgents/com.unitares.agent-orchestrator.plist"
+    _write_plist(
+        client_plist,
+        {"UNITARES_HTTP_API_TOKEN": "old-client-token"},
+        mode=0o600,
+    )
+    secrets_file = home / ".config/cirwel/secrets.env"
+    _write_secrets(secrets_file, "UNITARES_HTTP_API_TOKEN='old-http-token'\n")
+    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN", secrets_file=secrets_file)
+
+    fake_launchctl = tmp_path / "fake-launchctl"
+    _write_fake_command(fake_launchctl)
+    environment = {
+        **_rotation_env(
+            home,
+            plist_buddy=Path("/usr/libexec/PlistBuddy"),
+            launchctl=fake_launchctl,
+        ),
+        "UNITARES_EXTERNAL_BEARER_ROTATE_CMD": "echo 'keychain locked' >&2; exit 1",
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROTATE_SCRIPT)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert result.returncode != 0
+    assert "keychain locked" in result.stderr
+    assert "restoring secrets, plists, and anchors" in result.stderr
+    assert secrets_file.read_text() == "UNITARES_HTTP_API_TOKEN='old-http-token'\n"
+    with client_plist.open("rb") as handle:
+        client_payload = plistlib.load(handle)
+    assert (
+        client_payload["EnvironmentVariables"]["UNITARES_HTTP_API_TOKEN"]
+        == "old-client-token"
+    )
+
+
+def test_verify_bearer_polls_across_restart_and_reports_accurate_unreachable_cause(
+    tmp_path: Path,
+) -> None:
+    """check_bearer_live with wait_seconds>0 retries transient 401s from an
+    outgoing process, and an unreachable socket with a plist_env governance
+    plist does not falsely claim the plist lacks UNITARES_HTTP_API_TOKEN."""
+    import sys
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    import governance_bearer as gb
+
+    plist_env_gov = tmp_path / "gov-plist-env.plist"
+    _write_plist(
+        plist_env_gov,
+        {"UNITARES_HTTP_API_TOKEN": "configured-token"},
+        mode=0o600,
+    )
+    missing_sock = tmp_path / "missing.sock"
+    with pytest.raises(gb.PlistConfigError) as exc_info:
+        gb.check_bearer_live(
+            missing_sock,
+            "configured-token",
+            governance_plist=plist_env_gov,
+            subject="the rotated",
+            wait_seconds=0.0,
+        )
+    assert "keeps no UNITARES_HTTP_API_TOKEN" not in str(exc_info.value)
+    assert f"could not be reached over {missing_sock}" in str(exc_info.value)
+
+    short_socket_dir = tempfile.TemporaryDirectory(prefix="unitares-uds-", dir="/tmp")
+    socket_path = Path(short_socket_dir.name) / "governance.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(2)
+
+    def _serve_401_then_200() -> None:
+        try:
+            for status in (401, 200):
+                conn, _ = listener.accept()
+                with conn:
+                    conn.recv(4096)
+                    reason = "OK" if status == 200 else "Unauthorized"
+                    conn.sendall(
+                        f"HTTP/1.1 {status} {reason}\r\nContent-Length: 2\r\n\r\n{{}}".encode()
+                    )
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=_serve_401_then_200, daemon=True)
+    thread.start()
+    try:
+        gb.check_bearer_live(
+            socket_path,
+            "configured-token",
+            governance_plist=plist_env_gov,
+            subject="the rotated",
+            wait_seconds=2.0,
+            poll_interval=0.05,
+        )
+    finally:
+        thread.join(timeout=5)
+        short_socket_dir.cleanup()
+
 

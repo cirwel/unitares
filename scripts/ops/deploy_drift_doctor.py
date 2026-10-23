@@ -214,69 +214,141 @@ class PreflightSpec:
         self.uds_socket = os.path.expanduser(uds_socket) if uds_socket else None
 
 
-DEFAULT_PREFLIGHTS: List[PreflightSpec] = [
-    PreflightSpec(
-        "governance-mcp",
+def default_preflights(env: Optional[Dict[str, str]] = None) -> List[PreflightSpec]:
+    """Build the default read-only deploy preflights honoring the same environment
+    path overrides as the ``deploy-*.sh`` scripts."""
+    environ = os.environ if env is None else env
+    unitares_deploy = environ.get("UNITARES_DEPLOY", "~/projects/unitares-deploy")
+    mcp_deploy = environ.get("UNITARES_MCP_DEPLOY", unitares_deploy)
+    lease_plane_deploy = environ.get("UNITARES_LEASE_PLANE_DEPLOY", unitares_deploy)
+    orchestrator_deploy = environ.get(
+        "UNITARES_ORCHESTRATOR_DEPLOY", "~/projects/unitares-orchestrator-deploy"
+    )
+    bridge_deploy = environ.get(
+        "BRIDGE_DEPLOY", "~/projects/unitares-discord-bridge-deploy"
+    )
+    host_adapter_deploy = environ.get(
+        "HOST_ADAPTER_DEPLOY", "~/projects/unitares-host-adapter-deploy"
+    )
+    dispatch_deploy = environ.get(
+        "DISPATCH_DEPLOY", "~/projects/dispatch_beam-deploy"
+    )
+    governance_plist = environ.get(
+        "UNITARES_GOVERNANCE_PLIST",
         "~/Library/LaunchAgents/com.unitares.governance-mcp.plist",
-        ["~/projects/unitares-deploy/src/mcp_server.py"],
-        require_exists=True,
-        require_env_keys=["DB_POSTGRES_URL"],
-        check_governance_bearer=True,
-    ),
-    PreflightSpec(
-        "sentinel-beam",
-        "~/Library/LaunchAgents/com.unitares.sentinel-beam.plist",
-        ["~/projects/unitares-deploy"],
-        allow_env="UNITARES_SENTINEL_ALLOW_DEV",
-        check_sentinel_plist=True,
-        governance_plist="~/Library/LaunchAgents/com.unitares.governance-mcp.plist",
-        uds_socket="~/.unitares/governance.sock",
-    ),
-    PreflightSpec(
-        "gateway-mcp",
-        "~/Library/LaunchAgents/com.unitares.gateway-mcp.plist",
-        ["~/projects/unitares-deploy/src/gateway_server.py"],
-        allow_env="UNITARES_GATEWAY_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "lease-plane",
-        "~/Library/LaunchAgents/com.unitares.lease-plane.plist",
-        ["~/projects/unitares-deploy"],
-        allow_env="UNITARES_LEASE_PLANE_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "wave3a-handlers",
-        "~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist",
-        ["~/projects/unitares-deploy"],
-        allow_env="UNITARES_WAVE3A_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "dialectic-live",
-        "~/Library/LaunchAgents/com.unitares.dialectic-live.plist",
-        ["~/projects/unitares-deploy"],
-        allow_env="UNITARES_DIALECTIC_LIVE_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "agent-orchestrator",
-        "~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist",
-        ["~/projects/unitares-orchestrator-deploy/elixir/agent_orchestrator"],
-        allow_env="UNITARES_ORCHESTRATOR_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "discord-bridge",
-        "~/Library/LaunchAgents/com.unitares.discord-bridge.plist",
-        ["~/projects/unitares-discord-bridge-deploy/.venv/bin/python3"],
-        allow_env="BRIDGE_ALLOW_DEV",
-    ),
-    PreflightSpec(
-        "openai-gov-proxy",
-        "~/Library/LaunchAgents/com.unitares.openai-governance-proxy.plist",
-        [
-            "~/projects/unitares-host-adapter-deploy/.venv/bin/python3",
-            "~/projects/unitares-host-adapter-deploy/src",
-        ],
-    ),
-]
+    )
+    uds_socket = environ.get("UNITARES_UDS_SOCKET", "~/.unitares/governance.sock")
+
+    return [
+        PreflightSpec(
+            "governance-mcp",
+            governance_plist,
+            [f"{mcp_deploy}/src/mcp_server.py"],
+            require_exists=True,
+            require_env_keys=["DB_POSTGRES_URL"],
+            check_governance_bearer=True,
+        ),
+        PreflightSpec(
+            "sentinel-beam",
+            environ.get(
+                "UNITARES_SENTINEL_PLIST",
+                "~/Library/LaunchAgents/com.unitares.sentinel-beam.plist",
+            ),
+            [unitares_deploy],
+            allow_env="UNITARES_SENTINEL_ALLOW_DEV",
+            check_sentinel_plist=True,
+            governance_plist=governance_plist,
+            uds_socket=uds_socket,
+        ),
+        PreflightSpec(
+            "gateway-mcp",
+            environ.get(
+                "UNITARES_GATEWAY_PLIST",
+                "~/Library/LaunchAgents/com.unitares.gateway-mcp.plist",
+            ),
+            [f"{unitares_deploy}/src/gateway_server.py"],
+            allow_env="UNITARES_GATEWAY_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "lease-plane",
+            environ.get(
+                "UNITARES_LEASE_PLANE_PLIST",
+                "~/Library/LaunchAgents/com.unitares.lease-plane.plist",
+            ),
+            [lease_plane_deploy],
+            allow_env="UNITARES_LEASE_PLANE_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "wave3a-handlers",
+            environ.get(
+                "UNITARES_WAVE3A_PLIST",
+                "~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist",
+            ),
+            [unitares_deploy],
+            allow_env="UNITARES_WAVE3A_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "dialectic-live",
+            environ.get(
+                "UNITARES_DIALECTIC_LIVE_PLIST",
+                "~/Library/LaunchAgents/com.unitares.dialectic-live.plist",
+            ),
+            [unitares_deploy],
+            allow_env="UNITARES_DIALECTIC_LIVE_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "agent-orchestrator",
+            environ.get(
+                "UNITARES_ORCHESTRATOR_PLIST",
+                "~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist",
+            ),
+            [f"{orchestrator_deploy}/elixir/agent_orchestrator"],
+            require_exists=True,
+            allow_env="UNITARES_ORCHESTRATOR_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "discord-bridge",
+            environ.get(
+                "BRIDGE_PLIST",
+                "~/Library/LaunchAgents/com.unitares.discord-bridge.plist",
+            ),
+            [f"{bridge_deploy}/.venv/bin/python3"],
+            allow_env="BRIDGE_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "openai-gov-proxy",
+            environ.get(
+                "OPENAI_GOV_PROXY_PLIST",
+                "~/Library/LaunchAgents/com.unitares.openai-governance-proxy.plist",
+            ),
+            [
+                f"{host_adapter_deploy}/.venv/bin/python3",
+                f"{host_adapter_deploy}/src",
+            ],
+        ),
+        PreflightSpec(
+            "dispatch-beam",
+            environ.get(
+                "DISPATCH_PLIST",
+                "~/Library/LaunchAgents/com.cirwel.dispatch-beam.plist",
+            ),
+            [dispatch_deploy],
+            allow_env="DISPATCH_ALLOW_DEV",
+        ),
+        PreflightSpec(
+            "dispatch-beam-codex",
+            environ.get(
+                "DISPATCH_CODEX_PLIST",
+                "~/Library/LaunchAgents/com.cirwel.dispatch-beam-codex.plist",
+            ),
+            [dispatch_deploy],
+            allow_env="DISPATCH_ALLOW_DEV",
+        ),
+    ]
+
+
+_BUILTIN_PREFLIGHTS: List[PreflightSpec] = default_preflights()
+DEFAULT_PREFLIGHTS: List[PreflightSpec] = _BUILTIN_PREFLIGHTS
 
 
 # ---------------------------------------------------------------------------
@@ -640,10 +712,10 @@ def diagnose_preflight(
                 )
         if spec.check_governance_bearer:
             try:
-                from governance_bearer import PlistConfigError, resolve_plist_bearer
+                from governance_bearer import resolve_plist_bearer
 
                 resolve_plist_bearer(plist_path)
-            except PlistConfigError as exc:
+            except Exception as exc:
                 found.append(
                     Diagnosis(spec.service, "preflight_refused", str(exc))
                 )
@@ -669,7 +741,10 @@ def diagnose_preflights(
     """Run all configured read-only service deploy preflights."""
     found: List[Diagnosis] = []
     for spec in specs:
-        found.extend(diagnose_preflight(spec, io))
+        try:
+            found.extend(diagnose_preflight(spec, io))
+        except Exception as exc:
+            found.append(Diagnosis(spec.service, "preflight_refused", str(exc)))
     return found
 
 
@@ -690,7 +765,11 @@ class Doctor:
             and DEFAULT_SURFACES is _BUILTIN_SURFACES
             and (io is None or "sentinel_plist_check" in io)
         ):
-            self.preflights = DEFAULT_PREFLIGHTS
+            self.preflights = (
+                default_preflights()
+                if DEFAULT_PREFLIGHTS is _BUILTIN_PREFLIGHTS
+                else DEFAULT_PREFLIGHTS
+            )
         else:
             self.preflights = []
         self.io = {**DEFAULT_IO, **(io or {})}
