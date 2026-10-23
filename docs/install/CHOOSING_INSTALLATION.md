@@ -31,9 +31,13 @@ names the defaults and the explicit setup for each feature.
 
 The [managed Docker launcher](../../scripts/install/launch.sh) checks for a
 Homebrew `unitares` installation, a native environment file, and the standard
-native LaunchAgent. It reports discovered paths and stops before creating a
-checkout or starting Docker services. It does not read credentials from the
-native configuration, stop that installation, or move its data.
+native LaunchAgent. It reports discovered paths. A configured native service
+blocks creation of a new Docker checkout; a package alone does not, because
+its CLI can be used with Docker. An existing managed Docker checkout with its
+own `.env` can still be reused after the usual ownership, origin, release and
+clean-checkout validation. Its configuration is preserved. The launcher does
+not read credentials from native configuration, stop that installation, or
+move its data.
 
 Homebrew is located through `PATH` or its standard macOS/Linuxbrew executable
 locations. `UNITARES_NATIVE_ENV` can identify a custom native configuration.
@@ -63,9 +67,11 @@ uses these example ports. This option does not permit taking over another
 Docker checkout's fixed container names or volumes.
 
 For a new managed checkout the launcher saves these ports in `.env`, so later
-CLI updates keep them. For an existing checkout it requires matching literal
-port assignments in `.env` and never rewrites the file. Repeat the same explicit
-command to rerun the launcher alongside the native installation.
+CLI updates keep them. For an existing checkout it requires matching numeric
+port assignments in `.env`, optionally surrounded by single or double quotes,
+and never rewrites the file. Inline comments and variable expressions are
+rejected because the CLI's port reader does not resolve them. Repeat the same
+explicit command to rerun the launcher alongside the native installation.
 
 ## Know which server answered
 

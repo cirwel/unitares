@@ -17,6 +17,8 @@ for arg in "$@"; do
     *) fail 'expected up, --separate or --help' ;;
     esac
 done
+stack=${UNITARES_STACK_DIR:-"$HOME/.unitares/stack"}
+case "$stack" in /*) ;; *) fail 'UNITARES_STACK_DIR must be an absolute path' ;; esac
 
 # Probe installation metadata only: never source native.env, start a service,
 # or infer the owner of an HTTP endpoint from its version string.
@@ -34,7 +36,7 @@ if [ -n "$brew_command" ]; then
     case "$brew_prefix" in /*) ;; *) fail 'Homebrew returned an invalid prefix' ;; esac
     if [ -e "$brew_prefix/opt/unitares" ] || [ -L "$brew_prefix/opt/unitares" ]; then
         printf 'Existing Homebrew installation: %s\n' "$brew_prefix/opt/unitares" >&2
-        native=1
+        echo 'Package presence alone does not establish a configured native server.' >&2
     fi
 fi
 native_config=${UNITARES_NATIVE_ENV:-"${brew_prefix:-/opt/homebrew}/etc/unitares/native.env"}
@@ -47,7 +49,11 @@ if [ -f "$HOME/Library/LaunchAgents/com.unitares.governance-mcp.plist" ]; then
     native=1
 fi
 if [ "$native" = 1 ] && [ "$separate" = 0 ]; then
-    fail 'Use the existing native installation, or explicitly choose a separate Docker install with --separate and two alternate host ports. Nothing was installed. See https://github.com/cirwel/unitares/blob/master/docs/install/CHOOSING_INSTALLATION.md'
+    if [ -d "$stack/.git" ] && [ -f "$stack/.env" ]; then
+        echo 'Native configuration also exists; reusing the existing managed Docker checkout after validation. Its ports and data will be preserved.' >&2
+    else
+        fail 'Use the existing native installation, or explicitly choose a separate Docker install with --separate and two alternate host ports. Nothing was installed. See https://github.com/cirwel/unitares/blob/master/docs/install/CHOOSING_INSTALLATION.md'
+    fi
 fi
 if [ "$separate" = 1 ]; then
     # Explicit environment values override .env in Compose. Do not evaluate
@@ -66,8 +72,6 @@ done
 docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is required'
 docker info >/dev/null 2>&1 || fail 'Start the Docker daemon, then retry'
 
-stack=${UNITARES_STACK_DIR:-"$HOME/.unitares/stack"}
-case "$stack" in /*) ;; *) fail 'UNITARES_STACK_DIR must be an absolute path' ;; esac
 repo=https://github.com/cirwel/unitares.git
 # Check existing Compose ownership before creating a checkout or lock. Resolve
 # an existing parent without creating it, so symlinked paths still compare.
@@ -149,7 +153,13 @@ if [ "$separate" = 1 ]; then
               pos=index(line, "="); name=substr(line, 1, pos-1)
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
               if (pos && name==key) value=substr(line, pos+1) }
-            END { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value }
+            END {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                quote=substr(value, 1, 1)
+                if ((quote=="\"" || quote==sprintf("%c", 39)) && substr(value, length(value), 1)==quote)
+                    value=substr(value, 2, length(value)-2)
+                print value
+            }
         ' "$stack/.env")
         case "$key" in GOVERNANCE_HOST_PORT) expected=$GOVERNANCE_HOST_PORT ;; *) expected=$LEASE_PLANE_HOST_PORT ;; esac
         [ "$saved" = "$expected" ] \

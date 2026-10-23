@@ -136,12 +136,43 @@ def test_existing_homebrew_refused_before_docker_or_filesystem_changes(launcher)
     stack, env, launch = launcher
     native = Path(env['TEST_BREW_PREFIX']) / 'opt/unitares'
     native.mkdir(parents=True)
+    config = Path(env['TEST_BREW_PREFIX']) / 'etc/unitares/native.env'
+    config.parent.mkdir(parents=True)
+    config.write_text('native configuration')
     result = launch(TEST_DAEMON_RC='1')
     assert result.returncode != 0
     assert str(native) in result.stderr
     assert '--separate' in result.stderr
     assert not stack.parent.exists()
     assert not Path(env['TEST_DOCKER_LOG']).exists()
+
+
+def test_homebrew_cli_only_does_not_block_docker(launcher):
+    stack, env, launch = launcher
+    (Path(env['TEST_BREW_PREFIX']) / 'opt/unitares').mkdir(parents=True)
+    result = launch()
+    assert result.returncode == 0, result.stderr
+    assert 'Package presence alone' in result.stderr
+    assert (stack / '.env').exists()
+
+
+def test_existing_managed_stack_survives_later_native_configuration(launcher):
+    stack, env, launch = launcher
+    assert launch().returncode == 0
+    config = 'GOVERNANCE_HOST_PORT=8767\nLEASE_PLANE_HOST_PORT=8788\n'
+    (stack / '.env').write_text(config)
+    native = Path(env['TEST_BREW_PREFIX']) / 'etc/unitares/native.env'
+    native.parent.mkdir(parents=True)
+    native.write_text('native configuration')
+    result = launch(TEST_OWNER=str(stack))
+    assert result.returncode == 0, result.stderr
+    assert 'reusing the existing managed Docker checkout' in result.stderr
+    assert (stack / '.env').read_text() == config
+    # The reuse exception does not bypass checkout validation.
+    (stack / 'docker-compose.yml').write_text('edited')
+    rejected = launch(TEST_OWNER=str(stack))
+    assert rejected.returncode != 0
+    assert 'tracked edits' in rejected.stderr
 
 
 def test_native_config_detected_without_reading_or_executing_it(launcher, tmp_path):
@@ -212,6 +243,28 @@ def test_separate_rejects_later_conflicting_dotenv_assignment(launcher):
     result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
     assert result.returncode != 0
     assert 'Set the literal GOVERNANCE_HOST_PORT=18767' in result.stderr
+
+
+@pytest.mark.parametrize('quote', ["'", '"'])
+def test_separate_accepts_quoted_numeric_ports_without_rewriting(launcher, quote):
+    stack, _, launch = launcher
+    assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
+    config = f'GOVERNANCE_HOST_PORT={quote}18767{quote}\nLEASE_PLANE_HOST_PORT={quote}18788{quote}\n'
+    (stack / '.env').write_text(config)
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
+    assert result.returncode == 0, result.stderr
+    assert (stack / '.env').read_text() == config
+
+
+@pytest.mark.parametrize('value', ['18767 # note', '${OTHER_PORT}', '"${OTHER_PORT}"'])
+def test_separate_refuses_port_forms_the_cli_cannot_resolve(launcher, value):
+    stack, _, launch = launcher
+    assert launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788').returncode == 0
+    config = f'GOVERNANCE_HOST_PORT={value}\nLEASE_PLANE_HOST_PORT=18788\n'
+    (stack / '.env').write_text(config)
+    result = launch('--separate', GOVERNANCE_HOST_PORT='18767', LEASE_PLANE_HOST_PORT='18788')
+    assert result.returncode != 0
+    assert (stack / '.env').read_text() == config
 
 
 def test_pull_failure_stops_before_up(launcher):
