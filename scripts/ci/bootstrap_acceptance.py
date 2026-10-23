@@ -111,6 +111,46 @@ sys.exit(result.returncode)
     return marker
 
 
+def copy_artifact(source: Path, app: Path) -> None:
+    # Preserve archive symlinks, including optional dangling operator helpers;
+    # dereferencing them would copy files outside the artifact. Runtime data and
+    # local configuration are always replaced, never followed into the host.
+    shutil.copytree(source, app, symlinks=True, ignore=shutil.ignore_patterns(
+        ".git", ".env", ".env.*", "data", ".unitares", ".venv", "venv", "__pycache__",
+        ".test-cache", ".review-cache", ".scratch"))
+    (app / "data").mkdir()
+
+
+def runtime_environment(work: Path, db_url: str, redis_url: str) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
+    env.update({"DB_POSTGRES_URL": db_url, "DB_BACKEND": "postgres",
+                "REDIS_URL": redis_url, "UNITARES_RESIDENTS": "",
+                # Removing HOME alone is insufficient: Path.home() falls back
+                # to the account's home and the server loads ~/.env.mcp there.
+                # Use dotenv's supported opt-out and verify it before any DDL.
+                "PYTHON_DOTENV_DISABLED": "1", "UNITARES_SECRETS_ENV": "/dev/null",
+                "UNITARES_ANCHORS_DIR": str(work / "anchors"),
+                "UNITARES_WATCHER_DATA_DIR": str(work / "watcher"),
+                "UNITARES_KNOWLEDGE_BACKEND": "postgres", "UNITARES_DIALECTIC_BACKEND": "postgres",
+                "UNITARES_MODEL_BASE_URL": "http://127.0.0.1:1",
+                "LEASE_PLANE_BASE_URL": "http://127.0.0.1:1", "UNITARES_LEASE_PLANE_URL": "http://127.0.0.1:1"})
+    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', os.defpath)}"
+    return env
+
+
+def verify_dotenv_isolation(env: dict[str, str]) -> None:
+    result = subprocess.run([sys.executable, "-c", """
+import os
+from io import StringIO
+from dotenv import load_dotenv
+load_dotenv(stream=StringIO('UNITARES_ACCEPTANCE_DOTENV_PROBE=unexpected'), override=True)
+raise SystemExit(1 if 'UNITARES_ACCEPTANCE_DOTENV_PROBE' in os.environ else 0)
+"""], env=env, capture_output=True, timeout=10)
+    require(result.returncode == 0,
+            "Runtime must support PYTHON_DOTENV_DISABLED; refusing to load account configuration")
+
+
 def check_server(app: Path, work: Path, env: dict, launcher: str | None) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -168,21 +208,12 @@ def main() -> None:
     require(not work.exists(), "Use a new work-dir so old evidence cannot count as this run")
     psql = shutil.which("psql")
     require(psql is not None, "Real psql is required on PATH")
+    env = runtime_environment(work, args.db_url, args.redis_url)
+    verify_dotenv_isolation(env)
     empty_database(psql, args.db_url, args.expected_database)
     work.mkdir(parents=True)
     app = work / "app"
-    shutil.copytree(source, app, ignore=shutil.ignore_patterns(
-        ".git", ".env", ".env.*", "data", ".venv", "venv", "__pycache__", ".test-cache", ".review-cache", ".scratch"))
-    (app / "data").mkdir()
-    # No inherited deployment configuration, model credentials or residents.
-    env = {key: value for key, value in os.environ.items()
-           if key in {"PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
-    env.update({"DB_POSTGRES_URL": args.db_url, "DB_BACKEND": "postgres",
-                "REDIS_URL": args.redis_url, "UNITARES_RESIDENTS": "",
-                "UNITARES_SECRETS_ENV": "/dev/null", "UNITARES_KNOWLEDGE_BACKEND": "postgres",
-                "UNITARES_DIALECTIC_BACKEND": "postgres", "UNITARES_MODEL_BASE_URL": "http://127.0.0.1:1",
-                "LEASE_PLANE_BASE_URL": "http://127.0.0.1:1", "UNITARES_LEASE_PLANE_URL": "http://127.0.0.1:1"})
-    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', os.defpath)}"
+    copy_artifact(source, app)
     bootstrap = ["bash", str(app / "scripts/install/bootstrap_postgres.sh"), "--apply", "--db-url", args.db_url]
     runner = [sys.executable, str(app / "scripts/dev/apply_migrations.py"), "--db-url", args.db_url]
     interrupted = args.scenario == "interrupted"

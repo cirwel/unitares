@@ -84,3 +84,35 @@ def test_native_workflow_runs_both_scenarios_on_candidate_artifact():
 def test_failed_subprocess_is_not_reported_as_success(tmp_path):
     result = acceptance.run_logged(["/usr/bin/false"], tmp_path, {}, tmp_path / "failure.log")
     assert result == 1
+
+
+def test_artifact_copy_preserves_dangling_links_and_replaces_runtime_data(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    external = tmp_path / "existing-data"
+    external.mkdir()
+    (external / "keep").write_text("untouched")
+    (source / "data").symlink_to(external, target_is_directory=True)
+    (source / "optional-helper").symlink_to("missing-operator-helper")
+    (source / ".env").write_text("must not enter acceptance")
+    app = tmp_path / "app"
+    acceptance.copy_artifact(source, app)
+    assert (app / "optional-helper").is_symlink()
+    assert not (app / "data").is_symlink()
+    assert list((app / "data").iterdir()) == []
+    assert (external / "keep").read_text() == "untouched"
+    assert not (app / ".env").exists()
+
+
+def test_runtime_rejects_inherited_configuration_and_disables_dotenv(tmp_path, monkeypatch):
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/operator/socket")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-inherit")
+    env = acceptance.runtime_environment(tmp_path, "postgresql://fixture/acceptance", "redis://fixture/0")
+    assert "UNITARES_UDS_SOCKET" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert env["UNITARES_ANCHORS_DIR"] == str(tmp_path / "anchors")
+    acceptance.verify_dotenv_isolation(env)
+    # The same real dotenv runtime must fail this preflight without the opt-out.
+    env.pop("PYTHON_DOTENV_DISABLED")
+    with pytest.raises(RuntimeError, match="refusing to load account configuration"):
+        acceptance.verify_dotenv_isolation(env)
