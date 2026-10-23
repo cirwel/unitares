@@ -3631,8 +3631,10 @@ async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, 
 
 
 async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
-    """Project the existing response, then deliver bounded active-session notices."""
+    """Project the response, then attach bounded caller context and notices."""
     from src.knowledge_notices import attach_notices
+    from src.services.model_observations import attach_model_observation
 
     projected = await _apply_experience_envelope(name, arguments, ctx, result)
+    projected = await attach_model_observation(projected)
     return await attach_notices(name, arguments, ctx, projected)
