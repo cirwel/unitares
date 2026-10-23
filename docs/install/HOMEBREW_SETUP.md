@@ -1,7 +1,12 @@
 # Homebrew first-run configuration
 
-The Homebrew tap is still a local validation draft, not a published install
-channel. These commands apply to a package containing the setup helper.
+The [public Homebrew preview](https://github.com/cirwel/homebrew-unitares)
+provides the server and native dependencies for Apple Silicon Macs. Install it
+with the tap's documented `brew update`, `brew tap`, `brew trust` and
+`brew install` steps. Its [first-time setup instructions](https://github.com/cirwel/homebrew-unitares#first-time-setup)
+cover deliberate role/database creation and the installed bootstrap; no Docker
+or model server is required. These commands apply to a package containing the
+setup helper.
 From a source checkout, `--homebrew` selects the installed native package;
 a packaged CLI selects it automatically.
 
@@ -46,7 +51,7 @@ completed, **not** that the server is ready; read its database-readiness line.
   Unknown does not mean empty.
 - **No UNITARES migration registry:** this does not establish emptiness. Only
   if you deliberately created a new empty database, use the
-  [fresh native bootstrap](PLAYBOOK.md) for it. Keep both writers stopped. The
+  [Homebrew first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup) for it. Keep both writers stopped. The
   bootstrap script is `scripts/install/bootstrap_postgres.sh` inside
   `$(brew --prefix)/opt/unitares/libexec/app`; use the installed package's
   Python and PostgreSQL tools. An existing database without the registry may
