@@ -35,7 +35,7 @@ source_files:
 
 ## What It Is
 
-The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default store, and routing it through Apache AGE is opt-in (`UNITARES_KNOWLEDGE_BACKEND=age`). The AGE extension itself is still required by the server. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL: the relational rows are the canonical store. The Docker quickstart runs the AGE backend (`UNITARES_KNOWLEDGE_BACKEND=age`), which also writes the graph over those rows; a native install with the variable unset resolves to the `postgres` backend, which keeps the rows and full-text search without the graph. The AGE extension itself is required by the server either way. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
 
 ## Search Before Creating
 
@@ -298,6 +298,16 @@ high or critical store or update is refused with the typed `identity_required`
 refusal and nothing is written. Pass your `client_session_id` to write as
 yourself. Substrate-earned residents, which resolve by fingerprint by design,
 keep their attribution, as they do for check-ins.
+
+Under strict identity, naming yourself is not proof. A knowledge write that
+passes an `agent_id` with no binding behind it (no `client_session_id`,
+continuity token or other proof this call resolved) is refused with the same
+typed `identity_required` refusal, whatever the severity, and nothing is
+written. `supersede`, `cleanup`, `synthesize`, `promote` and `audit` have no
+anonymous fallback: they refuse any call without a binding, with or without
+an `agent_id`, and accept a server-inferred binding only for a substrate
+resident. Leave `agent_id` out and pass the `client_session_id` from
+`start_session`.
 
 ## Tagging Best Practices
 

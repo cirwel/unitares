@@ -45,6 +45,39 @@ control characters, credential-shaped values, and oversized values are rejected
 instead of truncated. The persisted envelope records why the value is missing
 without retaining the rejected text.
 
+## Model attribution on responses
+
+Successful caller-proven tool responses include `caller_model_observation` when
+a usable versioned model observation exists for that caller UUID. This field
+sits beside the identity signature and also survives compact friendly responses
+that omit the signature. Its `agent_uuid` always identifies the caller, even
+when an `agent` or `observe` read describes a different agent.
+
+The projection reads host observation audit events and non-synthetic governance
+state records. It carries the model identifier, source, exactness, verification
+and reporting channel, the separately sourced harness, original `observed_at`,
+and an audit-event or state-record pointer. `scope` is
+`latest_recorded_observation`: this is historical evidence, not a guarantee
+about the model serving the current request. A model switch appears after a
+new observation is recorded; an event without a model does not erase the last
+known one. A later caller-declared or inferred value keeps that provenance; it
+is not silently replaced by an older exact report.
+
+The existing `identity_context.harness_context` describes the current request
+and is not overwritten with historical evidence. UUIDs, names, binding assurance,
+lineage and authorization are unchanged. Neither `Codex` nor `Claude` in an
+agent label is used to infer a model. `exact=true` describes the reported
+identifier's specificity; `harness_reported_unverified` still means the server
+has not independently authenticated the provider's model selection.
+
+The read examines at most 32 model-bearing versioned records from each source,
+ordered by observation time, skipping invalid envelopes. Model-less records are
+filtered before this limit. Results are cached per UUID for up to 15 seconds
+with at most 256 entries per worker, and uncached reads have a 250 ms deadline.
+Unknown, failed or timed-out lookups omit the optional field rather than infer
+a value or fail the tool. There is no backfill, background task, new model call,
+or effect on governance decisions.
+
 ## Prospective boundary
 
 There is no safe backfill for historical nulls. A missing versioned envelope

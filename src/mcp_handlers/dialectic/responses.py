@@ -152,13 +152,17 @@ def get_session_exception_recovery() -> Dict[str, Any]:
 
 
 def llm_unavailable_recovery() -> Dict[str, Any]:
-    """Recovery payload when local Ollama is not available."""
+    """Recovery payload when the local model lane is not available."""
     return {
-        "action": "Start Ollama: `ollama serve` or use dialectic(action='request') for peer review",
+        "action": (
+            "Have the operator start the model server and name a model with "
+            "UNITARES_MODEL_ID (`unitares model`), or use "
+            "dialectic(action='request') for peer review"
+        ),
         "related_tools": ["dialectic", "health_check"],
         "workflow": [
-            "1. Check Ollama: curl http://localhost:11434/api/tags",
-            "2. Start if needed: ollama serve",
+            "1. Check the model server answers: GET {UNITARES_MODEL_BASE_URL}/models",
+            "2. Name a model it lists in UNITARES_MODEL_ID and restart the server",
             "3. Retry this tool",
         ],
     }

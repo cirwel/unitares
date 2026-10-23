@@ -73,12 +73,29 @@ DOI, so publish only the reviewed release commit.
    in the release PR's own diff, also run the documented Docker quickstart on a
    Docker-capable host and record the command/result in the release PR. Check
    the range with
-   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py .github/workflows/docker-quickstart.yml`.
+   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py scripts/ci/kg_graph_proof.py docker-compose.full.yml .github/workflows/docker-quickstart.yml`.
    This covers dependency resolution and stack wiring; application source is
    also copied into the image but deliberately does not trigger every rebuild.
    Delegating this check
    to CI counts only when the required CI workflow actually contains and passes
    that quickstart; a green Python/package test job is not equivalent evidence.
+   The required `test (3.12)` context also depends on **Native Bootstrap
+   Acceptance**. This extracts the exact candidate source archive, runs its
+   bare-metal bootstrap against real PostgreSQL with AGE/pgvector, checks every
+   checksum from migration 062 onward, and starts the native server until it is
+   ready with a connected database. A second isolated database tests interruption
+   immediately after 062 commits and recovery through `apply_migrations.py`,
+   preserving earlier records and the interrupted migration's NULL checksum.
+   Repeating the migration runner must leave the ledger unchanged. The workflow
+   retains logs, health output, source SHA and success evidence on GitHub.
+
+   Homebrew packaging needs its own installed-artifact acceptance in the tap:
+   use this repository's `scripts/ci/bootstrap_acceptance.py` with the installed
+   keg's application root, Python environment and server wrapper. A source-archive
+   pass does not establish formula/wrapper correctness. A local-only tap can run
+   the gate locally; it cannot claim automated publication enforcement until its
+   publication workflow depends on that result.
+
 4. Merge the release PR only after required CI is green, every applicable
    release-specific check from step 3 has recorded evidence, and an independent
    reviewer has checked the release notes, version choice, compatibility claims,

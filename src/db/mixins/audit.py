@@ -13,8 +13,32 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+
+
 class AuditMixin:
     """Audit event operations."""
+
+    async def read_audit_model_observation_candidates(
+        self, agent_id: str, *, event_types: List[str],
+        observed_before: datetime, limit: int = 32,
+    ) -> List[Dict[str, Any]]:
+        """Model-bearing host observations, scoped to UUID and observation time."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ts AS observed_at, event_id::text AS record_id,
+                       'audit_event'::text AS record_kind,
+                       payload->'runtime_provenance' AS provenance
+                FROM audit.events
+                WHERE agent_id = $1 AND event_type = ANY($2::text[]) AND ts <= $3
+                  AND payload#>>'{runtime_provenance,schema}' = 's22.runtime_provenance.v1'
+                  AND jsonb_typeof(payload#>'{runtime_provenance,model,identifier}') = 'string'
+                  AND length(payload#>>'{runtime_provenance,model,identifier}') BETWEEN 1 AND 160
+                ORDER BY ts DESC, event_id DESC LIMIT $4
+                """,
+                agent_id, event_types, observed_before, max(1, min(limit, 32)),
+            )
+        return [dict(row) for row in rows]
 
     async def record_r1_score_audit(self, record: Dict[str, Any]) -> bool:
         """R1 v3.3-A: persist the full score record to audit.r1_score_audit.

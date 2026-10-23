@@ -1,4 +1,0 @@
-- **dialectic reviewer:** the Claude and Codex reviewer CLIs now get an allowlisted environment and run in their own process group.
-  - **Before:** they inherited the reviewer process's whole environment. The reviewer runs under the agent orchestrator, whose environment carries service bearers and, from the secrets file, metered API keys, which would move a subscription CLI onto metered billing.
-  - **Now:** they get only the review gate's reviewer allowlist: `PATH`, `HOME` (their logins live under it), `USER` (filled in when missing), `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`, `XDG_RUNTIME_DIR`, locale, proxy and CA variables, and `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `NODE_EXTRA_CA_CERTS`.
-  - **Timeouts:** a timeout now kills the CLI's whole process group, where it used to kill only the CLI process and could leave codex's sandboxed children running.
