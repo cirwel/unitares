@@ -99,7 +99,28 @@ jobs:
           gh label create agent-via-operator-login --repo "$REPO" --color FBCA04 \
             --description "Agent PR opened through the operator's GitHub login (no App credential); not an operator act" \
             --force > /dev/null || true
-          jq -c '{labels: ([.labels[].name | select(. != "approved-to-merge" and . != "operator-armed")] + ["agent-via-operator-login"] | unique)}' \
+          # Every agent PR is authored by an App, so the author filter cannot
+          # tell model families apart. Label the family named by the body's
+          # last `Model:` line, matching what a local App runner can add, so
+          # hosted and local agent PRs filter alike. A filter, not provenance.
+          MODEL_LABEL="$(jq -r '
+            [(.body // "") | splits("\r?\n") | capture("^Model:[ \t]*(?<m>\\S+)"; "i") | .m]
+            | ((last // "") | ascii_downcase | split("/") | last) // ""
+            | if . == "claude" or startswith("claude-") then "agent/claude"
+              elif . == "gpt" or startswith("gpt-") then "agent/gpt"
+              elif . == "gemini" or startswith("gemini-") then "agent/gemini"
+              else "" end' "$RUNNER_TEMP/pr.json" || true)"
+          case "$MODEL_LABEL" in
+            agent/claude) COLOUR=d97757 DESCRIPTION="Opened by an agent running a Claude model" ;;
+            agent/gpt) COLOUR=10a37f DESCRIPTION="Opened by an agent running a GPT model (Codex, gpt-oss)" ;;
+            agent/gemini) COLOUR=4285f4 DESCRIPTION="Opened by an agent running a Gemini model (agy)" ;;
+            *) MODEL_LABEL="" ;;
+          esac
+          if [ -n "$MODEL_LABEL" ]; then
+            gh label create "$MODEL_LABEL" --repo "$REPO" --color "$COLOUR" \
+              --description "$DESCRIPTION" --force > /dev/null || true
+          fi
+          jq -c --arg model "$MODEL_LABEL" '{labels: ([.labels[].name | select(. != "approved-to-merge" and . != "operator-armed")] + ["agent-via-operator-login"] + (if $model == "" then [] else [$model] end) | unique)}' \
             "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/labels.json"
           GH_TOKEN="$APP_TOKEN" gh api -X POST "repos/$REPO/issues/$NEW/labels" \
             --input "$RUNNER_TEMP/labels.json" > /dev/null || echo "::warning::Labels were not copied to #$NEW."
