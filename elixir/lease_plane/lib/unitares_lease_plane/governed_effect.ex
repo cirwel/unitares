@@ -824,11 +824,24 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
       case acquire_all(canon_leases, env.proposer_agent_uuid) do
         {:ok, acquired} ->
-          # No `after`: a failed executor must retain its durable reservation.
-          # Expiry cannot release an admitted write whose outcome is unknown.
-          {reply, custody} = under_custody(env, effect_id, digest, acquired)
-          if custody == :release, do: release_all(acquired)
-          reply
+          # Admitted writes reserve durable custody via migration 076's
+          # effect_fence trigger. If the request process crashes or raises
+          # before admission commits a payload row (or after a clean rollback
+          # tombstones it), release_uncommitted_custody returns the unfenced
+          # lease immediately so a same-key retry does not hit lease_held (#2620).
+          watcher = start_custody_watcher(effect_id, acquired)
+
+          try do
+            {reply, custody} = under_custody(env, effect_id, digest, acquired)
+            stop_custody_watcher(watcher)
+            if custody == :release, do: release_all(acquired)
+            reply
+          catch
+            kind, reason ->
+              stop_custody_watcher(watcher)
+              release_uncommitted_custody(effect_id, acquired)
+              :erlang.raise(kind, reason, __STACKTRACE__)
+          end
 
         {:error, :held_by_other} ->
           {:error, :lease_held}
@@ -916,6 +929,66 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp custody_after({:committed, %{custody_retained: true}}), do: :hold
   defp custody_after({:committed, %{mark_deferred: true}}), do: :hold
   defp custody_after(_), do: :release
+
+  # Monitor the caller process across under_custody so an untrappable exit
+  # (e.g. Bandit request death or Process.exit(pid, :kill) during the veto HTTP
+  # call) still releases pre-admission leases without adopting :idempotent rows.
+  defp start_custody_watcher(effect_id, acquired) do
+    caller = self()
+
+    spawn_monitor(fn ->
+      ref = Process.monitor(caller)
+
+      receive do
+        {:disarm, ^caller} ->
+          Process.demonitor(ref, [:flush])
+          send(caller, {:disarmed, self()})
+
+        {:DOWN, ^ref, :process, ^caller, _reason} ->
+          release_uncommitted_custody(effect_id, acquired)
+      end
+    end)
+  end
+
+  defp stop_custody_watcher({pid, ref}) do
+    send(pid, {:disarm, self()})
+
+    receive do
+      {:disarmed, ^pid} ->
+        Process.demonitor(ref, [:flush])
+        :ok
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
+    after
+      5_000 ->
+        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :kill)
+        :ok
+    end
+  end
+
+  # Release acquired leases on abnormal exit ONLY when the effect never left an
+  # active or committed payload row (#2620). If Repo.begin_effect_custody
+  # admitted the write, migration 076's effect_fence trigger already blocks
+  # release while filesystem I/O is in flight or dirty; checking get_payload
+  # also keeps custody if the process crashed after finish_effect_custody
+  # retired the fence on a committed write but before persist_execute wrote
+  # the audit.events idempotency record.
+  defp release_uncommitted_custody(effect_id, acquired) do
+    case EffectRepo.get_payload(effect_id) do
+      {:ok, nil} ->
+        release_all(acquired)
+
+      {:ok, %{rollback_state: "tombstoned", committed_at: nil}} ->
+        release_all(acquired)
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
 
   # Durable row for the commit path only — a dry-run writes nothing and needs no
   # rollback row, so it would otherwise leave an orphan for recovery to reconcile.
