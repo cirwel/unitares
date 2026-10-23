@@ -88,6 +88,20 @@ describe("Timeline tab", () => {
     expect(t.rows()[1].querySelector(".tl-sub").textContent).toContain("declared lineage from agent-0");
   });
 
+  it("draws lineage marks without stray text", async () => {
+    const t = await mount(fixture(30));
+    expect(t.rows()[0].querySelector(".tl-mk.lineage").textContent).toBe("");
+  });
+
+  it("keeps a recently active subagent of a quiet parent inside the row cap", async () => {
+    const r = fixture(30);
+    // agent-28 is the 29th most recent root; give it a subagent busier than anyone.
+    r.agents.push({ agent_id: uid(99), label: "busy-child", spawn_reason: "subagent", parent_agent_id: uid(28) });
+    r.events.push({ kind: "checkin", ts: iso(1), agent_id: uid(99), authored_by: "agent", action: "approve" });
+    const t = await mount(r);
+    expect(t.names().slice(0, 2)).toEqual(["agent-28", "busy-child"]);
+  });
+
   it("filters rows by label or id", async () => {
     const t = await mount(fixture(30));
     const input = t.doc.getElementById("tl-filter");
@@ -163,6 +177,26 @@ describe("Timeline tab", () => {
     const n = t.calls.length;
     await t.dom.window.Timeline.refresh();
     expect(t.calls).toHaveLength(n);
+  });
+
+  it("renders only the newest request when windows are switched quickly", async () => {
+    const dom = new JSDOM(`<div id="tl-mount"></div>`, { runScripts: "outside-only", url: "https://gov.example/dashboard" });
+    const pending = [];
+    dom.window.DATA = { timeline: (opts) => new Promise((resolve) => pending.push({ opts, resolve })) };
+    dom.window.eval(sectionSource);
+    const first = dom.window.Timeline.load();
+    pending[0].resolve({ source: "live", data: fixture(3) });
+    await first;
+    const doc = dom.window.document;
+    doc.querySelector('.tl-win[data-h="1"]').click();
+    doc.querySelector('.tl-win[data-h="24"]').click();
+    const [one, day] = pending.slice(1);
+    day.resolve({ source: "live", data: Object.assign(fixture(3), { hours: 24 }) });
+    await new Promise((r) => setTimeout(r, 0));
+    one.resolve({ source: "live", data: Object.assign(fixture(3), { hours: 1 }) });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(doc.getElementById("tl-counts").textContent).toContain("Last 24h");
+    expect(doc.querySelector('.tl-win[aria-pressed="true"]').dataset.h).toBe("24");
   });
 
   it("keeps the selection across a refresh", async () => {

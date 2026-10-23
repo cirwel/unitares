@@ -110,7 +110,7 @@
         const spawnReason = (meta[e.agent_id] || {}).spawn_reason || null;
         const le = Object.assign({}, e, { spawn_reason: spawnReason, relation: relationOf(spawnReason) });
         const p = rowOf(e.parent_agent_id);
-        p.marks.push({ key: keep(le), cls: "lineage", left: pct(e.ts), e: le });
+        p.marks.push({ key: keep(le), cls: "lineage", glyph: "", left: pct(e.ts), e: le });
         p.last = Math.max(p.last, t);
         return;
       }
@@ -155,7 +155,17 @@
       if (r.parent === r.id) r.parent = null;
       r.relation = relationOf(m.spawn_reason);
     });
-    const byRecency = Object.values(rows).sort((a, b) => b.last - a.last);
+    // A family sorts by its most recent member, so a busy subagent under a
+    // quiet parent still lands near the top rather than past the row cap.
+    const kids = {};
+    Object.values(rows).forEach((r) => { if (r.parent && r.parent !== r.id && rows[r.parent]) (kids[r.parent] = kids[r.parent] || []).push(r); });
+    const latest = (r, seen = new Set()) => {
+      if (seen.has(r.id)) return r.last;
+      seen.add(r.id);
+      return Math.max(r.last, ...(kids[r.id] || []).map((c) => latest(c, seen)));
+    };
+    Object.values(rows).forEach((r) => { r.familyLast = latest(r); });
+    const byRecency = Object.values(rows).sort((a, b) => b.familyLast - a.familyLast);
     const ordered = [];
     const placed = new Set();
     const place = (r, depth) => {
@@ -182,7 +192,7 @@
     const bands = r.bands.map((b) => `<button type="button" class="tl-band ${b.cls}${state.sel === b.key ? " sel" : ""}" style="left:${b.left.toFixed(3)}%;width:${b.width.toFixed(3)}%" data-k="${esc(b.key)}" aria-label="${esc(title(b.e))}, ${esc(r.label)}"></button>`).join("");
     const marks = r.marks.map((m) => {
       const label = `${title(m.e)}, ${r.label}, ${utc(m.e.ts)}`;
-      return `<button type="button" class="tl-mk ${m.cls}${state.sel === m.key ? " sel" : ""}" style="left:${m.left.toFixed(3)}%" data-k="${esc(m.key)}" aria-label="${esc(label)}" title="${esc(label)}"><span class="tl-dot">${m.glyph}</span></button>`;
+      return `<button type="button" class="tl-mk ${m.cls}${state.sel === m.key ? " sel" : ""}" style="left:${m.left.toFixed(3)}%" data-k="${esc(m.key)}" aria-label="${esc(label)}" title="${esc(label)}"><span class="tl-dot">${m.glyph || ""}</span></button>`;
     }).join("");
     return `<div class="tl-row${r.child ? " child" : ""}">
       <div class="tl-lab"><div class="tl-name" title="${esc(r.id)}">${esc(r.label)}</div><div class="tl-sub">${sub}</div></div>
@@ -319,8 +329,13 @@
     $("#tl-detail").innerHTML = detailHtml(BY_KEY[state.sel], view.labels);
   }
 
+  // Only the newest request may render: switching 1h then 24h must not let a
+  // slower 1h answer replace the 24h one.
+  let seq = 0;
   async function load() {
+    const mine = ++seq;
     const r = await DATA.timeline({ hours: state.hours, includeSubstrate: state.includeSubstrate });
+    if (mine !== seq) return;
     MODEL = Object.assign({}, r.data, { source: r.source });
     if (!built || !$("#tl-filter")) skeleton();
     body();
