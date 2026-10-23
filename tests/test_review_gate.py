@@ -1084,7 +1084,11 @@ def test_branch_author_family_reads_only_the_author_prefix(branch, family):
     assert rg.branch_author_family(branch) == family
 
 
-def _author_sweep(monkeypatch, tmp_path, branch, choices):
+def _author_sweep(monkeypatch, tmp_path, branch, choices, agy_model=None):
+    if agy_model is None:
+        monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)  # agy's default model is Gemini
+    else:
+        monkeypatch.setenv("REVIEW_AGY_MODEL", agy_model)
     pr = _pr(3)
     pr["headRefName"] = branch
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
@@ -1125,6 +1129,16 @@ def test_sweep_skips_reviewers_from_the_authors_family(monkeypatch, tmp_path, br
 ])
 def test_sweep_falls_back_past_the_authors_family_in_configured_order(monkeypatch, tmp_path, branch, choices, expected):
     calls = _author_sweep(monkeypatch, tmp_path, branch, choices)
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+@pytest.mark.parametrize("branch,expected", [
+    ("claude/x", "codex"),        # agy would run Claude here: same family as the author
+    ("gemini/x", "antigravity"),  # ...and so it is an independent reviewer of a Gemini PR
+])
+def test_sweep_judges_agy_by_the_model_it_would_run(monkeypatch, tmp_path, branch, expected):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, ["antigravity", "codex"],
+                          agy_model="claude-sonnet-4-6")
     assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
 
 
@@ -4427,6 +4441,7 @@ def test_required_family_skips_the_authors_family(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "base_policy_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
     monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a: ["claude", "antigravity"])
     monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
     monkeypatch.setattr(rg, "_run", lambda *a, **k: "")

@@ -3827,8 +3827,9 @@ def branch_author_family(branch: str) -> str | None:
     """The model family an agent branch names in its author prefix
     (`codex/…`, `claude/…`, `gemini/…`), or None for any other branch.
 
-    The sweep skips configured reviewers of that family, so each PR is read
-    by another model family than the one that wrote it (operator direction,
+    The sweep skips configured reviewers of that family, judged by the model
+    each would run here (agy by its configured model), so each PR is read by
+    another model family than the one that wrote it (operator direction,
     2026-10-23). The prefix is the branch-naming convention, not proof of
     authorship; a branch without one is reviewed in the configured order."""
     prefix, sep, _ = (branch or "").partition("/")
@@ -3887,7 +3888,7 @@ def cmd_sweep(args) -> int:
                     eligible = ([] if waived else second_family_candidates(
                         p["headRefName"], families, comments, key))
                     selected = next((p for p in choices if p in eligible
-                                     and reviewer_family(p) != authored_by), None)
+                                     and provider_family(p) != authored_by), None)
                     if selected:
                         reviewer = selected
                         required_family = True
@@ -3915,7 +3916,7 @@ def cmd_sweep(args) -> int:
             usable = reviewer_candidates(p["headRefName"])
             reviewer = next((provider for provider in choices
                              if provider in usable
-                             and reviewer_family(provider) != authored_by
+                             and provider_family(provider) != authored_by
                              and ((provider == "codex" and native_enabled())
                                   or not provider_cooldown(provider))
                              and failed_runs(comments, key, provider) < SWEEP_MAX_FAILED), None)
