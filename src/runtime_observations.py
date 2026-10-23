@@ -29,9 +29,15 @@ RUNTIME_EVENT_PREFIX = "runtime_observation."
 # path but read by ``src/identity/compaction_outcomes.py``, never here.
 ACTIVITY_KINDS = ("activity_rollup", "heartbeat")
 COMPACTION_KIND = "context_compaction"
-VALID_KINDS = {*ACTIVITY_KINDS, COMPACTION_KIND}
+# The agent's own answer, after a compaction, to whether it is the same
+# running process. Read beside the compaction's outcome, never as evidence of
+# what the process is (docs/ontology/identity.md, *Compaction*).
+PROBE_KIND = "context_compaction_probe"
+PROBE_ANSWERS = ("same_process", "new_process", "cannot_tell", "no_answer")
+VALID_KINDS = {*ACTIVITY_KINDS, COMPACTION_KIND, PROBE_KIND}
 RUNTIME_EVENT_TYPES = tuple(RUNTIME_EVENT_PREFIX + kind for kind in ACTIVITY_KINDS)
 COMPACTION_EVENT_TYPE = RUNTIME_EVENT_PREFIX + COMPACTION_KIND
+PROBE_EVENT_TYPE = RUNTIME_EVENT_PREFIX + PROBE_KIND
 RUNTIME_RECENT_SECONDS = 3600.0
 EXECUTION_MODES = {"interactive", "automation", "ephemeral", "unknown"}
 EXECUTION_MODE_SOURCES = {
@@ -53,6 +59,7 @@ RESTORATION_CONTEXT_KEYS = (
 )
 _SLOT_HASH_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9_.-]{1,32}$")
+_PROBE_VERSION_RE = re.compile(r"^[a-z0-9_.-]{1,32}$")
 _EVENT_NAMESPACE = uuid.UUID("d4bb38de-7a45-4f5a-82df-4864eac82e9d")
 
 
@@ -644,6 +651,46 @@ def _session_is_live(session: Any, now: datetime) -> bool:
     return expires_at > now
 
 
+def _normalize_probe(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a continuity-probe answer and the compaction it answers.
+
+    The answer is the agent's (``agent_report``); ``no_answer`` is the hook
+    noting that the agent gave none, so it stays a substrate observation.
+    ``compaction_agent_uuid`` names the identity the compaction was recorded
+    on. It may differ from the posting identity when the agent minted in
+    between, which is itself part of what the probe is read beside.
+    """
+    answer = str(payload.get("probe_answer") or "").strip().lower()
+    if answer not in PROBE_ANSWERS:
+        raise RuntimeObservationError(
+            f"'probe_answer' must be one of {list(PROBE_ANSWERS)}"
+        )
+    version = str(payload.get("probe_version") or "").strip().lower()
+    if not _PROBE_VERSION_RE.fullmatch(version):
+        raise RuntimeObservationError("missing or invalid 'probe_version'")
+    raw_compacted = str(payload.get("compaction_agent_uuid") or "").strip()
+    try:
+        compaction_agent_uuid = str(uuid.UUID(raw_compacted))
+    except (ValueError, AttributeError) as exc:
+        raise RuntimeObservationError("'compaction_agent_uuid' must be a UUID") from exc
+    if payload.get("compaction_observed_at") in (None, ""):
+        raise RuntimeObservationError("missing 'compaction_observed_at'")
+    compaction_observed_at = _parse_observed_at(payload.get("compaction_observed_at"))
+    guidance_present = payload.get("guidance_present")
+    if not isinstance(guidance_present, bool):
+        raise RuntimeObservationError("'guidance_present' must be a boolean")
+    authored = answer != "no_answer"
+    return {
+        "probe_answer": answer,
+        "probe_version": version,
+        "compaction_agent_uuid": compaction_agent_uuid,
+        "compaction_observed_at": compaction_observed_at.isoformat(),
+        "guidance_present": guidance_present,
+        "epistemic_class": "agent_report" if authored else "substrate_observation",
+        "agent_authored": authored,
+    }
+
+
 def _normalize(
     payload: dict[str, Any],
 ) -> tuple[str, str, str, datetime, dict[str, Any]]:
@@ -736,6 +783,7 @@ def _normalize(
         "measurement_scope": {
             "heartbeat": "hook_parent_process_liveness",
             COMPACTION_KIND: "host_reported_context_compaction",
+            PROBE_KIND: "agent_reported_continuity_belief",
         }.get(kind, "completed_tool_event_receipts"),
         "host_process_scope": "hook_parent" if kind == "heartbeat" else None,
         "session_activity_evidence": False,
@@ -753,6 +801,9 @@ def _normalize(
         # The host replaced this session's context with a summary and kept
         # running. That is not tool activity and must not extend the session.
         normalized["tool_delta"] = 0
+    elif kind == PROBE_KIND:
+        normalized["tool_delta"] = 0
+        normalized.update(_normalize_probe(payload))
     else:
         normalized["session_activity_evidence"] = normalized["tool_delta"] > 0
 
@@ -886,7 +937,7 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
         "event_type": RUNTIME_EVENT_PREFIX + normalized["observation_kind"],
         "agent_uuid": agent_uuid,
         "client_session_id": session_id,
-        "epistemic_class": "substrate_observation",
+        "epistemic_class": normalized["epistemic_class"],
         "measurement_scope": normalized["measurement_scope"],
         "session_activity_refreshed": session_activity_refreshed,
         "agent_runtime_evidence": False,

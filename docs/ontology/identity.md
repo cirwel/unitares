@@ -419,6 +419,21 @@ consult) or `no_later_activity`. The outcome
 describes the record, not the agent's view of itself, and a compaction without
 a usable binding cannot be recorded, so it does not appear.
 
+The agent's view is recorded beside it where an adapter asks for it. An
+opt-in continuity probe puts one question to the agent in the compaction
+context: same running process, new process, or cannot tell. The adapter then
+reads the agent's answer from the end of that turn and records it on the same
+route (`observation_kind="context_compaction_probe"`), keyed to the
+compaction by the identity and time it was recorded on. A turn that ends
+without an answer is recorded as `no_answer`, which is the hook's note, not
+the agent's report. The report shows each answer beside its outcome and counts
+agreement: `same_process` with `kept`, `new_process` with `minted`. The
+question is asked with the compaction guidance above in the same context
+(`guidance_present`), so the probe cannot read what an agent would say
+unprompted. What it can read is whether stated belief tracks the act. A
+`same_process` answer beside a `minted` outcome points to a mechanical cause,
+such as a reconstructed `client_session_id`, rather than a belief.
+
 ### Cross-role lineage envelope (role families)
 
 Lineage declaration is gated at onboard by a cross-role pre-check

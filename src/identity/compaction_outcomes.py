@@ -24,6 +24,14 @@ the identity continued, not that the agent judged it should. A compaction with
 no usable binding is never recorded, because the route needs the session's
 proof, so those compactions do not appear here at all.
 
+The agent's view is read separately, where an adapter asked for it: a
+``context_compaction_probe`` row carries the agent's own answer (same process,
+new process, cannot tell) or the hook's note that it gave none, keyed to the
+compaction it answers. Each row then shows the answer beside the outcome. The
+answer was given with the operator's compaction guidance in the same context
+(``guidance_present``), so agreement between the two shows whether stated
+belief tracks what happened, not what the agent would say unprompted.
+
 The identity ontology (``docs/ontology/identity.md``, *Compaction*) says why
 the two outcomes are worth comparing.
 """
@@ -35,9 +43,16 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from src.runtime_observations import COMPACTION_EVENT_TYPE
+from src.runtime_observations import (
+    COMPACTION_EVENT_TYPE,
+    PROBE_ANSWERS,
+    PROBE_EVENT_TYPE,
+)
 
 OUTCOMES = ("minted", "kept", "no_later_activity")
+# The answer that matches each outcome. ``cannot_tell``, ``no_answer`` and
+# ``no_later_activity`` match nothing and are counted, not scored.
+AGREEING_ANSWER = {"kept": "same_process", "minted": "new_process"}
 # Audit rows written for an identity's own action: one ``auto_attest`` per
 # check-in (the agent checking in), ``knowledge_write`` (the author) and
 # ``consultation`` (the requester).
@@ -61,12 +76,83 @@ def _utc(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _probes_by_compaction(
+    probes: Iterable[Mapping[str, Any]],
+) -> tuple[dict[tuple[str, datetime], dict[str, Any]], int]:
+    """Key probe answers by (compacted identity, compaction time).
+
+    The first answer recorded for a compaction is kept; later ones for the same
+    compaction are counted as duplicates, not read.
+    """
+    keyed: dict[tuple[str, datetime], dict[str, Any]] = {}
+    duplicates = 0
+    ordered = sorted(
+        probes, key=lambda row: _utc(row.get("timestamp")) or datetime.max.replace(tzinfo=timezone.utc)
+    )
+    for row in ordered:
+        details = row.get("details") if isinstance(row.get("details"), Mapping) else {}
+        compacted = str(details.get("compaction_agent_uuid") or "").strip()
+        at = _utc(details.get("compaction_observed_at"))
+        answer = str(details.get("probe_answer") or "")
+        if not compacted or at is None or answer not in PROBE_ANSWERS:
+            continue
+        key = (compacted, at)
+        if key in keyed:
+            duplicates += 1
+            continue
+        keyed[key] = {
+            "answer": answer,
+            "probe_version": str(details.get("probe_version") or ""),
+            "guidance_present": details.get("guidance_present") is True,
+            "answered_by": str(row.get("agent_id") or ""),
+        }
+    return keyed, duplicates
+
+
+def _probe_summary(rows: list[dict[str, Any]], duplicates: int) -> dict[str, Any]:
+    asked = [row for row in rows if row["probe"] is not None]
+    by_outcome = {
+        answer: {name: 0 for name in OUTCOMES} for answer in PROBE_ANSWERS
+    }
+    agree = disagree = 0
+    for row in asked:
+        answer = row["probe"]["answer"]
+        by_outcome[answer][row["outcome"]] += 1
+        expected = AGREEING_ANSWER.get(row["outcome"])
+        if expected is None or answer not in AGREEING_ANSWER.values():
+            continue
+        if answer == expected:
+            agree += 1
+        else:
+            disagree += 1
+    return {
+        "asked": len(asked),
+        "answers": {
+            answer: sum(1 for row in asked if row["probe"]["answer"] == answer)
+            for answer in PROBE_ANSWERS
+        },
+        "by_answer_and_outcome": by_outcome,
+        "decisive_pairs": agree + disagree,
+        "agree": agree,
+        "disagree": disagree,
+        "answered_by_other_identity": sum(
+            1 for row in asked if row["probe"]["answered_by"] != row["agent_id"]
+        ),
+        "duplicates_ignored": duplicates,
+        "scope": (
+            "Answers given with the compaction guidance in context; agreement "
+            "pairs same_process with kept and new_process with minted."
+        ),
+    }
+
+
 def classify_compaction_outcomes(
     compactions: Iterable[Mapping[str, Any]],
     children: Iterable[Mapping[str, Any]],
     last_activity: Mapping[str, Any],
     *,
     through: datetime | None = None,
+    probes: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Classify compactions against minted children and later activity.
 
@@ -80,8 +166,11 @@ def classify_compaction_outcomes(
     ``event_id``). ``children`` are identities with
     ``spawn_reason="compaction"`` (``agent_id``, ``parent_agent_id``,
     ``created_at``). ``last_activity`` maps an agent id to the time of its
-    latest audit event that is not a runtime observation.
+    latest audit event that is not a runtime observation. ``probes`` are
+    ``context_compaction_probe`` audit rows, matched to a compaction by the
+    identity and time it names.
     """
+    probe_index, probe_duplicates = _probes_by_compaction(probes)
     by_agent: dict[str, list[tuple[datetime, Mapping[str, Any]]]] = {}
     excluded_at_cutoff = 0
     for row in compactions:
@@ -121,6 +210,7 @@ def classify_compaction_outcomes(
             else:
                 outcome = "no_later_activity"
             details = row.get("details") if isinstance(row.get("details"), Mapping) else {}
+            reported_at = _utc(details.get("observed_at")) or at
             rows.append(
                 {
                     "agent_id": agent_id,
@@ -129,6 +219,11 @@ def classify_compaction_outcomes(
                     "host_family": str(details.get("host_family") or "unknown"),
                     "outcome": outcome,
                     "minted_children": minted,
+                    "probe": (
+                        probe_index.get((agent_id, reported_at))
+                        if reported_at is not None
+                        else None
+                    ),
                 }
             )
 
@@ -145,6 +240,7 @@ def classify_compaction_outcomes(
             for host, counts in sorted(by_host.items())
         },
         "rows": rows,
+        "probe": _probe_summary(rows, probe_duplicates),
         "complete": through is None,
         "excluded_at_cutoff": excluded_at_cutoff,
         "scope": (
@@ -154,20 +250,22 @@ def classify_compaction_outcomes(
     }
 
 
-async def collect_compaction_outcomes(
-    *, since: datetime, page_size: int = PAGE_SIZE
-) -> dict[str, Any]:
-    """Read compactions since ``since`` and classify their outcomes."""
-    from src.audit_db import aggregate_audit_events_async, query_audit_events_async
-    from src.db import get_db
+async def _read_event_type(
+    event_type: str, *, since: datetime, page_size: int
+) -> tuple[list[dict[str, Any]], datetime | None]:
+    """Read every row of one audit event type since ``since``.
 
-    compactions: list[dict[str, Any]] = []
+    Returns the rows and, when the read stopped early, the time it reached.
+    """
+    from src.audit_db import query_audit_events_async
+
+    rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     start = since
     through: datetime | None = None
     for _ in range(MAX_PAGES):
         page = await query_audit_events_async(
-            event_types=[COMPACTION_EVENT_TYPE],
+            event_types=[event_type],
             start_time=start.isoformat(),
             limit=page_size,
             order="asc",
@@ -177,7 +275,7 @@ async def collect_compaction_outcomes(
             if key and key in seen:
                 continue
             seen.add(key)
-            compactions.append(row)
+            rows.append(row)
         last = _utc(page[-1].get("timestamp")) if page else None
         if len(page) < page_size or last is None:
             break
@@ -189,6 +287,22 @@ async def collect_compaction_outcomes(
         start = last
     else:
         through = start
+    return rows, through
+
+
+async def collect_compaction_outcomes(
+    *, since: datetime, page_size: int = PAGE_SIZE
+) -> dict[str, Any]:
+    """Read compactions since ``since`` and classify their outcomes."""
+    from src.audit_db import aggregate_audit_events_async
+    from src.db import get_db
+
+    compactions, through = await _read_event_type(
+        COMPACTION_EVENT_TYPE, since=since, page_size=page_size
+    )
+    probes, probes_through = await _read_event_type(
+        PROBE_EVENT_TYPE, since=since, page_size=page_size
+    )
     agent_ids = sorted(
         {str(row.get("agent_id")) for row in compactions if row.get("agent_id")}
     )
@@ -225,7 +339,12 @@ async def collect_compaction_outcomes(
             if latest:
                 activity[agent_id] = max(latest)
     report = classify_compaction_outcomes(
-        compactions, [dict(row) for row in children], activity, through=through
+        compactions,
+        [dict(row) for row in children],
+        activity,
+        through=through,
+        probes=probes,
     )
+    report["probe"]["complete"] = probes_through is None
     report["since"] = since.isoformat()
     return report

@@ -4,7 +4,9 @@
 Read-only. Each compaction a host reported with a usable session binding is
 paired with its outcome: ``minted`` (a ``spawn_reason="compaction"`` child was
 created), ``kept`` (the identity wrote again), or ``no_later_activity``.
-Definitions and limits live in ``src/identity/compaction_outcomes.py``.
+Where an adapter asked the agent whether it was the same process, its answer
+is shown beside the outcome. Definitions and limits live in
+``src/identity/compaction_outcomes.py``.
 
 Usage:
     python3 scripts/diagnostics/compaction_outcomes.py
@@ -29,6 +31,7 @@ sys.path.insert(
 
 from src.db import close_db
 from src.identity.compaction_outcomes import OUTCOMES, collect_compaction_outcomes
+from src.runtime_observations import PROBE_ANSWERS
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -79,6 +82,20 @@ async def main() -> int:
     )
     for host, counts in report["by_host"].items():
         print(f"  {host:<12} " + " ".join(f"{name}={counts[name]}" for name in OUTCOMES))
+    probe = report["probe"]
+    if probe["asked"]:
+        print(f"\nprobe: {probe['asked']} answered or recorded unanswered")
+        print(f"  scope: {probe['scope']}")
+        if not probe.get("complete", True):
+            print("  coverage: INCOMPLETE, the probe read stopped at its page cap")
+        for answer in PROBE_ANSWERS:
+            counts = probe["by_answer_and_outcome"][answer]
+            print(f"  {answer:<13} " + " ".join(f"{name}={counts[name]}" for name in OUTCOMES))
+        print(
+            f"  agree={probe['agree']} disagree={probe['disagree']} "
+            f"of {probe['decisive_pairs']} decisive; "
+            f"answered by another identity={probe['answered_by_other_identity']}"
+        )
     if report["rows"]:
         print("\nrecent:")
         for row in report["rows"][-20:]:
@@ -87,6 +104,7 @@ async def main() -> int:
                 f"  {row['compacted_at']}  {row['agent_id'][:8]}  "
                 f"{row['host_family']:<8} {row['outcome']}"
                 + (f" -> {children}" if children else "")
+                + (f"  said {row['probe']['answer']}" if row["probe"] else "")
             )
     return 0
 

@@ -19,7 +19,22 @@ def _compaction(agent_id, at, host="claude", event_id="e"):
         "agent_id": agent_id,
         "timestamp": at.isoformat(),
         "event_id": event_id,
-        "details": {"host_family": host},
+        "details": {"host_family": host, "observed_at": at.isoformat()},
+    }
+
+
+def _probe(compacted, at, answer, *, answered_by=None, posted=None):
+    return {
+        "agent_id": answered_by or compacted,
+        "timestamp": (posted or at + timedelta(minutes=1)).isoformat(),
+        "event_id": f"p-{compacted}-{answer}",
+        "details": {
+            "probe_answer": answer,
+            "probe_version": "v1",
+            "compaction_agent_uuid": compacted,
+            "compaction_observed_at": at.isoformat(),
+            "guidance_present": True,
+        },
     }
 
 
@@ -104,10 +119,13 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
         _compaction(kept_agent, T0, host="codex", event_id="kept"),
         _compaction(quiet_agent, T0, event_id="quiet"),
     ]
+    probes = [_probe(PARENT, T0, "same_process", answered_by="child")]
     seen = {}
 
     async def query(**kwargs):
-        seen["query"] = kwargs
+        seen.setdefault("queries", []).append(kwargs["event_types"])
+        if kwargs["event_types"] == ["runtime_observation.context_compaction_probe"]:
+            return probes
         return compactions
 
     async def aggregate(agent_id=None, start_time=None, event_types=None, **_):
@@ -151,7 +169,10 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
 
     report = await collect_compaction_outcomes(since=T0 - timedelta(days=1))
 
-    assert seen["query"]["event_types"] == ["runtime_observation.context_compaction"]
+    assert seen["queries"] == [
+        ["runtime_observation.context_compaction"],
+        ["runtime_observation.context_compaction_probe"],
+    ]
     assert set(seen["aggregate_types"]) == {"auto_attest", "knowledge_write", "consultation"}
     assert report["complete"] is True
     assert seen["children_args"][0] == sorted([PARENT, kept_agent, quiet_agent])
@@ -161,6 +182,13 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     # Only rows others or detectors wrote against it: not kept.
     assert by_event["quiet"]["outcome"] == "no_later_activity"
     assert report["by_host"]["codex"]["kept"] == 1
+    # The answer reaches its compaction even though the minted child posted it.
+    assert by_event["minted"]["probe"]["answer"] == "same_process"
+    assert by_event["minted"]["probe"]["answered_by"] == "child"
+    assert by_event["kept"]["probe"] is None
+    assert report["probe"]["disagree"] == 1
+    assert report["probe"]["answered_by_other_identity"] == 1
+    assert report["probe"]["complete"] is True
 
 
 
@@ -235,3 +263,70 @@ async def test_collector_pages_through_every_compaction(monkeypatch):
     assert sorted(row["event_id"] for row in report["rows"]) == [f"e{i}" for i in range(5)]
     assert report["complete"] is True
     assert len(calls) > 1
+
+
+def test_probe_answers_sit_beside_outcomes_and_agreement_is_counted():
+    kept, minted = PARENT, OTHER
+    unsure = "99999999-8888-4777-8666-555555555555"
+    report = classify_compaction_outcomes(
+        [_compaction(kept, T0), _compaction(minted, T0), _compaction(unsure, T0)],
+        [_child("c", minted, T0 + timedelta(minutes=2))],
+        {kept: T0 + timedelta(hours=1), unsure: T0 + timedelta(hours=1)},
+        probes=[
+            _probe(kept, T0, "same_process"),
+            _probe(minted, T0, "same_process", answered_by="c"),
+            _probe(unsure, T0, "cannot_tell"),
+        ],
+    )
+    probe = report["probe"]
+    assert probe["asked"] == 3
+    assert probe["answers"] == {
+        "same_process": 2, "new_process": 0, "cannot_tell": 1, "no_answer": 0,
+    }
+    assert probe["by_answer_and_outcome"]["same_process"] == {
+        "minted": 1, "kept": 1, "no_later_activity": 0,
+    }
+    # cannot_tell is counted, never scored either way.
+    assert (probe["decisive_pairs"], probe["agree"], probe["disagree"]) == (2, 1, 1)
+    assert probe["answered_by_other_identity"] == 1
+
+
+def test_a_probe_attaches_only_to_the_compaction_it_names():
+    later = T0 + timedelta(hours=2)
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0, event_id="first"), _compaction(PARENT, later, event_id="second")],
+        [],
+        {PARENT: later + timedelta(minutes=5)},
+        probes=[
+            _probe(PARENT, later, "new_process"),
+            # Another identity's compaction at the same moment is not this one.
+            _probe(OTHER, T0, "same_process"),
+        ],
+    )
+    by_event = {row["event_id"]: row for row in report["rows"]}
+    assert by_event["first"]["probe"] is None
+    assert by_event["second"]["probe"]["answer"] == "new_process"
+    assert (report["probe"]["agree"], report["probe"]["disagree"]) == (0, 1)
+
+
+def test_only_the_first_answer_to_a_compaction_is_read():
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0)],
+        [],
+        {PARENT: T0 + timedelta(hours=1)},
+        probes=[
+            _probe(PARENT, T0, "new_process", posted=T0 + timedelta(minutes=9)),
+            _probe(PARENT, T0, "same_process", posted=T0 + timedelta(minutes=1)),
+            {"agent_id": PARENT, "timestamp": T0.isoformat(), "details": {"probe_answer": "same_process"}},
+        ],
+    )
+    assert report["rows"][0]["probe"]["answer"] == "same_process"
+    assert report["probe"]["duplicates_ignored"] == 1
+    assert report["probe"]["asked"] == 1
+
+
+def test_no_probes_leaves_every_row_unasked():
+    report = classify_compaction_outcomes([_compaction(PARENT, T0)], [], {})
+    assert report["rows"][0]["probe"] is None
+    assert report["probe"]["asked"] == 0
+    assert report["probe"]["decisive_pairs"] == 0
