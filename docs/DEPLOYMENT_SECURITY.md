@@ -8,7 +8,43 @@ the Compose stack itself; this one isn't. Read both before treating a fresh
 `docker compose up` as more than what it is: **a trusted single-user
 development stack, not a hardened local production deployment.**
 
-## What this pass changed
+## Current posture
+
+A summary of the Compose stack as it stands. The [hardening pass
+log](#hardening-pass-log-2026-09-28-pr-2580) below records how it got here and
+carries the detail; its known-gaps list is kept current.
+
+- **Container privileges.** All four services drop every Linux capability
+  (`cap_drop: [ALL]`) and set `no-new-privileges`; `redis` adds back `SETUID`,
+  `SETGID`, `CHOWN` and `FOWNER`. `governance-mcp` and `lease-plane` still run
+  as root with a writable filesystem and no user-namespace remapping.
+- **Published ports.** `governance-mcp` (8767) and `lease-plane` (8788) are
+  published on the host's loopback interface. Postgres and Redis are not, unless you add
+  `docker-compose.admin.yml`. Un-publishing is a real boundary on Docker
+  Desktop and a weaker one on a native Linux Docker host.
+- **Credentials.** The MCP bearer allowlist is empty by default, and two
+  development-only secrets ship as literal values in `docker-compose.yml`.
+  Rotate them and set a real Postgres password before the stack is reachable
+  beyond your own loopback. The boot path enforces none of this: nothing
+  refuses to start on a default credential, an unauthenticated Redis, or a
+  missing MCP bearer (see [known gaps](#what-this-pass-did-not-change-known-gaps)).
+- **Browser pages and unlisted hosts.** The trusted-network bypass does not
+  apply to a request from a foreign browser `Origin`, or to any caller (browser,
+  `curl` or SDK) that sends an unlisted dotted `Host`.
+- **Not covered.** No image/repo split, no data-loss-prevention layer, and the
+  app connects to Postgres as its superuser role.
+
+## Hardening pass log (2026-09-28, PR #2580)
+
+The sections below describe the pass that dropped container privileges and
+stopped publishing Postgres and Redis
+([#2580](https://github.com/cirwel/unitares/pull/2580)). Later corrections are
+folded in: the browser-origin rule
+([#2658](https://github.com/cirwel/unitares/pull/2658), 2026-10-05) and the generated
+continuity secret ([#2674](https://github.com/cirwel/unitares/pull/2674),
+2026-10-06).
+
+### What this pass changed
 
 - Every service (`postgres-age`, `redis`, `lease-plane`, `governance-mcp`)
   runs with `security_opt: [no-new-privileges:true]` and `cap_drop: [ALL]`.
@@ -31,7 +67,7 @@ development stack, not a hardened local production deployment.**
 
   See `docker-compose.admin.yml` for what it publishes and why it's opt-in.
 
-## What un-publishing actually buys you (read before relying on it)
+### What un-publishing actually buys you (read before relying on it)
 
 The honest version, not the elevator pitch: **on Docker Desktop (macOS,
 Windows), un-publishing is a real boundary** — the Desktop VM hides the
@@ -87,7 +123,7 @@ the SDKs included, that addresses the server by a dotted hostname (for example
 the dashboard on a LAN address or a hostname also needs its origin in
 `UNITARES_MCP_ALLOWED_ORIGINS`, which `/mcp` already required.
 
-## What this pass did not change (known gaps)
+### What this pass did not change (known gaps)
 
 - **`governance-mcp` and `lease-plane` still run as root** — neither
   Dockerfile has a `USER` directive. Adding one needs a separate pass:
@@ -181,7 +217,7 @@ the dashboard on a LAN address or a hostname also needs its origin in
   in a different narrowing of this image's build, on the same kind of
   opt-in, non-default path a plain `docker compose up` doesn't cover.
 
-## Side effects to expect from this pass
+### Side effects to expect from this pass
 
 - **Host-side tooling that defaults to `localhost:5432`/`localhost:6379` now
   reads a healthy Compose install as down.** `scripts/dev/unitares_doctor.py`
@@ -205,7 +241,7 @@ the dashboard on a LAN address or a hostname also needs its origin in
   as the fix for a `5432`/`6379` collision on a plain `docker compose up`,
   since that collision can no longer happen there.
 
-## Related work
+### Related work
 
 [PR #2578](https://github.com/cirwel/unitares/pull/2578) hardens a different
 dimension of the same fresh-install audit this pass responds to — the local

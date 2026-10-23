@@ -397,8 +397,9 @@ defmodule UnitaresLeasePlane.Application do
   address cannot justify a refusal there. Outside a container, a bind beyond
   loopback adds a second, stronger warning. `http_ip` is the address the
   listener resolves (the environment variable, else `config :lease_plane,
-  http_ip:`), as a tuple or a `:gen_tcp` atom (`:any`, `:loopback`); a string is
-  parsed for convenience. The governance server applies the
+  http_ip:`), as a tuple, a `:gen_tcp` atom (`:any`, `:loopback`) or a Unix
+  socket (`{:local, path}`, never beyond loopback); a string is parsed for
+  convenience. The governance server applies the
   configuration-signalled refusal (src/insecure_defaults.py).
   """
   def published_default_warnings(token, http_ip, in_container?) do
@@ -468,6 +469,10 @@ defmodule UnitaresLeasePlane.Application do
 
   defp beyond_loopback?({127, _, _, _}), do: false
   defp beyond_loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: false
+  # IPv4-mapped loopback, ::ffff:127.0.0.0/104.
+  defp beyond_loopback?({0, 0, 0, 0, 0, 0xFFFF, hi, _}) when div(hi, 256) == 127, do: false
+  # A Unix domain socket has no network port to reach.
+  defp beyond_loopback?({:local, _path}), do: false
   defp beyond_loopback?(ip) when is_tuple(ip), do: true
   # :gen_tcp also takes these atoms for `ip:`; :any binds every interface.
   defp beyond_loopback?(:any), do: true

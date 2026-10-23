@@ -10,7 +10,7 @@ exposes them to the model via CodeAgent (which writes Python, not JSON tool call
 Configuration (env vars; CLI flags override):
     UNITARES_MCP_URL      governance MCP endpoint   (default http://127.0.0.1:8767/mcp/)
     UNITARES_OLLAMA_URL   Ollama OpenAI-compat API  (default: UNITARES_MODEL_BASE_URL, else http://127.0.0.1:11434/v1)
-    UNITARES_MODEL_ID     Ollama model to drive     (default gemma4:latest; the older UNITARES_LLM_MODEL was removed in v3.3.0)
+    UNITARES_MODEL_ID     Ollama model to drive     (no default: set it or pass --model; the older UNITARES_LLM_MODEL was removed in v3.3.0)
 
 Identity posture (v2 ontology — see docs/ontology/identity.md):
     A fresh bridge run mints a fresh process-instance identity
@@ -73,7 +73,7 @@ DEFAULT_OLLAMA_URL = (
     or (_openai_base(os.environ["UNITARES_MODEL_BASE_URL"]) if os.getenv("UNITARES_MODEL_BASE_URL", "").strip() else "")
     or "http://127.0.0.1:11434/v1"
 )
-DEFAULT_MODEL = os.getenv("UNITARES_MODEL_ID", "").strip() or "gemma4:latest"
+DEFAULT_MODEL = os.getenv("UNITARES_MODEL_ID", "").strip()
 
 # Valid spawn_reason values per the v2 ontology. "new_session" is the honest
 # fresh default (no parent); the rest are causal and expect a parent_agent_id.
@@ -363,7 +363,7 @@ def main():
     parser = argparse.ArgumentParser(description="Ollama-UNITARES Bridge")
     parser.add_argument(
         "--model", default=DEFAULT_MODEL,
-        help=f"Ollama model to use (default: {DEFAULT_MODEL}; env UNITARES_MODEL_ID)",
+        help=f"Ollama model to use (default: {DEFAULT_MODEL or 'none'}; env UNITARES_MODEL_ID)",
     )
     parser.add_argument(
         "--mcp-url", default=DEFAULT_MCP_URL,
@@ -397,6 +397,8 @@ def main():
              " (default new_session; env UNITARES_SPAWN_REASON).",
     )
     args = parser.parse_args()
+    if not args.model:
+        parser.error("no model named: pass --model or set UNITARES_MODEL_ID")
 
     identity = IdentityConfig.from_args(args)
 

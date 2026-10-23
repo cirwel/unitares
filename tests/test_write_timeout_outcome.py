@@ -112,11 +112,21 @@ def _update_arguments() -> dict:
     }
 
 
-def _patched_handler_dependencies(graph):
+def _patched_handler_dependencies(graph, bound: str | None = None):
+    """The handler's collaborators, with the caller bound as ``bound``.
+
+    Under strict identity a knowledge write naming an agent_id the call has
+    not proven is refused, so a caller writing as itself carries a resolved
+    binding to that id.
+    """
     server = MagicMock()
     server.agent_metadata = {}
     return (
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
+        patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value=bound,
+        ),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
         patch(
@@ -130,7 +140,8 @@ def _patched_handler_dependencies(graph):
 
 
 async def _run_patched(handler, graph, arguments):
-    patches = _patched_handler_dependencies(graph)
+    """Run ``handler`` as a caller bound to the agent_id its arguments name."""
+    patches = _patched_handler_dependencies(graph, bound=arguments.get("agent_id"))
     for p in patches:
         p.start()
     try:
@@ -370,6 +381,10 @@ def test_a_shared_anonymous_pseudonym_is_not_claimed_as_proof_of_authorship():
     assert "only its absence is proof" in recovery["action"]
 
 
+# The subject is the legacy named writer: an unproven agent_id taken as the
+# author. Under strict identity the handler refuses that write, so the
+# recovery cannot name an author for it.
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.parametrize(
     "writer",
     [
@@ -1044,7 +1059,10 @@ def test_reads_that_mint_nothing_stay_retry_safe(tool_name, arguments):
 @pytest.mark.asyncio
 async def test_router_level_timeout_classifies_the_routed_action():
     """knowledge(action='note') has no per-action timeout, so the router's fires."""
-    with patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+    # The note comes from a caller bound to agent-1, writing as itself.
+    with patch("src.coordination_failure_emit.emit_coordination_failure_sync"), patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id", return_value="agent-1"
+    ):
         wrapper = mcp_tool("knowledge", timeout=0.05, register=False)(_sleeper())
         write = _payload(await wrapper({"action": "note", "agent_id": "agent-1"}))
         wrapper = mcp_tool("knowledge", timeout=0.05, register=False)(_sleeper())
@@ -1200,7 +1218,17 @@ def test_call_literal_keeps_an_ordinary_id():
 
 PROBE = "timeout lookup probe"
 OTHER_WRITER = "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"
-ANON_WRITER = "anonkg_mcp_0123456789ab"
+# The anonymous writer is the pseudonym the module derives for these
+# arguments and writes back into them (a note's router dict carries it).
+# Under strict identity that is the only unbound agent_id a write keeps.
+ANON_ARGUMENTS = {"client_session_id": "sess-timeout-lookup"}
+ANON_WRITER = "anonymous"
+
+
+def _anonymous_writer() -> str:
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    return kg_handlers._derive_anonymous_writer_id(dict(ANON_ARGUMENTS))
 
 
 def _row(suffix: str, *, writer: str, created: datetime, summary: str, status="open",
@@ -1262,7 +1290,7 @@ def _lookup_for(writer: str, started: datetime, settled: datetime) -> dict:
     from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
 
     bound = writer if not writer.startswith("anonkg_") else None
-    arguments = {} if bound else {"agent_id": writer}
+    arguments = {} if bound else {**ANON_ARGUMENTS, "agent_id": writer}
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=bound):
         recovery = _unknown_outcome_recovery(
             CallOperation(operation="write", tool="knowledge", action="store"),
@@ -1281,6 +1309,9 @@ def _lookup_for(writer: str, started: datetime, settled: datetime) -> dict:
 async def test_the_store_lookup_lists_exactly_this_writers_rows_in_the_window(
     live_postgres_backend, backend, writer
 ):
+    if writer == ANON_WRITER:
+        writer = _anonymous_writer()
+        assert writer.startswith("anonkg_"), "premise: the module's own pseudonym"
     started, settled = _window()
     ours = [
         _row("open", writer=writer, created=started + timedelta(seconds=1),
@@ -1480,6 +1511,9 @@ def _label_owner_server(label="Label-Y", uuid="0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3
     return server, uuid
 
 
+# The subject is the legacy named writer: an unbound explicit agent_id the
+# note keeps as sent. Under strict identity that write is refused.
+@pytest.mark.legacy_identity_defaults
 def test_a_high_severity_note_keeps_the_writer_the_note_handler_records():
     """A note always takes the low-friction writer, whatever severity it
     carries: an explicit agent_id stays as sent. Resolving it through the

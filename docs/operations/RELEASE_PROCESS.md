@@ -11,20 +11,9 @@ from master at install time, so merging the publication PR updates it.
 Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
 not publish a server tag or container.
 
-## v2.22.1 maintenance release
-
-See the [release notes and publication checklist](../releases/2.22.1.md).
-
-v2.22.1 was prepared from tag `v2.22.0` (`b1360809`) on `release/2.22`,
-rather than from master. It backported #2092 and the release-evidence
-corrections while preserving the published callable surface and skills. It
-was tagged and published from `release/2.22` on 2026-09-08, and its history
-was forward-merged into master by #2209, which makes the maintenance tag an
-ancestor of later mainline releases, as the release-range gate requires.
-
-The v2.22.0 tag and release were left intact; their correction is recorded in
-[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md). A merge into a
-maintenance branch does not deploy the master-only public Pages workflow.
+Per-release notes and errata live in `docs/releases/`; the
+v2.22.1 maintenance release, cut from `release/2.22` rather than master, is
+recorded in [`../releases/2.22.1.md`](../releases/2.22.1.md).
 
 ## Server release
 
@@ -90,6 +79,23 @@ DOI, so publish only the reviewed release commit.
    Delegating this check
    to CI counts only when the required CI workflow actually contains and passes
    that quickstart; a green Python/package test job is not equivalent evidence.
+   The required `test (3.12)` context also depends on **Native Bootstrap
+   Acceptance**. This extracts the exact candidate source archive, runs its
+   bare-metal bootstrap against real PostgreSQL with AGE/pgvector, checks every
+   checksum from migration 062 onward, and starts the native server until it is
+   ready with a connected database. A second isolated database tests interruption
+   immediately after 062 commits and recovery through `apply_migrations.py`,
+   preserving earlier records and the interrupted migration's NULL checksum.
+   Repeating the migration runner must leave the ledger unchanged. The workflow
+   retains logs, health output, source SHA and success evidence on GitHub.
+
+   Homebrew packaging needs its own installed-artifact acceptance in the tap:
+   use this repository's `scripts/ci/bootstrap_acceptance.py` with the installed
+   keg's application root, Python environment and server wrapper. A source-archive
+   pass does not establish formula/wrapper correctness. A local-only tap can run
+   the gate locally; it cannot claim automated publication enforcement until its
+   publication workflow depends on that result.
+
 4. Merge the release PR only after required CI is green, every applicable
    release-specific check from step 3 has recorded evidence, and an independent
    reviewer has checked the release notes, version choice, compatibility claims,

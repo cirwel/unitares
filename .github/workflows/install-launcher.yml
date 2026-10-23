@@ -1,0 +1,135 @@
+name: Install Launcher
+
+# Runs scripts/install/launch.sh end to end the way a new user does: no clone
+# of this repository, only Docker, Git, curl and a POSIX shell. The launcher
+# installs the PUBLISHED release (PUBLISHED_VERSION on master), not this
+# checkout's code, so this job tests the launcher against the release users
+# actually get. That is why it is path-filtered to the launcher itself plus
+# PUBLISHED_VERSION: a release bump re-runs it against the new release's
+# images and Compose file.
+#
+# Acceptance from issue #2964: deep health healthy/moderate, the coordination
+# demo passes from the managed checkout, a second run is a no-op, and
+# `unitares update --check` works from the managed directory. It also checks
+# the launcher refuses a checkout with tracked edits. Stdlib-only host Python,
+# no paid model API, GITHUB_TOKEN only.
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'scripts/install/launch.sh'
+      - 'PUBLISHED_VERSION'
+      - '.github/workflows/install-launcher.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'scripts/install/launch.sh'
+      - 'PUBLISHED_VERSION'
+      - '.github/workflows/install-launcher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    runs-on: ubuntu-latest
+    env:
+      CONTAINERS: unitares-postgres-age unitares-redis unitares-lease-plane unitares-governance-mcp
+    steps:
+      # Only the launcher script comes from this checkout; the stack comes from
+      # the clone the launcher makes.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The runner context is not available in job-level env.
+      - name: Choose the managed checkout path
+        run: echo "UNITARES_STACK_DIR=$RUNNER_TEMP/unitares-stack" >> "$GITHUB_ENV"
+
+      - name: First run installs and starts the published release
+        run: |
+          set -euo pipefail
+          sh scripts/install/launch.sh 2>&1 | tee "$RUNNER_TEMP/launch-1.log"
+          grep -Eq '^Deep health: (healthy|moderate)$' "$RUNNER_TEMP/launch-1.log" \
+            || { echo "::error::launcher did not report deep health healthy/moderate"; exit 1; }
+          test -d "$UNITARES_STACK_DIR/.git"
+          # Read PUBLISHED_VERSION where the launcher does, from live master.
+          # Not this checkout's copy: a release-promotion PR changes it before
+          # master does. Not the release tree's copy either: it predates
+          # promotion (v3.4.0's says 3.3.0).
+          release="v$(curl -fsSL --max-time 30 \
+            https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION | tr -d '[:space:]')"
+          test "$(git -C "$UNITARES_STACK_DIR" rev-parse HEAD)" = \
+            "$(git -C "$UNITARES_STACK_DIR" rev-parse "refs/tags/$release^{commit}")" \
+            || { echo "::error::managed checkout is not on $release"; exit 1; }
+          echo "RELEASE=$release" >> "$GITHUB_ENV"
+          # The release commit also carries sdk-vX.Y.Z; the launcher must name the release.
+          grep -qx "Installed: $release" "$RUNNER_TEMP/launch-1.log" \
+            || { echo "::error::launcher did not report Installed: $release"; exit 1; }
+
+      - name: Record the running stack
+        run: |
+          set -euo pipefail
+          for name in $CONTAINERS; do
+            docker inspect -f '{{.Name}} {{.Id}} {{.State.StartedAt}}' "$name"
+          done > "$RUNNER_TEMP/containers-1.txt"
+          git -C "$UNITARES_STACK_DIR" rev-parse HEAD > "$RUNNER_TEMP/head-1.txt"
+          sha256sum "$UNITARES_STACK_DIR/.env" > "$RUNNER_TEMP/env-1.txt"
+          cat "$RUNNER_TEMP/containers-1.txt"
+
+      - name: Coordination demo passes from the managed checkout
+        working-directory: ${{ env.UNITARES_STACK_DIR }}
+        run: python3 scripts/demo/coordination_demo.py
+
+      - name: Second run is a no-op
+        run: |
+          set -euo pipefail
+          sh scripts/install/launch.sh 2>&1 | tee "$RUNNER_TEMP/launch-2.log"
+          grep -Eq '^Deep health: (healthy|moderate)$' "$RUNNER_TEMP/launch-2.log"
+          for name in $CONTAINERS; do
+            docker inspect -f '{{.Name}} {{.Id}} {{.State.StartedAt}}' "$name"
+          done > "$RUNNER_TEMP/containers-2.txt"
+          diff -u "$RUNNER_TEMP/containers-1.txt" "$RUNNER_TEMP/containers-2.txt" \
+            || { echo "::error::second run recreated or restarted containers"; exit 1; }
+          git -C "$UNITARES_STACK_DIR" rev-parse HEAD | diff -u "$RUNNER_TEMP/head-1.txt" - \
+            || { echo "::error::second run moved the checkout"; exit 1; }
+          sha256sum --check "$RUNNER_TEMP/env-1.txt" \
+            || { echo "::error::second run rewrote .env"; exit 1; }
+
+      - name: update --check works from the managed checkout
+        working-directory: ${{ env.UNITARES_STACK_DIR }}
+        run: |
+          set -euo pipefail
+          ./scripts/unitares update --check 2>&1 | tee "$RUNNER_TEMP/update-check.log"
+          # This runs the published release's scripts/unitares, not this
+          # checkout's, so its "Installed:" line is not asserted here: releases
+          # up to v3.4.0 print the SDK tag there (fixed alongside this job).
+          grep -q "Already on $RELEASE" "$RUNNER_TEMP/update-check.log" \
+            || { echo "::error::update --check did not report the installed release as current"; exit 1; }
+
+      - name: Launcher refuses a checkout with tracked edits
+        run: |
+          set -euo pipefail
+          echo "# local edit" >> "$UNITARES_STACK_DIR/README.md"
+          if sh scripts/install/launch.sh > "$RUNNER_TEMP/launch-dirty.log" 2>&1; then
+            cat "$RUNNER_TEMP/launch-dirty.log"
+            echo "::error::launcher accepted a checkout with tracked edits"; exit 1
+          fi
+          cat "$RUNNER_TEMP/launch-dirty.log"
+          grep -q 'tracked edits' "$RUNNER_TEMP/launch-dirty.log"
+          git -C "$UNITARES_STACK_DIR" checkout -- README.md
+
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: ${{ env.UNITARES_STACK_DIR }}
+        run: docker compose logs --no-color --tail=200 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          if [ -f "$UNITARES_STACK_DIR/docker-compose.yml" ]; then
+            docker compose --project-directory "$UNITARES_STACK_DIR" down -v
+          fi

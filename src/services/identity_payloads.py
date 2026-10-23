@@ -385,8 +385,11 @@ def _signature_is_routine(
     A caller-proven strong binding is the expected state. A weak, medium or
     server-inferred binding is not, and a rejected runtime-provenance value
     (#1872) is diagnostic, so either keeps the full record. So does a
-    continuity_claim that reports a discontinuity (a mint after a resume miss,
-    a reactivated archive, a heuristic or unknown-source resolution).
+    continuity_claim outside the explicit-session, continuity-token and fresh-
+    mint allowlist. The production signature caller currently supplies neither
+    identity status nor resolution outcome, so its claims describe the binding
+    source; the broader check remains fail-closed for callers that do supply
+    those fields.
     """
     if identity_context.get("continuity_claim") not in _ROUTINE_CONTINUITY_CLAIMS:
         return False

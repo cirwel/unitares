@@ -1,1 +1,0 @@
-- **Reviewer evidence:** lead the reviewer guide with captured accountability workflows and concrete review corrections; refresh the production and evidence pages with a dated October 18 operational inventory, captured aggregates, and read-only queries. Preserve the August record and registered research boundaries.

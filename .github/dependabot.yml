@@ -63,6 +63,30 @@ updates:
       - "dependencies"
       - "docker"
 
+  - package-ecosystem: "mix"
+    # The BEAM services had no coverage of any kind, so advisories in their
+    # lockfiles (bandit, mint, hpax, phoenix, decimal, postgrex) accumulated
+    # with no PR and no alert until a manual osv-scanner pass on 2026-10-22.
+    # unitares_sdk is a path dependency of the others and carries no lockfile.
+    directories:
+      - "/elixir/agent_orchestrator"
+      - "/elixir/dialectic_live"
+      - "/elixir/lease_plane"
+      - "/elixir/sentinel"
+      - "/elixir/wave3a_handlers"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      hex:
+        patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

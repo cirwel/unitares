@@ -1,0 +1,105 @@
+name: Native Bootstrap Acceptance
+
+# Shared by the required Tests gate and release promotion. Test the candidate
+# archive, never a schema pre-populated by Docker's separate init script.
+on:
+  workflow_call:
+    inputs:
+      source-ref:
+        type: string
+        default: ''
+      postgres-image:
+        type: string
+        default: ghcr.io/cirwel/unitares-postgres:v3.5.0
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: acceptance-only
+          POSTGRES_DB: unitares_acceptance_fresh
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres -d unitares_acceptance_fresh"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    steps:
+      - name: Check out the acceptance harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out the exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          path: candidate-source
+          persist-credentials: false
+
+      - name: Extract the candidate archive without a working checkout
+        run: |
+          mkdir "$RUNNER_TEMP/native-artifact"
+          git -C candidate-source archive --format=tar HEAD | tar -xf - -C "$RUNNER_TEMP/native-artifact"
+          git -C candidate-source rev-parse HEAD > "$RUNNER_TEMP/native-source-sha.txt"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Install the artifact's native runtime and real psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+          python -m pip install uv
+          uv pip install --system -r "$RUNNER_TEMP/native-artifact/requirements-docker.txt" \
+            -c "$RUNNER_TEMP/native-artifact/constraints.txt"
+          uv pip install --system --no-deps "$RUNNER_TEMP/native-artifact/agents/sdk"
+
+      - name: Exercise fresh installation and interrupted recovery
+        env:
+          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          PGPASSWORD: acceptance-only
+        run: |
+          set -euo pipefail
+          # Only this workflow's disposable service owns these databases.
+          # The acceptance harness itself never creates or drops a database.
+          createdb -h 127.0.0.1 -p "$PGPORT" -U postgres unitares_acceptance_interrupted
+          for scenario in fresh interrupted; do
+            redis_db=0
+            [ "$scenario" = fresh ] || redis_db=1
+            python scripts/ci/bootstrap_acceptance.py \
+              --app-root "$RUNNER_TEMP/native-artifact" \
+              --work-dir "$RUNNER_TEMP/native-acceptance/$scenario" \
+              --db-url "postgresql://postgres:acceptance-only@127.0.0.1:$PGPORT/unitares_acceptance_$scenario" \
+              --expected-database "unitares_acceptance_$scenario" \
+              --redis-url "redis://127.0.0.1:$REDIS_PORT/$redis_db" \
+              --scenario "$scenario"
+          done
+
+      - name: Preserve acceptance evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-bootstrap-evidence
+          path: |
+            ${{ runner.temp }}/native-source-sha.txt
+            ${{ runner.temp }}/native-acceptance/*/*.log
+            ${{ runner.temp }}/native-acceptance/*/*.json
+          if-no-files-found: error
