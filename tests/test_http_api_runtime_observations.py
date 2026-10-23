@@ -148,10 +148,111 @@ def test_context_compaction_is_recorded_without_activity(client, recorder):
     assert entry["details"]["host_process_scope"] is None
 
 
+COMPACTED_UUID = "7beb6c9f-6f18-4806-abf6-5212446be881"
+
+
+def _probe_payload(answer="same_process", **overrides):
+    payload = _payload("context_compaction_probe")
+    payload.pop("host_process_alive")
+    payload.update(
+        {
+            "host_family": "claude",
+            "probe_answer": answer,
+            "probe_version": "v1",
+            "compaction_agent_uuid": COMPACTED_UUID,
+            "compaction_observed_at": "2026-08-02T08:59:58.123456Z",
+            "guidance_present": True,
+        }
+    )
+    payload.update(overrides)
+    return payload
+
+
+def test_probe_answer_is_the_agents_report_and_not_activity(client, recorder):
+    rows, db = recorder
+
+    response = client.post("/v1/runtime/observe", json=_probe_payload())
+
+    assert response.status_code == 201
+    assert response.json()["epistemic_class"] == "agent_report"
+    assert response.json()["session_activity_refreshed"] is False
+    assert db.touched == []
+    entry = rows[0][0]
+    assert entry["event_type"] == "runtime_observation.context_compaction_probe"
+    details = entry["details"]
+    assert details["measurement_scope"] == "agent_reported_continuity_belief"
+    assert details["probe_answer"] == "same_process"
+    assert details["probe_version"] == "v1"
+    # The identity the compaction was recorded on, which need not be the
+    # posting one, and the compaction time normalized like observed_at.
+    assert details["compaction_agent_uuid"] == COMPACTED_UUID
+    assert details["compaction_observed_at"] == "2026-08-02T08:59:58.123456+00:00"
+    assert details["guidance_present"] is True
+    assert details["agent_authored"] is True
+    assert details["tool_delta"] == 0
+    assert details["eisv_written"] is False
+
+
+@pytest.mark.parametrize(
+    "value", ["2026-08-02T08:59:58", "not a time", 12345]
+)
+def test_a_bad_compaction_time_is_named_in_the_error(client, recorder, value):
+    response = client.post(
+        "/v1/runtime/observe", json=_probe_payload(compaction_observed_at=value)
+    )
+    assert response.status_code == 400
+    assert "compaction_observed_at" in response.text
+
+
+def test_the_stored_time_comes_back_so_an_answer_can_name_it(client, recorder):
+    payload = _payload("context_compaction")
+    payload.pop("observed_at")
+    response = client.post("/v1/runtime/observe", json=payload)
+    rows, _db = recorder
+    assert response.json()["observed_at"] == rows[0][0]["details"]["observed_at"]
+
+
+def test_no_answer_is_the_hooks_observation_not_the_agents(client, recorder):
+    rows, _db = recorder
+
+    response = client.post("/v1/runtime/observe", json=_probe_payload("no_answer"))
+
+    assert response.status_code == 201
+    assert response.json()["epistemic_class"] == "substrate_observation"
+    assert rows[0][0]["details"]["agent_authored"] is False
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"probe_answer": "maybe"},
+        {"probe_answer": None},
+        {"probe_version": "V 1!"},
+        {"compaction_agent_uuid": "not-a-uuid"},
+        {"compaction_observed_at": None},
+        {"compaction_observed_at": "2026-08-02T08:59:58"},
+        {"guidance_present": "yes"},
+        {"guidance_present": None},
+    ],
+)
+def test_probe_fields_are_validated(client, recorder, overrides):
+    rows, _db = recorder
+
+    response = client.post("/v1/runtime/observe", json=_probe_payload(**overrides))
+
+    assert response.status_code == 400
+    assert rows == []
+
+
 def test_context_compaction_stays_out_of_the_activity_read_model():
-    from src.runtime_observations import COMPACTION_EVENT_TYPE, RUNTIME_EVENT_TYPES
+    from src.runtime_observations import (
+        COMPACTION_EVENT_TYPE,
+        PROBE_EVENT_TYPE,
+        RUNTIME_EVENT_TYPES,
+    )
 
     assert COMPACTION_EVENT_TYPE not in RUNTIME_EVENT_TYPES
+    assert PROBE_EVENT_TYPE not in RUNTIME_EVENT_TYPES
     assert set(RUNTIME_EVENT_TYPES) == {
         "runtime_observation.activity_rollup",
         "runtime_observation.heartbeat",
