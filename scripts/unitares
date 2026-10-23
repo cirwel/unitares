@@ -432,7 +432,18 @@ cmd_status() {
         esac
     done
 
-    local health residents tiers latest errbuf auth_hint=0
+    local health residents tiers latest errbuf endpoint auth_hint=0
+    # Attribute the remote report to its endpoint, not to this CLI's install.
+    # Never echo URL credentials, query parameters or fragments in status.
+    endpoint=$(STATUS_URL="$UNITARES_URL" python3 -c '
+import os
+from urllib.parse import urlsplit, urlunsplit
+try:
+    url = urlsplit(os.environ["STATUS_URL"])
+    print(urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")))
+except ValueError:
+    print("[invalid endpoint URL]")
+')
     # /health is the one required panel — but its 503 during the post-restart
     # warmup window (connection-tracker middleware) is a legitimate state, not
     # an error, and a restart is the single most likely moment to run a status
@@ -445,8 +456,9 @@ cmd_status() {
             # front of the server — say so instead of over-claiming.
             rm -f "$errbuf"
             if [ "$json_mode" = "1" ]; then
-                printf '%s\n' '{"health": {"status": "warming_up"}, "residents": null, "tiers": null, "auth_required": false, "release": {"current": null, "latest": null, "comparison": "unknown"}}'
+                STATUS_ENDPOINT="$endpoint" python3 -c 'import json, os; print(json.dumps({"endpoint": os.environ["STATUS_ENDPOINT"], "health": {"status": "warming_up"}, "residents": None, "tiers": None, "auth_required": False, "release": {"current": None, "latest": None, "comparison": "unknown"}}))'
             else
+                printf 'Endpoint: %s\n' "$endpoint"
                 echo "UNITARES warming up — /health answered 503 (server starting, or a proxy error); retry shortly"
             fi
             return 0
@@ -538,7 +550,7 @@ for rel in releases:
 
     HEALTH="$health" RESIDENTS="$residents" TIERS="$tiers" LATEST="$latest" \
     RELEASE_STATE="$release_state" AUTH_HINT="$auth_hint" \
-    JSON_MODE="$json_mode" python3 -c '
+    JSON_MODE="$json_mode" STATUS_ENDPOINT="$endpoint" python3 -c '
 import json, os, sys
 
 def load(name):
@@ -581,6 +593,7 @@ if latest:
 
 if os.environ.get("JSON_MODE") == "1":
     print(json.dumps({
+        "endpoint": os.environ["STATUS_ENDPOINT"],
         "health": health,
         "residents": residents,
         "tiers": tiers,
@@ -603,6 +616,7 @@ if build:
     head += " (" + build + ")"
 head += " · up " + str(uptime) + " · db " + str(db.get("status", "?"))
 print(head)
+print("Endpoint: " + os.environ["STATUS_ENDPOINT"])
 
 # One message per failure cause: a 401/403 on the auth-gated panels means
 # "set UNITARES_TOKEN", while a missing route means "older server" — the two
@@ -953,6 +967,33 @@ _compose() {
     docker compose --project-directory "$(_repo_root)" "$@"
 }
 
+_is_homebrew_package() {
+    local root
+    root="$(_repo_root)"
+    case "$root" in
+        */libexec/app) [ -x "$root/../../bin/unitares-server" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+_has_homebrew_option() {
+    local arg
+    for arg in "$@"; do
+        [ "$arg" != "--homebrew" ] || return 0
+    done
+    return 1
+}
+
+_homebrew_service() {
+    local action="$1" arg
+    local -a options=()
+    shift
+    for arg in "$@"; do
+        [ "$arg" = "--homebrew" ] || options+=("$arg")
+    done
+    python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "${options[@]+"${options[@]}"}"
+}
+
 _env_value() {
     # A Compose setting as Compose resolves it: a value exported in this shell
     # first, then the checkout's .env, then the given default. Only simple
@@ -980,6 +1021,11 @@ _require_compose_install() {
     # $1: "existing" to also require this checkout's governance-mcp container.
     local root
     root="$(_repo_root)"
+    if _is_homebrew_package; then
+        echo "error: this CLI belongs to a Homebrew package; this operation requires a Docker checkout." >&2
+        echo "       Native upgrades still require stopping both writers, backup and explicit migration. See docs/install/CHOOSING_INSTALLATION.md." >&2
+        return 1
+    fi
     if [ "$(uname -s)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.unitares.governance-mcp" >/dev/null 2>&1; then
         echo "error: this machine runs UNITARES as a launchd service, not the Docker Compose stack." >&2
         echo "       Use that deployment's own start/stop/update procedure." >&2
@@ -1011,16 +1057,28 @@ cmd_model() {
 }
 
 cmd_start() {
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_service start "$@"
+        return $?
+    fi
     _require_compose_install || return 1
     _compose up -d --wait "$@"
 }
 
 cmd_stop() {
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_service stop "$@"
+        return $?
+    fi
     _require_compose_install existing || return 1
     _compose stop "$@"
 }
 
 cmd_logs() {
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_service logs "$@"
+        return $?
+    fi
     _require_compose_install existing || return 1
     if [ $# -eq 0 ]; then
         _compose logs -f --tail=100 governance-mcp
@@ -1516,8 +1574,18 @@ Install (Docker Compose install in this checkout):
   model [--model NAME] [--yes]      Pick the local Ollama model for consult
                                     and dialectic reviews (writes .env,
                                     rebuilds, checks the server reaches it)
-  start | stop                      Start or stop the stack
-  logs [service]                    Follow logs (default: governance-mcp)
+  start | stop                      Start or stop this installation
+  logs [service]                    Follow this installation's logs
+
+Homebrew service control (automatic from a Homebrew package):
+  start --homebrew [--check]         Start missing services; verify the schema
+                                    before starting either writer
+  stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
+  logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
+                                    Read native service logs
+  From a source checkout, --homebrew explicitly selects the installed native
+  services. Configuration/bootstrap must already be complete. No migrations
+  run during start. Native update is still a separate backed-up procedure.
 
 Commands:
   tui [--interval N] [--once [--json]]

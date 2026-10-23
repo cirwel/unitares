@@ -15,6 +15,31 @@ logger = get_logger(__name__)
 class StateMixin:
     """Agent state (EISV) snapshot operations."""
 
+    async def read_state_model_observation_candidates(
+        self, agent_id: str, *, observed_before, limit: int = 32,
+    ) -> List[Dict[str, Any]]:
+        """Model-bearing non-synthetic state, using the identity owner's lookup."""
+        identity = await self.get_identity(agent_id)
+        if identity is None:
+            return []
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT recorded_at AS observed_at, state_id::text AS record_id,
+                       'agent_state'::text AS record_kind,
+                       state_json#>'{provenance_context,runtime_provenance}' AS provenance
+                FROM core.agent_state
+                WHERE identity_id = $1 AND COALESCE(synthetic, false) = false
+                  AND recorded_at <= $2
+                  AND state_json#>>'{provenance_context,runtime_provenance,schema}' = 's22.runtime_provenance.v1'
+                  AND jsonb_typeof(state_json#>'{provenance_context,runtime_provenance,model,identifier}') = 'string'
+                  AND length(state_json#>>'{provenance_context,runtime_provenance,model,identifier}') BETWEEN 1 AND 160
+                ORDER BY recorded_at DESC, state_id DESC LIMIT $3
+                """,
+                identity.identity_id, observed_before, max(1, min(limit, 32)),
+            )
+        return [dict(row) for row in rows]
+
     async def record_agent_state(
         self,
         identity_id: int,

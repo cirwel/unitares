@@ -153,10 +153,17 @@ def patch_common(mock_mcp_server, mock_graph):
 
 @pytest.fixture
 def registered_agent(mock_mcp_server):
-    """Register a test agent in the mock server's metadata.
+    """Register a test agent in the mock server's metadata and bind it.
 
     Uses a valid UUID4 as the key so require_registered_agent can find it
     via direct UUID lookup in agent_metadata.
+
+    Tests that take this fixture write as the registered agent itself, so the
+    agent is also this call's RESOLVED binding (``get_context_resolved_agent_id``),
+    which is what identity resolution stamps for a bound caller. Under strict
+    identity a knowledge write naming an agent_id with no resolved binding is
+    refused as unproven, so a test that means an UNBOUND named writer must not
+    take this fixture and must say so itself.
     """
     import uuid
     agent_uuid = str(uuid.uuid4())
@@ -172,7 +179,11 @@ def registered_agent(mock_mcp_server):
     meta.created_at = "2026-01-01T00:00:00"
     meta.paused_at = None
     mock_mcp_server.agent_metadata[agent_uuid] = meta
-    return agent_uuid
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
+        return_value=agent_uuid,
+    ):
+        yield agent_uuid
 
 
 # ============================================================================
@@ -424,6 +435,66 @@ class TestStoreKnowledgeGraph:
         assert len(data["related_discoveries"]) == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", [None, "true", "1"])
+    async def test_store_links_when_flag_unset_null_or_truthy_string(
+        self, patch_common, registered_agent, flag
+    ):
+        """An unsent flag reaches the handler as None after params validation.
+
+        validate_params merges the Pydantic model's dump back into the
+        arguments, and the store schema defaults auto_link_related to None, so
+        a store that never mentioned the flag used to skip linking entirely.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        mock_graph.find_similar = AsyncMock(return_value=[make_discovery(id="related-1")])
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Something related",
+            "auto_link_related": flag,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        mock_graph.find_similar.assert_awaited()
+        assert [d["id"] for d in data["related_discoveries"]] == ["related-1"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", [False, "false", "0"])
+    async def test_store_skips_linking_only_when_explicitly_false(
+        self, patch_common, registered_agent, flag
+    ):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        mock_graph.find_similar = AsyncMock(return_value=[make_discovery(id="related-1")])
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "No linking",
+            "auto_link_related": flag,
+        })
+
+        assert parse_result(result)["success"] is True
+        mock_graph.find_similar.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_validated_store_arguments_still_link(self):
+        """The real validation step: what it hands the store handler must link."""
+        from src.mcp_handlers.knowledge.handlers import _auto_link_requested
+        from src.mcp_handlers.middleware.params_step import validate_params
+
+        _name, arguments, _ctx = await validate_params(
+            "knowledge",
+            {"action": "store", "summary": "Validated store"},
+            SimpleNamespace(),
+        )
+        # The dump carries the unsent flag as a present None ...
+        assert "auto_link_related" in arguments and arguments["auto_link_related"] is None
+        # ... which must still mean "link".
+        assert _auto_link_requested(arguments.get("auto_link_related")) is True
+
+    @pytest.mark.asyncio
     async def test_store_auto_link_excludes_rollup_rows(self, patch_common, registered_agent):
         """Auto-linking drops system-generated topic_rollup rows (#44 follow-up).
 
@@ -618,7 +689,25 @@ class TestStoreKnowledgeGraph:
         })
 
         data = parse_result(result)
-        # Should fail because agent not registered for high severity
+        # Under strict identity the unproven agent_id is refused before the
+        # registered-writer check (typed, success-shaped #425 refusal).
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+        assert identity_refusal_status(data) == "identity_required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.legacy_identity_defaults
+    async def test_store_high_severity_requires_registered_agent_legacy(self, patch_common):
+        """With strict identity off, high severity still requires a registered agent."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": "unregistered-agent",
+            "summary": "Critical issue found",
+            "severity": "high",
+        })
+
+        data = parse_result(result)
         assert data["success"] is False
 
     @pytest.mark.asyncio
@@ -1094,11 +1183,16 @@ class TestStoreKnowledgeGraphAdditional:
         )
         mock_mcp_server.agent_metadata[agent_uuid] = meta
 
-        result = await handle_store_knowledge_graph({
-            "agent_id": agent_uuid,
-            "summary": "S22 fork-discriminator test",
-            "harness": "claude-code",
-        })
+        # The fork child writes as itself: it is this call's resolved binding.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value=agent_uuid,
+        ):
+            result = await handle_store_knowledge_graph({
+                "agent_id": agent_uuid,
+                "summary": "S22 fork-discriminator test",
+                "harness": "claude-code",
+            })
 
         data = parse_result(result)
         assert data["success"] is True

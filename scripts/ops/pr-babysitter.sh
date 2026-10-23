@@ -37,7 +37,10 @@
 #      --match-head-commit on that head.
 #      A PR whose checks failed on an up-to-date head gets its failed Actions
 #      jobs re-run once (marked by the retried label); after that it is skipped
-#      until someone removes that label.
+#      until someone removes that label. A re-run that GitHub refuses to start
+#      leaves the retry unspent, up to PR_QUEUE_RERUN_TRIES ticks on one head;
+#      after that the label stays on, since each try adds two label events to
+#      the PR and past a few hundred GitHub stops showing it new ones (#3036).
 #
 # The approval label is the merge decision. The agent that owns a PR applies it
 # when it marks the PR ready, never on another agent's PR, and the maintainer
@@ -74,6 +77,7 @@ REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
 BASE="${PR_QUEUE_BASE:-master}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
+RERUN_TRIES="${PR_QUEUE_RERUN_TRIES:-3}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
@@ -149,19 +153,36 @@ prs=$(gh pr list -R "$REPO" --state open --limit 500 \
   --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
+# gh pr list caps statusCheckRollup at 100 entries per PR (no GraphQL pagination
+# on nested contexts); gh pr view paginates. Re-read any capped rollup before
+# evaluating checks (#3016).
+for n in $(jq -r '.[] | select((.statusCheckRollup | length) >= 100) | .number' <<<"$prs"); do
+  full_rollup=$(gh pr view "$n" -R "$REPO" --json statusCheckRollup 2>/dev/null) \
+    && prs=$(jq --argjson n "$n" --argjson r "$full_rollup" \
+      'map(if .number == $n then .statusCheckRollup = $r.statusCheckRollup else . end)' <<<"$prs") \
+    || { log "#$n statusCheckRollup hit 100-entry cap and gh pr view failed; nothing done"; exit 1; }
+done
+
 # Shared jq vocabulary. A check has FAILED when a finished run concluded badly
 # (CheckRun) or a status context reports failure (StatusContext); it is PENDING
 # while queued or running; ACTION_REQUIRED is a run parked for approval, which
-# a re-run cannot clear.
+# a re-run cannot clear. A head whose CI was re-run or retriggered carries
+# earlier entries alongside the current run in statusCheckRollup; `rollup`
+# keeps only the newest non-SKIPPED entry per check name (#3016).
 JQ_DEFS='
 def labelled($l): any(.labels[]?; .name == $l);
-def failed: [.statusCheckRollup[]?
+def rollup: [(.statusCheckRollup // [])
+  | group_by(.name // .context)[]
+  | ((map(select((.conclusion // "") != "SKIPPED")) | if length > 0 then . else null end) // .)
+  | (map([(.startedAt // .completedAt // ""), (.completedAt // "")]) | max) as $newest
+  | .[] | select([(.startedAt // .completedAt // ""), (.completedAt // "")] == $newest)];
+def failed: [rollup[]
   | select(((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
            or ((.state // "") | test("^(FAILURE|ERROR)$")))];
-def pending: [.statusCheckRollup[]?
+def pending: [rollup[]
   | select(((.status // "") | test("^(QUEUED|IN_PROGRESS|PENDING|WAITING|REQUESTED)$"))
            or ((.state // "") | test("^(PENDING|EXPECTED)$")))];
-def parked: [.statusCheckRollup[]? | select((.conclusion // "") == "ACTION_REQUIRED")];
+def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 '
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
@@ -243,7 +264,7 @@ unmet_required_checks() {
     *) auth=$(auth_path "$(jq -r .headRefOid <<<"$1")") && checks+=" review" || auth="" ;;
   esac
   for check in $checks; do
-    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
+    state=$(q -r --arg c "$check" '[rollup[] | select((.name // .context) == $c)
              | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
              | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
                else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
@@ -362,6 +383,16 @@ ARMS_FILE="$STATE_FILE.arms"
 record_arm() {
   [ "$DRY_RUN" = "1" ] && return 0
   mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ)" >>"$ARMS_FILE"
+}
+# Re-runs GitHub refused to start: "<pr> <head-sha>" per refused tick.
+RERUNS_FILE="$STATE_FILE.reruns"
+record_refused_rerun() {  # <pr> <head>
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$RERUNS_FILE")" && echo "$1 $2" >>"$RERUNS_FILE"
+}
+refused_reruns() {  # <pr> <head> -> count
+  [ -f "$RERUNS_FILE" ] || { echo 0; return 0; }
+  awk -v n="$1" -v h="$2" '$1 == n && $2 == h { c++ } END { print c + 0 }' "$RERUNS_FILE"
 }
 armed_by_script() {  # <pr> <enabledAt>
   local at
@@ -629,6 +660,10 @@ while read -r _ n head; do
       continue  # its run is still going; failed jobs can be re-run once it ends
     fi
     if jq -e --arg l "$RETRIED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null; then
+      if [ "$(refused_reruns "$n" "$head")" -ge "$RERUN_TRIES" ]; then
+        log "#$n: GitHub would not re-run its failed checks on ${head:0:8}; skipped until $RETRIED_LABEL is removed"
+        continue
+      fi
       log "#$n: $failed check(s) still failing after one retry; skipped until $RETRIED_LABEL is removed"
       notify "$n" failing "$head" "skipped: $(q -r 'failed | map(.name // .context) | unique | join(", ")' <<<"$pr") still failing after one automatic re-run. Fix it, then remove the \`$RETRIED_LABEL\` label."
       continue
@@ -646,11 +681,26 @@ while read -r _ n head; do
       || { log "#$n could not apply $RETRIED_LABEL; not re-running"; continue; }
     started=0
     for run in $runs; do
-      act gh run rerun "$run" --failed -R "$REPO" && started=$((started + 1))
+      if out=$(act gh run rerun "$run" --failed -R "$REPO" 2>&1); then
+        started=$((started + 1))
+        [ -n "$out" ] && echo "$out"
+      else
+        log "#$n: run $run did not re-run: $(tr '\n' ' ' <<<"$out" | cut -c1-300)"
+      fi
     done
     if [ "$started" -eq 0 ]; then
-      if act gh pr edit "$n" -R "$REPO" --remove-label "$RETRIED_LABEL"; then
-        log "#$n: no re-run started; retry not spent"
+      if ! record_refused_rerun "$n" "$head"; then
+        # Uncounted, the tries never run out: keep the marker rather than loop.
+        log "#$n: no re-run started, and the refusal could not be recorded ($RERUNS_FILE); leaving $RETRIED_LABEL on"
+        continue
+      fi
+      tries=$(refused_reruns "$n" "$head")
+      if [ "$tries" -ge "$RERUN_TRIES" ]; then
+        # Toggling the label every tick would bury the PR's timeline (#3036).
+        log "#$n: no re-run started in $tries tries on ${head:0:8}; leaving $RETRIED_LABEL on"
+        notify "$n" rerun-refused "$head" "skipped: GitHub would not re-run $(q -r 'failed | map(.name // .context) | unique | join(", ")' <<<"$pr") ($tries tries on this head). Re-run or fix it by hand, then remove the \`$RETRIED_LABEL\` label."
+      elif act gh pr edit "$n" -R "$REPO" --remove-label "$RETRIED_LABEL"; then
+        log "#$n: no re-run started; retry not spent ($tries of $RERUN_TRIES)"
       else
         log "#$n: no re-run started, and $RETRIED_LABEL could not be removed; remove it by hand to retry"
       fi

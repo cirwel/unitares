@@ -17,13 +17,14 @@ findings, advice, and review decisions that stay bound to the work across
 handoffs, and a question can be routed to another vendor's model for a second
 opinion.
 
-**Current public releases:** [server v3.4.0](https://github.com/cirwel/unitares/releases/tag/v3.4.0)
+**Current public releases:** [server v3.5.0](https://github.com/cirwel/unitares/releases/tag/v3.5.0)
 · [Python SDK 0.5.0](https://pypi.org/project/unitares-sdk/0.5.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
 <div class="hero-actions" role="group" aria-label="Get started">
-  <a class="primary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
+  <a class="primary" href="demo.html">See it without installing</a>
+  <a class="secondary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
   <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
 </div>
 
@@ -63,7 +64,7 @@ module within UNITARES.
 Run the documented stack and a six-check-in wiring demo:
 
 ```bash
-git clone --branch v3.4.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.5.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -78,7 +79,7 @@ python -m pip install unitares-sdk==0.5.0
 Or inspect the signed multi-architecture server image:
 
 ```bash
-docker pull ghcr.io/cirwel/unitares:v3.4.0
+docker pull ghcr.io/cirwel/unitares:v3.5.0
 ```
 
 The demo onboards an agent and runs six check-ins against your server. Each one

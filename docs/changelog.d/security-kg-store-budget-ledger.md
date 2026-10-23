@@ -1,1 +1,0 @@
-- The per-agent knowledge store budget (20 new discoveries per hour) now holds (GHSA-4m7p-grgw-vgmh). With Redis, charges made in the same second overwrote each other, so a burst counted as one; without Redis, the budget was not enforced. It is now kept in one PostgreSQL ledger, serialized per agent with an advisory lock and timed by the database server.

@@ -321,7 +321,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.54.0 (2026-10-19): A query search that finds fewer than 3 active rows runs a second pass over archived and cold rows and appends what it finds after every active row, with reported scores halved. Each such row carries retrieval_tier='archived_cold_fallback', and the response reports archived_cold_fallback (lean: state_summary.archived_cold_fallback counts), or archived_cold_fallback_error when the pass failed or did not fit the search's time budget; the first page is returned either way. An explicit include_archived=false or include_cold=false keeps that status out, and the string 'false' now means false. Queryless listings and explicit status filters are unchanged. Nothing is added, removed, retyped or renamed.
 # 1.55.0 (2026-10-20): call_model's model description no longer names a built-in default: with UNITARES_MODEL_ID unset, model='auto' on the local route is refused with MODEL_NOT_CONFIGURED. No capability, parameter name, type, default or requiredness changed; the description moves call_model's input_schema_sha256.
 # 1.56.0 (2026-10-21): consult gains an optional model input: the agent picks the local model on the standard lane from the models list_inference_hosts reports for ollama:local, which now lists the endpoint's served models. A model the endpoint does not list is refused with MODEL_NOT_SERVED; model outside the local standard lane is refused with INVALID_CONSULT_MODEL. Without model, UNITARES_MODEL_ID is used, else the endpoint's only served model. consult's and call_model's descriptions move.
-INTERFACE_CONTRACT_VERSION = "1.56.0"
+# 1.56.1 (2026-10-23): Automatic local model selection requires an explicitly configured endpoint; fresh installs stay model-free.
+INTERFACE_CONTRACT_VERSION = "1.56.1"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

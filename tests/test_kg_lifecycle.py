@@ -115,6 +115,11 @@ def registered_agent(mock_mcp_server):
 
     Uses a valid UUID4 as the key so require_registered_agent can find it
     via direct UUID lookup in agent_metadata.
+
+    Every test using this fixture passes ``agent_id=<this uuid>`` as a caller
+    writing as itself, so the binding is made real: the resolved context id
+    is this agent. Under strict identity an explicit agent_id with no
+    resolved binding is refused (knowledge ``_unproven_agent_id_refusal``).
     """
     import uuid
     agent_uuid = str(uuid.uuid4())
@@ -130,7 +135,11 @@ def registered_agent(mock_mcp_server):
     meta.created_at = "2026-01-01T00:00:00"
     meta.paused_at = None
     mock_mcp_server.agent_metadata[agent_uuid] = meta
-    return agent_uuid
+    with patch(
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
+        return_value=agent_uuid,
+    ):
+        yield agent_uuid
 
 
 # ============================================================================
@@ -228,6 +237,7 @@ class TestUpdateDiscoveryStatusGraph:
         assert "not found" in data["error"].lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.legacy_identity_defaults
     async def test_update_low_severity_unregistered_allowed(self, patch_common):
         """Low/medium updates accept an unregistered writer (mirrors store).
 
@@ -235,6 +245,9 @@ class TestUpdateDiscoveryStatusGraph:
         callers create low+medium rows, so update() must let them edit those
         rows too — otherwise a caller can create a row it cannot maintain
         without re-running onboard() (which mints a sibling identity).
+
+        Legacy posture only: an unbound caller naming an agent_id is refused
+        under strict identity (see the companion test below).
         """
         mock_mcp_server, mock_graph = patch_common
         mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="low"))
@@ -250,12 +263,57 @@ class TestUpdateDiscoveryStatusGraph:
         assert data["success"] is True
 
     @pytest.mark.asyncio
+    async def test_update_low_severity_unbound_named_writer_refused_under_strict(
+        self, patch_common
+    ):
+        """Under strict identity the same unbound named update is refused.
+
+        An explicit agent_id with no resolved binding is the caller's word
+        alone; a low-severity update must not edit or close a row on it.
+        """
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="low"))
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": "unregistered",
+            "discovery_id": "disc-1",
+            "status": "resolved",
+        })
+
+        data = parse_result(result)
+        assert data.get("refused") is True
+        assert identity_refusal_status(data) == "identity_required"
+        mock_graph.update_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_update_high_severity_unregistered_rejected(self, patch_common):
         """High/critical updates still require a registered agent (unchanged).
 
         The Credential Loop Asymmetry fix only relaxes the low/medium gate; the
         security boundary on high+critical rows is preserved.
         """
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="critical"))
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": "unregistered",
+            "discovery_id": "disc-1",
+            "status": "resolved",
+        })
+
+        data = parse_result(result)
+        # Strict identity refuses the unproven agent_id first (typed #425 refusal).
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+        assert identity_refusal_status(data) == "identity_required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.legacy_identity_defaults
+    async def test_update_high_severity_unregistered_rejected_legacy(self, patch_common):
+        """With strict identity off, high/critical updates still need a registered agent."""
         mock_mcp_server, mock_graph = patch_common
         mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="critical"))
         from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
@@ -695,6 +753,15 @@ class TestLeaveNote:
 # ============================================================================
 
 class TestCleanupKnowledgeGraph:
+
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Cleanup refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_cleanup_dry_run(self, patch_common):
@@ -1142,6 +1209,15 @@ class TestLeaveNoteAdditional:
 # ============================================================================
 
 class TestSupersedeHandler:
+
+    @pytest.fixture(autouse=True)
+    def _bound_caller(self):
+        # Supersede refuses an unbound call under strict identity.
+        with patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="test-agent",
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_supersede_success(self, patch_common):

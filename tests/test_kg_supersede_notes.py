@@ -42,6 +42,12 @@ def handler_env():
     server.monitors = {}
     with (
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
+        # A caller past the strict-identity gate: supersede refuses an
+        # unbound call before any of the behaviour these tests pin.
+        patch(
+            "src.mcp_handlers.context.get_context_resolved_agent_id",
+            return_value="bound-caller",
+        ),
         patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
         patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
     ):
