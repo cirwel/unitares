@@ -526,6 +526,8 @@ def test_status_panels_render_real_data(stub_env):
         stub_env["UNITARES_URL"] = url
         stub_env["UNITARES_RELEASE_CHECK"] = "off"
         result = _run(stub_env, "status")
+        assert f'Endpoint: {url}' in result.stdout
+        assert json.loads(_run(stub_env, 'status', '--json').stdout)['endpoint'] == url
         # "unknown" is the no-tier bucket, rendered as "untiered", not as a
         # peer of the earned tiers.
         assert "10 total · 3 earned · 3 verified · 7 untiered" in result.stdout
@@ -595,13 +597,28 @@ def test_status_renders_warming_up_on_health_503(stub_env):
         result = _run(stub_env, "status")
         assert result.returncode == 0
         assert "warming up" in result.stdout
+        assert f'Endpoint: {url}' in result.stdout
         assert "error" not in result.stderr.lower()
         # --json keeps its machine-readable contract during warmup: JSON on
         # stdout, exit 0 — never a plain-text line handed to a parser.
         jresult = _run(stub_env, "status", "--json")
         data = json.loads(jresult.stdout)
         assert data["health"]["status"] == "warming_up"
+        assert data['endpoint'] == url
         assert data["residents"] is None and data["tiers"] is None
+    finally:
+        server.shutdown()
+
+
+def test_status_endpoint_does_not_echo_basic_auth_credentials(stub_env):
+    server, url = _start_stub({'/health': (200, HEALTH_STUB)})
+    try:
+        stub_env['UNITARES_URL'] = url.replace('http://', 'http://fixture-user:fixture-secret@')
+        stub_env['UNITARES_RELEASE_CHECK'] = 'off'
+        result = _run(stub_env, 'status', '--json')
+        assert json.loads(result.stdout)['endpoint'] == url
+        assert 'fixture-secret' not in result.stdout
+        assert 'fixture-user' not in result.stdout
     finally:
         server.shutdown()
 

@@ -5,13 +5,14 @@ name: Minimal Core Matrix
 # It is a measurement, not a gate: probes record outcomes and the legs pass
 # unless the harness itself breaks. The table lands in the run summary.
 #
-# Configurations (overrides live in .github/minimal-core/):
+# Configurations (overrides live in .github/minimal-core/, except minimal-core,
+# which is the shipped opt-in profile docker-compose.core.yml):
 #   full                stock docker-compose.yml (the baseline)
 #   no-redis            Redis service off, REDIS_ENABLED=0
 #   no-lease-plane      lease plane off, its bearer empty
 #   no-age-stock-init   plain pgvector Postgres, stock init script (records how init fails)
 #   no-age              plain pgvector Postgres, init skipping only graph_schema.sql
-#   minimal-core        server + Postgres (Redis and lease plane off)
+#   minimal-core        docker-compose.core.yml: server + Postgres (Redis and lease plane off)
 #   minimal-floor       minimal-core on plain pgvector Postgres
 #
 # Built from this checkout, so it measures the code a change would ship.
@@ -23,6 +24,7 @@ on:
     paths:
       - '.github/workflows/minimal-core-matrix.yml'
       - '.github/minimal-core/**'
+      - 'docker-compose.core.yml'
       - 'scripts/ci/minimal_core_probe.py'
   workflow_dispatch:
 
@@ -48,9 +50,9 @@ jobs:
           - config: no-age
             files: "-f .github/minimal-core/no-age-image.yml -f .github/minimal-core/no-age-init.yml"
           - config: minimal-core
-            files: "-f .github/minimal-core/minimal-core.yml"
+            files: "-f docker-compose.core.yml"
           - config: minimal-floor
-            files: "-f .github/minimal-core/minimal-core.yml -f .github/minimal-core/no-age-image.yml -f .github/minimal-core/no-age-init.yml"
+            files: "-f docker-compose.core.yml -f .github/minimal-core/no-age-image.yml -f .github/minimal-core/no-age-init.yml"
     env:
       COMPOSE_PROJECT_NAME: unitares-matrix
     steps:
@@ -88,6 +90,21 @@ jobs:
           --up-rc "$UP_RC"
           -- docker compose -f docker-compose.yml ${{ matrix.files }}
 
+      # The update script stops the lease plane by name. Naming a service whose
+      # profile is off must not bring it back on the core profile.
+      - name: Core profile survives a stop that names the lease plane
+        if: matrix.config == 'minimal-core'
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml ${{ matrix.files }} stop governance-mcp lease-plane
+          if docker compose -f docker-compose.yml ${{ matrix.files }} ps -a --format '{{.Service}}' | grep -qx lease-plane; then
+            echo "::error::naming lease-plane created it on the core profile"; exit 1
+          fi
+          docker compose -f docker-compose.yml ${{ matrix.files }} up -d --wait --wait-timeout 300
+          if docker compose -f docker-compose.yml ${{ matrix.files }} ps -a --format '{{.Service}}' | grep -qxE 'lease-plane|redis'; then
+            echo "::error::a plain up on the core profile started Redis or the lease plane"; exit 1
+          fi
+
       - name: Collect logs
         if: always()
         run: |
@@ -96,7 +113,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: matrix-${{ matrix.config }}
           path: ${{ runner.temp }}/results/
@@ -117,7 +134,7 @@ jobs:
           persist-credentials: false
 
       - name: Download results
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: matrix-*
           path: ${{ runner.temp }}/results
