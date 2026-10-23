@@ -28,7 +28,7 @@ The pane shows whatever agents already report through the existing adapters. It 
 - `config/test.exs` does not turn the firehose off. `start_firehose` defaults to `true` from `runtime.exs`, so the CI `dialectic_live` job already starts a Firehose against `127.0.0.1:8767`.
 - Deploy: `cirwel update` → `deploy-apply.sh` → `deploy-dialectic-live.sh` (compile, strict asset build, kickstart, `/health` poll, reset-to-PREV rollback). `/health` is decoupled from the LiveViews.
 - `mix.lock` pins Req 0.6.2, which ships `Req.Test`.
-- The README and moduledocs are stale. They say the server emits no `dialectic_*` events, but it has emitted them since 2026-06-28 (#1251).
+- The README and moduledocs are stale. They say the server emits no `dialectic_*` events, but it has emitted them since 2026-06-29 (#1251).
 
 **`GET /v1/timeline`** (#3045, open, not on master, so a 404 live today) serves six kinds: `checkin`, `outcome`, `lifecycle`, `knowledge`, `lineage` and `dialectic`. `limit` is per kind (default 500, max 2000), and truncation drops the oldest rows. Unknown params return a 400. Summaries are cut to 280 code points (`summary[:279] + "…"`). Check-in events carry `state_json->>'action'`, but no state-row id and no `report_excerpt`. Lifecycle reads 7 audit types. #3045 also adds a 20-line read-only `SELECT` on `core.dialectic_sessions` to `src/dialectic_db.py` (§5).
 
@@ -37,7 +37,7 @@ The pane shows whatever agents already report through the existing adapters. It 
 | Timeline kind | On the firehose? |
 |---|---|
 | checkin | as a by-product: `eisv_update`, emitted by the EISV websocket enrichment (`enrichments.py`, `@enrichment(order=220)`, failure logged at debug); no `epistemic_class`, row id or excerpt |
-| lifecycle | yes: `lifecycle_*`, a wider set than the 7 types history reads |
+| lifecycle | partly: `lifecycle_*` frames, an overlapping but different set from the 7 types history reads (`_LIFECYCLE_EVENT_TYPES`, which also includes the two `circuit_breaker_*` types) |
 | knowledge | yes: `knowledge_write` with `discovery_id` (summary cut at 497 chars + "...") |
 | dialectic | transitions only (`dialectic_*`) |
 | outcome | **no** (`outcome_events.py` never broadcasts) |
@@ -45,7 +45,7 @@ The pane shows whatever agents already report through the existing adapters. It 
 
 **Load**, from read-only DB counts on 2026-10-23 over 24 h: 1525 check-in rows (about 63/h; 552 in the last 6 h, already over the default `limit=500`); 363 non-trajectory outcomes (about 15/h visible by default) and 1322 `trajectory_validated`; 0 rows in the 7 timeline lifecycle types. Over 30 days the populated lifecycle types are `lifecycle_archived`, `lifecycle_silent` and `lifecycle_silent_critical`. The live share is therefore essentially check-ins.
 
-**Verdict field.** The persisted check-in `action` is `decision.sub_action || decision.action` (`phases.py:2068`, `broadcaster.verdict_of`). On the wire, `decision.action` is "proceed" for both approve and guide.
+**Verdict field.** The persisted check-in `action` is `decision.sub_action || decision.action` (`phases.py:2063-2064` and `2148-2149`, `broadcaster.verdict_of`). On the wire, `decision.action` is "proceed" for both approve and guide.
 
 **#3047 defect, independent of this proposal.** `timeline` is in `RELOAD` but has no `APPLY` entry (`app.html`), so every frame falls through to the 1.5 s debounced full refetch. That means a refetch on every frame: bursts down to the debounce, about every 15–20 s on average. The tab defaults to 6 h with substrate on. `AUTO_MAX_HOURS = 6`, so the 1 h and 6 h windows auto-refresh and only 24 h is on demand. Its default 6 h check-in kind is truncated today.
 
@@ -67,10 +67,10 @@ Edited files:
 
 - `governance.ex`: add `timeline/2` (`Req.get`, same bearer, `retry: false`, 8 s timeout, JSON decode with no `Envelope.classify`). Add `:req_options` injection to both calls for `Req.Test`.
 - `firehose.ex`: back off from 1 s to 10 s; log `econnrefused` as "governance unreachable" and a refused upgrade (401/403) as "governance refused credentials"; publish connection state on a **new** topic, `"firehose:status"`, never on `"dialectic:events"`; accept `:name` and `:pubsub` options for tests. It still sends **no** auth header. Credentials are an M4 item.
-- `application.ex`: start `Task.Supervisor` and `TimelineFeed` unconditionally; remove the `DNSCluster` child.
+- `application.ex`: start `Task.Supervisor` and `TimelineFeed` outside tests (gated on `start_timeline_feed`, default true); remove the `DNSCluster` child.
 - `mix.exs` / `mix.lock`: drop `:dns_cluster`.
 - `config/runtime.exs`: remove `DNS_CLUSTER_QUERY`; add `GOVERNANCE_TIMELINE_URL`, `TIMELINE_WINDOW_HOURS` (default 1) and `TIMELINE_REREAD_MS` (default 60000); fix the stale `start_firehose` comment.
-- `config/test.exs`: `start_firehose: false` and `start_timeline_feed: false`, so tests start their own instances with `start_supervised`.
+- `config/runtime.exs` and `config/test.exs`: `runtime.exs` sets `start_firehose` outside its prod guard and loads after `test.exs`, so a `test.exs` value alone would be overridden. Guard both flags in `runtime.exs` with `config_env() != :test` (and set `start_firehose: false`, `start_timeline_feed: false` in `test.exs`), so tests start their own instances with `start_supervised`.
 - `router.ex`: add `live "/timeline", TimelineLive` in the existing browser scope, under the same posture as `/` and `/dialectic`.
 - `components/layouts/root.html.heex`: a two-link nav (Dialectic, Timeline). Because it sits in the root layout, the dialectic LiveView needs no edit.
 - `README.md`, `AGENTS.md`: correct the `dialectic_*` claim; record the trial URL; replace the generator AGENTS.md with UNITARES rules (read-only toward dialectic, fleet neutrality, no distribution, deploy via `cirwel update`, which credentials the process holds, and that `force_ssl`'s host list and `check_origin` are load-bearing).
@@ -94,7 +94,7 @@ Two windows are offered: 1 h (default) and 6 h. The 6 h window passes `limit=200
 `TimelineFeed` subscribes to `"governance:events"`. `TimelineAdapter` maps only these frames:
 
 - `eisv_update` → two parts. (a) A **core** `checkin` mark: `agent_id`, `ts` = frame timestamp, `authored_by: "unknown"`. This is a *stated stand-in*. The live check-in signal currently comes from an EISV enrichment's output, which inverts the rule that subscribers depend on the core (federation §3 rule 4). If EISV becomes optional, or its enrichment fails, live check-ins stop, and the pane falls back to re-read only (§4 item 0). (b) An **optional EISV decoration**, `verdict = decision["sub_action"] || decision["action"]`, which mirrors `verdict_of` and is rendered and labelled as an assessment. A render without it must work.
-- The 7 historical lifecycle types → `lifecycle`, plus a doorbell. Other `lifecycle_*` names are ignored until §4 item 3 aligns the sets.
+- The 7 types history reads (`lifecycle_paused`, `lifecycle_resumed`, `lifecycle_archived`, `lifecycle_loop_detected`, `lifecycle_stuck_detected`, `circuit_breaker_trip`, `circuit_breaker_reset`) → `lifecycle`, plus a doorbell. Other `lifecycle_*` names are ignored until §4 item 3 aligns the sets.
 - `knowledge_write` → `knowledge`, with the summary re-cut to Python's rule: if the code-point length is over 280, keep the first 279 code points plus U+2026 (`String.codepoints/1`, not graphemes).
 - `dialectic_*` → doorbell only.
 
@@ -145,7 +145,7 @@ Each item needs its own PR, checked against the Wave 3 writer inventory and the 
 
 ## 5. Non-goals and what this stays out of
 
-- **Wave 3 reduced-scope gate.** The gate covers writers of `status`, `phase`, `reviewer_agent_id`, `awaiting_facilitation`, and anything that moves `updated_at` on dialectic sessions (as `scripts/ops/wave3_writer_inventory.py` defines them), plus the named symbols in gate §1: `auto_resolve_stuck_sessions`, `_parse_timestamp`, `check_reviewer_stuck`, `_apply_reviewer_reassignment`, `check_timeout`, `select_reviewer`, `is_agent_in_active_session`, `add_message`, `src/mcp_handlers/dialectic/{session,beam_resolve_client,events}.py`, the `lease_plane` `dialectic_saga` / `dialectic_liveness` / `http_router` modules, the `dialectic_sweep_cycle` / `dialectic_session_write` emitters, and `instrument_version = "wave3-instrument-v2"`. Gated paths call `src/broadcaster.py` `broadcast_event` / `_persist_event` on their emit path (`dialectic/events.py:256`, `dialectic/handlers.py:241`), so those two functions are out of bounds as well. #3045's addition to `src/dialectic_db.py` is a read-only `SELECT`, outside the writer set. #3045's PR body should record that `tests/test_wave3_writer_inventory.py` stays green on it. The pane never calls dialectic `resolve`, `reassign`, `takeover`, `submit` or `add_message`.
+- **Wave 3 reduced-scope gate.** The gate covers writers of `status`, `phase`, `reviewer_agent_id`, `awaiting_facilitation`, and anything that moves `updated_at` on dialectic sessions (as `scripts/ops/wave3_writer_inventory.py` defines them). It also covers the seven symbols named in gate §1 (`auto_resolve_stuck_sessions`, `_parse_timestamp`, `check_reviewer_stuck`, `_apply_reviewer_reassignment`, `check_timeout`, `select_reviewer`, `is_agent_in_active_session`); the writer inventory's sites (`add_message`, `src/mcp_handlers/dialectic/{session,beam_resolve_client,events}.py`, the `lease_plane` `dialectic_saga` / `dialectic_liveness` / `http_router` modules, the `dialectic_session_write` emitter); and, from gate §10 (A5/A6), the `dialectic_sweep_cycle` emitter and `instrument_version = "wave3-instrument-v2"`. Gated paths call `src/broadcaster.py` `broadcast_event` / `_persist_event` on their emit path (`dialectic/events.py:256`, `dialectic/handlers.py:241`), so those two functions are out of bounds as well. #3045's addition to `src/dialectic_db.py` is a read-only `SELECT`, outside the writer set. #3045's PR body should record that `tests/test_wave3_writer_inventory.py` stays green on it. The pane never calls dialectic `resolve`, `reassign`, `takeover`, `submit` or `add_message`.
 - **No steering.** No POST from the timeline. No new tool, action, alias or model channel.
 - **No Erlang distribution.** No `-sname`/`-name`, no cookie, no clustering hook (DNSCluster is removed), no clustering with lease_plane, agent_orchestrator, wave3a_handlers, sentinel or dispatch_beam.
 - **No data ownership.** No Ecto or Postgres reads.
@@ -158,7 +158,7 @@ Each item needs its own PR, checked against the Wave 3 writer inventory and the 
 
 **M0, prerequisites.**
 - #3045 merges and deploys through `cirwel update`.
-- #3047's owning session adds `APPLY.timeline` (swallowing non-timeline frames, with a vitest case that replays a `knowledge_read`-heavy sequence and counts `DATA.timeline` calls), then renews `approved-to-merge` after CI and review. If that does not happen, it ships as its own PR marked "merge after #3047". Separately, the tab's 6 h check-in truncation should be fixed there (by passing `limit` or showing the banner).
+- #3047's `APPLY.timeline` fix: done on #3047 (commit `f7614cbdd`). Irrelevant frames are swallowed, relevant ones coalesce to at most one refetch per 15 s, and a vitest replays a `knowledge_read`-heavy sequence and counts `DATA.timeline` calls. The tab already shows a truncation banner (`sections/timeline.js`); passing a larger `limit` for its 6 h window remains open there.
 - This document lands with a row in `active/README.md` (BEAM footprint, **Active**) and the Active count in `docs/proposals/README.md` bumped by one, after claiming the BEAM proposal surface.
 
 **M1, the smallest live slice** (one PR: the app plus the parity fixture and the deploy smoke check). It contains §3.1–3.4 and §3.7, with no auth change. Tests are DB-free and governance-free, use injected `:name`, `:table`, `:pubsub` and `:req_options`, and use `Req.Test.allow` with `start_supervised`:
@@ -218,7 +218,7 @@ The deciding criterion is the operator's per-feature judgement after M1.5 on the
 
 ## 10. Authorization
 
-Merging this document authorises **M1 only**, as scoped in §3 and §6, and the M0 `APPLY.timeline` fix by #3047's owner. M1 contains no auth, identity or boundary change, so it sits wholly inside the agent column. If the operator vetoes §9.1, M1 waits. Merging does not authorise: any change in the Wave 3 gated scope, including `broadcast_event` / `_persist_event`; any new tool, action, alias, model channel or steering control; any `src/` change; any M4 boundary or credential change; Erlang distribution; `RunAtLoad`, `DIALECTIC_LIVE_BIND_ALL` or tunnel exposure; a rename; or M2 and later.
+Merging this document authorises **M1 only**, as scoped in §3 and §6, plus three small agent-column changes it names: the M0 fixes on #3047 (the `APPLY.timeline` fix, already made, and the 6 h `limit`), and the one-line `scripts/ops/deploy-status.sh` drift-scope PR (§3.1). M1 contains no auth, identity or boundary change, so it sits wholly inside the agent column. If the operator vetoes §9.1, M1 waits. Merging does not authorise: any change in the Wave 3 gated scope, including `broadcast_event` / `_persist_event`; any new tool, action, alias, model channel or steering control; any `src/` change; any M4 boundary or credential change; Erlang distribution; `RunAtLoad`, `DIALECTIC_LIVE_BIND_ALL` or tunnel exposure; a rename; or M2 and later.
 
 ## Review record
 
@@ -236,3 +236,4 @@ Merging this document authorises **M1 only**, as scoped in §3 and §6, and the 
   - the minor findings: DNSCluster, nav placement, status topic, code-point cut, per-agent topic, latency naming, M0 ownership, classification, idle polling, trial log, positioning and credential scope.
 
   The second-family review for M1 is still requested.
+- 2026-10-23: an independent fresh-context pass checked the revised text against the repo, both PR branches and the running system. It confirmed the runtime claims (socket origin 403/101, the `rebind.example` 301, `nonode@nohost`, the `/v1/timeline` 404 on master) and found seven corrections, all applied: the §5 sources (gate §1, gate §10 and the writer inventory, each named), the `runtime.exs` override of a `test.exs` flag, the `TimelineFeed` start wording, the `phases.py` line numbers, the M0 status on #3047, §10 naming every scheduled agent-column change, and the lifecycle type set listed by name.
