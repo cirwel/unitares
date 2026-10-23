@@ -431,6 +431,7 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
         "details": (
                 "discovery_id", "length", "offset", "max_chain_depth",
+                "response_chain_limit", "response_chain_offset",
                 "include_response_chain", "response_mode",
         ),
         "note": (
@@ -675,7 +676,24 @@ class KnowledgeParams(AgentIdentityMixin):
     offset: Optional[int] = Field(None, description="Character offset for action=details pagination")
     length: Optional[int] = Field(None, description="Maximum details characters returned for action=details")
     include_response_chain: Union[bool, str, None] = Field(None, description="Include typed response chain for action=details")
-    max_chain_depth: Optional[int] = Field(None, description="Maximum response-chain traversal depth for action=details")
+    max_chain_depth: Optional[int] = Field(
+        None,
+        ge=1,
+        le=32,
+        description="Maximum response-chain traversal depth for action=details (1-32; default 10)",
+    )
+    response_chain_limit: Optional[int] = Field(
+        None,
+        ge=1,
+        le=200,
+        description="Maximum discoveries returned from a response chain (1-200; default 100)",
+    )
+    response_chain_offset: Optional[int] = Field(
+        None,
+        ge=0,
+        le=10_000,
+        description="Discovery offset for paginating a response chain (0-10000; default 0)",
+    )
     # Recall-recovery levers for action=search. Default search excludes archived
     # and cold-storage notes; pass these to reach them when an active-tier search
     # comes up empty. The handler already honors both — they were just never

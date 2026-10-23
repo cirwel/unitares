@@ -143,6 +143,8 @@ def test_details_and_threading_controls_exposed():
         "length",
         "include_response_chain",
         "max_chain_depth",
+        "response_chain_limit",
+        "response_chain_offset",
         "response_to",
     } <= declared
 

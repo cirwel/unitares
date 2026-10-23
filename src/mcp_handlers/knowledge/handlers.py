@@ -585,7 +585,13 @@ def _invalid_enum_response(field: str, value: Any, valid_values: set[str], *, ti
     )
 
 
-def _coerce_pagination_int(value: Any, *, default: int, minimum: int) -> int:
+def _coerce_pagination_int(
+    value: Any,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
     if value is None:
         return default
     try:
@@ -594,6 +600,8 @@ def _coerce_pagination_int(value: Any, *, default: int, minimum: int) -> int:
         return default
     if coerced < minimum:
         return default
+    if maximum is not None and coerced > maximum:
+        return maximum
     return coerced
 
 
@@ -5456,15 +5464,35 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                 arguments.get("max_chain_depth"),
                 default=10,
                 minimum=1,
+                maximum=32,
+            )
+            chain_limit = _coerce_pagination_int(
+                arguments.get("response_chain_limit"),
+                default=100,
+                minimum=1,
+                maximum=200,
+            )
+            chain_offset = _coerce_pagination_int(
+                arguments.get("response_chain_offset"),
+                default=0,
+                minimum=0,
+                maximum=10_000,
             )
 
             # Check if backend supports response chain traversal
             if hasattr(graph, 'get_response_chain'):
                 try:
-                    chain = await graph.get_response_chain(discovery_id, max_depth=max_depth)
+                    chain = await graph.get_response_chain(
+                        discovery_id,
+                        max_depth=max_depth,
+                        limit=chain_limit,
+                        offset=chain_offset,
+                    )
                     response["response_chain"] = {
                         "count": len(chain),
                         "max_depth": max_depth,
+                        "limit": chain_limit,
+                        "offset": chain_offset,
                         "discoveries": [d.to_dict(include_details=False) for d in chain]
                     }
                     response["message"] += f" (includes {len(chain)} discoveries in response chain)"

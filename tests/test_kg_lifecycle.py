@@ -521,6 +521,8 @@ class TestGetDiscoveryDetails:
         assert data["success"] is True
         assert "response_chain" in data
         assert data["response_chain"]["count"] == 2
+        assert data["response_chain"]["limit"] == 100
+        assert data["response_chain"]["offset"] == 0
 
     @pytest.mark.asyncio
     async def test_get_details_null_chain_depth_uses_default(self, patch_common):
@@ -544,6 +546,37 @@ class TestGetDiscoveryDetails:
         mock_graph.get_response_chain.assert_awaited_once_with(
             disc.id,
             max_depth=10,
+            limit=100,
+            offset=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_bounds_and_pagination(self, patch_common):
+        """Chain parameters are capped before reaching the graph backend."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        disc = make_discovery(id="2026-01-01T00:00:00.000000", details="Details")
+        mock_graph.get_discovery = AsyncMock(return_value=disc)
+        mock_graph.get_response_chain = AsyncMock(return_value=[disc])
+
+        result = await handle_get_discovery_details({
+            "discovery_id": disc.id,
+            "include_response_chain": True,
+            "max_chain_depth": 999,
+            "response_chain_limit": 999,
+            "response_chain_offset": 99_999,
+        })
+
+        data = parse_result(result)
+        assert data["response_chain"]["max_depth"] == 32
+        assert data["response_chain"]["limit"] == 200
+        assert data["response_chain"]["offset"] == 10_000
+        mock_graph.get_response_chain.assert_awaited_once_with(
+            disc.id,
+            max_depth=32,
+            limit=200,
+            offset=10_000,
         )
 
     @pytest.mark.asyncio
