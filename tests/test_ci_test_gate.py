@@ -84,7 +84,9 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     _assert_shard_partition(yaml.safe_load(workflow), PROJECT_ROOT)
 
     assert "name: test (3.12)" in workflow
-    assert "needs: [test_shard, macos-platform]" in workflow
+    assert "needs: [test_shard, macos-platform, native-bootstrap]" in workflow
+    assert "needs.native-bootstrap.result != 'success'" in workflow
+    assert "uses: ./.github/workflows/native-bootstrap.yml" in workflow
     assert "needs.test_shard.result != 'success'" in workflow
     assert "needs.macos-platform.result != 'success'" in workflow
     assert "python -m coverage combine coverage-data" in workflow
