@@ -1617,8 +1617,6 @@ def _requires_proven_writer(action: str):
 
     return decorate
 
-    return guarded
-
 
 async def _resolve_store_writer(
     arguments: Dict[str, Any],
