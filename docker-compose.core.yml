@@ -12,10 +12,11 @@
 # Minimal Core Matrix workflow (it runs this file on every change to it):
 #
 # - Without Redis, sessions bound by a keyed client_session_id resolve from
-#   PostgreSQL and survive a restart. Everything Redis holds alone is kept in
-#   process memory and lost on restart: non-keyed session keys (X-Session-ID,
-#   Mcp-Session-Id, fingerprint pins), onboard pins, OAuth tokens and provider
-#   cooldowns. Use the default stack for a long-running deployment.
+#   PostgreSQL and survive a restart. Non-keyed session keys (X-Session-ID,
+#   Mcp-Session-Id, fingerprint pins), OAuth state and provider cooldowns fall
+#   back to process memory and are lost on restart. Onboard pins have no
+#   fallback and do not work at all, so clients must pass client_session_id.
+#   Use the default stack for a long-running deployment.
 # - Without the lease plane there are no surface leases or agent messages:
 #   coordination calls that need it fail. Check-ins, identity resumption, the
 #   knowledge graph and dialectic requests work.

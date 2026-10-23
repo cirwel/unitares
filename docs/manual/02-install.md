@@ -586,7 +586,8 @@ which runs this file on every change to it:
 |---|---|
 | Onboard, check-in, knowledge store and search, dialectic requests | Work |
 | Identity resumption across a server restart, by a keyed `client_session_id` | Works: that binding is stored in PostgreSQL |
-| State held only in Redis: non-keyed session keys (`X-Session-ID`, `Mcp-Session-Id`, fingerprint pins), onboard pins, OAuth tokens, provider cooldowns | Kept in process memory, lost on restart |
+| Non-keyed session keys (`X-Session-ID`, `Mcp-Session-Id`, fingerprint pins), OAuth state, provider cooldowns | Kept in process memory, lost on restart |
+| Onboard pins (the continuity a client gets when it does not pass its `client_session_id`) | Not available: the pin has no fallback without Redis, so pass `client_session_id` |
 | Surface leases and agent messages (the lease plane) | Not available |
 
 Use the default stack for a deployment that runs for long, serves several
