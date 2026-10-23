@@ -424,7 +424,10 @@ opt-in continuity probe puts one question to the agent in the compaction
 context: same running process, new process, or cannot tell. The adapter then
 reads the agent's answer from the end of that turn and records it on the same
 route (`observation_kind="context_compaction_probe"`), keyed to the
-compaction by the identity and time it was recorded on. A turn that ends
+compaction by the identity and time it was recorded on. Any bound identity can
+post an answer naming any compaction, so the report counts only answers from
+the compacted identity or a `spawn_reason="compaction"` child it minted after
+that compaction; others are ignored and counted. A turn that ends
 without an answer is recorded as `no_answer`, which is the hook's note, not
 the agent's report. The report shows each answer beside its outcome and counts
 how often they are consistent: `same_process` with `kept`, `new_process` with

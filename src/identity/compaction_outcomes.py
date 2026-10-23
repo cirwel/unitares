@@ -83,14 +83,13 @@ def _utc(value: Any) -> datetime | None:
 
 def _probes_by_compaction(
     probes: Iterable[Mapping[str, Any]],
-) -> tuple[dict[tuple[str, datetime], dict[str, Any]], int]:
-    """Key probe answers by (compacted identity, compaction time).
+) -> dict[tuple[str, datetime], list[dict[str, Any]]]:
+    """Group probe answers by (compacted identity, compaction time), oldest first.
 
-    The first answer recorded for a compaction is kept; later ones for the same
-    compaction are counted as duplicates, not read.
+    Which of them counts is decided per compaction, once its successors are
+    known (``_select_probe``).
     """
-    keyed: dict[tuple[str, datetime], dict[str, Any]] = {}
-    duplicates = 0
+    keyed: dict[tuple[str, datetime], list[dict[str, Any]]] = {}
     ordered = sorted(
         probes, key=lambda row: _utc(row.get("timestamp")) or datetime.max.replace(tzinfo=timezone.utc)
     )
@@ -101,20 +100,42 @@ def _probes_by_compaction(
         answer = str(details.get("probe_answer") or "")
         if not compacted or at is None or answer not in PROBE_ANSWERS:
             continue
-        key = (compacted, at)
-        if key in keyed:
+        keyed.setdefault((compacted, at), []).append(
+            {
+                "answer": answer,
+                "probe_version": str(details.get("probe_version") or ""),
+                "guidance_present": details.get("guidance_present") is True,
+                "answered_by": str(row.get("agent_id") or ""),
+            }
+        )
+    return keyed
+
+
+def _select_probe(
+    candidates: list[dict[str, Any]], eligible: set[str]
+) -> tuple[dict[str, Any] | None, int, int]:
+    """Pick the first answer from the compacted identity or a successor it minted.
+
+    The route lets any bound identity name any compaction, so an answer from
+    anyone else is ignored rather than allowed to displace the agent's own.
+    Returns the answer, the later eligible answers ignored as duplicates, and
+    the answers ignored as unrelated.
+    """
+    chosen = None
+    duplicates = unrelated = 0
+    for candidate in candidates:
+        if candidate["answered_by"] not in eligible:
+            unrelated += 1
+        elif chosen is None:
+            chosen = candidate
+        else:
             duplicates += 1
-            continue
-        keyed[key] = {
-            "answer": answer,
-            "probe_version": str(details.get("probe_version") or ""),
-            "guidance_present": details.get("guidance_present") is True,
-            "answered_by": str(row.get("agent_id") or ""),
-        }
-    return keyed, duplicates
+    return chosen, duplicates, unrelated
 
 
-def _probe_summary(rows: list[dict[str, Any]], duplicates: int) -> dict[str, Any]:
+def _probe_summary(
+    rows: list[dict[str, Any]], duplicates: int, unrelated: int
+) -> dict[str, Any]:
     asked = [row for row in rows if row["probe"] is not None]
     by_outcome = {
         answer: {name: 0 for name in OUTCOMES} for answer in PROBE_ANSWERS
@@ -140,10 +161,11 @@ def _probe_summary(rows: list[dict[str, Any]], duplicates: int) -> dict[str, Any
         "decisive_pairs": consistent + inconsistent,
         "consistent": consistent,
         "inconsistent": inconsistent,
-        "answered_by_other_identity": sum(
+        "answered_by_successor": sum(
             1 for row in asked if row["probe"]["answered_by"] != row["agent_id"]
         ),
         "duplicates_ignored": duplicates,
+        "unrelated_ignored": unrelated,
         "scope": (
             "Answers given with the compaction guidance in context. kept is "
             "mostly produced by the Stop hook's own check-in, so same_process "
@@ -177,9 +199,11 @@ def classify_compaction_outcomes(
     ``created_at``). ``last_activity`` maps an agent id to the time of its
     latest audit event that is not a runtime observation. ``probes`` are
     ``context_compaction_probe`` audit rows, matched to a compaction by the
-    identity and time it names.
+    identity and time it names, and counted only when posted by that identity
+    or a child it minted after the compaction.
     """
-    probe_index, probe_duplicates = _probes_by_compaction(probes)
+    probe_index = _probes_by_compaction(probes)
+    probe_duplicates = probe_unrelated = 0
     by_agent: dict[str, list[tuple[datetime, Mapping[str, Any]]]] = {}
     excluded_at_cutoff = 0
     for row in compactions:
@@ -220,6 +244,11 @@ def classify_compaction_outcomes(
                 outcome = "no_later_activity"
             details = row.get("details") if isinstance(row.get("details"), Mapping) else {}
             reported_at = _utc(details.get("observed_at")) or at
+            probe, dupes, unrelated = _select_probe(
+                probe_index.get((agent_id, reported_at), []), {agent_id, *minted}
+            )
+            probe_duplicates += dupes
+            probe_unrelated += unrelated
             rows.append(
                 {
                     "agent_id": agent_id,
@@ -228,11 +257,7 @@ def classify_compaction_outcomes(
                     "host_family": str(details.get("host_family") or "unknown"),
                     "outcome": outcome,
                     "minted_children": minted,
-                    "probe": (
-                        probe_index.get((agent_id, reported_at))
-                        if reported_at is not None
-                        else None
-                    ),
+                    "probe": probe,
                 }
             )
 
@@ -249,7 +274,7 @@ def classify_compaction_outcomes(
             for host, counts in sorted(by_host.items())
         },
         "rows": rows,
-        "probe": _probe_summary(rows, probe_duplicates),
+        "probe": _probe_summary(rows, probe_duplicates, probe_unrelated),
         "complete": through is None,
         "excluded_at_cutoff": excluded_at_cutoff,
         "scope": (

@@ -187,7 +187,7 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
     assert by_event["minted"]["probe"]["answered_by"] == "child"
     assert by_event["kept"]["probe"] is None
     assert report["probe"]["inconsistent"] == 1
-    assert report["probe"]["answered_by_other_identity"] == 1
+    assert report["probe"]["answered_by_successor"] == 1
     assert report["probe"]["complete"] is True
 
 
@@ -288,7 +288,7 @@ def test_probe_answers_sit_beside_outcomes_and_consistency_is_counted():
     }
     # cannot_tell is counted, never scored either way.
     assert (probe["decisive_pairs"], probe["consistent"], probe["inconsistent"]) == (2, 1, 1)
-    assert probe["answered_by_other_identity"] == 1
+    assert probe["answered_by_successor"] == 1
 
 
 def test_a_probe_attaches_only_to_the_compaction_it_names():
@@ -330,3 +330,37 @@ def test_no_probes_leaves_every_row_unasked():
     assert report["rows"][0]["probe"] is None
     assert report["probe"]["asked"] == 0
     assert report["probe"]["decisive_pairs"] == 0
+
+
+def test_an_unrelated_identity_cannot_answer_for_a_compaction():
+    # Any bound identity can post a probe naming any compaction; only the
+    # compacted identity or a child it minted counts.
+    intruder = "99999999-8888-4777-8666-555555555555"
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0)],
+        [],
+        {PARENT: T0 + timedelta(hours=1)},
+        probes=[
+            _probe(PARENT, T0, "new_process", answered_by=intruder,
+                   posted=T0 + timedelta(seconds=5)),
+            _probe(PARENT, T0, "same_process", posted=T0 + timedelta(minutes=1)),
+        ],
+    )
+    assert report["rows"][0]["probe"]["answer"] == "same_process"
+    assert report["rows"][0]["probe"]["answered_by"] == PARENT
+    assert report["probe"]["unrelated_ignored"] == 1
+    assert report["probe"]["duplicates_ignored"] == 0
+
+
+def test_a_child_that_is_not_this_compactions_successor_cannot_answer():
+    # A compaction child minted after the NEXT compaction belongs to that one.
+    later = T0 + timedelta(hours=2)
+    report = classify_compaction_outcomes(
+        [_compaction(PARENT, T0, event_id="first"), _compaction(PARENT, later, event_id="second")],
+        [_child("late-child", PARENT, later + timedelta(minutes=1))],
+        {PARENT: later + timedelta(minutes=30)},
+        probes=[_probe(PARENT, T0, "new_process", answered_by="late-child")],
+    )
+    by_event = {row["event_id"]: row for row in report["rows"]}
+    assert by_event["first"]["probe"] is None
+    assert report["probe"]["unrelated_ignored"] == 1

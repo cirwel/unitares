@@ -94,7 +94,8 @@ async def main() -> int:
         print(
             f"  consistent={probe['consistent']} inconsistent={probe['inconsistent']} "
             f"of {probe['decisive_pairs']} decisive; "
-            f"answered by another identity={probe['answered_by_other_identity']}"
+            f"answered by a successor={probe['answered_by_successor']} "
+            f"unrelated ignored={probe['unrelated_ignored']}"
         )
     if report["rows"]:
         print("\nrecent:")
