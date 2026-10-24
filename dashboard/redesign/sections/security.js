@@ -61,6 +61,14 @@
           </div>
           <div id="enrollmentCode" hidden></div>
           <p class="security-note" id="operatorHint"></p>
+          <label class="security-secret-label" for="operatorCredential">Operator credential</label>
+          <div class="security-actions security-secret-row">
+            <input class="security-secret" id="operatorCredential" type="password"
+              autocomplete="off" autocapitalize="none" spellcheck="false"
+              placeholder="Paste over this TLS session">
+            <button class="security-btn" id="saveOperatorCredential" type="button">Store in this browser</button>
+            <button class="security-btn" id="forgetOperatorCredential" type="button">Forget</button>
+          </div>
         </section>
         <section class="panel">
           <div class="panel-head"><h2>Active sessions</h2><span class="who" id="sessionCount"></span></div>
@@ -96,7 +104,7 @@
     document.querySelector("#mintCode").disabled = !opAvailable;
     document.querySelector("#operatorHint").textContent = opAvailable
       ? "Type the displayed code on the target device. It is never placed in a URL."
-      : "An operator credential is required to mint a code. Existing codes can still be typed on the enrollment page.";
+      : "Paste the operator credential below to mint a code. It is never placed in a URL. Existing codes can still be typed on the enrollment page.";
   }
 
   async function refresh() {
@@ -105,7 +113,8 @@
       render();
       message("");
     } catch (error) {
-      document.querySelectorAll("#security-mount button").forEach((button) => { button.disabled = true; });
+      document.querySelectorAll('#credentialList button, #logout, #revokeAll')
+        .forEach((button) => { button.disabled = true; });
       // A server with no passkey relying party refuses every session call too,
       // so the 403 above says nothing about this browser. Ask the server which
       // case this is before calling it a failure: "not configured" is a setup
@@ -186,10 +195,34 @@
     }
   }
 
+  function storeOperatorCredential() {
+    const input = document.querySelector("#operatorCredential");
+    if (!input.value.trim()) {
+      message("Enter a non-empty operator credential.", "error");
+      return;
+    }
+    const stored = window.DATA.setOperatorToken(input.value);
+    input.value = "";
+    render();
+    message(
+      stored ? "Operator credential stored in this browser." : "This browser could not store the operator credential.",
+      stored ? "ok" : "error",
+    );
+  }
+
+  function forgetOperatorCredential() {
+    window.DATA.setOperatorToken("");
+    document.querySelector("#operatorCredential").value = "";
+    render();
+    message("Operator credential removed from this browser.", "ok");
+  }
+
   function wire() {
     document.querySelector("#mintCode").addEventListener("click", (event) => mintCode(event.currentTarget));
     document.querySelector("#logout").addEventListener("click", () => endSessions(false));
     document.querySelector("#revokeAll").addEventListener("click", () => endSessions(true));
+    document.querySelector("#saveOperatorCredential").addEventListener("click", storeOperatorCredential);
+    document.querySelector("#forgetOperatorCredential").addEventListener("click", forgetOperatorCredential);
     document.querySelector("#credentialList").addEventListener("click", (event) => {
       const button = event.target.closest('[data-action="revoke-credential"]');
       if (button) revokeCredential(button);
@@ -201,6 +234,7 @@
     if (!mount) return;
     mount.innerHTML = shell();
     wire();
+    render();
     await refresh();
   }
 
