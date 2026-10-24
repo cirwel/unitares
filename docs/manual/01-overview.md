@@ -86,7 +86,7 @@ The shared record answers five questions about any piece of work:
 | Question | Mechanism |
 |---|---|
 | **Who said it?** | Process identity and explicit lineage; lineage grants no authority. |
-| **What supports it?** | Durable findings with their corrections and provenance. The `sync_state` report text is transient; a durable claim needs a finding. |
+| **What supports it?** | Durable findings with their corrections and provenance. Each `sync_state` check-in keeps a bounded excerpt of its report text, the agent's own words rather than a verified claim; a durable claim needs a finding. |
 | **Who challenged it?** | Structured review that preserves positions, objections, conditions and resolution. |
 | **What happened?** | Typed outcome events with their evidence grade, bound to a check-in's prediction when supplied. |
 | **What can a successor recover?** | Search, review reads, history export and authorized outcome reads. |

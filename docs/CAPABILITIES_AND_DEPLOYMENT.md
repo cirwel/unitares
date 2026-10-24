@@ -10,14 +10,15 @@ and reconstruction.
 | Task | Public entry points | What the caller must supply or retain |
 |---|---|---|
 | Bind identity | `start_session(force_new=true)`, `identity` for inspection or explicit same-process rebind | Retain `client_session_id`. A fresh process gets a fresh identity; declare lineage only for a real causal relationship. |
-| Record claims and evidence | `sync_state`, `store_finding`, `update_finding` | `sync_state` submits a transient work report from which durable state is derived; durable claim text belongs in a finding. Search before storing. Confidence is optional, and supplying it can mint a prediction. |
+| Record claims and evidence | `sync_state`, `store_finding`, `update_finding` | `sync_state` submits a work report from which durable state is derived, and each check-in keeps a bounded excerpt of its report text; durable claim text belongs in a finding. Search before storing. Confidence is optional, and supplying it can mint a prediction. |
 | Review | `request_review`, `dialectic` | Preserve the session ID, positions, reviewer judgment, and unresolved conditions. An advisory `consult` answer is not a governed review verdict. |
 | Record outcomes | `record_result` | Record the observed outcome and provenance; use the returned prediction ID to grade the intended prediction. |
 | Reconstruct work | `search_shared_memory`, `knowledge` reads, `dialectic` reads, `export`, operator-gated `observe(action="outcome_evidence")` | Retrieve relevant records and distinguish current claims, superseded claims, disagreement, and missing evidence. These reads have different authorization and retention boundaries. |
 
-Reconstruction is a client workflow over these records and operations. The original `sync_state` report
-text is not part of the persisted state history, and exported governance history
-does not include shared knowledge. Preserve source IDs and gaps when summarizing.
+Reconstruction is a client workflow over these records and operations. Each `sync_state` check-in keeps a bounded excerpt of its report text
+(500 characters by default, `UNITARES_CHECKIN_EXCERPT_CHARS`; 0 turns it off),
+not the full text, and exported governance history does not include shared
+knowledge. Preserve source IDs and gaps when summarizing.
 Comparative reconstruction fidelity and correction propagation remain
 evaluation questions.
 
