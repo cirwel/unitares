@@ -72,7 +72,10 @@
     }
 
     function callTool(name, args) {
-        var headers = { 'Content-Type': 'application/json' };
+        var headers = {
+            'Content-Type': 'application/json',
+            'X-Unitares-Csrf': '1'
+        };
         var token = getToken();
         if (token) headers['Authorization'] = 'Bearer ' + token;
 

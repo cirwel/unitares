@@ -79,6 +79,10 @@
   async function authFetch(path, opts) {
     opts = opts || {};
     const headers = Object.assign({}, opts.headers);
+    const method = (opts.method || "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+      headers["X-Unitares-Csrf"] = "1";
+    }
     const t = token();
     if (t) headers["Authorization"] = "Bearer " + t;
     const r = await fetch(path, Object.assign({}, opts, {
