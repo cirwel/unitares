@@ -54,8 +54,7 @@ every step."* The generalisation is one step further out — **the tree is not t
 deployment**, and a comment, a template, a default, or a static constant is not
 a reading of the running system.
 
-Three other findings that day had the same shape, tagged explicitly below by
-source:
+Three other findings from the same audit are tagged below by source:
 
 - **Tree, refuted by system (UNVERIFIED here).** A plist comment said the
   process is a jetsam target. The system reading: 9h 3m uptime across every
@@ -66,7 +65,8 @@ source:
   inside the SDK's own 405-rejection function, and `stateless=True` means
   `mcp_session_id` is always `None`, so `DELETE` 405s unconditionally. Nothing
   here required a live probe; a closer reading of the same source was enough.
-  Not every correction needs a system reading.
+  This row does not fit a tree-vs-system frame: not every correction needs a
+  system reading.
 - **System, qualified by inference, not by a second system reading
   (UNVERIFIED here).** `launchctl` showed the tunnel `runs = 1` — that count
   is itself a system reading, not a tree claim. But reading it as settling
