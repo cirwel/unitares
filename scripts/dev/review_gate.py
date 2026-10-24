@@ -981,7 +981,7 @@ class CodexRounds:
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
     def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
-        """Require operator approval after too many unproductive cycles.
+        """Require explicit authorization after too many unproductive cycles.
 
         Total cycle count prompts reassessment, never grants or denies coverage.
         """

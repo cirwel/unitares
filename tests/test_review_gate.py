@@ -5817,7 +5817,7 @@ def test_authorize_full_review_works_under_app_credentials_without_operator_acco
     monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
     rounds = rg.CodexRounds(4, cycles=[rg.ReviewCycle(head, key, {'openai', 'anthropic'})])
     monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds)
-    monkeypatch.setattr(rg, 'require_operator_account', lambda: pytest.fail('App used operator credentials'))
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: pytest.fail(f'unexpected gh_json call: {a}'))
     ran = []
     monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: ran.append(True) or 0)
     monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)

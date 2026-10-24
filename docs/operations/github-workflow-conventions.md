@@ -434,7 +434,7 @@ confirmed a bounded correction or clarification without scope expansion.
 The optional `git config review.verifier ollama:<model>` route remains
 available for minor-finding verification; no verifier is required by default.
 
-After cycle three, a new full cycle requires an explicit reason (`review.sh --authorize-full-review "reason"`). P0/P1 and security findings remain blockers; exhausting the budget never creates approval. Missing second-family coverage on a security-sensitive diff can also be completed directly on the current diff, including when the first family completed via a `scope=fix` follow-up. Agents running under `unitares-github` App credentials can pass `--authorize-full-review "reason"` directly without needing a separate operator account or comment.
+After cycle three, a new full cycle requires an explicit reason (`review.sh --authorize-full-review "reason"`). P0/P1 and security findings remain blockers; exhausting the budget never turns an unreviewed diff into a passing review. When the first model family completed via a `scope=fix` follow-up and the second family has not yet run a full cycle on the PR, that missing second family can run directly on the current diff without extra flags. Agents running under `unitares-github` App credentials can pass `--authorize-full-review "reason"` directly without needing a separate operator account or comment.
 
 For compatibility, the capped CLI also supports a scoped PR comment (`--review-cycle-grant <comment-id>`):
 
