@@ -1063,6 +1063,15 @@ class TestGetResponseChain:
         }
 
     @pytest.mark.asyncio
+    async def test_lookahead_fetches_one_bounded_sentinel_row(self):
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query.return_value = []
+
+        await kg.get_response_chain("root", limit=200, lookahead=True)
+
+        assert mock_db.graph_query.await_args.args[1]["limit"] == 201
+
+    @pytest.mark.asyncio
     async def test_deduplicates_by_smallest_depth(self):
         """Should keep the entry with the smallest depth when duplicates exist."""
         kg, mock_db = make_kg_with_mock_db()

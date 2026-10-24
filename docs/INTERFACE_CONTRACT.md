@@ -1156,5 +1156,6 @@ with deterministic pagination.
 - **Schema digests:** `knowledge` and its complete-catalog surface digest move
   because the public input schema gains two fields and bounds the existing
   depth field.
-- **Client action:** clients that need more than the first 100 chain members
-  should advance `response_chain_offset` in pages no larger than 200.
+- **Client action:** the response reports `has_more` and `next_offset`; clients
+  should advance `response_chain_offset` while `has_more` is true, using pages
+  no larger than 200.

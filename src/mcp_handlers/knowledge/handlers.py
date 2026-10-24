@@ -5482,17 +5482,22 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
             # Check if backend supports response chain traversal
             if hasattr(graph, 'get_response_chain'):
                 try:
-                    chain = await graph.get_response_chain(
+                    chain_with_lookahead = await graph.get_response_chain(
                         discovery_id,
                         max_depth=max_depth,
                         limit=chain_limit,
                         offset=chain_offset,
+                        lookahead=True,
                     )
+                    has_more = len(chain_with_lookahead) > chain_limit
+                    chain = chain_with_lookahead[:chain_limit]
                     response["response_chain"] = {
                         "count": len(chain),
                         "max_depth": max_depth,
                         "limit": chain_limit,
                         "offset": chain_offset,
+                        "has_more": has_more,
+                        "next_offset": chain_offset + chain_limit if has_more else None,
                         "discoveries": [d.to_dict(include_details=False) for d in chain]
                     }
                     response["message"] += f" (includes {len(chain)} discoveries in response chain)"

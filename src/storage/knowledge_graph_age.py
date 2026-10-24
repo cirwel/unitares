@@ -1103,6 +1103,7 @@ class KnowledgeGraphAGE:
         max_depth: int = 10,
         limit: int = 100,
         offset: int = 0,
+        lookahead: bool = False,
     ) -> List[DiscoveryNode]:
         """
         Get a response chain for a discovery using AGE graph traversal.
@@ -1118,6 +1119,7 @@ class KnowledgeGraphAGE:
         max_depth = max(1, min(int(max_depth), 32))
         limit = max(1, min(int(limit), 200))
         offset = max(0, min(int(offset), 10_000))
+        query_limit = limit + int(bool(lookahead))
 
         db = await self._get_db()
         if not await db.graph_available():
@@ -1131,7 +1133,8 @@ class KnowledgeGraphAGE:
         # Include depth 0 so the root itself is present in the chain.
         # Project a single map literal (not a bare multi-column `RETURN d, depth`):
         # graph_query declares one `result agtype` output column, so a map keeps
-        # node + depth in one column. Ordering is done in Python below.
+        # node + depth in one column. AGE groups and orders the page; the
+        # defensive Python pass below tolerates malformed or duplicate rows.
         cypher = f"""
             MATCH (root:Discovery {{id: ${{discovery_id}}}})
             MATCH p = (d:Discovery)-[:RESPONDS_TO*0..{max_depth}]->(root:Discovery)
@@ -1144,7 +1147,7 @@ class KnowledgeGraphAGE:
         params = {
             "discovery_id": discovery_id,
             "offset": offset,
-            "limit": limit,
+            "limit": query_limit,
         }
         async with db.acquire() as conn:
             async with conn.transaction():
