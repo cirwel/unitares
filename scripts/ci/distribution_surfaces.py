@@ -22,7 +22,7 @@ Statuses:
     OK       the live surface matches
     PENDING  it does not match yet, and an open PR moves it
     INFO     report only (descriptions are printed so copy drift is visible)
-    SKIP     could not check (no gh, no auth, no network) -- never a pass
+    SKIP     not checked here (delegated, no auth, or unreachable) -- never a pass
     DRIFT    the live surface disagrees and nothing in flight fixes it
 
 Exit 1 on any DRIFT or offline error; otherwise 0. As in
@@ -72,6 +72,7 @@ PROBE_FIELDS: dict[str, tuple[str, ...]] = {
     "http-ok": ("url",),
     "manual": ("last_verified", "max_age_days"),
     "covered": (),
+    "github-workflow": ("repo", "workflow", "branch"),
 }
 
 #: File names that publish UNITARES somewhere when they appear in this repo.
@@ -126,15 +127,21 @@ class Net(Protocol):
 class LiveNet:
     """``gh api`` for GitHub, urllib for everything else. None means not-run."""
 
-    def __init__(self) -> None:
+    def __init__(self, github_app: bool = False) -> None:
         self.has_gh = shutil.which("gh") is not None
+        self.github_app = github_app
 
     def gh_json(self, endpoint: str) -> Any | None:
         if not self.has_gh:
             return None
+        command = ["gh", "api", endpoint]
+        if self.github_app:
+            match = re.match(r"repos/(cirwel/[^/]+)(?:/|$)", endpoint, re.I)
+            repo = match.group(1) if match else "cirwel/unitares"
+            command = ["unitares-github", "--repo", repo, "--read-only", "--", *command]
         try:
             proc = subprocess.run(
-                ["gh", "api", endpoint],
+                command,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -434,7 +441,30 @@ def probe_manual(
 
 def probe_covered(sid: str, surface: dict, _net: Net, _root: Path) -> list[Result]:
     owners = ", ".join(surface.get("covered_by", [])) or "(none named)"
-    return [Result("OK", sid, f"covered by {owners}")]
+    return [Result("SKIP", sid, f"not run here; delegated to {owners}")]
+
+
+def probe_github_workflow(sid: str, probe: dict, net: Net, _root: Path) -> list[Result]:
+    repo, branch, workflow = probe["repo"], probe["branch"], probe["workflow"]
+    head = net.gh_json(f"repos/{repo}/commits/{branch}")
+    if not isinstance(head, dict) or not head.get("sha"):
+        return [Result("SKIP", sid, f"cannot read {repo}@{branch}")]
+    sha = head["sha"]
+    payload = net.gh_json(
+        f"repos/{repo}/actions/workflows/{workflow}/runs?branch={branch}&event=push&per_page=20"
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+        return [Result("SKIP", sid, f"cannot read acceptance runs for {repo}@{sha}")]
+    runs = [r for r in payload["workflow_runs"] if r.get("head_sha") == sha]
+    if not runs:
+        return [Result("SKIP", sid, f"no push acceptance run for current {repo}@{sha}")]
+    run = runs[0]
+    evidence = f"{repo}@{sha}: {run.get('html_url', '(run URL unavailable)')}"
+    if run.get("status") != "completed":
+        return [Result("PENDING", sid, f"acceptance {run.get('status', 'unknown')}; {evidence}")]
+    conclusion = run.get("conclusion")
+    status = "OK" if conclusion == "success" else "DRIFT" if conclusion in {"failure", "timed_out"} else "SKIP"
+    return [Result(status, sid, f"acceptance {conclusion}; {evidence}")]
 
 
 PROBES = {
@@ -444,6 +474,7 @@ PROBES = {
     "repo-description": probe_repo_description,
     "http-ok": probe_http_ok,
     "manual": probe_manual,
+    "github-workflow": probe_github_workflow,
 }
 
 
@@ -520,6 +551,15 @@ def offline_errors(registry: dict, root: Path = REPO_ROOT) -> list[str]:
             if not (root / rel).exists():
                 errors.append(f"{sid}: {rel} does not exist")
 
+    for surface in surfaces:
+        dependencies = surface.get("depends_on", [])
+        if not isinstance(dependencies, list) or any(not isinstance(d, str) for d in dependencies):
+            errors.append(f"{surface['id']}: depends_on must be a list of surface ids")
+        else:
+            for dependency in dependencies:
+                if dependency not in seen or dependency == surface["id"]:
+                    errors.append(f"{surface['id']}: invalid dependency {dependency}")
+
     for entry in registry.get("not_listed", []):
         for key in ("where", "checked", "note"):
             if key not in entry:
@@ -556,13 +596,100 @@ def run_probes(
     return results
 
 
+def deployment_observation(root: Path, enabled: bool) -> dict:
+    """Use the existing operator-owned inventory; never infer a host roster."""
+    if not enabled:
+        return {"status": "UNKNOWN", "message": "Not requested; use --deployments with the configured deployment inventory.", "services": []}
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "scripts/ops/deploy-status.sh"), "--json"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if proc.returncode:
+            # Adapter stderr may contain private configuration. Do not export it.
+            raise ValueError("deployment status command failed; inspect deploy-status.sh --json locally")
+        rows = json.loads(proc.stdout)
+        if not isinstance(rows, list) or any(
+            not isinstance(r, dict) or any(not isinstance(r.get(k), str) for k in ("name", "verdict", "commit", "health"))
+            for r in rows
+        ):
+            raise ValueError("deployment status returned an invalid service list")
+        # Preserve the status command's verdicts, without interpreting CURRENT as
+        # proof of health or exporting local paths and deployment commands.
+        services = [{k: r[k] for k in ("name", "verdict", "commit", "health")} for r in rows]
+        return {"status": "OBSERVED" if rows else "UNKNOWN", "message": "Configured inventory only; verdict and health are separate. No remote fetch was performed." if rows else "Configured inventory contains no services.", "services": services}
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return {"status": "UNKNOWN", "message": str(exc), "services": []}
+
+
+def make_report(registry: dict, results: list[Result], errors: list[str], deployments: dict, only: str | None = None) -> dict:
+    rows = []
+    for surface in registry.get("surface", []):
+        if only and surface["id"] != only:
+            continue
+        observed = [r for r in results if r.surface == surface["id"]]
+        states = {r.status for r in observed}
+        state = next((s for s in ("DRIFT", "SKIP", "PENDING", "OK") if s in states), "SKIP")
+        rows.append({
+            "id": surface["id"], "title": surface["title"],
+            "status": "UNKNOWN" if state == "SKIP" else state,
+            "where": surface["where"], "source": surface.get("source", "Not recorded"),
+            "probe": surface["probe"]["type"], "refresh": surface["refresh"],
+            "depends_on": surface.get("depends_on", []),
+            "checks": surface.get("covered_by", []) + surface.get("content_checked_by", []),
+            "observations": [r.message for r in observed],
+        })
+    return {
+        "schema": 1, "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "registry": str(REGISTRY.relative_to(REPO_ROOT)), "errors": errors,
+        "scope": "OK applies only to the named probe. Reachability does not verify content, compatibility, installation, or health. Versions need not match across components.",
+        "surfaces": rows, "deployments": deployments,
+        "not_listed": registry.get("not_listed", []),
+    }
+
+
+def render_markdown(report: dict) -> str:
+    def cell(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
+
+    lines = ["# UNITARES surface report", "", f"Checked at: {report['checked_at']}", "", report["scope"], ""]
+    if report["errors"]:
+        lines += ["Registry errors: " + cell("; ".join(report["errors"])), ""]
+    lines += ["| Surface | Status | Probe | Observation |", "| --- | --- | --- | --- |"]
+    for row in report["surfaces"]:
+        lines.append("| " + " | ".join(cell(str(v)) for v in (row["title"], row["status"], row["probe"], "; ".join(row["observations"]))) + " |")
+    lines += ["", "## Sources and refresh paths", ""]
+    for row in report["surfaces"]:
+        lines += [f"### {cell(row['id'])}", "", f"Published: {cell(row['where'])}", "", f"Source: {cell(row['source'])}", "", f"Refresh: {cell(row['refresh'])}", ""]
+        if row["depends_on"]:
+            lines += ["Depends on: " + cell(", ".join(row["depends_on"])), ""]
+        if row["checks"]:
+            lines += ["Checks: " + cell("; ".join(row["checks"])), ""]
+    deploy = report["deployments"]
+    lines += ["## Running installations", "", cell(deploy["status"] + ": " + deploy["message"]), ""]
+    for row in deploy["services"]:
+        lines.append("- " + cell(f"{row['name']}: {row['verdict']} @ {row['commit']}; health: {row['health']}"))
+    lines += ["", "## Previously checked and absent", ""]
+    for row in report["not_listed"]:
+        lines.append("- " + cell(f"{row['where']} (checked {row['checked']}): {row['note']}"))
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--offline", action="store_true", help="validate the registry only; no network")
     parser.add_argument("--only", metavar="ID", help="probe one surface")
+    parser.add_argument("--report-json", type=Path, help="write a timestamped machine-readable report")
+    parser.add_argument("--report-markdown", type=Path, help="write the operator report")
+    parser.add_argument("--deployments", action="store_true", help="include configured deploy-status.sh --json observations; keep this report private")
+    parser.add_argument("--github-app", action="store_true", help="route GitHub reads through the installed repository-scoped unitares-github runner")
     args = parser.parse_args(argv)
+    if args.offline and (args.report_json or args.report_markdown or args.deployments):
+        parser.error("report and deployment options require live mode")
 
     registry = load_registry()
+    if args.only and args.only not in {s["id"] for s in registry["surface"]}:
+        parser.error(f"unknown surface: {args.only}")
     errors = offline_errors(registry)
     for error in errors:
         print(f"ERROR    {error}")
@@ -572,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"OK       registry: {count} surfaces, every manifest registered")
         return 1 if errors else 0
 
-    results = run_probes(registry, LiveNet(), only=args.only)
+    results = run_probes(registry, LiveNet(github_app=args.github_app), only=args.only)
     for result in results:
         print(result.line())
     for entry in registry.get("not_listed", []):
@@ -583,6 +710,14 @@ def main(argv: list[str] | None = None) -> int:
         f"\n{len(results)} results: {len(drift)} drift, "
         f"{sum(r.status == 'PENDING' for r in results)} pending, {len(skipped)} skipped"
     )
+    if args.report_json or args.report_markdown:
+        report = make_report(registry, results, errors, deployment_observation(REPO_ROOT, args.deployments), args.only)
+        for path, body in ((args.report_json, json.dumps(report, indent=2) + "\n"), (args.report_markdown, render_markdown(report))):
+            if path:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+    elif args.deployments:
+        print(json.dumps(deployment_observation(REPO_ROOT, True), indent=2))
     return 1 if errors or drift else 0
 
 

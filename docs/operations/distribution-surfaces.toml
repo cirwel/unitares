@@ -14,6 +14,8 @@
 #     nobody registered fails CI.
 #   online (weekly, .github/workflows/positioning-surfaces.yml): runs each
 #     surface's probe against the live surface and prints one report.
+#     --report-markdown PATH --report-json PATH saves the same observations,
+#     sources and refresh paths. See deployment-inventory.md for --deployments.
 #
 # Adding a surface: add a [[surface]] in the same change that creates it (or
 # that opens the PR to someone else's list). Pick the probe that reads the
@@ -39,7 +41,8 @@
 #   repo-description  prints each repo's description; enforces `must_contain`
 #   http-ok           URL answers 200
 #   manual            `last_verified` is within `max_age_days`
-#   covered           an existing check owns this surface (`covered_by`)
+#   covered           delegated check, reported SKIP until separately inspected
+#   github-workflow   current branch head has a successful push acceptance run
 #
 # `content_checked_by` names checks that live outside this repo (a sibling
 # repo or the operator's machine), so they cannot be `covered_by` paths. The
@@ -125,6 +128,28 @@ probe = { type = "covered" }
 # --------------------------------------------------------------------------
 
 [[surface]]
+id = "server-source"
+kind = "package"
+title = "Server source and release version"
+where = "https://github.com/cirwel/unitares/releases"
+source = "VERSION (development), PUBLISHED_VERSION (verified release), COMPATIBILITY.md"
+paths = ["VERSION", "PUBLISHED_VERSION", "docs/COMPATIBILITY.md"]
+refresh = "Follow docs/operations/RELEASE_PROCESS.md; development and published versions are separate."
+covered_by = ["scripts/ci/server_release_sync.py", "scripts/ci/release_series_drift.py", "scripts/ci/compat_component_rows.py"]
+probe = { type = "covered" }
+
+[[surface]]
+id = "homebrew-unitares"
+kind = "package"
+title = "Homebrew native Apple Silicon preview"
+where = "https://github.com/cirwel/homebrew-unitares"
+source = "cirwel/homebrew-unitares: Formula/unitares.rb, SOURCES.json and README.md"
+refresh = "Publish a reviewed tap PR; native-acceptance.yml must pass for the installed package. Package revisions may carry backports independently of the server release."
+content_checked_by = ["https://github.com/cirwel/homebrew-unitares/actions/workflows/native-acceptance.yml"]
+depends_on = ["server-source", "pypi-unitares-sdk"]
+probe = { type = "github-workflow", repo = "cirwel/homebrew-unitares", branch = "main", workflow = "native-acceptance.yml" }
+
+[[surface]]
 id = "pypi-unitares-sdk"
 kind = "package"
 title = "PyPI unitares-sdk"
@@ -208,6 +233,7 @@ title = "cirwel.org"
 where = "https://cirwel.org"
 source = "cirwel/cirwel-site (src/data/claims.json, components)"
 refresh = "Edit and deploy cirwel-site."
+depends_on = ["homebrew-unitares", "ghcr-images", "pypi-unitares-sdk"]
 content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json (pages include /llms.txt, the plain-text summary for language models)", "served-surfaces check: hero, share card, retired phrasings", "daily site-refresh-stats job (scheduled on the maintainer's deployment host, outside this repository)"]
 probe = { type = "http-ok", url = "https://cirwel.org" }
 
