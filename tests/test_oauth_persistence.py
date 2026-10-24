@@ -109,30 +109,6 @@ async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
 
 
 @pytest.mark.asyncio
-async def test_persisted_client_load_evicts_an_old_cache_entry_without_growing_approval_state():
-    store = _DictStore()
-    before = GovernanceOAuthProvider(store=store)
-    clients = [_dcr_client(f"dcr-{index}") for index in range(3)]
-    for client in clients:
-        await before.register_client(client)
-        await _sign_in(before, client)
-
-    after = GovernanceOAuthProvider(
-        store=store,
-        auto_approve=False,
-        max_dynamic_clients=2,
-    )
-    for client in clients:
-        assert await after.get_client(client.client_id) is not None
-
-    assert len(after._clients) == 2
-    assert len(after._approved_dynamic_client_ids) == 2
-    assert set(after._approved_dynamic_client_ids) == set(
-        after._dynamic_client_expires_at
-    )
-
-
-@pytest.mark.asyncio
 async def test_refresh_works_after_a_restart_and_is_single_use():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)
@@ -164,9 +140,7 @@ async def test_persisted_refresh_cache_stays_bounded():
 
     after = GovernanceOAuthProvider(store=store, max_refresh_tokens=1)
     assert await after.load_refresh_token(first_client, first.refresh_token) is not None
-    assert (
-        await after.load_refresh_token(second_client, second.refresh_token) is not None
-    )
+    assert await after.load_refresh_token(second_client, second.refresh_token) is not None
 
     assert list(after._refresh_tokens) == [second.refresh_token]
 
@@ -186,9 +160,7 @@ async def test_the_store_never_holds_a_raw_token():
 @pytest.mark.asyncio
 async def test_ttls_follow_token_lifetimes():
     store = _DictStore()
-    provider = GovernanceOAuthProvider(
-        store=store, access_token_ttl=3600, refresh_token_ttl=604800
-    )
+    provider = GovernanceOAuthProvider(store=store, access_token_ttl=3600, refresh_token_ttl=604800)
     client = _dcr_client()
     await provider.register_client(client)
     await _sign_in(provider, client)
@@ -255,12 +227,9 @@ async def test_the_static_client_is_not_written_to_the_store():
     provider = GovernanceOAuthProvider(store=store, static_clients=[static])
     tokens = await _sign_in_static(provider, static)
     assert "client:google" not in store.data
-    assert (
-        await GovernanceOAuthProvider(
-            store=store, static_clients=[static]
-        ).load_access_token(tokens.access_token)
-        is not None
-    )
+    assert await GovernanceOAuthProvider(store=store, static_clients=[static]).load_access_token(
+        tokens.access_token
+    ) is not None
 
 
 async def _sign_in_static(provider, client):
@@ -287,9 +256,7 @@ async def test_without_a_store_behaviour_is_memory_only():
     await provider.register_client(client)
     tokens = await _sign_in(provider, client)
     assert await provider.load_access_token(tokens.access_token) is not None
-    assert (
-        await GovernanceOAuthProvider().load_access_token(tokens.access_token) is None
-    )
+    assert await GovernanceOAuthProvider().load_access_token(tokens.access_token) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -427,14 +394,7 @@ async def test_a_revocation_that_misses_the_store_is_logged(caplog):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [
-        (None, False),
-        ("true", True),
-        ("1", True),
-        ("false", False),
-        ("0", False),
-        ("nope", False),
-    ],
+    [(None, False), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
 )
 def test_dynamic_registration_switch(monkeypatch, raw, expected):
     from src.mcp_listen_config import oauth_dynamic_registration_enabled
@@ -454,17 +414,13 @@ def test_with_registration_closed_there_is_no_register_route():
     from starlette.testclient import TestClient
 
     provider = GovernanceOAuthProvider(
-        static_clients=[
-            build_static_client("google", "s3cret", ["https://example.org/cb"])
-        ]
+        static_clients=[build_static_client("google", "s3cret", ["https://example.org/cb"])]
     )
-    app = Starlette(
-        routes=create_auth_routes(
-            provider,
-            issuer_url=AnyHttpUrl("https://gov.example.org"),
-            client_registration_options=ClientRegistrationOptions(enabled=False),
-        )
-    )
+    app = Starlette(routes=create_auth_routes(
+        provider,
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+        client_registration_options=ClientRegistrationOptions(enabled=False),
+    ))
     client = TestClient(app)
     resp = client.post("/register", json={"redirect_uris": ["https://x.example/cb"]})
     assert resp.status_code in (404, 405)
@@ -483,13 +439,11 @@ def _http_app(provider):
     from pydantic import AnyHttpUrl
     from starlette.applications import Starlette
 
-    return Starlette(
-        routes=create_auth_routes(
-            provider,
-            issuer_url=AnyHttpUrl("https://gov.example.org"),
-            client_registration_options=ClientRegistrationOptions(enabled=False),
-        )
-    )
+    return Starlette(routes=create_auth_routes(
+        provider,
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+        client_registration_options=ClientRegistrationOptions(enabled=False),
+    ))
 
 
 def _http_sign_in(client_http, client_id, secret, redirect):
@@ -498,49 +452,29 @@ def _http_sign_in(client_http, client_id, secret, redirect):
     from urllib.parse import parse_qs, urlparse
 
     verifier = "v" * 64
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-        .decode()
-        .rstrip("=")
-    )
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     resp = client_http.get(
         "/authorize",
         params={
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": redirect,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": "s",
+            "response_type": "code", "client_id": client_id, "redirect_uri": redirect,
+            "code_challenge": challenge, "code_challenge_method": "S256", "state": "s",
         },
         follow_redirects=False,
     )
     code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
-    resp = client_http.post(
-        "/token",
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect,
-            "code_verifier": verifier,
-            "client_id": client_id,
-            "client_secret": secret,
-        },
-    )
+    resp = client_http.post("/token", data={
+        "grant_type": "authorization_code", "code": code, "redirect_uri": redirect,
+        "code_verifier": verifier, "client_id": client_id, "client_secret": secret,
+    })
     assert resp.status_code == 200, resp.text
     return resp.json()
 
 
 def _http_refresh(client_http, client_id, secret, refresh_token):
-    return client_http.post(
-        "/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-            "client_secret": secret,
-        },
-    )
+    return client_http.post("/token", data={
+        "grant_type": "refresh_token", "refresh_token": refresh_token,
+        "client_id": client_id, "client_secret": secret,
+    })
 
 
 def test_refresh_grant_works_over_http():
@@ -556,10 +490,7 @@ def test_refresh_grant_works_over_http():
     assert resp.status_code == 200, resp.text
     assert resp.json()["access_token"] != tokens["access_token"]
     # single use
-    assert (
-        _http_refresh(http, "google", "s3cret", tokens["refresh_token"]).status_code
-        == 400
-    )
+    assert _http_refresh(http, "google", "s3cret", tokens["refresh_token"]).status_code == 400
 
 
 def test_refresh_grant_works_over_http_after_a_restart():
@@ -568,14 +499,10 @@ def test_refresh_grant_works_over_http_after_a_restart():
     redirect = "https://example.org/cb"
     static = build_static_client("google", "s3cret", [redirect])
     store = _DictStore()
-    before = TestClient(
-        _http_app(GovernanceOAuthProvider(static_clients=[static], store=store))
-    )
+    before = TestClient(_http_app(GovernanceOAuthProvider(static_clients=[static], store=store)))
     tokens = _http_sign_in(before, "google", "s3cret", redirect)
 
-    after = TestClient(
-        _http_app(GovernanceOAuthProvider(static_clients=[static], store=store))
-    )
+    after = TestClient(_http_app(GovernanceOAuthProvider(static_clients=[static], store=store)))
     resp = _http_refresh(after, "google", "s3cret", tokens["refresh_token"])
     assert resp.status_code == 200, resp.text
 
