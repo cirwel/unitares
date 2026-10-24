@@ -59,7 +59,9 @@ _SECRET_PATTERNS = (
     re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,255}"),
     re.compile(r"\bhf_[A-Za-z0-9]{30,255}"),
     re.compile(r"\bnpm_[A-Za-z0-9]{36}"),
-    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,2000}\.[A-Za-z0-9_\-]{10,2000}\.[A-Za-z0-9_\-]{10,2000}"),
+    # JWTs, and a JWT cut short by the scanned window's end (any `eyJ` base64url
+    # run is redacted from its start, since its later segments may be unseen).
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,2000}(?:\.[A-Za-z0-9_\-]{0,2000}){0,2}"),
     # Credentials inside a URL: scheme://user:pass@host (the password may hold '@').
     re.compile(r"(?<=://)[^/\s:@]{1,128}:[^/\s]{1,256}(?=@[^/\s@]{1,256})"),
 )
@@ -160,10 +162,12 @@ def make_report_excerpt(text: Optional[str], limit: Optional[int] = None) -> Opt
         window_end = limit + _SCAN_MARGIN
         raw_end = window_end * _RAW_FACTOR
         flat = _WHITESPACE.sub(" ", _UNSTORABLE.sub("", text[:raw_end])).strip()
+        # Widen by doubling, up to the whole raw read (16 windows); `end` is
+        # always the extent actually scrubbed.
         end = window_end
-        for _ in range(_WIDEN_STEPS):
+        for step in range(_WIDEN_STEPS + 1):
             collapsed = scrub_credentials(flat[:end]).strip()
-            if len(collapsed) >= window_end or end >= len(flat):
+            if len(collapsed) >= window_end or end >= len(flat) or step == _WIDEN_STEPS:
                 break
             end *= 2
         if not collapsed:

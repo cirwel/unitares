@@ -284,3 +284,24 @@ def test_redactions_inside_the_window_do_not_eat_the_margin():
     text = tokens + " " + "w " * 30 + 'password: "correct horse battery staple ' + "x " * 400 + '"'
     out = make_report_excerpt(text)
     assert "correct horse" not in out
+
+
+def test_a_secret_across_the_last_widening_step_is_redacted():
+    # A long key block redacts to a few characters, so the window widens to
+    # 8x; the passphrase starts just before that edge and lands inside the
+    # kept text once the block before it shrinks.
+    window = 500 + 512
+    head = "-----BEGIN RSA PRIVATE KEY-----" + "A" * 7800 + "-----END RSA PRIVATE KEY----- "
+    head += "w " * ((8 * window - 15 - len(head)) // 2)
+    text = head + 'password: "correct horse battery staple ' + "x " * 400 + '"'
+    assert len(head) < 8 * window < len(head) + 40
+    out = make_report_excerpt(text)
+    assert 'password: "[REDACTED]"' in out
+    assert "corr" not in out and "AAAA" not in out
+
+
+def test_a_jwt_cut_short_by_the_window_is_redacted():
+    # One word longer than the excerpt is cut at the limit, so a JWT whose
+    # signature lies past the window must still be redacted from its start.
+    jwt = "eyJ" + "a" * 600 + "." + "b" * 600 + "." + "c" * 600
+    assert make_report_excerpt(jwt + " tail").startswith(REDACTED)
