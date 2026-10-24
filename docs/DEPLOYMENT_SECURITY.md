@@ -62,8 +62,9 @@ arrives from such a trusted address, so setting that token alone does not requir
 it on every REST request. That trusted-network bypass does not apply to a
 browser request whose `Origin` falls outside localhost, the MCP origin
 allowlist, and the dashboard origin; a cross-site request without an allowed
-origin is also refused. The bypass likewise does not apply when the dotted DNS
-`Host` authority (name and port) is absent from `UNITARES_MCP_ALLOWED_HOSTS`.
+origin likewise loses the bypass. The bypass also does not apply when the
+dotted DNS `Host` authority (name and port) is absent from
+`UNITARES_MCP_ALLOWED_HOSTS`.
 List the exact `name:port` or use the documented `name:*` form. Otherwise, the
 caller must present an accepted bearer or dashboard session. This prevents a
 web page from becoming a trusted caller merely because it connects through the
