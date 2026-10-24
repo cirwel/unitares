@@ -29,8 +29,11 @@ _REAL_IDENTITY_BOUND_REQUEST = brc._identity_bound_request
 @pytest.fixture(autouse=True)
 def _stub_request_bound_identity(monkeypatch):
     """Keep transport-contract tests focused; dedicated tests cover minting."""
+    from src.mcp_handlers.context import set_credential_proof_uuid
+
     monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BINDING", raising=False)
     monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", raising=False)
+    set_credential_proof_uuid(None)
 
     def bind(
         path,
@@ -50,6 +53,8 @@ def _stub_request_bound_identity(monkeypatch):
         }
 
     monkeypatch.setattr(brc, "_identity_bound_request", bind)
+    yield
+    set_credential_proof_uuid(None)
 
 
 def _fake_httpx(status_code, body):
@@ -70,6 +75,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
     from src.lease_attestation import export_public_jwks, verify_lease_attestation
     from src.mcp_handlers.context import (
         reset_session_context,
+        set_credential_proof_uuid,
         set_session_proof_origin,
         set_session_context,
         update_context_agent_id,
@@ -86,6 +92,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
     context_token = set_session_context(client_session_id="session-test")
     update_context_agent_id(actor)
     set_session_proof_origin("caller_asserted")
+    set_credential_proof_uuid(actor)
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
@@ -93,6 +100,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
             include_actor=True,
         )
     finally:
+        set_credential_proof_uuid(None)
         set_session_proof_origin(None)
         reset_session_context(context_token)
 
@@ -186,6 +194,34 @@ def test_identity_bound_request_does_not_launder_server_inferred_identity(monkey
     context_token = set_session_context(client_session_id="session-test")
     update_context_agent_id(actor)
     set_session_proof_origin("server_inferred")
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    _, headers = bound
+    assert "X-Unitares-Identity-Proof" not in headers
+
+
+def test_identity_bound_request_does_not_launder_application_identity(monkeypatch):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    context_token = set_session_context(client_session_id="shared-application")
+    update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
@@ -680,7 +716,7 @@ async def test_enforced_dialectic_transport_error_never_falls_back(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
     monkeypatch.setenv(
-        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "maintenance,dialectic"
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "maintenance,dialectic_beam"
     )
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     boom = MagicMock()
@@ -707,7 +743,7 @@ async def test_enforced_dialectic_commit_unknown_reaches_readback(
 ):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
-    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     detail = {}
 
@@ -738,7 +774,7 @@ async def test_enforced_dialectic_commit_unknown_reaches_readback(
 async def test_enforced_dialectic_disabled_route_never_falls_back(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
-    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
 
     with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
         await brc.beam_update_phase("s1", "antithesis")
@@ -750,7 +786,7 @@ async def test_enforced_dialectic_disabled_route_never_falls_back(monkeypatch):
 async def test_enforced_dialectic_non_ok_never_falls_back(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
-    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
 
     with patch.dict(
@@ -770,6 +806,28 @@ async def test_enforcement_for_other_surface_keeps_compatibility_fallback(monkey
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "maintenance")
 
     assert await brc.beam_update_phase("s1", "antithesis") is None
+
+
+@pytest.mark.asyncio
+async def test_enforced_beam_controls_leave_unassigned_timeout_to_system_writer(
+    monkeypatch,
+):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+
+    out = await brc.beam_resolve(
+        "s1",
+        "paused",
+        None,
+        {"reason": "timeout"},
+        status="failed",
+        expected_phase="thesis",
+        expected_transcript_revision=0,
+    )
+
+    assert out is None
 
 
 @pytest.mark.asyncio

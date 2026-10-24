@@ -145,12 +145,14 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
-      # Principal-attributed dialectic mutations fail closed. Maintenance
-      # retains its existing enforced posture. Agent/file/resident producers remain outside this selector until every producer mints
-      # request-bound proofs; explicit `log` or `off` remain rollback postures.
+      # Principal-attributed BEAM dialectic control routes fail closed.
+      # Message/phase transactions that remain Python-owned are deliberately
+      # outside this selector. Maintenance retains its existing enforced
+      # posture. Agent/file/resident producers remain outside until migrated;
+      # explicit `log` or `off` remain rollback postures.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
       UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic_beam}
       UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
       # Exact private-Compose exception; every other HTTP key URL is rejected.
@@ -204,10 +206,10 @@ services:
       UNITARES_DIALECTIC_BACKEND: postgres
       UNITARES_DIALECTIC_BEAM_RESOLUTION: ${UNITARES_DIALECTIC_BEAM_RESOLUTION:-1}
       # Keep Python's fallback decision aligned with the lease plane. Under
-      # dialectic enforcement, an unavailable BEAM writer must fail closed
+      # BEAM-control enforcement, an unavailable BEAM writer must fail closed
       # instead of bypassing request-bound identity via direct PostgreSQL.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic_beam}
       # Coordination boundary used by governed clients and spawned workers.
       LEASE_PLANE_BASE_URL: http://lease-plane:8788
       UNITARES_LEASE_PLANE_URL: http://lease-plane:8788

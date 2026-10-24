@@ -26,6 +26,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   alias UnitaresLeasePlane
   alias UnitaresLeasePlane.{Canonicalize, HandoffServer, IdentityBinding, Repo}
 
+  @dialectic_identity_surface "dialectic_beam"
+
   plug(:match)
 
   # Liveness exemption — the ONLY pre-auth path. Exact match on GET /health;
@@ -342,7 +344,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                IdentityBinding.authorize(
                  params.paused_agent_id,
                  IdentityBinding.proof_from_conn(conn),
-                 "dialectic",
+                 @dialectic_identity_surface,
                  IdentityBinding.request_context(conn)
                ) do
           case UnitaresLeasePlane.DialecticSaga.create_session(params) do
@@ -1095,7 +1097,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp authorize_dialectic_participant(conn, session_id, actor_agent_id, roles) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?("dialectic") do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
         authorize_dialectic_participant_membership(session_id, actor_agent_id, roles)
       else
         :ok
@@ -1124,7 +1126,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?("dialectic") do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
         authorize_dialectic_resolution_membership(session_id, actor_agent_id)
       else
         :ok
@@ -1155,7 +1157,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
          claim_if_unassigned
        ) do
     with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-      if IdentityBinding.enforced_for_surface?("dialectic") do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
         authorize_dialectic_reviewer_membership(
           session_id,
           actor_agent_id,
@@ -1206,7 +1208,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     IdentityBinding.authorize(
       actor_agent_id,
       IdentityBinding.proof_from_conn(conn),
-      "dialectic",
+      @dialectic_identity_surface,
       IdentityBinding.request_context(conn)
     )
   end

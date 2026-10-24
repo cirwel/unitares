@@ -145,7 +145,7 @@ def beam_resolution_enabled() -> bool:
 
 
 def dialectic_identity_enforced() -> bool:
-    """Mirror the lease plane's effective enforcement mode for dialectic writes."""
+    """Whether identity is enforced for the BEAM-routed dialectic controls."""
     if os.getenv("UNITARES_LEASE_IDENTITY_BINDING", "off").strip().lower() != "enforce":
         return False
     raw_kinds = os.getenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS")
@@ -154,7 +154,7 @@ def dialectic_identity_enforced() -> bool:
     if raw_kinds.strip().lower() == "all":
         return True
     kinds = {kind.strip() for kind in raw_kinds.split(",") if kind.strip()}
-    return "dialectic" in kinds
+    return "dialectic_beam" in kinds
 
 
 def _fallback_or_refuse(operation: str) -> None:
@@ -185,6 +185,7 @@ def _identity_bound_request(
     a second PostgreSQL writer.
     """
     from src.mcp_handlers.context import (
+        get_credential_proof_uuid,
         get_context_resolved_agent_id,
         get_session_proof_origin,
     )
@@ -228,6 +229,7 @@ def _identity_bound_request(
         raw_actor is not None
         and actor is not None
         and get_session_proof_origin() == "caller_asserted"
+        and get_credential_proof_uuid() == actor
     ):
         try:
             headers["X-Unitares-Identity-Proof"] = mint_lease_attestation(
@@ -574,7 +576,17 @@ async def beam_resolve(
 
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
     # The BEAM endpoint requires non-empty session/paused/reviewer; a session
-    # with no assigned reviewer falls back to the Python path.
+    # with no assigned reviewer cannot enter its reviewer-owned saga. A FAILED
+    # timeout is a system-authored liveness transition, not a principal action,
+    # so it retains the guarded PostgreSQL path even when BEAM controls enforce
+    # identity. RESOLVED always requires a named reviewer.
+    if (
+        status == "failed"
+        and session_id
+        and paused_agent_id
+        and not reviewer_agent_id
+    ):
+        return None
     if not (bearer and session_id and paused_agent_id and reviewer_agent_id):
         return _fallback_or_refuse("resolve_session")
 
