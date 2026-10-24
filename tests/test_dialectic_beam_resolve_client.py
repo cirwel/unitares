@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 project_root = Path(__file__).parent.parent
@@ -534,6 +535,51 @@ async def test_create_lost_response_marks_commit_unknown(monkeypatch):
 
     assert out is None
     assert detail == {"commit_unknown": True}
+
+
+@pytest.mark.asyncio
+async def test_create_connect_failure_falls_back_without_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    fake.ConnectError = httpx.ConnectError
+    fake.ConnectTimeout = httpx.ConnectTimeout
+    fake.Client.return_value.__enter__.return_value.post.side_effect = (
+        httpx.ConnectError("connection refused")
+    )
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_create_session(
+            "s1", "p", {"reason": "x"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_create_enforced_connect_failure_refuses(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv(
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam"
+    )
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    fake.ConnectError = httpx.ConnectError
+    fake.ConnectTimeout = httpx.ConnectTimeout
+    fake.Client.return_value.__enter__.return_value.post.side_effect = (
+        httpx.ConnectError("connection refused")
+    )
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_create_session(
+                "s1", "p", {"reason": "x"}, detail={}
+            )
+
+    assert exc.value.error_code == "identity_verification_unavailable"
 
 
 @pytest.mark.asyncio

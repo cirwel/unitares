@@ -269,9 +269,11 @@ async def beam_create_session(
     synthesis_round, paused_agent_state, trigger_source, discovery_id).
 
     Returns the BEAM result on success, or ``None`` to fall back to the Python
-    `create_session_async` path (flag off / no bearer / missing ids / BEAM
-    unreachable / ordinary non-OK). Raises ``BeamDialecticPolicyRefusal`` for
-    an authoritative governance-policy refusal. Gated by the same
+    `create_session_async` path when BEAM is disabled, unavailable before the
+    request is sent, or returns a definitive ordinary non-OK response. An
+    ambiguous post-send failure is reported through ``detail`` instead of
+    opening a second writer. Raises ``BeamDialecticPolicyRefusal`` for an
+    authoritative governance-policy refusal. Gated by the same
     UNITARES_DIALECTIC_BEAM_RESOLUTION flag as the resolve routing.
     """
     if not beam_resolution_enabled():
@@ -301,6 +303,12 @@ async def beam_create_session(
     except Exception:  # pragma: no cover
         return _fallback_or_refuse("create_session")
 
+    connect_error_types = tuple(
+        exc_type
+        for name in ("ConnectError", "ConnectTimeout")
+        if isinstance((exc_type := getattr(httpx, name, None)), type)
+    )
+
     post_started = False
 
     def _post():
@@ -328,6 +336,8 @@ async def beam_create_session(
                 f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}"
             )
             rec.respond(outcome="no_response", error=type(e).__name__)
+            if connect_error_types and isinstance(e, connect_error_types):
+                return _fallback_or_refuse("create_session")
             if post_started and detail is not None:
                 detail["commit_unknown"] = True
                 return None

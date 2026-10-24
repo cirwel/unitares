@@ -2578,8 +2578,10 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     # Persist to PostgreSQL (single source of truth)
     # JSON snapshots removed - use export_dialectic_session() for debugging
     try:
-        # BEAM owns the write + starts a liveness watcher at birth when flagged;
-        # otherwise (or on any BEAM error) fall back to the Python insert.
+        # BEAM owns the write + starts a liveness watcher at birth when flagged.
+        # Fall back only when it is known not to have accepted the write; an
+        # ambiguous post-send failure must be reconciled before another writer
+        # is opened.
         # (dialectic-on-BEAM Slice 2.1)
         beam_detail: Dict[str, Any] = {}
         beam_created = await beam_create_session(
