@@ -185,7 +185,8 @@ defmodule DialecticLive.TimelineAdapter do
   def key(%{"kind" => "outcome", "outcome_id" => id}), do: {"outcome", id}
   def key(%{"kind" => "dialectic", "session_id" => id}), do: {"dialectic", id}
   def key(%{"kind" => kind, "event_id" => id}) when is_binary(id), do: {kind, id}
-  def key(e), do: {e["kind"], e["agent_id"], e["ts"]}
+  def key(%{} = e), do: {e["kind"], e["agent_id"], e["ts"]}
+  def key(other), do: {:unkeyed, other}
 
   @doc "A DOM-safe id derived from `key/1`."
   @spec dom_id(map()) :: String.t()

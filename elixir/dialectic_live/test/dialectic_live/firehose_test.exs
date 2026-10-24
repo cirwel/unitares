@@ -111,17 +111,19 @@ defmodule DialecticLive.FirehoseTest do
 
   test "the backoff starts at the floor and resets after a successful upgrade" do
     url = FakeGovernanceWS.start!(test: self())
-    fh = start_firehose(url, reconnect_min_ms: 30, reconnect_max_ms: 500)
+    # A floor long enough that the test reads the doubled value before the
+    # reconnect fires, even on a slow runner.
+    fh = start_firehose(url, reconnect_min_ms: 400, reconnect_max_ms: 5_000)
     assert_receive {:firehose_status, :connected}, 2_000
-    assert Firehose.backoff_ms(fh.name) == 30
+    assert Firehose.backoff_ms(fh.name) == 400
 
     # Peer closes: one failure doubles the delay, the reconnect resets it.
     assert_receive {:fake_ws_up, ws}
     send(ws, :close)
     assert_receive {:firehose_status, :unreachable}, 1_000
-    assert Firehose.backoff_ms(fh.name) == 60
-    assert_receive {:firehose_status, :connected}, 2_000
-    assert Firehose.backoff_ms(fh.name) == 30
+    assert Firehose.backoff_ms(fh.name) == 800
+    assert_receive {:firehose_status, :connected}, 3_000
+    assert Firehose.backoff_ms(fh.name) == 400
   end
 
   test "a malformed url backs off instead of spinning" do

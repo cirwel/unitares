@@ -313,49 +313,57 @@ defmodule DialecticLiveWeb.TimelineLive do
     end
   end
 
-  defp detail(%{"kind" => "checkin"} = m) do
-    [
-      m["authored_by"] && "by #{m["authored_by"]}",
-      m["epistemic_class"],
-      m["action"] && "action #{m["action"]}"
-    ]
-    |> Enum.filter(& &1)
-    |> Enum.join(" · ")
-  end
+  # Record fields arrive from the server as JSON; anything that is not text or
+  # a number renders as absent rather than raising in a template.
+  defp txt(v) when is_binary(v) and v != "", do: v
+  defp txt(v) when is_number(v), do: to_string(v)
+  defp txt(_), do: nil
 
-  defp detail(%{"kind" => "outcome"} = m) do
-    [m["outcome_type"], m["outcome_score"] && "score #{m["outcome_score"]}", m["is_bad"] && "bad"]
-    |> Enum.filter(& &1)
-    |> Enum.join(" · ")
-  end
+  defp joined(parts), do: parts |> Enum.filter(&is_binary/1) |> Enum.join(" · ")
 
-  defp detail(%{"kind" => "lifecycle"} = m),
-    do: [m["event_type"], m["reason"]] |> Enum.filter(&is_binary/1) |> Enum.join(" · ")
+  defp prefixed(_label, nil), do: nil
+  defp prefixed(label, value), do: label <> " " <> value
+
+  defp detail(%{"kind" => "checkin"} = m),
+    do: joined([prefixed("by", txt(m["authored_by"])), txt(m["epistemic_class"])])
+
+  defp detail(%{"kind" => "outcome"} = m),
+    do:
+      joined([
+        txt(m["outcome_type"]),
+        prefixed("score", txt(m["outcome_score"])),
+        m["is_bad"] == true && "bad"
+      ])
+
+  defp detail(%{"kind" => "lifecycle"} = m), do: joined([txt(m["event_type"]), txt(m["reason"])])
 
   defp detail(%{"kind" => "knowledge"} = m),
-    do: [m["discovery_type"], m["summary"]] |> Enum.filter(&is_binary/1) |> Enum.join(" · ")
+    do: joined([txt(m["discovery_type"]), txt(m["summary"])])
 
   defp detail(%{"kind" => "lineage"} = m) do
-    [
-      m["parent_agent_id"] && "declared parent #{String.slice(m["parent_agent_id"], 0, 8)}",
-      m["successor_class"]
-    ]
-    |> Enum.filter(&is_binary/1)
-    |> Enum.join(" · ")
+    parent = txt(m["parent_agent_id"])
+
+    joined([
+      parent && "declared parent " <> String.slice(parent, 0, 8),
+      txt(m["successor_class"])
+    ])
   end
 
   defp detail(%{"kind" => "dialectic"} = m),
-    do:
-      [m["session_type"], m["status"], m["phase"]]
-      |> Enum.filter(&is_binary/1)
-      |> Enum.join(" · ")
+    do: joined([txt(m["session_type"]), txt(m["status"]), txt(m["phase"])])
 
   defp detail(_m), do: ""
 
-  defp assessment(%{"assessment" => %{"verdict" => verdict, "source" => source}}),
-    do: "#{source} assessment: #{verdict}"
-
+  # The check-in verdict is a governance assessment, not part of the core
+  # record. A live mark carries it as an EISV decoration; a history row carries
+  # the persisted `action`, which is the same verdict. Both render the same way,
+  # so a row does not change label when the re-read confirms it.
+  defp assessment(%{"assessment" => %{"verdict" => verdict}}), do: assessment_text(txt(verdict))
+  defp assessment(%{"kind" => "checkin", "action" => action}), do: assessment_text(txt(action))
   defp assessment(_m), do: nil
+
+  defp assessment_text(nil), do: nil
+  defp assessment_text(verdict), do: "assessment: " <> verdict
 
   # --- render ---
 
@@ -397,11 +405,20 @@ defmodule DialecticLiveWeb.TimelineLive do
         <div id="firehose-status">
           Firehose: <span class="font-medium">{firehose_label(Map.get(@meta, :firehose))}</span>
         </div>
-        <div id="socket-status">
+        <div
+          id="socket-status"
+          phx-disconnected={JS.show(to: "#socket-lost")}
+          phx-connected={JS.hide(to: "#socket-lost")}
+        >
           Page socket:
           <span class="font-medium">{if connected?(@socket), do: "connected", else: "connecting"}</span>
         </div>
-        <div id="last-frame">Last frame: {ago(Map.get(@meta, :last_frame_at), @now)}</div>
+        <div id="last-frame">
+          Last frame: {ago(Map.get(@meta, :last_frame_at), @now)} · last eisv_update: {ago(
+            Map.get(@meta, :last_eisv_at),
+            @now
+          )}
+        </div>
         <div id="source-status">
           History: <span class="font-medium">{source_label(@source)}</span>
           · re-read {ago(@last_reread_at, @now)}
@@ -422,6 +439,10 @@ defmodule DialecticLiveWeb.TimelineLive do
           <% end %>
         </div>
       </section>
+
+      <div id="socket-lost" class="alert alert-error text-sm hidden">
+        The page socket is disconnected: nothing on this page is updating until it reconnects.
+      </div>
 
       <div :if={@truncated != []} id="truncation-banner" class="alert alert-warning text-sm">
         Truncated: {Enum.join(@truncated, ", ")}. The server keeps the newest rows per kind, so the oldest part of this window is missing for those kinds.

@@ -70,6 +70,19 @@ defmodule DialecticLive.TimelineFeedTest do
       refute_receive {:timeline_get, _}, 200
     end
 
+    test "a reload by the only viewer is debounced, not an immediate re-read" do
+      ctx = start_feed(debounce_ms: 300)
+      v = viewer(ctx.feed)
+      _ = await_reread_gets()
+      stop_viewer(v)
+      _ = :sys.get_state(ctx.feed)
+
+      # Comes back at once: the re-read waits for the debounce instead.
+      _ = viewer(ctx.feed)
+      refute_receive {:timeline_get, _}, 150
+      _ = await_reread_gets()
+    end
+
     test "a firehose reconnect re-reads" do
       ctx = start_feed()
       _ = viewer(ctx.feed)
@@ -137,10 +150,10 @@ defmodule DialecticLive.TimelineFeedTest do
     end
 
     test "a slow answer past the guard sets unavailable and is then ignored", %{ctx: ctx} do
-      :sys.replace_state(ctx.feed, &%{&1 | fetch_timeout_ms: 50})
+      :sys.replace_state(ctx.feed, &%{&1 | fetch_timeout_ms: 300})
 
       fail_next_with(ctx, fn conn ->
-        Process.sleep(400)
+        Process.sleep(1_500)
         Req.Test.json(conn, window_body([]))
       end)
 
@@ -157,13 +170,50 @@ defmodule DialecticLive.TimelineFeedTest do
       assert [%{"outcome_id" => "o-1"}] = snap.events
     end
 
-    test "a 401 or 403 sets refused", %{ctx: ctx} do
-      fail_next_with(ctx, &Plug.Conn.send_resp(&1, 401, ""))
-      assert %{status: :refused} = await_applied(ctx, "1h", :refused)
+    for status <- [401, 403] do
+      test "a #{status} sets refused", %{ctx: ctx} do
+        status = unquote(status)
+        fail_next_with(ctx, &Plug.Conn.send_resp(&1, status, ""))
 
-      fail_next_with(ctx, &Plug.Conn.send_resp(&1, 403, ""))
-      assert %{status: :refused, error: error} = await_applied(ctx, "6h", :refused)
-      assert error =~ "refused credentials"
+        for window <- ["1h", "6h"] do
+          assert %{status: :refused, error: error} = await_applied(ctx, window, :refused)
+          assert error =~ "refused credentials (HTTP #{status})"
+        end
+      end
+    end
+
+    test "rows that are not objects, and agents without ids, are dropped", %{ctx: ctx} do
+      good = %{
+        "kind" => "outcome",
+        "ts" => iso(-500),
+        "agent_id" => @agent,
+        "outcome_id" => "o-2"
+      }
+
+      fail_next_with(
+        ctx,
+        &Req.Test.json(
+          &1,
+          window_body(["x", 1, nil, [], good], [
+            "x",
+            %{"label" => "no id"},
+            %{"agent_id" => @agent}
+          ])
+        )
+      )
+
+      _ = :sys.get_state(ctx.feed)
+      assert Process.alive?(ctx.feed)
+
+      snap =
+        Enum.find_value(1..200, fn _ ->
+          case TimelineFeed.snapshot("1h", ctx.table) do
+            {:ok, %{events: [%{"outcome_id" => "o-2"}]} = snap} -> snap
+            _ -> Process.sleep(5) && nil
+          end
+        end)
+
+      assert %{status: :ok, agents: [%{"agent_id" => @agent}]} = snap
     end
   end
 
@@ -262,10 +312,46 @@ defmodule DialecticLive.TimelineFeedTest do
     end
   end
 
+  defp await_registered(name, old) do
+    Enum.find_value(1..600, fn _ ->
+      case Process.whereis(name) do
+        pid when is_pid(pid) and pid != old -> pid
+        _ -> Process.sleep(5) && nil
+      end
+    end) || flunk("#{inspect(name)} was not restarted")
+  end
+
   describe "storage" do
     test "a missing table reads as unavailable" do
       assert TimelineFeed.snapshot("1h", :no_such_timeline_table) == :unavailable
       assert TimelineFeed.snapshot_meta(:no_such_timeline_table) == :unavailable
+    end
+
+    test "the table keeps its heir through two feed crashes and a heir restart" do
+      ctx = start_feed()
+      heir = Process.whereis(ctx.heir)
+      assert :ets.info(ctx.table, :heir) == heir
+
+      for _ <- 1..2 do
+        old = Process.whereis(ctx.name)
+        ref = Process.monitor(old)
+        Process.exit(old, :kill)
+        assert_receive {:DOWN, ^ref, :process, _, :killed}
+        assert :ets.info(ctx.table, :id) != :undefined
+        new = await_registered(ctx.name, old)
+        assert :ets.info(ctx.table, :owner) == new
+        assert :ets.info(ctx.table, :heir) == heir
+      end
+
+      # The heir restarts; the feed names the new one on its table.
+      ref = Process.monitor(heir)
+      Process.exit(heir, :kill)
+      assert_receive {:DOWN, ^ref, :process, _, :killed}
+      new_heir = await_registered(ctx.heir, heir)
+
+      assert Enum.find_value(1..300, fn _ ->
+               :ets.info(ctx.table, :heir) == new_heir || (Process.sleep(10) && nil)
+             end)
     end
 
     test "an unknown window reads as unavailable" do

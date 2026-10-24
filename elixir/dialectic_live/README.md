@@ -46,8 +46,8 @@ a *consumer*, through three reads:
 
 | Kind | Live | Source |
 |---|---|---|
-| checkin | yes, as a provisional mark | `eisv_update` frames, which the EISV enrichment emits; if EISV is absent, check-ins arrive on re-read only, and the header says so |
-| lifecycle | yes | the seven types `/v1/timeline` reads |
+| checkin | yes, as a provisional mark | `eisv_update` frames, which the EISV enrichment emits. Until one arrives the header says check-ins are re-read only; after that it shows how long ago the last one came, so a stalled enrichment is visible as a growing age |
+| lifecycle | when broadcast | the seven types `/v1/timeline` reads; transitions the server records without a broadcast (automatic archives among them) arrive on re-read |
 | knowledge | yes | `knowledge_write` |
 | outcome, lineage, dialectic | re-read only | not broadcast (dialectic frames ring the doorbell) |
 

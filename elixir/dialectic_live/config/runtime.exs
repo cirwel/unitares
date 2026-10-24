@@ -36,9 +36,18 @@ config :dialectic_live, :governance,
 
 # Timeline pane: the window shown on open (1 or 6 hours) and the re-read floor
 # while at least one viewer is connected. With no viewer the feed makes no GET.
+# A malformed value falls back to the default rather than failing the boot of
+# the whole app (and with it the dialectic pane).
+int_env = fn name, default ->
+  case Integer.parse(System.get_env(name, "")) do
+    {value, ""} when value > 0 -> value
+    _ -> default
+  end
+end
+
 config :dialectic_live, :timeline,
-  default_window_hours: String.to_integer(System.get_env("TIMELINE_WINDOW_HOURS", "1")),
-  reread_ms: String.to_integer(System.get_env("TIMELINE_REREAD_MS", "60000"))
+  default_window_hours: int_env.("TIMELINE_WINDOW_HOURS", 1),
+  reread_ms: int_env.("TIMELINE_REREAD_MS", 60_000)
 
 # Which long-lived clients start. Outside tests both default to true: the app
 # still boots when governance is unreachable, because the firehose backs off and

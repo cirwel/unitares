@@ -29,7 +29,9 @@ The app binds `127.0.0.1`. Its browser boundary is, today:
   "127.0.0.1"]]`. Any other `Host` is redirected, which is what stops DNS
   rebinding on this plain-http bind. Do not widen the list or drop `force_ssl`.
 - The default `check_origin`, which pins the LiveView socket to the endpoint
-  url host, `localhost`. Do not set `check_origin: false` outside `dev.exs`.
+  url host, `localhost` (`runtime.exs` takes it from `PHX_HOST` when that is
+  set, so a stray `PHX_HOST` in the service environment moves the pin). Do not
+  set `check_origin: false` outside `dev.exs`.
   This is why the trial URL is `http://localhost:8790/timeline` and why
   `127.0.0.1` pages never go live.
 

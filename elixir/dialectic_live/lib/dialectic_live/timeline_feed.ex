@@ -152,14 +152,18 @@ defmodule DialecticLive.TimelineFeed do
       debounce_timer: nil,
       firehose_status: :off,
       last_frame_at: nil,
-      last_eisv_at: nil
+      last_eisv_at: nil,
+      last_fetch_started: nil,
+      heir_ref: nil
     }
+
+    # Subscribe before asking the firehose for its state, so a change between
+    # the two cannot be missed.
+    Phoenix.PubSub.subscribe(state.pubsub, Firehose.all_topic())
+    Phoenix.PubSub.subscribe(state.pubsub, Firehose.status_topic())
 
     state = %{state | firehose_status: initial_firehose_status(state.firehose)}
     state = attach_table(state)
-
-    Phoenix.PubSub.subscribe(state.pubsub, Firehose.all_topic())
-    Phoenix.PubSub.subscribe(state.pubsub, Firehose.status_topic())
 
     Enum.each(@window_order, &write_window(state, &1))
     write_meta(state)
@@ -206,22 +210,29 @@ defmodule DialecticLive.TimelineFeed do
         :none
       end
 
-    case claimed do
-      {:ok, _tid} ->
-        # A previous feed's table: keep its last window readable until the
-        # first re-read replaces it, by restoring it into state.
-        restore_from_table(state)
+    state =
+      case claimed do
+        {:ok, _tid} ->
+          # A previous feed's table: keep its last window readable until the
+          # first re-read replaces it, by restoring it into state.
+          restore_from_table(state)
 
-      :none ->
-        heir_opt = if heir_pid, do: [{:heir, heir_pid, state.table}], else: []
+        :none ->
+          :ets.new(state.table, [:named_table, :protected, :set, {:read_concurrency, true}])
+          state
+      end
 
-        :ets.new(
-          state.table,
-          [:named_table, :protected, :set, {:read_concurrency, true}] ++ heir_opt
-        )
+    arm_heir(state, heir_pid)
+  end
 
-        state
-    end
+  # Name the heir on the table every time: after a claim, and after the heir
+  # itself restarted (a table naming a dead heir is deleted when its owner dies).
+  defp arm_heir(state, nil), do: state
+
+  defp arm_heir(state, heir_pid) do
+    :ets.setopts(state.table, {:heir, heir_pid, state.table})
+    if state.heir_ref, do: Process.demonitor(state.heir_ref, [:flush])
+    %{state | heir_ref: Process.monitor(heir_pid)}
   end
 
   defp restore_from_table(state) do
@@ -283,6 +294,11 @@ defmodule DialecticLive.TimelineFeed do
     end
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{heir_ref: ref} = state) do
+    Process.send_after(self(), :rearm_heir, 50)
+    {:noreply, %{state | heir_ref: nil}}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, reason}, state) do
     case inflight_for(state, ref) do
       {window, fetch} ->
@@ -342,6 +358,17 @@ defmodule DialecticLive.TimelineFeed do
     {:noreply, state}
   end
 
+  def handle_info(:rearm_heir, state) do
+    case resolve(state.heir) do
+      nil ->
+        Process.send_after(self(), :rearm_heir, 200)
+        {:noreply, state}
+
+      pid ->
+        {:noreply, arm_heir(state, pid)}
+    end
+  end
+
   # The heir's give_away on claim, and anything else, is ignored.
   def handle_info(_message, state), do: {:noreply, state}
 
@@ -349,7 +376,21 @@ defmodule DialecticLive.TimelineFeed do
 
   defp viewing?(state), do: map_size(state.viewers) > 0
 
-  defp start_viewing(state), do: state |> reread_all() |> schedule_floor()
+  # The first viewer re-reads at once, unless a fetch started within the
+  # debounce interval (a reload, or a socket flap by the only viewer): then the
+  # re-read is debounced, so page reloads stay inside the rate bound.
+  defp start_viewing(state) do
+    recent? =
+      state.last_fetch_started != nil and
+        System.convert_time_unit(
+          System.monotonic_time() - state.last_fetch_started,
+          :native,
+          :millisecond
+        ) < state.debounce_ms
+
+    state = if recent?, do: ring(state), else: reread_all(state)
+    schedule_floor(state)
+  end
 
   defp drop_viewer(state, pid) do
     case Map.pop(state.viewers, pid) do
@@ -438,7 +479,8 @@ defmodule DialecticLive.TimelineFeed do
       state
       | inflight: Map.put(state.inflight, window, fetch),
         gen: Map.put(state.gen, window, gen),
-        held: held
+        held: held,
+        last_fetch_started: fetch.started
     }
   end
 
@@ -469,6 +511,9 @@ defmodule DialecticLive.TimelineFeed do
 
   defp apply_result(state, window, fetch, {:ok, %{"events" => events} = body})
        when is_list(events) do
+    # Rows that are not objects, and agents without an id, are dropped rather
+    # than allowed to crash the feed (and, by restart, the pane).
+    events = Enum.filter(events, &is_map/1)
     old = state.held[window]
     {provisional, matched} = merge(old.provisional, events, fetch.started, old.hours)
 
@@ -485,7 +530,7 @@ defmodule DialecticLive.TimelineFeed do
         error: nil,
         history: events,
         provisional: provisional,
-        agents: list_or_empty(body["agents"]),
+        agents: body["agents"] |> list_or_empty() |> Enum.filter(&agent?/1),
         truncated: list_or_empty(body["truncated"]),
         counts: map_or_empty(body["counts"]),
         last_reread_at: DateTime.utc_now()
@@ -530,6 +575,9 @@ defmodule DialecticLive.TimelineFeed do
     do: {:unavailable, "governance unreachable (#{Exception.message(e)})"}
 
   defp classify_error(reason), do: {:unavailable, "governance unreachable (#{inspect(reason)})"}
+
+  defp agent?(%{"agent_id" => id}) when is_binary(id), do: true
+  defp agent?(_), do: false
 
   defp list_or_empty(v) when is_list(v), do: v
   defp list_or_empty(_), do: []

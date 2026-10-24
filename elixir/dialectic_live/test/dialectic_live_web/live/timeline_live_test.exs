@@ -62,6 +62,46 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert html =~ "connecting"
   end
 
+  test "a lost page socket is announced client-side, since the server cannot say so" do
+    # The header text is rendered by the server, so it cannot change once the
+    # socket is gone; the phx-disconnected binding shows the warning instead.
+    ctx = feed_with([])
+    {:ok, view, _} = live(build_conn(), ~p"/timeline")
+    _ = ctx
+    assert has_element?(view, "#socket-lost.hidden")
+    assert has_element?(view, "#socket-status[phx-disconnected]")
+    assert has_element?(view, "#socket-status[phx-connected]")
+  end
+
+  test "odd field types render as absent instead of crashing the pane", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "outcome",
+        "ts" => iso(-1_000),
+        "agent_id" => @a,
+        "outcome_id" => "o-9",
+        "outcome_type" => %{"nested" => true},
+        "outcome_score" => [1],
+        "is_bad" => "yes"
+      },
+      %{
+        "kind" => "lineage",
+        "ts" => iso(-2_000),
+        "agent_id" => @a,
+        "event_id" => "l-1",
+        "parent_agent_id" => 42,
+        "successor_class" => %{}
+      }
+    ]
+
+    ctx =
+      feed_with(events, [%{"agent_id" => @a, "label" => %{"x" => 1}, "last_activity_at" => 5}])
+
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#timeline-feed li[data-kind=outcome]")
+    assert has_element?(view, "#timeline-feed li[data-kind=lineage]")
+  end
+
   test "an empty window renders its empty states", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
@@ -127,8 +167,8 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     assert has_element?(view, "#truncation-banner", "checkin")
     html = view |> element("#timeline-feed") |> render()
-    assert html =~ "action guide"
-    assert :binary.match(html, "action guide") < :binary.match(html, "test_failed")
+    assert html =~ "assessment: guide"
+    assert :binary.match(html, "assessment: guide") < :binary.match(html, "test_failed")
     assert has_element?(view, "#timeline-feed li[data-kind=outcome]", "worker one")
   end
 
@@ -233,7 +273,7 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
-    assert has_element?(view, "#timeline-feed li[data-kind=checkin]", "eisv assessment: guide")
+    assert has_element?(view, "#timeline-feed li[data-kind=checkin]", "assessment: guide")
   end
 
   test "substrate off hides provisional and substrate check-ins and says why", %{conn: conn} do
@@ -292,6 +332,12 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
   test "a feed restart re-subscribes the open pane", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
+
+    # Forget the viewer, as a restarted feed would, then announce a restart.
+    :sys.replace_state(ctx.feed, fn st ->
+      Enum.each(st.viewers, fn {_pid, ref} -> Process.demonitor(ref, [:flush]) end)
+      %{st | viewers: %{}}
+    end)
 
     Phoenix.PubSub.broadcast(ctx.pubsub, TimelineFeed.topic(), :timeline_feed_up)
     _ = render(view)

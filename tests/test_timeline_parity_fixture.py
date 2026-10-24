@@ -14,6 +14,12 @@ This side checks each rule against the server code that owns it:
 - every eisv_update, lifecycle and knowledge_write frame in ``frames.json``,
   against the same three rules.
 
+The frame dispatch itself (which frame type maps to which kind, and what is
+dropped) has no server counterpart: the server does not map frames. So
+``test_frame_cases_follow_the_server_rules`` restates the dispatch to check the
+fixture's consistency, and only its uses of the cut, the lifecycle set and
+``verdict_of`` are anchored to server code.
+
 Portal proposal: ``docs/proposals/active/portal-live-timeline-v0.md`` §3.1.
 """
 

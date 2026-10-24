@@ -58,8 +58,32 @@ defmodule DialecticLiveWeb.EndpointBoundaryTest do
       endpoint = get_in(cfg, [:dialectic_live, DialecticLiveWeb.Endpoint]) || []
       refute Keyword.has_key?(endpoint, :check_origin)
       assert endpoint[:url][:host] == "localhost"
+    end
 
-      refute File.read!(Path.join(@config_dir, "runtime.exs")) =~ "check_origin"
+    test "in prod, runtime.exs keeps the url host localhost and the bind loopback" do
+      # The origin pin follows the url host, which runtime.exs takes from
+      # PHX_HOST when set; with it unset the pin is localhost.
+      vars = ~w(SECRET_KEY_BASE PHX_HOST DIALECTIC_LIVE_BIND_ALL)
+      saved = Map.new(vars, &{&1, System.get_env(&1)})
+
+      try do
+        System.put_env("SECRET_KEY_BASE", String.duplicate("k", 64))
+        System.delete_env("PHX_HOST")
+        System.delete_env("DIALECTIC_LIVE_BIND_ALL")
+
+        cfg =
+          Config.Reader.read!(Path.join(@config_dir, "runtime.exs"), env: :prod, target: :host)
+
+        endpoint = get_in(cfg, [:dialectic_live, DialecticLiveWeb.Endpoint])
+        assert endpoint[:url][:host] == "localhost"
+        assert endpoint[:http][:ip] == {127, 0, 0, 1}
+        refute Keyword.has_key?(endpoint, :check_origin)
+      after
+        Enum.each(saved, fn
+          {k, nil} -> System.delete_env(k)
+          {k, v} -> System.put_env(k, v)
+        end)
+      end
     end
 
     test "Origin http://localhost:8790 connects; 127.0.0.1 and foreign origins are refused" do
