@@ -362,7 +362,8 @@ SELECT identity_id, now() - interval '10 minutes',
 FROM core.identities WHERE agent_id = '{PARENT}'
 UNION ALL
 SELECT identity_id, now() - interval '20 minutes',
-       '{{"action": "approve", "verdict": "safe"}}'::jsonb, 'substrate_interpretation', false, NULL
+       '{{"action": "approve", "verdict": "safe",
+          "eisv_telemetry": {{"self_report": null}}}}'::jsonb, 'substrate_interpretation', false, NULL
 FROM core.identities WHERE agent_id = '{PARENT}'
 UNION ALL
 SELECT identity_id, now() - interval '30 minutes', '{{}}'::jsonb, 'agent_report', true, NULL
@@ -429,6 +430,7 @@ async def test_sql_against_live_db(live_postgres_backend, monkeypatch):
     assert isinstance(agent["state_id"], int) and agent["state_id"] != substrate["state_id"]
     assert agent["report_excerpt"] == "Opened PR #3045."
     assert agent["confidence_reported"] == pytest.approx(0.7)
+    # Its telemetry stores "self_report": null (no self-report), so the field is omitted.
     assert substrate["report_excerpt"] is None and "confidence_reported" not in substrate
     (outcome,) = [e for e in events if e["kind"] == "outcome"]
     assert outcome["outcome_type"] == "test_failed"

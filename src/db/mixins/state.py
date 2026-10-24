@@ -504,8 +504,8 @@ async def fetch_timeline_checkins(
                s.state_json->>'report_excerpt' AS report_excerpt,
                s.state_json #>> '{eisv_telemetry,self_report,confidence_reported}'
                    AS confidence_reported,
-               (s.state_json #> '{eisv_telemetry,self_report}') IS NOT NULL
-                   AS has_self_report,
+               coalesce(jsonb_typeof(s.state_json #> '{eisv_telemetry,self_report}')
+                        = 'object', false) AS has_self_report,
                s.risk_score
         FROM core.agent_state s
         WHERE s.recorded_at >= $1 AND s.synthetic = false
