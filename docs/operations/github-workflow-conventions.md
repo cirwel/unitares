@@ -208,8 +208,11 @@ the PR under the `unitares-pr-relay` App, which can write pull requests on
 this repository and nothing else. The original is closed with a link to its
 replacement. Branch, commits, labels and footer carry over, except the
 queue labels `approved-to-merge` and `operator-armed`, which are earned on
-the new PR. The new body opens by
-saying the branch was pushed through the operator login, so the record keeps
+the new PR. The relay also adds a model-family label, `agent/claude`,
+`agent/gpt` or `agent/gemini`, from the body's last `Model:` line, so PRs can
+be filtered by model family even though an App authors them all. The label
+comes from the body, so it is a filter, not verified provenance. The new
+body opens by saying the branch was pushed through the operator login, so the record keeps
 the credential path while the operator account stops being the author. The
 session keeps pushing to the same branch and does its follow-ups (review,
 ready, label) on the new number. Label a PR `relay-hold` to keep it where it
@@ -565,7 +568,16 @@ coverage or erase earlier findings. Existing council/human review remains valid.
 Unattended callers make their policy explicit: `review.sh sweep --reviewer claude
 --reviewer antigravity --worktree PATH` supplies an ordered fallback list chosen
 by that caller. The sweep filters that list by availability, cooldown, retry
-budget and missing model family, and attempts only one provider per tick. A
+budget and missing model family, and attempts only one provider per tick. It
+also skips providers from the family the PR's branch prefix names (exactly
+`codex/`, `claude/`, `gemini/`, `agy/` or `antigravity/`), judging agy by the
+model it is configured to run, so a PR is read by another family than the one
+that wrote it (operator direction, 2026-10-23). A list of all three providers,
+for example `--reviewer claude --reviewer codex --reviewer antigravity`, sends
+a Codex PR to Claude and then agy, an agy PR to Claude and then Codex, and a
+Claude PR to Codex and then agy. A branch without an agent prefix is reviewed
+in the configured order. When only the author's family is configured, the
+sweep starts nothing and says so. A
 local Codex CLI cooldown does not prevent its separately enabled native route. It
 never adds providers to the list. `UNITARES_REVIEWER` supplies a single choice
 when no flags are given. With neither, it reports the missing configuration and

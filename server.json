@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cirwel/unitares",
   "title": "UNITARES",
-  "description": "Accountability infrastructure for long-running AI agents.",
+  "description": "Accountability infrastructure for long-running AI agents. Shared memory is a provenance graph.",
   "version": "3.2.0",
   "repository": {
     "url": "https://github.com/cirwel/unitares",
