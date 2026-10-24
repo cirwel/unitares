@@ -239,6 +239,51 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert oldest =~ "oldest_row"
   end
 
+  test "a delta for a row the re-read already showed is not counted twice", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "outcome",
+        "ts" => iso(-1_000),
+        "agent_id" => @a,
+        "outcome_id" => "n",
+        "outcome_type" => "newer_row"
+      },
+      %{
+        "kind" => "outcome",
+        "ts" => iso(-20_000),
+        "agent_id" => @a,
+        "outcome_id" => "o",
+        "outcome_type" => "older_row"
+      }
+    ]
+
+    ctx = feed_with(events)
+    view = mount_live(conn, ctx)
+
+    # A live mark the LiveView already has (as if the re-read held it) arrives
+    # again as a delta; then a mark between the two rows.
+    mark = %{
+      "kind" => "lifecycle",
+      "ts" => iso(-500),
+      "agent_id" => @b,
+      "event_type" => "lifecycle_paused",
+      "reason" => "already_shown",
+      "provisional" => true
+    }
+
+    send(view.pid, {:timeline_delta, "1h", mark})
+    send(view.pid, {:timeline_delta, "1h", mark})
+
+    between = %{mark | "ts" => iso(-10_000), "reason" => "between_rows"}
+    send(view.pid, {:timeline_delta, "1h", between})
+
+    assert [first, newer, middle, older] = feed_rows(view)
+    assert first =~ "already_shown"
+    assert newer =~ "newer_row"
+    assert middle =~ "between_rows"
+    assert older =~ "older_row"
+  end
+
   test "a delta older than a full feed is not shown and evicts nothing", %{conn: conn} do
     events =
       for i <- 1..200 do

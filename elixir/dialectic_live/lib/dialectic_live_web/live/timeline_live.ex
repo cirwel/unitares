@@ -150,7 +150,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           labels: Map.new(snap.agents, &{&1["agent_id"], &1["label"]}),
           agents: order_agents(snap.agents, last_seen),
           last_seen: last_seen,
-          row_ts: Enum.map(rows, &sort_key/1)
+          feed_shown: Enum.map(rows, &{sort_key(&1), TimelineAdapter.dom_id(&1)})
         )
         |> stream(:feed, rows, reset: true)
 
@@ -164,7 +164,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           labels: %{},
           agents: [],
           last_seen: %{},
-          row_ts: []
+          feed_shown: []
         )
         |> stream(:feed, [], reset: true)
     end
@@ -188,23 +188,33 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   defp sort_key(mark), do: TimelineAdapter.ts_us(mark["ts"]) || 0
 
-  # Streams cannot be read back, so the pane keeps the shown rows' timestamps
-  # (newest first, at most the cap) to insert a delta at its place in time. A
-  # delta older than every row of a full feed is not shown; the cap prunes
-  # from the oldest end.
+  # Streams cannot be read back, so the pane keeps the shown rows as
+  # `{timestamp, dom id}` (newest first, at most the cap) to insert a delta at
+  # its place in time. A delta whose row is already shown (a re-read that
+  # already held it, handled before its queued delta) changes nothing. A delta
+  # older than every row of a full feed is not shown; the cap prunes from the
+  # oldest end.
   defp insert_mark(socket, mark) do
     ts = sort_key(mark)
-    {newer, older} = Enum.split_while(socket.assigns.row_ts, &(&1 >= ts))
-    at = length(newer)
-    # The agent was seen whether or not its mark fits in the feed.
+    id = TimelineAdapter.dom_id(mark)
+    shown = socket.assigns.feed_shown
+    # The agent was seen whether or not its mark is shown.
     socket = assign(socket, last_seen: bump_last_seen(socket.assigns.last_seen, mark))
 
-    if at >= @feed_cap do
-      socket
-    else
-      socket
-      |> stream_insert(:feed, mark, at: at, limit: @feed_cap)
-      |> assign(row_ts: Enum.take(newer ++ [ts | older], @feed_cap))
+    {newer, older} = Enum.split_while(shown, fn {t, _} -> t >= ts end)
+    at = length(newer)
+
+    cond do
+      Enum.any?(shown, fn {_, shown_id} -> shown_id == id end) ->
+        socket
+
+      at >= @feed_cap ->
+        socket
+
+      true ->
+        socket
+        |> stream_insert(:feed, mark, at: at, limit: @feed_cap)
+        |> assign(feed_shown: Enum.take(newer ++ [{ts, id} | older], @feed_cap))
     end
   end
 
@@ -510,7 +520,7 @@ defmodule DialecticLiveWeb.TimelineLive do
       <section class="space-y-2">
         <h2 class="font-semibold">Feed (newest first, up to 200)</h2>
         <%!-- Outside the stream container, so stream_insert's `at:` indexes count rows only. --%>
-        <p :if={@row_ts == []} id="feed-empty" class="text-sm text-base-content/60">
+        <p :if={@feed_shown == []} id="feed-empty" class="text-sm text-base-content/60">
           Nothing in this window yet.
         </p>
         <ul id="timeline-feed" phx-update="stream" class="space-y-1 text-sm">
