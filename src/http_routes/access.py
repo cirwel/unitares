@@ -34,6 +34,7 @@ from src.mcp_listen_config import (
 from src.dashboard_auth import (
     DASHBOARD_EXPECTED_ORIGIN,
     dashboard_session_authenticated,
+    dashboard_session_write_authorized,
 )
 
 logger = get_logger(__name__)
@@ -253,6 +254,28 @@ def _bearer_from_header(auth: str | None) -> str | None:
     return auth.split(" ", 1)[1].strip()
 
 
+def _dashboard_session_http_authorized(request) -> bool:
+    """Authorize a dashboard-cookie request for this HTTP method.
+
+    Safe reads need only the validated session. Unsafe methods additionally
+    require the exact configured dashboard Origin and the non-simple CSRF
+    header. Bearer and trusted-network callers are evaluated on their own
+    paths and never inherit these browser-cookie requirements.
+    """
+    if not dashboard_session_authenticated(request):
+        return False
+    method = str(getattr(request, "method", "GET") or "GET").upper()
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    origin = _header_value(request, "origin")
+    return (
+        bool(DASHBOARD_EXPECTED_ORIGIN)
+        and bool(origin)
+        and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
+        and dashboard_session_write_authorized(request)
+    )
+
+
 # A browser cannot set headers on a ``WebSocket`` handshake, but it can offer
 # subprotocols, and ``Sec-WebSocket-Protocol`` is a header: it is not part of
 # the request line, so it never reaches uvicorn's handshake log or an edge
@@ -412,7 +435,7 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         if mcp_bearer_required() and check_mcp_bearer(auth):
             return True
-        return dashboard_session_authenticated(request)
+        return _dashboard_session_http_authorized(request)
 
     # Legacy / local posture: trusted network -> bearer -> validated session.
     # A foreign browser page loses the network bypass but can still present
@@ -423,7 +446,7 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     token = _bearer_from_header(auth)
     if token and http_api_token and secrets.compare_digest(token, http_api_token):
         return True
-    if dashboard_session_authenticated(request):
+    if _dashboard_session_http_authorized(request):
         return True
     # Fail closed when UNITARES_HTTP_API_TOKEN is unset. Removing the token is
     # a deliberate lockout of non-session, non-trusted clients—not cleanup.

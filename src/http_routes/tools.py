@@ -21,7 +21,7 @@ from src.services.http_request_parser import (
     enrich_http_client_context,
     normalize_http_tool_name,
     parse_http_tool_request,
-    validate_http_tool_content_length,
+    read_bounded_json_body,
 )
 from src.mcp_compat import get_tool_input_schema
 from src.interface_contract import (
@@ -316,10 +316,7 @@ async def http_call_tool(request):
         ):
             return access._http_unauthorized()
 
-        validate_http_tool_content_length(
-            request.headers.get("content-length")
-        )
-        body = await request.json()
+        body = await read_bounded_json_body(request)
         parsed = parse_http_tool_request(
             body,
             mcp_server_name=request.state._http_api_mcp_server_name,
