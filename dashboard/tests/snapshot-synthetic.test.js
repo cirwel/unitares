@@ -34,6 +34,7 @@ describe("offline snapshot", () => {
     ["Agents", "agents", "ag-mount"], ["Discoveries", "discoveries", "dsc-mount"],
     ["Dialectic", "dialectic", "dlc-mount"], ["Activity", "activity", "act-mount"],
     ["EISV", "eisv", "eisv-mount"], ["Risk", "risk", "risk-mount"],
+    ["Timeline", "timeline", "tl-mount"],
   ];
   for (const [global, file, mountId] of SECTIONS) {
     it(`${global} renders from it with no server`, async () => {

@@ -74,8 +74,8 @@ verdict is ``agrees=true`` either
 * has the same subject PR: the first PR its topic names (9cd71f4a accepted
   unitares#2025 after 8da00e5b, 5db1710c and 0dc43b1d rejected earlier heads
   of it; faee73eb accepted #2348 twelve minutes after 78129de5 rejected it).
-  Two subject PRs differ only by number, or by two EXPLICIT repos (a URL or
-  ``owner/repo``); see ``PrRef``.
+  Subject references match only after both resolve to the same explicit or
+  configured repository and number; see ``PrRef``.
 
 Only the subject PR counts, not every PR a thesis mentions: a review of #2064
 "stacked on #2063" is not answered by an accepted review of #2063. A same-subject
@@ -104,8 +104,9 @@ kept on the list.
   before it is cited context, or a post-merge review, and stays listed: that is
   also what stops a repo-less "fermata PR #59" being read as this repo's #59,
   which merged in April, months before the review.
-* A repo-less reference is read as ``DEFAULT_PR_REPO``; an explicit repo (URL or
-  ``owner/repo``) is used as written.
+* A repo-less reference is resolved only when ``DIALECTIC_PR_REPO`` is
+  explicitly configured; otherwise it remains unresolved. An explicit repo
+  (URL or ``owner/repo``) is used as written.
 * The state comes from GitHub (``gh``), one batched query, bounded by a
   timeout. Any failure (no ``gh``, offline, unauthenticated, a timeout, a
   reference GitHub cannot resolve) hides nothing for that review. MERGED is
@@ -137,7 +138,9 @@ body that quotes a session id is usually citing it as an example (#2735 quotes
 8973efacebb17e11 as a concession it measured and answers none of its
 conditions). The lookup is one batched, time-bounded ``gh`` search; found
 answers are cached (``DIALECTIC_ANSWER_CACHE``) because a merged PR stays
-merged, and any failure hides nothing. As elsewhere, nothing is written to the
+merged. The answer cache is scoped to ``DIALECTIC_PR_REPO``; without that
+configuration, answer searches and cache-based hiding are disabled. Any failure
+hides nothing. As elsewhere, nothing is written to the
 database and nothing here says the PR met the conditions: the PR body is the
 answer, on the record where anyone can read it.
 
@@ -188,8 +191,8 @@ DEFAULT_LEDGER = "~/.unitares/dialectic-acks.jsonl"
 #   test       -- a smoke test or probe the label filter did not catch
 DISPOSITIONS = ("superseded", "stale", "test")
 
-# Subject-PR lookups. A repo-less "PR #N" is read as this repo's.
-DEFAULT_PR_REPO = "cirwel/unitares"
+# Optional context for repo-less PR references and answer searches.
+DEFAULT_PR_REPO = os.environ.get("DIALECTIC_PR_REPO", "").strip().lower()
 PR_STATE_CACHE_ENV = "DIALECTIC_PR_STATE_CACHE"
 DEFAULT_PR_STATE_CACHE = "~/.unitares/dialectic-pr-state.json"
 # One batched GraphQL call. The SessionStart hook waits on this, so it is
@@ -370,7 +373,8 @@ class PrRef:
     def same_as(self, other: "PrRef") -> bool:
         if self.number != other.number:
             return False
-        return self.repo is None or other.repo is None or self.repo == other.repo
+        key = _pr_key(self)
+        return key is not None and key == _pr_key(other)
 
 
 def subject_pr(text: str) -> Optional[PrRef]:
@@ -433,8 +437,14 @@ def find_supersessions(
 # ── subject PR finished ─────────────────────────────────────────────────────
 
 
-def _pr_key(pr: PrRef) -> tuple:
-    return ((pr.repo or DEFAULT_PR_REPO).lower(), pr.number)
+def _configured_pr_repo() -> str | None:
+    repo = DEFAULT_PR_REPO.lower()
+    return repo if re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repo) else None
+
+
+def _pr_key(pr: PrRef) -> tuple | None:
+    repo = pr.repo or _configured_pr_repo()
+    return (repo.lower(), pr.number) if repo else None
 
 
 def find_finished_subjects(
@@ -547,9 +557,12 @@ def _gh_pr_states(keys: Sequence[tuple]) -> Dict[tuple, Dict[str, Any]]:
 
 def fetch_pr_states(rows: Sequence[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any]]:
     """GitHub state of every subject PR the rows name, cache first."""
+    wanted = {key for pr in (subject_pr(r.get("topic") or "") for r in rows)
+              if pr and (key := _pr_key(pr)) is not None}
+    if not wanted:
+        return {}
     path = pr_state_cache_path()
     cache = _load_pr_cache(path)
-    wanted = {_pr_key(pr) for pr in (subject_pr(r.get("topic") or "") for r in rows) if pr}
     missing = sorted(k for k in wanted if k not in cache)
     fresh = _gh_pr_states(missing)
     if any(st.get("state") == "MERGED" for st in fresh.values()):
@@ -603,8 +616,23 @@ def _load_answer_cache(path: str) -> Dict[str, List[Dict[str, Any]]]:
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {sid: [a for a in found if isinstance(a, dict) and a.get("pr") and a.get("merged_at")]
+    repo = _configured_pr_repo()
+    if not repo:
+        return {}
+    if "schema_version" in raw:
+        if raw.get("schema_version") != 2 or raw.get("repo") != repo:
+            return {}
+        raw = raw.get("answers")
+        if not isinstance(raw, dict):
+            return {}
+    # Legacy caches carry an explicit owner/repo in each answer. Only retain
+    # records matching the configured scope; a cached answer from another
+    # installation must not hide a standing objection.
+    scoped = {sid: [a for a in found if isinstance(a, dict)
+                  and re.fullmatch(re.escape(repo) + r"#[1-9][0-9]*", str(a.get("pr", "")).lower())
+                  and a.get("merged_at")]
             for sid, found in raw.items() if isinstance(found, list)}
+    return {sid: found for sid, found in scoped.items() if found}
 
 
 def _save_answer_cache(path: str, cache: Dict[str, List[Dict[str, Any]]]) -> None:
@@ -614,7 +642,8 @@ def _save_answer_cache(path: str, cache: Dict[str, List[Dict[str, Any]]]) -> Non
             os.makedirs(parent, exist_ok=True)
         tmp = f"{path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({sid: found for sid, found in sorted(cache.items()) if found},
+            json.dump({"schema_version": 2, "repo": _configured_pr_repo(),
+                       "answers": {sid: found for sid, found in sorted(cache.items()) if found}},
                       fh, sort_keys=True, indent=1)
         os.replace(tmp, path)
     except OSError:
@@ -626,6 +655,8 @@ def _gh_answering_prs(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, An
     ``answer_line``: one GraphQL search per ``ANSWER_LOOKUP_CHUNK`` ids, so the
     window (90 days, a few dozen rows) costs a query or two. A failed chunk
     hides nothing for its ids and does not stop the others."""
+    if not _configured_pr_repo():
+        return {}
     valid = [sid for sid in session_ids if re.fullmatch(r"[0-9a-f]{8,64}", sid or "")]
     out: Dict[str, List[Dict[str, Any]]] = {}
     for start in range(0, len(valid), ANSWER_LOOKUP_CHUNK):
@@ -635,12 +666,15 @@ def _gh_answering_prs(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, An
 
 def _gh_answer_chunk(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
     """One batched search for already-validated ids. Empty on any failure."""
+    repo = _configured_pr_repo()
+    if not repo:
+        return {}
     parts = []
     aliases = {}
     for i, sid in enumerate(session_ids):
         alias = f"s{i}"
         aliases[alias] = sid
-        parts.append(f'{alias}: search(query: "repo:{DEFAULT_PR_REPO} is:pr is:merged in:body {sid}", '
+        parts.append(f'{alias}: search(query: "repo:{repo} is:pr is:merged in:body {sid}", '
                      f'type: ISSUE, first: 5) {{ nodes {{ ... on PullRequest '
                      f'{{ number mergedAt body }} }} }}')
     if not parts:
@@ -661,7 +695,7 @@ def _gh_answer_chunk(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any
     for alias, sid in aliases.items():
         nodes = ((data.get(alias) or {}).get("nodes")) or []
         line = answer_line(sid)
-        found = [{"pr": f"{DEFAULT_PR_REPO}#{n['number']}", "merged_at": n["mergedAt"]}
+        found = [{"pr": f"{repo}#{n['number']}", "merged_at": n["mergedAt"]}
                  for n in nodes
                  if isinstance(n, dict) and n.get("number") and n.get("mergedAt")
                  and line.search(n.get("body") or "")]
@@ -671,7 +705,9 @@ def _gh_answer_chunk(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any
 
 
 def fetch_answers(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Merged PRs answering each row, cache first."""
+    """Merged PRs answering each row, cache first, only in explicit scope."""
+    if not _configured_pr_repo():
+        return {}
     path = answer_cache_path()
     cache = _load_answer_cache(path)
     wanted = [r["session_id"] for r in rows]

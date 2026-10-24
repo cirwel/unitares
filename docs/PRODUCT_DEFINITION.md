@@ -17,8 +17,8 @@ The shared record answers five questions:
 | Question | Deployed mechanism |
 |---|---|
 | **Who said it?** | Process identity and explicit lineage attribute work and handoffs. Platform workload identity supplies credentials; lineage grants no authority. |
-| **What supports it?** | Durable findings retain claims, corrections, and provenance. The original `sync_state` report text is transient; durable claims require a finding. |
-| **Who challenged it?** | Structured review preserves positions, objections, conditions, and resolution. Requesting review does not complete it. |
+| **What supports it?** | Durable findings retain claims, corrections, and provenance. Each `sync_state` check-in keeps a bounded excerpt of its report text, the agent's own words rather than a verified claim; durable claims require a finding. |
+| **Who challenged it?** | Structured review preserves positions, objections, conditions, and resolution; a review completes when its session resolves. |
 | **What happened?** | Typed outcome events preserve reported results and evidence grades, with prediction binding when supplied. |
 | **What can a successor recover?** | Knowledge search, review reads, history export, and authorized outcome-evidence reads let a client reconstruct the work from available records. |
 
@@ -34,8 +34,9 @@ the dashboard expose the same Core. Claude Code, Codex, Hermes, custom runtimes,
 and residents retain their own reasoning loops and interaction surfaces.
 
 The [interface contract](INTERFACE_CONTRACT.md) defines callable capabilities
-across MCP, REST discovery, and local stdio. Automatic onboarding, check-ins,
-and policy actuation require host integration beyond connecting an MCP client.
+across MCP, REST discovery, and local stdio. A connected MCP client reaches every
+capability; a host integration (hooks or an adapter) adds automatic onboarding,
+check-ins, and enforcement of policy actions beyond governed writes.
 
 ## Core and Resident are different products
 
@@ -45,8 +46,8 @@ and behavioral state and policy. Agents own their reasoning and execution.
 
 **UNITARES Resident** is a separate first-party agent project for persistent
 conversations, provider and tool adapters, scheduling, task queues, and operator
-interfaces. Its repository and runtime skeleton are shipped; the usable agent
-product is not yet shipped. It uses the same public MCP/SDK contract as any
+interfaces. Its repository and runtime skeleton ship today; the agent
+itself has not shipped yet. It uses the same public MCP/SDK contract as any
 other harness, with no direct database access, Core-internal imports, or
 privileged measurement or policy path.
 
@@ -71,9 +72,8 @@ a new process:
 
 Check-ins return an EISV behavioral state estimate and `proceed`, `guide`, or
 `pause`. A pause holds governed writes until recovery, review, an operator,
-or expiry lifts it. Enforcement outside those writes requires host integration.
-EISV still ships in the core path; its move to an optional module follows the
-[staged plan](proposals/active/eisv-core-boundary-v0.md). The
+or expiry lifts it. EISV ships in the core path today and moves to an optional
+module under the [staged plan](proposals/active/eisv-core-boundary-v0.md). The
 [computation reference](EISV_COMPUTATION.md) defines the deployed instrument.
 
 ## Who it is for, and what "done" looks like

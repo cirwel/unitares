@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.56.1`
+**Current contract:** `unitares.interface-contract.v1`, version `2.0.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -110,7 +110,9 @@ parameters through `describe_tool(tool_name=..., action=...)`.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new
-major schema contract or an explicit deprecation window. Raw implementation
+major negotiated interface release or an explicit deprecation window. The
+document schema family changes only when the contract document’s shape breaks
+compatibility, as distinguished below. Raw implementation
 names may remain callable for compatibility even when the preferred workflow
 alias is the documented integration name.
 
@@ -1137,3 +1139,78 @@ Automatic local model selection requires an explicitly configured endpoint; fres
   brief schema is unchanged; only its full explanatory description changes.
 - **Client action:** choose a model per call, set `UNITARES_MODEL_ID`, or explicitly
   configure the endpoint to permit its sole-model default.
+
+## 2.0.0 (2026-10-23)
+
+Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default. Workspace diagnostics check the server installation without discovering desktop clients or assuming a development checkout.
+
+This is a major negotiated interface release because omitted-host requests
+can now select a different host or refuse where the old default selected a
+particular vendor, and workspace diagnostics report unperformed checks as
+`null` instead of implying success. The document shape is unchanged, so its
+schema remains `unitares.interface-contract.v1`. No tool or argument is removed.
+
+- **Affected:** `delegate_inference.host_id` defaults to `null` (unselected),
+  replacing `claude:host-adapter`. The Python async and sync SDKs leave an
+  omitted host out of the request. `consult(effort='thorough')` also stops
+  using a built-in vendor preference order when no host is supplied.
+- **Selection:** an explicit `host_id` is retained. Otherwise the operator’s
+  `UNITARES_INFERENCE_HOSTS_FILE` may define `jobs.consult.thorough.prefer`.
+  Raw delegation chooses the first supported, enabled entry and makes one
+  attempt; it does not silently retry another provider. Thorough consultation
+  retains the configured job’s failover policy, eligible-peer checks and
+  caller-family exclusion. Without a preference, automatic selection requires
+  exactly one enabled, configured and available eligible host (a peer of another
+  family for thorough consultation). Merely naming a host in config does not
+  authorize its use.
+- **Compatibility:** explicit host pins and `consult(host_ids=[...])` councils
+  retain their existing validation, membership, privacy, authentication,
+  enablement, provenance and egress rules. Standard local consultation is
+  unchanged. Old SDKs that send their historical default as an explicit
+  `host_id` keep making that pinned request; upgraded SDKs no longer add it.
+  An ambiguous omitted-host request (several eligible hosts and no
+  preference) now reports `INFERENCE_HOST_SELECTION_REQUIRED` for delegation,
+  or `CONSULT_HOST_SELECTION_REQUIRED` for thorough consultation. When no host
+  is eligible at all, as on a default install, delegation reports
+  `INFERENCE_HOST_UNAVAILABLE` with `reason: no_eligible_host`, and thorough
+  consultation reports `CONSULT_NO_ELIGIBLE_HOST` (with `reason:
+  extension_not_configured` when the server has no orchestrator extension). A
+  configured preference is an order, not an availability check: its first
+  enabled, permitted host is attempted, and if that host cannot serve the
+  call, its own failure is returned (for example `INFERENCE_HOST_UNAVAILABLE`
+  with `reason: extension_not_configured`). Only a preference whose every
+  entry is switched off or excluded yields the no-eligible-host refusal.
+  Consultation uses a standard local fallback only when the caller permits
+  degradation; none of these choices creates a metered default.
+- **Client/operator action:** to preserve a fixed provider, pass `host_id`
+  explicitly. To delegate selection, install an explicit preference order
+  before upgrading, or provision only one eligible host. Inspect
+  `list_inference_hosts` and the refusal’s recovery details when selection is
+  unresolved. A caller expecting the old omitted-host behavior must migrate;
+  this is not a claim of unchanged behavior for those calls.
+- **Workspace diagnostics:** `get_workspace_health` and
+  `admin(action='workspace_health')` check installed dependencies and server
+  module availability. They no longer probe desktop client configurations or
+  require checkout documents. Default `mcp_status.clients` is `{}`,
+  `cursor_servers` and `claude_desktop_servers` are `[]`, and both
+  `configured_count` and legacy `active_count` are `0`. These counts describe
+  distinct configured server names, not running servers. Client configuration
+  and workspace-file checks require paths supplied to the Python embedding
+  helpers; the MCP tools do not expose file-path arguments.
+- **Workspace response compatibility:** existing response blocks remain, but
+  unsupported checks are `null`: `security.exposed_secrets`,
+  `security.api_keys_secured`, `workspace_status.scripts_executable`,
+  `workspace_status.mcp_servers_responding`,
+  `documentation_coherence.server_counts_match`, and
+  `documentation_coherence.paths_current`. The default
+  `documentation_coherence.file_references_valid` is also `null` because no
+  files were requested. Client and documentation checks report
+  `status='not_requested'`; security reports `status='not_assessed'`. Clients
+  must accept these unknown/unrequested states and empty client lists rather
+  than interpret them as failed checks or proof that no clients are installed.
+  `health='healthy'` means the requested installation checks passed; use
+  `health_check` for running server subsystem health.
+- **Schema digests:** only `delegate_inference`’s input-schema digest changes,
+  together with `surface_sha256`. `consult`’s schema digest is unchanged;
+  its routing change is recorded in the negotiated release. Hash-pinning
+  clients should inspect the new schema and refresh that pin.

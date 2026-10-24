@@ -1,5 +1,5 @@
 {
-  "_comment": "Chronicler's deployment-specific metric names. The server registers these only when UNITARES_METRICS_CATALOG_EXTRA points at this file (see docs/operations/resident-roster.md); the core catalog in src/fleet_metrics/catalog.py stays product-only. Every name in agents/chronicler/scrapers.py SCRAPERS must be in the core catalog or here, or its daily POST is refused. The github.cirwel.* names are stable keys (renaming a metric orphans its stored series); the org they measure is GITHUB_SCRAPE_ORG in scrapers.py. Entries marked \"progress\": true also count as this resident's work for the resident-progress metrics_series source; the github.* traffic series deliberately do not.",
+  "_comment": "Chronicler's deployment-specific metric names. The server registers these only when UNITARES_METRICS_CATALOG_EXTRA points at this file (see docs/operations/resident-roster.md); the core catalog in src/fleet_metrics/catalog.py stays product-only. Every name in agents/chronicler/scrapers.py SCRAPERS must be in the core catalog or here, or its daily POST is refused. GitHub traffic is opt-in through GITHUB_SCRAPE_ORG. A custom CHRONICLER_GITHUB_METRIC_PREFIX requires a corresponding deployment catalog so existing series retain their names. Entries marked \"progress\": true also count as this resident's work for the resident-progress metrics_series source; the github.* traffic series deliberately do not.",
   "metrics": [
     {
       "name": "tokei.unitares.src.code",
@@ -19,22 +19,22 @@
       "unit": "findings"
     },
     {
-      "name": "github.cirwel.traffic.views.14d",
+      "name": "github.traffic.views.14d",
       "description": "GitHub page-view count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
       "unit": "views"
     },
     {
-      "name": "github.cirwel.traffic.views.uniques.14d",
+      "name": "github.traffic.views.uniques.14d",
       "description": "GitHub unique-visitor count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
       "unit": "visitors"
     },
     {
-      "name": "github.cirwel.traffic.clones.14d",
+      "name": "github.traffic.clones.14d",
       "description": "GitHub clone count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
       "unit": "clones"
     },
     {
-      "name": "github.cirwel.traffic.clones.uniques.14d",
+      "name": "github.traffic.clones.uniques.14d",
       "description": "GitHub unique-cloner count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
       "unit": "cloners"
     }

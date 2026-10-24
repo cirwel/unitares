@@ -15,9 +15,7 @@
 #
 # Auth: requires UNITARES_OPERATOR_TOKEN in the environment (single token,
 # matched against the server's UNITARES_OPERATOR_TOKENS allowlist). For
-# convenience, the secrets env file ($UNITARES_SECRETS_ENV, default
-# ~/.config/unitares/secrets.env, legacy ~/.config/cirwel/secrets.env still
-# read) is sourced if present.
+# an explicitly selected UNITARES_SECRETS_ENV file may supply it instead.
 #
 # Endpoint discovery: defaults to http://127.0.0.1:8767. Override via
 # UNITARES_GOVERNANCE_MCP_URL.
@@ -83,11 +81,11 @@ fi
 
 # --- environment ------------------------------------------------------------
 
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials come from the service environment, or an explicitly selected file.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 if [[ -z "${UNITARES_OPERATOR_TOKEN:-}" && -r "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090

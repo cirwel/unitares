@@ -53,6 +53,7 @@ async def test_both_lanes_send_constraints_and_preserve_brief_and_audit_hash(
     brief = 'Return only {"risk": "..."}.\nLimit the string to five words.'
     request = co.ConsultRequest(
         brief=brief, requester_uuid="test", purpose=purpose, effort=effort,
+        thorough_host_id="codex:host-adapter" if effort == "thorough" else None,
         privacy="local" if effort == "standard" else "cloud_allowed",
         response_mode="full",
     )

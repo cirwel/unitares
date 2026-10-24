@@ -3,9 +3,8 @@
 #
 # Sources AGENT_ORCHESTRATOR_BEARER_TOKEN, the lease-plane bearer, and the
 # shared Postgres URL (AGENT_ORCHESTRATOR_DATABASE_URL, GOVERNANCE_DATABASE_URL,
-# or DB_POSTGRES_URL) from the secrets env file (mode 600; resolved below:
-# $UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env, legacy
-# ~/.config/cirwel/secrets.env still read), then execs `mix run --no-halt`. The HTTP control surface binds 127.0.0.1:8789 by default;
+# or DB_POSTGRES_URL) from the explicit UNITARES_SECRETS_ENV file (mode 600), then execs
+# `mix run --no-halt`. The HTTP control surface binds 127.0.0.1:8789 by default;
 # override via AGENT_ORCHESTRATOR_HTTP_PORT or the :agent_orchestrator runtime
 # config (see application.ex / config.exs).
 #
@@ -20,18 +19,16 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 ORCHESTRATOR_DIR="$REPO_ROOT/elixir/agent_orchestrator"
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials come from the service environment, or an explicitly selected file.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$SECRETS_FILE"
-else
-    echo "[agent-orchestrator] WARNING: $SECRETS_FILE missing — starting fail-closed (HTTPAuth → 503)" >&2
 fi
 
 # Homebrew Elixir lives at /opt/homebrew/bin on Apple Silicon. PATH inherited

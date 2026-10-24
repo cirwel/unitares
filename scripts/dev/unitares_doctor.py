@@ -59,29 +59,15 @@ REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "vector")
 RESIDENT_LAUNCHD_ENV = "UNITARES_DOCTOR_RESIDENT_LAUNCHD"
 LAUNCHD_LABEL_PREFIX = "com.unitares."
 ANCHOR_DIR = Path.home() / ".unitares"
-# Optional env file sourced by helper scripts (ship.sh, the BEAM start
-# scripts); the server itself reads only its own process environment.
-# UNITARES_SECRETS_ENV names it explicitly. Otherwise the neutral default is
-# used, falling back to the pre-2026-09 location when only that one exists so
-# an existing deployment keeps its file where its scripts look for it.
+# Optional helper-script secrets source; the server reads its process environment.
 SECRETS_ENV_VAR = "UNITARES_SECRETS_ENV"
-DEFAULT_SECRETS_FILE = Path.home() / ".config" / "unitares" / "secrets.env"
-LEGACY_SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
 
 
-def resolve_secrets_file(
-    environ: dict | None = None,
-    default: Path = DEFAULT_SECRETS_FILE,
-    legacy: Path = LEGACY_SECRETS_FILE,
-) -> Path:
-    """The secrets env file this install uses (see SECRETS_ENV_VAR above)."""
+def resolve_secrets_file(environ: dict | None = None) -> Path | None:
+    """Return only an explicitly selected source; never discover a home file."""
     env = os.environ if environ is None else environ
     override = (env.get(SECRETS_ENV_VAR) or "").strip()
-    if override:
-        return Path(override).expanduser()
-    if not default.exists() and legacy.exists():
-        return legacy
-    return default
+    return Path(override) if override else None
 
 
 def resident_launchd_slots(
@@ -1154,6 +1140,12 @@ def check_anchor_dir() -> CheckResult:
 def check_secrets_file(path: Path | None = None) -> CheckResult:
     name, mode = "secrets_file", "local"
     secrets_file = resolve_secrets_file() if path is None else path
+    if secrets_file is None:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{SECRETS_ENV_VAR} is unset; helper scripts use their environment")
+    if not secrets_file.is_absolute():
+        return CheckResult(name, mode, Status.FAIL,
+                           f"{SECRETS_ENV_VAR} must name an absolute path")
     if not secrets_file.exists():
         # Optional: the server never reads this file, so its absence is not a
         # finding. Only the mode of a file that exists is worth checking.

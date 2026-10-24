@@ -386,6 +386,7 @@ class TestSyncToolMapping:
         client.call_tool = fake_call
         result = client.delegate_inference(
             "review this",
+            host_id="claude:host-adapter",
             model="claude-opus-5",
             task_type="review",
             timeout_s=60,
@@ -530,3 +531,10 @@ class TestCheckinOmitsFabricatedFields:
         args = captured["args"]
         assert args["confidence"] == 1.0, "confidence must be clamped to [0,1]"
         assert args["epistemic_class"] == "substrate_interpretation"
+
+
+def test_delegate_omits_unspecified_host_in_rest_payload():
+    client = SyncGovernanceClient(transport="rest")
+    client.call_tool = MagicMock(return_value={"success": True, "response": "answer"})
+    client.delegate_inference("review this")
+    assert "host_id" not in client.call_tool.call_args.args[1]
