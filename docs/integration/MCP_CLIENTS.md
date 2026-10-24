@@ -116,7 +116,10 @@ tool runs:
      client_id/client_secret blank and self-registers. Client registrations and issued tokens are
      kept in Redis (keys `unitares:oauth:*`, token keys are SHA-256 digests,
      TTLs follow token lifetimes), so a restart does not sign connectors out;
-     with Redis unavailable they fall back to memory and reset on restart.
+     with Redis unavailable they fall back to per-client-bounded memory and
+     reset on restart. One client's cache churn cannot evict another client's
+     live tokens. Authorization codes carry signed, five-minute state rather
+     than occupying a server-side pending-code cache.
      The protected MCP resource defaults to
      `<UNITARES_OAUTH_ISSUER_URL>/mcp`; set `UNITARES_OAUTH_RESOURCE_URL` only
      if a reverse proxy exposes the MCP resource at a different public URL.

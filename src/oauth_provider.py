@@ -5,8 +5,8 @@ Implements the MCP SDK's OAuthAuthorizationServerProvider protocol.
 State lives in memory and, when a store is given (Redis in production), is
 written through so issued tokens and DCR registrations survive a restart: a
 connector signed in before a restart stays signed in after it. Authorization
-codes stay in memory only (five-minute lifetime; a restart mid-sign-in just
-means signing in again).
+codes are short-lived, provider-signed envelopes, so abandoned authorization
+requests consume no server-side state. A restart mid-sign-in invalidates them.
 """
 
 from __future__ import annotations
@@ -78,10 +78,10 @@ logger = logging.getLogger(__name__)
 CLIENT_STATE_TTL = 30 * 86400
 PENDING_CLIENT_TTL = 10 * 60
 
-# Process-local OAuth state is a cache, not an authority. Keep it bounded even
-# when Redis is unavailable or a caller abandons registration/authorization
-# flows. The limits are deliberately constructor-overridable for constrained
-# deployments and focused tests, but they are not caller-controlled.
+# Process-local OAuth state stays bounded even when Redis is unavailable.
+# Authorization codes are stateless signed envelopes; live token caches are
+# bounded per client so one enrolled client cannot evict another's credentials.
+# Limits are constructor-overridable for constrained deployments and tests.
 DEFAULT_MAX_DYNAMIC_CLIENTS = 256
 DEFAULT_MAX_AUTH_CODES = 1024
 DEFAULT_MAX_AUTH_CODES_PER_CLIENT = 32
@@ -198,12 +198,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_token_ttl = refresh_token_ttl
         self._auth_code_ttl = auth_code_ttl
         self._max_dynamic_clients = max(1, int(max_dynamic_clients))
-        self._max_auth_codes = max(1, int(max_auth_codes))
         self._max_auth_codes_per_client = max(
-            1, min(int(max_auth_codes_per_client), self._max_auth_codes)
+            1, min(int(max_auth_codes_per_client), max(1, int(max_auth_codes)))
         )
-        self._max_access_tokens = max(1, int(max_access_tokens))
-        self._max_refresh_tokens = max(1, int(max_refresh_tokens))
+        self._max_access_tokens_per_client = max(1, min(int(max_access_tokens), 32))
+        self._max_refresh_tokens_per_client = max(1, min(int(max_refresh_tokens), 8))
 
         # Pre-registered clients survive restarts because they come from the
         # environment, not from DCR. Connectors that cannot self-register
@@ -211,7 +210,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._clients: dict[str, OAuthClientInformationFull] = {
             c.client_id: c for c in (static_clients or []) if c.client_id
         }
-        self._auth_codes: dict[str, AuthCodeEntry] = {}
+        self._consumed_auth_codes: dict[str, tuple[str, float]] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
         self._store = store
@@ -235,10 +234,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             self._clients.pop(client_id, None)
             self._dynamic_client_expires_at.pop(client_id, None)
             self._approved_dynamic_client_ids.discard(client_id)
-        self._auth_codes = {
-            code: entry
-            for code, entry in self._auth_codes.items()
-            if not entry.is_expired(self._auth_code_ttl)
+        self._consumed_auth_codes = {
+            digest: (client_id, expiry)
+            for digest, (client_id, expiry) in self._consumed_auth_codes.items()
+            if expiry > now
         }
         self._access_tokens = {
             token: entry
@@ -284,45 +283,107 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._approved_dynamic_client_ids.discard(client_id)
         return True
 
-    def _make_auth_code_room(self, client_id: str) -> None:
+    def _encode_auth_code(self, client: OAuthClientInformationFull,
+                          params: AuthorizationParams) -> str:
+        now = time.time()
+        payload = {
+            "v": 1,
+            "nonce": secrets.token_urlsafe(18),
+            "client_id": client.client_id,
+            "redirect_uri": str(params.redirect_uri),
+            "code_challenge": params.code_challenge,
+            "scopes": params.scopes or [],
+            "redirect_uri_provided_explicitly": params.redirect_uri_provided_explicitly,
+            "created_at": now,
+            "expires_at": now + self._auth_code_ttl,
+            "resource": str(params.resource) if params.resource is not None else None,
+        }
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        ).decode().rstrip("=")
+        signature = hmac.new(
+            self._secret.encode(), f"ac1.{encoded}".encode(), hashlib.sha256
+        ).digest()
+        signed = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+        return f"ac1.{encoded}.{signed}"
+
+    def _decode_auth_code(self, client: OAuthClientInformationFull,
+                          code: str) -> AuthCodeEntry | None:
+        try:
+            prefix, encoded, signed = code.split(".", 2)
+            if prefix != "ac1":
+                return None
+            expected = hmac.new(
+                self._secret.encode(), f"ac1.{encoded}".encode(), hashlib.sha256
+            ).digest()
+            actual = base64.urlsafe_b64decode(signed + "=" * (-len(signed) % 4))
+            if not hmac.compare_digest(expected, actual):
+                return None
+            payload = json.loads(
+                base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+            )
+            if (
+                payload.get("v") != 1
+                or payload.get("client_id") != client.client_id
+                or float(payload["expires_at"]) <= time.time()
+            ):
+                return None
+            return AuthCodeEntry(
+                code=code,
+                client_id=str(payload["client_id"]),
+                redirect_uri=str(payload["redirect_uri"]),
+                code_challenge=str(payload["code_challenge"]),
+                scopes=list(payload.get("scopes") or []),
+                redirect_uri_provided_explicitly=bool(
+                    payload.get("redirect_uri_provided_explicitly", True)
+                ),
+                created_at=float(payload["created_at"]),
+                expires_at=float(payload["expires_at"]),
+                resource=payload.get("resource"),
+            )
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None
+
+    def _consume_auth_code(self, entry: AuthCodeEntry) -> bool:
         self._prune_expired_state()
-        client_codes = [
-            entry for entry in self._auth_codes.values() if entry.client_id == client_id
-        ]
-        if len(client_codes) >= self._max_auth_codes_per_client:
-            raise AuthorizeError(
+        digest = _digest(entry.code)
+        if digest in self._consumed_auth_codes:
+            return False
+        used_by_client = sum(
+            client_id == entry.client_id
+            for client_id, _expiry in self._consumed_auth_codes.values()
+        )
+        if used_by_client >= self._max_auth_codes_per_client:
+            raise TokenError(
                 error="temporarily_unavailable",
-                error_description="too many pending authorization attempts for this client",
+                error_description="too many recently redeemed authorization codes",
             )
-        if len(self._auth_codes) >= self._max_auth_codes:
-            raise AuthorizeError(
-                error="temporarily_unavailable",
-                error_description="authorization-code capacity reached; retry after expiry",
-            )
+        self._consumed_auth_codes[digest] = (
+            entry.client_id,
+            entry.created_at + self._auth_code_ttl,
+        )
+        return True
 
     def _cache_access(self, entry: AccessToken) -> None:
         self._prune_expired_state()
-        if (
-            entry.token not in self._access_tokens
-            and len(self._access_tokens) >= self._max_access_tokens
-        ):
-            self._access_tokens.pop(next(iter(self._access_tokens)))
+        client_tokens = [
+            token for token, cached in self._access_tokens.items()
+            if cached.client_id == entry.client_id and token != entry.token
+        ]
+        if len(client_tokens) >= self._max_access_tokens_per_client:
+            self._access_tokens.pop(client_tokens[0], None)
         self._access_tokens[entry.token] = entry
 
     def _cache_refresh(self, entry: RefreshTokenEntry) -> None:
         self._prune_expired_state()
-        if len(self._refresh_tokens) >= self._max_refresh_tokens:
-            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
+        client_tokens = [
+            cached for cached in self._refresh_tokens.values()
+            if cached.client_id == entry.client_id and cached.token != entry.token
+        ]
+        if len(client_tokens) >= self._max_refresh_tokens_per_client:
+            oldest = min(client_tokens, key=lambda token: token.created_at)
             self._refresh_tokens.pop(oldest.token, None)
         self._refresh_tokens[entry.token] = entry
-
-    def _make_token_room(self) -> None:
-        self._prune_expired_state()
-        if len(self._access_tokens) >= self._max_access_tokens:
-            self._access_tokens.pop(next(iter(self._access_tokens)))
-        if len(self._refresh_tokens) >= self._max_refresh_tokens:
-            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
-            self._refresh_tokens.pop(oldest.token, None)
 
     # -- persistence helpers ------------------------------------------------
 
@@ -446,20 +507,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     "pre-register this client or enable auto-approval deliberately"
                 ),
             )
-        self._make_auth_code_room(client.client_id)
-        code = secrets.token_hex(24)
-
-        entry = AuthCodeEntry(
-            code=code,
-            client_id=client.client_id,
-            redirect_uri=str(params.redirect_uri),
-            code_challenge=params.code_challenge,
-            scopes=params.scopes or [],
-            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            expires_at=time.time() + self._auth_code_ttl,
-            resource=params.resource,
-        )
-        self._auth_codes[code] = entry
+        code = self._encode_auth_code(client, params)
 
         query = {"code": code}
         if params.state:
@@ -471,15 +519,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str,
     ) -> AuthCodeEntry | None:
-        entry = self._auth_codes.get(authorization_code)
-        if entry is None:
+        if _digest(authorization_code) in self._consumed_auth_codes:
             return None
-        if entry.client_id != client.client_id:
-            return None
-        if entry.is_expired(self._auth_code_ttl):
-            del self._auth_codes[authorization_code]
-            return None
-        return entry
+        return self._decode_auth_code(client, authorization_code)
 
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry,
@@ -489,12 +531,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # requests carrying the same code could both pass it. Whichever pops
         # the entry redeems it; the other gets invalid_grant, so a code yields
         # one token pair at most (RFC 6749 section 4.1.2).
-        if self._auth_codes.pop(authorization_code.code, None) is None:
+        if not self._consume_auth_code(authorization_code):
             raise TokenError(
                 error="invalid_grant",
                 error_description="authorization code already used",
             )
-        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         refresh_token_str = self._generate_token("rt")
@@ -588,7 +629,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 "A used refresh token could NOT be deleted from the store; it "
                 "stays redeemable after a restart until it expires"
             )
-        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         new_refresh_str = self._generate_token("rt")

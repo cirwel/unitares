@@ -150,7 +150,7 @@ async def test_refresh_works_after_a_restart_and_is_single_use():
 
 
 @pytest.mark.asyncio
-async def test_persisted_refresh_cache_stays_bounded():
+async def test_persisted_refresh_cache_is_bounded_per_client():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)
     first_client = _dcr_client("dcr-1")
@@ -164,7 +164,7 @@ async def test_persisted_refresh_cache_stays_bounded():
     assert await after.load_refresh_token(first_client, first.refresh_token) is not None
     assert await after.load_refresh_token(second_client, second.refresh_token) is not None
 
-    assert list(after._refresh_tokens) == [second.refresh_token]
+    assert set(after._refresh_tokens) == {first.refresh_token, second.refresh_token}
 
 
 @pytest.mark.asyncio
