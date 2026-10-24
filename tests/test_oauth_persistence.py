@@ -109,6 +109,31 @@ async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
 
 
 @pytest.mark.asyncio
+async def test_slow_first_exchange_restores_pruned_dynamic_client():
+    provider = GovernanceOAuthProvider()
+    client = _dcr_client()
+    await provider.register_client(client)
+    redirect = await provider.authorize(
+        client,
+        AuthorizationParams(
+            state="s",
+            scopes=["mcp:tools"],
+            code_challenge="c",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_provided_explicitly=True,
+        ),
+    )
+    code = redirect.split("code=")[1].split("&")[0]
+    entry = await provider.load_authorization_code(client, code)
+    provider._dynamic_client_expires_at[client.client_id] = 0
+
+    await provider.exchange_authorization_code(client, entry)
+
+    assert await provider.get_client(client.client_id) is client
+    assert client.client_id in provider._approved_dynamic_client_ids
+
+
+@pytest.mark.asyncio
 async def test_persisted_client_load_evicts_an_old_cache_entry_without_growing_approval_state():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)

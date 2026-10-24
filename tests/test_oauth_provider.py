@@ -243,6 +243,17 @@ class TestAuthorize:
 
         assert await provider.load_authorization_code(client, code + "x") is None
 
+    @pytest.mark.asyncio
+    async def test_restart_invalidates_code_even_with_stable_server_secret(self):
+        client = _client()
+        before = GovernanceOAuthProvider(secret="stable-secret")
+        redirect = await before.authorize(client, _auth_params())
+        code = redirect.split("code=")[1].split("&")[0]
+
+        after = GovernanceOAuthProvider(secret="stable-secret")
+
+        assert await after.load_authorization_code(client, code) is None
+
 
 # --------------------------------------------------------------------------- #
 # Authorization code loading: client binding + expiry
@@ -323,6 +334,19 @@ class TestExchangeAuthorizationCode:
         assert len(provider._access_tokens) == 1
 
     @pytest.mark.asyncio
+    async def test_recent_redemption_limit_uses_valid_oauth_error(self):
+        provider = GovernanceOAuthProvider(max_auth_codes_per_client=1)
+        client = _client()
+        first = await self._issue_code(provider, client)
+        second = await self._issue_code(provider, client)
+        await provider.exchange_authorization_code(client, first)
+
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(client, second)
+
+        assert refused.value.error == "invalid_request"
+
+    @pytest.mark.asyncio
     async def test_empty_scopes_default_to_mcp_tools(self, provider):
         client = _client()
         entry = await self._issue_code(provider, client, scopes=[])
@@ -379,6 +403,18 @@ class TestRefreshFlow:
         code = redirect.split("code=")[1].split("&")[0]
         entry = await provider.load_authorization_code(client, code)
         return await provider.exchange_authorization_code(client, entry)
+
+    @pytest.mark.asyncio
+    async def test_loaded_refresh_remains_redeemable_after_cache_eviction(self):
+        provider = GovernanceOAuthProvider(max_refresh_tokens=1)
+        client = _client()
+        token = await self._full_token(provider, client)
+        loaded = await provider.load_refresh_token(client, token.refresh_token)
+        provider._refresh_tokens.pop(token.refresh_token)
+
+        rotated = await provider.exchange_refresh_token(client, loaded, [])
+
+        assert rotated.refresh_token.startswith("rt_")
 
     @pytest.mark.asyncio
     async def test_load_refresh_token_client_binding(self, provider):

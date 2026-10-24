@@ -85,8 +85,8 @@ PENDING_CLIENT_TTL = 10 * 60
 DEFAULT_MAX_DYNAMIC_CLIENTS = 256
 DEFAULT_MAX_AUTH_CODES = 1024
 DEFAULT_MAX_AUTH_CODES_PER_CLIENT = 32
-DEFAULT_MAX_ACCESS_TOKENS = 2048
-DEFAULT_MAX_REFRESH_TOKENS = 2048
+DEFAULT_MAX_ACCESS_TOKENS = 256
+DEFAULT_MAX_REFRESH_TOKENS = 256
 
 
 class OAuthStateStore:
@@ -193,6 +193,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         max_refresh_tokens: int = DEFAULT_MAX_REFRESH_TOKENS,
     ):
         self._secret = secret or secrets.token_hex(32)
+        self._auth_code_secret = hmac.new(
+            self._secret.encode(), secrets.token_bytes(32), hashlib.sha256
+        ).digest()
         self._auto_approve = auto_approve
         self._access_token_ttl = access_token_ttl
         self._refresh_token_ttl = refresh_token_ttl
@@ -201,8 +204,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._max_auth_codes_per_client = max(
             1, min(int(max_auth_codes_per_client), max(1, int(max_auth_codes)))
         )
-        self._max_access_tokens_per_client = max(1, min(int(max_access_tokens), 32))
-        self._max_refresh_tokens_per_client = max(1, min(int(max_refresh_tokens), 8))
+        self._max_access_tokens_per_client = max(1, int(max_access_tokens))
+        self._max_refresh_tokens_per_client = max(1, int(max_refresh_tokens))
 
         # Pre-registered clients survive restarts because they come from the
         # environment, not from DCR. Connectors that cannot self-register
@@ -302,7 +305,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         ).decode().rstrip("=")
         signature = hmac.new(
-            self._secret.encode(), f"ac1.{encoded}".encode(), hashlib.sha256
+            self._auth_code_secret, f"ac1.{encoded}".encode(), hashlib.sha256
         ).digest()
         signed = base64.urlsafe_b64encode(signature).decode().rstrip("=")
         return f"ac1.{encoded}.{signed}"
@@ -314,7 +317,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             if prefix != "ac1":
                 return None
             expected = hmac.new(
-                self._secret.encode(), f"ac1.{encoded}".encode(), hashlib.sha256
+                self._auth_code_secret, f"ac1.{encoded}".encode(), hashlib.sha256
             ).digest()
             actual = base64.urlsafe_b64decode(signed + "=" * (-len(signed) % 4))
             if not hmac.compare_digest(expected, actual):
@@ -355,7 +358,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         )
         if used_by_client >= self._max_auth_codes_per_client:
             raise TokenError(
-                error="temporarily_unavailable",
+                error="invalid_request",
                 error_description="too many recently redeemed authorization codes",
             )
         self._consumed_auth_codes[digest] = (
@@ -420,6 +423,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def _issued(self, client: OAuthClientInformationFull,
                       access: AccessToken, refresh: RefreshTokenEntry) -> None:
         if client.client_id not in self._static_client_ids:
+            self._clients[client.client_id] = client
             self._approved_dynamic_client_ids.add(client.client_id)
             self._dynamic_client_expires_at[client.client_id] = time.time() + CLIENT_STATE_TTL
         await self._persist_access(access)
@@ -614,13 +618,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # digest as consumed (also before any await) stops a later load from
         # reloading the token from the store while, or if, its delete lags.
         digest = _digest(refresh_token.token)
-        if (
-            self._refresh_tokens.pop(refresh_token.token, None) is None
-            or digest in self._consumed_refresh
-        ):
+        if digest in self._consumed_refresh:
             raise TokenError(
                 error="invalid_grant", error_description="refresh token already used"
             )
+        self._refresh_tokens.pop(refresh_token.token, None)
         self._consumed_refresh[digest] = refresh_token.created_at + self._refresh_token_ttl
         if self._store is not None and not await self._store.delete(f"rt:{digest}"):
             # This process refuses it (consumed set); another process, or this
