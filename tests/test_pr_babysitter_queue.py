@@ -247,6 +247,7 @@ def _run(
             "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
             "FAKE_GH_DIR": str(d),
             "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_BASE": "master",
             "PR_QUEUE_STATE_FILE": str(state_file),
             "PR_QUEUE_NOTIFY": "0",
             "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
@@ -260,6 +261,7 @@ def _run(
             "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
             "FAKE_GH_DIR": str(d),
             "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_BASE": "master",
             "PR_QUEUE_STATE_FILE": str(state_file),
             "PR_QUEUE_NOTIFY": "0",
             "PR_QUEUE_REVIEW_POLICY": str(_review_policy(tmp_path)),
@@ -1324,6 +1326,19 @@ def test_a_script_armed_auth_path_pr_left_unreviewed_is_disarmed(tmp_path: Path)
     calls, out = _run(tmp_path, [pr], compares={"aaa": AUTH}, arms={3: 20}, PR_QUEUE_REQUIRED_CHECKS="")
     assert calls[0] == "pr merge 3 -R o/r --disable-auto"
     assert "required on an auth path" in out
+
+
+def test_queue_requires_an_explicit_repository_before_using_github(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 99\n")
+    gh.chmod(0o755)
+    env = {key: value for key, value in os.environ.items() if key not in ("PR_BABYSITTER_REPO", "PR_QUEUE_BASE")}
+    env["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "Set PR_BABYSITTER_REPO" in result.stderr
 
 
 # --- #3016: 100-check rollup cap and superseded check runs -----------------------

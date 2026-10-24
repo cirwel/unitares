@@ -314,8 +314,8 @@ def test_agent_feed_and_checkin_counts_ignore_an_empty_roster(residentless):
 
 
 # --- route packs (2026-09-27) -------------------------------------------------
-# The reference residents' summary / backlog / adjudication routes are mounted
-# only by the opt-in `reference-residents` route pack. Declaring no residents is
+# The reference residents' summary / backlog routes are mounted only when a
+# deployment's route-pack manifest declares them and selects that pack. Declaring no residents is
 # the default install, and it must carry none of those endpoints — independent
 # of the roster, which does not mount a pack either way.
 

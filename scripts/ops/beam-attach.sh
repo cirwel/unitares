@@ -22,9 +22,7 @@
 #     cookie would let any one compromised BEAM service pivot into all the
 #     others, including the orchestrator, whose entire job is spawning
 #     processes.
-#   * Cookies live in the secrets env file (mode 600; $UNITARES_SECRETS_ENV,
-#     default ~/.config/unitares/secrets.env, legacy
-#     ~/.config/cirwel/secrets.env still read; resolved below) and in
+#   * Cookies may live in the explicit UNITARES_SECRETS_ENV file (mode 600) and in
 #     ~/.erlang.cookie (mode 400). Anything that can read those can already do
 #     this; the boundary is the filesystem, not this script.
 #
@@ -33,11 +31,11 @@
 
 set -euo pipefail
 
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials come from the service environment, or an explicitly selected file.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 HOST="$(hostname -s)"
 
@@ -50,8 +48,7 @@ Usage:
 Services:
   orchestrator          agent-orchestrator      AGENT_ORCHESTRATOR_NODE_COOKIE
   lease-plane           unitares-lease-plane    LEASE_PLANE_NODE_COOKIE
-  dispatch-beam         dispatch_beam           ~/.erlang.cookie (default)
-  dispatch-beam-codex   dispatch_beam_codex     ~/.erlang.cookie (default)
+  Additional services: UNITARES_BEAM_SERVICES_FILE (service, node, cookie variable TSV)
 
 Without --eval you get an interactive IEx attached to the live node. Exit with
 Ctrl-\ (Ctrl-C twice kills the REMOTE node, not your shell).
@@ -59,25 +56,40 @@ USAGE
     exit 2
 }
 
-# service -> sname, and service -> cookie variable ("" means the default
-# ~/.erlang.cookie, which is what a node started with --sname and no --cookie
-# uses).
+# Core integrations are public; external service/node names are explicit
+# deployment configuration. Empty cookie variable retains ~/.erlang.cookie.
+SERVICES=(
+  "orchestrator|agent-orchestrator|AGENT_ORCHESTRATOR_NODE_COOKIE"
+  "lease-plane|unitares-lease-plane|LEASE_PLANE_NODE_COOKIE"
+)
+if [[ -n "${UNITARES_BEAM_SERVICES_FILE:-}" ]]; then
+  [[ -r "$UNITARES_BEAM_SERVICES_FILE" ]] || { echo "unreadable BEAM service inventory" >&2; exit 2; }
+  while IFS=$'\t' read -r svc node cookie || [[ -n "$svc$node$cookie" ]]; do
+    [[ -n "$svc$node$cookie" ]] || continue
+    if [[ ! "$svc" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ || ! "$node" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ || ( -n "$cookie" && ! "$cookie" =~ ^[A-Z][A-Z0-9_]*$ ) ]]; then
+      echo "invalid BEAM service inventory entry" >&2; exit 2
+    fi
+    for entry in "${SERVICES[@]}"; do
+      [[ "${entry%%|*}" != "$svc" ]] || { echo "duplicate BEAM service: $svc" >&2; exit 2; }
+    done
+    SERVICES+=("$svc|$node|$cookie")
+  done < "$UNITARES_BEAM_SERVICES_FILE"
+fi
 sname_for() {
-    case "$1" in
-        orchestrator)        echo "agent-orchestrator" ;;
-        lease-plane)         echo "unitares-lease-plane" ;;
-        dispatch-beam)       echo "dispatch_beam" ;;
-        dispatch-beam-codex) echo "dispatch_beam_codex" ;;
-        *) return 1 ;;
-    esac
+  local entry svc node cookie
+  for entry in "${SERVICES[@]}"; do
+    IFS='|' read -r svc node cookie <<< "$entry"
+    if [[ "$svc" == "$1" ]]; then printf '%s\n' "$node"; return 0; fi
+  done
+  return 1
 }
-
 cookie_var_for() {
-    case "$1" in
-        orchestrator) echo "AGENT_ORCHESTRATOR_NODE_COOKIE" ;;
-        lease-plane)  echo "LEASE_PLANE_NODE_COOKIE" ;;
-        *)            echo "" ;;
-    esac
+  local entry svc node cookie
+  for entry in "${SERVICES[@]}"; do
+    IFS='|' read -r svc node cookie <<< "$entry"
+    if [[ "$svc" == "$1" ]]; then printf '%s\n' "$cookie"; return 0; fi
+  done
+  return 1
 }
 
 if [[ $# -eq 0 ]]; then usage; fi
@@ -87,7 +99,8 @@ if [[ "$1" == "--list" ]]; then
     epmd -names 2>/dev/null | sed -n 's/^name \(.*\) at port .*/  \1/p' || echo "  (epmd not running)"
     echo
     echo "Known services (a service missing above is running UNNAMED):"
-    for svc in orchestrator lease-plane dispatch-beam dispatch-beam-codex; do
+    for entry in "${SERVICES[@]}"; do
+        svc="${entry%%|*}"
         sname="$(sname_for "$svc")"
         if epmd -names 2>/dev/null | grep -q "^name $sname "; then
             printf '  %-22s %-24s reachable\n' "$svc" "$sname"
@@ -125,6 +138,7 @@ fi
 COOKIE=""
 cookie_var="$(cookie_var_for "$SERVICE")"
 if [[ -n "$cookie_var" ]]; then
+    COOKIE="${!cookie_var:-}"
     if [[ -f "$SECRETS_FILE" ]]; then
         COOKIE="$( (set -a; . "$SECRETS_FILE" >/dev/null 2>&1; printf '%s' "${!cookie_var:-}") || true)"
     fi

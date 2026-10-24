@@ -325,7 +325,10 @@ def _owned(rel: str, prefixes: tuple[str, ...]) -> bool:
 def route_packs(root: Path) -> set[str]:
     """Repository paths of the route-pack modules under ``agents/``."""
     tree = _parse(root, PACKS_REL.as_posix())
-    packs: set[str] = set()
+    # Optional reference routes remain boundary-checked without registering a
+    # deployment roster in the server. Keep legacy table discovery for fixtures.
+    packs: set[str] = {p.relative_to(root).as_posix()
+                       for p in (root / MEMBER_ROOT).glob("*/routes.py")}
     if tree is None:
         return packs
     for node in ast.walk(tree):

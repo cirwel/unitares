@@ -303,6 +303,9 @@ def _run_guard(tmp_path: Path, content: str) -> subprocess.CompletedProcess:
     """Run the guard against one file in a throwaway repo, not this checkout."""
     (tmp_path / "scripts" / "dev").mkdir(parents=True)
     shutil.copy(REPO_ROOT / _REPO_SCOPE_SH, tmp_path / _REPO_SCOPE_SH)
+    # The guard ends by running the operator-defaults check beside it.
+    defaults = "scripts/dev/check_operator_defaults.py"
+    shutil.copy(REPO_ROOT / defaults, tmp_path / defaults)
     (tmp_path / "probe.md").write_text(content)
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     return subprocess.run(

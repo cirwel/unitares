@@ -40,11 +40,11 @@ WEDGE_STATE_FILE="${BRIDGE_WATCHDOG_WEDGE_STATE:-$HOME/.unitares/bridge-watchdog
 ALERT_COOLDOWN_S="${BRIDGE_WATCHDOG_ALERT_COOLDOWN_S:-21600}"
 RESTART_SETTLE_S="${BRIDGE_RESTART_SETTLE_S:-3}"
 ALERT_LOG="${UNITARES_ALERT_LOG:-/tmp/unitares_alerts.log}"
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials come from the service environment, or an explicitly selected file.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 GOV_API_URL="${UNITARES_GOVERNANCE_HTTP_URL:-http://127.0.0.1:8767}"
 TIMEOUT_S="${HEALTHCHECK_TIMEOUT_S:-5}"

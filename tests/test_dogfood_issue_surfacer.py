@@ -24,6 +24,11 @@ _spec.loader.exec_module(dis)
 CHECKPOINT = "2030-01-02T03:04:05Z"
 
 
+@pytest.fixture(autouse=True)
+def explicit_fixture_repository(monkeypatch):
+    monkeypatch.setattr(dis, "DEFAULT_REPO", "CIRWEL/unitares")
+
+
 def finding(**kw):
     base = {
         "surface": "Dashboard/API docs-to-command exactness",
@@ -855,3 +860,11 @@ def test_markerless_legacy_issue_dedupes_a_truncated_long_surface():
     ).run()
 
     assert not any(args[:2] == ["issue", "create"] for args in calls)
+
+
+def test_missing_destination_fails_before_reading_findings_or_github(monkeypatch):
+    monkeypatch.setattr(dis, "DEFAULT_REPO", "")
+    def unexpected(*args, **kwargs):
+        pytest.fail("unconfigured destination performed I/O")
+    with pytest.raises(ValueError, match="set --repo"):
+        dis.Surfacer(io={"fetch_findings": unexpected, "gh": unexpected}).run()
