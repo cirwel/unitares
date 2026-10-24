@@ -27,6 +27,7 @@ defmodule DialecticLiveWeb.Router do
 
     live "/", DialecticLive
     live "/dialectic", DialecticLive
+    live "/timeline", TimelineLive
   end
 
   # Other scopes may use custom stacks.

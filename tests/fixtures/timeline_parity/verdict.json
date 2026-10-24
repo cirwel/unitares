@@ -1,0 +1,73 @@
+{
+  "_doc": "src/broadcaster.py verdict_of: decision.sub_action, else decision.action, else 'proceed', with Python falsiness. Persisted check-in action follows the same rule (phases.py).",
+  "cases": [
+    {
+      "name": "guided check-in",
+      "frame": {
+        "decision": {
+          "action": "proceed",
+          "sub_action": "guide"
+        }
+      },
+      "expected": "guide"
+    },
+    {
+      "name": "approve",
+      "frame": {
+        "decision": {
+          "action": "proceed",
+          "sub_action": "approve"
+        }
+      },
+      "expected": "approve"
+    },
+    {
+      "name": "action only",
+      "frame": {
+        "decision": {
+          "action": "pause"
+        }
+      },
+      "expected": "pause"
+    },
+    {
+      "name": "empty sub_action falls through",
+      "frame": {
+        "decision": {
+          "action": "reject",
+          "sub_action": ""
+        }
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "null sub_action falls through",
+      "frame": {
+        "decision": {
+          "action": "proceed",
+          "sub_action": null
+        }
+      },
+      "expected": "proceed"
+    },
+    {
+      "name": "empty decision",
+      "frame": {
+        "decision": {}
+      },
+      "expected": "proceed"
+    },
+    {
+      "name": "no decision",
+      "frame": {},
+      "expected": "proceed"
+    },
+    {
+      "name": "decision not an object",
+      "frame": {
+        "decision": "pause"
+      },
+      "expected": "proceed"
+    }
+  ]
+}

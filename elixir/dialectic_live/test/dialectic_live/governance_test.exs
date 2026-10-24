@@ -53,4 +53,64 @@ defmodule DialecticLive.GovernanceTest do
   test "config/0 still reads this app's governance keyword list" do
     assert is_list(DialecticLive.Governance.config())
   end
+
+  describe "timeline/2" do
+    @describetag :capture_log
+
+    defp stub(respond) do
+      name = :"governance_timeline_#{System.unique_integer([:positive])}"
+      test = self()
+
+      Req.Test.stub(name, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        send(test, {:get, conn.method, conn.request_path, conn.query_params})
+        respond.(conn)
+      end)
+
+      [req_options: [plug: {Req.Test, name}]]
+    end
+
+    test "a 200 window is returned as decoded JSON, with no envelope classification" do
+      # A plain REST body: a top-level "success" must not be read as a tool envelope.
+      opts = stub(&Req.Test.json(&1, %{"success" => true, "events" => []}))
+
+      assert {:ok, %{"events" => []}} =
+               DialecticLive.Governance.timeline([hours: 6, limit: 2000], opts)
+
+      assert_receive {:get, "GET", "/v1/timeline", %{"hours" => "6", "limit" => "2000"}}
+    end
+
+    test "a 200 that is not a JSON object is undecodable" do
+      opts = stub(&Plug.Conn.send_resp(&1, 200, "not json"))
+      assert DialecticLive.Governance.timeline([hours: 1], opts) == {:error, :undecodable}
+
+      opts = stub(&Req.Test.json(&1, [1, 2]))
+      assert DialecticLive.Governance.timeline([hours: 1], opts) == {:error, :undecodable}
+    end
+
+    test "another status is an http_status error, tried once" do
+      opts = stub(&Plug.Conn.send_resp(&1, 503, ""))
+      assert DialecticLive.Governance.timeline([hours: 1], opts) == {:error, {:http_status, 503}}
+      assert_receive {:get, _, _, _}
+      refute_receive {:get, _, _, _}, 100
+    end
+
+    test "a transport failure is an error, not a raise" do
+      opts = stub(&Req.Test.transport_error(&1, :econnrefused))
+
+      assert {:error, %Req.TransportError{reason: :econnrefused}} =
+               DialecticLive.Governance.timeline([hours: 1], opts)
+    end
+  end
+
+  test "the tool-call reads accept injected req_options too" do
+    name = :"governance_tools_#{System.unique_integer([:positive])}"
+
+    Req.Test.stub(name, fn conn ->
+      Req.Test.json(conn, %{"result" => %{"sessions" => [%{"session_id" => "s1"}]}})
+    end)
+
+    assert {:ok, [%{"session_id" => "s1"}]} =
+             DialecticLive.Governance.list_sessions(5, req_options: [plug: {Req.Test, name}])
+  end
 end
