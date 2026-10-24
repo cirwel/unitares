@@ -41,6 +41,15 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     :ok
   end
 
+  # The feed's rows in DOM order, as text, read through LazyHTML selectors.
+  defp feed_rows(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#timeline-feed > li")
+    |> Enum.map(&LazyHTML.text/1)
+  end
+
   defp feed_with(events, agents \\ [], extra \\ %{}) do
     start_feed(respond: fn conn -> Req.Test.json(conn, window_body(events, agents, extra)) end)
     |> use_feed()
@@ -166,9 +175,9 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     view = mount_live(conn, ctx)
 
     assert has_element?(view, "#truncation-banner", "checkin")
-    html = view |> element("#timeline-feed") |> render()
-    assert html =~ "assessment: guide"
-    assert :binary.match(html, "assessment: guide") < :binary.match(html, "test_failed")
+    assert [checkin, outcome] = feed_rows(view)
+    assert checkin =~ "assessment: guide"
+    assert outcome =~ "test_failed"
     assert has_element?(view, "#timeline-feed li[data-kind=outcome]", "worker one")
   end
 
@@ -224,12 +233,10 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
 
-    html = view |> element("#timeline-feed") |> render()
-
-    [newest, delayed, oldest] =
-      Enum.map(~w(newest_row delayed_frame oldest_row), &elem(:binary.match(html, &1), 0))
-
-    assert newest < delayed and delayed < oldest
+    assert [newest, delayed, oldest] = feed_rows(view)
+    assert newest =~ "newest_row"
+    assert delayed =~ "delayed_frame"
+    assert oldest =~ "oldest_row"
   end
 
   test "a delta older than a full feed is not shown and evicts nothing", %{conn: conn} do
@@ -259,6 +266,8 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     refute has_element?(view, "#timeline-feed", "too_old")
     assert has_element?(view, "#timeline-feed", "row200")
+    # The agent was still seen: the strip's last-seen moves even so.
+    assert Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
   end
 
   test "a foreign roster renders from record fields alone", %{conn: conn} do

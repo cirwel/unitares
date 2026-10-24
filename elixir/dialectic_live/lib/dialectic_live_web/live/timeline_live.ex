@@ -196,16 +196,15 @@ defmodule DialecticLiveWeb.TimelineLive do
     ts = sort_key(mark)
     {newer, older} = Enum.split_while(socket.assigns.row_ts, &(&1 >= ts))
     at = length(newer)
+    # The agent was seen whether or not its mark fits in the feed.
+    socket = assign(socket, last_seen: bump_last_seen(socket.assigns.last_seen, mark))
 
     if at >= @feed_cap do
       socket
     else
       socket
       |> stream_insert(:feed, mark, at: at, limit: @feed_cap)
-      |> assign(
-        row_ts: Enum.take(newer ++ [ts | older], @feed_cap),
-        last_seen: bump_last_seen(socket.assigns.last_seen, mark)
-      )
+      |> assign(row_ts: Enum.take(newer ++ [ts | older], @feed_cap))
     end
   end
 
