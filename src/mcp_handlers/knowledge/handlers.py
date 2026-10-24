@@ -5489,7 +5489,10 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                         offset=chain_offset,
                         lookahead=True,
                     )
-                    has_more = len(chain_with_lookahead) > chain_limit
+                    more_rows_exist = len(chain_with_lookahead) > chain_limit
+                    next_offset = chain_offset + chain_limit
+                    truncated = more_rows_exist and next_offset > 10_000
+                    has_more = more_rows_exist and not truncated
                     chain = chain_with_lookahead[:chain_limit]
                     response["response_chain"] = {
                         "count": len(chain),
@@ -5497,7 +5500,8 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                         "limit": chain_limit,
                         "offset": chain_offset,
                         "has_more": has_more,
-                        "next_offset": chain_offset + chain_limit if has_more else None,
+                        "next_offset": next_offset if has_more else None,
+                        "truncated": truncated,
                         "discoveries": [d.to_dict(include_details=False) for d in chain]
                     }
                     response["message"] += f" (includes {len(chain)} discoveries in response chain)"

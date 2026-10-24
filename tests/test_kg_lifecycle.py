@@ -525,6 +525,7 @@ class TestGetDiscoveryDetails:
         assert data["response_chain"]["offset"] == 0
         assert data["response_chain"]["has_more"] is False
         assert data["response_chain"]["next_offset"] is None
+        assert data["response_chain"]["truncated"] is False
 
     @pytest.mark.asyncio
     async def test_get_details_null_chain_depth_uses_default(self, patch_common):
@@ -606,7 +607,31 @@ class TestGetDiscoveryDetails:
         assert chain["count"] == 2
         assert chain["has_more"] is True
         assert chain["next_offset"] == 6
+        assert chain["truncated"] is False
         assert [row["id"] for row in chain["discoveries"]] == [root.id, reply.id]
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_reports_offset_ceiling(self, patch_common):
+        """A caller never receives a next offset that schema validation rejects."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        root = make_discovery(id="2026-01-01T00:00:00.000000", details="Details")
+        sentinel = make_discovery(id="2026-01-02T00:00:00.000000", summary="More")
+        mock_graph.get_discovery = AsyncMock(return_value=root)
+        mock_graph.get_response_chain = AsyncMock(return_value=[root, sentinel])
+
+        result = await handle_get_discovery_details({
+            "discovery_id": root.id,
+            "include_response_chain": True,
+            "response_chain_limit": 1,
+            "response_chain_offset": 10_000,
+        })
+
+        chain = parse_result(result)["response_chain"]
+        assert chain["has_more"] is False
+        assert chain["next_offset"] is None
+        assert chain["truncated"] is True
 
     @pytest.mark.asyncio
     async def test_get_details_response_chain_not_supported(self, patch_common):

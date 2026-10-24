@@ -1149,13 +1149,15 @@ with deterministic pagination.
   traversal deduplicates discoveries, orders them by minimum depth and id,
   applies the requested page, and runs under a two-second database statement
   timeout.
-- **Compatibility:** additive for ordinary details reads. Existing
-  `include_response_chain=true` calls keep their default depth and now return
-  at most 100 discoveries. Values outside the advertised bounds are rejected
-  by schema validation; direct storage callers are clamped defensively.
+- **Compatibility:** ordinary details reads are unchanged. Existing
+  `include_response_chain=true` calls keep depth 10 by default and now return
+  at most 100 discoveries. Explicit depths above 32, limits above 200, and
+  offsets above 10,000 are intentionally rejected by schema validation;
+  direct storage callers are clamped defensively.
 - **Schema digests:** `knowledge` and its complete-catalog surface digest move
   because the public input schema gains two fields and bounds the existing
   depth field.
-- **Client action:** the response reports `has_more` and `next_offset`; clients
-  should advance `response_chain_offset` while `has_more` is true, using pages
-  no larger than 200.
+- **Client action:** the response reports `has_more`, `next_offset`, and
+  `truncated`. Clients should advance `response_chain_offset` while `has_more`
+  is true, using pages no larger than 200. `truncated=true` means additional
+  rows exist beyond the maximum permitted starting offset.
