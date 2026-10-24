@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, MutableMapping
 
@@ -37,14 +38,20 @@ def normalize_http_tool_name(body: Mapping[str, Any], mcp_server_name: str) -> s
     )
 
 
-def validate_http_tool_content_length(content_length: str | None) -> None:
-    """Reject an explicitly oversized body before JSON parsing."""
-    if not content_length:
-        return
+def validate_http_tool_content_length(content_length: str | None) -> int | None:
+    """Validate a declared body length, returning it when present."""
+    if content_length is None:
+        return None
     try:
         size = int(content_length)
-    except ValueError:
-        return
+    except (TypeError, ValueError):
+        raise HttpToolRequestError(
+            {"success": False, "error": "Invalid Content-Length header"}
+        )
+    if size < 0:
+        raise HttpToolRequestError(
+            {"success": False, "error": "Invalid Content-Length header"}
+        )
     if size > MAX_HTTP_TOOL_REQUEST_SIZE:
         raise HttpToolRequestError(
             {
@@ -54,6 +61,32 @@ def validate_http_tool_content_length(content_length: str | None) -> None:
             },
             status_code=413,
         )
+    return size
+
+
+async def read_bounded_json_body(request: Any) -> Any:
+    """Read and decode JSON while enforcing the byte cap on the actual stream.
+
+    ``Content-Length`` is only an early rejection hint. Chunked requests and
+    requests with a missing declaration are counted as they arrive so Starlette
+    never buffers an arbitrarily large body before this boundary can reject it.
+    """
+    validate_http_tool_content_length(request.headers.get("content-length"))
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_HTTP_TOOL_REQUEST_SIZE:
+            raise HttpToolRequestError(
+                {
+                    "success": False,
+                    "error": "Request body too large",
+                    "max_size_mb": MAX_HTTP_TOOL_REQUEST_SIZE // (1024 * 1024),
+                },
+                status_code=413,
+            )
+        chunks.append(chunk)
+    return json.loads(b"".join(chunks))
 
 
 def parse_http_tool_request(

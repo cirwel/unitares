@@ -1,5 +1,7 @@
 # Public presentation audit — 2026-09-10
 
+**Status:** Point-in-time audit record (2026-09-10, baseline `d97a958c`). Preserved as historical evidence; for current public positioning and capability boundaries, see [`../../README.md`](../../README.md), [`../PRODUCT_DEFINITION.md`](../PRODUCT_DEFINITION.md), and [`../CAPABILITIES_AND_DEPLOYMENT.md`](../CAPABILITIES_AND_DEPLOYMENT.md).
+
 Scope: README, product definition, package/MCP metadata, discovery contract,
 repository-owned Glama artifacts, and deterministic public-positioning drift
 checks. No tool registration, routing, schema/default, tier, authorization,

@@ -15,7 +15,7 @@ function storage() {
   };
 }
 
-function dataContext(fetch) {
+function dataContext(fetch, search = "") {
   const redirects = [];
   const context = {
     fetch,
@@ -24,7 +24,7 @@ function dataContext(fetch) {
     location: {
       hash: "",
       pathname: "/",
-      search: "",
+      search,
       assign: (path) => redirects.push(path),
     },
     URLSearchParams,
@@ -36,6 +36,23 @@ function dataContext(fetch) {
 }
 
 describe("dashboard REST auth seam", () => {
+  it("never accepts an operator credential from the URL", () => {
+    const { context } = dataContext(vi.fn(), "?operator_token=leaked-secret");
+
+    expect(context.window.DATA.operatorToken()).toBeNull();
+    expect(context.localStorage.getItem("unitares_operator_token")).toBeNull();
+    expect(context.history.replaceState).toHaveBeenCalledWith(null, "", "/");
+  });
+
+  it("stores and clears an operator credential only through the explicit setter", () => {
+    const { context } = dataContext(vi.fn());
+
+    expect(context.window.DATA.setOperatorToken("  browser-secret  ")).toBe(true);
+    expect(context.window.DATA.operatorToken()).toBe("browser-secret");
+    expect(context.window.DATA.setOperatorToken("")).toBe(false);
+    expect(context.window.DATA.operatorToken()).toBeNull();
+  });
+
   it("redirects a cookieless 401 to passkey sign-in when no bearer is stored", async () => {
     const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
     const { context, redirects } = dataContext(fetch);

@@ -23,6 +23,8 @@ or [User Manual](../manual/README.md).
   operator-owned inventory that deployment status and dispatch read.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
+- [`local-pr-review.md`](local-pr-review.md) — local full-diff PR review
+  (`scripts/dev/review-local.sh`) against a fresh Ollama reviewer.
 - [`ci-issue-surfacing.md`](ci-issue-surfacing.md) — deduplicated CI finding
   experiment.
 - [`automation-overrides.md`](automation-overrides.md) — operator metadata for
@@ -48,6 +50,11 @@ or [User Manual](../manual/README.md).
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
   lease-plane operations.
+- [`agent-orchestrator-idempotency.md`](agent-orchestrator-idempotency.md) —
+  durable PostgreSQL spawn idempotency (`Idempotency-Key` on `POST /v1/agents`)
+  and recovery for the BEAM agent orchestrator.
+- [`effect-custody-recheck.md`](effect-custody-recheck.md) — file-write custody
+  admission, revocation, and recovery against lease-plane state.
 - [`dialectic-resolution-effects.md`](dialectic-resolution-effects.md) —
   read-only inventory and state-specific recovery for interrupted dialectic
   runtime effects.
@@ -67,6 +74,9 @@ or [User Manual](../manual/README.md).
   descriptive model/harness provenance and like-for-like cohort reporting.
 - [`ablation-negative-controls.md`](ablation-negative-controls.md) — synthetic
   negative controls for the ablation plumbing.
+- [`falsifiability-power-audit-2026-08-23.md`](falsifiability-power-audit-2026-08-23.md)
+  — corrected instrument characterisation of the synthetic falsifiability
+  harness (original power table withdrawn).
 - [`positive-control-validity-2026-08-23.md`](positive-control-validity-2026-08-23.md)
   — when a positive control may make an instrument's silence informative, and the
   coherence-gate control that could not fail.
@@ -77,6 +87,15 @@ or [User Manual](../manual/README.md).
   — historical measurement record, superseded for current lift claims.
 - [`self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)
   — dated verdict-provenance worked example with an inline correction.
+- [`public-presentation-audit-2026-09-10.md`](public-presentation-audit-2026-09-10.md)
+  — *point-in-time audit (`d97a958c`, 2026-09-10):* public positioning,
+  package/MCP metadata, and Glama artifacts.
+- [`tool-surface-audit-2026-09-12.md`](tool-surface-audit-2026-09-12.md) —
+  *point-in-time audit (`be117c2`, 2026-09-12):* MCP tool registration,
+  dispatch, wire catalog, and introspection audit.
+- [`bounded-fix-loop-readiness.md`](bounded-fix-loop-readiness.md) —
+  *point-in-time readiness audit (2026-10-14):* bounded defect-discovery and
+  reviewed-fix loop over existing workflows.
 - [`resident-validation-cohort.md`](resident-validation-cohort.md) — experimental
   resident validation tick contract and its local supervised canary invocation
   (`resident-validation-supervised-invocation.md` is now a locator).

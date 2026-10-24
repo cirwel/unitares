@@ -83,13 +83,11 @@ returns `effect_in_progress`; a successor is admitted only after completion.
 
 ## Deployment and retained-reservation recovery
 
-Migration 075 is occupied by PR #2836; this change uses 076 and has no dependency
-on that migration. Apply 076 before starting the new binary: lease queries now
-read its column even with execute flags disabled. Stop and drain **all** live
+Apply migration 076 before starting the new binary: lease queries read its
+column even with execute flags disabled. Stop and drain **all** live
 file-write executors before the upgrade. Do not mix old live-writing binaries
 with the reservation protocol: the trigger protects reservations, but an old
-executor does not create one. No live migration or flag change is part of this
-PR's validation.
+executor does not create one.
 
 Inspect retained reservations through `/v1/lease/status` (`active_effect_id`)
 or an operator database connection:

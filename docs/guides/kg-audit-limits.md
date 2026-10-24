@@ -43,6 +43,4 @@ Implementation: `run_kg_audit` in
 and `_make_json_serializable` in
 [`src/mcp_handlers/serialization.py`](../../src/mcp_handlers/serialization.py).
 
-Source audit: discovery `2026-10-13T06:48:37.234783+00:00`. This documents the
-existing cap during the feature freeze; no schema, output, ranking, retention
-rule or shared serializer changes are introduced.
+Source audit: discovery `2026-10-13T06:48:37.234783+00:00`.
