@@ -162,6 +162,36 @@
     return Object.assign(t, { total: t.proceed + t.guide + t.pause, windowMin: 60, coverageStart: (NOW - 6 * 3600 * 1000) / 1000 });
   })();
 
+  // ── Timeline: six hours of events across the recent agents ────────────────
+  const timeline = (() => {
+    const span = 6 * 3600;
+    const tlAgents = recentAgents.agents.slice(0, 5);
+    const events = [];
+    tlAgents.forEach((a, i) => {
+      for (let s = span - 600 - i * 900; s > 120; s -= 1500 + Math.floor(rnd() * 1800)) {
+        const action = rnd() < 0.15 ? "guide" : "approve";
+        events.push({ kind: "checkin", ts: at(s), agent_id: a.id, authored_by: "agent", epistemic_class: "agent_report", action, verdict: "safe", risk_score: between(0.02, 0.4),
+          report_excerpt: action === "guide" ? "Large diff across two modules; tests not yet run." : "Small change; tests pass locally." });
+        events.push({ kind: "checkin", ts: at(s - 240), agent_id: a.id, authored_by: "substrate", epistemic_class: "substrate_interpretation", action: "approve", verdict: "safe", risk_score: null });
+      }
+      events.push({ kind: "outcome", ts: at(span / 2 - i * 600), agent_id: a.id, outcome_type: i === 1 ? "test_failed" : "test_passed", is_bad: i === 1,
+        outcome_score: i === 1 ? 0 : 1, verification_source: "external_signal", reported_confidence: i === 1 ? 0.9 : 0.7, prediction_id: null, decision_action: "proceed" });
+    });
+    events.push({ kind: "knowledge", ts: at(span - 3000), agent_id: tlAgents[0].id, discovery_id: "example-discovery", discovery_type: "note", summary: "Example finding: the rate-limiter test depends on test order." });
+    events.push({ kind: "lifecycle", ts: at(span - 5400), agent_id: tlAgents[2].id, event_type: "lifecycle_paused", reason: "Risk crossed the pause threshold." });
+    events.push({ kind: "lifecycle", ts: at(span - 8400), agent_id: tlAgents[2].id, event_type: "lifecycle_resumed", reason: "self_recovery" });
+    events.push({ kind: "lineage", ts: at(span - 2400), agent_id: tlAgents[4].id, parent_agent_id: tlAgents[0].id, successor_class: "ephemeral" });
+    events.push({ kind: "dialectic", ts: at(9000), end: at(7600), agent_id: tlAgents[3].id, reviewer_agent_id: tlAgents[1].id, session_id: "example-session", status: "resolved", phase: "resolved", session_type: "review" });
+    events.sort((x, y) => x.ts.localeCompare(y.ts));
+    const counts = {};
+    events.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    return {
+      window: { start: at(span), end: at(0), hours: 6 }, events, truncated: [], counts,
+      agents: tlAgents.map((a, i) => ({ agent_id: a.id, label: a.name, model_type: null, trust_tier: TIERS[i], status: "active",
+        parent_agent_id: i === 4 ? tlAgents[0].id : null, spawn_reason: i === 4 ? "subagent" : null, created_at: at(span + 600), last_activity_at: a.ts })),
+    };
+  })();
+
   window.SNAPSHOT = {
     synthetic: true,
     capturedAt: at(0),
@@ -186,5 +216,6 @@
     activity,
     eisv: eisvChart,
     riskTrend,
+    timeline,
   };
 })();
