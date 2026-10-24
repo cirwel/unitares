@@ -216,7 +216,8 @@
         rows.push(["Written by", own ? "The agent (sync_state)" : "A hook, not the agent"], ["Action", e.action || "—"], ["Verdict", e.verdict || "—"],
           ["Risk", typeof e.risk_score === "number" ? e.risk_score.toFixed(2) : "—"]);
         if (own) {
-          rows.push(["Report", typeof e.report_excerpt === "string" && e.report_excerpt ? e.report_excerpt : "Report text not retained for this check-in."]);
+          rows.push(["Report", typeof e.report_excerpt === "string" && e.report_excerpt ? e.report_excerpt : "Report text not retained for this check-in."],
+            ["Reported confidence", typeof e.confidence_reported === "number" ? e.confidence_reported.toFixed(2) : "none reported"]);
         } else {
           note = "Recorded automatically. It is evidence about the agent, not a claim the agent made.";
         }

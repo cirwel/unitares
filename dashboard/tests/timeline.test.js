@@ -22,7 +22,7 @@ function fixture(nAgents = 30) {
     // agent-0 is the most recent, agent-(n-1) the oldest.
     events.push({ kind: "checkin", ts: iso(10 + i * 5), agent_id: uid(i), authored_by: "agent", action: "approve", verdict: "safe", risk_score: 0.1 });
   }
-  events.push({ kind: "checkin", ts: iso(5), agent_id: uid(0), authored_by: "agent", action: "guide", verdict: "safe", risk_score: 0.3, report_excerpt: "Ready to merge; tests green." });
+  events.push({ kind: "checkin", ts: iso(5), agent_id: uid(0), authored_by: "agent", action: "guide", verdict: "safe", risk_score: 0.3, report_excerpt: "Ready to merge; tests green.", confidence_reported: 0.8 });
   events.push({ kind: "checkin", ts: iso(4), agent_id: uid(0), authored_by: "substrate", action: "approve", verdict: "safe", risk_score: null });
   events.push({ kind: "outcome", ts: iso(3), agent_id: uid(0), outcome_id: "o-1", outcome_type: "test_failed", is_bad: true, reported_confidence: 0.9, verification_source: "external_signal" });
   events.push({ kind: "lifecycle", ts: iso(120), agent_id: uid(1), event_type: "lifecycle_paused", reason: "risk over threshold", event_id: "l-1" });
@@ -132,9 +132,11 @@ describe("Timeline tab", () => {
     const detail = () => t.doc.getElementById("tl-detail").textContent;
     t.rows()[0].querySelector(".tl-mk.checkin.guide").click();
     expect(detail()).toContain("Ready to merge; tests green.");
+    expect(detail()).toContain("Reported confidence0.80");
     expect(detail()).toContain("UTC");
     t.rows()[0].querySelector(".tl-mk.checkin.proceed").click();
     expect(detail()).toContain("Report text not retained for this check-in.");
+    expect(detail()).toContain("none reported");
     t.rows()[0].querySelector(".tl-mk.checkin.substrate").click();
     expect(detail()).toContain("A hook, not the agent");
   });
