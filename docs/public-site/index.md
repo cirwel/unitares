@@ -18,12 +18,13 @@ handoffs, and a question can be routed to another vendor's model for a second
 opinion.
 
 **Current public releases:** [server v3.5.0](https://github.com/cirwel/unitares/releases/tag/v3.5.0)
-· [Python SDK 0.5.0](https://pypi.org/project/unitares-sdk/0.5.0/)
+· [Python SDK 0.6.0](https://pypi.org/project/unitares-sdk/0.6.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
 <div class="hero-actions" role="group" aria-label="Get started">
-  <a class="primary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
+  <a class="primary" href="demo.html">See it without installing</a>
+  <a class="secondary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
   <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
 </div>
 
@@ -72,7 +73,7 @@ make demo
 Install the resident-agent SDK from PyPI:
 
 ```bash
-python -m pip install unitares-sdk==0.5.0
+python -m pip install unitares-sdk==0.6.0
 ```
 
 Or inspect the signed multi-architecture server image:

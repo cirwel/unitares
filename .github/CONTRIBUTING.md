@@ -6,6 +6,10 @@ If you're considering a contribution, please **open an issue first** describing 
 
 ## Quick setup
 
+For a packaged deployment on Apple Silicon, use the [Homebrew preview](https://github.com/cirwel/homebrew-unitares).
+To develop and test the code in this checkout, use the source build below;
+changing this checkout does not change an installed Homebrew keg.
+
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait --build # Postgres + AGE + pgvector + Redis + lease plane + server
