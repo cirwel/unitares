@@ -152,7 +152,7 @@ tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tic
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
+  --json number,title,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # gh pr list caps statusCheckRollup at 100 entries per PR (no GraphQL pagination
@@ -188,6 +188,31 @@ def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 '
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
+
+# GitHub labels remain on a merged PR, but they are not part of the landed Git
+# object. Preserve the exact model identifier from the PR's final `Model:` line
+# in the squash subject, where it survives branch deletion and is visible to
+# `git log`. This is the same self-reported value as the PR family label, not
+# verified model provenance. Unknown, unavailable, whitespace-containing or
+# otherwise non-identifier values keep GitHub's default subject.
+squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
+  jq -r '
+    ([((.body // "") | splits("\\r?\\n"))
+      | capture("^Model:[ \\t]*(?<model>[^\\r\\n]*?)[ \\t]*$"; "i")
+      | .model] | last // "") as $model
+    | if (($model | ascii_downcase) != "unavailable"
+          and ($model | test("^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,127}$")))
+      then "\(.title) [model:\($model)] (#\(.number))"
+      else ""
+      end
+  ' <<<"$1"
+}
+
+subject_key() {  # <subject> -> whitespace-free value for the arm journal
+  jq -rn --arg subject "$1" '
+    if $subject == "" then "default" else "b64:" + ($subject | @base64) end
+  '
+}
 
 # --- approval helpers -----------------------------------------------------------
 # When did the approval label last go on, and when was the last commit that
@@ -377,14 +402,38 @@ load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
 load_review_policy  # likewise for auth_path
 
 # --- 1. tidy the slot -----------------------------------------------------------
-# Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
-# script's when GitHub's arming time matches a recorded one. Only those are
-# ever disarmed; a PR the maintainer armed by hand (labelled or not, or
-# re-armed later, which carries a later time) is left alone.
+# Arms this script made: "<pr> <armed-at> <subject-key>" per line. An armed PR
+# is the script's when GitHub's arming time matches a recorded one. Only those
+# are ever disarmed; a PR the maintainer armed by hand (labelled or not, or
+# re-armed later, which carries a later time) is left alone. The subject key
+# makes a title or Model-signature edit refresh the stored auto-merge subject
+# instead of landing the value that was current when the PR was first armed.
 ARMS_FILE="$STATE_FILE.arms"
-record_arm() {
+record_arm() {  # <pr> <subject>
+  local key
   [ "$DRY_RUN" = "1" ] && return 0
-  mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ)" >>"$ARMS_FILE"
+  key=$(subject_key "$2") || return 1
+  mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ) $key" >>"$ARMS_FILE"
+}
+recorded_subject_key() {  # <pr>
+  [ -f "$ARMS_FILE" ] || return 1
+  awk -v n="$1" '$1 == n { k = $3 } END { if (k) print k }' "$ARMS_FILE"
+}
+arm_subject_issue() {  # <pr> <pr-json> -> legacy_signed or changed; fails when current
+  local recorded subject current
+  recorded=$(recorded_subject_key "$1")
+  subject=$(squash_subject "$2")
+  current=$(subject_key "$subject")
+  if [ -z "$recorded" ]; then
+    # Pre-upgrade arms have no key. GitHub's default subject is still correct
+    # for an unsigned PR; only a signed PR needs one deliberate refresh so its
+    # model token reaches Git history.
+    [ -n "$subject" ] && echo "legacy_signed"
+  elif [ "$recorded" != "$current" ]; then
+    echo "changed"
+  else
+    return 1
+  fi
 }
 # Re-runs GitHub refused to start: "<pr> <head-sha>" per refused tick.
 RERUNS_FILE="$STATE_FILE.reruns"
@@ -408,7 +457,7 @@ armed=$(q -c --arg b "$BASE" \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 disarmed=" "
-hold_order=0
+hold_reason=""
 # An operator's arm takes the slot: any queue arm alongside it is disarmed (it
 # keeps its label and returns in turn), so there is never more than one arm.
 operator_arm=$(jq -rs --arg l "$OPERATOR_ARMED_LABEL" \
@@ -441,6 +490,14 @@ while read -r pr; do
     reason="it touches a governance-sensitive surface ($why), which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
+  elif subject_issue=$(arm_subject_issue "$n" "$pr"); then
+    if [ "$subject_issue" = "legacy_signed" ]; then
+      reason="it predates model-subject journaling and needs its signed subject added"
+    else
+      reason="its title or Model signature changed since it was armed"
+    fi
+    # Keep its queue position. The next tick re-arms it with the fresh subject.
+    hold_reason="a disarmed PR needs its squash subject refreshed"
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
@@ -452,7 +509,9 @@ while read -r pr; do
     # update; the PR keeps its place, since the tick stops here and the next
     # one re-arms it once the check passes.
     reason="$unmet is not passing"
-    case " $unmet" in *=MISSING*|*=PENDING*) hold_order=1 ;; esac
+    case " $unmet" in
+      *=MISSING*|*=PENDING*) hold_reason="a disarmed PR is waiting on a required check" ;;
+    esac
   elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
@@ -471,8 +530,8 @@ while read -r pr; do
     fi
   fi
 done <<<"$armed"
-if [ "$hold_order" = "1" ]; then
-  log "a disarmed PR is waiting on a required check; nothing else armed this tick"
+if [ -n "$hold_reason" ]; then
+  log "$hold_reason; nothing else armed this tick"
   exit 0
 fi
 
@@ -772,9 +831,13 @@ while read -r _ n head; do
   # also try to delete a local branch in whatever directory this runs from.
   # --match-head-commit: arm only the head the approval covers, so a push that
   # lands between this tick's read and the call is refused, not merged.
-  if act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head"; then
+  merge_args=(gh pr merge "$n" -R "$REPO" --auto --squash)
+  subject=$(squash_subject "$pr")
+  [ -z "$subject" ] || merge_args+=(--subject "$subject")
+  merge_args+=(--match-head-commit "$head")
+  if act "${merge_args[@]}"; then
     # Unrecorded, the arm could not be withdrawn by removing the label later.
-    if ! record_arm "$n"; then
+    if ! record_arm "$n" "$subject"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
     fi
