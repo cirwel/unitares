@@ -186,7 +186,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ),
         (
             "check-in text retention limit",
-            ("original `sync_state` report text is transient",),
+            ("bounded excerpt of its report text",),
         ),
         ("unmeasured comparative benefit", ("remain unmeasured",)),
     ],
@@ -204,7 +204,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         (
             "check-in text retention limit",
             (
-                "original `sync_state` report text is not part of the persisted state history",
+                "bounded excerpt of its report text",
             ),
         ),
         (
@@ -231,7 +231,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ),
         (
             "check-in text retention limit",
-            ("original report text is not retained as durable history",),
+            ("bounded excerpt of its report text",),
         ),
         (
             "AGE replacement-link boundary",
