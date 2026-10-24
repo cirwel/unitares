@@ -223,8 +223,10 @@ Inside the container, the Docker host is reached as `host.docker.internal` (on
 Linux, set `OLLAMA_HOST=0.0.0.0` for Ollama and allow port 11434 from the Docker
 bridge only). Pass `--build` when enabling a model on an existing install. The
 legacy `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL`, and
-`UNITARES_LLM_MODEL` names were removed in v3.3.0 and are ignored (`./scripts/unitares model`
-rewrites `.env` to `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID`).
+`UNITARES_LLM_MODEL` names were removed in v3.3.0; nothing reads or warns about
+them, so rename them to `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` in
+`.env` or in the LaunchAgent plist (`./scripts/unitares model` rewrites `.env`
+only).
 
 **Where the prompt goes.** `consult` (and the deprecated `call_model`, removed
 no earlier than 2026-12-02) default to `privacy='local'`, and the in-process reviewer, check-in coaching and
@@ -233,7 +235,11 @@ local from the URL alone, never from DNS:
 
 - an IP address is local when it is loopback, in a private RFC 1918 range, or
   in a network listed in `UNITARES_TRUSTED_NETWORKS` (add `100.64.0.0/10` there
-  for a Tailscale peer, or an IPv6 unique-local range);
+  for a Tailscale peer, or an IPv6 unique-local range; note that on a source
+  install, adding a range to `UNITARES_TRUSTED_NETWORKS` also lets callers from
+  that network reach the REST API without a token, whereas under Compose callers
+  arrive through the Docker bridge so it changes only which model endpoints count
+  as local);
 - a hostname is local only when it is `localhost`, `host.docker.internal`, or
   listed in `UNITARES_MODEL_LOCAL_HOSTS` (comma-separated, e.g. `vllm` or
   `gpu-box.lan`);
@@ -275,16 +281,16 @@ Compose stack and refuses without changing code or schema when:
 - this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)).
 
 On confirmation it checks out the target, stops the governance server and lease
-plane, starts the database, writes a `0600` backup to
-`~/.unitares/backups/unitares-<time>-before-<tag>.sql.gz` (or
-`UNITARES_BACKUP_DIR`), applies pending migrations with
-`scripts/dev/apply_migrations.py` inside the database container, and rebuilds,
-restarts, and verifies deep health (`healthy` or `moderate`). If the dump fails,
-nothing is migrated. If a migration or rebuild fails before crossing the
-protected dialectic schema frontier (migrations 077 and 078), `update` checks
-the previous release back out and rebuilds it; once 077/078 are crossed (or the
-schema version is unreadable), it leaves the target release checked out with the
-writers stopped for forward repair.
+plane, starts the database, and — if the release has pending migrations — writes
+a `0600` backup to `~/.unitares/backups/unitares-<time>-before-<tag>.sql.gz` (or
+`UNITARES_BACKUP_DIR`) and applies them with `scripts/dev/apply_migrations.py`
+inside the database container, then rebuilds, restarts, and verifies deep health
+(`healthy` or `moderate`). If the dump fails, nothing is migrated. If a
+migration or rebuild fails before crossing the protected dialectic schema
+frontier (migrations 077 and 078), `update` checks the previous release back out
+and rebuilds it; if the attempt crossed 077 or 078 during this update (or the
+schema version cannot be read afterwards), it leaves the target release checked
+out with the writers stopped for forward repair.
 
 When upgrading from v3.3.0 or earlier, fetch and check out the target tag first
 so the new `update` script runs with the 077/078 quiescence attestation:
@@ -377,10 +383,13 @@ curl -s http://localhost:8767/health/deep
 curl -s http://127.0.0.1:8788/health; git rev-parse --short "$TAG^{commit}"   # if you run the lease plane
 ```
 
-If a migration fails before crossing 077 or 078, you may roll the code back with
-`git checkout --detach "$PREV"` and reinstall dependencies; once 077 or 078 has
-applied (or if the schema version cannot be read), stay on `$TAG` and repair
-forward or restore from the backup.
+If a migration fails, do not start the previous release over the database until
+you know where the schema stopped (the `psql` query above). If it did not cross
+077 or 078 during this update, you can roll back with
+`git checkout --detach "$PREV"`, reinstall its dependencies, and restart what you
+stopped; if it crossed either one during this update (or you cannot read the
+version), stay on `$TAG`, fix the reported cause, and rerun `--apply` (or restore
+from the backup).
 
 #### Updating the agent plugin
 
