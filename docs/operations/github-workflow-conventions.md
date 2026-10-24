@@ -10,7 +10,7 @@ summary in their shared-contract block and point here for the detail.
 
 ## Why this exists
 
-All entrypoints — `./scripts/dev/ship.sh`, CLI agents, and web/cloud harnesses — share one branch-naming pattern (`<author>/<topic>-<short-id>`), one delivery artifact (a draft PR), and one serial merge queue (`approved-to-merge`). This prevents concurrent sessions from colliding or direct-pushing to shared branches.
+All entrypoints — `./scripts/dev/ship.sh`, CLI agents, and web/cloud harnesses — share one branch-naming pattern (`<author>/<topic>-<short-id>`), one default delivery artifact (a draft PR, with explicit opt-outs via `--direct` for docs/tests-only pushes and `--auto-merge` when requested by the operator), and one serial merge queue (`approved-to-merge`). This keeps concurrent sessions from colliding or direct-pushing to shared branches by default.
 
 ## The convention
 

@@ -273,11 +273,13 @@ From the checkout, see whether a newer release is published, then move to it:
 `update` resolves the newest published release (or `--to <tag>`), prints the
 installed and target versions, and asks before changing anything (`--yes` skips
 the prompt; `--check` only reports). It manages only this checkout's Docker
-Compose stack and refuses without changing code or schema when:
+Compose stack and refuses, leaving the code and the database schema as they
+were, when:
 
 - tracked files have local changes, or `db/postgres` holds untracked files;
-- the database schema is newer than the target release (downgrades are not
-  supported);
+- the database schema is newer than anything the target release knows, so moving
+  to an older release is not supported (it learns this only after fetching the
+  target's tag and starting the database, which stay fetched and running);
 - this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)).
 
 On confirmation it checks out the target, stops the governance server and lease
@@ -290,7 +292,8 @@ migration or rebuild fails before crossing the protected dialectic schema
 frontier (migrations 077 and 078), `update` checks the previous release back out
 and rebuilds it; if the attempt crossed 077 or 078 during this update (or the
 schema version cannot be read afterwards), it leaves the target release checked
-out with the writers stopped for forward repair.
+out with the writers stopped for forward repair. A checkout already on the
+target release goes through the same steps without moving the code.
 
 When upgrading from v3.3.0 or earlier, fetch and check out the target tag first
 so the new `update` script runs with the 077/078 quiescence attestation:
@@ -301,6 +304,12 @@ git checkout --detach vX.Y.Z
 docker compose up -d --build --wait postgres-age   # only from a release before v3.0.0
 ./scripts/unitares update --to vX.Y.Z
 ```
+
+Because `vX.Y.Z` is already checked out before `update` runs on this manual path,
+if `update` stops before the release's protected migrations are applied (077 and
+078 for v3.4.0) it restarts the stack from the checked-out Compose file; to run
+the previous release instead, check that release out and run
+`docker compose up -d --wait`.
 
 #### Updating a bare-metal or LaunchAgent install
 
@@ -415,10 +424,14 @@ while advertising a small progressive surface initially. Use
 action=...)` for its parameters, and `use_tool(tool_name=..., arguments={...})`
 to invoke an omitted capability through its normal gates. Set
 `UNITARES_TOOL_ADVERTISEMENT=full` in `.env` to advertise every schema up front,
-then recreate the service and reconnect the client. Old `GOVERNANCE_TOOL_MODE`
-values are ignored, and action authorization and identity gates are unchanged
-(for legacy 2.x profile behavior prior to v3.0.0, see the
-[v2.22.0 release errata](../releases/2.22.0-errata.md)).
+then recreate the service and reconnect the client. Old `GOVERNANCE_TOOL_MODE` values are ignored, and action authorization and
+identity gates are unchanged. Earlier 2.x releases (`v2.22.1` is the last 2.x
+release) used `minimal`, `lite`, and `full` discovery profiles: `v2.22.0`
+defaults to the five-tool `minimal` profile and requires the explicit override
+in the [v2.22.0 release errata](../releases/2.22.0-errata.md) to forward
+`GOVERNANCE_TOOL_MODE` under Compose, while `v2.21.0` uses an older six-tool
+`minimal` profile with registration-time filtering on the HTTP MCP mount.
+Upgrade the server for the unified catalog and dispatch compatibility.
 
 ## 2.2 Bare-metal installation
 
