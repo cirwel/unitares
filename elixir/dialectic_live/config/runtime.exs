@@ -24,16 +24,34 @@ config :dialectic_live, DialecticLiveWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "8790"))]
 
 # Upstream Python governance MCP (:8767). This app is a *consumer*: it subscribes
-# to the broadcaster firehose over WebSocket and issues tool-call POSTs for
-# dialectic list/get. The bearer token is held server-side here and never reaches
-# the browser. Defaults target a local governance-mcp; override via env in prod.
+# to the broadcaster firehose over WebSocket, issues tool-call POSTs for
+# dialectic list/get, and reads GET /v1/timeline for the Timeline pane. The
+# bearer token is held server-side here and never reaches the browser. Defaults
+# target a local governance-mcp; override via env in prod.
 config :dialectic_live, :governance,
   ws_url: System.get_env("GOVERNANCE_WS_URL", "ws://127.0.0.1:8767/ws/eisv"),
   tools_url: System.get_env("GOVERNANCE_TOOLS_URL", "http://127.0.0.1:8767/v1/tools/call"),
-  api_token: System.get_env("UNITARES_HTTP_API_TOKEN"),
-  # When false (default until the upstream firehose is reachable in this env),
-  # the broadcaster WS client supervisor child is omitted so the app still boots.
-  start_firehose: System.get_env("GOVERNANCE_START_FIREHOSE", "true") == "true"
+  timeline_url: System.get_env("GOVERNANCE_TIMELINE_URL", "http://127.0.0.1:8767/v1/timeline"),
+  api_token: System.get_env("UNITARES_HTTP_API_TOKEN")
+
+# Timeline pane: the window shown on open (1 or 6 hours) and the re-read floor
+# while at least one viewer is connected. With no viewer the feed makes no GET.
+config :dialectic_live, :timeline,
+  default_window_hours: String.to_integer(System.get_env("TIMELINE_WINDOW_HOURS", "1")),
+  reread_ms: String.to_integer(System.get_env("TIMELINE_REREAD_MS", "60000"))
+
+# Which long-lived clients start. Outside tests both default to true: the app
+# still boots when governance is unreachable, because the firehose backs off and
+# the feed keeps its last window. runtime.exs loads after config/test.exs, so
+# these are guarded here, and test.exs turns both off; tests start their own
+# instances with start_supervised.
+if config_env() != :test do
+  config :dialectic_live, :governance,
+    start_firehose: System.get_env("GOVERNANCE_START_FIREHOSE", "true") == "true"
+
+  config :dialectic_live, :timeline,
+    start_timeline_feed: System.get_env("TIMELINE_START_FEED", "true") == "true"
+end
 
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
@@ -49,8 +67,6 @@ if config_env() == :prod do
       """
 
   host = System.get_env("PHX_HOST") || "localhost"
-
-  config :dialectic_live, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   # Match the sibling BEAM apps' trust boundary: loopback-only by default. Exposure
   # to a tunnel/LAN is an explicit opt-in via DIALECTIC_LIVE_BIND_ALL=1, mirroring

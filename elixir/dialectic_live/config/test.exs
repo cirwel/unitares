@@ -7,6 +7,11 @@ config :dialectic_live, DialecticLiveWeb.Endpoint,
   secret_key_base: "pQ3I7eEj1H2poFK0Um//4ruDTJygWfv3x7dMLHN2dMVyZzlm9PGAyMSimpksuG6p",
   server: false
 
+# No long-lived governance clients in tests: they start their own instances,
+# with injected names and stubs, under start_supervised.
+config :dialectic_live, :governance, start_firehose: false
+config :dialectic_live, :timeline, start_timeline_feed: false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
