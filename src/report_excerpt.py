@@ -1,8 +1,8 @@
 """A bounded excerpt of a check-in's report text, for the persisted state row.
 
 The full `sync_state` report text is not kept. Each check-in row keeps this
-excerpt so a later reader can see what the agent said beside the state it was
-given (the per-agent timeline, reconstruction after the fact). It is the
+excerpt instead: what the agent said beside the state it was given, for the
+per-agent timeline and reconstruction after the fact. It is the
 agent's own report, not a verified claim: durable claims still belong in a
 finding.
 
@@ -30,9 +30,14 @@ DEFAULT_EXCERPT_CHARS = 500
 MAX_EXCERPT_CHARS = 2000
 REDACTED = "[REDACTED]"
 
-# Text scanned beyond the kept length, so a secret that starts inside the
-# excerpt is seen whole before the cut (no recognised token is longer).
+# Text scanned beyond the kept length. The margin is measured after
+# whitespace is collapsed, so a secret that starts inside the excerpt is seen
+# for at least this many characters, more than any pattern's minimum match;
+# a token longer than the margin is still redacted from its start.
 _SCAN_MARGIN = 512
+# Raw characters read before collapsing whitespace (a multiple of the window):
+# both passes over it are linear, and they bound the work on an uncapped input.
+_RAW_FACTOR = 16
 
 _SECRET_PATTERNS = (
     # PEM / PGP private key blocks, whole (or to the end of the window).
@@ -72,9 +77,10 @@ _SECRET_NAME = (
 )
 # Values are matched possessively to their end, so a long value is redacted
 # whole rather than leaving its tail; the scanned window bounds the cost.
+# Quoted values may hold backslash escapes, so `"ab\"cd"` is one value.
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(" + _SECRET_NAME + r"[\"']?\s{0,4}[=:]\s{0,4})"
-    r"(?:\"([^\"\n]++)\"|'([^'\n]++)'|([^\s\"',;)}\]]++))"
+    r"(?:\"((?:[^\"\\\n]|\\.)++)\"|'((?:[^'\\\n]|\\.)++)'|([^\s\"',;)}\]]++))"
 )
 # Control characters (keeping tab/newline/CR for the whitespace collapse) and
 # lone surrogates: Postgres jsonb rejects \u0000 and unpaired surrogates, and
@@ -100,12 +106,15 @@ def excerpt_chars() -> int:
 
 
 def _looks_secret(value: str, *, assignment: bool) -> bool:
-    # `name=value` and quoted values are deliberate assignments. After a bare
-    # colon the value may be prose ("The token: refreshed correctly"), so it
-    # must also carry a digit or be long.
+    # `name=value` and quoted values are deliberate assignments, redacted at
+    # any length (`password=hunter2`). After a bare colon the value may be
+    # prose ("The token: refreshed correctly"), so it must be at least 8
+    # characters and also carry a digit or be long.
+    if assignment:
+        return True
     if len(value) < 8:
         return False
-    return assignment or any(c.isdigit() for c in value) or len(value) >= 20
+    return any(c.isdigit() for c in value) or len(value) >= 20
 
 
 def _redact_assignment(match: re.Match) -> str:
@@ -142,13 +151,22 @@ def make_report_excerpt(text: Optional[str], limit: Optional[int] = None) -> Opt
         if limit < 2:
             return None
         window_end = limit + _SCAN_MARGIN
-        window = _UNSTORABLE.sub("", text[:window_end])
-        collapsed = _WHITESPACE.sub(" ", scrub_credentials(window)).strip()
+        raw_end = window_end * _RAW_FACTOR
+        flat = _WHITESPACE.sub(" ", _UNSTORABLE.sub("", text[:raw_end])).strip()
+        window = flat[:window_end]
+        more = len(flat) > window_end or len(text) > raw_end
+        collapsed = scrub_credentials(window).strip()
         if not collapsed:
             return None
-        if len(collapsed) <= limit and len(text) <= window_end:
+        if not more and len(collapsed) <= limit:
             return collapsed
         room = limit - 1  # leave space for the ellipsis
+        if more and len(window) < window_end and not text[raw_end - 1:raw_end].isspace():
+            # The raw read ended inside padding and mid-word, so the window's
+            # tail had no margin after it: keep only text a margin from its end.
+            room = min(room, len(collapsed) - _SCAN_MARGIN)
+            if room < 1:
+                return None
         cut = collapsed.rfind(" ", 0, room + 1)
         head = collapsed[:cut] if cut > 0 else collapsed[:room]
         return head.rstrip() + "…"

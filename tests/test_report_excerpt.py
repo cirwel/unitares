@@ -3,6 +3,7 @@ its persistence into core.agent_state.state_json."""
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -215,11 +216,20 @@ async def test_record_agent_state_persists_the_excerpt():
 def test_both_record_sites_pass_one_excerpt_computed_outside_the_write():
     source = (REPO_ROOT / "src" / "mcp_handlers" / "updates" / "phases.py").read_text(encoding="utf-8")
     assert source.count("report_excerpt=report_excerpt,") == 2
-    compute = source.index("report_excerpt = make_report_excerpt(ctx.response_text)")
-    write = source.index("await agent_storage.record_agent_state(", compute)
-    # Nothing between the computation and the write opens the try it sits in.
-    assert "try:" in source[compute:write]
-    assert "try:" not in source[source.rfind("\n", 0, compute):compute]
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    computes = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and getattr(node.value.func, "id", None) == "make_report_excerpt"
+    ]
+    assert len(computes) == 1
+    # No enclosing try: an exception there would be caught with the write's.
+    node = computes[0]
+    while node in parents:
+        node = parents[node]
+        assert not isinstance(node, ast.Try), "make_report_excerpt is inside a try"
 
 
 @pytest.mark.parametrize(
@@ -239,3 +249,23 @@ def test_long_values_and_compound_names_are_redacted(text, secret):
 def test_basic_and_bearer_in_prose_survive():
     text = "basic authentication was the cause; Fixed the Bearer authentication middleware"
     assert scrub_credentials(text) == text
+
+
+def test_short_assigned_secrets_and_escaped_quotes_are_redacted():
+    out = scrub_credentials('password=hunter2 api_key=abc1234 {"password": "ab\\"cdefghijk"}')
+    for secret in ("hunter2", "abc1234", "cdefghijk"):
+        assert secret not in out
+
+
+def test_the_scan_margin_counts_after_whitespace_is_collapsed():
+    token = "ghp_" + "abcdefghij" * 3
+    out = make_report_excerpt(" " * 1010 + token + " and more")
+    assert out == "[REDACTED] and more"
+    pr = make_report_excerpt("see " + " " * 1010 + "#2167 then words " * 60)
+    assert "#216…" not in pr and pr.endswith("…")
+
+
+def test_a_raw_read_ending_mid_token_keeps_nothing_near_it():
+    raw_end = (500 + 512) * 16
+    assert make_report_excerpt("x " + " " * (raw_end - 4) + "ghp_" + "a" * 40) is None
+    assert make_report_excerpt("x " + " " * 200000 + "ghp_" + "a" * 40) == "x…"
