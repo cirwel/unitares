@@ -32,6 +32,15 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 _TRUTHY = {"1", "true", "yes", "on"}
+DIALECTIC_ATTESTATION_SCOPE = frozenset(
+    {
+        ("POST", "/v1/dialectic/session"),
+        ("POST", "/v1/dialectic/phase"),
+        ("POST", "/v1/dialectic/reviewer"),
+        ("POST", "/v1/dialectic/reviewer/claim"),
+        ("POST", "/v2/dialectic/resolve-with-effect"),
+    }
+)
 
 # `DialecticSaga.resolve` answers a resolve that finds the row already
 # resolved/failed with `{:ok, %{status: existing, saga_id: nil, origin:
@@ -152,7 +161,10 @@ def _identity_bound_request(
     request; enforcement rejects it authoritatively instead of silently opening
     a second PostgreSQL writer.
     """
-    from src.mcp_handlers.context import get_context_resolved_agent_id
+    from src.mcp_handlers.context import (
+        get_context_resolved_agent_id,
+        get_session_proof_origin,
+    )
     from src.lease_attestation import LeaseAttestationError, mint_lease_attestation
 
     raw_actor = get_context_resolved_agent_id()
@@ -189,13 +201,18 @@ def _identity_bound_request(
         "Authorization": f"Bearer {os.environ['LEASE_PLANE_BEARER_TOKEN']}",
         "Content-Type": "application/json",
     }
-    if raw_actor is not None and actor is not None:
+    if (
+        raw_actor is not None
+        and actor is not None
+        and get_session_proof_origin() == "caller_asserted"
+    ):
         try:
             headers["X-Unitares-Identity-Proof"] = mint_lease_attestation(
                 holder_agent_uuid=actor,
                 method="POST",
                 path=path,
                 body_sha256=hashlib.sha256(body).hexdigest(),
+                request_scope=DIALECTIC_ATTESTATION_SCOPE,
             )
         except LeaseAttestationError as exc:
             logger.warning(
@@ -304,7 +321,7 @@ async def beam_update_phase(
 ) -> Optional[Dict[str, Any]]:
     """Advance a non-terminal dialectic phase via BEAM (sole writer of the session
     row). Returns the BEAM result on success, or ``None`` to fall back to the
-    Python `pg_update_phase` path. Never raises. Terminal phases are NOT routed
+    Python `pg_update_phase` path. Governance-policy refusals raise. Terminal phases are NOT routed
     here (those go via resolve); BEAM rejects them with 422 -> None -> fallback.
 
     ``synthesis_round`` is sent only when supplied. Deploy order is safe in both

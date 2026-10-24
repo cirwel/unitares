@@ -67,6 +67,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
     from src.lease_attestation import export_public_jwks, verify_lease_attestation
     from src.mcp_handlers.context import (
         reset_session_context,
+        set_session_proof_origin,
         set_session_context,
         update_context_agent_id,
     )
@@ -81,6 +82,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
     monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_AUDIENCE", "test-plane")
     context_token = set_session_context(client_session_id="session-test")
     update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
@@ -88,6 +90,7 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
             include_actor=True,
         )
     finally:
+        set_session_proof_origin(None)
         reset_session_context(context_token)
 
     assert bound is not None
@@ -134,24 +137,61 @@ def test_identity_bound_request_refuses_a_resolved_caller_mismatch():
 
 
 def test_identity_bound_request_without_attestation_still_targets_beam(monkeypatch):
-    from src.mcp_handlers.context import reset_session_context, set_session_context
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
 
+    actor = "11111111-1111-4111-8111-111111111111"
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     monkeypatch.delenv("UNITARES_LEASE_ATTESTATION_SIGNING_KEY", raising=False)
     context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
             {"session_id": "s1", "phase": "antithesis"},
             include_actor=True,
-            fallback_actor_id="paused",
+            fallback_actor_id=actor,
         )
     finally:
+        set_session_proof_origin(None)
         reset_session_context(context_token)
 
     assert bound is not None
     body, headers = bound
-    assert json.loads(body)["actor_agent_id"] == "paused"
+    assert json.loads(body)["actor_agent_id"] == actor
+    assert "X-Unitares-Identity-Proof" not in headers
+
+
+def test_identity_bound_request_does_not_launder_server_inferred_identity(monkeypatch):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    set_session_proof_origin("server_inferred")
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    _, headers = bound
     assert "X-Unitares-Identity-Proof" not in headers
 
 
