@@ -511,7 +511,7 @@ async def beam_resolve(
     bound_request = _identity_bound_request(
         "/v2/dialectic/resolve-with-effect",
         payload,
-        expected_agent_id=reviewer_agent_id,
+        include_actor=True,
     )
     if bound_request is None:
         return None

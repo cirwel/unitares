@@ -556,11 +556,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           params = Map.put(params, :effect_protocol, effect_protocol)
 
           with :ok <-
-                 IdentityBinding.authorize(
-                   params.reviewer_agent_id,
-                   IdentityBinding.proof_from_conn(conn),
-                   "dialectic",
-                   IdentityBinding.request_context(conn)
+                 authorize_dialectic_resolution_participant(
+                   conn,
+                   params.session_id,
+                   params.actor_agent_id
                  ) do
             case UnitaresLeasePlane.DialecticSaga.resolve(params) do
               {:ok, result} ->
@@ -607,7 +606,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                 })
             end
           else
-            {:error, identity_reason} -> identity_refusal(conn, identity_reason)
+            {:error, :not_found} ->
+              json(conn, 404, %{ok: false, error: "session_not_found"})
+
+            {:error, :session_identity_mismatch} ->
+              json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
+
+            {:error, identity_reason} ->
+              identity_refusal(conn, identity_reason)
           end
         end
 
@@ -655,7 +661,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       ok: true,
       status: "ok",
       identity_binding: %{
-        mode: Application.get_env(:lease_plane, :identity_binding_mode, :enforce),
+        mode: Application.get_env(:lease_plane, :identity_binding_mode, :off),
         proof_format: Application.get_env(:lease_plane, :identity_proof_format, :hybrid),
         metrics: UnitaresLeasePlane.IdentityMetrics.snapshot()
       }
@@ -1115,6 +1121,28 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
+    case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
+      {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
+        if actor_agent_id in [paused, reviewer] do
+          IdentityBinding.authorize(
+            actor_agent_id,
+            IdentityBinding.proof_from_conn(conn),
+            "dialectic",
+            IdentityBinding.request_context(conn)
+          )
+        else
+          {:error, :session_identity_mismatch}
+        end
+
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        {:error, :identity_verification_unavailable}
+    end
+  end
+
   defp authorize_dialectic_reviewer_change(
          conn,
          session_id,
@@ -1366,6 +1394,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     expected_phase = Map.get(body, "expected_phase")
     expected_revision = Map.get(body, "expected_transcript_revision")
     expected_awaiting = Map.get(body, "expected_awaiting_facilitation")
+    actor_agent_id = Map.get(body, "actor_agent_id", reviewer)
 
     expected_updated_at =
       case Map.get(body, "expected_updated_at") do
@@ -1397,6 +1426,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       not is_nil(expected_awaiting) and not is_boolean(expected_awaiting) ->
         {:error, "expected_awaiting_facilitation must be a boolean or null"}
 
+      not is_binary(actor_agent_id) or byte_size(actor_agent_id) == 0 ->
+        {:error, "actor_agent_id must be a non-empty string"}
+
       expected_updated_at == :invalid ->
         {:error, "expected_updated_at must be an ISO-8601 timestamp or null"}
 
@@ -1406,6 +1438,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
            session_id: session_id,
            paused_agent_id: paused,
            reviewer_agent_id: reviewer,
+           actor_agent_id: actor_agent_id,
            resolution_payload: resolution,
            status: status,
            expected_phase: expected_phase,

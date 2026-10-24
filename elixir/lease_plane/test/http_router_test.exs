@@ -1478,12 +1478,12 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert post_json_with_proof("/v1/dialectic/phase", body, "proof:paused").status == 200
     end
 
-    test "reviewer claims and terminal resolutions require the named participant proof" do
+    test "reviewer claims and terminal resolutions require a named participant proof" do
       session_id =
         insert_dialectic_session(
           paused_agent_id: "paused",
           reviewer_agent_id: nil,
-          phase: "antithesis",
+          phase: "synthesis",
           status: "active"
         )
 
@@ -1513,6 +1513,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
         session_id: session_id,
         paused_agent_id: "paused",
         reviewer_agent_id: "reviewer",
+        actor_agent_id: "paused",
         resolution: %{"reason" => "test"}
       }
 
@@ -1522,7 +1523,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                "/v1/dialectic/resolve",
                resolve,
                "proof:paused"
-             ).status == 403
+             ).status == 200
     end
   end
 

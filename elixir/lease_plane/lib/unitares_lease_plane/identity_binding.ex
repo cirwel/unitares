@@ -126,8 +126,8 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     do: {:error, :identity_proof_invalid}
 
   @spec parse_mode(String.t() | nil) :: :off | :log | :enforce
-  def parse_mode(nil), do: :enforce
-  def parse_mode(""), do: :enforce
+  def parse_mode(nil), do: :off
+  def parse_mode(""), do: :off
 
   def parse_mode(value) when is_binary(value) do
     case String.downcase(String.trim(value)) do
@@ -143,11 +143,15 @@ defmodule UnitaresLeasePlane.IdentityBinding do
   def parse_surface_kinds(""), do: :all
 
   def parse_surface_kinds(value) when is_binary(value) do
-    value
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> MapSet.new()
+    if String.downcase(String.trim(value)) == "all" do
+      :all
+    else
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> MapSet.new()
+    end
   end
 
   @spec parse_proof_format(String.t() | nil) :: :legacy | :hybrid | :attestation

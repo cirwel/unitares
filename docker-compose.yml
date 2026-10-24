@@ -145,12 +145,13 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
-      # Principal-attributed mutations fail closed with request-bound operator
-      # attestations. Explicit `log` or `off` values remain rollback postures;
-      # the default selector covers every lease and dialectic surface kind.
+      # Principal-attributed mutations fail closed for the migrated agent and
+      # dialectic producers. Maintenance retains its existing enforced posture.
+      # File/resident producers remain outside this selector until they mint
+      # request-bound proofs; explicit `log` or `off` remain rollback postures.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
       UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-all}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,agent,dialectic}
       UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
       # Exact private-Compose exception; every other HTTP key URL is rejected.

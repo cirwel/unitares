@@ -122,8 +122,8 @@ defmodule UnitaresLeasePlane.Application do
     configure_governance_api_token()
 
     # Identity attribution is a separate gate from the shared service bearer.
-    # New deployments fail closed; `log` and `off` remain explicit rollback
-    # postures for lease and dialectic producers during migration.
+    # Native upgrades keep the compatibility default until their lease
+    # producers carry proofs; Compose opts migrated surface kinds into enforce.
     Application.put_env(
       :lease_plane,
       :identity_binding_mode,

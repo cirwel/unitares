@@ -182,6 +182,7 @@ async def test_success_returns_body(monkeypatch):
     assert out == body
     post = fake.Client.return_value.__enter__.return_value.post
     assert post.call_args.args[0].endswith("/v2/dialectic/resolve-with-effect")
+    assert json.loads(post.call_args.kwargs["content"])["actor_agent_id"] == "actor"
 
 
 @pytest.mark.asyncio
