@@ -221,15 +221,14 @@ completes); (3)+(4) are the justification (need §0).
 (fitted blend weights, a learned readout) is efficacy work gated by the
 registered 2026-12-01 outcome read. That one fitted to the same label channel
 would not by itself constitute a new premise under that read's reopening clause
-was decided 2026-09-25 under the operator's recorded delegation, and is
-ratified on merge, as a pre-read clarification in the registered stop rule
+was decided 2026-09-25 under the operator's recorded delegation as a pre-read
+clarification in the registered stop rule
 (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`, "Pre-read
 clarification — drafted 2026-09-25"), which is the authority; no condition,
 threshold or pinned candidate of the read moved. Label-free work
 (self-predictability, windowed baselines, system identification) may proceed
-offline; live-path changes wait for the read's report (amended 2026-10-15:
-they may land once their PR records `instrument_change_at` under the
-[stop-rule amendment](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)). See
+offline; live-path changes may land once their PR records `instrument_change_at`
+under the [stop-rule amendment](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change). See
 `docs/ontology/eisv-proprioception-contract.md`, "Fitted and learned
 estimators — which bucket they sit in".
 

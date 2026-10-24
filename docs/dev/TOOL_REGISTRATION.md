@@ -513,7 +513,7 @@ No usage count or byte budget authorizes retiring a capability.
 
 ## Hints That Name Unadvertised Tools
 
-#2119 adds `dialectic` to `standard`, closing the concrete discovery gap where
+`dialectic` is included in `standard` (#2119), closing the concrete discovery gap where
 an agent could open a review with `request_review` and then was not offered
 its polling/progress actions. The router has **eight** advertised actions:
 `request`, `thesis`, `antithesis`, `synthesis`, `get`, `list`, `reassign`, and

@@ -90,7 +90,6 @@ python3 scripts/demo/coordination_demo.py
 
 Use `./scripts/unitares update` from this directory for upgrades, following
 the update instructions below; rerunning the launcher never moves Git or runs upgrade migrations.
-The launcher URL becomes available when the launcher change lands on master.
 
 On a release checkout, Compose pulls the server, the coordination lease plane
 and the database as the images published from that release tag

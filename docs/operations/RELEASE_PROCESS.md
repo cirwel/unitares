@@ -366,3 +366,13 @@ Production deployment is a separate operator action. Follow
 [`OPERATOR_RUNBOOK.md`](OPERATOR_RUNBOOK.md), record the deployed commit, restart
 only the affected services, and verify the live health/version endpoints. Do not
 describe a merged PR or release tag as deployed without that observation.
+
+## Cross-surface delivery check
+
+Generate the [operator surface report](deployment-inventory.md#one-report-across-publication-and-running-installations)
+after publishing. Check the affected entries in
+[distribution-surfaces.toml](distribution-surfaces.toml), including the Homebrew
+tap and cirwel.org installation copy. An available website is not evidence that
+its content reflects the release; run its named content check. Keep unresolved
+or unreachable surfaces explicitly unverified in the release handoff. Package
+acceptance and a running machine's health are separate observations.
