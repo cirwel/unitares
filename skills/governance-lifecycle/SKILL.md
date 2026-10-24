@@ -51,12 +51,12 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-10-17
+**Last Updated:** 2026-10-24
 
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.57.0` on 2026-10-23.
+contract `2.1.0` on 2026-10-24.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
