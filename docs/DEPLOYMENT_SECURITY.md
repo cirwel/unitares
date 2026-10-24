@@ -60,11 +60,14 @@ In local REST posture, loopback and private-network callers may be trusted
 without presenting `UNITARES_HTTP_API_TOKEN`. A Compose-bridge caller normally
 arrives from such a trusted address, so setting that token alone does not require
 it on every REST request. That trusted-network bypass does not apply to a
-browser request with a foreign `Origin`, or to any request whose dotted DNS
-`Host` is absent from `UNITARES_MCP_ALLOWED_HOSTS`; the caller must instead
-present an accepted bearer or dashboard session. This prevents a web page from
-becoming a trusted caller merely because it connects through the operator's
-loopback interface.
+browser request whose `Origin` falls outside localhost, the MCP origin
+allowlist, and the dashboard origin; a cross-site request without an allowed
+origin is also refused. The bypass likewise does not apply when the dotted DNS
+`Host` authority (name and port) is absent from `UNITARES_MCP_ALLOWED_HOSTS`.
+List the exact `name:port` or use the documented `name:*` form. Otherwise, the
+caller must present an accepted bearer or dashboard session. This prevents a
+web page from becoming a trusted caller merely because it connects through the
+operator's loopback interface.
 
 A non-empty `UNITARES_MCP_BEARER_TOKENS` allowlist turns strict REST on by
 default; set `UNITARES_MCP_BEARER_TOKEN` to one member for in-repo callers such
