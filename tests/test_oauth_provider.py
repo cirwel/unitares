@@ -222,7 +222,7 @@ class TestAuthorize:
         assert second.split("code=")[1].split("&")[0] in provider._auth_codes
 
     @pytest.mark.asyncio
-    async def test_authorization_code_cache_evicts_per_client_before_global_capacity(self):
+    async def test_authorization_code_cache_refuses_without_evicting_pending_codes(self):
         provider = GovernanceOAuthProvider(
             max_auth_codes=2,
             max_auth_codes_per_client=1,
@@ -230,19 +230,18 @@ class TestAuthorize:
         client = _client("client-1")
         first = await provider.authorize(client, _auth_params())
         first_code = first.split("code=")[1].split("&")[0]
-        second = await provider.authorize(client, _auth_params())
+        with pytest.raises(AuthorizeError) as refused:
+            await provider.authorize(client, _auth_params())
+
+        assert refused.value.error == "temporarily_unavailable"
+        assert set(provider._auth_codes) == {first_code}
+
+        second = await provider.authorize(_client("client-2"), _auth_params())
         second_code = second.split("code=")[1].split("&")[0]
+        with pytest.raises(AuthorizeError):
+            await provider.authorize(_client("client-3"), _auth_params())
 
-        assert first_code not in provider._auth_codes
-        assert second_code in provider._auth_codes
-
-        third = await provider.authorize(_client("client-2"), _auth_params())
-        fourth = await provider.authorize(_client("client-3"), _auth_params())
-
-        assert len(provider._auth_codes) == 2
-        assert second_code not in provider._auth_codes
-        assert third.split("code=")[1].split("&")[0] in provider._auth_codes
-        assert fourth.split("code=")[1].split("&")[0] in provider._auth_codes
+        assert set(provider._auth_codes) == {first_code, second_code}
 
 
 # --------------------------------------------------------------------------- #
@@ -352,22 +351,21 @@ class TestExchangeAuthorizationCode:
         assert list(provider._refresh_tokens) == [second.refresh_token]
 
     @pytest.mark.asyncio
-    async def test_live_token_capacity_refuses_new_issuance(self):
+    async def test_live_token_capacity_evicts_oldest_cache_entries(self):
         provider = GovernanceOAuthProvider(
             max_access_tokens=1,
             max_refresh_tokens=1,
         )
         client = _client()
         first_entry = await self._issue_code(provider, client)
-        await provider.exchange_authorization_code(client, first_entry)
+        first = await provider.exchange_authorization_code(client, first_entry)
         second_entry = await self._issue_code(provider, client)
+        second = await provider.exchange_authorization_code(client, second_entry)
 
-        with pytest.raises(TokenError) as refused:
-            await provider.exchange_authorization_code(client, second_entry)
-
-        assert refused.value.error == "invalid_request"
-        assert len(provider._access_tokens) == 1
-        assert len(provider._refresh_tokens) == 1
+        assert list(provider._access_tokens) == [second.access_token]
+        assert list(provider._refresh_tokens) == [second.refresh_token]
+        assert first.access_token not in provider._access_tokens
+        assert first.refresh_token not in provider._refresh_tokens
 
 
 # --------------------------------------------------------------------------- #

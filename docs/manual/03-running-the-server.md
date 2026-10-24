@@ -117,7 +117,8 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_OAUTH_ISSUER_URL` | Enable OAuth 2.1 / DCR |
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_OAUTH_PUBLIC_PORT` | Confine OAuth to a separate loopback listener, so local non-OAuth clients keep `/mcp` |
-| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `false` admits only pre-registered OAuth clients (open by default) |
+| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | Open dynamic client registration deliberately (`false` by default) |
+| `UNITARES_OAUTH_AUTO_APPROVE` | Approve newly registered dynamic clients during a bounded enrollment window (`false` by default) |
 | `UNITARES_TRUSTED_NETWORKS` | Extra CIDRs whose callers skip REST auth, added to the built-in loopback and private RFC1918 ranges |
 | `REDIS_URL` | Redis URL (default `redis://localhost:6379/0`) |
 | `UNITARES_TOOL_ADVERTISEMENT` | `progressive` (default, small initial `tools/list`) or `full` |

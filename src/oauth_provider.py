@@ -272,17 +272,42 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._dynamic_client_expires_at.pop(client_id, None)
         return True
 
+    def _evict_oldest_dynamic_client(self) -> bool:
+        if not self._dynamic_client_expires_at:
+            return False
+        client_id = min(
+            self._dynamic_client_expires_at,
+            key=self._dynamic_client_expires_at.__getitem__,
+        )
+        self._clients.pop(client_id, None)
+        self._dynamic_client_expires_at.pop(client_id, None)
+        self._approved_dynamic_client_ids.discard(client_id)
+        return True
+
     def _make_auth_code_room(self, client_id: str) -> None:
         self._prune_expired_state()
         client_codes = [
             entry for entry in self._auth_codes.values() if entry.client_id == client_id
         ]
         if len(client_codes) >= self._max_auth_codes_per_client:
-            oldest = min(client_codes, key=lambda entry: entry.created_at)
-            self._auth_codes.pop(oldest.code, None)
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="too many pending authorization attempts for this client",
+            )
         if len(self._auth_codes) >= self._max_auth_codes:
-            oldest = min(self._auth_codes.values(), key=lambda entry: entry.created_at)
-            self._auth_codes.pop(oldest.code, None)
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="authorization-code capacity reached; retry after expiry",
+            )
+
+    def _cache_access(self, entry: AccessToken) -> None:
+        self._prune_expired_state()
+        if (
+            entry.token not in self._access_tokens
+            and len(self._access_tokens) >= self._max_access_tokens
+        ):
+            self._access_tokens.pop(next(iter(self._access_tokens)))
+        self._access_tokens[entry.token] = entry
 
     def _cache_refresh(self, entry: RefreshTokenEntry) -> None:
         self._prune_expired_state()
@@ -291,19 +316,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             self._refresh_tokens.pop(oldest.token, None)
         self._refresh_tokens[entry.token] = entry
 
-    def _ensure_token_capacity(self, *, replacing_refresh: bool = False) -> None:
+    def _make_token_room(self) -> None:
         self._prune_expired_state()
         if len(self._access_tokens) >= self._max_access_tokens:
-            raise TokenError(
-                error="invalid_request",
-                error_description="OAuth access-token capacity reached; retry after expiry",
-            )
-        refresh_limit = self._max_refresh_tokens + int(replacing_refresh)
-        if len(self._refresh_tokens) >= refresh_limit:
-            raise TokenError(
-                error="invalid_request",
-                error_description="OAuth refresh-token capacity reached; retry after expiry",
-            )
+            self._access_tokens.pop(next(iter(self._access_tokens)))
+        if len(self._refresh_tokens) >= self._max_refresh_tokens:
+            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
+            self._refresh_tokens.pop(oldest.token, None)
 
     # -- persistence helpers ------------------------------------------------
 
@@ -377,9 +396,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 except ValueError:
                     return None
                 self._prune_expired_state()
-                if self._dynamic_client_count() < self._max_dynamic_clients:
-                    self._clients[client_id] = client
-                    self._dynamic_client_expires_at[client_id] = time.time() + CLIENT_STATE_TTL
+                if self._dynamic_client_count() >= self._max_dynamic_clients:
+                    self._evict_oldest_dynamic_client()
+                self._clients[client_id] = client
+                self._dynamic_client_expires_at[client_id] = time.time() + CLIENT_STATE_TTL
                 self._approved_dynamic_client_ids.add(client_id)
         return client
 
@@ -464,7 +484,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry,
     ) -> OAuthToken:
-        self._ensure_token_capacity()
         # Claim the code before minting anything, as exchange_refresh_token
         # claims its token: load_authorization_code only reads, so two
         # requests carrying the same code could both pass it. Whichever pops
@@ -475,12 +494,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 error="invalid_grant",
                 error_description="authorization code already used",
             )
+        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         refresh_token_str = self._generate_token("rt")
         expires_at = int(time.time()) + self._access_token_ttl
 
-        self._access_tokens[access_token_str] = AccessToken(
+        access = AccessToken(
             token=access_token_str,
             client_id=client.client_id,
             scopes=authorization_code.scopes or ["mcp:tools"],
@@ -488,13 +508,15 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             resource=authorization_code.resource,
         )
 
-        self._refresh_tokens[refresh_token_str] = self._new_refresh(
+        refresh = self._new_refresh(
             refresh_token_str, client.client_id, authorization_code.scopes or ["mcp:tools"]
         )
+        self._cache_access(access)
+        self._cache_refresh(refresh)
         await self._issued(
             client,
-            self._access_tokens[access_token_str],
-            self._refresh_tokens[refresh_token_str],
+            access,
+            refresh,
         )
 
         return OAuthToken(
@@ -545,7 +567,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token: RefreshTokenEntry,
         scopes: list[str],
     ) -> OAuthToken:
-        self._ensure_token_capacity(replacing_refresh=True)
         # Claim before any await: load_refresh_token awaits the store, so two
         # requests with the same token can both pass it. Only the one that
         # pops the entry proceeds; the other gets invalid_grant. Recording the
@@ -567,26 +588,29 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 "A used refresh token could NOT be deleted from the store; it "
                 "stays redeemable after a restart until it expires"
             )
+        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         new_refresh_str = self._generate_token("rt")
         expires_at = int(time.time()) + self._access_token_ttl
         effective_scopes = scopes or refresh_token.scopes or ["mcp:tools"]
 
-        self._access_tokens[access_token_str] = AccessToken(
+        access = AccessToken(
             token=access_token_str,
             client_id=client.client_id,
             scopes=effective_scopes,
             expires_at=expires_at,
         )
 
-        self._refresh_tokens[new_refresh_str] = self._new_refresh(
+        refresh = self._new_refresh(
             new_refresh_str, client.client_id, effective_scopes
         )
+        self._cache_access(access)
+        self._cache_refresh(refresh)
         await self._issued(
             client,
-            self._access_tokens[access_token_str],
-            self._refresh_tokens[new_refresh_str],
+            access,
+            refresh,
         )
 
         return OAuthToken(
@@ -609,9 +633,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     entry = AccessToken.model_validate({**json.loads(raw), "token": token})
                 except (ValueError, TypeError):
                     return None
-                self._prune_expired_state()
-                if len(self._access_tokens) < self._max_access_tokens:
-                    self._access_tokens[token] = entry
+                self._cache_access(entry)
         if entry is None:
             return None
         if entry.expires_at and entry.expires_at < int(time.time()):

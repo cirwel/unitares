@@ -109,6 +109,28 @@ async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
 
 
 @pytest.mark.asyncio
+async def test_persisted_client_load_evicts_an_old_cache_entry_without_growing_approval_state():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    clients = [_dcr_client(f"dcr-{index}") for index in range(3)]
+    for client in clients:
+        await before.register_client(client)
+        await _sign_in(before, client)
+
+    after = GovernanceOAuthProvider(
+        store=store,
+        auto_approve=False,
+        max_dynamic_clients=2,
+    )
+    for client in clients:
+        assert await after.get_client(client.client_id) is not None
+
+    assert len(after._clients) == 2
+    assert len(after._approved_dynamic_client_ids) == 2
+    assert set(after._approved_dynamic_client_ids) == set(after._dynamic_client_expires_at)
+
+
+@pytest.mark.asyncio
 async def test_refresh_works_after_a_restart_and_is_single_use():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)
