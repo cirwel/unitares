@@ -76,3 +76,61 @@ and `check_sentinel_plist` (booleans), and `allow_env`, `governance_plist` and
 configured surfaces and no preflights it performs no checks and no finding
 resolutions; it never reports an empty inventory as a healthy fleet. The one-time plist migration helper also requires explicit
 `UNITARES_DEPLOY_MIGRATE_LABELS` alongside source and deployment paths.
+
+## One report across publication and running installations
+
+The existing [distribution registry](distribution-surfaces.toml) owns public
+packages, listings and sites; this deployment inventory owns operator-specific
+machines and services. Do not copy host names or credentials into the public
+registry. Temporary `git surface` claims coordinate edits; they are not an
+inventory of published or running software.
+
+From the server checkout, generate a timestamped report:
+
+```sh
+python3 scripts/ci/distribution_surfaces.py \
+  --report-markdown artifacts/surfaces.md --report-json artifacts/surfaces.json
+```
+
+On a maintainer workstation, add `--github-app` to that command
+for repository-scoped App reads through the installed runner. CI supplies
+its own read-only GitHub token. The installed runner supports an explicit
+repository scope, for example:
+
+```sh
+unitares-github --repo cirwel/homebrew-unitares --read-only -- \
+  gh api repos/cirwel/homebrew-unitares/commits/main --jq .sha
+```
+
+The report selects that scope for each cirwel repository. Reads of public
+third-party listings use the server repository's App token as a public GitHub
+API caller; they gain no installation access to those repositories. Refused
+calls stay UNKNOWN, with no retry through a human login. The maintainer's
+2026-10-24 live run verified this interface against Homebrew's current head and
+its acceptance run, plus the public upstream listing probes.
+
+The existing Positioning Surfaces workflow
+publishes the same report in its job summary and retains both files for 30 days.
+It runs weekly and supports manual dispatch; no additional scheduler is needed.
+
+Add `--deployments` only on a configured operator host. It calls the existing
+`deploy-status.sh --json` with the selected inventory, never deploys or restarts,
+and preserves service verdicts separately from health. Remote fetch is not
+requested, so comparisons use the inventory's existing Git refs. Keep this
+combined report private: service names and health descriptions can identify the
+installation. Missing configuration, a failed adapter, and an empty inventory
+are UNKNOWN, never proof of a healthy fleet.
+
+A report records when its observations were collected; it is not a permanent
+status. OK applies only to the named probe. An HTTP response proves reachability,
+not that the page's instructions are current. A delegated check is UNKNOWN until
+its own evidence is inspected, and a Homebrew acceptance result must name the
+current tap head. The report links each surface's source, refresh path, checks,
+and declared dependencies so the next action is discoverable.
+
+When releasing, inspect source, Docker, Homebrew, SDK/plugin compatibility and
+installation copy as separate deliveries. Different version numbers are expected;
+use COMPATIBILITY.md and package manifests instead of requiring version equality.
+Add new public surfaces to the registry in the change that publishes them, and
+new running services to the operator inventory. Update the existing workspace
+project index to point here rather than maintaining another status table.
