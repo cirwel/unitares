@@ -152,7 +152,7 @@ tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tic
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
+  --json number,title,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # gh pr list caps statusCheckRollup at 100 entries per PR (no GraphQL pagination
@@ -188,6 +188,25 @@ def parked: [rollup[] | select((.conclusion // "") == "ACTION_REQUIRED")];
 '
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
+
+# GitHub labels remain on a merged PR, but they are not part of the landed Git
+# object. Preserve the exact model identifier from the PR's final `Model:` line
+# in the squash subject, where it survives branch deletion and is visible to
+# `git log`. This is the same self-reported value as the PR family label, not
+# verified model provenance. Unknown, unavailable, whitespace-containing or
+# otherwise non-identifier values keep GitHub's default subject.
+squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
+  jq -r '
+    ([((.body // "") | splits("\\r?\\n"))
+      | capture("^Model:[ \\t]*(?<model>[^\\r\\n]*?)[ \\t]*$"; "i")
+      | .model] | last // "") as $model
+    | if (($model | ascii_downcase) != "unavailable"
+          and ($model | test("^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,127}$")))
+      then "\(.title) [model:\($model)] (#\(.number))"
+      else ""
+      end
+  ' <<<"$1"
+}
 
 # --- approval helpers -----------------------------------------------------------
 # When did the approval label last go on, and when was the last commit that
@@ -772,7 +791,11 @@ while read -r _ n head; do
   # also try to delete a local branch in whatever directory this runs from.
   # --match-head-commit: arm only the head the approval covers, so a push that
   # lands between this tick's read and the call is refused, not merged.
-  if act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head"; then
+  merge_args=(gh pr merge "$n" -R "$REPO" --auto --squash)
+  subject=$(squash_subject "$pr")
+  [ -z "$subject" ] || merge_args+=(--subject "$subject")
+  merge_args+=(--match-head-commit "$head")
+  if act "${merge_args[@]}"; then
     # Unrecorded, the arm could not be withdrawn by removing the label later.
     if ! record_arm "$n"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"

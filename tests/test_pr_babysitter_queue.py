@@ -121,6 +121,7 @@ def _check(
 def _pr(
     number: int,
     *,
+    title: str | None = None,
     labels: tuple[str, ...] = (LABEL,),
     draft: bool = False,
     armed_min_ago: float | None = None,
@@ -138,6 +139,7 @@ def _pr(
         rollup.append(_check("review", review, run=900))
     return {
         "number": number,
+        "title": title or f"fix: change {number}",
         "isDraft": draft,
         "mergeable": mergeable,
         "mergeStateStatus": state,
@@ -274,12 +276,42 @@ def _run(
     return [line for line in (d / "calls.log").read_text().splitlines() if line], result.stdout
 
 
-def _arm(n: int, head: str | None = None) -> str:
-    return f"pr merge {n} -R o/r --auto --squash --match-head-commit {head or f'sha{n}'}"
+def _arm(n: int, head: str | None = None, *, title: str | None = None, model: str | None = None) -> str:
+    subject = f" --subject {title or f'fix: change {n}'} [model:{model}] (#{n})" if model else ""
+    return f"pr merge {n} -R o/r --auto --squash{subject} --match-head-commit {head or f'sha{n}'}"
 
 
 
 # --- the queue -----------------------------------------------------------------
+
+
+def test_the_agent_model_survives_in_the_squash_subject(tmp_path: Path) -> None:
+    body = """Classification: fix
+
+---
+Model: openai/gpt-5.3-codex
+UNITARES agent: 11111111-2222-4333-8444-555555555555
+"""
+    calls, _ = _run(tmp_path, [_pr(1, title="fix: make attribution durable", body=body)])
+    assert calls == [
+        _arm(1, title="fix: make attribution durable", model="openai/gpt-5.3-codex")
+    ]
+
+
+def test_the_last_model_signature_controls_the_squash_subject(tmp_path: Path) -> None:
+    body = "Model: claude-old\nnotes\nModel: claude-opus-5-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1, model="claude-opus-5-5")]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["unavailable", "Gemini 3.1 Pro", "gpt-5] --admin", "<actual model identifier>"],
+)
+def test_an_unusable_model_signature_keeps_githubs_default_subject(tmp_path: Path, model: str) -> None:
+    body = f"Model: {model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1)]
 
 
 def test_arms_in_approval_order_not_pr_number(tmp_path: Path) -> None:

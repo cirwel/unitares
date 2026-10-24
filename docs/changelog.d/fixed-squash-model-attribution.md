@@ -1,0 +1,1 @@
+- **merge queue:** preserve a signed agent PR's exact self-reported model as a `[model:…]` token in the landed squash subject, so model attribution remains visible after branch deletion without replacing GitHub's commit body or co-author trailers.

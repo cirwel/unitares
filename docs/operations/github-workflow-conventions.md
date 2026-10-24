@@ -74,6 +74,16 @@ veto by removing the label.
   `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
   than holding a fix. Reserved auth, identity, scientific and
   governance-sensitive gates are unchanged.
+- End an agent-authored PR body with the provenance signature described in the
+  shared global contract: `Model: <actual model identifier>` followed by
+  `UNITARES agent: <uuid>`. GitHub keeps PR labels after merge, but labels are
+  not part of the landed Git object. When the final `Model:` value is a compact
+  identifier, the merge queue appends `[model:<identifier>]` before the final
+  `(#N)` in the squash subject. This keeps the exact self-reported model visible
+  in `git log` after the branch is deleted while retaining the conventional
+  commit prefix, PR number, default commit body and GitHub co-author trailers.
+  Like the PR's `agent/*` family label, the token is a filter and attribution
+  aid, not verified model provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
   opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
   session's UNITARES identity: a later session finds the owner by it and can
