@@ -179,7 +179,30 @@ def _beam_policy_error_code(exc: BeamDialecticPolicyRefusal) -> str:
         "reviewer_recused": "REVIEWER_AUTHOR_CONFLICT",
         "invalid_review_authorship": "REVIEW_AUTHORSHIP_METADATA_INVALID",
         "session_identity_mismatch": "DIALECTIC_SESSION_IDENTITY_MISMATCH",
+        "identity_proof_invalid": "DIALECTIC_IDENTITY_PROOF_INVALID",
+        "identity_proof_replayed": "DIALECTIC_IDENTITY_PROOF_REPLAYED",
+        "identity_verification_unavailable": "DIALECTIC_IDENTITY_VERIFICATION_UNAVAILABLE",
     }.get(exc.error_code, "DIALECTIC_POLICY_REFUSED")
+
+
+def _beam_policy_recovery(exc: BeamDialecticPolicyRefusal) -> dict:
+    if exc.error_code in {"identity_proof_invalid", "identity_proof_replayed"}:
+        return {
+            "action": "Retry with a caller-asserted session identity and fresh proof.",
+            "related_tools": ["identity", "dialectic", "request_review"],
+        }
+    if exc.error_code == "identity_verification_unavailable":
+        return {
+            "action": "Retry after the lease-plane identity verifier recovers.",
+            "related_tools": ["dialectic", "request_review"],
+        }
+    return {
+        "action": (
+            "Use a registered independent reviewer and a valid "
+            "reviewed-work authorship declaration."
+        ),
+        "related_tools": ["dialectic", "request_review"],
+    }
 
 # Import PostgreSQL async functions for dialectic session storage
 from src.dialectic_db import (
@@ -2596,13 +2619,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             str(e),
             error_code=error_code,
             error_category="governance_refusal",
-            recovery={
-                "action": (
-                    "Use a registered independent reviewer and a valid "
-                    "reviewed-work authorship declaration."
-                ),
-                "related_tools": ["dialectic", "request_review"],
-            },
+            recovery=_beam_policy_recovery(e),
             arguments=arguments,
         )]
     except Exception as e:
@@ -2990,6 +3007,19 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                             expected_transcript_revision=timeout_frontier,
                             expected_phase=timeout_phase,
                         )
+                    except BeamDialecticPolicyRefusal as e:
+                        logger.info(
+                            "Timeout persistence deferred for %s: %s",
+                            session_id[:16],
+                            e.error_code,
+                        )
+                        result = session.to_dict()
+                        result["success"] = True
+                        result["timeout_persistence_deferred"] = e.error_code
+                        attach_attestation(result)
+                        await _attach_public_resolution_effect(result, session_id)
+                        result.update(_build_dialectic_actionability(result))
+                        return success_response(result)
                     except Exception as e:
                         logger.error(
                             "Failed to persist timeout to PostgreSQL: %s",

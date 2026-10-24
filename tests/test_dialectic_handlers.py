@@ -3428,6 +3428,41 @@ class TestHandleGetDialecticSession:
         assert "recovery" in data
 
     @pytest.mark.asyncio
+    async def test_timeout_identity_refusal_does_not_turn_read_into_failure(
+        self, mock_context_agent_bound,
+    ):
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticPolicyRefusal,
+        )
+        from src.mcp_handlers.dialectic.handlers import (
+            ACTIVE_SESSIONS,
+            handle_get_dialectic_session,
+        )
+
+        session = _make_session(phase=DialecticPhase.THESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with (
+            patch.object(session, "check_timeout", return_value="session timed out"),
+            patch(
+                f"{DIALECTIC}._commit_terminal_resolution",
+                new=AsyncMock(
+                    side_effect=BeamDialecticPolicyRefusal(
+                        "identity_proof_invalid", operation="resolve_session"
+                    )
+                ),
+            ),
+            mock_context_agent_bound,
+        ):
+            result = await handle_get_dialectic_session(
+                {"session_id": session.session_id, "check_timeout": True}
+            )
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["timeout_persistence_deferred"] == "identity_proof_invalid"
+
+    @pytest.mark.asyncio
     async def test_reviewer_stuck_detection(
         self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound,
     ):

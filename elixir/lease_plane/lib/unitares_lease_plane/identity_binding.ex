@@ -237,7 +237,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
-  defp mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :enforce)
+  defp mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :off)
 
   defp effective_mode(surface_kind) do
     if required_for_surface?(surface_kind), do: mode(), else: :off
