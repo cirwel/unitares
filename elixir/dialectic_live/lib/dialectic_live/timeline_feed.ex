@@ -235,30 +235,46 @@ defmodule DialecticLive.TimelineFeed do
     %{state | heir_ref: Process.monitor(heir_pid)}
   end
 
+  # Restores everything the previous feed held, provisional marks included,
+  # so open panes lose nothing across a crash. Restored marks count as received
+  # now: only re-reads started after the restart can expire them.
   defp restore_from_table(state) do
-    held =
+    now = System.monotonic_time()
+
+    restored =
       Map.new(@window_order, fn w ->
         case :ets.lookup(state.table, {:window, w}) do
           [{_, saved}] ->
-            {w,
-             %{
-               empty_window(w)
-               | status: saved.status,
-                 error: saved.error,
-                 history: saved.events,
-                 agents: saved.agents,
-                 truncated: saved.truncated,
-                 counts: saved.counts,
-                 last_reread_at: saved.last_reread_at,
-                 last_attempt_at: saved.last_attempt_at
-             }}
+            seen =
+              for %{"seen_live" => true} = row <- saved.events,
+                  into: MapSet.new(),
+                  do: TimelineAdapter.key(row)
+
+            held = %{
+              empty_window(w)
+              | status: saved.status,
+                error: saved.error,
+                history: Enum.map(saved.events, &Map.delete(&1, "seen_live")),
+                provisional: Enum.map(saved.provisional, &{&1, now, 0}),
+                agents: saved.agents,
+                truncated: saved.truncated,
+                counts: saved.counts,
+                last_reread_at: saved.last_reread_at,
+                last_attempt_at: saved.last_attempt_at
+            }
+
+            {w, {held, seen}}
 
           _ ->
-            {w, empty_window(w)}
+            {w, {empty_window(w), MapSet.new()}}
         end
       end)
 
-    %{state | held: held}
+    %{
+      state
+      | held: Map.new(restored, fn {w, {held, _}} -> {w, held} end),
+        seen_live: Map.new(restored, fn {w, {_, seen}} -> {w, seen} end)
+    }
   end
 
   defp resolve(nil), do: nil
@@ -515,7 +531,9 @@ defmodule DialecticLive.TimelineFeed do
     # than allowed to crash the feed (and, by restart, the pane).
     events = Enum.filter(events, &is_map/1)
     old = state.held[window]
-    {provisional, matched} = merge(old.provisional, events, fetch.started, old.hours)
+
+    {provisional, matched} =
+      merge(old.provisional, events, fetch.started, old.hours, state.seen_live[window])
 
     history_keys = MapSet.new(events, &TimelineAdapter.key/1)
 
@@ -587,12 +605,21 @@ defmodule DialecticLive.TimelineFeed do
   @doc false
   # Pure: which provisional marks survive a re-read, and which history keys
   # absorbed one. Only a re-read that started after a mark arrived can miss it.
-  def merge(provisional, history, fetch_started, hours) do
+  #
+  # Successive check-ins from one agent can fall within the 2 s lag window of
+  # each other's rows, so a row is claimed by at most one mark: marks are
+  # paired oldest first, each with the latest unclaimed row in its window.
+  # Rows that absorbed a mark at an earlier re-read (`claimed`) are taken.
+  def merge(provisional, history, fetch_started, hours, claimed \\ MapSet.new()) do
     cutoff_us = System.os_time(:microsecond) - hours * 3_600_000_000
 
     {kept, matched} =
-      Enum.reduce(provisional, {[], MapSet.new()}, fn {mark, received, misses}, {kept, matched} ->
-        case Enum.find(history, &TimelineAdapter.matches?(mark, &1)) do
+      provisional
+      |> Enum.reverse()
+      |> Enum.reduce({[], MapSet.new()}, fn {mark, received, misses}, {kept, matched} ->
+        taken = MapSet.union(claimed, matched)
+
+        case best_row(mark, history, taken) do
           nil ->
             misses = if received < fetch_started, do: misses + 1, else: misses
             ts = TimelineAdapter.ts_us(mark["ts"])
@@ -608,8 +635,20 @@ defmodule DialecticLive.TimelineFeed do
         end
       end)
 
-    {Enum.reverse(kept), matched}
+    # `kept` was built oldest first, prepending: it is newest first again.
+    {kept, matched}
   end
+
+  defp best_row(%{"kind" => "checkin"} = mark, history, taken) do
+    history
+    |> Enum.filter(
+      &(TimelineAdapter.matches?(mark, &1) and not MapSet.member?(taken, TimelineAdapter.key(&1)))
+    )
+    |> Enum.max_by(&(TimelineAdapter.ts_us(&1["ts"]) || 0), fn -> nil end)
+  end
+
+  defp best_row(mark, history, _taken),
+    do: Enum.find(history, &TimelineAdapter.matches?(mark, &1))
 
   # --- frames ---
 
@@ -630,8 +669,12 @@ defmodule DialecticLive.TimelineFeed do
     Enum.reduce(@window_order, state, fn window, state ->
       held = state.held[window]
 
+      # A check-in is never treated as already in history on arrival: a row
+      # within the lag window may be the agent's previous check-in, and
+      # dropping a real check-in is worse than showing it twice until the next
+      # re-read pairs it. Knowledge and lifecycle keys are exact.
       duplicate? =
-        TimelineAdapter.in_history?(mark, held.history) or
+        (mark["kind"] != "checkin" and TimelineAdapter.in_history?(mark, held.history)) or
           Enum.any?(held.provisional, fn {m, _, _} -> m == mark end)
 
       if duplicate? do

@@ -175,6 +175,28 @@ defmodule DialecticLive.TimelineAdapterTest do
       {[], _} = TimelineFeed.merge(once, [], 3, 1)
     end
 
+    test "successive check-ins pair with their own rows, each row claimed once" do
+      t0 = DateTime.utc_now()
+      at = fn ms -> t0 |> DateTime.add(ms, :millisecond) |> DateTime.to_iso8601() end
+      m0 = %{"kind" => "checkin", "agent_id" => @agent, "ts" => at.(0), "provisional" => true}
+      m1 = %{"kind" => "checkin", "agent_id" => @agent, "ts" => at.(1_000), "provisional" => true}
+      r0 = %{"kind" => "checkin", "agent_id" => @agent, "ts" => at.(-80)}
+      r1 = %{"kind" => "checkin", "agent_id" => @agent, "ts" => at.(920)}
+
+      # Only the first row is in history yet: the first mark takes it, the
+      # second waits for its own row instead of taking the first one's.
+      {[{^m1, 1, 1}], matched} = TimelineFeed.merge([{m1, 1, 0}, {m0, 1, 0}], [r0], 2, 1)
+      assert matched == MapSet.new([TimelineAdapter.key(r0)])
+
+      # Both rows present: each mark takes its own.
+      {[], matched} = TimelineFeed.merge([{m1, 1, 0}, {m0, 1, 0}], [r0, r1], 2, 1)
+      assert matched == MapSet.new([TimelineAdapter.key(r0), TimelineAdapter.key(r1)])
+
+      # A row that absorbed a mark at an earlier re-read is not taken again.
+      claimed = MapSet.new([TimelineAdapter.key(r0)])
+      {[{^m1, 1, 1}], _} = TimelineFeed.merge([{m1, 1, 0}], [r0], 2, 1, claimed)
+    end
+
     test "a mark older than the window is dropped" do
       mark = %{"kind" => "checkin", "agent_id" => @agent, "ts" => now_iso(-3_700_000)}
       {[], _} = TimelineFeed.merge([{mark, 100, 0}], [], 50, 1)

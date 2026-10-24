@@ -290,6 +290,47 @@ defmodule DialecticLive.TimelineFeedTest do
       assert snap.provisional == []
     end
 
+    test "a check-in a second after the agent's previous row is still shown", %{ctx: ctx} do
+      prev = %{
+        "kind" => "checkin",
+        "ts" => iso(-1_000),
+        "agent_id" => @agent,
+        "authored_by" => "agent",
+        "action" => "approve"
+      }
+
+      serve(ctx.stub, &Req.Test.json(&1, window_body([prev])))
+      broadcast_status(ctx, :connected)
+      _ = await_reread_gets()
+      assert_receive {:timeline_reread, "1h"}
+      assert_receive {:timeline_reread, "6h"}
+
+      broadcast_frame(ctx, %{
+        "type" => "eisv_update",
+        "agent_id" => @agent,
+        "timestamp" => iso(),
+        "decision" => %{"action" => "proceed", "sub_action" => "pause"}
+      })
+
+      assert_receive {:timeline_delta, "1h", %{"assessment" => %{"verdict" => "pause"}}}
+    end
+
+    test "a feed restart keeps the live marks it held", %{ctx: ctx} do
+      ts = iso()
+      broadcast_frame(ctx, eisv(ts))
+      assert_receive {:timeline_delta, "1h", _}
+      _ = :sys.get_state(ctx.feed)
+
+      old = Process.whereis(ctx.name)
+      ref = Process.monitor(old)
+      Process.exit(old, :kill)
+      assert_receive {:DOWN, ^ref, :process, _, :killed}
+      _ = await_registered(ctx.name, old)
+
+      assert {:ok, %{provisional: [%{"ts" => ^ts, "provisional" => true}]}} =
+               TimelineFeed.snapshot("1h", ctx.table)
+    end
+
     test "a frame already in history adds nothing", %{ctx: ctx} do
       ts = iso(-500)
 
