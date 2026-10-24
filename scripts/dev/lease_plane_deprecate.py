@@ -31,10 +31,8 @@ Usage:
 
 Authorization:
     `deprecation-sweep` and `deprecate-and-finalize` require
-    LEASE_FORCE_RELEASE_TOKEN (RFC §7.10) — read from env or the secrets
-    env file (`$UNITARES_SECRETS_ENV`, default `~/.config/unitares/secrets.env`;
-    a legacy `~/.config/cirwel/secrets.env` is still read when only it
-    exists). GOVERNANCE_TOKEN does NOT authorize.
+    LEASE_FORCE_RELEASE_TOKEN (RFC §7.10) — read from env or
+    the file explicitly named by `UNITARES_SECRETS_ENV`. GOVERNANCE_TOKEN does NOT authorize.
 
 Phase ordering (RFC §7.11.2):
     Phase 0:  deprecate                  — INSERT into deprecated_schemes
@@ -101,28 +99,17 @@ DEFAULT_DB_URL = os.environ.get(
 )
 
 
-def _secrets_env_path() -> Path:
-    """The secrets env file: UNITARES_SECRETS_ENV, else
-    ~/.config/unitares/secrets.env, else the pre-2026-09 ~/.config/cirwel
-    path when only that one exists. Mirrors resolve_secrets_file() in
-    scripts/dev/unitares_doctor.py (tests/test_secrets_env_resolver_parity.py
-    pins the two together)."""
-    _env_override = os.environ.get("UNITARES_SECRETS_ENV")
-    secrets_path = Path.home() / ".config" / "unitares" / "secrets.env"
-    _legacy = Path.home() / ".config" / "cirwel" / "secrets.env"
-    if _env_override:
-        secrets_path = Path(_env_override).expanduser()
-    elif not secrets_path.exists() and _legacy.exists():
-        secrets_path = _legacy
-    return secrets_path
-
-
 def _read_force_release_token() -> str | None:
     """Read LEASE_FORCE_RELEASE_TOKEN from env or the secrets env file."""
     tok = os.environ.get("LEASE_FORCE_RELEASE_TOKEN")
     if tok:
         return tok
-    secrets_path = _secrets_env_path()
+    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
+    if not override:
+        return None
+    secrets_path = Path(override)
+    if not secrets_path.is_absolute():
+        return None
     if not secrets_path.exists():
         return None
     for line in secrets_path.read_text().splitlines():
@@ -347,8 +334,7 @@ async def deprecation_sweep_cmd(
     if not token:
         print(
             "error: deprecation-sweep requires LEASE_FORCE_RELEASE_TOKEN "
-            f"(env or the secrets env file {_secrets_env_path()}). "
-            "GOVERNANCE_TOKEN does NOT authorize.",
+            "(env or explicit UNITARES_SECRETS_ENV). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1
@@ -520,8 +506,7 @@ async def deprecate_and_finalize_cmd(
     if not token:
         print(
             "error: deprecate-and-finalize requires LEASE_FORCE_RELEASE_TOKEN "
-            f"(env or the secrets env file {_secrets_env_path()}). "
-            "GOVERNANCE_TOKEN does NOT authorize.",
+            "(env or explicit UNITARES_SECRETS_ENV). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1

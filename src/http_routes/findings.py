@@ -4,7 +4,7 @@ Any producer (a resident, a doctor check, a host hook) posts findings here;
 they are persisted to audit.events and broadcast. This is core: it does not
 depend on which residents a deployment runs. The monitoring resident's own
 read surfaces (summary, backlog) live with it in agents/sentinel/routes.py and
-mount only with the reference-residents route pack. (Split out of
+mount only when a deployment's route-pack manifest declares them. (Split out of
 src/http_routes/sentinel.py on 2026-09-27; registered in src/http_api.py.)
 """
 

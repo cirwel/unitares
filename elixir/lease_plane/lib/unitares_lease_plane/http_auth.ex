@@ -12,8 +12,8 @@ defmodule UnitaresLeasePlane.HTTPAuth do
   `docker-compose.yml` sets only `LEASE_PLANE_BEARER_TOKEN`; it does not
   forward `LEASE_FORCE_RELEASE_TOKEN`, so force-release stays unconfigured
   there. A native install fills both through
-  `scripts/start.sh` from the secrets env file: `$UNITARES_SECRETS_ENV`, then
-  `~/.config/unitares/secrets.env`, then a legacy fallback described there.
+  `scripts/start.sh` from the service environment or the file explicitly
+  named by `$UNITARES_SECRETS_ENV`.
   Per RFC §7.10 line 731
   ("standard bearer must NOT permit force-release"), the regular bearer cannot
   authorize force-release, and the elevated force-release bearer cannot

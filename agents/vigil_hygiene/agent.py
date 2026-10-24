@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 # Ensure repo root on sys.path when run directly
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -36,7 +37,7 @@ if str(project_root) not in sys.path:
 from agents.vigil_hygiene.cherry import CherryResult, CherryVerdict, parse_cherry
 from agents.vigil_hygiene.clean_check import check_worktree_clean
 
-KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main", "feat/branch-hygiene-automation"})
+KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main"})
 NEWER_THAN_SECONDS = 24 * 60 * 60
 LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-vigil-hygiene.log"
 LEASE_SURFACE_ID = "maintenance:/vigil_hygiene_sweep"
@@ -78,17 +79,69 @@ def run_git(*args: str, repo: Path, check: bool = True) -> subprocess.CompletedP
     )
 
 
+class ProtectionLookupError(RuntimeError):
+    """The open-PR protection set could not be established; do not delete."""
+
+
 def list_open_pr_branches(repo: Path) -> set[str]:
+    """Protect every open PR in the selected checkout's origin repository.
+
+    Explicit origin selection prevents gh's default repository or GH_REPO from
+    redirecting a destructive sweep. Pagination is required: a truncated list
+    would silently leave later open branches unprotected.
+    """
+    gh = os.environ.get("VIGIL_HYGIENE_GH_BIN", "gh")
     try:
-        result = subprocess.run(
-            ["gh", "pr", "list", "--repo", "CIRWEL/unitares", "--state", "open",
-             "--json", "headRefName", "--jq", ".[].headRefName"],
-            capture_output=True, text=True, check=True, cwd=str(repo),
+        origin = run_git("remote", "get-url", "origin", repo=repo).stdout.strip()
+        if not origin:
+            raise ValueError("origin URL is empty")
+        metadata = subprocess.run(
+            [gh, "repo", "view", origin, "--json", "nameWithOwner,url"],
+            capture_output=True, text=True, check=True, cwd=str(repo), timeout=30,
         )
-        return {ln.strip() for ln in result.stdout.splitlines() if ln.strip()}
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log(f"WARN: gh pr list failed ({e}); defaulting to empty open-PR set (will be over-conservative)")
-        return set()
+        target = json.loads(metadata.stdout)
+        name = target["nameWithOwner"]
+        url = urlsplit(target["url"])
+        if (not isinstance(name, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", name)
+                or url.scheme != "https" or not url.hostname
+                or url.path.strip("/") != name):
+            raise ValueError("invalid repository identity from gh")
+        result = subprocess.run(
+            [gh, "api", "--hostname", url.hostname, "--paginate", "--slurp",
+             f"repos/{name}/pulls?state=open&per_page=100"],
+            capture_output=True, text=True, check=True, cwd=str(repo), timeout=120,
+        )
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or not pages:
+            raise ValueError("expected at least one PR page")
+        branches = set()
+        for page in pages:
+            if not isinstance(page, list):
+                raise ValueError("PR page is not a list")
+            for pr in page:
+                branch = pr["head"]["ref"]
+                if not isinstance(branch, str) or not branch.strip():
+                    raise ValueError("PR has no usable head ref")
+                branches.add(branch)
+        return branches
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError) as exc:
+        raise ProtectionLookupError(f"open-PR protection lookup failed: {exc}") from exc
+
+
+def default_base(repo: Path) -> str:
+    """Use the selected origin's default, holding ambiguous fallback layouts."""
+    result = run_git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", repo=repo, check=False)
+    if result.returncode == 0:
+        ref = result.stdout.strip()
+        if ref.startswith("origin/") and run_git("rev-parse", "--verify", f"{ref}^{{commit}}", repo=repo, check=False).returncode == 0:
+            return ref
+    candidates = [
+        ref for ref in ("origin/main", "origin/master")
+        if run_git("rev-parse", "--verify", f"{ref}^{{commit}}", repo=repo, check=False).returncode == 0
+    ]
+    if len(candidates) != 1:
+        raise ProtectionLookupError("cannot establish origin's default branch; configure origin/HEAD")
+    return candidates[0]
 
 
 def list_gone_branches(repo: Path) -> list[str]:
@@ -222,6 +275,16 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
 
     log(f"sweep started (repo={repo}, dry_run={dry_run})")
 
+    # Establish the protection set before any fetch/prune, branch or worktree
+    # mutation. A lookup failure is unknown protection, never an empty set.
+    try:
+        open_prs = list_open_pr_branches(repo)
+    except ProtectionLookupError as exc:
+        report.errors.append(str(exc))
+        log(f"ERROR: {exc}; sweep held without deleting anything")
+        report.duration_s = time.time() - started
+        return report
+
     # 1. Fetch + prune
     try:
         run_git("fetch", "--prune", "origin", repo=repo)
@@ -229,6 +292,13 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
     except subprocess.CalledProcessError as e:
         report.errors.append(f"fetch failed: {e.stderr}")
         log(f"ERROR: fetch failed: {e.stderr}")
+        report.duration_s = time.time() - started
+        return report
+
+    try:
+        base = default_base(repo)
+    except ProtectionLookupError as exc:
+        report.errors.append(str(exc))
         report.duration_s = time.time() - started
         return report
 
@@ -240,10 +310,15 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
 
     # 2. Local [gone] cleanup
     for branch in list_gone_branches(repo):
-        cherry_out = cherry_local(repo, branch)
+        keep, _reason = is_keepalive(
+            branch, open_prs, None, time.time()
+        )
+        if keep:
+            continue
+        cherry_out = cherry_local(repo, branch, base=base)
         if cherry_out is None:
             continue
-        cherry_result = classify_local_gone_cherry(cherry_out)
+        cherry_result = classify_local_gone_cherry(cherry_out, base=base)
         if cherry_result.verdict == CherryVerdict.HOLD:
             report.holds.append(branch)
             report.holds_count += 1
@@ -300,15 +375,14 @@ def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
                 report.errors.append(f"branch -D {branch}: {e.stderr}")
 
     # 3. Origin orphan sweep
-    open_prs = list_open_pr_branches(repo)
     now = time.time()
     for branch in list_origin_branches(repo):
         ts = get_committer_timestamp(repo, f"origin/{branch}")
         keep, reason = is_keepalive(branch, open_prs, ts, now)
-        if keep:
+        if keep or f"origin/{branch}" == base:
             continue
 
-        cherry_out = cherry(repo, branch)
+        cherry_out = cherry(repo, branch, base=base)
         result = parse_cherry(cherry_out)
 
         if result.verdict == CherryVerdict.HOLD:

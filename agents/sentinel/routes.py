@@ -1,8 +1,9 @@
 """The monitoring resident's read surfaces: GET /v1/sentinel/{summary,backlog}.
 
-Reference-resident code, not core: these routes mount only when the
-server's UNITARES_ROUTE_PACKS names the `reference-residents` pack
-(src/http_routes/packs.py imports this module lazily). Finding INTAKE, which
+Reference-resident code, not core: these routes mount only when a
+deployment's route-pack manifest (UNITARES_ROUTE_PACKS_FILE) declares them and
+UNITARES_ROUTE_PACKS selects that pack (src/http_routes/packs.py imports this
+module lazily). Finding INTAKE, which
 every producer uses, stays in core at src/http_routes/findings.py. (Moved
 from src/http_routes/sentinel.py on 2026-09-27.)
 """

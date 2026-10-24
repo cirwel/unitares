@@ -400,7 +400,7 @@ def audit(repo: str, quiet_hours: float) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repo", default="cirwel/unitares")
+    ap.add_argument("--repo", required=True, help="GitHub owner/repository to audit")
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument(
         "--quiet-hours",

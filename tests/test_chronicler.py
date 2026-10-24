@@ -918,7 +918,7 @@ class TestChroniclerAgent:
 
 
 class TestGithubTrafficScrapers:
-    """Aggregate GitHub traffic across the scraped org's non-archived repos.
+    """Aggregate GitHub traffic across non-archived configured repos.
 
     The four scrapers share one process-lifetime fetch (Chronicler is a
     one-shot launchd job) so a single run hits the GitHub API once, not
@@ -927,11 +927,14 @@ class TestGithubTrafficScrapers:
 
     def setup_method(self):
         from agents.chronicler import scrapers
-        scrapers._fetch_cirwel_traffic.cache_clear()
+        scrapers._fetch_github_traffic.cache_clear()
+        self.org_patch = patch.object(scrapers, "GITHUB_ORG", "example")
+        self.org_patch.start()
 
     def teardown_method(self):
         from agents.chronicler import scrapers
-        scrapers._fetch_cirwel_traffic.cache_clear()
+        self.org_patch.stop()
+        scrapers._fetch_github_traffic.cache_clear()
 
     @staticmethod
     def _gh_runner(repos, traffic):
@@ -946,7 +949,7 @@ class TestGithubTrafficScrapers:
             if cmd[:3] == ["gh", "repo", "list"]:
                 return CompletedProcess(cmd, 0, stdout=json.dumps(repos), stderr="")
             if cmd[:2] == ["gh", "api"]:
-                # cmd shape: ["gh", "api", "repos/<org>/<name>/traffic/<kind>"]
+                # cmd shape: ["gh", "api", "repos/example/<name>/traffic/<kind>"]
                 path = cmd[2]
                 _, _, repo_name, _, kind = path.split("/")
                 count, uniques = traffic[repo_name][kind]
@@ -968,7 +971,7 @@ class TestGithubTrafficScrapers:
             "beta": {"views": (23, 2), "clones": (7, 3)},
         }
         with patch.object(scrapers.subprocess, "run", side_effect=self._gh_runner(repos, traffic)):
-            result = scrapers._fetch_cirwel_traffic()
+            result = scrapers._fetch_github_traffic()
 
         assert result == {
             "views": 123,
@@ -987,7 +990,7 @@ class TestGithubTrafficScrapers:
         traffic = {"alive": {"views": (10, 1), "clones": (2, 1)}}
         # Only `alive` should be queried; `frozen` would KeyError if asked.
         with patch.object(scrapers.subprocess, "run", side_effect=self._gh_runner(repos, traffic)):
-            result = scrapers._fetch_cirwel_traffic()
+            result = scrapers._fetch_github_traffic()
 
         assert result == {
             "views": 10, "views_uniques": 1,
@@ -1001,8 +1004,8 @@ class TestGithubTrafficScrapers:
         traffic = {"x": {"views": (1, 1), "clones": (1, 1)}}
         runner = MagicMock(side_effect=self._gh_runner(repos, traffic))
         with patch.object(scrapers.subprocess, "run", runner):
-            scrapers._fetch_cirwel_traffic()
-            scrapers._fetch_cirwel_traffic()
+            scrapers._fetch_github_traffic()
+            scrapers._fetch_github_traffic()
 
         # 1 repo-list call + (views, clones) per repo = 3 total. If the second
         # call re-fetched, we'd see 6.
@@ -1012,20 +1015,21 @@ class TestGithubTrafficScrapers:
         from agents.chronicler import scrapers
 
         snapshot = {"views": 7, "views_uniques": 3, "clones": 12, "clones_uniques": 4}
-        with patch.object(scrapers, "_fetch_cirwel_traffic", return_value=snapshot):
-            assert scrapers.github_cirwel_traffic_views_14d(Path("/")) == 7.0
-            assert scrapers.github_cirwel_traffic_views_uniques_14d(Path("/")) == 3.0
-            assert scrapers.github_cirwel_traffic_clones_14d(Path("/")) == 12.0
-            assert scrapers.github_cirwel_traffic_clones_uniques_14d(Path("/")) == 4.0
+        with patch.object(scrapers, "_fetch_github_traffic", return_value=snapshot):
+            assert scrapers.github_traffic_views_14d(Path("/")) == 7.0
+            assert scrapers.github_traffic_views_uniques_14d(Path("/")) == 3.0
+            assert scrapers.github_traffic_clones_14d(Path("/")) == 12.0
+            assert scrapers.github_traffic_clones_uniques_14d(Path("/")) == 4.0
 
     def test_traffic_scrapers_registered(self):
-        from agents.chronicler.scrapers import SCRAPERS
+        from agents.chronicler.scrapers import build_scrapers
+        SCRAPERS = build_scrapers("example", "github")
 
         for name in (
-            "github.cirwel.traffic.views.14d",
-            "github.cirwel.traffic.views.uniques.14d",
-            "github.cirwel.traffic.clones.14d",
-            "github.cirwel.traffic.clones.uniques.14d",
+            "github.traffic.views.14d",
+            "github.traffic.views.uniques.14d",
+            "github.traffic.clones.14d",
+            "github.traffic.clones.uniques.14d",
         ):
             assert name in SCRAPERS, f"{name} missing from SCRAPERS registry"
 
@@ -1050,10 +1054,10 @@ class TestGithubTrafficScrapers:
         _catalog = self._extra_catalog()
 
         for name in (
-            "github.cirwel.traffic.views.14d",
-            "github.cirwel.traffic.views.uniques.14d",
-            "github.cirwel.traffic.clones.14d",
-            "github.cirwel.traffic.clones.uniques.14d",
+            "github.traffic.views.14d",
+            "github.traffic.views.uniques.14d",
+            "github.traffic.clones.14d",
+            "github.traffic.clones.uniques.14d",
         ):
             assert name in _catalog, f"{name} missing from catalog"
             entry = _catalog[name]
@@ -1071,10 +1075,10 @@ class TestGithubTrafficScrapers:
         _catalog = self._extra_catalog()
 
         for name in (
-            "github.cirwel.traffic.views.14d",
-            "github.cirwel.traffic.views.uniques.14d",
-            "github.cirwel.traffic.clones.14d",
-            "github.cirwel.traffic.clones.uniques.14d",
+            "github.traffic.views.14d",
+            "github.traffic.views.uniques.14d",
+            "github.traffic.clones.14d",
+            "github.traffic.clones.uniques.14d",
         ):
             assert f"{name}.error" in _catalog
 
@@ -1119,3 +1123,39 @@ class TestChroniclerAsKnownResident:
             "UNITARES_RESIDENT_SILENCE_SECONDS", "chronicler=abc,,vigil=2400,x=-5"
         )
         assert _load_resident_silence_seconds() == {"vigil": 2400}
+
+
+def test_unconfigured_traffic_registers_no_series_or_network_calls():
+    from agents.chronicler import scrapers
+
+    with patch.object(scrapers.subprocess, "run") as runner:
+        configured = scrapers.build_scrapers("")
+    assert not any(name.startswith("github.") for name in configured)
+    runner.assert_not_called()
+
+
+def test_configured_traffic_namespace_preserves_existing_series():
+    from agents.chronicler.scrapers import build_scrapers
+
+    configured = build_scrapers("example", "github.existing_owner")
+    assert "github.existing_owner.traffic.views.14d" in configured
+    assert "github.traffic.views.14d" not in configured
+
+
+def test_direct_traffic_fetch_requires_explicit_owner():
+    from agents.chronicler import scrapers
+
+    scrapers._fetch_github_traffic.cache_clear()
+    with patch.object(scrapers, "GITHUB_ORG", ""), patch.object(scrapers.subprocess, "run") as runner:
+        with pytest.raises(ValueError, match="GITHUB_SCRAPE_ORG"):
+            scrapers._fetch_github_traffic()
+    runner.assert_not_called()
+
+
+def test_registered_traffic_reads_the_explicit_owner_not_a_global_default():
+    from agents.chronicler import scrapers
+
+    with patch.object(scrapers, "_fetch_github_traffic", return_value={"views": 4}) as fetch:
+        configured = scrapers.build_scrapers("selected-owner", "github.existing")
+        assert configured["github.existing.traffic.views.14d"](Path("/")) == 4.0
+    fetch.assert_called_once_with("selected-owner")

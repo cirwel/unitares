@@ -6,7 +6,7 @@
 # running from ~/projects/unitares (the SHARED dev tree, marked restart-DEV/⚠DEV
 # in deploy-status.sh), so a merged fix was NOT live until someone manually
 # pulled + kickstarted. That is the running-process-vs-master-commit drift class
-# (feedback_running-process-vs-master-commit.md) — it caused the 2026-06-28
+# observed in the 2026-06-28
 # "forced-release fix merged but Sentinel still alerting" incident. Mirrors
 # deploy-lease-plane.sh: a dedicated worktree makes running-code == origin/master
 # by construction.
@@ -25,8 +25,8 @@
 # deploy-lib.sh.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.sentinel-beam"
 LOG="${UNITARES_SENTINEL_LOG:-$HOME/Library/Logs/unitares-sentinel-beam.log}"
 PLIST="${UNITARES_SENTINEL_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
@@ -57,6 +57,8 @@ python3 "$SENTINEL_PLIST_TOOL" check \
   --governance-plist "$GOVERNANCE_PLIST" \
   --socket "$GOVERNANCE_SOCKET"
 
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
+
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-sentinel.sh" "$DEPLOY"
 
@@ -72,6 +74,7 @@ prev_lines=0
 [[ -f "$LOG" ]] && prev_lines="$(wc -l < "$LOG" | tr -d ' ')"
 
 echo "[deploy] restarting $LABEL (gui domain — it is a LaunchAgent, not a system daemon)"
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
 check_sentinel_boot_stamp() {
