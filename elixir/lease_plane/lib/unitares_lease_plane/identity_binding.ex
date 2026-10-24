@@ -4,7 +4,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
   Modes:
 
-    * `:off` — compatibility posture; no identity proof is inspected.
+    * `:off` — explicit compatibility posture; no identity proof is inspected.
     * `:log` — verify when a proof is present and log failures, but allow.
     * `:enforce` — every lease mutation requires a governance-verified proof
       bound to the UUID that owns (or will own) the lease.
@@ -126,8 +126,8 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     do: {:error, :identity_proof_invalid}
 
   @spec parse_mode(String.t() | nil) :: :off | :log | :enforce
-  def parse_mode(nil), do: :off
-  def parse_mode(""), do: :off
+  def parse_mode(nil), do: :enforce
+  def parse_mode(""), do: :enforce
 
   def parse_mode(value) when is_binary(value) do
     case String.downcase(String.trim(value)) do
@@ -229,7 +229,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
-  defp mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :off)
+  defp mode, do: Application.get_env(:lease_plane, :identity_binding_mode, :enforce)
 
   defp effective_mode(surface_kind) do
     if required_for_surface?(surface_kind), do: mode(), else: :off

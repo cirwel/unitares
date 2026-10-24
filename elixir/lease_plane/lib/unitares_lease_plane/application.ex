@@ -122,8 +122,8 @@ defmodule UnitaresLeasePlane.Application do
     configure_governance_api_token()
 
     # Identity attribution is a separate gate from the shared service bearer.
-    # Default off preserves existing deployments; quickstarts can enable
-    # `enforce` only when governance is reachable and callers carry proofs.
+    # New deployments fail closed; an explicit compatibility override is
+    # required to weaken non-strict legacy surfaces during migration.
     Application.put_env(
       :lease_plane,
       :identity_binding_mode,

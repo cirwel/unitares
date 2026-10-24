@@ -138,3 +138,26 @@ def test_mint_requires_explicit_destination_audience(monkeypatch) -> None:
             signing_key=key,
             issuer=VECTOR["issuer"],
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/lease/acquire",
+        "/v1/dialectic/session",
+        "/v1/dialectic/reviewer/claim",
+        "/v2/dialectic/resolve-with-effect",
+    ],
+)
+def test_mint_accepts_supported_principal_mutation_paths(path) -> None:
+    token = mint_lease_attestation(
+        holder_agent_uuid=VECTOR["holder_agent_uuid"],
+        method="POST",
+        path=path,
+        body_sha256=VECTOR["body_sha256"],
+        signing_key=load_signing_key(VECTOR["seed"]),
+        issuer=VECTOR["issuer"],
+        audience=VECTOR["jwks"]["audience"],
+    )
+
+    assert token.startswith("lat.v1.")

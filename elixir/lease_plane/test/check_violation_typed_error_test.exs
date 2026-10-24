@@ -28,6 +28,11 @@ defmodule UnitaresLeasePlane.CheckViolationTypedErrorTest do
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
     Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+    Application.put_env(:lease_plane, :identity_verifier, fn holder, proof ->
+      if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+    end)
+
     surface = unique_surface_id("checkviol")
 
     on_exit(fn -> cleanup_surface(surface) end)
@@ -36,11 +41,25 @@ defmodule UnitaresLeasePlane.CheckViolationTypedErrorTest do
   end
 
   defp post_json(path, body) do
-    :post
-    |> conn(path, Jason.encode!(body))
-    |> put_req_header("content-type", "application/json")
-    |> put_req_header("authorization", "Bearer #{@bearer}")
-    |> HTTPRouter.call(@opts)
+    holder =
+      Map.get(body, :holder_agent_uuid) ||
+        case UnitaresLeasePlane.Repo.active_lease(Map.get(body, :lease_id)) do
+          {:ok, lease} -> lease.holder_agent_uuid
+          _ -> nil
+        end
+
+    conn =
+      :post
+      |> conn(path, Jason.encode!(body))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer #{@bearer}")
+
+    conn =
+      if holder,
+        do: put_req_header(conn, "x-unitares-identity-proof", "proof:" <> holder),
+        else: conn
+
+    HTTPRouter.call(conn, @opts)
   end
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)

@@ -58,6 +58,21 @@ def _fake_httpx(status_code, body):
 def _enable(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    # These tests exercise attempt/response recording, not attestation
+    # construction. Supply the request-bound result that a proved reviewer
+    # would produce so the client reaches the mocked HTTP boundary.
+    monkeypatch.setattr(
+        brc,
+        "_identity_bound_request",
+        lambda *_args, **_kwargs: (
+            b"{}",
+            {
+                "Authorization": "Bearer tok",
+                "Content-Type": "application/json",
+                "X-Unitares-Identity-Proof": "proof",
+            },
+        ),
+    )
 
 
 # --- the recorder itself ---------------------------------------------------

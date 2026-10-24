@@ -8,6 +8,9 @@ Authoritative governance-policy, transcript-frontier, and in-flight-saga
 refusals raise rather than fall back to a second writer.
 """
 
+import base64
+import hashlib
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +21,25 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.dialectic import beam_resolve_client as brc
+
+_REAL_IDENTITY_BOUND_REQUEST = brc._identity_bound_request
+
+
+@pytest.fixture(autouse=True)
+def _stub_request_bound_identity(monkeypatch):
+    """Keep transport-contract tests focused; dedicated tests cover minting."""
+
+    def bind(path, payload, *, expected_agent_id=None, include_actor=False):
+        wire = dict(payload)
+        if include_actor:
+            wire["actor_agent_id"] = expected_agent_id or "actor"
+        return json.dumps(wire).encode(), {
+            "Authorization": "Bearer tok",
+            "Content-Type": "application/json",
+            "X-Unitares-Identity-Proof": "lat.v1.test.signature",
+        }
+
+    monkeypatch.setattr(brc, "_identity_bound_request", bind)
 
 
 def _fake_httpx(status_code, body):
@@ -32,6 +54,52 @@ def _fake_httpx(status_code, body):
     fake = MagicMock()
     fake.Client.return_value = client_cm
     return fake
+
+
+def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
+    from src.lease_attestation import export_public_jwks, verify_lease_attestation
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    monkeypatch.setenv(
+        "UNITARES_LEASE_ATTESTATION_SIGNING_KEY",
+        base64.urlsafe_b64encode(b"1" * 32).rstrip(b"=").decode(),
+    )
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "test-issuer")
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_AUDIENCE", "test-plane")
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        reset_session_context(context_token)
+
+    assert bound is not None
+    body, headers = bound
+    assert json.loads(body) == {
+        "session_id": "s1",
+        "phase": "antithesis",
+        "actor_agent_id": actor,
+    }
+    proof = headers["X-Unitares-Identity-Proof"]
+    assert verify_lease_attestation(
+        proof,
+        jwks=export_public_jwks(),
+        holder_agent_uuid=actor,
+        method="POST",
+        path="/v1/dialectic/phase",
+        body_sha256=hashlib.sha256(body).hexdigest(),
+        audience="test-plane",
+    ) is not None
 
 
 @pytest.mark.asyncio
@@ -224,7 +292,9 @@ async def test_status_failed_is_sent_and_validated(monkeypatch):
         )
     assert out is not None and out["status"] == "failed"
     # The status was forwarded in the POST body.
-    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    sent = json.loads(
+        fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["content"]
+    )
     assert sent["status"] == "failed"
 
 
@@ -253,7 +323,9 @@ async def test_create_success_filters_none_fields(monkeypatch):
             "s1", "p", {"reviewer_agent_id": "r", "topic": None, "reason": "boom"}
         )
     assert out is not None and out["created"] is True
-    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    sent = json.loads(
+        fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["content"]
+    )
     assert sent["reviewer_agent_id"] == "r"
     assert "topic" not in sent  # None-valued fields are dropped
 
@@ -303,6 +375,23 @@ async def test_update_phase_non_ok_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_phase_identity_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {
+        "ok": False,
+        "error": "permission_denied",
+        "reason": "identity_proof_invalid",
+    }
+
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(403, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_proof_invalid"
+
+
+@pytest.mark.asyncio
 async def test_update_reviewer_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     assert await brc.beam_update_reviewer("s1", "rev") is None
@@ -331,11 +420,12 @@ async def test_update_reviewer_open_slot_claim_is_sent(monkeypatch):
     assert out is not None
     post = fake.Client.return_value.__enter__.return_value.post
     assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
-    sent = post.call_args.kwargs["json"]
+    sent = json.loads(post.call_args.kwargs["content"])
     assert sent == {
         "session_id": "s1",
         "reviewer_agent_id": "rev",
         "claim_if_unassigned": True,
+        "actor_agent_id": "rev",
     }
 
 

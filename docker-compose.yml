@@ -145,12 +145,12 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
-      # Enforce request-bound operator attestations only for the maintenance
-      # surface exercised by the coordination demo. Expand this list only after
-      # each producer for a kind has been migrated to carry identity proof.
+      # Principal-attributed mutations fail closed with request-bound operator
+      # attestations. Keep the rollout selector at all for any legacy helper
+      # that still consults it; core lease/dialectic routes verify strictly.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
       UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-all}
       UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
       # Exact private-Compose exception; every other HTTP key URL is rejected.
