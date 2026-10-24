@@ -15,6 +15,13 @@ from agents.vigil_hygiene.agent import is_keepalive, sweep
 from agents.vigil_hygiene.cherry import CherryVerdict
 
 
+@pytest.fixture(autouse=True)
+def isolated_lease_plane(monkeypatch):
+    # A developer shell may carry real lease credentials. Tests must exercise
+    # the advisory wrapper without sending synthetic sweeps to that service.
+    monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
@@ -242,3 +249,88 @@ class TestSweepHelpers:
     def test_list_origin_branches_returns_pushed_branches(self, fake_repo: Path):
         result = agent_mod.list_origin_branches(fake_repo)
         assert "master" in result
+
+
+class TestOpenPRProtection:
+    def test_queries_selected_origin_and_all_pages(self, fake_repo, monkeypatch):
+        import json
+
+        real_run = agent_mod.subprocess.run
+        calls = []
+        monkeypatch.setenv("GH_REPO", "unrelated/project")
+
+        def run(cmd, **kwargs):
+            if cmd[0] != "gh":
+                return real_run(cmd, **kwargs)
+            calls.append((cmd, kwargs))
+            payload = (
+                {"nameWithOwner": "example/selected", "url": "https://github.example/example/selected"}
+                if cmd[1:3] == ["repo", "view"] else
+                [[{"head": {"ref": "first-page"}}], [{"head": {"ref": "later-page"}}]]
+            )
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+        monkeypatch.setattr(agent_mod.subprocess, "run", run)
+        assert agent_mod.list_open_pr_branches(fake_repo) == {"first-page", "later-page"}
+        assert calls[0][0][3] == _git(fake_repo, "remote", "get-url", "origin").stdout.strip()
+        assert calls[0][1]["cwd"] == str(fake_repo)
+        assert calls[1][0] == [
+            "gh", "api", "--hostname", "github.example", "--paginate", "--slurp",
+            "repos/example/selected/pulls?state=open&per_page=100",
+        ]
+
+    @pytest.mark.parametrize("payload", ["", "null", "[]", "{}", '[[{"head": {}}]]', '["bad-page"]'])
+    def test_incomplete_or_malformed_response_is_not_an_empty_protection_set(
+        self, fake_repo, monkeypatch, payload,
+    ):
+        real_run = agent_mod.subprocess.run
+
+        def run(cmd, **kwargs):
+            if cmd[0] != "gh":
+                return real_run(cmd, **kwargs)
+            data = ('{"nameWithOwner":"example/repo","url":"https://github.com/example/repo"}'
+                    if cmd[1:3] == ["repo", "view"] else payload)
+            return subprocess.CompletedProcess(cmd, 0, data, "")
+
+        monkeypatch.setattr(agent_mod.subprocess, "run", run)
+        with pytest.raises(agent_mod.ProtectionLookupError):
+            agent_mod.list_open_pr_branches(fake_repo)
+
+    def test_protection_failure_holds_entire_live_sweep_before_git_mutation(self, fake_repo, monkeypatch):
+        def unavailable(_repo):
+            raise agent_mod.ProtectionLookupError("no GitHub response")
+
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", unavailable)
+        monkeypatch.setattr(agent_mod, "run_git", lambda *a, **kw: pytest.fail("sweep ran git before protection"))
+        report = agent_mod._sweep_inner(fake_repo, dry_run=False)
+        assert report.errors == ["no GitHub response"]
+        assert report.branches_pruned == report.worktrees_removed == report.origin_orphans_deleted == 0
+
+    def test_gone_local_branch_with_open_pr_is_held(self, fake_repo, monkeypatch):
+        _git(fake_repo, "branch", "feature/active-review")
+        _git(fake_repo, "push", "-u", "origin", "feature/active-review")
+        _git(fake_repo, "push", "origin", "--delete", "feature/active-review")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: {"feature/active-review"})
+        report = sweep(fake_repo, dry_run=False)
+        assert report.branches_pruned == 0
+        assert "feature/active-review" in _git(fake_repo, "branch", "--list", "feature/active-review").stdout
+
+
+def test_selected_main_repository_uses_its_default_base(fake_repo, monkeypatch):
+    _git(fake_repo, "branch", "-m", "master", "main")
+    _git(fake_repo, "push", "-u", "origin", "main")
+    # Explicit symbolic remote default supports repositories retaining another
+    # historical branch named master without guessing the base.
+    _git(fake_repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    assert agent_mod.default_base(fake_repo) == "origin/main"
+    monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+    assert sweep(fake_repo, dry_run=True).errors == []
+
+
+def test_ambiguous_default_branch_holds_cleanup(fake_repo, monkeypatch):
+    _git(fake_repo, "branch", "main")
+    _git(fake_repo, "push", "origin", "main")
+    monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+    agent_mod.run_git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD", repo=fake_repo, check=False)
+    with pytest.raises(agent_mod.ProtectionLookupError, match="cannot establish origin's default branch"):
+        agent_mod.default_base(fake_repo)

@@ -235,11 +235,11 @@ def test_resolve_secrets_path_defaults_to_neutral_location(setup_mod, tmp_path):
     )
 
 
-def test_resolve_secrets_path_keeps_existing_legacy_file(setup_mod, tmp_path):
+def test_resolve_secrets_path_ignores_unselected_legacy_file(setup_mod, tmp_path):
     legacy = tmp_path / ".config" / "cirwel" / "secrets.env"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("X=1\n")
-    assert setup_mod.resolve_secrets_path(tmp_path, {}) == legacy
+    assert setup_mod.resolve_secrets_path(tmp_path, {}) == tmp_path / ".config/unitares/secrets.env"
 
 
 def test_resolve_secrets_path_honours_override(setup_mod, tmp_path):
@@ -439,15 +439,10 @@ def test_run_pipeline_apply_runs_final_doctor(setup_mod, monkeypatch, tmp_path):
     assert (fake_home / ".unitares").is_dir()
 
 
-# The neutral default a fresh install gets, and the pre-2026-09 legacy path an
-# existing install may hold alone (kept as the backward-compat case).
-@pytest.mark.parametrize("secrets_dir", ["unitares", "cirwel"])
-def test_run_pipeline_idempotent_apply_on_healthy_state(
-    setup_mod, monkeypatch, tmp_path, secrets_dir
-):
+def test_run_pipeline_idempotent_apply_on_healthy_state(setup_mod, monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     (fake_home / ".unitares").mkdir(mode=0o700, parents=True)
-    secrets = fake_home / ".config" / secrets_dir / "secrets.env"
+    secrets = fake_home / ".config" / "unitares" / "secrets.env"
     secrets.parent.mkdir(parents=True)
     secrets.write_text("EXISTING=1\n")
     secrets.chmod(0o600)

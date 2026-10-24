@@ -60,7 +60,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REPO = os.environ.get("DOGFOOD_ISSUE_REPO", "CIRWEL/unitares")
+DEFAULT_REPO = os.environ.get("DOGFOOD_ISSUE_REPO", "").strip()
 DEFAULT_BASE = os.environ.get("UNITARES_HTTP_BASE", "http://127.0.0.1:8767")
 EVENT_TYPE = "dogfood_friction_finding"
 ROUTE = "issue_surface"
@@ -540,7 +540,7 @@ class Surfacer:
 
     def __init__(
         self,
-        repo: str = DEFAULT_REPO,
+        repo: str | None = None,
         base: str = DEFAULT_BASE,
         io: Mapping[str, Callable[..., Any]] | None = None,
         apply: bool = False,
@@ -550,7 +550,9 @@ class Surfacer:
         checkpoint_path: str | Path | None = None,
     ) -> None:
         """Configure a dry run, reviewed exact apply, or checkpointed bulk apply."""
-        self.repo = repo
+        self.repo = DEFAULT_REPO if repo is None else repo
+        if not isinstance(self.repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repo):
+            raise ValueError("set --repo OWNER/REPO or DOGFOOD_ISSUE_REPO before surfacing findings")
         self.base = base
         self.io = {**DEFAULT_IO, **(io or {})}
         self.apply = apply

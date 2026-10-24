@@ -75,8 +75,8 @@ from typing import Any, List, Optional, Tuple
 from .base import CheckResult
 
 GH_BIN = os.environ.get("VIGIL_GH_BIN", "gh")
-# Which GitHub owner's drafts to sweep. The fleet lives under one owner.
-OWNER = os.environ.get("VIGIL_STALLED_PR_OWNER", "cirwel")
+# Optional GitHub owner. An unconfigured check makes no network requests.
+OWNER = os.environ.get("VIGIL_STALLED_PR_OWNER", "").strip()
 # CI red for longer than this, with nothing done about it, is a stall.
 STALE_HOURS = float(os.environ.get("VIGIL_STALLED_PR_STALE_HOURS", "12"))
 # Bound on the search sweep and on per-PR status calls.
@@ -452,7 +452,7 @@ async def gather(
 
 class StalledDraftPR:
     name = "stalled_draft_pr"
-    # Distinct from "governance"/"lumen" so _collect_health_state gives this
+    # Distinct from service-health keys so _collect_health_state gives this
     # check its own {svc}_healthy bookkeeping — that is what makes the finding
     # page once on the healthy -> unhealthy edge instead of every cycle. It is
     # also listed in agent.CONDITION_SERVICE_KEYS so detect_changes does not
@@ -470,6 +470,13 @@ class StalledDraftPR:
             search_limit=_this.SEARCH_LIMIT,
             max_inspect=_this.MAX_INSPECT,
         )
+        if not _this.OWNER:
+            return _this.assess(
+                [], drafts_read=0, cap_skipped=0, unreadable=0, deadline_skipped=0,
+                search_truncated=False, indeterminate=True,
+                indeterminate_reason="VIGIL_STALLED_PR_OWNER is not configured",
+                prev_ok=prev_ok, **common,
+            )
         try:
             res = await _this.gather(
                 _this.OWNER,

@@ -28,6 +28,22 @@ from src.tool_schemas import get_tool_definitions
 
 
 @pytest.fixture(autouse=True)
+def explicit_host_preference(monkeypatch, tmp_path):
+    """Legacy routing cases now declare their deployment's preference."""
+    from src import inference_config
+
+    path = tmp_path / "explicit-hosts.json"
+    path.write_text(json.dumps({"version": 1, "jobs": {"consult.thorough": {
+        "prefer": ["claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"]
+    }}}))
+    path.chmod(0o600)
+    monkeypatch.setenv(inference_config.HOSTS_FILE_ENV, str(path))
+    inference_config._cache.update(key=None, result=None)
+    yield
+    inference_config._cache.update(key=None, result=None)
+
+
+@pytest.fixture(autouse=True)
 def _resolved_consult_identity(monkeypatch):
     """Direct handler tests model the proof-bearing dispatch handoff."""
     monkeypatch.setattr(
@@ -1092,7 +1108,7 @@ _ALL_HOSTS = {"claude:host-adapter", "codex:host-adapter", "antigravity:host-ada
          {"codex:host-adapter", "antigravity:host-adapter"}, "codex:host-adapter"),
         (SessionSignals(client_hint="chatgpt"),
          {"antigravity:host-adapter", "codex:host-adapter"}, "antigravity:host-adapter"),
-        # Unknown callers keep the pre-existing Claude default.
+        # Unknown callers follow this fixture's explicit deployment order.
         (None, _ALL_HOSTS, "claude:host-adapter"),
         (SessionSignals(user_agent="curl/8"), {"antigravity:host-adapter"},
          "antigravity:host-adapter"),
@@ -1621,7 +1637,7 @@ async def test_record_carries_model_reporting_status_and_reroutes(monkeypatch, a
         {"threadId": "t1", "fromModel": "gpt-a", "toModel": "gpt-b", "reason": "capacity"},
     ]
     monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=outcome))
-    monkeypatch.setattr(co, "_thorough_host_for_caller", lambda: "codex:host-adapter")
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid == "codex:host-adapter")
 
     parsed = _payload(await co.handle_consult({
         "brief": "Deep analysis",
@@ -1686,7 +1702,7 @@ async def test_backend_reroute_reason_prose_is_hashed(monkeypatch, audit_sinks):
         {"fromModel": "gpt-a", "toModel": "gpt-b", "reason": "high risk activity detected in your prompt"},
     ]
     monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=outcome))
-    monkeypatch.setattr(co, "_thorough_host_for_caller", lambda: "codex:host-adapter")
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid == "codex:host-adapter")
 
     await co.handle_consult({
         "brief": "Deep analysis",
@@ -1956,9 +1972,8 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
     monkeypatch.setattr(co, "run_model_inference", standard)
     monkeypatch.setattr(co, "run_delegated_inference", thorough)
     # Explicit selection bypasses inferred family and automatic availability picks.
-    chooser = lambda: pytest.fail("a pinned host must not use automatic selection")
-    monkeypatch.setattr(co, "_thorough_host_for_caller", chooser)
-    monkeypatch.setattr(co, "_thorough_peers_for_caller", chooser)
+    chooser = lambda *_args, **_kwargs: pytest.fail("a pinned host must not use automatic selection")
+    monkeypatch.setattr(co, "_thorough_plan", chooser)
     is_standard = host_id in co._STANDARD_HOST_ROUTES
     parsed = _payload(await co.handle_consult({
         "brief": _BRIEF_SENTINEL,
@@ -2117,7 +2132,7 @@ def test_caller_family_falls_back_to_bound_agent_metadata_over_generic_http_ua(
 
     assert co._caller_family() == "google"
     assert co._thorough_host_for_caller() == "claude:host-adapter"
-    assert "antigravity:host-adapter" not in co._THOROUGH_PEERS[co._caller_family()]
+    assert "antigravity:host-adapter" not in co._thorough_plan(co._caller_family()).peers
 
     # Antigravity hosting a Claude model still resolves to anthropic first.
     monkeypatch.setitem(
@@ -2240,11 +2255,10 @@ def hosts_file(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("family", list(_OLD_THOROUGH_PEERS))
-def test_default_job_order_matches_the_old_peer_table(monkeypatch, family):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+def test_explicit_deployment_order_preserves_reciprocal_routing(monkeypatch, family):
     plan = co._thorough_plan(family)
     assert plan.peers == _OLD_THOROUGH_PEERS[family]
-    assert plan.config_error is None and not plan.job_configured
+    assert plan.config_error is None and plan.job_configured
 
 
 def test_file_job_order_is_followed_and_only_shortened(hosts_file):
@@ -2321,7 +2335,8 @@ async def test_unknown_host_id_lists_the_valid_ids(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skipped_and_family_reach_the_result(monkeypatch, hosts_file):
-    hosts_file("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n")
+    hosts_file("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n"
+               "jobs:\n  consult.thorough: { prefer: [claude:host-adapter, codex:host-adapter] }\n")
     monkeypatch.setattr(co, "host_adapter_available", lambda host_id: True)
     completed = _completed(route="agent_orchestrator", host_id="codex:host-adapter",
                            privacy_class="operator_authorized_external")
@@ -2334,8 +2349,6 @@ async def test_skipped_and_family_reach_the_result(monkeypatch, hosts_file):
     assert parsed["diagnostics"]["family"] == "openai"
 
 
-def test_peer_table_view_still_matches_the_old_table():
-    assert co._THOROUGH_PEERS == _OLD_THOROUGH_PEERS
 
 
 # Regression tests for the step-2 review (skipped semantics, privacy gating,
@@ -2348,7 +2361,6 @@ def _served_by(host_id):
 
 @pytest.mark.asyncio
 async def test_skipped_never_names_hosts_after_the_one_that_served(monkeypatch):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     _thorough_as(monkeypatch, caller=SessionSignals(reported_harness_type="codex"),
                  available=_ALL_HOSTS,
                  results={"claude:host-adapter": _served_by("claude:host-adapter")})
@@ -2362,7 +2374,6 @@ async def test_skipped_never_names_hosts_after_the_one_that_served(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failover_records_the_hosts_it_passes(monkeypatch):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     calls = _thorough_as(
         monkeypatch, caller=SessionSignals(), available={"claude:host-adapter", "antigravity:host-adapter"},
         results={"claude:host-adapter": _quota_failure(),
@@ -2417,7 +2428,6 @@ async def test_policy_refusals_are_recorded(monkeypatch, hosts_file, audit_sinks
 
 @pytest.mark.asyncio
 async def test_family_reaches_the_compact_result(monkeypatch):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     _thorough_as(monkeypatch, caller=SessionSignals(), available=_ALL_HOSTS,
                  results={"claude:host-adapter": _served_by("claude:host-adapter")})
     parsed = _payload(await co.handle_consult(
@@ -2427,7 +2437,6 @@ async def test_family_reaches_the_compact_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failover_with_no_next_host_records_nothing_after_the_last_tried(monkeypatch):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     calls = _thorough_as(monkeypatch, caller=SessionSignals(), available={"claude:host-adapter"},
                          results={"claude:host-adapter": _quota_failure()})
     parsed = _payload(await co.handle_consult(
@@ -2450,7 +2459,6 @@ def _council_args(**overrides):
 
 @pytest.mark.asyncio
 async def test_council_asks_each_host_once_and_records_each(monkeypatch, audit_sinks):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     calls = _thorough_as(monkeypatch, caller=SessionSignals(reported_harness_type="claude-code"),
                          available=_ALL_HOSTS,
                          results={h: _served_by(h) for h in _ALL_HOSTS})
@@ -2499,7 +2507,6 @@ async def test_council_members_run_in_parallel(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_council_returns_partial_answers_and_never_fails_over(monkeypatch, audit_sinks):
-    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
     calls = _thorough_as(monkeypatch, caller=SessionSignals(), available=_ALL_HOSTS, results={
         "codex:host-adapter": _quota_failure(),
         "antigravity:host-adapter": _served_by("antigravity:host-adapter"),
@@ -2776,3 +2783,57 @@ async def test_cancelled_council_keeps_a_members_policy_refusal(monkeypatch, hos
     assert records["antigravity:host-adapter"]["status"] == "cancelled"
     # Nothing reached the caller, so no row keeps hashes under an unseen key.
     assert all(r["hashes"] is None for r in records.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available,code", [
+    (set(), "CONSULT_NO_ELIGIBLE_HOST"),
+    (_ALL_HOSTS, "CONSULT_HOST_SELECTION_REQUIRED"),
+])
+async def test_unconfigured_host_order_refuses_missing_or_ambiguous_peers(monkeypatch, available, code):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    monkeypatch.setattr(co, "_caller_family", lambda: None)
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: hid in available)
+    thorough = AsyncMock()
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert parsed["error_code"] == code
+    # No peer and no orchestrator names the missing extension; an ambiguity names the preference.
+    expected = "consult.thorough.prefer" if available else "orchestrator extension"
+    assert expected in parsed["recovery"]["action"]
+    assert co._thorough_host_for_caller() is None
+    thorough.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_order_selects_one_peer_after_same_family_exclusion(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    monkeypatch.setattr(co, "_caller_family", lambda: "anthropic")
+    monkeypatch.setattr(co, "host_adapter_available",
+                        lambda hid: hid in {"claude:host-adapter", "antigravity:host-adapter"})
+    thorough = AsyncMock(return_value=_served_by("antigravity:host-adapter"))
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert parsed["success"] is True
+    assert thorough.await_args.args[0].host_id == "antigravity:host-adapter"
+    assert co._thorough_plan("anthropic").peers == ("antigravity:host-adapter",)
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_thorough_hosts_allow_requested_local_degradation(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    monkeypatch.setattr(co, "_caller_family", lambda: None)
+    monkeypatch.setattr(co, "host_adapter_available", lambda hid: True)
+    thorough = AsyncMock()
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "allow_degraded": True,
+    }))
+    assert parsed["status"] == "degraded"
+    assert parsed["degradation"]["reason_code"] == "CONSULT_HOST_SELECTION_REQUIRED"
+    thorough.assert_not_awaited()

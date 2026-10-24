@@ -550,33 +550,13 @@ def test_launchd_deployment_tolerates_missing_agents_dir(doctor, monkeypatch, tm
 
 def test_resolve_secrets_file_prefers_override(doctor, tmp_path):
     target = tmp_path / "elsewhere.env"
-    resolved = doctor.resolve_secrets_file(
-        {doctor.SECRETS_ENV_VAR: str(target)},
-        default=tmp_path / "default.env", legacy=tmp_path / "legacy.env",
-    )
-    assert resolved == target
+    assert doctor.resolve_secrets_file({doctor.SECRETS_ENV_VAR: str(target)}) == target
 
 
-def test_resolve_secrets_file_defaults_to_neutral_path(doctor, tmp_path):
-    default = tmp_path / "unitares" / "secrets.env"
-    resolved = doctor.resolve_secrets_file(
-        {}, default=default, legacy=tmp_path / "legacy" / "secrets.env",
-    )
-    assert resolved == default
-
-
-def test_resolve_secrets_file_keeps_existing_legacy_file(doctor, tmp_path):
-    legacy = tmp_path / "legacy" / "secrets.env"
-    legacy.parent.mkdir()
-    legacy.write_text("X=1\n")
-    resolved = doctor.resolve_secrets_file(
-        {}, default=tmp_path / "unitares" / "secrets.env", legacy=legacy,
-    )
-    assert resolved == legacy
-
-
-def test_default_secrets_path_carries_no_operator_name(doctor):
-    assert doctor.DEFAULT_SECRETS_FILE.parent.name == "unitares"
+def test_resolve_secrets_file_requires_explicit_selection(doctor, monkeypatch):
+    monkeypatch.delenv(doctor.SECRETS_ENV_VAR, raising=False)
+    assert doctor.resolve_secrets_file({}) is None
+    assert doctor.check_secrets_file().status == doctor.Status.SKIP
 
 
 def test_secrets_file_absent_is_skip_not_warn(doctor, tmp_path):

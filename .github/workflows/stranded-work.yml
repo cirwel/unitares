@@ -68,7 +68,7 @@ jobs:
             cat audit.txt
             echo '```'
             echo
-            echo "_Re-run locally: \`python3 scripts/dev/stranded_work_audit.py\`_"
+            echo "_Re-run locally: \`python3 scripts/dev/stranded_work_audit.py --repo $GITHUB_REPOSITORY\`_"
           } > "$body_file"
           existing=$(gh issue list --label ci-finding --state open \
                        --search 'stranded-work-audit in:body' \

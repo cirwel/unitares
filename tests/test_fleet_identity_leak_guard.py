@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
+
+import pytest
 
 _GUARD = Path(__file__).resolve().parents[1] / "scripts/dev/check_fleet_identity_leak.py"
 _spec = importlib.util.spec_from_file_location("check_fleet_identity_leak", _GUARD)
@@ -72,3 +75,36 @@ def test_name_exemptions_do_not_exempt_the_domain(monkeypatch):
     failing, deferred = guard.triage(coupled, [domain_hit, name_hit])
     assert failing == [domain_hit] and deferred == [name_hit]
     assert guard.triage("src/other.py", [name_hit]) == ([name_hit], [])
+
+
+@pytest.mark.parametrize("checkout", ["checkout", "tests/checkout", "tests"])
+def test_main_scans_runtime_regardless_of_checkout_directory(
+    tmp_path, monkeypatch, capsys, checkout
+):
+    repo = tmp_path / checkout
+    source = repo / "src" / "runtime.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('ORIGIN = "https://gov.cirwel.org/mcp/"\n')
+    monkeypatch.setattr(guard, "REPO_ROOT", repo)
+    monkeypatch.setattr(sys, "argv", [str(_GUARD), "--paths", "src", "--no-served"])
+
+    assert guard.main() == 1
+    output = capsys.readouterr().out
+    assert 'src/runtime.py:1: hardcoded operator domain "cirwel.org"' in output
+
+
+def test_main_exempts_only_repository_test_paths(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "tests" / "checkout"
+    for relative, contents in {
+        "agents/example/agent.py": 'ORIGIN = ""\n',
+        "agents/example/tests/fixture.py": 'ORIGIN = "https://gov.cirwel.org"\n',
+        "agents/example/test_agent.py": 'ORIGIN = "https://gov.cirwel.org"\n',
+    }.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+    monkeypatch.setattr(guard, "REPO_ROOT", repo)
+    monkeypatch.setattr(sys, "argv", [str(_GUARD), "--paths", "agents", "--no-served"])
+
+    assert guard.main() == 0
+    assert "1 file(s) scanned" in capsys.readouterr().out
