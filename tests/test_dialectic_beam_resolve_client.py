@@ -29,10 +29,17 @@ _REAL_IDENTITY_BOUND_REQUEST = brc._identity_bound_request
 def _stub_request_bound_identity(monkeypatch):
     """Keep transport-contract tests focused; dedicated tests cover minting."""
 
-    def bind(path, payload, *, expected_agent_id=None, include_actor=False):
+    def bind(
+        path,
+        payload,
+        *,
+        expected_agent_id=None,
+        include_actor=False,
+        fallback_actor_id=None,
+    ):
         wire = dict(payload)
         if include_actor:
-            wire["actor_agent_id"] = expected_agent_id or "actor"
+            wire["actor_agent_id"] = expected_agent_id or fallback_actor_id or "actor"
         return json.dumps(wire).encode(), {
             "Authorization": "Bearer tok",
             "Content-Type": "application/json",
@@ -126,6 +133,28 @@ def test_identity_bound_request_refuses_a_resolved_caller_mismatch():
     assert exc.value.error_code == "identity_proof_invalid"
 
 
+def test_identity_bound_request_without_attestation_still_targets_beam(monkeypatch):
+    from src.mcp_handlers.context import reset_session_context, set_session_context
+
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    monkeypatch.delenv("UNITARES_LEASE_ATTESTATION_SIGNING_KEY", raising=False)
+    context_token = set_session_context(client_session_id="session-test")
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+            fallback_actor_id="paused",
+        )
+    finally:
+        reset_session_context(context_token)
+
+    assert bound is not None
+    body, headers = bound
+    assert json.loads(body)["actor_agent_id"] == "paused"
+    assert "X-Unitares-Identity-Proof" not in headers
+
+
 @pytest.mark.asyncio
 async def test_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
@@ -182,7 +211,7 @@ async def test_success_returns_body(monkeypatch):
     assert out == body
     post = fake.Client.return_value.__enter__.return_value.post
     assert post.call_args.args[0].endswith("/v2/dialectic/resolve-with-effect")
-    assert json.loads(post.call_args.kwargs["content"])["actor_agent_id"] == "actor"
+    assert json.loads(post.call_args.kwargs["content"])["actor_agent_id"] == "p"
 
 
 @pytest.mark.asyncio

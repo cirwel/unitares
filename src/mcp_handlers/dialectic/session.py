@@ -472,7 +472,10 @@ async def save_session(
         else:
             round_ = getattr(session, "synthesis_round", None)
             beam_ph = await beam_update_phase(
-                session.session_id, session.phase.value, round_
+                session.session_id,
+                session.phase.value,
+                round_,
+                actor_agent_id=getattr(session, "paused_agent_id", None),
             )
             if beam_ph is None:
                 with session_write_via("python_fallback", site="save_session_phase"):

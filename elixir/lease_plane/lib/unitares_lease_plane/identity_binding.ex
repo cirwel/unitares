@@ -59,6 +59,10 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
+  @doc "True only when this surface is currently in fail-closed enforcement."
+  @spec enforced_for_surface?(String.t() | nil) :: boolean()
+  def enforced_for_surface?(surface_kind), do: effective_mode(surface_kind) == :enforce
+
   @spec authorize(String.t(), String.t() | nil) :: :ok | {:error, refusal()}
   def authorize(expected_holder_uuid, proof), do: authorize(expected_holder_uuid, proof, nil, nil)
 

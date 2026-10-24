@@ -1443,6 +1443,29 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(response)["ok"] == true
     end
 
+    test "explicit compatibility mode permits a non-participant dialectic actor" do
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          phase: "thesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      response =
+        post_json_without_proof("/v1/dialectic/phase", %{
+          session_id: session_id,
+          phase: "antithesis",
+          actor_agent_id: "background-reconciler"
+        })
+
+      assert response.status == 200
+    end
+
     test "dialectic session creation binds proof to the paused participant" do
       session_id = "test_elixir_identity_create_#{System.unique_integer([:positive])}"
       on_exit(fn -> cleanup_dialectic_session(session_id) end)

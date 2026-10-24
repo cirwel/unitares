@@ -140,6 +140,7 @@ def _identity_bound_request(
     *,
     expected_agent_id: Optional[str] = None,
     include_actor: bool = False,
+    fallback_actor_id: Optional[str] = None,
 ) -> Optional[tuple[bytes, Dict[str, str]]]:
     """Encode one BEAM mutation and bind it to the resolved MCP caller.
 
@@ -147,28 +148,36 @@ def _identity_bound_request(
     whose dialectic row will change. A short-lived Ed25519 attestation binds the
     resolved caller to the exact path and bytes. Calls without a resolved
     request identity (for example a trusted background reconciliation task)
-    stay on the existing direct-PostgreSQL fallback instead of minting a claim.
+    still go through BEAM without a proof. Compatibility mode accepts that
+    request; enforcement rejects it authoritatively instead of silently opening
+    a second PostgreSQL writer.
     """
     from src.mcp_handlers.context import get_context_resolved_agent_id
     from src.lease_attestation import LeaseAttestationError, mint_lease_attestation
 
     raw_actor = get_context_resolved_agent_id()
-    if raw_actor is None:
-        return None
-    try:
-        actor = str(uuid.UUID(str(raw_actor)))
-        expected = str(uuid.UUID(str(expected_agent_id))) if expected_agent_id else None
-    except (TypeError, ValueError, AttributeError):
-        raise BeamDialecticPolicyRefusal(
-            "identity_proof_invalid", operation=f"identity_binding:{path}"
-        )
-    if expected is not None and actor != expected:
-        raise BeamDialecticPolicyRefusal(
-            "identity_proof_invalid", operation=f"identity_binding:{path}"
-        )
+    actor: Optional[str] = None
+    if raw_actor is not None:
+        try:
+            actor = str(uuid.UUID(str(raw_actor)))
+            expected = (
+                str(uuid.UUID(str(expected_agent_id))) if expected_agent_id else None
+            )
+        except (TypeError, ValueError, AttributeError):
+            raise BeamDialecticPolicyRefusal(
+                "identity_proof_invalid", operation=f"identity_binding:{path}"
+            )
+        if expected is not None and actor != expected:
+            raise BeamDialecticPolicyRefusal(
+                "identity_proof_invalid", operation=f"identity_binding:{path}"
+            )
+    elif expected_agent_id is not None:
+        actor = str(expected_agent_id)
+    elif fallback_actor_id is not None:
+        actor = str(fallback_actor_id)
 
     wire_payload = dict(payload)
-    if include_actor:
+    if include_actor and actor is not None:
         wire_payload["actor_agent_id"] = actor
     body = json.dumps(
         wire_payload,
@@ -176,20 +185,26 @@ def _identity_bound_request(
         allow_nan=False,
         separators=(",", ":"),
     ).encode("utf-8")
-    try:
-        proof = mint_lease_attestation(
-            holder_agent_uuid=actor,
-            method="POST",
-            path=path,
-            body_sha256=hashlib.sha256(body).hexdigest(),
-        )
-    except LeaseAttestationError:
-        return None
-    return body, {
+    headers = {
         "Authorization": f"Bearer {os.environ['LEASE_PLANE_BEARER_TOKEN']}",
         "Content-Type": "application/json",
-        "X-Unitares-Identity-Proof": proof,
     }
+    if raw_actor is not None and actor is not None:
+        try:
+            headers["X-Unitares-Identity-Proof"] = mint_lease_attestation(
+                holder_agent_uuid=actor,
+                method="POST",
+                path=path,
+                body_sha256=hashlib.sha256(body).hexdigest(),
+            )
+        except LeaseAttestationError as exc:
+            logger.warning(
+                "[BEAM_IDENTITY] attestation unavailable for %s; sending the "
+                "request without proof so the lease plane applies its rollout mode: %s",
+                path,
+                exc,
+            )
+    return body, headers
 
 
 async def beam_create_session(
@@ -285,6 +300,7 @@ async def beam_update_phase(
     session_id: str,
     phase: Optional[str],
     synthesis_round: Optional[int] = None,
+    actor_agent_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Advance a non-terminal dialectic phase via BEAM (sole writer of the session
     row). Returns the BEAM result on success, or ``None`` to fall back to the
@@ -309,6 +325,7 @@ async def beam_update_phase(
         "/v1/dialectic/phase",
         payload,
         include_actor=True,
+        fallback_actor_id=actor_agent_id,
     )
     if bound_request is None:
         return None
@@ -392,6 +409,7 @@ async def beam_update_reviewer(
         payload,
         expected_agent_id=reviewer_agent_id if claim_if_unassigned else None,
         include_actor=True,
+        fallback_actor_id=reviewer_agent_id,
     )
     if bound_request is None:
         return None
@@ -512,6 +530,7 @@ async def beam_resolve(
         "/v2/dialectic/resolve-with-effect",
         payload,
         include_actor=True,
+        fallback_actor_id=paused_agent_id,
     )
     if bound_request is None:
         return None

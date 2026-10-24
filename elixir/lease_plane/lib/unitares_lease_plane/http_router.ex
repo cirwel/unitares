@@ -1102,15 +1102,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             :reviewer -> actor_agent_id == reviewer
           end)
 
-        if allowed do
-          IdentityBinding.authorize(
-            actor_agent_id,
-            IdentityBinding.proof_from_conn(conn),
-            "dialectic",
-            IdentityBinding.request_context(conn)
-          )
-        else
-          {:error, :identity_proof_invalid}
+        with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+          if IdentityBinding.enforced_for_surface?("dialectic") and not allowed,
+            do: {:error, :identity_proof_invalid},
+            else: :ok
         end
 
       {:ok, nil} ->
@@ -1124,15 +1119,11 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
     case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
       {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
-        if actor_agent_id in [paused, reviewer] do
-          IdentityBinding.authorize(
-            actor_agent_id,
-            IdentityBinding.proof_from_conn(conn),
-            "dialectic",
-            IdentityBinding.request_context(conn)
-          )
-        else
-          {:error, :session_identity_mismatch}
+        with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+          if IdentityBinding.enforced_for_surface?("dialectic") and
+               actor_agent_id not in [paused, reviewer],
+             do: {:error, :session_identity_mismatch},
+             else: :ok
         end
 
       {:ok, nil} ->
@@ -1163,13 +1154,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           claim_if_unassigned and not is_nil(reviewer) ->
             {:error, :reviewer_write_refused}
 
-          allowed ->
-            IdentityBinding.authorize(
-              actor_agent_id,
-              IdentityBinding.proof_from_conn(conn),
-              "dialectic",
-              IdentityBinding.request_context(conn)
-            )
+          allowed or not IdentityBinding.enforced_for_surface?("dialectic") ->
+            authorize_dialectic_actor(conn, actor_agent_id)
 
           true ->
             {:error, :identity_proof_invalid}
@@ -1181,6 +1167,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       {:error, _reason} ->
         {:error, :identity_verification_unavailable}
     end
+  end
+
+  defp authorize_dialectic_actor(conn, actor_agent_id) do
+    IdentityBinding.authorize(
+      actor_agent_id,
+      IdentityBinding.proof_from_conn(conn),
+      "dialectic",
+      IdentityBinding.request_context(conn)
+    )
   end
 
   defp identity_refusal(conn, :identity_proof_invalid) do
