@@ -136,7 +136,7 @@ describe("Timeline tab", () => {
     expect(detail()).toContain("UTC");
     t.rows()[0].querySelector(".tl-mk.checkin.proceed").click();
     expect(detail()).toContain("Report text not retained for this check-in.");
-    expect(detail()).toContain("none reported");
+    expect(detail()).not.toContain("Reported confidence");  // field absent: no row
     t.rows()[0].querySelector(".tl-mk.checkin.substrate").click();
     expect(detail()).toContain("A hook, not the agent");
   });
@@ -229,14 +229,14 @@ describe("DATA.timeline", () => {
     expect(r.data.events).toEqual([]);
   });
 
-  it("keeps the server's default limit for the 1h window only", async () => {
+  it("asks for the per-kind maximum on every window", async () => {
     const dom = new JSDOM("<div></div>", { runScripts: "outside-only", url: "https://gov.example/dashboard" });
     const urls = [];
     dom.window.fetch = async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ success: true, events: [], agents: [], truncated: [], counts: {} }) }; };
     dom.window.eval(dataSource);
     await dom.window.DATA.timeline({ hours: 1 });
     await dom.window.DATA.timeline({ hours: 6 });
-    expect(urls).toEqual(["/v1/timeline?hours=1&include_substrate=1", "/v1/timeline?hours=6&include_substrate=1&limit=2000"]);
+    expect(urls).toEqual(["/v1/timeline?hours=1&include_substrate=1&limit=2000", "/v1/timeline?hours=6&include_substrate=1&limit=2000"]);
   });
 });
 
