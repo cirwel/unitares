@@ -37,7 +37,9 @@ from src.oauth_provider import (
 # mcp 1.x let `client_id` be unset on the registered-client record (the provider
 # minted it); 2.x split the registration request from the record and made
 # `client_id` required on the record, so the SDK mints it before register_client.
-_CLIENT_ID_OPTIONAL = not OAuthClientInformationFull.model_fields["client_id"].is_required()
+_CLIENT_ID_OPTIONAL = not OAuthClientInformationFull.model_fields[
+    "client_id"
+].is_required()
 
 
 @pytest.fixture
@@ -52,8 +54,9 @@ def _client(client_id="client-1", redirect="https://app.example/cb"):
     )
 
 
-def _auth_params(redirect="https://app.example/cb", state="state-123",
-                 scopes=None, resource=None):
+def _auth_params(
+    redirect="https://app.example/cb", state="state-123", scopes=None, resource=None
+):
     return AuthorizationParams(
         state=state,
         scopes=scopes if scopes is not None else ["mcp:tools"],
@@ -68,15 +71,18 @@ def _auth_params(redirect="https://app.example/cb", state="state-123",
 # Dataclass entries
 # --------------------------------------------------------------------------- #
 
+
 class TestEntryExpiry:
     def test_auth_code_not_expired_when_fresh(self):
-        entry = AuthCodeEntry(code="c", client_id="x", redirect_uri="u",
-                              code_challenge="ch", scopes=[])
+        entry = AuthCodeEntry(
+            code="c", client_id="x", redirect_uri="u", code_challenge="ch", scopes=[]
+        )
         assert entry.is_expired(ttl=300) is False
 
     def test_auth_code_expired_after_ttl(self):
-        entry = AuthCodeEntry(code="c", client_id="x", redirect_uri="u",
-                              code_challenge="ch", scopes=[])
+        entry = AuthCodeEntry(
+            code="c", client_id="x", redirect_uri="u", code_challenge="ch", scopes=[]
+        )
         entry.created_at = time.time() - 301
         assert entry.is_expired(ttl=300) is True
 
@@ -91,12 +97,15 @@ class TestEntryExpiry:
 # Client registration
 # --------------------------------------------------------------------------- #
 
+
 class TestRegisterClient:
     @pytest.mark.asyncio
     async def test_fills_in_missing_id_and_secret(self, provider):
         if _CLIENT_ID_OPTIONAL:
             # mcp 1.x: client_id may arrive unset; register_client mints one.
-            client = OAuthClientInformationFull(redirect_uris=["https://app.example/cb"])
+            client = OAuthClientInformationFull(
+                redirect_uris=["https://app.example/cb"]
+            )
             assert client.client_id is None
             await provider.register_client(client)
             assert client.client_id.startswith("unitares_")
@@ -155,6 +164,7 @@ class TestRegisterClient:
 # --------------------------------------------------------------------------- #
 # Authorization code issuance + redirect
 # --------------------------------------------------------------------------- #
+
 
 class TestAuthorize:
     @pytest.mark.asyncio
@@ -222,7 +232,9 @@ class TestAuthorize:
         assert second.split("code=")[1].split("&")[0] in provider._auth_codes
 
     @pytest.mark.asyncio
-    async def test_authorization_code_cache_evicts_per_client_before_global_capacity(self):
+    async def test_authorization_code_cache_refuses_without_evicting_pending_codes(
+        self,
+    ):
         provider = GovernanceOAuthProvider(
             max_auth_codes=2,
             max_auth_codes_per_client=1,
@@ -230,24 +242,24 @@ class TestAuthorize:
         client = _client("client-1")
         first = await provider.authorize(client, _auth_params())
         first_code = first.split("code=")[1].split("&")[0]
-        second = await provider.authorize(client, _auth_params())
+        with pytest.raises(AuthorizeError) as refused:
+            await provider.authorize(client, _auth_params())
+
+        assert refused.value.error == "temporarily_unavailable"
+        assert set(provider._auth_codes) == {first_code}
+
+        second = await provider.authorize(_client("client-2"), _auth_params())
         second_code = second.split("code=")[1].split("&")[0]
+        with pytest.raises(AuthorizeError):
+            await provider.authorize(_client("client-3"), _auth_params())
 
-        assert first_code not in provider._auth_codes
-        assert second_code in provider._auth_codes
-
-        third = await provider.authorize(_client("client-2"), _auth_params())
-        fourth = await provider.authorize(_client("client-3"), _auth_params())
-
-        assert len(provider._auth_codes) == 2
-        assert second_code not in provider._auth_codes
-        assert third.split("code=")[1].split("&")[0] in provider._auth_codes
-        assert fourth.split("code=")[1].split("&")[0] in provider._auth_codes
+        assert set(provider._auth_codes) == {first_code, second_code}
 
 
 # --------------------------------------------------------------------------- #
 # Authorization code loading: client binding + expiry
 # --------------------------------------------------------------------------- #
+
 
 class TestLoadAuthorizationCode:
     @pytest.mark.asyncio
@@ -279,6 +291,7 @@ class TestLoadAuthorizationCode:
 # --------------------------------------------------------------------------- #
 # Authorization code exchange
 # --------------------------------------------------------------------------- #
+
 
 class TestExchangeAuthorizationCode:
     async def _issue_code(self, provider, client, **kw):
@@ -352,27 +365,27 @@ class TestExchangeAuthorizationCode:
         assert list(provider._refresh_tokens) == [second.refresh_token]
 
     @pytest.mark.asyncio
-    async def test_live_token_capacity_refuses_new_issuance(self):
+    async def test_live_token_capacity_evicts_oldest_cache_entries(self):
         provider = GovernanceOAuthProvider(
             max_access_tokens=1,
             max_refresh_tokens=1,
         )
         client = _client()
         first_entry = await self._issue_code(provider, client)
-        await provider.exchange_authorization_code(client, first_entry)
+        first = await provider.exchange_authorization_code(client, first_entry)
         second_entry = await self._issue_code(provider, client)
+        second = await provider.exchange_authorization_code(client, second_entry)
 
-        with pytest.raises(TokenError) as refused:
-            await provider.exchange_authorization_code(client, second_entry)
-
-        assert refused.value.error == "invalid_request"
-        assert len(provider._access_tokens) == 1
-        assert len(provider._refresh_tokens) == 1
+        assert list(provider._access_tokens) == [second.access_token]
+        assert list(provider._refresh_tokens) == [second.refresh_token]
+        assert first.access_token not in provider._access_tokens
+        assert first.refresh_token not in provider._refresh_tokens
 
 
 # --------------------------------------------------------------------------- #
 # Refresh token rotation
 # --------------------------------------------------------------------------- #
+
 
 class TestRefreshFlow:
     async def _full_token(self, provider, client, **kw):
@@ -385,7 +398,9 @@ class TestRefreshFlow:
     async def test_load_refresh_token_client_binding(self, provider):
         client = _client(client_id="A")
         token = await self._full_token(provider, client)
-        assert await provider.load_refresh_token(client, token.refresh_token) is not None
+        assert (
+            await provider.load_refresh_token(client, token.refresh_token) is not None
+        )
         other = _client(client_id="B")
         assert await provider.load_refresh_token(other, token.refresh_token) is None
 
@@ -401,7 +416,10 @@ class TestRefreshFlow:
         # old refresh token is consumed (rotation)
         assert await provider.load_refresh_token(client, token.refresh_token) is None
         # new refresh token works
-        assert await provider.load_refresh_token(client, new_token.refresh_token) is not None
+        assert (
+            await provider.load_refresh_token(client, new_token.refresh_token)
+            is not None
+        )
 
     @pytest.mark.asyncio
     async def test_requested_scopes_override(self, provider):
@@ -409,7 +427,8 @@ class TestRefreshFlow:
         token = await self._full_token(provider, client)
         rt_entry = await provider.load_refresh_token(client, token.refresh_token)
         new_token = await provider.exchange_refresh_token(
-            client, rt_entry, scopes=["mcp:tools", "extra"])
+            client, rt_entry, scopes=["mcp:tools", "extra"]
+        )
         loaded = await provider.load_access_token(new_token.access_token)
         assert loaded.scopes == ["mcp:tools", "extra"]
 
@@ -417,6 +436,7 @@ class TestRefreshFlow:
 # --------------------------------------------------------------------------- #
 # Access token loading + expiry + revocation
 # --------------------------------------------------------------------------- #
+
 
 class TestAccessTokenLifecycle:
     @pytest.mark.asyncio
@@ -427,7 +447,9 @@ class TestAccessTokenLifecycle:
     async def test_expired_access_token_dropped(self, provider):
         client = _client()
         provider._access_tokens["at_x"] = AccessToken(
-            token="at_x", client_id=client.client_id, scopes=["mcp:tools"],
+            token="at_x",
+            client_id=client.client_id,
+            scopes=["mcp:tools"],
             expires_at=int(time.time()) - 5,
         )
         assert await provider.load_access_token("at_x") is None
@@ -436,7 +458,9 @@ class TestAccessTokenLifecycle:
     @pytest.mark.asyncio
     async def test_get_token_client_id(self, provider):
         provider._access_tokens["at_y"] = AccessToken(
-            token="at_y", client_id="owner-1", scopes=["mcp:tools"],
+            token="at_y",
+            client_id="owner-1",
+            scopes=["mcp:tools"],
             expires_at=int(time.time()) + 3600,
         )
         assert provider.get_token_client_id("at_y") == "owner-1"

@@ -40,6 +40,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 @dataclass
 class AuthCodeEntry:
     """Stored authorization code with metadata."""
+
     code: str
     client_id: str
     redirect_uri: str
@@ -57,6 +58,7 @@ class AuthCodeEntry:
 @dataclass
 class RefreshTokenEntry:
     """Stored refresh token with metadata."""
+
     token: str
     client_id: str
     scopes: list[str]
@@ -128,9 +130,13 @@ class RedisOAuthStore(OAuthStateStore):
             redis = await self._redis()
             if redis is None:
                 return None
-            return await asyncio.wait_for(redis.get(self.PREFIX + key), timeout=self._timeout)
+            return await asyncio.wait_for(
+                redis.get(self.PREFIX + key), timeout=self._timeout
+            )
         except Exception as exc:
-            logger.warning("OAuth store read failed (%s); using memory only", type(exc).__name__)
+            logger.warning(
+                "OAuth store read failed (%s); using memory only", type(exc).__name__
+            )
             return None
 
     async def set(self, key: str, value: str, ttl: int) -> bool:
@@ -145,7 +151,10 @@ class RedisOAuthStore(OAuthStateStore):
             )
             return True
         except Exception as exc:
-            logger.warning("OAuth store write failed (%s); state is memory-only", type(exc).__name__)
+            logger.warning(
+                "OAuth store write failed (%s); state is memory-only",
+                type(exc).__name__,
+            )
             return False
 
     async def delete(self, *keys: str) -> bool:
@@ -257,7 +266,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         }
 
     def _dynamic_client_count(self) -> int:
-        return sum(client_id not in self._static_client_ids for client_id in self._clients)
+        return sum(
+            client_id not in self._static_client_ids for client_id in self._clients
+        )
 
     def _evict_oldest_pending_client(self) -> bool:
         pending = {
@@ -272,38 +283,61 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._dynamic_client_expires_at.pop(client_id, None)
         return True
 
+    def _evict_oldest_dynamic_client(self) -> bool:
+        if not self._dynamic_client_expires_at:
+            return False
+        client_id = min(
+            self._dynamic_client_expires_at,
+            key=self._dynamic_client_expires_at.__getitem__,
+        )
+        self._clients.pop(client_id, None)
+        self._dynamic_client_expires_at.pop(client_id, None)
+        self._approved_dynamic_client_ids.discard(client_id)
+        return True
+
     def _make_auth_code_room(self, client_id: str) -> None:
         self._prune_expired_state()
         client_codes = [
             entry for entry in self._auth_codes.values() if entry.client_id == client_id
         ]
         if len(client_codes) >= self._max_auth_codes_per_client:
-            oldest = min(client_codes, key=lambda entry: entry.created_at)
-            self._auth_codes.pop(oldest.code, None)
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="too many pending authorization attempts for this client",
+            )
         if len(self._auth_codes) >= self._max_auth_codes:
-            oldest = min(self._auth_codes.values(), key=lambda entry: entry.created_at)
-            self._auth_codes.pop(oldest.code, None)
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="authorization-code capacity reached; retry after expiry",
+            )
+
+    def _cache_access(self, entry: AccessToken) -> None:
+        self._prune_expired_state()
+        if (
+            entry.token not in self._access_tokens
+            and len(self._access_tokens) >= self._max_access_tokens
+        ):
+            self._access_tokens.pop(next(iter(self._access_tokens)))
+        self._access_tokens[entry.token] = entry
 
     def _cache_refresh(self, entry: RefreshTokenEntry) -> None:
         self._prune_expired_state()
         if len(self._refresh_tokens) >= self._max_refresh_tokens:
-            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
+            oldest = min(
+                self._refresh_tokens.values(), key=lambda token: token.created_at
+            )
             self._refresh_tokens.pop(oldest.token, None)
         self._refresh_tokens[entry.token] = entry
 
-    def _ensure_token_capacity(self, *, replacing_refresh: bool = False) -> None:
+    def _make_token_room(self) -> None:
         self._prune_expired_state()
         if len(self._access_tokens) >= self._max_access_tokens:
-            raise TokenError(
-                error="invalid_request",
-                error_description="OAuth access-token capacity reached; retry after expiry",
+            self._access_tokens.pop(next(iter(self._access_tokens)))
+        if len(self._refresh_tokens) >= self._max_refresh_tokens:
+            oldest = min(
+                self._refresh_tokens.values(), key=lambda token: token.created_at
             )
-        refresh_limit = self._max_refresh_tokens + int(replacing_refresh)
-        if len(self._refresh_tokens) >= refresh_limit:
-            raise TokenError(
-                error="invalid_request",
-                error_description="OAuth refresh-token capacity reached; retry after expiry",
-            )
+            self._refresh_tokens.pop(oldest.token, None)
 
     # -- persistence helpers ------------------------------------------------
 
@@ -316,7 +350,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def _persist_access(self, entry: AccessToken) -> None:
         if self._store is None:
             return
-        ttl = (entry.expires_at - int(time.time())) if entry.expires_at else self._access_token_ttl
+        ttl = (
+            (entry.expires_at - int(time.time()))
+            if entry.expires_at
+            else self._access_token_ttl
+        )
         await self._store.set(
             f"at:{_digest(entry.token)}",
             entry.model_dump_json(exclude={"token"}),
@@ -329,25 +367,35 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         ttl = int(entry.created_at + self._refresh_token_ttl - time.time())
         await self._store.set(
             f"rt:{_digest(entry.token)}",
-            json.dumps({
-                "client_id": entry.client_id,
-                "scopes": list(entry.scopes),
-                "created_at": entry.created_at,
-            }),
+            json.dumps(
+                {
+                    "client_id": entry.client_id,
+                    "scopes": list(entry.scopes),
+                    "created_at": entry.created_at,
+                }
+            ),
             ttl,
         )
 
-    async def _issued(self, client: OAuthClientInformationFull,
-                      access: AccessToken, refresh: RefreshTokenEntry) -> None:
+    async def _issued(
+        self,
+        client: OAuthClientInformationFull,
+        access: AccessToken,
+        refresh: RefreshTokenEntry,
+    ) -> None:
         if client.client_id not in self._static_client_ids:
             self._approved_dynamic_client_ids.add(client.client_id)
-            self._dynamic_client_expires_at[client.client_id] = time.time() + CLIENT_STATE_TTL
+            self._dynamic_client_expires_at[client.client_id] = (
+                time.time() + CLIENT_STATE_TTL
+            )
         await self._persist_access(access)
         await self._persist_refresh(refresh)
         # A client that just got a token is in use; keep its registration.
         await self._persist_client(client)
 
-    def _new_refresh(self, token: str, client_id: str, scopes: list[str]) -> RefreshTokenEntry:
+    def _new_refresh(
+        self, token: str, client_id: str, scopes: list[str]
+    ) -> RefreshTokenEntry:
         now = time.time()
         return RefreshTokenEntry(
             token=token,
@@ -377,9 +425,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 except ValueError:
                     return None
                 self._prune_expired_state()
-                if self._dynamic_client_count() < self._max_dynamic_clients:
-                    self._clients[client_id] = client
-                    self._dynamic_client_expires_at[client_id] = time.time() + CLIENT_STATE_TTL
+                if self._dynamic_client_count() >= self._max_dynamic_clients:
+                    self._evict_oldest_dynamic_client()
+                self._clients[client_id] = client
+                self._dynamic_client_expires_at[client_id] = (
+                    time.time() + CLIENT_STATE_TTL
+                )
                 self._approved_dynamic_client_ids.add(client_id)
         return client
 
@@ -412,7 +463,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             )
 
     async def authorize(
-        self, client: OAuthClientInformationFull, params: AuthorizationParams,
+        self,
+        client: OAuthClientInformationFull,
+        params: AuthorizationParams,
     ) -> str:
         if (
             not self._auto_approve
@@ -449,7 +502,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         return f"{redirect}{separator}{urlencode(query)}"
 
     async def load_authorization_code(
-        self, client: OAuthClientInformationFull, authorization_code: str,
+        self,
+        client: OAuthClientInformationFull,
+        authorization_code: str,
     ) -> AuthCodeEntry | None:
         entry = self._auth_codes.get(authorization_code)
         if entry is None:
@@ -462,9 +517,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         return entry
 
     async def exchange_authorization_code(
-        self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry,
+        self,
+        client: OAuthClientInformationFull,
+        authorization_code: AuthCodeEntry,
     ) -> OAuthToken:
-        self._ensure_token_capacity()
         # Claim the code before minting anything, as exchange_refresh_token
         # claims its token: load_authorization_code only reads, so two
         # requests carrying the same code could both pass it. Whichever pops
@@ -475,12 +531,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 error="invalid_grant",
                 error_description="authorization code already used",
             )
+        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         refresh_token_str = self._generate_token("rt")
         expires_at = int(time.time()) + self._access_token_ttl
 
-        self._access_tokens[access_token_str] = AccessToken(
+        access = AccessToken(
             token=access_token_str,
             client_id=client.client_id,
             scopes=authorization_code.scopes or ["mcp:tools"],
@@ -488,30 +545,42 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             resource=authorization_code.resource,
         )
 
-        self._refresh_tokens[refresh_token_str] = self._new_refresh(
-            refresh_token_str, client.client_id, authorization_code.scopes or ["mcp:tools"]
+        refresh = self._new_refresh(
+            refresh_token_str,
+            client.client_id,
+            authorization_code.scopes or ["mcp:tools"],
         )
+        self._cache_access(access)
+        self._cache_refresh(refresh)
         await self._issued(
             client,
-            self._access_tokens[access_token_str],
-            self._refresh_tokens[refresh_token_str],
+            access,
+            refresh,
         )
 
         return OAuthToken(
             access_token=access_token_str,
             token_type="Bearer",
             expires_in=self._access_token_ttl,
-            scope=" ".join(authorization_code.scopes) if authorization_code.scopes else "mcp:tools",
+            scope=" ".join(authorization_code.scopes)
+            if authorization_code.scopes
+            else "mcp:tools",
             refresh_token=refresh_token_str,
         )
 
     async def load_refresh_token(
-        self, client: OAuthClientInformationFull, refresh_token: str,
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: str,
     ) -> RefreshTokenEntry | None:
         if _digest(refresh_token) in self._consumed_refresh:
             return None
         entry = self._refresh_tokens.get(refresh_token)
-        if entry is None and self._store is not None and refresh_token.startswith("rt_"):
+        if (
+            entry is None
+            and self._store is not None
+            and refresh_token.startswith("rt_")
+        ):
             raw = await self._store.get(f"rt:{_digest(refresh_token)}")
             if raw:
                 try:
@@ -530,7 +599,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             return None
         if entry.client_id != client.client_id:
             return None
-        if entry.is_expired(self._refresh_token_ttl) or await self._revoked_after(entry):
+        if entry.is_expired(self._refresh_token_ttl) or await self._revoked_after(
+            entry
+        ):
             self._refresh_tokens.pop(refresh_token, None)
             if self._store is not None:
                 await self._store.delete(f"rt:{_digest(refresh_token)}")
@@ -545,7 +616,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token: RefreshTokenEntry,
         scopes: list[str],
     ) -> OAuthToken:
-        self._ensure_token_capacity(replacing_refresh=True)
         # Claim before any await: load_refresh_token awaits the store, so two
         # requests with the same token can both pass it. Only the one that
         # pops the entry proceeds; the other gets invalid_grant. Recording the
@@ -559,7 +629,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             raise TokenError(
                 error="invalid_grant", error_description="refresh token already used"
             )
-        self._consumed_refresh[digest] = refresh_token.created_at + self._refresh_token_ttl
+        self._consumed_refresh[digest] = (
+            refresh_token.created_at + self._refresh_token_ttl
+        )
         if self._store is not None and not await self._store.delete(f"rt:{digest}"):
             # This process refuses it (consumed set); another process, or this
             # one after a restart, would not until it expires.
@@ -567,26 +639,27 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 "A used refresh token could NOT be deleted from the store; it "
                 "stays redeemable after a restart until it expires"
             )
+        self._make_token_room()
 
         access_token_str = self._generate_token("at")
         new_refresh_str = self._generate_token("rt")
         expires_at = int(time.time()) + self._access_token_ttl
         effective_scopes = scopes or refresh_token.scopes or ["mcp:tools"]
 
-        self._access_tokens[access_token_str] = AccessToken(
+        access = AccessToken(
             token=access_token_str,
             client_id=client.client_id,
             scopes=effective_scopes,
             expires_at=expires_at,
         )
 
-        self._refresh_tokens[new_refresh_str] = self._new_refresh(
-            new_refresh_str, client.client_id, effective_scopes
-        )
+        refresh = self._new_refresh(new_refresh_str, client.client_id, effective_scopes)
+        self._cache_access(access)
+        self._cache_refresh(refresh)
         await self._issued(
             client,
-            self._access_tokens[access_token_str],
-            self._refresh_tokens[new_refresh_str],
+            access,
+            refresh,
         )
 
         return OAuthToken(
@@ -606,12 +679,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             raw = await self._store.get(f"at:{_digest(token)}")
             if raw:
                 try:
-                    entry = AccessToken.model_validate({**json.loads(raw), "token": token})
+                    entry = AccessToken.model_validate(
+                        {**json.loads(raw), "token": token}
+                    )
                 except (ValueError, TypeError):
                     return None
-                self._prune_expired_state()
-                if len(self._access_tokens) < self._max_access_tokens:
-                    self._access_tokens[token] = entry
+                self._cache_access(entry)
         if entry is None:
             return None
         if entry.expires_at and entry.expires_at < int(time.time()):
@@ -634,18 +707,24 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def revoke_token(self, token: AccessToken | RefreshTokenEntry) -> None:
         if isinstance(token, AccessToken):
             self._access_tokens.pop(token.token, None)
-            to_remove = [k for k, v in self._refresh_tokens.items()
-                         if v.client_id == token.client_id]
+            to_remove = [
+                k
+                for k, v in self._refresh_tokens.items()
+                if v.client_id == token.client_id
+            ]
             for k in to_remove:
                 del self._refresh_tokens[k]
             if self._store is not None:
                 # Marker first: it is what refuses the client's persisted refresh
                 # tokens this process never loaded.
                 marked = await self._store.set(
-                    f"revoked:{token.client_id}", repr(time.time()), self._refresh_token_ttl
+                    f"revoked:{token.client_id}",
+                    repr(time.time()),
+                    self._refresh_token_ttl,
                 )
                 deleted = await self._store.delete(
-                    f"at:{_digest(token.token)}", *(f"rt:{_digest(k)}" for k in to_remove)
+                    f"at:{_digest(token.token)}",
+                    *(f"rt:{_digest(k)}" for k in to_remove),
                 )
                 if not (marked and deleted):
                     logger.error(
@@ -676,7 +755,9 @@ def build_static_client(
     choice between the two is not documented.
     """
     if not client_id or not client_secret:
-        raise ValueError("static OAuth client needs both a client_id and a client_secret")
+        raise ValueError(
+            "static OAuth client needs both a client_id and a client_secret"
+        )
     if not redirect_uris:
         raise ValueError("static OAuth client needs at least one redirect URI")
     return OAuthClientInformationFull(
@@ -738,8 +819,15 @@ class StaticClientBasicAuthShim:
     refresh-token request. Every other client passes through untouched.
     """
 
-    def __init__(self, app, *, client_id: str, pkce_verifier: str | None = None,
-                 path: str = "/token", authorize_path: str = "/authorize"):
+    def __init__(
+        self,
+        app,
+        *,
+        client_id: str,
+        pkce_verifier: str | None = None,
+        path: str = "/token",
+        authorize_path: str = "/authorize",
+    ):
         self.app = app
         self._client_id = client_id
         self._verifier = pkce_verifier
@@ -753,7 +841,9 @@ class StaticClientBasicAuthShim:
             return
         path, method = scope.get("path"), scope.get("method")
         if self._verifier and path == self._authorize_path and method == "GET":
-            fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            fields = parse_qsl(
+                scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True
+            )
             if dict(fields).get("client_id") == self._client_id:
                 fields = self._authorize_fields(fields)
                 scope = {**scope, "query_string": urlencode(fields).encode()}
@@ -788,7 +878,9 @@ class StaticClientBasicAuthShim:
             await self.app(scope, passthrough, send)
             return
 
-        fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        fields = parse_qsl(
+            body.decode("utf-8", errors="replace"), keep_blank_values=True
+        )
         values = dict(fields)
         # The SDK authenticates the form client_id when present; decide on
         # that, and leave a request whose Basic and form ids disagree alone.
@@ -829,15 +921,24 @@ class StaticClientBasicAuthShim:
             and not (creds is not None and k.lower() == b"authorization")
         ]
         headers.append((b"content-length", str(len(new_body)).encode()))
-        await self.app({**scope, "headers": headers}, _replay([_body_message(new_body)]), send)
+        await self.app(
+            {**scope, "headers": headers}, _replay([_body_message(new_body)]), send
+        )
 
     def _authorize_fields(self, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
         values = dict(fields)
         out = _narrow_scope(fields)
         if not values.get("code_challenge"):
             # Absent or blank: a blank challenge is no PKCE at all.
-            out = [(k, v) for k, v in out if k not in ("code_challenge", "code_challenge_method")]
-            out += [("code_challenge", self._challenge), ("code_challenge_method", "S256")]
+            out = [
+                (k, v)
+                for k, v in out
+                if k not in ("code_challenge", "code_challenge_method")
+            ]
+            out += [
+                ("code_challenge", self._challenge),
+                ("code_challenge_method", "S256"),
+            ]
         return out
 
 
@@ -857,8 +958,10 @@ def _is_urlencoded(scope) -> bool:
     the SDK also accepts multipart, which is passed through untouched."""
     for key, value in scope.get("headers", []):
         if key.lower() == b"content-type":
-            return value.decode("latin-1").split(";")[0].strip().lower() == \
-                "application/x-www-form-urlencoded"
+            return (
+                value.decode("latin-1").split(";")[0].strip().lower()
+                == "application/x-www-form-urlencoded"
+            )
     return False
 
 
@@ -872,12 +975,18 @@ def _content_type(scope) -> str:
 def static_pkce_verifier(client_secret: str) -> str:
     """Server-held PKCE verifier for the static client, derived from its
     secret so it is stable across restarts and never leaves the server."""
-    digest = hmac.new(client_secret.encode(), b"unitares-static-client-pkce", hashlib.sha256).digest()
+    digest = hmac.new(
+        client_secret.encode(), b"unitares-static-client-pkce", hashlib.sha256
+    ).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def _s256(verifier: str) -> str:
-    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    return (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
 
 
 def _body_message(body: bytes) -> dict:
@@ -925,7 +1034,11 @@ def _url_for_log(url: str | None, *, host_only: bool = False) -> str:
         return "unparseable"
     if host_only:
         return host or "-"
-    return f"{parts.scheme}://{host}{parts.path}" if parts.scheme else (host + parts.path or "-")
+    return (
+        f"{parts.scheme}://{host}{parts.path}"
+        if parts.scheme
+        else (host + parts.path or "-")
+    )
 
 
 def _attempt_facts(path: str, values: dict, basic) -> dict:
@@ -1042,7 +1155,9 @@ class OAuthAttemptLogger:
             return
         path, method = scope["path"], scope.get("method")
         if method == "GET":
-            fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            fields = parse_qsl(
+                scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True
+            )
         elif method == "POST":
             # Read a prefix only, then hand the SDK the whole stream untouched:
             # an oversize body or a mid-body disconnect reaches it exactly as
@@ -1052,10 +1167,15 @@ class OAuthAttemptLogger:
                 fields = None
                 unparsed_reason = f"content-type {_content_type(scope)}"
             else:
-                seen, body, complete, receive = await _peek_body(receive, _MAX_TOKEN_BODY)
+                seen, body, complete, receive = await _peek_body(
+                    receive, _MAX_TOKEN_BODY
+                )
                 fields = (
-                    parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-                    if complete else None
+                    parse_qsl(
+                        body.decode("utf-8", errors="replace"), keep_blank_values=True
+                    )
+                    if complete
+                    else None
                 )
                 if not complete:
                     unparsed_reason = f"over {_MAX_TOKEN_BODY} bytes or disconnected"
@@ -1093,11 +1213,17 @@ class OAuthAttemptLogger:
                             q = {}
                         outcome["error"] = q.get("error")
                         outcome["error_description"] = q.get("error_description")
-            elif message["type"] == "http.response.body" and outcome["status"] and outcome["status"] >= 400:
+            elif (
+                message["type"] == "http.response.body"
+                and outcome["status"]
+                and outcome["status"] >= 400
+            ):
                 try:
                     data = json.loads(message.get("body", b"") or b"{}")
                     outcome["error"] = outcome["error"] or data.get("error")
-                    outcome["error_description"] = outcome["error_description"] or data.get("error_description")
+                    outcome["error_description"] = outcome[
+                        "error_description"
+                    ] or data.get("error_description")
                 except (ValueError, AttributeError):
                     pass
             await send(message)
@@ -1116,12 +1242,16 @@ class OAuthAttemptLogger:
             # No return in this finally: it would swallow the app's exception.
             budget = (
                 _STATIC_LOG_BUDGET
-                if self._static_client_id and facts.get("client") == self._static_client_id
+                if self._static_client_id
+                and facts.get("client") == self._static_client_id
                 else _LOG_BUDGET
             )
             suppressed = budget.take()
             if suppressed:
-                logger.info("[OAUTH] %d attempt line(s) suppressed by the rate limit", suppressed)
+                logger.info(
+                    "[OAUTH] %d attempt line(s) suppressed by the rate limit",
+                    suppressed,
+                )
             if suppressed is not None:
                 logger.info(
                     "[OAUTH] %s %s -> %s%s",
@@ -1131,7 +1261,8 @@ class OAuthAttemptLogger:
                     (
                         f" error={_log_safe(outcome['error'])}"
                         f" ({_log_safe(_strip_queries(outcome['error_description']))})"
-                        if outcome["error"] else ""
+                        if outcome["error"]
+                        else ""
                     ),
                 )
 
