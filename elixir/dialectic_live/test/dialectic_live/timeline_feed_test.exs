@@ -94,6 +94,42 @@ defmodule DialecticLive.TimelineFeedTest do
       refute_receive {:timeline_get, _}, 400
     end
 
+    test "an immediate re-read cancels the pending doorbell" do
+      ctx = start_feed(debounce_ms: 300)
+      _ = viewer(ctx.feed)
+      _ = await_reread_gets()
+
+      # A doorbell is pending; then the debounce interval passes (simulated by
+      # ageing the last fetch) and a reconnect fetches at once.
+      broadcast_frame(ctx, paused(iso()))
+      assert %{debounce_timer: timer} = :sys.get_state(ctx.feed)
+      assert is_reference(timer)
+
+      :sys.replace_state(ctx.feed, fn st ->
+        %{
+          st
+          | last_fetch_started:
+              st.last_fetch_started - System.convert_time_unit(1_000, :millisecond, :native)
+        }
+      end)
+
+      broadcast_status(ctx, :connected)
+      _ = await_reread_gets()
+      assert %{debounce_timer: nil} = :sys.get_state(ctx.feed)
+      refute_receive {:timeline_get, _}, 450
+    end
+
+    test "a doorbell that fires inside the debounce of a fetch waits out the rest" do
+      ctx = start_feed(debounce_ms: 300)
+      _ = viewer(ctx.feed)
+      _ = await_reread_gets()
+
+      :sys.replace_state(ctx.feed, &%{&1 | last_fetch_started: System.monotonic_time()})
+      send(ctx.feed, :doorbell)
+      refute_receive {:timeline_get, _}, 150
+      _ = await_reread_gets()
+    end
+
     test "a firehose reconnect re-reads" do
       ctx = start_feed()
       _ = viewer(ctx.feed)

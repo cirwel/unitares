@@ -338,7 +338,7 @@ defmodule DialecticLive.TimelineFeed do
   end
 
   def handle_info({:floor, token}, %{floor_token: token} = state) do
-    state = state |> reread_all() |> schedule_floor()
+    state = state |> reread_soon() |> schedule_floor()
     {:noreply, state}
   end
 
@@ -346,7 +346,7 @@ defmodule DialecticLive.TimelineFeed do
 
   def handle_info(:doorbell, state) do
     state = %{state | debounce_timer: nil}
-    {:noreply, if(viewing?(state), do: reread_all(state), else: state)}
+    {:noreply, if(viewing?(state), do: reread_soon(state), else: state)}
   end
 
   def handle_info({:firehose_status, status}, state) do
@@ -397,21 +397,37 @@ defmodule DialecticLive.TimelineFeed do
   # re-read is debounced, so page reloads stay inside the rate bound.
   defp start_viewing(state), do: state |> reread_soon() |> schedule_floor()
 
-  # Re-read now, unless a fetch started within the debounce interval: then
-  # through the debounced doorbell. The first viewer and each firehose
-  # reconnect go through here, so neither page reloads nor a flapping firehose
-  # (whose backoff resets on each upgrade) can fetch faster than the debounce.
+  # The one gate every re-read passes (first viewer, reconnect, floor, and a
+  # doorbell when it fires): fetch now only if the last fetch started at least
+  # `debounce_ms` ago, cancelling any pending doorbell; otherwise make sure a
+  # doorbell is pending, and let it pass this gate again when it fires. So two
+  # re-reads never start closer together than the debounce, whatever mix of
+  # reloads, reconnects and frames arrives.
   defp reread_soon(state) do
-    recent? =
-      state.last_fetch_started != nil and
-        System.convert_time_unit(
-          System.monotonic_time() - state.last_fetch_started,
-          :native,
-          :millisecond
-        ) < state.debounce_ms
+    case ms_since_last_fetch(state) do
+      ms when is_integer(ms) and ms < state.debounce_ms ->
+        schedule_doorbell(state, state.debounce_ms - ms)
 
-    if recent?, do: ring(state), else: reread_all(state)
+      _ ->
+        cancel(state.debounce_timer)
+        reread_all(%{state | debounce_timer: nil})
+    end
   end
+
+  defp ms_since_last_fetch(%{last_fetch_started: nil}), do: nil
+
+  defp ms_since_last_fetch(state) do
+    System.convert_time_unit(
+      System.monotonic_time() - state.last_fetch_started,
+      :native,
+      :millisecond
+    )
+  end
+
+  defp schedule_doorbell(%{debounce_timer: nil} = state, ms),
+    do: %{state | debounce_timer: Process.send_after(self(), :doorbell, max(ms, 1))}
+
+  defp schedule_doorbell(state, _ms), do: state
 
   defp drop_viewer(state, pid) do
     case Map.pop(state.viewers, pid) do
