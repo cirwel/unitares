@@ -1065,6 +1065,15 @@ cmd_start() {
     _compose up -d --wait "$@"
 }
 
+cmd_setup() {
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_service setup "$@"
+    else
+        echo 'Select the installed native package with unitares setup --homebrew. For source installs, use scripts/install/setup.py.' >&2
+        return 1
+    fi
+}
+
 cmd_stop() {
     if _has_homebrew_option "$@" || _is_homebrew_package; then
         _homebrew_service stop "$@"
@@ -1578,6 +1587,9 @@ Install (Docker Compose install in this checkout):
   logs [service]                    Follow this installation's logs
 
 Homebrew service control (automatic from a Homebrew package):
+  setup --homebrew [--apply] [--non-interactive]
+                                    Inspect native configuration and database
+                                    readiness; --apply creates missing config
   start --homebrew [--check]         Start missing services; verify the schema
                                     before starting either writer
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
@@ -1640,6 +1652,7 @@ case "${1:-help}" in
     update)      shift; cmd_update "$@" ;;
     model)       shift; cmd_model "$@" ;;
     start)       shift; cmd_start "$@" ;;
+    setup)       shift; cmd_setup "$@" ;;
     stop)        shift; cmd_stop "$@" ;;
     logs)        shift; cmd_logs "$@" ;;
     metrics|m)   shift; cmd_metrics ;;

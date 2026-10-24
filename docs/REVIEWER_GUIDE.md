@@ -38,8 +38,8 @@ operations, or monitoring agents:
    `client_session_id`, and thread it on later calls. Confirm that
    `check_working_state` returns the new process's `agent_uuid`.
 3. **Preserve the finding.** Use `store_finding` for a durable claim and its
-   evidence. Use `sync_state` after meaningful work; its report text is transient,
-   so it does not replace the finding. Retain a returned `prediction_id` when
+   evidence. Use `sync_state` after meaningful work; its check-in keeps only a bounded
+   excerpt of its report text, so it does not replace the finding. Retain a returned `prediction_id` when
    grading that check-in later.
 4. **Request review when needed.** `request_review` starts a governed review;
    retain its session ID, positions, reviewer judgment, and unresolved conditions.

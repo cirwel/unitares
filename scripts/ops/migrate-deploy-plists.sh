@@ -21,8 +21,8 @@
 #     operator-gated wave3a-handlers) stays stopped — running state is preserved
 set -uo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LA="${UNITARES_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
 UID_NUM="$(id -u)"
 
@@ -38,7 +38,7 @@ done
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Services that load from the dev checkout today (deploy-status.sh restart-DEV).
-SERVICES="com.unitares.sentinel-beam com.unitares.gateway-mcp com.unitares.wave3a-handlers"
+SERVICES="${UNITARES_DEPLOY_MIGRATE_LABELS:?set the space-separated launchd labels to migrate}"
 
 is_running() {  # label -> 0 if a launchd PID is present
   launchctl list 2>/dev/null | awk -v l="$1" '$3==l && $1!="-"{f=1} END{exit !f}'

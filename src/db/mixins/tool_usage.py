@@ -682,3 +682,34 @@ def _session_ref(session_id):
     from src.mcp_handlers.identity.stable_session import audit_reference
 
     return audit_reference(session_id)
+
+
+async def fetch_timeline_outcomes(
+    conn,
+    *,
+    start,
+    agent_id: Optional[str],
+    exclude_type: Optional[str],
+    limit: int,
+) -> list:
+    """Outcome events since `start`, newest first, for GET /v1/timeline.
+
+    `exclude_type` leaves out one outcome type (the server's own trajectory
+    re-scores); None keeps every type.
+    """
+    return await conn.fetch(
+        """
+        SELECT ts, outcome_id, agent_id, outcome_type, outcome_score,
+               is_bad, verification_source,
+               detail->>'reported_confidence' AS reported_confidence,
+               detail->>'prediction_id' AS prediction_id,
+               detail->>'decision_action' AS decision_action
+        FROM audit.outcome_events
+        WHERE ts >= $1
+          AND ($2::text IS NULL OR agent_id = $2)
+          AND ($3::text IS NULL OR outcome_type <> $3)
+        ORDER BY ts DESC
+        LIMIT $4
+        """,
+        start, agent_id, exclude_type, limit,
+    )

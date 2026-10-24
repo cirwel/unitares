@@ -1,7 +1,7 @@
 # Dashboard extensions
 
 The dashboard ships the tabs every UNITARES install can read: Overview, Agents,
-Discoveries, Dialectic, Activity, EISV, Risk and Security. Anything more
+Discoveries, Dialectic, Activity, Timeline, EISV, Risk and Security. Anything more
 specific to a deployment belongs to that deployment: a panel for its own
 residents, a census of its scheduled jobs, a research instrument. It is added
 as an **extension**, which lives outside this repository and is loaded only by

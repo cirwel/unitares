@@ -22,11 +22,11 @@
 set -uo pipefail
 
 BASE_URL="${LEASE_PLANE_BASE_URL:-http://127.0.0.1:8788}"
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials are inherited or loaded from an explicitly selected source.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -r "$SECRETS_FILE" || ! -f "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 STATE_FILE="${LEASE_PLANE_HEALTHCHECK_STATE:-$HOME/.unitares/lease-plane-healthcheck.state}"
 ALERT_LOG="${UNITARES_ALERT_LOG:-/tmp/unitares_alerts.log}"
@@ -43,6 +43,8 @@ TIMEOUT_S="${HEALTHCHECK_TIMEOUT_S:-5}"
 AUTORESTART="${LEASE_PLANE_HEALTHCHECK_AUTORESTART:-0}"
 REMEDIATE_FAILURES="${REMEDIATE_FAILURES:-3}"
 LEASE_PLANE_LABEL="${LEASE_PLANE_LABEL:-com.unitares.lease-plane}"
+LEASE_PLANE_PLIST="${UNITARES_LEASE_PLANE_PLIST:-$HOME/Library/LaunchAgents/$LEASE_PLANE_LABEL.plist}"
+HEALTHCHECK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 RESTART_MARKER="${STATE_FILE}.restart-attempted"
 # A dedicated probe surface in /tmp — never a real file, so the check can never
 # collide with a genuine holder. TTL is short so a crash mid-probe self-reaps.
@@ -105,6 +107,14 @@ maybe_remediate() {
   fi
   : >"$RESTART_MARKER" 2>/dev/null || true
   local domain="gui/$(id -u)"
+  # A restart must not reuse a pre-migration cached secrets selector. The
+  # helper reads metadata only; failures retain the existing alert path.
+  if ! . "$HEALTHCHECK_REPO_ROOT/scripts/ops/deploy-lib.sh" || \
+      ! deploy_lib_require_loaded_secrets_env lease-plane-healthcheck "$LEASE_PLANE_PLIST" "$domain/$LEASE_PLANE_LABEL"; then
+    local m="auto-restart REFUSED: verify the lease-plane plist and complete its controlled environment reload"
+    alert "$m"; post_finding "critical" "lease-plane-acquire-autorestart-failed" "$m"
+    return 0
+  fi
   echo "[$(ts)] auto-remediating: launchctl kickstart -k $domain/$LEASE_PLANE_LABEL" >&2
   if launchctl kickstart -k "$domain/$LEASE_PLANE_LABEL" 2>/dev/null; then
     local m="auto-restart of $LEASE_PLANE_LABEL issued after ${n} consecutive acquire failures (start.sh re-runs mix deps.get); next probe verifies recovery"

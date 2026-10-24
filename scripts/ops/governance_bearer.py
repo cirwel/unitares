@@ -4,10 +4,11 @@
 Supported LaunchAgent bearer storage shapes (``BearerShape``):
   - ``plist_env``: ``EnvironmentVariables:UNITARES_HTTP_API_TOKEN`` is stored
     directly in the LaunchAgent plist.
-  - ``secrets_wrapper``: ``ProgramArguments`` launches through
-    ``with-cirwel-secrets --keys ...UNITARES_HTTP_API_TOKEN... -- ...``, which
-    reads the job's ``CIRWEL_SECRETS_FILE`` (or ``~/.config/cirwel/secrets.env``)
-    at exec time so the plist holds no value.
+  - ``secrets_wrapper``: ``ProgramArguments`` launches through the wrapper
+    the job names in ``UNITARES_SECRETS_WRAPPER`` (an absolute path), as
+    ``<wrapper> --keys ...UNITARES_HTTP_API_TOKEN... -- ...``, and the wrapper
+    reads the file the job names in ``UNITARES_SECRETS_ENV`` at exec time, so
+    the plist holds no value. No wrapper or secrets file is found by name.
   - ``external_store``: the plist names neither ``EnvironmentVariables:UNITARES_HTTP_API_TOKEN``
     nor the secrets wrapper (for example, a launcher script that reads the
     macOS login Keychain before ``exec``). Callers verify a candidate bearer
@@ -38,7 +39,8 @@ UDS_SOCKET_KEY = "UNITARES_UDS_SOCKET"
 TOKEN_PLACEHOLDER = "__UNITARES_HTTP_API_TOKEN__"
 PLACEHOLDER_RE = re.compile(r"__[A-Z0-9_]+__")
 INVALID_TOKENS = {TOKEN_PLACEHOLDER, "GENERATE_YOUR_OWN_TOKEN"}
-SECRETS_WRAPPER = "with-cirwel-secrets"
+SECRETS_WRAPPER_ENV = "UNITARES_SECRETS_WRAPPER"
+SECRETS_FILE_ENV = "UNITARES_SECRETS_ENV"
 SECRET_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 EXTERNAL_ROTATE_CMD_ENV = "UNITARES_EXTERNAL_BEARER_ROTATE_CMD"
 
@@ -89,66 +91,67 @@ def valid_token(value: object) -> bool:
 
 
 def wrapped_keys(payload: dict[str, Any]) -> set[str]:
-    """Keys the secrets wrapper supplies at exec time, or an empty set."""
+    """Keys the configured secrets wrapper supplies at exec time, or an empty
+    set when the job names no wrapper in ``UNITARES_SECRETS_WRAPPER``."""
     arguments = payload.get("ProgramArguments")
+    environment = payload.get("EnvironmentVariables") or {}
+    wrapper = environment.get(SECRETS_WRAPPER_ENV) if isinstance(environment, dict) else None
+    if wrapper is None:
+        return set()
+    if not isinstance(wrapper, str) or not os.path.isabs(wrapper):
+        raise PlistConfigError(f"{SECRETS_WRAPPER_ENV} must be an absolute path")
     if (
         not isinstance(arguments, list)
         or len(arguments) < 5
         or not all(isinstance(argument, str) for argument in arguments[:4])
-        or Path(arguments[0]).name != SECRETS_WRAPPER
+        or arguments[0] != wrapper
         or arguments[1] != "--keys"
         or arguments[3] != "--"
     ):
-        return set()
+        raise PlistConfigError("configured secrets wrapper does not match ProgramArguments")
     return {key for key in arguments[2].split(",") if key}
 
 
-def wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
-    """The file ``with-cirwel-secrets`` reads: ``CIRWEL_SECRETS_FILE`` from the
-    job's environment (a plist's ``EnvironmentVariables``; this process's own
-    environment when no plist is given), else ``~/.config/cirwel/secrets.env``."""
+def selected_secrets_file(environment: dict[str, Any] | None = None) -> Path | None:
+    """The file ``UNITARES_SECRETS_ENV`` names in a job's environment (this
+    process's own when none is given), or None when it names none."""
     source = os.environ if environment is None else environment
-    override = source.get("CIRWEL_SECRETS_FILE")
-    if isinstance(override, str) and override:
-        if not os.path.isabs(override):
-            raise PlistConfigError(
-                f"CIRWEL_SECRETS_FILE must be an absolute path: {override!r}"
-            )
-        return Path(override)
-    home = source.get("HOME")
-    base = Path(home) if isinstance(home, str) and home else default_home()
-    return base / ".config/cirwel/secrets.env"
+    override = source.get(SECRETS_FILE_ENV)
+    if override in (None, ""):
+        return None
+    if not isinstance(override, str) or not os.path.isabs(override):
+        raise PlistConfigError(f"{SECRETS_FILE_ENV} must be an absolute path")
+    return Path(override)
 
 
-def sourced_secrets_file() -> Path:
-    """The file ``start.sh`` and ``deploy-lease-plane.sh`` source."""
-    explicit = os.environ.get("UNITARES_SECRETS_ENV")
-    if explicit:
-        return Path(explicit).expanduser()
-    home = default_home()
-    path = home / ".config/unitares/secrets.env"
-    fallback = home / ".config/cirwel/secrets.env"
-    if not path.exists() and fallback.exists():
-        return fallback
+def wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
+    """The file a configured secrets wrapper reads; the job must name it."""
+    path = selected_secrets_file(environment)
+    if path is None:
+        raise PlistConfigError(f"a configured secrets wrapper requires {SECRETS_FILE_ENV}")
     return path
 
 
+def sourced_secrets_file() -> Path | None:
+    """The file ``start.sh`` and ``deploy-lease-plane.sh`` source, when this
+    process names one in ``UNITARES_SECRETS_ENV``."""
+    return selected_secrets_file()
+
+
 def rotation_files() -> list[Path]:
-    """Every existing secrets file a reader of the rotated keys may use."""
-    candidates = [wrapper_secrets_file(), sourced_secrets_file()]
+    """Existing files explicitly selected by this process or installed jobs."""
+    candidates = [selected_secrets_file()]
     for plist in sorted((default_home() / "Library/LaunchAgents").glob("*.plist")):
         try:
             payload = load_plist(plist)
         except PlistConfigError:
             continue
         environment = payload.get("EnvironmentVariables")
-        if wrapped_keys(payload) and isinstance(environment, dict):
-            candidates.append(wrapper_secrets_file(environment))
-        elif wrapped_keys(payload):
-            candidates.append(wrapper_secrets_file({}))
+        if isinstance(environment, dict):
+            candidates.append(selected_secrets_file(environment))
     found: list[Path] = []
     for path in candidates:
-        if path.exists() and not any(path.samefile(seen) for seen in found):
+        if path is not None and path.exists() and not any(path.samefile(seen) for seen in found):
             found.append(path)
     return found
 

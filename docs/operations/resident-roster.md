@@ -237,30 +237,37 @@ exists to catch.
 
 ## Route packs
 
-Some HTTP routes exist only because a deployment runs something specific. They
-are grouped into packs (`src/http_routes/packs.py`) and mounted only when the
-governance server's `UNITARES_ROUTE_PACKS` names them, comma-separated. The
-shipped default is empty, so an install that runs none of these carries none of
-their endpoints.
+Optional HTTP extensions are selected by two explicit settings:
+`UNITARES_ROUTE_PACKS` lists pack names and `UNITARES_ROUTE_PACKS_FILE` selects a
+trusted local JSON manifest. Both are unset by default. For example:
 
-| Pack | Routes | Enable when |
-|---|---|---|
-| `reference-residents` | `/v1/sentinel/{backlog,summary}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` |
-| `automation-census` | `/api/automations` | you run the `unitares-automations` census on the server's host ([setup](automation-census-setup.md)); not available in the Docker image |
+```json
+{
+  "schema": "unitares.route-packs.v1",
+  "packs": {
+    "example-summary": [
+      {"path": "/extensions/summary", "handler": "summary.py:handle_summary", "methods": ["GET"]}
+    ]
+  }
+}
+```
 
-The pack code lives next to what it serves, not in the installed server
-package: the resident routes in `agents/<resident>/routes.py`, the census route
-beside its tool in `scripts/ops/automation_census_route.py`. The server imports
-a pack's code only when the pack is enabled, so a pip-installed server without
-`agents/` or `scripts/` is unaffected, and a pack whose code is absent (the
-Docker image carries `agents/` but not `scripts/`) is logged and skipped.
-Finding intake (`POST /api/findings`) is core and always mounted
-(`src/http_routes/findings.py`).
+A handler reference names an installed Python module or a `.py` file relative to
+the manifest (absolute paths also work), followed by an async function name.
+The manifest grants that code execution inside the server: manage it as trusted
+deployment configuration, never as request input. Every mounted handler passes
+the server's existing REST credential gate. Duplicate paths/methods are rejected;
+a missing or invalid pack is logged and skipped without stopping core startup.
+Only selected packs are imported.
 
-A pack name that matches nothing is logged at startup rather than ignored.
-Packs are named for what they serve, never for a resident, for the reason in
-the next-but-one section. Declaring residents in `UNITARES_RESIDENTS` does not
-mount a pack; the two settings are independent.
+Install or mount the handler code and manifest together. The default Docker
+image includes the SDK, shared helpers and optional orchestrated reviewer; it
+does not include reference resident packages. Their example implementations in
+`agents/*/routes.py` and `scripts/ops/*_route.py` can be installed by deployments
+that use them. Existing deployments should move their selected route table into
+a manifest before updating. No built-in pack name silently selects a fleet.
+Finding intake (`POST /api/findings`) remains core. Declaring residents and
+selecting HTTP extensions are independent configuration choices.
 
 ## Metrics extra catalog (`UNITARES_METRICS_CATALOG_EXTRA`)
 
@@ -273,10 +280,11 @@ residents is declared next to its producer in a JSON file and registered only
 when the governance server's `UNITARES_METRICS_CATALOG_EXTRA` names that file:
 
 ```
-UNITARES_METRICS_CATALOG_EXTRA=/path/to/unitares/agents/chronicler/metrics_catalog.json
+UNITARES_METRICS_CATALOG_EXTRA=/etc/unitares/metrics-catalog.json
 ```
 
-The reference Chronicler's file declares its repository-size, test-count,
+Copy or extend the reference Chronicler's `agents/chronicler/metrics_catalog.json`
+into your deployment configuration. It declares repository-size, test-count,
 Sentinel-findings and GitHub-traffic series. Unset (the default) registers
 nothing, so an install that runs no such scraper neither lists those names nor
 accepts writes to them. Each entry is `{"name", "description", "unit"}` under a

@@ -49,7 +49,7 @@ record**. Privacy narrows the first.
 | You want | Use | Notes |
 |---|---|---|
 | Advice from whatever is configured, local only | `consult` (defaults: `effort="standard"`, `privacy="local"`) | `purpose` is `answer`, `critique`, `summarize` or `generate`. Writes an audit row with keyed hashes, not text (`_record_consultation`, `src/mcp_handlers/support/consultation.py`) |
-| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host from the `consult.thorough` job (the operator's inference hosts file, or claude, codex, antigravity by default): it skips the caller's own family, inferred from transport signals, and takes the first available host, reporting the rest in `skipped` with a reason code (`_thorough_plan`, `_caller_family`). Set `host_id` to select a specific existing host instead |
+| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host from the `consult.thorough` job (the operator's inference hosts file; without an order, only one eligible available host can be selected): it skips the caller's own family, inferred from transport signals, and takes the first available host, reporting the rest in `skipped` with a reason code (`_thorough_plan`, `_caller_family`). Set `host_id` to select a specific existing host instead |
 | Advice from 2 or 3 model families at once (a council) | `consult(host_ids=[...], privacy="cloud_allowed")` | Name 2 or 3 distinct CLI hosts. Each runs as a pinned consult in parallel, with its own audit record linked by `council_id`, and answers separately under `members`. Nothing combines or ranks the answers. One member failing leaves the others (`status: "partial"`) (`_handle_council`) |
 | A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
 | Advice from a specific HTTP host | `consult(host_id=...)` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; consult takes no raw model/token/temperature controls, by design; the deprecated `call_model` keeps them until its removal (no earlier than 2026-12-02) |
@@ -65,8 +65,9 @@ record**. Privacy narrows the first.
   Reassigning a reviewer needs an operator credential or the current
   reviewer.
 - **Automatic thorough routing excludes the inferred caller family.** The
-  server reads transport signals and skips that family; unknown callers try
-  Claude first. `host_id` overrides this choice and pins one existing host,
+  server reads transport signals and skips that family. Unknown callers follow
+  the deployment's order without excluding a family; no vendor has priority
+  unless the deployment assigns it. `host_id` pins one existing host,
   including the caller's own family. It remains advisory, never peer review.
   Explicit selection appears in the compact `request.host_id`; full
   `diagnostics` retain the actual host, provider and model. Automatic calls
@@ -77,6 +78,17 @@ record**. Privacy narrows the first.
 - **`effort="thorough"` routes to the operator-authorized subscription-CLI
   lane** (Claude, Codex, Antigravity); it names a lane, not a measured
   capability tier.
+- **Strong-host preference belongs to the deployment.** Set
+  `jobs.consult.thorough.prefer` in `UNITARES_INFERENCE_HOSTS_FILE` for an
+  ordered list of authorized adapters. Automatic thorough consultation filters
+  out the caller's family, disabled hosts and unsupported routes, then follows
+  that order with the existing safe failover rules. Raw `delegate_inference`
+  uses its first enabled, supported entry and never retries another provider.
+  Without a declared preference, either tool selects automatically only when
+  exactly one eligible host is configured and available; otherwise it returns
+  setup guidance. An explicit `host_id` remains the caller's selection, subject
+  to the existing authorization and policy checks. SDK clients leave an omitted
+  `host_id` unset so they do not impose their own provider choice.
 - **The orchestrator lane is configuration.** The agent-orchestrator extension
   behind `consult(effort="thorough")` and `delegate_inference` is off on a
   default install. Without it, thorough `consult` fails with a recovery hint

@@ -2,12 +2,13 @@
 
 The absolute EISV floors in :mod:`src.behavioral_assessment` bound individual
 risk components; by default they do not force a behavioral verdict.  This
-module records that geometry after assessment so production rows can answer
-issue #1995's calibration question.  Building the row changes nothing: it is
-not read by risk, policy or enforcement.  The one exception to its default
-``telemetry_only`` / ``policy_effect: none`` labels is a row whose verdict the
-default-off ``UNITARES_FLOOR_BREACH_CAUTION_APPLY`` floor raised (in the
-assessment, before this row is built); that row says so.
+module records that geometry after assessment so production rows could answer
+issue #1995's calibration question (closed under Option 1 on 2026-10-23 with
+``UNITARES_FLOOR_BREACH_CAUTION_APPLY`` kept default-off).  Building the row
+changes nothing: it is not read by risk, policy or enforcement.  The one
+exception to its default ``telemetry_only`` / ``policy_effect: none`` labels is
+a row whose verdict the default-off ``UNITARES_FLOOR_BREACH_CAUTION_APPLY``
+floor raised (in the assessment, before this row is built); that row says so.
 """
 
 from __future__ import annotations
