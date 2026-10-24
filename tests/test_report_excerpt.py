@@ -269,3 +269,18 @@ def test_a_raw_read_ending_mid_token_keeps_nothing_near_it():
     raw_end = (500 + 512) * 16
     assert make_report_excerpt("x " + " " * (raw_end - 4) + "ghp_" + "a" * 40) is None
     assert make_report_excerpt("x " + " " * 200000 + "ghp_" + "a" * 40) == "x…"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["export TOKEN='abc123defg\\'", 'DB_PASSWORD="C:\\secrets\\"', 'password="hunter2xyz\\"'],
+)
+def test_a_quoted_value_ending_in_a_backslash_is_still_redacted(text):
+    assert REDACTED in scrub_credentials(text)
+
+
+def test_redactions_inside_the_window_do_not_eat_the_margin():
+    tokens = " ".join("glpat-" + "a" * 255 for _ in range(3))
+    text = tokens + " " + "w " * 30 + 'password: "correct horse battery staple ' + "x " * 400 + '"'
+    out = make_report_excerpt(text)
+    assert "correct horse" not in out

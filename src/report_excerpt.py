@@ -1,8 +1,7 @@
 """A bounded excerpt of a check-in's report text, for the persisted state row.
 
 The full `sync_state` report text is not kept. Each check-in row keeps this
-excerpt instead: what the agent said beside the state it was given, for the
-per-agent timeline and reconstruction after the fact. It is the
+excerpt instead: what the agent said beside the state it was given. It is the
 agent's own report, not a verified claim: durable claims still belong in a
 finding.
 
@@ -30,11 +29,14 @@ DEFAULT_EXCERPT_CHARS = 500
 MAX_EXCERPT_CHARS = 2000
 REDACTED = "[REDACTED]"
 
-# Text scanned beyond the kept length. The margin is measured after
-# whitespace is collapsed, so a secret that starts inside the excerpt is seen
-# for at least this many characters, more than any pattern's minimum match;
-# a token longer than the margin is still redacted from its start.
+# Text scanned beyond the kept length, counted after whitespace is collapsed
+# and again after redaction (which shortens the text, so the window widens
+# until the margin holds): a secret that starts inside the excerpt is seen
+# for at least this many characters, more than any pattern's minimum match,
+# and a token longer than the margin is still redacted from its start. Where
+# the margin cannot be had, only text a margin before the window's end is kept.
 _SCAN_MARGIN = 512
+_WIDEN_STEPS = 4
 # Raw characters read before collapsing whitespace (a multiple of the window):
 # both passes over it are linear, and they bound the work on an uncapped input.
 _RAW_FACTOR = 16
@@ -77,10 +79,13 @@ _SECRET_NAME = (
 )
 # Values are matched possessively to their end, so a long value is redacted
 # whole rather than leaving its tail; the scanned window bounds the cost.
-# Quoted values may hold backslash escapes, so `"ab\"cd"` is one value.
+# Quoted values may hold backslash escapes, so `"ab\"cd"` is one value; a
+# value that ends in a backslash (`"C:\secrets\"`) falls back to the plain
+# quoted form.
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(" + _SECRET_NAME + r"[\"']?\s{0,4}[=:]\s{0,4})"
-    r"(?:\"((?:[^\"\\\n]|\\.)++)\"|'((?:[^'\\\n]|\\.)++)'|([^\s\"',;)}\]]++))"
+    r"(?:\"((?:[^\"\\\n]|\\.)++)\"|\"([^\"\n]++)\""
+    r"|'((?:[^'\\\n]|\\.)++)'|'([^'\n]++)'|([^\s\"',;)}\]]++))"
 )
 # Control characters (keeping tab/newline/CR for the whitespace collapse) and
 # lone surrogates: Postgres jsonb rejects \u0000 and unpaired surrogates, and
@@ -118,13 +123,15 @@ def _looks_secret(value: str, *, assignment: bool) -> bool:
 
 
 def _redact_assignment(match: re.Match) -> str:
-    value = match.group(2) or match.group(3) or match.group(4) or ""
-    quoted = match.group(4) is None
+    double = match.group(2) if match.group(2) is not None else match.group(3)
+    single = match.group(4) if match.group(4) is not None else match.group(5)
+    value = double or single or match.group(6) or ""
+    quoted = match.group(6) is None
     if not _looks_secret(value, assignment=quoted or "=" in match.group(1)):
         return match.group(0)
-    if match.group(2) is not None:
+    if double is not None:
         return f'{match.group(1)}"{REDACTED}"'
-    if match.group(3) is not None:
+    if single is not None:
         return f"{match.group(1)}'{REDACTED}'"
     return match.group(1) + REDACTED
 
@@ -153,17 +160,24 @@ def make_report_excerpt(text: Optional[str], limit: Optional[int] = None) -> Opt
         window_end = limit + _SCAN_MARGIN
         raw_end = window_end * _RAW_FACTOR
         flat = _WHITESPACE.sub(" ", _UNSTORABLE.sub("", text[:raw_end])).strip()
-        window = flat[:window_end]
-        more = len(flat) > window_end or len(text) > raw_end
-        collapsed = scrub_credentials(window).strip()
+        end = window_end
+        for _ in range(_WIDEN_STEPS):
+            collapsed = scrub_credentials(flat[:end]).strip()
+            if len(collapsed) >= window_end or end >= len(flat):
+                break
+            end *= 2
         if not collapsed:
             return None
+        more = len(flat) > end or len(text) > raw_end
         if not more and len(collapsed) <= limit:
             return collapsed
         room = limit - 1  # leave space for the ellipsis
-        if more and len(window) < window_end and not text[raw_end - 1:raw_end].isspace():
-            # The raw read ended inside padding and mid-word, so the window's
-            # tail had no margin after it: keep only text a margin from its end.
+        # Unseen text follows the window unless the raw read ended on
+        # whitespace with nothing collapsed left over.
+        open_tail = len(flat) > end or (
+            len(text) > raw_end and not text[raw_end - 1:raw_end].isspace()
+        )
+        if open_tail and len(collapsed) < window_end:
             room = min(room, len(collapsed) - _SCAN_MARGIN)
             if room < 1:
                 return None

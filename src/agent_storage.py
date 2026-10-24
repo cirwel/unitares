@@ -770,8 +770,8 @@ async def record_agent_state(
     if eisv_instrument:
         state_json["eisv_instrument"] = dict(eisv_instrument)
     # A bounded, credential-scrubbed excerpt of the check-in's report text
-    # (src/report_excerpt.py), so a later reader can see what the agent said
-    # beside the state it was given. The agent's own words, not a verified
+    # (src/report_excerpt.py), so the row keeps what the agent said beside the
+    # state it was given. The agent's own words, not a verified
     # claim. Absent when retention is off or the check-in carried no text.
     if report_excerpt:
         state_json["report_excerpt"] = report_excerpt
