@@ -200,7 +200,7 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `get` | Get one agent's knowledge, or read back a single `discovery_id` |
 | `list` | Raw status aggregate (`epoch_scope`, `including_cold`); its numbers differ from `stats` by design |
 | `update` | Modify an existing discovery (status, content, tags); a `summary` over 4,003 characters, the most a store keeps, is refused |
-| `details` | Full row with `details` pagination (`offset`, `length` default 2000); `include_response_chain=true` adds the typed response chain (AGE backend only) |
+| `details` | Full row with `details` pagination (`offset`, `length` default 2000); `include_response_chain=true` adds the typed response chain on the AGE backend, bounded by `max_chain_depth` (default 10, maximum 32), `response_chain_limit` (default 100, maximum 200), and `response_chain_offset` (default 0) |
 | `note` | Quick note storage through the unified interface |
 | `cleanup` | Run the lifecycle passes graph-wide (tag canonicalization; `ephemeral`-tagged → archived after 7 days; resolved → archived after 30 days, permanent entries skipped; archived → cold after 90 days). Never deletes; `dry_run` defaults to true |
 | `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
