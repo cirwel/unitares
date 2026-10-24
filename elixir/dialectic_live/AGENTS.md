@@ -25,7 +25,7 @@ app. The design record for the Timeline pane is
 
 The app binds `127.0.0.1`. Its browser boundary is, today:
 
-- `config/prod.exs` `force_ssl` with `exclude: [hosts: ["localhost",
+- `elixir/dialectic_live/config/prod.exs` `force_ssl` with `exclude: [hosts: ["localhost",
   "127.0.0.1"]]`. Any other `Host` is redirected, which is what stops DNS
   rebinding on this plain-http bind. Do not widen the list or drop `force_ssl`.
 - The default `check_origin`, which pins the LiveView socket to the endpoint
@@ -42,7 +42,7 @@ auth or the boundary (an explicit Host plug, an explicit origin list, a guarded
 ## Credentials the process holds
 
 Credentials come from the service environment. When `UNITARES_SECRETS_ENV`
-names a secrets file, `scripts/start.sh` sources the whole file with `set -a`,
+names a secrets file, `elixir/dialectic_live/scripts/start.sh` sources the whole file with `set -a`,
 so the process environment holds every key in it, not only the two it uses:
 `SECRET_KEY_BASE` (from `DIALECTIC_LIVE_SECRET_KEY_BASE`) and, optionally,
 `UNITARES_HTTP_API_TOKEN`, which `DialecticLive.Governance` sends as a bearer.
@@ -56,7 +56,7 @@ keys and resolving credentials properly is M4 work.
 - `mix deps.get && mix compile` in a fresh worktree before anything else; then
   `mix test` (DB-free and governance-free; CI runs the same).
 - Tests start their own processes with `start_supervised` and injected names
-  (`:name`, `:table`, `:pubsub`, `:req_options`); `config/test.exs` turns off
+  (`:name`, `:table`, `:pubsub`, `:req_options`); `elixir/dialectic_live/config/test.exs` turns off
   the application's Firehose and TimelineFeed. HTTP goes through `Req.Test`.
 - The frame→mark rules shared with the Python server live in
   `tests/fixtures/timeline_parity/` at the repo root, asserted by

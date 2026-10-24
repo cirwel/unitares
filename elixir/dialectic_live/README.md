@@ -73,7 +73,7 @@ shared fixture in [`tests/fixtures/timeline_parity/`](../../tests/fixtures/timel
 The app binds `127.0.0.1` only. Two Phoenix defaults form its browser boundary
 today, and both are load-bearing:
 
-- `config/prod.exs` `force_ssl` excludes only `localhost` and `127.0.0.1`, so a
+- `elixir/dialectic_live/config/prod.exs` `force_ssl` excludes only `localhost` and `127.0.0.1`, so a
   request with any other `Host` is redirected to https. On this plain-http
   loopback bind that acts as a Host allowlist against DNS rebinding.
 - `check_origin` is left at its default, which pins the LiveView socket to the
