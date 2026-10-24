@@ -79,8 +79,11 @@ CLIENT_STATE_TTL = 30 * 86400
 PENDING_CLIENT_TTL = 10 * 60
 
 # Process-local OAuth state stays bounded even when Redis is unavailable.
-# Authorization codes are stateless signed envelopes; live token caches are
-# bounded per client so one enrolled client cannot evict another's credentials.
+# Authorization codes are stateless signed envelopes, and live token caches
+# are bounded per client so one client's token churn cannot evict another's
+# live tokens. The dynamic-client cache has a separate global cap: Redis can
+# reload an issued client after eviction, while memory-only open enrollment
+# may require that client to register again.
 # Limits are constructor-overridable for constrained deployments and tests.
 DEFAULT_MAX_DYNAMIC_CLIENTS = 256
 DEFAULT_MAX_AUTH_CODES = 1024
