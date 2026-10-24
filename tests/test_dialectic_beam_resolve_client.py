@@ -701,6 +701,40 @@ async def test_enforced_dialectic_transport_error_never_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["lost_response", "server_error", "invalid_ack"])
+async def test_enforced_dialectic_commit_unknown_reaches_readback(
+    monkeypatch, failure
+):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+
+    if failure == "server_error":
+        fake = _fake_httpx(503, {"ok": False})
+    else:
+        fake = _fake_httpx(200, {"ok": True})
+        response = fake.Client.return_value.__enter__.return_value.post.return_value
+        if failure == "lost_response":
+            response.json.side_effect = RuntimeError("response body lost")
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
+        )
+
+    assert out is None
+    assert detail["commit_unknown"] is True
+
+
+@pytest.mark.asyncio
 async def test_enforced_dialectic_disabled_route_never_falls_back(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")

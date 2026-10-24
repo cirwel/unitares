@@ -482,6 +482,10 @@ async def save_session(
                     await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except BeamDialecticPolicyRefusal:
+        if terminal_minted and session.resolution is not None:
+            discard_receipt_unless_written(
+                session.resolution, written=False, had_receipt=False
+            )
         raise
     except Exception as e:
         if terminal_minted and session.resolution is not None:

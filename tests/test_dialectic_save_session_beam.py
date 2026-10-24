@@ -10,7 +10,7 @@ snapshot. default=str fixes it. (DB writes were never affected.)
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -146,6 +146,41 @@ async def test_save_session_surfaces_identity_refusal_without_python_fallback(mo
             await sess_mod.save_session(session)
 
     pg_phase.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_session_discards_new_receipt_before_identity_refusal(monkeypatch):
+    monkeypatch.setattr(
+        sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False
+    )
+    resolution = SimpleNamespace(
+        receipt="",
+        to_dict=lambda: {"action": "resume"},
+    )
+    session = _resolved_session()
+    session.resolution = resolution
+    beam = AsyncMock(
+        side_effect=BeamDialecticPolicyRefusal(
+            "identity_verification_unavailable", operation="resolve_session"
+        )
+    )
+    discard = MagicMock()
+
+    def seal(_session, _resolution, *, status):
+        resolution.receipt = "new-receipt"
+        return {"action": "resume", "receipt": resolution.receipt}
+
+    with patch(
+        "src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", beam
+    ), patch.object(sess_mod, "seal_resolution_for_persistence", new=seal), patch.object(
+        sess_mod, "discard_receipt_unless_written", new=discard
+    ):
+        with pytest.raises(BeamDialecticPolicyRefusal):
+            await sess_mod.save_session(session)
+
+    discard.assert_called_once_with(
+        resolution, written=False, had_receipt=False
+    )
 
 
 @pytest.mark.asyncio

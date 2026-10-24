@@ -2100,6 +2100,67 @@ class TestHandleSubmitSynthesis:
         assert "dialectic_facilitation_needed" not in emitted
 
     @pytest.mark.asyncio
+    async def test_identity_refusal_recommends_retry_without_facilitation(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """Transient identity failures are retryable, not reviewer disputes."""
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticPolicyRefusal,
+        )
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = Resolution(
+            action="resume",
+            conditions=["Lower threshold"],
+            root_cause="Agreed cause",
+            reasoning="Agreed reasoning",
+            signature_a="",
+            signature_b="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            signature_version=3,
+        )
+        facilitation = AsyncMock()
+
+        with patch(
+            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}._commit_terminal_resolution",
+            new=AsyncMock(
+                side_effect=BeamDialecticPolicyRefusal(
+                    "identity_verification_unavailable",
+                    operation="resolve_session",
+                )
+            ),
+        ), patch(
+            f"{DIALECTIC}._set_awaiting_facilitation", new=facilitation
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
+            response = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+            })
+
+        data = parse_result(response)
+        assert data["error_code"] == "DIALECTIC_IDENTITY_VERIFICATION_UNAVAILABLE"
+        assert data["recovery"]["action"] == (
+            "Retry after the lease-plane identity verifier recovers."
+        )
+        assert session.phase == DialecticPhase.SYNTHESIS
+        facilitation.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_ambiguous_beam_commit_never_calls_python_resolution_writer(self):
         from src.mcp_handlers.dialectic.handlers import (
             _commit_converged_resolution,

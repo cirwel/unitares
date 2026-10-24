@@ -3,7 +3,8 @@
 **Status: implemented for lease presence, strong lease-holder exchange, and
 dialectic BEAM mint sites in PR #3059 (2026-10-23). The §4 mint-site model was
 ratified on 2026-08-29 and is implemented as exact per-site scopes; the global
-path prefix was not widened.** This is the
+validator now accepts versioned API routes, while every mint site still limits
+issuance to its own exact method/path pairs.** This is the
 first design question named by
 [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md)
 §9 for its steps 1 and 2, split out because it is a security question about the
@@ -144,8 +145,10 @@ Python-side scope change.
   mint site's declaration and tests.
 - **Does not unblock** BEAM-verbs §9 steps 1 or 2. It closes one of their
   prerequisites.
-- **Does not touch verification.** No claim, comparison, or refusal on the BEAM
-  side changes.
+- **Does not change cryptographic claim verification.** This implementation
+  does add dialectic participant-membership authorization and its associated
+  BEAM-side refusals; signature, audience, method, path, and body-hash claim
+  comparisons remain unchanged.
 - **Does not narrow anything in use.** The presence site keeps exactly its
   acquire, heartbeat, and release routes.
 

@@ -5996,17 +5996,19 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         result["success"] = False
                         result["converged"] = False
                         result["blocked"] = e.error_code
-                        await _set_awaiting_facilitation(
-                            session, True, reason=e.error_code
-                        )
+                        if e.error_code not in {
+                            "identity_proof_invalid",
+                            "identity_proof_replayed",
+                            "identity_verification_unavailable",
+                        }:
+                            await _set_awaiting_facilitation(
+                                session, True, reason=e.error_code
+                            )
                         return [error_response(
                             str(e),
                             error_code=_beam_policy_error_code(e),
                             error_category="governance_refusal",
-                            recovery={
-                                "action": "Ask an operator to assign an independent reviewer.",
-                                "related_tools": ["dialectic"],
-                            },
+                            recovery=_beam_policy_recovery(e),
                             arguments=arguments,
                         )]
                     except Exception as e:

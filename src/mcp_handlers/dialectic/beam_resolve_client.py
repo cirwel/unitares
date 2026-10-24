@@ -513,6 +513,7 @@ async def beam_update_reviewer(
             rec.respond(outcome="no_response", error=type(e).__name__)
             if post_started and detail is not None:
                 detail["commit_unknown"] = True
+                return None
             return _fallback_or_refuse("update_reviewer")
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
@@ -531,6 +532,8 @@ async def beam_update_reviewer(
         logger.warning(
             f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back"
         )
+        if commit_unknown and detail is not None:
+            return None
         return _fallback_or_refuse("update_reviewer")
 
 
@@ -649,6 +652,7 @@ async def beam_resolve(
                 # not commit before the response was lost. Exact PostgreSQL
                 # readback decides whether the caller must route reconciliation.
                 detail["commit_unknown"] = True
+                return None
             return _fallback_or_refuse("resolve_session")
 
         if (
@@ -692,6 +696,8 @@ async def beam_resolve(
                 f"[BEAM_RESOLVE] invalid positive acknowledgement for "
                 f"{session_id[:16]}: {body}"
             )
+            if detail is not None:
+                return None
             return _fallback_or_refuse("resolve_session")
 
         commit_unknown = status >= 500 or 200 <= status < 300
@@ -728,4 +734,6 @@ async def beam_resolve(
         logger.warning(
             f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )
+        if commit_unknown and detail is not None:
+            return None
         return _fallback_or_refuse("resolve_session")
