@@ -1,6 +1,6 @@
 # Review gate proportionality (v0)
 
-Status: Proposal. Item 3 (the operator waiver) is built in this PR, bounded as
+Status: Proposal. Item 3 (the operator waiver) is built, bounded as
 described in `docs/operations/github-workflow-conventions.md`; items 1, 2 and 4
 are not built.
 

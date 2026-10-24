@@ -40,7 +40,7 @@ Default total generation budget is 1,800 seconds (`--budget`, maximum 3,600).
 Context overflow, missing source context/inspection, incomplete generation, malformed output,
 and tool/time exhaustion fail as UNREVIEWED. No truncated full diff earns a pass.
 
-Review without `--record` first when trying a new model. `--record` requires the provenance-aware gate from PR #2596 in the runner checkout and explicitly posts
+Review without `--record` first when trying a new model. `--record` uses the provenance-aware gate in the runner checkout and explicitly posts
 through the canonical gate renderer, after verifying both PR head and base still
 match. Exit codes: 0 = CLEAN, 1 = FINDINGS, 2 = UNREVIEWED/error. A CLEAN exit does
 not itself assert CI green, family coverage, readiness, or authorization to merge.
@@ -56,10 +56,7 @@ This command does not resume scheduled sweeps. Never use it to
 manufacture a missing review or replace a required reviewer with author reasoning.
 
 For a shared shortcut, set `git config alias.review-local "!ABSOLUTE/PATH/TO/scripts/dev/review-local.sh"`.
-Keep that checkout available until the shortcut is repointed to a merged checkout.
-
 The canonical gate is imported from the runner checkout, never from the PR being reviewed.
-After #2596 merges, update that checkout or repoint the shortcut to a checkout containing both changes.
 
 Qwen is opt-in: `git review-local --pr NUMBER --model qwen3-coder-next-64k:latest`.
 The installed Qwen model repeated identical tools in the initial pilots; Gemma completed

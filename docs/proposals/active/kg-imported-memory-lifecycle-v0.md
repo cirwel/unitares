@@ -2,7 +2,7 @@
 
 **Status:** Friction fix authorized by the 2026-10-13 handoff addendum and KG
 freeze-scope decision `2026-10-13T09:17:42.808916+00:00`. Preview and digest
-implementation is in this PR; deployment remains separate. Source lifecycle
+implementation shipped; deployment remains separate. Source lifecycle
 already replaces changed bodies and archives deleted/retracted sources.
 **Evidence checked:** 2026-10-13.
 
