@@ -45,12 +45,16 @@ class _AcquireCtx:
 def _rows():
     return {
         "checkin": [
-            {"recorded_at": NOW - timedelta(minutes=5), "identity_id": 1,
+            {"state_id": 11, "recorded_at": NOW - timedelta(minutes=5), "identity_id": 1,
              "epistemic_class": "agent_report", "action": "guide",
-             "verdict": "safe", "risk_score": 0.31},
-            {"recorded_at": NOW - timedelta(minutes=50), "identity_id": 1,
+             "verdict": "safe", "risk_score": 0.31,
+             "report_excerpt": "Opened PR #3045.", "confidence_reported": "0.7",
+             "has_self_report": True},
+            {"state_id": 10, "recorded_at": NOW - timedelta(minutes=50), "identity_id": 1,
              "epistemic_class": "substrate_interpretation", "action": "approve",
-             "verdict": "safe", "risk_score": None},
+             "verdict": "safe", "risk_score": None,
+             "report_excerpt": None, "confidence_reported": None,
+             "has_self_report": False},
         ],
         "outcome": [
             {"ts": NOW - timedelta(minutes=3), "outcome_id": "0b5c", "agent_id": PARENT,
@@ -256,6 +260,11 @@ class TestResponseShape:
 
         authored = {e["authored_by"] for e in by_kind["checkin"]}
         assert authored == {"agent", "substrate"}
+        substrate, agent = by_kind["checkin"]  # oldest first
+        assert (agent["state_id"], agent["report_excerpt"]) == (11, "Opened PR #3045.")
+        assert agent["confidence_reported"] == 0.7  # the jsonb text, as a number
+        assert (substrate["state_id"], substrate["report_excerpt"]) == (10, None)
+        assert "confidence_reported" not in substrate  # no self-report recorded
 
         (outcome,) = by_kind["outcome"]
         assert outcome["reported_confidence"] == 0.9
@@ -347,11 +356,14 @@ VALUES ('{PARENT}', 'h1', '{{"label": "parent-agent", "trust_tier": {{"name": "e
 
 INSERT INTO core.agent_state (identity_id, recorded_at, state_json, epistemic_class, synthetic, risk_score)
 SELECT identity_id, now() - interval '10 minutes',
-       '{{"action": "guide", "verdict": "safe"}}'::jsonb, 'agent_report', false, 0.4
+       '{{"action": "guide", "verdict": "safe", "report_excerpt": "Opened PR #3045.",
+          "eisv_telemetry": {{"self_report": {{"confidence_reported": 0.7}}}}}}'::jsonb,
+       'agent_report', false, 0.4
 FROM core.identities WHERE agent_id = '{PARENT}'
 UNION ALL
 SELECT identity_id, now() - interval '20 minutes',
-       '{{"action": "approve", "verdict": "safe"}}'::jsonb, 'substrate_interpretation', false, NULL
+       '{{"action": "approve", "verdict": "safe",
+          "eisv_telemetry": {{"self_report": null}}}}'::jsonb, 'substrate_interpretation', false, NULL
 FROM core.identities WHERE agent_id = '{PARENT}'
 UNION ALL
 SELECT identity_id, now() - interval '30 minutes', '{{}}'::jsonb, 'agent_report', true, NULL
@@ -414,6 +426,12 @@ async def test_sql_against_live_db(live_postgres_backend, monkeypatch):
     assert {(e["authored_by"], e["action"]) for e in checkins} == {
         ("agent", "guide"), ("substrate", "approve"),
     }
+    substrate, agent = checkins
+    assert isinstance(agent["state_id"], int) and agent["state_id"] != substrate["state_id"]
+    assert agent["report_excerpt"] == "Opened PR #3045."
+    assert agent["confidence_reported"] == pytest.approx(0.7)
+    # Its telemetry stores "self_report": null (no self-report), so the field is omitted.
+    assert substrate["report_excerpt"] is None and "confidence_reported" not in substrate
     (outcome,) = [e for e in events if e["kind"] == "outcome"]
     assert outcome["outcome_type"] == "test_failed"
     assert outcome["reported_confidence"] == pytest.approx(0.9)

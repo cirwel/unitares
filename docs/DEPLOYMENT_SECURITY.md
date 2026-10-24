@@ -1,256 +1,247 @@
-# Deployment security: the Compose quickstart's hardening posture
+# Deployment security for the Compose stack
 
-This is the infra/deployment counterpart to
-[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md), which covers the
-identity/protocol trust boundary (self-report vs. trusted outcomes, the
-symmetric resolution HMAC, single-operator scope). That document is silent on
-the Compose stack itself; this one isn't. Read both before treating a fresh
-`docker compose up` as more than what it is: **a trusted single-user
-development stack, not a hardened local production deployment.**
+The default Compose stack is designed for one trusted operator on one host.
+The governance server and lease plane are published on host loopback, while
+PostgreSQL and Redis remain unpublished on the default Compose network unless
+the admin overlay is enabled. These defaults reduce accidental exposure; they
+do not make the stack a hardened multi-user or internet-facing deployment.
 
-## Current posture
+This page owns the current infrastructure posture of the base
+[`docker-compose.yml`](../docker-compose.yml). The
+[scope and threat model](SCOPE_AND_THREAT_MODEL.md) owns the product and
+adversarial boundaries. The [security policy](../.github/SECURITY.md) owns
+vulnerability reporting and report scope. Installation and hosted-deployment
+procedures live in the [installation manual](manual/02-install.md) and the
+[cloud deployment runbook](operations/cloud-deploy-runbook.md).
 
-A summary of the Compose stack as it stands. The [hardening pass
-log](#hardening-pass-log-2026-09-28-pr-2580) below records how it got here and
-carries the detail; its known-gaps list is kept current.
+## Deployment profiles
 
-- **Container privileges.** All four services drop every Linux capability
-  (`cap_drop: [ALL]`) and set `no-new-privileges`; `redis` adds back `SETUID`,
-  `SETGID`, `CHOWN` and `FOWNER`. `governance-mcp` and `lease-plane` still run
-  as root with a writable filesystem and no user-namespace remapping.
-- **Published ports.** `governance-mcp` (8767) and `lease-plane` (8788) are
-  published on the host's loopback interface. Postgres and Redis are not, unless you add
-  `docker-compose.admin.yml`. Un-publishing is a real boundary on Docker
-  Desktop and a weaker one on a native Linux Docker host.
-- **Credentials.** The MCP bearer allowlist is empty by default, and two
-  development-only secrets ship as literal values in `docker-compose.yml`.
-  Rotate them and set a real Postgres password before the stack is reachable
-  beyond your own loopback. The boot path enforces none of this: nothing
-  refuses to start on a default credential, an unauthenticated Redis, or a
-  missing MCP bearer (see [known gaps](#what-this-pass-did-not-change-known-gaps)).
-- **Browser pages and unlisted hosts.** The trusted-network bypass does not
-  apply to a request from a foreign browser `Origin`, or to any caller (browser,
-  `curl` or SDK) that sends an unlisted dotted `Host`.
-- **Not covered.** No image/repo split, no data-loss-prevention layer, and the
-  app connects to Postgres as its superuser role.
+| Profile | Host-published services | Intended use |
+|---|---|---|
+| Base quickstart | Governance MCP on `127.0.0.1:8767`; lease plane on `127.0.0.1:8788` | Local evaluation on a trusted host. It retains published development credentials and is not a shared-host security boundary. |
+| Admin/debug overlay | The base ports plus PostgreSQL on `127.0.0.1:5432` and Redis on `127.0.0.1:6379` | Temporary local debugging. Redis still has no authentication, and PostgreSQL keeps its configured credential. |
+| Core overlay | Governance MCP only; PostgreSQL remains internal, while Redis and the lease plane are disabled | Reduced-capability evaluation. Its security posture is not a substitute for the default stack's coordination and durable session services. |
+| Full-search overlay | Same network topology as the base stack | Adds local embedding dependencies and a read-only scripts mount; it does not harden the base stack. |
+| Shared-network or non-loopback deployment | Operator-defined | Not a hardened profile shipped by these Compose files. Follow the exposure checklist below and the hosted-deployment runbook. |
 
-## Hardening pass log (2026-09-28, PR #2580)
+The governance and lease-plane processes listen on all container interfaces so
+the host mappings work; it is the host-side mappings that bind to `127.0.0.1`.
+Do not describe the containers themselves as loopback-bound.
 
-The sections below describe the pass that dropped container privileges and
-stopped publishing Postgres and Redis
-([#2580](https://github.com/cirwel/unitares/pull/2580)). Later corrections are
-folded in: the browser-origin rule
-([#2658](https://github.com/cirwel/unitares/pull/2658), 2026-10-05) and the generated
-continuity secret ([#2674](https://github.com/cirwel/unitares/pull/2674),
-2026-10-06).
+## Controls enabled by default
 
-### What this pass changed
+### Container process controls
 
-- Every service (`postgres-age`, `redis`, `lease-plane`, `governance-mcp`)
-  runs with `security_opt: [no-new-privileges:true]` and `cap_drop: [ALL]`.
-  `redis` then adds back `SETUID`, `SETGID`, `CHOWN` and `FOWNER` so its
-  entrypoint can drop to the `redis` user and fix volume permissions; the
-  other three add nothing back. Verified against `docker compose up`: all four still start and pass their
-  healthchecks (`postgres-age` already runs as the non-root `postgres` user
-  per `db/postgres/Dockerfile.age-vector`; none of the four bind a port below
-  1024 inside the container, so `CAP_NET_BIND_SERVICE` is never needed).
-- `postgres-age` (5432) and `redis` (6379) are no longer published to the
-  host by default. Postgres carries a default credential
-  (`postgres`/`postgres`, see `.env.example`) and Redis has no
-  authentication at all. `governance-mcp` and `lease-plane` still reach both
-  over the internal Compose network with no change in behavior. To opt back
-  in for local debugging (`psql`, `redis-cli`, a GUI client):
+All four base services set `no-new-privileges` and drop every Linux capability.
+Redis adds back `SETUID`, `SETGID`, `CHOWN`, and `FOWNER` so its entrypoint can
+repair volume permissions and drop to the `redis` user. The PostgreSQL image
+ends as its `postgres` user. The governance and lease-plane images declare no
+`USER`, so they run as root inside their containers.
 
-  ```
-  docker compose -f docker-compose.yml -f docker-compose.admin.yml up
-  ```
+### Network publication
 
-  See `docker-compose.admin.yml` for what it publishes and why it's opt-in.
+PostgreSQL and Redis have no host port in the base file. The governance and
+lease-plane ports are published only on host loopback. The
+[`docker-compose.admin.yml`](../docker-compose.admin.yml) overlay deliberately
+publishes the database ports on loopback for host-side debugging; it does not
+add authentication or otherwise harden either database.
 
-### What un-publishing actually buys you (read before relying on it)
+### Request gates
 
-The honest version, not the elevator pitch: **on Docker Desktop (macOS,
-Windows), un-publishing is a real boundary** — the Desktop VM hides the
-container bridge network from the host, so another local process or OS
-account genuinely cannot reach an unpublished port. **On a native Linux
-Docker host, it's weaker than "127.0.0.1 is a machine boundary, not a user
-boundary" makes it sound.** Docker's bridge network is directly routable
-from the host's own network namespace by design — any local process,
-privileged or not, can typically reach a container's bridge IP
-(`docker inspect <container> --format '{{.NetworkSettings.IPAddress}}'`)
-whether or not its port is published, because Docker does not firewall
-container-to-host-namespace traffic by default. Un-publishing there mainly
-removes discovery via a well-known port (`5432`/`6379`) in favor of a bridge
-IP an attacker has to enumerate; it is not a hard access boundary. Closing
-that gap for real needs a host-originated-traffic rule, not a forwarding one
-— Docker's `DOCKER-USER` chain hooks `FORWARD` and only sees traffic routed
-*through* the host (container-to-container across networks, or external
-traffic), not a host process connecting directly to a bridge IP, which is
-`OUTPUT`-chain traffic. An `iptables`/`nftables` rule hooked on `OUTPUT` with
-UID matching (e.g. `iptables -A OUTPUT -d <bridge-subnet> -m owner ! --uid-owner
-<docker-daemon-uid>` or nftables `meta skuid`) is what would actually block
-another local account from reaching the bridge subnet; this pass does not
-add one.
+The base profile leaves `UNITARES_MCP_BEARER_TOKENS` empty, so `/mcp` is
+unauthenticated; its boundary is the loopback host publication and trusted-host
+access. When configured, the MCP transport has a bearer gate, and OAuth can gate
+the MCP resource as a separate deployment profile. Explicit MCP `Host` and
+browser `Origin` allowlists apply independently. REST and WebSocket routes use a
+separate local-versus-strict auth policy: a credential does not replace MCP
+`Host` validation, and a correct `Host` does not replace authentication.
 
-**Applied consistently, this also means the ports still published by default
-(`governance-mcp` 8767, `lease-plane` 8788) are not meaningfully harder to
-reach than Postgres/Redis were** — `UNITARES_MCP_BEARER_TOKENS` is empty by
-default (any local caller can drive governance writes, mint identities, read
-the knowledge graph), `LEASE_PLANE_BEARER_TOKEN` defaults to the literal
-string `unitares-local-lease-plane` (public in this repo and in
-`docker-quickstart.yml`), and `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`
-defaults to a public, sequential-byte Ed25519 seed — so an attacker who can
-already reach the loopback interface can forge attestations offline. This
-pass hardens the network-exposure layer for two services; it does not close
-the credential layer for any of the four. That's the same shape of gap
-`.github/SECURITY.md` already names out of scope ("issues that require root
-or local-shell access to the host"), stated here so it doesn't read as
-solved by this PR's title.
+In local REST posture, loopback and private-network callers may be trusted
+without presenting `UNITARES_HTTP_API_TOKEN`. A Compose-bridge caller normally
+arrives from such a trusted address, so setting that token alone does not require
+it on every REST request. That trusted-network bypass does not apply to a
+browser request whose `Origin` falls outside localhost, the MCP origin
+allowlist, and the dashboard origin; a cross-site request without an allowed
+origin likewise loses the bypass. The bypass also does not apply when the
+dotted DNS `Host` authority (name and port) is absent from
+`UNITARES_MCP_ALLOWED_HOSTS`.
+List the exact `name:port` or use the documented `name:*` form. Otherwise, the
+caller must present an accepted bearer or dashboard session. This prevents a
+web page from becoming a trusted caller merely because it connects through the
+operator's loopback interface.
 
-**A web page is not a local caller.** The trusted-network bypass on REST and
-`/ws/eisv` trusts the source address, and a browser on the operator's machine
-connects from loopback (or, under Compose, from the bridge gateway) whichever
-page asked. The bypass therefore does not apply when the request names a
-browser `Origin` outside localhost, `UNITARES_MCP_ALLOWED_ORIGINS` and the
-dashboard passkey origin, or a `Host` that is a dotted DNS name not listed in
-`UNITARES_MCP_ALLOWED_HOSTS` (the DNS-rebinding shape). IP literals, `localhost`
-and dotless names such as the `governance-mcp` service need no listing.
-The Host rule applies to every caller, not only browsers: the server cannot
-tell a rebound page from a script by its Host alone. So any client, `curl` and
-the SDKs included, that addresses the server by a dotted hostname (for example
-`server.home.arpa` or a Tailscale MagicDNS name) needs that host in
-`UNITARES_MCP_ALLOWED_HOSTS`, or a bearer or passkey session. A browser opening
-the dashboard on a LAN address or a hostname also needs its origin in
-`UNITARES_MCP_ALLOWED_ORIGINS`, which `/mcp` already required.
+A non-empty `UNITARES_MCP_BEARER_TOKENS` allowlist turns strict REST on by
+default; set `UNITARES_MCP_BEARER_TOKEN` to one member for in-repo callers such
+as the lease plane, and leave `UNITARES_REST_STRICT` enabled for an exposed
+deployment. See [Running the server: exposing beyond
+loopback](manual/03-running-the-server.md#35-exposing-beyond-loopback) for the
+complete transport procedure.
 
-### What this pass did not change (known gaps)
+Except for the static `GET /health` liveness response, the lease-plane HTTP
+surface separately requires its bearer and fails requests closed when the
+bearer is absent or wrong. Force-release routes require a distinct elevated
+bearer that the base Compose file does not configure. The base file supplies a
+published development bearer for ordinary routes, so reachability remains the
+important boundary until that value is replaced.
 
-- **`governance-mcp` and `lease-plane` still run as root** — neither
-  Dockerfile has a `USER` directive. Adding one needs a separate pass:
-  `governance-mcp` writes to the `governance-data` named volume
-  (`/app/data`) and `lease-plane` compiles its Mix project at build time and runs it with
-  `mix run --no-halt` (not a packaged release), and both
-  need their runtime file-permission needs verified against a non-root UID
-  before switching, not assumed.
-- **Two dev-only default secrets are still defaults.** `LEASE_PLANE_BEARER_TOKEN`
-  and `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` ship as literal values in
-  `docker-compose.yml`, each commented `# Development-only` /
-  `# Known development-only` at its definition. Rotate both (and set a real
-  `POSTGRES_PASSWORD`) before running this stack anywhere reachable beyond
-  your own loopback; the server refuses to start with either one once its
-  configuration says it is reachable (next item). `UNITARES_CONTINUITY_TOKEN_SECRET` no longer has a
-  default: unset, the server generates its own key on the `governance-data`
-  volume, and it ignores the value compose used to publish
-  (`src/continuity_secret.py`).
-- **The boot guard covers the two published secrets, judged from
-  configuration only.** The governance server refuses to start when
-  `LEASE_PLANE_BEARER_TOKEN` or `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` still
-  holds its published compose value (matched by digest, `src/insecure_defaults.py`)
-  and its configuration says clients reach it from beyond this host:
-  - `UNITARES_MCP_BEARER_TOKENS` has a member (hosted `/mcp` bearer gate and
-    strict REST);
-  - `UNITARES_MCP_ALLOWED_HOSTS` or `UNITARES_MCP_ALLOWED_ORIGINS` names a host
-    other than loopback;
-  - `UNITARES_DASHBOARD_RP_ID` (or, with it, `UNITARES_DASHBOARD_ORIGIN`) names
-    a host other than loopback;
-  - `UNITARES_OAUTH_ISSUER_URL` names a host other than loopback (this covers
-    the public OAuth listener, which needs an issuer).
+### Secret generation and published-default detection
 
-  The error names the variables, never their values. With none of these set,
-  as in the plain quickstart, the server only warns, as before. The process
-  cannot see Docker's host port mapping, and inside the container it binds
-  every interface by design, so a quickstart whose port mapping was widened
-  to `0.0.0.0` by hand is not detected; the warning still prints.
-  `UNITARES_ALLOW_PUBLISHED_DEFAULTS=1` (in `.env` for docker compose, which passes it through) turns the refusal back into a warning
-  for a deliberate demo and logs a second warning at every start while it is
-  set. The variable names in use also appear as the `insecure_defaults` check
-  in the `health_check` tool and the authenticated `/health/deep` snapshot that
-  the dashboard reads, so they are visible after boot; the public `/health`
-  route does not carry them.
-- **The guard does not cover the other services or other credentials.** The
-  lease plane loads `LEASE_PLANE_BEARER_TOKEN` at boot and serves with whatever
-  value it is given. It warns when that value is the published default, and
-  again when it binds beyond loopback outside a container, but it reads none of
-  the exposure configuration above, so it does not refuse. Nothing refuses an unauthenticated
-  Redis, the default Postgres password, or a missing MCP bearer on a
-  non-loopback bind. `.github/SECURITY.md` treats a non-loopback bind and
-  local-host/local-process access as operator responsibility and out of report
-  scope, respectively; that framing is a real decision, not an oversight.
-- **No image/repo split.** `governance-mcp`'s image ships the reference
-  residents, research apparatus, and operator tooling alongside the core
-  server; there's no separate minimal image for someone who only wants the
-  governance core.
-- **No data-loss-prevention layer.** Check-ins, findings, and dialectic text
-  persist as free-form text with no secret-pattern redaction, sensitivity
-  labels, or bounded retention.
-- **`postgres-age`'s superuser role is the same role the app connects as.**
-  The official Postgres image makes `POSTGRES_USER` (`postgres` by default) a
-  superuser; `governance-mcp` and `lease-plane` both connect as that role.
-  Code execution in either container reaches `COPY ... TO PROGRAM`-style
-  superuser SQL against Postgres regardless of that container's own
-  `cap_drop`/`security_opt` — `cap_drop: ALL` constrains the container's
-  Linux capabilities, not what its already-privileged DB session can do.
-  Scoping the app to a non-superuser role with least-privilege grants is a
-  separate, unstarted pass.
-- **No `read_only: true` on any service.** `governance-mcp` and `lease-plane`
-  run as root (see above) with a writable filesystem; code execution in
-  either can rewrite the application itself, and `restart: unless-stopped`
-  brings the same, now-modified, writable layer back up. `cap_drop: ALL`
-  doesn't prevent this — plain file writes to files you own don't need a
-  capability.
-- **No user-namespace remapping.** UID 0 inside `governance-mcp` and
-  `lease-plane` is UID 0 on the Docker host (no `userns-remap`, no rootless
-  Docker), so a container escape from either is a host-root escape. The
-  capabilities that matter most for escapes (`SYS_ADMIN`, `SYS_PTRACE`,
-  `SYS_MODULE`, `DAC_READ_SEARCH`) were never in Docker's default set to
-  begin with, so `cap_drop: ALL` narrows an already-narrow escape surface
-  more than it closes the root-execution gap above.
-- **Optional host-mount paths haven't been tested under `cap_drop: ALL`.**
-  `UNITARES_DASHBOARD_EXT_DIR` and the metrics-catalog/route-pack mount
-  points ask an operator to bind-mount a host directory into a root
-  container. If that directory carries restrictive permissions (owned by
-  another UID, mode `0700`), a root process with every capability dropped
-  can fail to read it — `CAP_DAC_OVERRIDE`, which `cap_drop: ALL` removes, is
-  exactly what lets root bypass an ownership mismatch. This wasn't exercised
-  here because it's an opt-in path outside the default quickstart; a sibling
-  PR (#2578) hit the same *shape* of regression (two live import breakages)
-  in a different narrowing of this image's build, on the same kind of
-  opt-in, non-default path a plain `docker compose up` doesn't cover.
+When `UNITARES_CONTINUITY_TOKEN_SECRET` is unset, the governance server creates
+and persists its own continuity signing secret in the governance-data volume.
+The retired Compose default is ignored rather than reused.
 
-### Side effects to expect from this pass
+The base stack still publishes two development credentials in source:
+`LEASE_PLANE_BEARER_TOKEN` and
+`UNITARES_LEASE_ATTESTATION_SIGNING_KEY`. The governance server warns whenever
+either remains at its published value. It refuses to start when a published
+value is combined with configuration that signals beyond-host exposure, such as
+a non-loopback allowed host/origin, an MCP bearer allowlist, a hosted dashboard
+RP, or a non-loopback OAuth issuer. The refusal names variables, never values.
 
-- **Host-side tooling that defaults to `localhost:5432`/`localhost:6379` now
-  reads a healthy Compose install as down.** `scripts/dev/unitares_doctor.py`
-  is the clearest case (`check_postgres_running`, `check_redis_continuity`,
-  `check_governance_database`, `check_pg_extensions` all default to a
-  loopback DB URL); the reference agents and `scripts/analysis/*` tools that
-  default the same way are written for this operator's native/Homebrew
-  deployment (see `CLAUDE.md`'s `HOST_BINARIES`), not the Compose quickstart,
-  so they were never exercising this path. `docker compose ps` /
-  `docker inspect --format '{{.State.Health.Status}}' <container>` is the
-  correct way to check a Compose install's Postgres/Redis health now; the
-  admin overlay is the way to make host-side tools that expect a loopback
-  connection see them too. A deeper fix (teaching the doctor to notice a
-  healthy Compose-managed container instead of reporting a false failure)
-  is real and worth doing, but is its own pass against a file with enough
-  standing caution around it that it doesn't belong bundled into this one.
-- **`POSTGRES_HOST_PORT`/`REDIS_HOST_PORT` no longer do anything on a plain
-  `docker compose up`** — they only take effect with the admin overlay now.
-  `.github/CONTRIBUTING.md`, `docs/manual/02-install.md`, and
-  `docs/REVIEWER_GUIDE.md` are updated in this pass to stop suggesting them
-  as the fix for a `5432`/`6379` collision on a plain `docker compose up`,
-  since that collision can no longer happen there.
+`UNITARES_ALLOW_PUBLISHED_DEFAULTS=1` downgrades that refusal to a warning for a
+deliberate demo. It is not a production mode. The guard cannot see a Docker host
+port mapping widened by hand, and it does not cover the PostgreSQL password,
+unauthenticated Redis, or a missing MCP bearer.
 
-### Related work
+### Health information
 
-[PR #2578](https://github.com/cirwel/unitares/pull/2578) hardens a different
-dimension of the same fresh-install audit this pass responds to — the local
-session-file permissions (`scripts/unitares` writing
-`~/.unitares_session.json` world/group-readable) and the Docker build
-context leaking `.unitares/`/`secrets/` via a missing `.dockerignore` entry.
-It does not touch `docker-compose.yml` or either Dockerfile's `USER`
-handling.
+`/health`, `/health/live`, and `/health/ready` are intentionally shallow and
+public. The `health_check` tool and `/health/deep` include component diagnostics
+and the `insecure_defaults` check; `/health/deep` is gated by the normal REST
+policy, which may admit trusted-network callers without an explicit credential
+in local posture.
 
-None of the gaps above are fixed by this pass. They're recorded here so the
-next pass doesn't have to re-derive them from a fresh read of the compose
-file.
+## Before exposing the stack beyond loopback
+
+Treat any LAN binding, tunnel, reverse proxy, shared host, or public endpoint as
+a new deployment profile. At minimum:
+
+1. Set a strong `POSTGRES_PASSWORD` before the first volume initialization. A
+   later `.env` edit does not rotate an existing database role.
+2. Replace `LEASE_PLANE_BEARER_TOKEN` and
+   `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`; choose a stable attestation issuer
+   and trusted-issuer mapping.
+3. Configure a non-empty `UNITARES_MCP_BEARER_TOKENS`, give in-repo clients a
+   matching singular `UNITARES_MCP_BEARER_TOKEN`, and keep strict REST enabled.
+   OAuth may additionally gate `/mcp`, but it does not replace this bearer pair
+   for strict REST or in-repo clients. If OAuth is enabled, pre-register the
+   intended clients and set `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false`; open
+   dynamic registration with the default auto-approval does not exclude unknown
+   callers.
+4. Set exact MCP `Host` and `Origin` allowlists and any required browser CORS and
+   dashboard relying-party values. A documented `host:*` entry may cover that
+   host's presented port; do not use a broad wildcard instead of naming the
+   authority the proxy presents.
+5. Keep PostgreSQL and Redis unpublished unless a specific client requires
+   direct host access. If they must be reachable, add independent network and
+   credential controls rather than treating the admin overlay as hardening.
+6. Inspect the rendered Compose configuration and deployed port mappings, then
+   verify gated deep health. Do not paste rendered configuration into logs or
+   tickets; it contains expanded secret values.
+7. Remove `UNITARES_ALLOW_PUBLISHED_DEFAULTS` after any deliberate demo.
+
+The [cloud deployment runbook](operations/cloud-deploy-runbook.md) owns the
+full credential, proxy, passkey, and validation procedure. Completing that
+procedure does not remove the architectural limitations below.
+
+## Network isolation boundaries
+
+Loopback is a machine boundary, not a user boundary: another process or account
+on the same host can connect to a loopback-published service unless host policy
+prevents it.
+
+Unpublishing PostgreSQL and Redis has different effects by platform:
+
+- On Docker Desktop, the VM normally hides the container bridge network from
+  host processes, so an unpublished service is not directly reachable from the
+  host.
+- On native Linux Docker, the host namespace can normally route to container
+  bridge addresses even when no port is published. Unpublishing removes the
+  stable host port and reduces accidental discovery; it is not a strong barrier
+  against another local account.
+
+Host firewall and rootless/user-namespace policy are deployment concerns. The
+Compose files do not install host-originated traffic rules, request user-
+namespace remapping, or declare the default network `internal`.
+
+## Known limitations
+
+- **Root, writable application containers.** `governance-mcp` and `lease-plane`
+  run as root inside writable container filesystems. No base service uses
+  `read_only: true`. Compose requests no user-namespace remapping; the effective
+  host UID boundary depends on the Docker daemon or rootless configuration.
+- **Database privilege.** The application and lease plane connect with the
+  configured PostgreSQL role, which is the image's superuser role by default.
+  Container capability dropping does not reduce database privileges.
+- **Incomplete credential coverage.** Redis has no authentication in the base
+  stack. PostgreSQL defaults to `postgres`/`postgres`. The startup guard covers
+  two published lease/attestation credentials, not every unsafe combination of
+  binding, proxy, database, and auth settings.
+- **Environment-delivered secrets.** Compose passes credentials through
+  environment variables and `.env`; it does not use Docker secrets or another
+  external secret store.
+- **No general content DLP.** Free-form operator and agent text is not covered by
+  a system-wide data-loss-prevention, sensitivity-label, or retention-policy
+  layer. Treat it as persistent and secret-bearing unless a specific surface
+  documents a bounded, scrubbed representation; a scrubber is defense in depth,
+  not permission to submit secrets.
+- **Broad governance image.** The governance image includes agent SDK/common
+  packages, the dialectic reviewer, configuration, dashboard assets, and skills
+  rather than a minimal core-only artifact.
+- **Mixed image pinning.** Service images use release or upstream tags with
+  `pull_policy: missing`; only the Python base is digest-pinned. Controlled
+  deployments should record and verify the image digests they actually run.
+- **Optional bind-mount permissions.** Dashboard extensions, an extra metrics
+  catalog, and the full-search scripts mount add deployment-controlled files.
+  Restrictive ownership can become unreadable after `cap_drop: ALL`; verify each
+  enabled mount with the actual host UID and Docker mode.
+- **No default egress restriction.** The Compose network is not marked
+  `internal`; container outbound access is governed by the Docker host and its
+  network policy.
+- **Single-operator scope.** The shipped posture is not a multi-tenant security
+  boundary. The security policy treats non-loopback exposure and attackers with
+  host shell/root access as operator responsibilities.
+
+## Verify the deployed state
+
+Run these checks against the same Compose file set used to start the stack:
+
+```bash
+docker compose config --quiet
+docker compose ps
+docker compose port governance-mcp 8767
+docker compose port lease-plane 8788
+./scripts/unitares health
+```
+
+Use `docker compose config` without `--quiet` only in a private terminal when
+you need to inspect expanded port, environment, or mount values; its output may
+contain secrets. Inspect the running container controls when needed:
+
+```bash
+docker inspect --format '{{json .HostConfig.SecurityOpt}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' \
+  unitares-governance-mcp unitares-lease-plane unitares-postgres-age unitares-redis
+```
+
+Read the `health_check` tool or gated `/health/deep` response for component
+status and `insecure_defaults`. The shallow public health routes do not expose
+those diagnostics. A host-side doctor probe of `localhost:5432` or
+`localhost:6379` can report a healthy base Compose deployment as unavailable;
+use `docker compose ps`, or enable the admin overlay only when direct host
+database access is actually required.
+
+The Docker Quickstart CI workflow exercises all four base services, deep health,
+and MCP behavior. It does not validate an operator's host firewall, daemon
+configuration, proxy, or secret custody.
+
+## Change history
+
+The current contract above is authoritative. These changes explain its main
+boundaries; the PRs and changelog retain the implementation narrative.
+
+| Change | Result |
+|---|---|
+| [#2580](https://github.com/cirwel/unitares/pull/2580) | Added capability dropping and `no-new-privileges`; stopped publishing PostgreSQL and Redis by default. |
+| [#2658](https://github.com/cirwel/unitares/pull/2658) | Tightened browser-origin and host handling. |
+| [#2674](https://github.com/cirwel/unitares/pull/2674) | Replaced the published continuity secret with generated persistent key material. |
+| [#2957](https://github.com/cirwel/unitares/pull/2957) | Added published-default warnings, exposure detection, and startup refusal. |

@@ -1,0 +1,303 @@
+{
+  "_doc": "Firehose frame -> timeline mark pairs. result is one of mark, mark_and_doorbell, doorbell, drop. Frames are trimmed copies of live /ws/eisv shapes with synthetic ids.",
+  "cases": [
+    {
+      "name": "eisv_update guided",
+      "frame": {
+        "type": "eisv_update",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "agent_name": "synthetic-agent",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "coherence": 0.5,
+        "risk": 0.1,
+        "decision": {
+          "action": "proceed",
+          "sub_action": "guide",
+          "reason": "r"
+        }
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "checkin",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "authored_by": "unknown",
+        "assessment": {
+          "source": "eisv",
+          "verdict": "guide"
+        }
+      }
+    },
+    {
+      "name": "eisv_update without decision has no assessment",
+      "frame": {
+        "type": "eisv_update",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "checkin",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "authored_by": "unknown"
+      }
+    },
+    {
+      "name": "lifecycle_paused maps",
+      "frame": {
+        "type": "lifecycle_paused",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "lifecycle_paused",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "lifecycle_resumed maps",
+      "frame": {
+        "type": "lifecycle_resumed",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "lifecycle_resumed",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "lifecycle_archived maps",
+      "frame": {
+        "type": "lifecycle_archived",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "lifecycle_archived",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "lifecycle_loop_detected maps",
+      "frame": {
+        "type": "lifecycle_loop_detected",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "lifecycle_loop_detected",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "lifecycle_stuck_detected maps",
+      "frame": {
+        "type": "lifecycle_stuck_detected",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "lifecycle_stuck_detected",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "circuit_breaker_trip maps",
+      "frame": {
+        "type": "circuit_breaker_trip",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "circuit_breaker_trip",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "circuit_breaker_reset maps",
+      "frame": {
+        "type": "circuit_breaker_reset",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "because"
+      },
+      "result": "mark_and_doorbell",
+      "mark": {
+        "kind": "lifecycle",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "event_type": "circuit_breaker_reset",
+        "reason": "because"
+      }
+    },
+    {
+      "name": "lifecycle_silent is not in the history set",
+      "frame": {
+        "type": "lifecycle_silent",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "lifecycle_created is not in the history set",
+      "frame": {
+        "type": "lifecycle_created",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "knowledge_write re-cut",
+      "frame": {
+        "type": "knowledge_write",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "discovery_id": "2026-10-24T04:16:18.000000+00:00",
+        "discovery_type": "note",
+        "severity": "low",
+        "summary": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq...",
+        "tags": [
+          "t"
+        ]
+      },
+      "result": "mark",
+      "mark": {
+        "kind": "knowledge",
+        "ts": "2026-10-24T04:16:18.847670+00:00",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "provisional": true,
+        "discovery_id": "2026-10-24T04:16:18.000000+00:00",
+        "discovery_type": "note",
+        "summary": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq…"
+      }
+    },
+    {
+      "name": "knowledge_read dropped",
+      "frame": {
+        "type": "knowledge_read",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "action": "search"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "dialectic transition is a doorbell",
+      "frame": {
+        "type": "dialectic_session_resolved",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "session_id": "s"
+      },
+      "result": "doorbell"
+    },
+    {
+      "name": "dialectic without agent is still a doorbell",
+      "frame": {
+        "type": "dialectic_sweep_cycle",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "doorbell"
+    },
+    {
+      "name": "identity frames dropped",
+      "frame": {
+        "type": "identity_hijack_suspected",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "reason": "fingerprint_mismatch"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "dashboard frames dropped",
+      "frame": {
+        "type": "dashboard_session_started",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "operator_label": "op"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "findings dropped",
+      "frame": {
+        "type": "sentinel_finding",
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "eisv_update without agent_id dropped",
+      "frame": {
+        "type": "eisv_update",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00",
+        "decision": {
+          "action": "proceed"
+        }
+      },
+      "result": "drop"
+    },
+    {
+      "name": "lifecycle without agent_id dropped",
+      "frame": {
+        "type": "lifecycle_paused",
+        "agent_id": null,
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "drop"
+    },
+    {
+      "name": "frame without type dropped",
+      "frame": {
+        "agent_id": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-24T04:16:18.847670+00:00"
+      },
+      "result": "drop"
+    }
+  ]
+}

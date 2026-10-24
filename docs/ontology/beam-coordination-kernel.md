@@ -3,8 +3,9 @@
 > **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
 
 **Created:** April 30, 2026
-**Last Updated:** June 28, 2026
-**Status:** Placement decided; lease-plane live; Sentinel Wave 1 shipped (`com.unitares.sentinel-beam`); **Wave 3a read-only handlers DEPLOYED (:8770, first inbound BEAM listener) and dialectic-on-BEAM merged (flags off, 2026-06-28)**. Remaining = Wave 3 write-path (3b/3c `handler_dispatch`, not started).
+**Last reviewed:** October 24, 2026 (status line re-read against the running services and the Wave 3 gate; body last revised June 28, 2026)
+**Status:** Placement decided; lease-plane live; Sentinel Wave 1 shipped (`com.unitares.sentinel-beam`); Wave 3a read-only handlers deployed (:8770); the dialectic LiveView pane (#1250, `elixir/dialectic_live/`) deployed as a read-only consumer on :8790. Wave 3 write-path (3b/3c `handler_dispatch`) not started: its reduced-scope gate was ratified 2026-09-27 and authorises nothing to be built ([`wave-3-reduced-scope-gate-v0.md`](../proposals/active/wave-3-reduced-scope-gate-v0.md)).
+**Earlier status (2026-06-28):** Placement decided; lease-plane live; Sentinel Wave 1 shipped (`com.unitares.sentinel-beam`); **Wave 3a read-only handlers DEPLOYED (:8770, first inbound BEAM listener) and dialectic-on-BEAM merged (flags off, 2026-06-28)**. Remaining = Wave 3 write-path (3b/3c `handler_dispatch`, not started).
 
 ## Related artifacts (independent convergence, 2026-04-30)
 
