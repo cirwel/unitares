@@ -96,6 +96,10 @@ tests/fixtures/*
 # docs/operations/eisv-instrument-preservation-harness.md).
 !tests/fixtures/eisv_preservation/
 !tests/fixtures/eisv_preservation/**
+# Timeline parity fixture shared by tests/test_timeline_parity_fixture.py and
+# elixir/dialectic_live (load-bearing: keeps the two normalisers in step).
+!tests/fixtures/timeline_parity/
+!tests/fixtures/timeline_parity/**
 tests/data/
 data/exports/
 data/mcp_server_sse*.log
