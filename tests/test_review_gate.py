@@ -956,9 +956,8 @@ def test_review_app_cannot_waive_a_second_family_even_with_write_association(ass
     assert rg.apply_waiver(_HELD, [c], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY) == _HELD
 
 
-@pytest.mark.parametrize("command", ["waiver", "extra-round"])
 @pytest.mark.parametrize("actor", [None, {"type": "Bot"}, {}])
-def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(monkeypatch, command, actor):
+def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(monkeypatch, actor):
     def identity(*args):
         assert args == ("api", "user")
         if actor is None:
@@ -967,10 +966,7 @@ def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(
     monkeypatch.setattr(rg, "gh_json", identity)
     monkeypatch.setattr(rg, "_resolve", lambda *a: pytest.fail("resolved or ran an operator action"))
     with pytest.raises(SystemExit, match="operator"):
-        if command == "waiver":
-            rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
-        else:
-            rg.cmd_review(SimpleNamespace(authorize_full_review="one additional full review"))
+        rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
 
 
 @pytest.mark.parametrize("verdict,disposed,state", [
@@ -5811,3 +5807,48 @@ def test_failed_agy_json_findings_are_visible_without_completed_coverage(repo, m
     rec, text = posted[0]
     assert rec.verdict == 'FINDINGS' and rec.scope == 'full-required'
     assert text.startswith('[P1] Unsafe caller.') and 'no completed review coverage' in text
+
+
+def test_authorize_full_review_works_under_app_credentials_without_operator_account(repo, monkeypatch):
+    head, key = _git(repo, 'rev-parse', 'HEAD'), rg.diff_key('master', 'HEAD')
+    args = SimpleNamespace(base='master', budget=30, fresh=True, reviewer='codex',
+                           authorize_full_review='follow-up scope declined after base refresh')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    rounds = rg.CodexRounds(4, cycles=[rg.ReviewCycle(head, key, {'openai', 'anthropic'})])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds)
+    monkeypatch.setattr(rg, 'require_operator_account', lambda: pytest.fail('App used operator credentials'))
+    ran = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: ran.append(True) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == 0
+    assert ran
+
+
+def test_missing_second_family_on_sensitive_path_is_not_blocked_by_round_cap(repo, reviewed_followup, monkeypatch):
+    """When the first family passed via a scope=fix follow-up after 3 cycles,
+    the second required family can still run on the current diff without a grant."""
+    comments, fix = reviewed_followup
+    # Keep only the first family (codex -> openai) on the anchor so the second family is still missing.
+    comments = [comments[0], _app_comment(fix, text='SCOPE: FOLLOWUP\nExamined delta.\nVERDICT: CLEAN')]
+    args = SimpleNamespace(base=fix.base, budget=30, fresh=True, reviewer='claude')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['src/oauth_provider.py'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['src/oauth_provider.py'])
+    # Three prior full cycles by openai, then a scope=fix follow-up at fix.head.
+    rounds = rg.CodexRounds(3, cycles=[rg.ReviewCycle('1' * 40, 'old1', {'openai'}),
+                                       rg.ReviewCycle('2' * 40, 'old2', {'openai'}),
+                                       rg.ReviewCycle(fix.from_head, fix.from_key, {'openai'})])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds)
+    ran = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: ran.append(True) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == 0
+    assert ran
+    # Repeating the already-passing family (openai) past the cap without authorization is still refused.
+    ran.clear()
+    args_repeat = SimpleNamespace(base=fix.base, budget=30, fresh=True, reviewer='codex')
+    assert rg.cmd_review(args_repeat) == rg.UNREVIEWED
+    assert not ran
+
