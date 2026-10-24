@@ -110,7 +110,7 @@ async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
 
 @pytest.mark.asyncio
 async def test_slow_first_exchange_restores_pruned_dynamic_client():
-    provider = GovernanceOAuthProvider()
+    provider = GovernanceOAuthProvider(max_dynamic_clients=1)
     client = _dcr_client()
     await provider.register_client(client)
     redirect = await provider.authorize(
@@ -125,12 +125,16 @@ async def test_slow_first_exchange_restores_pruned_dynamic_client():
     )
     code = redirect.split("code=")[1].split("&")[0]
     entry = await provider.load_authorization_code(client, code)
-    provider._dynamic_client_expires_at[client.client_id] = 0
+    replacement = _dcr_client("dcr-2")
+    await provider.register_client(replacement)
+    assert set(provider._clients) == {replacement.client_id}
 
     await provider.exchange_authorization_code(client, entry)
 
     assert await provider.get_client(client.client_id) is client
     assert client.client_id in provider._approved_dynamic_client_ids
+    assert set(provider._clients) == {client.client_id}
+    assert provider._dynamic_client_count() == 1
 
 
 @pytest.mark.asyncio

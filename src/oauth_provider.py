@@ -423,6 +423,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def _issued(self, client: OAuthClientInformationFull,
                       access: AccessToken, refresh: RefreshTokenEntry) -> None:
         if client.client_id not in self._static_client_ids:
+            self._prune_expired_state()
+            if (
+                client.client_id not in self._clients
+                and self._dynamic_client_count() >= self._max_dynamic_clients
+            ):
+                self._evict_oldest_dynamic_client()
             self._clients[client.client_id] = client
             self._approved_dynamic_client_ids.add(client.client_id)
             self._dynamic_client_expires_at[client.client_id] = time.time() + CLIENT_STATE_TTL
@@ -614,9 +620,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> OAuthToken:
         # Claim before any await: load_refresh_token awaits the store, so two
         # requests with the same token can both pass it. Only the one that
-        # pops the entry proceeds; the other gets invalid_grant. Recording the
-        # digest as consumed (also before any await) stops a later load from
-        # reloading the token from the store while, or if, its delete lags.
+        # records the digest as consumed proceeds; the other gets invalid_grant.
+        # Recording it before any await also stops a later load from reloading
+        # the token from the store while, or if, its delete lags.
         digest = _digest(refresh_token.token)
         if digest in self._consumed_refresh:
             raise TokenError(
