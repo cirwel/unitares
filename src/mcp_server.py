@@ -161,7 +161,7 @@ if _oauth_issuer_url:
         )
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
-        _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+        _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "false").lower() in ("true", "1", "yes")
         _oauth_resource_url = (
             os.environ.get("UNITARES_OAUTH_RESOURCE_URL")
             or f"{_oauth_issuer_url.rstrip('/')}/mcp"
@@ -182,10 +182,10 @@ if _oauth_issuer_url:
             issuer_url=_oauth_issuer_url,
             resource_server_url=_oauth_resource_url,
             required_scopes=_OAUTH_REQUIRED_SCOPES,
-            # Open DCR plus auto-approve lets anyone mint a token, so an
-            # operator can close it and admit only pre-registered clients
-            # (or open it briefly to add a connector; registrations that got
-            # a token persist after it closes).
+            # DCR is closed by default. Opening it plus auto-approval lets any
+            # reachable caller mint a token, so both switches require a
+            # deliberate operator choice. Static clients remain explicitly
+            # pre-approved by their environment configuration.
             client_registration_options=ClientRegistrationOptions(
                 enabled=oauth_dynamic_registration_enabled(),
                 valid_scopes=["mcp:tools"],
@@ -198,9 +198,17 @@ if _oauth_issuer_url:
             + ("the public listener (UNITARES_OAUTH_PUBLIC_PORT) only, if it binds" if _oauth_public_port else "every request")
             + ("; static client configured" if _oauth_static_client_id else "")
             + ("; dynamic registration OPEN" if _auth_settings.client_registration_options.enabled
-               else "; dynamic registration closed"),
+               else "; dynamic registration closed")
+            + ("; automatic approval OPEN" if _auto_approve else "; automatic approval closed"),
             file=sys.stderr, flush=True,
         )
+        if _auth_settings.client_registration_options.enabled and not _auto_approve:
+            print(
+                "[FastMCP] WARNING: dynamic registration is open but automatic approval "
+                "is closed; new registrations cannot complete their first sign-in",
+                file=sys.stderr,
+                flush=True,
+            )
     except Exception as e:
         # An operator who set the issuer URL asked for an auth gate. Serving
         # /mcp unauthenticated anyway answers a different question than the one

@@ -218,12 +218,12 @@ def mcp_bearer_tokens() -> List[str]:
 def oauth_dynamic_registration_enabled() -> bool:
     """Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION).
 
-    On by default, as before. Open DCR with auto-approve lets any caller mint a
-    token, so a deployment that wants the OAuth gate to exclude anyone should
-    turn it off and admit only pre-registered clients, opening it briefly to
-    add a connector if needed. An unparseable value reads as off.
+    Closed by default. Opening DCR creates unauthenticated process-local state,
+    and a deployment that also enables auto-approval lets any reachable caller
+    mint a token. Operators can open it deliberately for enrollment; an
+    unparseable value reads as off.
     """
-    raw = os.environ.get("UNITARES_OAUTH_DYNAMIC_REGISTRATION", "true").strip().lower()
+    raw = os.environ.get("UNITARES_OAUTH_DYNAMIC_REGISTRATION", "false").strip().lower()
     return raw in _TRUTHY
 
 
