@@ -110,12 +110,8 @@ def _registered_get_routes() -> list[tuple[str, object]]:
         mod = importlib.import_module(mod_name)
         source = inspect.getsource(mod)
         out.extend(_get_routes_in(mod, source))
-    # Opt-in route packs (UNITARES_ROUTE_PACKS), resolved through their table.
-    # Read even though the shipped default mounts none: a deployment that
-    # enables a pack exposes these routes, so each must be gated like the rest.
-    from src.http_routes import packs
-    for routes in packs.pack_routes().values():
-        out.extend((r.path, r.endpoint) for r in routes if "GET" in (r.methods or ()))
+    # External extensions are gated by the registrar itself and exercised with
+    # real requests in test_route_packs.py, independent of any operator manifest.
     return out
 
 
@@ -167,11 +163,12 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # the Overview feed and the Risk picker). Gated like /v1/eisv/recent.
 # 54 -> 53: /v1/sentinel/adjudication-queue removed with operator and model
 # adjudication (2026-09-27). Its two POST siblings were never counted here.
-# 53 -> 54: /v1/knowledge/flow (cross-agent knowledge flow from the AGE graph,
+# 53 -> 48: five reference extension GETs now come from deployment manifests.
+# 48 -> 49: /v1/knowledge/flow (cross-agent knowledge flow from the AGE graph,
 # for the Discoveries panel). Gated.
-# 54 -> 55: /v1/timeline (every agent's check-ins, outcomes, lifecycle,
+# 49 -> 50: /v1/timeline (every agent's check-ins, outcomes, lifecycle,
 # knowledge, lineage and dialectic events in one window). Gated.
-EXPECTED_GET_ROUTES = 55
+EXPECTED_GET_ROUTES = 50
 
 
 def test_route_registry_is_readable():

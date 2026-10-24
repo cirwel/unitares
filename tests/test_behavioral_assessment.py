@@ -153,9 +153,9 @@ class TestAbsoluteFloorsBoundComponentsNotVerdict:
     a sustained one-sided collapse in E or I widens the gap and typically
     breaches the V ceiling too, reaching "caution" via two components. S is
     genuinely independent and is the one dimension whose floor is provably
-    reachable alone. Whether the E/I/V coupling case should escalate
-    further is an open calibration question for the operator -- these
-    tests document current behavior, they don't decide it.
+    reachable alone. Issue #1995 closed under Option 1 (2026-10-23) keeping
+    floors as component-level bounds after the 2026-09-13 wake read recorded 0
+    baselined E/I/S breach-and-safe rows across 8,857 check-ins.
     """
 
     def test_S_alone_at_ceiling_stays_safe(self):
@@ -198,10 +198,12 @@ class TestBaselinedFloorBreachCautionFloor:
     """Issue #1995 option 2, baselined-only form, behind default-OFF flags.
 
     Wake condition 1 of the thread's 2026-09-02 stop rule fired 2026-09-13
-    (first baselined breach-and-safe rows). The candidate remedy: when the
-    baseline is warm AND an absolute floor is breached, the verdict is at
-    least "caution". Flag off must be byte-identical to the pre-flag result;
-    SHADOW records without changing; APPLY changes verdict only.
+    (first baselined breach-and-safe rows: 59 rows on one agent oscillating
+    around V = -0.50, 0 E/I/S rows). Issue #1995 closed under Option 1 on
+    2026-10-23 with APPLY kept default-OFF because promoting boundary |V|
+    jitter without hysteresis manufactures CIRS resonance. Flag off must be
+    byte-identical to the pre-flag result; SHADOW records without changing;
+    APPLY changes verdict only.
     """
 
     @pytest.fixture(autouse=True)

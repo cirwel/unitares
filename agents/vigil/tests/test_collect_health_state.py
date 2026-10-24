@@ -44,7 +44,7 @@ def test_governance_unhealthy_does_not_count_uptime():
     assert state["gov_up_cycles"] == 10  # not incremented
 
 
-def test_no_lumen_check_defaults_to_healthy_and_no_streak():
+def test_unconfigured_service_has_no_fabricated_health_or_uptime():
     """Agnostic user (no anima-mcp plugin): Vigil must still produce sensible state."""
     from agents.vigil.agent import _collect_health_state
 
@@ -52,11 +52,7 @@ def test_no_lumen_check_defaults_to_healthy_and_no_streak():
     gov_result = CheckResult(ok=True, summary="Governance: ok")
 
     state = _collect_health_state([(gov_check, gov_result)], prev_state={})
-    # Lumen defaults: healthy=True so uptime counter progresses but streak stays 0
-    assert state["lumen_healthy"] is True
-    assert state["lumen_down_streak"] == 0
-    # No lumen_last_ok_url since no plugin to populate it
-    assert "lumen_last_ok_url" not in state
+    assert not any(key.startswith("lumen_") for key in state)
 
 
 def test_lumen_result_detail_merges_into_state():
@@ -146,3 +142,34 @@ def test_arbitrary_service_gets_full_bookkeeping():
     assert state2["redis_healthy"] is True
     assert state2["redis_up_cycles"] == 5
     assert state2["redis_down_streak"] == 0
+
+
+def test_hook_condition_cannot_overwrite_governance_health():
+    from agents.vigil.agent import _collect_health_state
+
+    state = _collect_health_state([
+        (_FakeCheck("governance_health", "governance"), CheckResult(ok=False, summary="down")),
+        (_FakeCheck("plugin_hook_liveness", "plugin_hooks"), CheckResult(ok=True, summary="not configured")),
+    ], {})
+    assert state["governance_healthy"] is False
+    assert state["plugin_hooks_healthy"] is True
+
+
+def test_builtin_condition_results_cannot_replace_service_health():
+    from agents.vigil.agent import _collect_health_state, detect_changes
+    from agents.vigil.checks.governance_health import GovernanceHealth
+    from agents.vigil.checks.plugin_hook_liveness import PluginHookLiveness
+    from agents.vigil.checks.resident_tag_hygiene import ResidentTagHygiene
+
+    state = _collect_health_state([
+        (GovernanceHealth(), CheckResult(ok=False, summary="server down")),
+        (ResidentTagHygiene(), CheckResult(ok=True, summary="no missing tags")),
+        (PluginHookLiveness(), CheckResult(ok=True, summary="not configured")),
+    ], {})
+    assert not state["governance_healthy"]
+    assert state["resident_tags_healthy"]
+    assert state["plugin_hooks_healthy"]
+    assert detect_changes(
+        {"resident_tags_healthy": True},
+        {"resident_tags_healthy": False, "resident_tags_detail": "missing tags"},
+    ) == []

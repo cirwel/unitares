@@ -54,7 +54,7 @@ def fetch_tag_audit(url: str, timeout: float = 5.0) -> Tuple[bool, dict, str]:
 
 class ResidentTagHygiene:
     name = "resident_tag_hygiene"
-    service_key = "governance"
+    service_key = "resident_tags"
 
     async def run(self) -> CheckResult:
         from . import resident_tag_hygiene as _this

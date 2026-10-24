@@ -23,8 +23,8 @@
 # deploy-lib.sh.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.wave3a-handlers"
 PLIST="${UNITARES_WAVE3A_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${UNITARES_WAVE3A_PORT:-8770}"
@@ -43,6 +43,8 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
   --recipe "[deploy]   re-render the plist against the deploy worktree
 [deploy]   (sed __UNITARES_ROOT__ -> $DEPLOY ; see the template header)"
 
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
+
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-wave3a.sh" "$DEPLOY"
 
@@ -50,6 +52,7 @@ echo "[deploy] compiling wave3a_handlers (MIX_ENV=prod; surfaces compile errors 
 ( cd "$DEPLOY/elixir/wave3a_handlers" && mix deps.get && MIX_ENV=prod mix compile )
 
 echo "[deploy] restarting $LABEL"
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
 check_wave3a_health() {

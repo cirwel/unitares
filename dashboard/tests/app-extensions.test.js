@@ -35,7 +35,7 @@ describe("dashboard extensions", () => {
   it("ships only the core sections", () => {
     const dom = boot(null, {});
     const ids = [...dom.window.document.querySelectorAll("#nav a[data-section]")].map((a) => a.dataset.section);
-    expect(ids).toEqual(["overview", "agents", "discoveries", "dialectic", "activity", "eisv", "risk", "security"]);
+    expect(ids).toEqual(["overview", "agents", "discoveries", "dialectic", "activity", "timeline", "eisv", "risk", "security"]);
   });
 
   it("adds nothing when no manifest is served", async () => {

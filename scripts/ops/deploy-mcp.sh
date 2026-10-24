@@ -47,8 +47,8 @@ for arg in "$@"; do
   esac
 done
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_MCP_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.governance-mcp"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
@@ -263,6 +263,7 @@ if deploy_lib_poll 40 3 check_mcp_running_deploy_code; then
 else
   echo "[deploy-mcp] FAILED — new code did not come up healthy." >&2
   if recover_or_hold_forward "the new governance MCP failed its health check"; then
+    deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
     launchctl kickstart -k "gui/$UID_NUM/$LABEL"
     echo "[deploy-mcp] rolled back. Investigate ${DEPLOY}/data/logs/mcp_server_error.log" >&2
   fi

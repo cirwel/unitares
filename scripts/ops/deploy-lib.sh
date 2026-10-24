@@ -313,9 +313,9 @@ deploy_lib_nudge_lease_plane() {
   local tag="$1" script_name="$2" deploy="$3" ops_dir
   ops_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [[ "${DEPLOY_LIB_FRESH:-0}" == 1 ]]; then
-    "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: deploy worktree re-created (deps/_build gone)" || true
+    UNITARES_MCP_DEPLOY="$deploy" "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: deploy worktree re-created (deps/_build gone)" || true
   else
-    "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: shared-worktree ff" \
+    UNITARES_MCP_DEPLOY="$deploy" "$ops_dir/nudge-lease-plane.sh" --reason "$script_name: shared-worktree ff" \
       --if-changed "$DEPLOY_LIB_PREV" "$(git -C "$deploy" rev-parse HEAD)" || true
   fi
 }
@@ -432,6 +432,61 @@ _deploy_lib_env_keys_loaded() {
   return 0
 }
 
+# Explicit secrets-file selection must be present in launchd's cached job
+# environment before kickstart: editing a plist alone does not update it.
+# No selector means no requirement; installs that inject env directly stay valid.
+# Read only plist metadata, never the selected file. Capture launchctl output
+# without logging it (other environment entries can contain credentials).
+# usage: deploy_lib_require_loaded_secrets_env TAG PLIST DOMAIN/LABEL
+deploy_lib_require_loaded_secrets_env() {
+  local tag="$1" plist="$2" target="$3" configured out
+  if ! configured="$(python3 -c '
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as source:
+        env = plistlib.load(source).get("EnvironmentVariables", {})
+    value = env.get("UNITARES_SECRETS_ENV", "")
+    if not isinstance(value, str) or (value and not value.startswith("/")):
+        raise ValueError()
+    print("yes" if value else "no")
+except Exception:
+    sys.exit(1)
+' "$plist" 2>/dev/null)"; then
+    echo "[$tag] REFUSING: cannot validate the plist UNITARES_SECRETS_ENV selection for $target." >&2
+    return 1
+  fi
+  [[ "$configured" == yes ]] || return 0
+  if out="$(launchctl print "$target" 2>/dev/null)" && \
+      printf '%s\n' "$out" | python3 -c '
+import json, plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as source:
+        expected = plistlib.load(source)["EnvironmentVariables"]["UNITARES_SECRETS_ENV"]
+    values = []
+    in_env = False
+    for line in sys.stdin:
+        line = line.strip()
+        if line == "environment = {":
+            in_env = True
+        elif in_env and line == "}":
+            in_env = False
+        elif in_env and "=>" in line:
+            key, value = (part.strip() for part in line.split("=>", 1))
+            if key == "UNITARES_SECRETS_ENV":
+                if value.startswith(chr(34)):
+                    value = json.loads(value)
+                values.append(value)
+    sys.exit(0 if values == [expected] else 1)
+except Exception:
+    sys.exit(1)
+' "$plist" 2>/dev/null; then
+    return 0
+  fi
+  echo "[$tag] REFUSING: $target has a missing or stale cached UNITARES_SECRETS_ENV selection." >&2
+  echo "[$tag] Complete the controlled bootout/bootstrap of this job, then retry; kickstart does not reload its plist." >&2
+  return 1
+}
+
 # ── Environment overlay ──────────────────────────────────────────────────────
 # Write this deployment's external environment overlay into the live plist
 # (apply_plist_env_overlay.py) ahead of deploy_lib_restart_service, so that a
@@ -541,12 +596,14 @@ deploy_lib_restart_service() {
   # say so, rather than reloading blind on every deploy.
   if [[ "$known_unloaded" != 1 && -z "$cur_sha" && "$force" != 1 ]]; then
     echo "[$tag] WARNING: no sha256 tool found — plist drift is NOT being detected; kickstarting." >&2
+    deploy_lib_require_loaded_secrets_env "$tag" "$plist" "$domain/$label" || return 1
     launchctl kickstart -k "$domain/$label"
     return $?
   fi
 
   if [[ "$known_unloaded" != 1 && "$force" != 1 && -n "$old_sha" && "$cur_sha" == "$old_sha" ]]; then
     echo "[$tag] restarting $label (plist unchanged since last deploy restart — kickstart)"
+    deploy_lib_require_loaded_secrets_env "$tag" "$plist" "$domain/$label" || return 1
     launchctl kickstart -k "$domain/$label"
     return $?
   fi
@@ -555,6 +612,7 @@ deploy_lib_restart_service() {
   # (see the policy comment above). Only a MISMATCH triggers the reload.
   if [[ "$known_unloaded" != 1 && "$force" != 1 && -z "$old_sha" ]]; then
     echo "[$tag] restarting $label (no plist baseline recorded — adopting the current hash; kickstart)"
+    deploy_lib_require_loaded_secrets_env "$tag" "$plist" "$domain/$label" || return 1
     _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$cur_sha"
     launchctl kickstart -k "$domain/$label"
     return $?
@@ -596,6 +654,7 @@ deploy_lib_restart_service() {
   err=""
   for attempt in 1 2 3; do
     if err="$(launchctl bootstrap "$domain" "$plist" 2>&1)"; then
+      deploy_lib_require_loaded_secrets_env "$tag" "$plist" "$domain/$label" || return 1
       if missing="$(_deploy_lib_env_keys_loaded "$plist" "$domain/$label")"; then
         _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$cur_sha"
       else

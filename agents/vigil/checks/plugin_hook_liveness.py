@@ -1,42 +1,20 @@
-"""Plugin-hook liveness check — an external canary for a dark hook chain.
+"""Detect divergence between a configured client's activity and hook dispatch.
 
-Background: on 2026-06-02 the ``unitares-governance-plugin`` hook chain was
-found to have been silently dark for ~2.5 weeks. Every command in the plugin's
-``hooks.json`` wrapped ``${CLAUDE_PLUGIN_ROOT}`` in single quotes, which
-``/bin/sh`` will not expand, so every hook resolved to a literal path and died
-"No such file". ``~/.unitares/checkins.log`` had frozen at 2026-05-16 and
-nothing surfaced it — in a project whose whole thesis is observability of agent
-behavior, there was no canary asking "are my own hooks even firing?".
+Both the independent activity file and the hook artifact paths are explicit
+configuration. No client directory is inspected by default. With recent
+activity, stale or absent artifacts produce an advisory; with old or missing
+activity, the result is indeterminate. A healthy gated skip can count as a
+hook dispatch by including its artifact in the configured set.
 
-This check is that canary. The load-bearing design constraint: it must be
-**external to the hook chain**. A heartbeat written *by* the hooks cannot
-detect the hooks being un-dispatchable — the exact 2026-06-02 failure was that
-the wrapper never ran, so anything it was supposed to touch never got touched.
-So this check (running inside Vigil, a separate launchd process) compares two
-independent signals:
+The activity source must be independent of the hooks it checks. The newest
+artifact mtime represents last dispatch, rather than last submitted check-in.
+A long active session without any dispatch can still produce an advisory;
+thresholds describe the observation window, not proof of a broken client.
 
-  * ground truth — Claude Code's own activity record (``~/.claude/history.jsonl``
-    advances on every prompt). The plugin cannot suppress this.
-  * hook artifact — files the governance hook chain writes when it *dispatches*
-    (``~/.unitares/checkins.log`` on send, ``hook-skips.log`` on a gated skip).
-    We take the newest mtime across the set, so a healthy-but-skipping chain
-    (dispatch OK, check-in gated) still reads as alive — the signal is
-    "did a hook run at all", not "did a check-in get recorded".
-
-The check is a **divergence test**, deliberately not a raw staleness threshold:
-it only fires when there is recent CC activity *and* every hook artifact is
-stale. That distinguishes "hooks are dark" from "operator is simply idle" —
-a quiet weekend must not page anyone.
-
-Honest scope notes (no silent caps):
-  * The artifact set spans plugin AND user-level (~/.claude/hooks) governance
-    hooks, so this answers "is the governance hook layer alive", which is
-    slightly broader than "is the plugin chain alive". That is the right
-    default — a dark user-level chain is just as worth surfacing.
-  * Long single sessions are the known soft spot: an operator who keeps one
-    session open for >stale_hours without any hook dispatch could read as dark.
-    The default stale window (24h) is wide enough that this is rare; the
-    severity is ``warning``, an advisory to verify, not a critical page.
+Provenance: the 2026-06-02 Claude Code adapter incident exposed a quoted
+${CLAUDE_PLUGIN_ROOT} that prevented hooks from dispatching for weeks. Comparing
+its independent history file against hook artifacts detected that failure.
+The same divergence mechanism accepts any explicitly configured client.
 """
 
 from __future__ import annotations
@@ -46,18 +24,15 @@ from typing import Iterable, Optional
 
 from .base import CheckResult
 
-# Ground truth: Claude Code's own per-prompt activity log.
+# Optional activity source and hook artifacts. No default client directories
+# are inspected. The older VIGIL_CC_HISTORY_PATH remains an explicit adapter
+# alias for existing deployments; VIGIL_ACTIVITY_PATH takes precedence.
 HISTORY_PATH = os.path.expanduser(
-    os.environ.get("VIGIL_CC_HISTORY_PATH", "~/.claude/history.jsonl")
+    os.environ.get("VIGIL_ACTIVITY_PATH", os.environ.get("VIGIL_CC_HISTORY_PATH", ""))
 )
-# Hook artifacts: files the governance hook chain writes when it dispatches.
-# Colon-separated; newest mtime across the set is "last hook dispatch".
 HOOK_ARTIFACT_PATHS = [
-    os.path.expanduser(p)
-    for p in os.environ.get(
-        "VIGIL_HOOK_ARTIFACT_PATHS",
-        "~/.unitares/checkins.log:~/.unitares/hook-skips.log",
-    ).split(":")
+    os.path.expanduser(p.strip())
+    for p in os.environ.get("VIGIL_HOOK_ARTIFACT_PATHS", "").split(":")
     if p.strip()
 ]
 # Operator must have been active within this window for the check to assert at
@@ -90,16 +65,23 @@ def assess(
 
     Returns ok=True when the chain looks live OR when there is not enough recent
     activity to judge (indeterminate is not a failure). Returns ok=False only on
-    the genuine divergence: recent CC activity with a stale/absent hook artifact.
+    the genuine divergence: recent client activity with a stale/absent hook artifact.
     """
     artifact_paths = list(artifact_paths)
+    if not history_path or not artifact_paths:
+        return CheckResult(
+            ok=True,
+            summary="Plugin-hook liveness: not configured (set activity and artifact paths)",
+            severity="info",
+            fingerprint_key="plugin_hook_liveness_indeterminate",
+        )
     history_mtime = _newest_mtime([history_path])
 
     # No ground truth → cannot assert. Don't false-alarm.
     if history_mtime is None:
         return CheckResult(
             ok=True,
-            summary="Plugin-hook liveness: indeterminate (no Claude Code activity log found)",
+            summary="Plugin-hook liveness: indeterminate (no activity log found)",
             severity="info",
             fingerprint_key="plugin_hook_liveness_indeterminate",
         )
@@ -110,7 +92,7 @@ def assess(
         return CheckResult(
             ok=True,
             summary=(
-                f"Plugin-hook liveness: indeterminate (no CC activity in "
+                f"Plugin-hook liveness: indeterminate (no client activity in "
                 f"{activity_age_h:.1f}h, threshold {activity_hours:.0f}h)"
             ),
             severity="info",
@@ -124,7 +106,7 @@ def assess(
         return CheckResult(
             ok=False,
             summary=(
-                f"Plugin hook chain DARK — CC active {activity_age_h:.1f}h ago "
+                f"Plugin hook chain DARK — client active {activity_age_h:.1f}h ago "
                 f"but no hook artifact exists at any of {len(artifact_paths)} path(s). "
                 f"Hooks have likely never dispatched."
             ),
@@ -142,9 +124,9 @@ def assess(
         return CheckResult(
             ok=False,
             summary=(
-                f"Plugin hook chain DARK — CC active {activity_age_h:.1f}h ago but "
+                f"Plugin hook chain DARK — client active {activity_age_h:.1f}h ago but "
                 f"last hook dispatch was {hook_age_h:.1f}h ago (threshold {stale_hours:.0f}h). "
-                f"Check ${{CLAUDE_PLUGIN_ROOT}} expansion / hooks.json quoting."
+                f"Check the configured hook dispatcher and artifact paths."
             ),
             detail={
                 "activity_age_hours": round(activity_age_h, 2),
@@ -159,14 +141,14 @@ def assess(
         ok=True,
         summary=(
             f"Plugin hook chain live — last dispatch {hook_age_h:.1f}h ago, "
-            f"CC active {activity_age_h:.1f}h ago"
+            f"client active {activity_age_h:.1f}h ago"
         ),
     )
 
 
 class PluginHookLiveness:
     name = "plugin_hook_liveness"
-    service_key = "governance"
+    service_key = "plugin_hooks"
 
     async def run(self) -> CheckResult:
         # Re-read module-level config so test monkeypatching of paths/thresholds

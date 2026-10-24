@@ -609,9 +609,13 @@ before disposition; all five hold.
    explained-mismatch rate, fixed in the preregistered parity plan. Given 4.2,
    decide whether a partial, non-replayable parity before the horizon is worth
    running at all, or whether Stage 2 waits for instrumentation.
-4. **Report-text retention.** The report is transient today and truncated in
-   excerpts (#2267 §4.3). The target can carry nothing, a salted digest, an
-   excerpt, or the full text under a retention policy.
+4. **Report-text retention.** Resolved by the operator on 2026-10-23: an
+   excerpt. Each check-in keeps a bounded, credential-scrubbed excerpt of its
+   report text in `state_json.report_excerpt` (500 characters by default, cut
+   at a word boundary; `src/report_excerpt.py`; KG decision
+   `2026-10-23T11:09:33.699107+00:00`). Before that the report was transient
+   and truncated in excerpts (#2267 §4.3); the options were nothing, a salted
+   digest, an excerpt, or the full text under a retention policy.
 5. **Estimator instrumentation after the horizon.** Whether to instrument
    `process_update` so the input snapshot is exact, bumping `epoch`.
 6. **Preservation horizon.** What counts as the read's report being final.

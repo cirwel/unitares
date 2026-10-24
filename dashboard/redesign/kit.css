@@ -259,3 +259,47 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
   /* Stack the two-up layouts so neither column gets crushed on a phone. */
   .split-2, .split-wide { grid-template-columns: 1fr; }
 }
+
+/* ---------------- agent timeline (sections/timeline.js) ----------------
+   One row per agent; marks positioned by time across a track. Shapes differ
+   by kind and verdict as well as colour, so the marks read without hue. */
+.tl-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tl-grid { min-width: 760px; }
+.tl-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); border-top: var(--hairline) solid var(--line); }
+.tl-row.child .tl-lab { padding-left: var(--space-6); }
+.tl-lab { padding: var(--space-2) var(--space-3); min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.tl-name { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-sub { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-track { position: relative; height: 52px; margin-right: var(--space-5);
+  background-image: linear-gradient(to right, var(--line) var(--hairline), transparent var(--hairline));
+  background-size: 16.6667% 100%; }
+.tl-axis .tl-track { height: 28px; background: none; }
+.tl-tick { position: absolute; top: 6px; transform: translateX(-50%); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+.tl-mk { position: absolute; top: 50%; width: 24px; height: 24px; margin: -12px 0 0 -12px; padding: 0; border: 0;
+  background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: var(--radius-sm); z-index: 2; }
+.tl-mk:hover { background: var(--surface-2); }
+.tl-mk:focus-visible { outline: 2px solid var(--ink); }
+.tl-mk.sel { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
+.tl-dot { display: block; }
+.tl-mk.checkin .tl-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); border: 2px solid var(--surface); }
+.tl-mk.checkin.guide .tl-dot { width: 13px; height: 12px; border: 0; border-radius: 0; background: var(--warn); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.tl-mk.checkin.pause .tl-dot { background: var(--danger); border-radius: 2px; }
+.tl-mk.checkin.substrate .tl-dot { width: 7px; height: 7px; background: var(--surface); border: 1.5px solid var(--muted); clip-path: none; border-radius: 50%; }
+.tl-mk.outcome .tl-dot { width: 16px; height: 16px; border-radius: 4px; color: var(--surface); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; background: var(--ok); }
+.tl-mk.outcome.bad .tl-dot { background: var(--danger); }
+.tl-mk.knowledge .tl-dot { width: 9px; height: 9px; background: var(--info); transform: rotate(45deg); }
+.tl-mk.lineage .tl-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--eisv-e); background: var(--surface); }
+.tl-mk.lifecycle .tl-dot { width: 3px; height: 18px; background: var(--ink-2); }
+.tl-band { position: absolute; top: 14px; height: 24px; border-radius: var(--radius-sm); padding: 0; cursor: pointer; z-index: 1; }
+.tl-band.pause { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--danger) 24%, transparent) 0 4px, color-mix(in srgb, var(--danger) 6%, transparent) 4px 8px);
+  border: var(--hairline) solid color-mix(in srgb, var(--danger) 50%, transparent); }
+.tl-band.dialectic { background: color-mix(in srgb, var(--eisv-e) 14%, transparent); border: var(--hairline) solid color-mix(in srgb, var(--eisv-e) 55%, transparent); }
+.tl-band.sel { box-shadow: 0 0 0 2px var(--accent); }
+.tl-band:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.tl-legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center; font-size: var(--text-xs); color: var(--ink-2); }
+.tl-legend .tl-mk { position: static; margin: 0; cursor: default; }
+.tl-legend .tl-mk:hover { background: transparent; }
+.tl-legend .tl-band { position: static; display: inline-block; width: 22px; height: 12px; cursor: default; }
+.tl-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3) var(--space-5); }
+.tl-detail dt { font-size: var(--text-xs); color: var(--muted); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.tl-detail dd { color: var(--ink); overflow-wrap: anywhere; }

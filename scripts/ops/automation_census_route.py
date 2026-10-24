@@ -3,8 +3,9 @@
 Reference-ops code, next to the `unitares-automations` census tool in this
 directory: it serves the snapshot that tool writes. It is not part of the
 installed server package. The governance server imports this file by path
-only when UNITARES_ROUTE_PACKS names the `automation-census` pack
-(src/http_routes/packs.py). (Moved from src/http_routes/overview.py on
+only when a deployment's route-pack manifest declares it and
+UNITARES_ROUTE_PACKS selects that pack (src/http_routes/packs.py;
+docs/operations/automation-census-setup.md has an example). (Moved from src/http_routes/overview.py on
 2026-09-27.)
 """
 
