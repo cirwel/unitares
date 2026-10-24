@@ -83,6 +83,17 @@ defmodule DialecticLive.TimelineFeedTest do
       _ = await_reread_gets()
     end
 
+    test "a flapping firehose cannot fetch faster than the debounce" do
+      ctx = start_feed(debounce_ms: 300)
+      _ = viewer(ctx.feed)
+      _ = await_reread_gets()
+
+      for _ <- 1..4, do: broadcast_status(ctx, :connected)
+      refute_receive {:timeline_get, _}, 150
+      _ = await_reread_gets()
+      refute_receive {:timeline_get, _}, 400
+    end
+
     test "a firehose reconnect re-reads" do
       ctx = start_feed()
       _ = viewer(ctx.feed)
@@ -356,7 +367,8 @@ defmodule DialecticLive.TimelineFeedTest do
   defp await_registered(name, old) do
     Enum.find_value(1..600, fn _ ->
       case Process.whereis(name) do
-        pid when is_pid(pid) and pid != old -> pid
+        # Registered before init/1 runs: wait for init to finish.
+        pid when is_pid(pid) and pid != old -> :sys.get_state(pid) && pid
         _ -> Process.sleep(5) && nil
       end
     end) || flunk("#{inspect(name)} was not restarted")
@@ -426,6 +438,8 @@ defmodule DialecticLive.TimelineFeedTest do
         end)
 
       assert is_pid(restarted) and restarted != ctx.feed
+      # The name is registered before init/1 runs; wait for init to finish.
+      _ = :sys.get_state(restarted)
       assert :ets.info(ctx.table, :owner) == restarted
       assert {:ok, %{events: [%{"outcome_id" => "o-1"}]}} = TimelineFeed.snapshot("1h", ctx.table)
     end

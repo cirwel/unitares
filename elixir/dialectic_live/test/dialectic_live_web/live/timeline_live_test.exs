@@ -193,6 +193,74 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     refute_receive {:timeline_get, _}, 100
   end
 
+  test "a delayed delta takes its place in time, not the top", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "outcome",
+        "ts" => iso(-60_000),
+        "agent_id" => @a,
+        "outcome_id" => "old",
+        "outcome_type" => "oldest_row"
+      },
+      %{
+        "kind" => "outcome",
+        "ts" => iso(-1_000),
+        "agent_id" => @a,
+        "outcome_id" => "new",
+        "outcome_type" => "newest_row"
+      }
+    ]
+
+    ctx = feed_with(events)
+    view = mount_live(conn, ctx)
+
+    broadcast_frame(ctx, %{
+      "type" => "lifecycle_paused",
+      "agent_id" => @b,
+      "timestamp" => iso(-30_000),
+      "reason" => "delayed_frame"
+    })
+
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+
+    html = view |> element("#timeline-feed") |> render()
+
+    [newest, delayed, oldest] =
+      Enum.map(~w(newest_row delayed_frame oldest_row), &elem(:binary.match(html, &1), 0))
+
+    assert newest < delayed and delayed < oldest
+  end
+
+  test "a delta older than a full feed is not shown and evicts nothing", %{conn: conn} do
+    events =
+      for i <- 1..200 do
+        %{
+          "kind" => "outcome",
+          "ts" => iso(-i * 1_000),
+          "agent_id" => @a,
+          "outcome_id" => "o#{i}",
+          "outcome_type" => "row#{i}"
+        }
+      end
+
+    ctx = feed_with(events)
+    view = mount_live(conn, ctx)
+
+    broadcast_frame(ctx, %{
+      "type" => "lifecycle_paused",
+      "agent_id" => @b,
+      "timestamp" => iso(-500_000),
+      "reason" => "too_old"
+    })
+
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+
+    refute has_element?(view, "#timeline-feed", "too_old")
+    assert has_element?(view, "#timeline-feed", "row200")
+  end
+
   test "a foreign roster renders from record fields alone", %{conn: conn} do
     agents = [
       agent(@a, "an agent from a harness nobody has heard of", "unheard-harness-9"),

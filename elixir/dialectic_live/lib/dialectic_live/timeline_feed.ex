@@ -354,7 +354,7 @@ defmodule DialecticLive.TimelineFeed do
     write_meta(state)
 
     state =
-      if status == :connected and viewing?(state), do: reread_all(state), else: state
+      if status == :connected and viewing?(state), do: reread_soon(state), else: state
 
     {:noreply, state}
   end
@@ -395,7 +395,13 @@ defmodule DialecticLive.TimelineFeed do
   # The first viewer re-reads at once, unless a fetch started within the
   # debounce interval (a reload, or a socket flap by the only viewer): then the
   # re-read is debounced, so page reloads stay inside the rate bound.
-  defp start_viewing(state) do
+  defp start_viewing(state), do: state |> reread_soon() |> schedule_floor()
+
+  # Re-read now, unless a fetch started within the debounce interval: then
+  # through the debounced doorbell. The first viewer and each firehose
+  # reconnect go through here, so neither page reloads nor a flapping firehose
+  # (whose backoff resets on each upgrade) can fetch faster than the debounce.
+  defp reread_soon(state) do
     recent? =
       state.last_fetch_started != nil and
         System.convert_time_unit(
@@ -404,8 +410,7 @@ defmodule DialecticLive.TimelineFeed do
           :millisecond
         ) < state.debounce_ms
 
-    state = if recent?, do: ring(state), else: reread_all(state)
-    schedule_floor(state)
+    if recent?, do: ring(state), else: reread_all(state)
   end
 
   defp drop_viewer(state, pid) do

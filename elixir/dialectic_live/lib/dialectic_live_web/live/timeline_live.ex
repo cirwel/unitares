@@ -74,16 +74,8 @@ defmodule DialecticLiveWeb.TimelineLive do
     now = DateTime.utc_now()
     socket = record_latency(socket, mark, now)
 
-    socket =
-      if visible?(mark, socket.assigns.substrate) do
-        socket
-        |> stream_insert(:feed, mark, at: 0, limit: @feed_cap)
-        |> assign(last_seen: bump_last_seen(socket.assigns.last_seen, mark))
-      else
-        socket
-      end
-
-    {:noreply, socket}
+    {:noreply,
+     if(visible?(mark, socket.assigns.substrate), do: insert_mark(socket, mark), else: socket)}
   end
 
   def handle_info({:timeline_reread, window}, %{assigns: %{window: window}} = socket),
@@ -158,7 +150,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           labels: Map.new(snap.agents, &{&1["agent_id"], &1["label"]}),
           agents: order_agents(snap.agents, last_seen),
           last_seen: last_seen,
-          row_count: length(rows)
+          row_ts: Enum.map(rows, &sort_key/1)
         )
         |> stream(:feed, rows, reset: true)
 
@@ -172,7 +164,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           labels: %{},
           agents: [],
           last_seen: %{},
-          row_count: 0
+          row_ts: []
         )
         |> stream(:feed, [], reset: true)
     end
@@ -195,6 +187,27 @@ defmodule DialecticLiveWeb.TimelineLive do
   defp visible?(_mark, _substrate), do: true
 
   defp sort_key(mark), do: TimelineAdapter.ts_us(mark["ts"]) || 0
+
+  # Streams cannot be read back, so the pane keeps the shown rows' timestamps
+  # (newest first, at most the cap) to insert a delta at its place in time. A
+  # delta older than every row of a full feed is not shown; the cap prunes
+  # from the oldest end.
+  defp insert_mark(socket, mark) do
+    ts = sort_key(mark)
+    {newer, older} = Enum.split_while(socket.assigns.row_ts, &(&1 >= ts))
+    at = length(newer)
+
+    if at >= @feed_cap do
+      socket
+    else
+      socket
+      |> stream_insert(:feed, mark, at: at, limit: @feed_cap)
+      |> assign(
+        row_ts: Enum.take(newer ++ [ts | older], @feed_cap),
+        last_seen: bump_last_seen(socket.assigns.last_seen, mark)
+      )
+    end
+  end
 
   defp record_latency(socket, mark, now) do
     case TimelineAdapter.ts_us(mark["ts"]) do
@@ -497,10 +510,11 @@ defmodule DialecticLiveWeb.TimelineLive do
 
       <section class="space-y-2">
         <h2 class="font-semibold">Feed (newest first, up to 200)</h2>
+        <%!-- Outside the stream container, so stream_insert's `at:` indexes count rows only. --%>
+        <p :if={@row_ts == []} id="feed-empty" class="text-sm text-base-content/60">
+          Nothing in this window yet.
+        </p>
         <ul id="timeline-feed" phx-update="stream" class="space-y-1 text-sm">
-          <li id="feed-empty" class="hidden only:block text-base-content/60">
-            Nothing in this window yet.
-          </li>
           <li
             :for={{id, m} <- @streams.feed}
             id={id}

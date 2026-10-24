@@ -29,21 +29,36 @@ defmodule DialecticLive.TimelineTableHeir do
   @impl true
   def init(:ok), do: {:ok, %{}}
 
+  # Ownership is read from ETS itself, not from the 'ETS-TRANSFER' message:
+  # the table becomes this process's the moment its owner dies, but the
+  # message can arrive after the restarted feed's claim. Answering :none then
+  # would make the feed try to create a table whose name is still taken.
   @impl true
   def handle_call({:claim, table_name}, {pid, _tag}, tables) do
-    case Map.pop(tables, table_name) do
-      {nil, tables} ->
+    tables = Map.delete(tables, table_name)
+
+    case :ets.whereis(table_name) do
+      :undefined ->
         {:reply, :none, tables}
 
-      {tid, tables} ->
-        :ets.give_away(tid, pid, table_name)
-        {:reply, {:ok, tid}, tables}
+      tid ->
+        if :ets.info(tid, :owner) == self() do
+          :ets.give_away(tid, pid, table_name)
+          {:reply, {:ok, tid}, tables}
+        else
+          {:reply, :none, tables}
+        end
     end
   end
 
   @impl true
   def handle_info({:"ETS-TRANSFER", tid, _from, table_name}, tables) do
-    {:noreply, Map.put(tables, table_name, tid)}
+    # A late message for a table already handed back is ignored.
+    if :ets.info(tid, :owner) == self() do
+      {:noreply, Map.put(tables, table_name, tid)}
+    else
+      {:noreply, tables}
+    end
   end
 
   def handle_info(_message, tables), do: {:noreply, tables}
