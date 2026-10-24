@@ -1070,6 +1070,98 @@ def test_sweep_uses_only_callers_ordered_choices(monkeypatch, tmp_path, choices,
         assert not calls
 
 
+@pytest.mark.parametrize("branch,family", [
+    ("codex/neutrality-1019", "openai"),
+    ("claude/sweep-author-family", "anthropic"),
+    ("gemini/bearer-resolver-3018", "google"),
+    ("agy/x", "google"),
+    ("dependabot/npm_and_yarn/x", None),
+    ("kenny/topic", None),
+    ("sonnet/fix", None),        # a model name is not an agent prefix
+    ("codex-tools/fix", None),   # matched exactly, not by token
+    ("antigravity/x", "google"),
+    ("codex", None),  # no author prefix without a slash
+    ("", None),
+])
+def test_branch_author_family_reads_only_the_author_prefix(branch, family):
+    assert rg.branch_author_family(branch) == family
+
+
+def _author_sweep(monkeypatch, tmp_path, branch, choices, agy_model=None):
+    if agy_model is None:
+        monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)  # agy's default model is Gemini
+    else:
+        monkeypatch.setenv("REVIEW_AGY_MODEL", agy_model)
+    pr = _pr(3)
+    pr["headRefName"] = branch
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: None)
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=choices, quiet_minutes=0, dry_run=False,
+                                       worktree=str(tmp_path / "wt"))) == 0
+    return calls
+
+
+@pytest.mark.parametrize("branch,expected", [
+    # Operator direction 2026-10-23: a Codex PR goes to Claude, then agy; an
+    # agy PR to Claude, then Codex; a Claude PR to Codex, then agy.
+    ("codex/x", "claude"),
+    ("gemini/x", "claude"),
+    ("claude/x", "codex"),
+    ("dependabot/npm_and_yarn/x", "claude"),  # no author family: configured order
+])
+def test_sweep_skips_reviewers_from_the_authors_family(monkeypatch, tmp_path, branch, expected):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, ["claude", "codex", "antigravity"])
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+@pytest.mark.parametrize("branch,choices,expected", [
+    ("claude/x", ["claude", "antigravity", "codex"], "antigravity"),
+    ("codex/x", ["codex", "antigravity", "claude"], "antigravity"),
+    ("gemini/x", ["antigravity", "codex", "claude"], "codex"),
+])
+def test_sweep_falls_back_past_the_authors_family_in_configured_order(monkeypatch, tmp_path, branch, choices, expected):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, choices)
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+@pytest.mark.parametrize("branch,expected", [
+    ("claude/x", "codex"),        # agy would run Claude here: same family as the author
+    ("gemini/x", "antigravity"),  # ...and so it is an independent reviewer of a Gemini PR
+])
+def test_sweep_judges_agy_by_the_model_it_would_run(monkeypatch, tmp_path, branch, expected):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, ["antigravity", "codex"],
+                          agy_model="claude-sonnet-4-6")
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+def test_an_unknown_author_family_excludes_no_reviewer(monkeypatch, tmp_path):
+    # Neither side known: agy runs an unclassified model on a contributor branch.
+    calls = _author_sweep(monkeypatch, tmp_path, "kenny/x", ["antigravity"], agy_model="mystery-model")
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == "antigravity"
+
+
+@pytest.mark.parametrize("branch", ["sonnet/fix", "codex-tools/fix"])
+def test_contributor_prefixes_keep_the_configured_order(monkeypatch, tmp_path, branch):
+    calls = _author_sweep(monkeypatch, tmp_path, branch, ["claude" if branch.startswith("sonnet") else "codex"])
+    assert len(calls) == 1
+
+
+def test_sweep_starts_no_review_when_only_the_authors_family_is_configured(monkeypatch, tmp_path, capsys):
+    assert _author_sweep(monkeypatch, tmp_path, "claude/x", ["claude"]) == []
+    assert "outside the author's family unavailable" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("text,n,ok", [
     ("", 1, False),
     ("   \n", 1, False),
@@ -4346,6 +4438,33 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
         assert waiver_calls == []
     if expected:
         assert calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
+
+
+def test_required_family_skips_the_authors_family(monkeypatch, tmp_path):
+    # A Claude-authored sensitive PR with a passing Codex review still needs a
+    # second family; Claude is eligible but wrote it, so agy supplies it.
+    pr = _pr(3)
+    pr["headRefName"] = "claude/x"
+    pr["labels"] = [{"name": "review-requested"}]
+    monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: full_record("k", "CLEAN", 1, False, "codex"))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: None)
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a: ["claude", "antigravity"])
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(reviewer=["claude", "codex", "antigravity"], quiet_minutes=0,
+                                        dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == 1 and calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
 
 
 def test_shared_request_never_claims_a_completed_review_or_clears_findings():

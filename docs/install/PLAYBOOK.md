@@ -1,9 +1,10 @@
 # UNITARES Advanced Bare-Metal Install Playbook (macOS)
 
-> **Tier-1 installs use the release-tagged Docker Compose quickstart in the
-> repository README.** This playbook is the advanced source-based path for an
-> operator who deliberately wants Homebrew services and a native Python
-> process. It is maintained, but it is not the default installation contract.
+> **This is the advanced source-checkout path.** For packaged Apple Silicon
+> Mac installations, use the [public Homebrew preview](https://github.com/cirwel/homebrew-unitares)
+> and its first-time setup steps. For containers, use the manual's
+> [Docker quickstart](../manual/02-install.md#21-docker-quickstart). Do not apply
+> this page's manual extension builds or pip commands inside a Homebrew keg.
 
 **Goal:** take a blank macOS install to a state where the governance MCP server is serving on `http://localhost:8767`, an MCP client can perform a check-in successfully, and the dashboard is reachable.
 
@@ -75,7 +76,9 @@ operator continuity.
 
 ## Step 2 — Build Apache AGE and pgvector against PostgreSQL 17
 
-AGE is not in Homebrew. You build it from source against the exact `pg_config` from your Homebrew Postgres.
+AGE is not in Homebrew core; the UNITARES tap provides a managed formula.
+This source-checkout path builds it manually against the exact `pg_config`
+from your Homebrew Postgres. Do not combine it with a tap-managed AGE install.
 
 ```bash
 export PG_CONFIG="$(brew --prefix postgresql@17)/bin/pg_config"
@@ -129,6 +132,12 @@ against that version's `pg_config`.
 ---
 
 ## Step 3 — Create the database, install extensions, apply schema
+
+Use bootstrap only for a new, empty database. It is not an upgrade or retry
+command: the base schema contains objects that cannot be created twice. If
+initialization stops after applying some SQL, preserve the log and follow
+[interrupted bootstrap recovery](#recovering-an-interrupted-native-bootstrap)
+instead of repeating this step.
 
 ```bash
 git clone https://github.com/cirwel/unitares.git
@@ -291,11 +300,59 @@ For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything bey
 | `make` fails on AGE with `bison` errors | Apple's old bison shadows Homebrew's | `brew install bison && export PATH="$(brew --prefix bison)/bin:$PATH"` |
 | `psql: error: connection to server ... failed: FATAL: role "postgres" does not exist` | Homebrew Postgres uses your username | Export the trust-auth DSN from Step 3; do not add a synthetic `postgres` role just to satisfy a stale default |
 | `Address already in use` on port 8767 | Server already running | `lsof -i :8767` — stop the duplicate or use `--port 18767` and set `UNITARES_URL=http://127.0.0.1:18767` |
-| `relation "agents" does not exist` on first call | Schema not applied | Re-run `./scripts/install/bootstrap_postgres.sh --apply` from Step 3 |
+| `relation "agents" does not exist` on first call | Wrong database or incomplete initialization | Confirm the configured database; use Step 3 only for an empty database, otherwise follow [interrupted bootstrap recovery](#recovering-an-interrupted-native-bootstrap) |
+| Syntax error at `:` after migration 062 commits | The 3.4.0 bootstrap used `psql -c` for a variable-expanded checksum update | Preserve the committed schema and follow [interrupted bootstrap recovery](#recovering-an-interrupted-native-bootstrap); the bootstrap fix ships in 3.5.0 |
 | `extension "age" is not available` | AGE built against wrong `pg_config` | Verify `$PG_CONFIG` points to your Homebrew PG 17, rebuild |
 | Dashboard loads but is empty | Expected — no agents yet | Run the CLI onboarding commands in Step 6 |
 
 For more, see `docs/guides/TROUBLESHOOTING.md`.
+
+### Recovering an interrupted native bootstrap
+
+Do not rerun bootstrap, drop the database, or delete migration records to make
+initialization start again. A failure after a migration's `COMMIT` can leave
+that migration applied even though the bootstrap command exited nonzero.
+Repeating the base schema can fail on an existing trigger before reaching any
+pending migrations.
+
+Keep the bootstrap log and identify the exact source release or installed
+package that produced it. Confirm `DB_POSTGRES_URL` names the affected database.
+Stop both the server and lease plane, verify their processes and listening
+ports are gone, and take a successful database backup as described in
+[the native update procedure](../manual/02-install.md#updating-a-bare-metal-or-launchagent-install).
+Do not start either writer until recovery and verification succeed.
+
+For the known 3.4.0 failure immediately after migration 062, the base schema and
+062 have committed; the subsequent checksum update failed. Inspect the log and
+`core.schema_migrations` to confirm that state before continuing. Use the
+affected release's migration runner to apply only pending migrations. For a
+source install, prepare the Python environment in Step 4 first; from that
+checkout, with its virtualenv active:
+
+```bash
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" &&
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --dialectic-writers-quiesced &&
+python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --check
+```
+
+The quiescence flag attests that both writers are stopped; the tool does not
+stop them for you. For a packaged install, use the installed package's Python
+environment and `scripts/dev/apply_migrations.py`, not an unrelated checkout.
+The interrupted migration's checksum can remain NULL: that means its content
+cannot be verified from the registry. Do not backfill it from today's file and
+claim it proves what originally ran. A successful drift check does not remove
+that uncertainty. Resume installation and run the Step 6 acceptance checks only
+after recovery succeeds.
+
+If initialization failed earlier, the registry is missing, or the runner reports
+drift or a partially applied migration, keep the writers stopped and diagnose
+that specific state before applying more SQL. This procedure is not a general
+repair for an incomplete base schema.
+
+Release maintainers must also run the [native bootstrap and installed-package
+acceptance gates](../operations/RELEASE_PROCESS.md#server-release). These
+exercise fresh initialization and interruption recovery on disposable databases;
+they are not commands to run against an operator's existing database.
 
 ---
 

@@ -779,8 +779,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 ctx.strict_reject = True
                 ctx.identity_result = {
                     "error": (
-                        "Bare agent_uuid passthrough denied. Include "
-                        "continuity_token or use force_new=true."
+                        "Bare agent_uuid passthrough denied. The same live "
+                        "process rebinds with identity(agent_uuid=<uuid>, "
+                        "continuity_token=<token>, resume=true); otherwise "
+                        "call start_session(force_new=true)."
                     ),
                     "reason": "bare_uuid_resume_denied",
                     "agent_uuid": _direct_uuid,

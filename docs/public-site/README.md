@@ -1,13 +1,14 @@
 # Public site (GitHub Pages)
 
 This folder holds the sources for the public UNITARES GitHub Pages site. The
-landing page, ontology glossary, interactive glossary viewer, and latest
-glossary drift audit are published to GitHub Pages. Each page is **generated
+landing page, read-only demo, ontology glossary, interactive glossary viewer,
+and latest glossary drift audit are published to GitHub Pages. Each page is **generated
 from repository markdown**; the built HTML is never hand-edited.
 
 | File | Role |
 | --- | --- |
 | [`index.md`](index.md) | Landing page source |
+| [`demo.md`](demo.md) | Read-only demo source; the build fills its facts, record ids and link names from `tests/accountability_journey/incident-v0.json` and fails on anything it cannot fill |
 | [`glossary-viewer.template.html`](glossary-viewer.template.html) | Interactive glossary viewer template; the build injects the glossary data |
 | [`favicon.svg`](favicon.svg) | Site icon |
 | `README.md` (this file) | Maintainer notes; the build does not render it, so it is not published |
@@ -18,6 +19,7 @@ this README also redeploys the (unchanged) site.
 ## How it builds
 
 - `scripts/dev/build_public_site.py` renders `docs/public-site/index.md`,
+  `docs/public-site/demo.md` (filled from the accountability-journey fixture),
   `docs/ontology/glossary.md`, and the latest `glossary-drift-audit-*.md` into a
   small static site (`build/public-site/`) with a shared theme. Only the
   `markdown` pip package is needed — no model API, no paid service.
@@ -33,8 +35,10 @@ this README also redeploys the (unchanged) site.
   `path.py::symbol` code references or its cross-references with the runtime
   glossary (`src/governance_glossary.py`) go stale.
 - `.github/workflows/public-pages.yml` runs the build and deploys to Pages on
-  every push to `master` that touches the landing page, glossary, drift audit,
-  build script, parser, viewer template, or workflow. Also runnable via
+  every push to `master` that touches the site sources, glossary, drift audit,
+  build script, parser, viewer template, workflow, or the accountability-journey
+  fixture the demo is filled from (so editing that fixture republishes the site,
+  and a fixture the demo cannot fill fails the build). Also runnable via
   **Actions → public-pages → Run workflow**.
 
 Build locally to preview:
@@ -108,7 +112,7 @@ cirwel.org without shipping webfonts.
 
 ## What it publishes (and what it doesn't)
 
-Deliberately scoped to the landing page, glossary, and drift audit rather than
+Deliberately scoped to the landing page, demo, glossary, and drift audit rather than
 the whole `docs/` tree. Internal proposals and runbooks are not published as
 polished pages by this workflow; evaluator links point to their canonical files
 in the public repository.
