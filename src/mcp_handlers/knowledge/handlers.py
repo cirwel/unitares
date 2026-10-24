@@ -5478,6 +5478,11 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                 minimum=0,
                 maximum=10_000,
             )
+            page_limit = (
+                chain_limit
+                if chain_offset == 10_000
+                else min(chain_limit, 10_000 - chain_offset)
+            )
 
             # Check if backend supports response chain traversal
             if hasattr(graph, 'get_response_chain'):
@@ -5485,15 +5490,15 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                     chain_with_lookahead = await graph.get_response_chain(
                         discovery_id,
                         max_depth=max_depth,
-                        limit=chain_limit,
+                        limit=page_limit,
                         offset=chain_offset,
                         lookahead=True,
                     )
-                    more_rows_exist = len(chain_with_lookahead) > chain_limit
-                    next_offset = chain_offset + chain_limit
+                    more_rows_exist = len(chain_with_lookahead) > page_limit
+                    next_offset = chain_offset + page_limit
                     truncated = more_rows_exist and next_offset > 10_000
                     has_more = more_rows_exist and not truncated
-                    chain = chain_with_lookahead[:chain_limit]
+                    chain = chain_with_lookahead[:page_limit]
                     response["response_chain"] = {
                         "count": len(chain),
                         "max_depth": max_depth,

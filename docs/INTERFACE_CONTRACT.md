@@ -1151,7 +1151,7 @@ with deterministic pagination.
   timeout.
 - **Compatibility:** ordinary details reads are unchanged. Existing
   `include_response_chain=true` calls keep depth 10 by default and now return
-  at most 100 discoveries. Explicit depths above 32, limits above 200, and
+  at most 100 discoveries. Explicit depths outside 1-32, limits above 200, and
   offsets above 10,000 are intentionally rejected by schema validation;
   direct storage callers are clamped defensively.
 - **Schema digests:** `knowledge` and its complete-catalog surface digest move

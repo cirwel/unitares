@@ -634,6 +634,39 @@ class TestGetDiscoveryDetails:
         assert chain["truncated"] is True
 
     @pytest.mark.asyncio
+    async def test_get_details_response_chain_lands_exactly_on_offset_ceiling(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        rows = [
+            make_discovery(id=f"chain-{i:03d}", summary=str(i))
+            for i in range(101)
+        ]
+        root = rows[0]
+        mock_graph.get_discovery = AsyncMock(return_value=root)
+        mock_graph.get_response_chain = AsyncMock(return_value=rows)
+
+        result = await handle_get_discovery_details({
+            "discovery_id": root.id,
+            "include_response_chain": True,
+            "response_chain_limit": 150,
+            "response_chain_offset": 9_900,
+        })
+
+        chain = parse_result(result)["response_chain"]
+        assert chain["count"] == 100
+        assert chain["has_more"] is True
+        assert chain["next_offset"] == 10_000
+        assert chain["truncated"] is False
+        mock_graph.get_response_chain.assert_awaited_once_with(
+            root.id,
+            max_depth=10,
+            limit=100,
+            offset=9_900,
+            lookahead=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_get_details_response_chain_not_supported(self, patch_common):
         """Response chain gracefully handles unsupported backend."""
         mock_mcp_server, mock_graph = patch_common
