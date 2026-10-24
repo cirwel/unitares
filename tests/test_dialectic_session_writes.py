@@ -57,7 +57,23 @@ def _fake_httpx(status_code, body):
 
 def _enable(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "off")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    # These tests exercise attempt/response recording, not attestation
+    # construction. Supply the request-bound result that a proved reviewer
+    # would produce so the client reaches the mocked HTTP boundary.
+    monkeypatch.setattr(
+        brc,
+        "_identity_bound_request",
+        lambda *_args, **_kwargs: (
+            b"{}",
+            {
+                "Authorization": "Bearer tok",
+                "Content-Type": "application/json",
+                "X-Unitares-Identity-Proof": "proof",
+            },
+        ),
+    )
 
 
 # --- the recorder itself ---------------------------------------------------
@@ -264,7 +280,26 @@ class TestBeamClient:
         attempt, response = _pair(captured)
         assert attempt["requested"] == "failed"
         assert (response["outcome"], response["http_status"], response["error"]) == (
-            "error", 409, "BeamDialecticSagaInFlight")
+            "not_written", 409, "saga_in_flight")
+
+    @pytest.mark.asyncio
+    async def test_identity_refusal_is_definitively_not_written(
+        self, monkeypatch, captured
+    ):
+        _enable(monkeypatch)
+        body = {
+            "ok": False,
+            "error": "service_unavailable",
+            "reason": "identity_verification_unavailable",
+        }
+        with patch.dict(sys.modules, {"httpx": _fake_httpx(503, body)}):
+            with pytest.raises(brc.BeamDialecticPolicyRefusal):
+                await brc.beam_resolve("s1", "p", "r", {}, **FRONTIER)
+
+        _attempt, response = _pair(captured)
+        assert response["outcome"] == "not_written"
+        assert response["http_status"] == 503
+        assert response["error"] == "service_unavailable"
 
     @pytest.mark.asyncio
     async def test_an_exception_produces_the_response_record(self, monkeypatch, captured):

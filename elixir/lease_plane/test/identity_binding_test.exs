@@ -69,6 +69,14 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
     assert_raise ArgumentError, fn -> IdentityBinding.parse_mode("enabled") end
   end
 
+  test "surface-kind parser recognizes the all sentinel" do
+    assert IdentityBinding.parse_surface_kinds(nil) == :all
+    assert IdentityBinding.parse_surface_kinds(" ALL ") == :all
+
+    assert IdentityBinding.parse_surface_kinds("maintenance,agent,dialectic") ==
+             MapSet.new(["maintenance", "agent", "dialectic"])
+  end
+
   test "proof-format and trusted-issuer parsers fail closed" do
     assert IdentityBinding.parse_proof_format(nil) == :hybrid
     assert IdentityBinding.parse_proof_format(" ATTESTATION ") == :attestation

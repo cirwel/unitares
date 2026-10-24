@@ -179,7 +179,30 @@ def _beam_policy_error_code(exc: BeamDialecticPolicyRefusal) -> str:
         "reviewer_recused": "REVIEWER_AUTHOR_CONFLICT",
         "invalid_review_authorship": "REVIEW_AUTHORSHIP_METADATA_INVALID",
         "session_identity_mismatch": "DIALECTIC_SESSION_IDENTITY_MISMATCH",
+        "identity_proof_invalid": "DIALECTIC_IDENTITY_PROOF_INVALID",
+        "identity_proof_replayed": "DIALECTIC_IDENTITY_PROOF_REPLAYED",
+        "identity_verification_unavailable": "DIALECTIC_IDENTITY_VERIFICATION_UNAVAILABLE",
     }.get(exc.error_code, "DIALECTIC_POLICY_REFUSED")
+
+
+def _beam_policy_recovery(exc: BeamDialecticPolicyRefusal) -> dict:
+    if exc.error_code in {"identity_proof_invalid", "identity_proof_replayed"}:
+        return {
+            "action": "Retry with a caller-asserted session identity and fresh proof.",
+            "related_tools": ["identity", "dialectic", "request_review"],
+        }
+    if exc.error_code == "identity_verification_unavailable":
+        return {
+            "action": "Retry after the lease-plane identity verifier recovers.",
+            "related_tools": ["dialectic", "request_review"],
+        }
+    return {
+        "action": (
+            "Use a registered independent reviewer and a valid "
+            "reviewed-work authorship declaration."
+        ),
+        "related_tools": ["dialectic", "request_review"],
+    }
 
 # Import PostgreSQL async functions for dialectic session storage
 from src.dialectic_db import (
@@ -2555,9 +2578,12 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     # Persist to PostgreSQL (single source of truth)
     # JSON snapshots removed - use export_dialectic_session() for debugging
     try:
-        # BEAM owns the write + starts a liveness watcher at birth when flagged;
-        # otherwise (or on any BEAM error) fall back to the Python insert.
+        # BEAM owns the write + starts a liveness watcher at birth when flagged.
+        # Fall back only when it is known not to have accepted the write; an
+        # ambiguous post-send failure must be reconciled before another writer
+        # is opened.
         # (dialectic-on-BEAM Slice 2.1)
+        beam_detail: Dict[str, Any] = {}
         beam_created = await beam_create_session(
             session_id=session.session_id,
             paused_agent_id=session.paused_agent_id,
@@ -2573,7 +2599,24 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "paused_agent_state": paused_agent_state,
                 "trigger_source": trigger_source,
             },
+            detail=beam_detail,
         )
+        if beam_created is None and beam_detail.get("commit_unknown"):
+            return [error_response(
+                "The session-creation outcome is unknown; do not open another "
+                "session until this session ID is reconciled.",
+                error_code="DIALECTIC_SESSION_CREATE_COMMIT_UNKNOWN",
+                error_category="system_error",
+                details={
+                    "session_id": session.session_id,
+                    "commit_unknown": True,
+                },
+                recovery={
+                    "action": "Inspect this session ID before retrying creation.",
+                    "related_tools": ["dialectic"],
+                },
+                arguments=arguments,
+            )]
         if beam_created is None:
             await pg_create_session(
                 session_id=session.session_id,
@@ -2596,13 +2639,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             str(e),
             error_code=error_code,
             error_category="governance_refusal",
-            recovery={
-                "action": (
-                    "Use a registered independent reviewer and a valid "
-                    "reviewed-work authorship declaration."
-                ),
-                "related_tools": ["dialectic", "request_review"],
-            },
+            recovery=_beam_policy_recovery(e),
             arguments=arguments,
         )]
     except Exception as e:
@@ -2990,6 +3027,19 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                             expected_transcript_revision=timeout_frontier,
                             expected_phase=timeout_phase,
                         )
+                    except BeamDialecticPolicyRefusal as e:
+                        logger.info(
+                            "Timeout persistence deferred for %s: %s",
+                            session_id[:16],
+                            e.error_code,
+                        )
+                        result = session.to_dict()
+                        result["success"] = True
+                        result["timeout_persistence_deferred"] = e.error_code
+                        attach_attestation(result)
+                        await _attach_public_resolution_effect(result, session_id)
+                        result.update(_build_dialectic_actionability(result))
+                        return success_response(result)
                     except Exception as e:
                         logger.error(
                             "Failed to persist timeout to PostgreSQL: %s",
@@ -5966,17 +6016,19 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         result["success"] = False
                         result["converged"] = False
                         result["blocked"] = e.error_code
-                        await _set_awaiting_facilitation(
-                            session, True, reason=e.error_code
-                        )
+                        if e.error_code not in {
+                            "identity_proof_invalid",
+                            "identity_proof_replayed",
+                            "identity_verification_unavailable",
+                        }:
+                            await _set_awaiting_facilitation(
+                                session, True, reason=e.error_code
+                            )
                         return [error_response(
                             str(e),
                             error_code=_beam_policy_error_code(e),
                             error_category="governance_refusal",
-                            recovery={
-                                "action": "Ask an operator to assign an independent reviewer.",
-                                "related_tools": ["dialectic"],
-                            },
+                            recovery=_beam_policy_recovery(e),
                             arguments=arguments,
                         )]
                     except Exception as e:

@@ -70,6 +70,9 @@ async def _trigger_dialectic_for_stuck_agent(
     already has an active session, or if no peer reviewer is available.
     """
     from src.dialectic_protocol import DialecticSession
+    from src.mcp_handlers.dialectic.beam_resolve_client import (
+        BeamDialecticPolicyRefusal,
+    )
     from src.mcp_handlers.dialectic.reviewer import select_reviewer
     from ..dialectic.session import save_session
     from src.dialectic_db import is_agent_in_active_session_async
@@ -126,7 +129,15 @@ async def _trigger_dialectic_for_stuck_agent(
         reviewer_agent_id=reviewer_id,
         paused_agent_state=paused_agent_state,
     )
-    await save_session(session)
+    try:
+        await save_session(session)
+    except BeamDialecticPolicyRefusal as exc:
+        logger.warning(
+            "[STUCK_AGENT_RECOVERY] BEAM refused session persistence for %s: %s",
+            agent_id[:8],
+            exc.error_code,
+        )
+        return None
 
     logger.info(
         f"[STUCK_AGENT_RECOVERY] Triggered dialectic for {agent_id[:8]}... "

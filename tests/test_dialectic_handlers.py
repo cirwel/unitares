@@ -447,6 +447,34 @@ class TestHandleRequestDialecticReview:
         assert [call.args[0] for call in emit.await_args_list] == ["dialectic_opened"]
 
     @pytest.mark.asyncio
+    async def test_unknown_beam_create_never_opens_a_second_writer(
+        self, mock_server, mock_require_registered, mock_verify_ownership,
+        mock_pg_create, mock_is_in_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        async def unknown_create(*_args, detail=None, **_kwargs):
+            detail["commit_unknown"] = True
+            return None
+
+        with mock_require_registered("agent-paused"), mock_verify_ownership, \
+             mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
+             patch(f"{DIALECTIC}.beam_create_session", new=unknown_create):
+            result = await handle_request_dialectic_review({
+                "agent_id": "agent-paused",
+                "_agent_uuid": "agent-paused",
+                "reason": "Test recovery",
+                "reviewer_mode": "self",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_SESSION_CREATE_COMMIT_UNKNOWN"
+        assert data["commit_unknown"] is True
+        assert data["session_id"]
+        pg_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_explicit_self_review_still_self_assigns(
         self, mock_server, mock_require_registered, mock_verify_ownership,
         mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer,
@@ -2100,6 +2128,67 @@ class TestHandleSubmitSynthesis:
         assert "dialectic_facilitation_needed" not in emitted
 
     @pytest.mark.asyncio
+    async def test_identity_refusal_recommends_retry_without_facilitation(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """Transient identity failures are retryable, not reviewer disputes."""
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticPolicyRefusal,
+        )
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = Resolution(
+            action="resume",
+            conditions=["Lower threshold"],
+            root_cause="Agreed cause",
+            reasoning="Agreed reasoning",
+            signature_a="",
+            signature_b="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            signature_version=3,
+        )
+        facilitation = AsyncMock()
+
+        with patch(
+            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}._commit_terminal_resolution",
+            new=AsyncMock(
+                side_effect=BeamDialecticPolicyRefusal(
+                    "identity_verification_unavailable",
+                    operation="resolve_session",
+                )
+            ),
+        ), patch(
+            f"{DIALECTIC}._set_awaiting_facilitation", new=facilitation
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
+            response = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+            })
+
+        data = parse_result(response)
+        assert data["error_code"] == "DIALECTIC_IDENTITY_VERIFICATION_UNAVAILABLE"
+        assert data["recovery"]["action"] == (
+            "Retry after the lease-plane identity verifier recovers."
+        )
+        assert session.phase == DialecticPhase.SYNTHESIS
+        facilitation.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_ambiguous_beam_commit_never_calls_python_resolution_writer(self):
         from src.mcp_handlers.dialectic.handlers import (
             _commit_converged_resolution,
@@ -3426,6 +3515,41 @@ class TestHandleGetDialecticSession:
         assert data["success"] is False
         assert "timeout" in data["error"].lower()
         assert "recovery" in data
+
+    @pytest.mark.asyncio
+    async def test_timeout_identity_refusal_does_not_turn_read_into_failure(
+        self, mock_context_agent_bound,
+    ):
+        from src.mcp_handlers.dialectic.beam_resolve_client import (
+            BeamDialecticPolicyRefusal,
+        )
+        from src.mcp_handlers.dialectic.handlers import (
+            ACTIVE_SESSIONS,
+            handle_get_dialectic_session,
+        )
+
+        session = _make_session(phase=DialecticPhase.THESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with (
+            patch.object(session, "check_timeout", return_value="session timed out"),
+            patch(
+                f"{DIALECTIC}._commit_terminal_resolution",
+                new=AsyncMock(
+                    side_effect=BeamDialecticPolicyRefusal(
+                        "identity_proof_invalid", operation="resolve_session"
+                    )
+                ),
+            ),
+            mock_context_agent_bound,
+        ):
+            result = await handle_get_dialectic_session(
+                {"session_id": session.session_id, "check_timeout": True}
+            )
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["timeout_persistence_deferred"] == "identity_proof_invalid"
 
     @pytest.mark.asyncio
     async def test_reviewer_stuck_detection(

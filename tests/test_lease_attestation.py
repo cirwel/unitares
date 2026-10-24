@@ -14,6 +14,9 @@ from src.lease_attestation import (
     mint_lease_attestation,
     verify_lease_attestation,
 )
+from src.http_routes.lease_identity import LEASE_HOLDER_ATTESTATION_SCOPE
+from src.mcp_handlers.dialectic.beam_resolve_client import DIALECTIC_ATTESTATION_SCOPE
+from src.mcp_handlers.identity.agent_presence_lease import PRESENCE_ATTESTATION_SCOPE
 
 
 VECTOR = json.loads(
@@ -34,6 +37,7 @@ def test_python_minter_reproduces_cross_language_vector() -> None:
         method=VECTOR["method"],
         path=VECTOR["path"],
         body_sha256=VECTOR["body_sha256"],
+        request_scope=frozenset({(VECTOR["method"], VECTOR["path"])}),
         signing_key=key,
         issuer=VECTOR["issuer"],
         audience=audience,
@@ -123,6 +127,7 @@ def test_mint_requires_explicit_operator_configuration(monkeypatch) -> None:
             method=VECTOR["method"],
             path=VECTOR["path"],
             body_sha256=VECTOR["body_sha256"],
+            request_scope=frozenset({(VECTOR["method"], VECTOR["path"])}),
         )
 
 
@@ -135,6 +140,58 @@ def test_mint_requires_explicit_destination_audience(monkeypatch) -> None:
             method=VECTOR["method"],
             path=VECTOR["path"],
             body_sha256=VECTOR["body_sha256"],
+            request_scope=frozenset({(VECTOR["method"], VECTOR["path"])}),
             signing_key=key,
             issuer=VECTOR["issuer"],
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/lease/acquire",
+        "/v1/dialectic/session",
+        "/v1/dialectic/reviewer/claim",
+        "/v2/dialectic/resolve-with-effect",
+    ],
+)
+def test_mint_accepts_supported_principal_mutation_paths(path) -> None:
+    token = mint_lease_attestation(
+        holder_agent_uuid=VECTOR["holder_agent_uuid"],
+        method="POST",
+        path=path,
+        body_sha256=VECTOR["body_sha256"],
+        request_scope=frozenset({("POST", path)}),
+        signing_key=load_signing_key(VECTOR["seed"]),
+        issuer=VECTOR["issuer"],
+        audience=VECTOR["jwks"]["audience"],
+    )
+
+    assert token.startswith("lat.v1.")
+
+
+def test_mint_site_scope_is_exact_and_never_a_path_prefix() -> None:
+    scope = frozenset({("POST", "/v1/lease/acquire")})
+
+    with pytest.raises(LeaseAttestationError, match="declared scope"):
+        mint_lease_attestation(
+            holder_agent_uuid=VECTOR["holder_agent_uuid"],
+            method="POST",
+            path="/v1/dialectic/session",
+            body_sha256=VECTOR["body_sha256"],
+            request_scope=scope,
+            signing_key=load_signing_key(VECTOR["seed"]),
+            issuer=VECTOR["issuer"],
+            audience=VECTOR["jwks"]["audience"],
+        )
+
+
+def test_each_mint_site_declares_a_separate_exact_scope() -> None:
+    assert PRESENCE_ATTESTATION_SCOPE == {
+        ("POST", "/v1/lease/acquire"),
+        ("POST", "/v1/lease/heartbeat"),
+        ("POST", "/v1/lease/release"),
+    }
+    assert not PRESENCE_ATTESTATION_SCOPE & DIALECTIC_ATTESTATION_SCOPE
+    assert not LEASE_HOLDER_ATTESTATION_SCOPE & DIALECTIC_ATTESTATION_SCOPE
+    assert ("POST", "/v2/dialectic/resolve-with-effect") in DIALECTIC_ATTESTATION_SCOPE

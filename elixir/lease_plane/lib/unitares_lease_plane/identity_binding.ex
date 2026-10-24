@@ -4,7 +4,7 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
   Modes:
 
-    * `:off` — compatibility posture; no identity proof is inspected.
+    * `:off` — explicit compatibility posture; no identity proof is inspected.
     * `:log` — verify when a proof is present and log failures, but allow.
     * `:enforce` — every lease mutation requires a governance-verified proof
       bound to the UUID that owns (or will own) the lease.
@@ -58,6 +58,10 @@ defmodule UnitaresLeasePlane.IdentityBinding do
       _ -> false
     end
   end
+
+  @doc "True only when this surface is currently in fail-closed enforcement."
+  @spec enforced_for_surface?(String.t() | nil) :: boolean()
+  def enforced_for_surface?(surface_kind), do: effective_mode(surface_kind) == :enforce
 
   @spec authorize(String.t(), String.t() | nil) :: :ok | {:error, refusal()}
   def authorize(expected_holder_uuid, proof), do: authorize(expected_holder_uuid, proof, nil, nil)
@@ -143,11 +147,15 @@ defmodule UnitaresLeasePlane.IdentityBinding do
   def parse_surface_kinds(""), do: :all
 
   def parse_surface_kinds(value) when is_binary(value) do
-    value
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> MapSet.new()
+    if String.downcase(String.trim(value)) == "all" do
+      :all
+    else
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> MapSet.new()
+    end
   end
 
   @spec parse_proof_format(String.t() | nil) :: :legacy | :hybrid | :attestation

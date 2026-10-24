@@ -264,13 +264,22 @@ defmodule UnitaresLeasePlane.EffectCustodyFenceTest do
     {pid, ref} = writer(ctx)
 
     previous =
-      for key <- [:bearer_token, :force_release_token, :identity_binding_mode],
+      for key <- [
+            :bearer_token,
+            :force_release_token,
+            :identity_binding_mode,
+            :identity_verifier
+          ],
           into: %{},
           do: {key, Application.get_env(:lease_plane, key)}
 
     Application.put_env(:lease_plane, :bearer_token, "fence-test")
     Application.put_env(:lease_plane, :force_release_token, "fence-operator-test")
     Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+    Application.put_env(:lease_plane, :identity_verifier, fn holder, proof, _context ->
+      if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+    end)
 
     on_exit(fn ->
       Enum.each(previous, fn {key, val} ->
@@ -289,6 +298,10 @@ defmodule UnitaresLeasePlane.EffectCustodyFenceTest do
         Plug.Test.conn(:post, "/v1/lease/" <> route, Jason.encode!(body))
         |> Plug.Conn.put_req_header("content-type", "application/json")
         |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+        |> Plug.Conn.put_req_header(
+          "x-unitares-identity-proof",
+          "proof:" <> ctx.params.holder_agent_uuid
+        )
         |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
 
       assert conn.status == 409

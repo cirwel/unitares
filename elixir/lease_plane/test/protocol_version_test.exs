@@ -28,6 +28,11 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
 
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
+
+    Application.put_env(:lease_plane, :identity_verifier, fn holder, proof ->
+      if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+    end)
+
     surface = unique_surface_id("protover")
     on_exit(fn -> cleanup_surface(surface) end)
     {:ok, surface: surface}
@@ -36,11 +41,20 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
   defp authed(conn), do: put_req_header(conn, "authorization", "Bearer #{@bearer}")
 
   defp post_json(path, body) do
-    :post
-    |> conn(path, Jason.encode!(body))
-    |> put_req_header("content-type", "application/json")
-    |> authed()
-    |> HTTPRouter.call(@opts)
+    conn =
+      :post
+      |> conn(path, Jason.encode!(body))
+      |> put_req_header("content-type", "application/json")
+      |> authed()
+
+    holder = Map.get(body, :holder_agent_uuid)
+
+    conn =
+      if holder,
+        do: put_req_header(conn, "x-unitares-identity-proof", "proof:" <> holder),
+        else: conn
+
+    HTTPRouter.call(conn, @opts)
   end
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)

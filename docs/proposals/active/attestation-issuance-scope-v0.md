@@ -1,7 +1,10 @@
 # Attestation issuance scope — v0
 
-**Status: design-only. No code or widening. The §4 mint-site model was
-ratified on 2026-08-29; implementation lands with its consumer.** This is the
+**Status: implemented for lease presence, strong lease-holder exchange, and
+dialectic BEAM mint sites in PR #3059 (2026-10-23). The §4 mint-site model was
+ratified on 2026-08-29 and is implemented as exact per-site scopes; the global
+validator now accepts versioned API routes, while every mint site still limits
+issuance to its own exact method/path pairs.** This is the
 first design question named by
 [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md)
 §9 for its steps 1 and 2, split out because it is a security question about the
@@ -43,7 +46,7 @@ security question, and §3 is why it is sharper than it looks.
 `validate_path` is not only scoping what governance will sign. It is also the
 sole containment on a deliberate assurance exemption.
 
-There are exactly two mint call sites:
+Before the implementation, there were exactly two mint call sites:
 
 | Call site | Assurance gate | Paths |
 | --- | --- | --- |
@@ -94,9 +97,10 @@ single list the whole process shares.
   *(Correction 2026-10-20: the presence helper also mints for
   `POST /v1/lease/release` (`agent_presence_lease.py:503`), so its exemption
   covers three bootstrap paths. See [`msg-send-assurance-gate-v0.md`](msg-send-assurance-gate-v0.md) §2.)*
-  `{POST /v1/lease/heartbeat, POST /v1/lease/acquire}`. Unchanged behavior,
-  but the exemption is now bounded by something that says so, rather than by a
-  prefix that bounds it as a side effect.
+  `{POST /v1/lease/heartbeat, POST /v1/lease/acquire,
+  POST /v1/lease/release}`. Unchanged behavior, but the exemption is now
+  bounded by something that says so, rather than by a prefix that bounds it as
+  a side effect.
 - **The attest route keeps `recertify_strong_tier`** and carries the scope it
   effectively serves today.
 - **A future `msg` capability mint is its own site**, strong-assurance-gated per
@@ -108,7 +112,7 @@ single list the whole process shares.
 
 The property this buys, stated so it can be tested: **no mint site can sign for
 a path outside its declared scope, and the site that skips the assurance gate
-has a scope that contains only the two bootstrap paths.** A test should pin both
+has a scope that contains only the three bootstrap paths.** Tests pin both
 halves — and in particular that the presence site cannot mint for `/v1/msg/*`,
 which is the regression §3 describes.
 
@@ -134,17 +138,19 @@ presentation impossible, so this is hardening rather than a fix. It belongs
 with whoever changes the verifier, and should not be smuggled into a
 Python-side scope change.
 
-## 6. What this does not do
+## 6. Implementation boundary
 
-- **No code.** Widening issuance scope with no consumer would ship an unwired
-  surface, and an unwired surface is the second of the four states a later zero
-  cannot distinguish. The scope change lands with the mint site that needs it.
+- **No global widening.** Each implemented consumer passes its own exact scope
+  into `mint_lease_attestation`; adding another route requires changing that
+  mint site's declaration and tests.
 - **Does not unblock** BEAM-verbs §9 steps 1 or 2. It closes one of their
   prerequisites.
-- **Does not touch verification.** No claim, comparison, or refusal on the BEAM
-  side changes.
-- **Does not narrow anything in use.** The presence site keeps exactly the two
-  paths it mints for today.
+- **Does not change cryptographic claim verification.** This implementation
+  does add dialectic participant-membership authorization and its associated
+  BEAM-side refusals; signature, audience, method, path, and body-hash claim
+  comparisons remain unchanged.
+- **Does not narrow anything in use.** The presence site keeps exactly its
+  acquire, heartbeat, and release routes.
 
 ## 7. How to know this was wrong
 

@@ -334,8 +334,9 @@ async def record_session_write(
 
     Emits ``stage="attempt"`` on entry. On a normal exit emits the response
     with whatever the block passed to ``record.respond(...)`` (``outcome`` at
-    least). On an ``Exception`` the response says ``outcome="error"`` and the
-    exception class, and the exception propagates. On a cancellation the
+    least). On an ``Exception`` the response defaults to ``outcome="error"``
+    and the exception class, unless the writer already recorded a more precise
+    definitive outcome; the exception still propagates. On a cancellation the
     response (``outcome="interrupted"``) is scheduled as a background task
     rather than awaited -- awaiting mid-cancellation could hang the task being
     cancelled -- and the cancellation propagates.
@@ -364,8 +365,10 @@ async def record_session_write(
     try:
         yield record
     except Exception as exc:
-        await _emit({**base, "stage": "response", **record.fields,
-                     "outcome": "error", "error": type(exc).__name__})
+        fields = dict(record.fields)
+        fields.setdefault("outcome", "error")
+        fields.setdefault("error", type(exc).__name__)
+        await _emit({**base, "stage": "response", **fields})
         raise
     except BaseException:
         try:
