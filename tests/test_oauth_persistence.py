@@ -85,6 +85,30 @@ async def test_tokens_and_dcr_client_survive_a_restart():
 
 
 @pytest.mark.asyncio
+async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await before.register_client(client)
+    await _sign_in(before, client)
+
+    after = GovernanceOAuthProvider(store=store, auto_approve=False)
+    reloaded = await after.get_client(client.client_id)
+
+    assert reloaded is not None
+    assert "code=" in await after.authorize(
+        reloaded,
+        AuthorizationParams(
+            state="s",
+            scopes=["mcp:tools"],
+            code_challenge="c",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_provided_explicitly=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_refresh_works_after_a_restart_and_is_single_use():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)
@@ -101,6 +125,24 @@ async def test_refresh_works_after_a_restart_and_is_single_use():
     again = GovernanceOAuthProvider(store=store)
     assert await again.load_refresh_token(client, tokens.refresh_token) is None
     assert await again.load_refresh_token(client, rotated.refresh_token) is not None
+
+
+@pytest.mark.asyncio
+async def test_persisted_refresh_cache_stays_bounded():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    first_client = _dcr_client("dcr-1")
+    second_client = _dcr_client("dcr-2")
+    for client in (first_client, second_client):
+        await before.register_client(client)
+    first = await _sign_in(before, first_client)
+    second = await _sign_in(before, second_client)
+
+    after = GovernanceOAuthProvider(store=store, max_refresh_tokens=1)
+    assert await after.load_refresh_token(first_client, first.refresh_token) is not None
+    assert await after.load_refresh_token(second_client, second.refresh_token) is not None
+
+    assert list(after._refresh_tokens) == [second.refresh_token]
 
 
 @pytest.mark.asyncio

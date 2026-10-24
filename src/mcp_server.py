@@ -198,9 +198,17 @@ if _oauth_issuer_url:
             + ("the public listener (UNITARES_OAUTH_PUBLIC_PORT) only, if it binds" if _oauth_public_port else "every request")
             + ("; static client configured" if _oauth_static_client_id else "")
             + ("; dynamic registration OPEN" if _auth_settings.client_registration_options.enabled
-               else "; dynamic registration closed"),
+               else "; dynamic registration closed")
+            + ("; automatic approval OPEN" if _auto_approve else "; automatic approval closed"),
             file=sys.stderr, flush=True,
         )
+        if _auth_settings.client_registration_options.enabled and not _auto_approve:
+            print(
+                "[FastMCP] WARNING: dynamic registration is open but automatic approval "
+                "is closed; new registrations cannot complete their first sign-in",
+                file=sys.stderr,
+                flush=True,
+            )
     except Exception as e:
         # An operator who set the issuer URL asked for an auth gate. Serving
         # /mcp unauthenticated anyway answers a different question than the one

@@ -126,10 +126,24 @@ class TestRegisterClient:
         assert await provider.get_client("nope") is None
 
     @pytest.mark.asyncio
-    async def test_dynamic_registration_is_bounded(self):
+    async def test_abandoned_dynamic_registration_yields_its_slot(self):
         provider = GovernanceOAuthProvider(max_dynamic_clients=2)
         await provider.register_client(_client("client-1"))
         await provider.register_client(_client("client-2"))
+        await provider.register_client(_client("client-3"))
+
+        assert set(provider._clients) == {"client-2", "client-3"}
+
+    @pytest.mark.asyncio
+    async def test_issued_dynamic_clients_hold_the_bounded_slots(self):
+        provider = GovernanceOAuthProvider(max_dynamic_clients=2)
+        for client_id in ("client-1", "client-2"):
+            client = _client(client_id)
+            await provider.register_client(client)
+            redirect = await provider.authorize(client, _auth_params())
+            code = redirect.split("code=")[1].split("&")[0]
+            entry = await provider.load_authorization_code(client, code)
+            await provider.exchange_authorization_code(client, entry)
 
         with pytest.raises(RegistrationError) as refused:
             await provider.register_client(_client("client-3"))
@@ -206,6 +220,29 @@ class TestAuthorize:
 
         assert first_code not in provider._auth_codes
         assert second.split("code=")[1].split("&")[0] in provider._auth_codes
+
+    @pytest.mark.asyncio
+    async def test_authorization_code_cache_evicts_per_client_before_global_capacity(self):
+        provider = GovernanceOAuthProvider(
+            max_auth_codes=2,
+            max_auth_codes_per_client=1,
+        )
+        client = _client("client-1")
+        first = await provider.authorize(client, _auth_params())
+        first_code = first.split("code=")[1].split("&")[0]
+        second = await provider.authorize(client, _auth_params())
+        second_code = second.split("code=")[1].split("&")[0]
+
+        assert first_code not in provider._auth_codes
+        assert second_code in provider._auth_codes
+
+        third = await provider.authorize(_client("client-2"), _auth_params())
+        fourth = await provider.authorize(_client("client-3"), _auth_params())
+
+        assert len(provider._auth_codes) == 2
+        assert second_code not in provider._auth_codes
+        assert third.split("code=")[1].split("&")[0] in provider._auth_codes
+        assert fourth.split("code=")[1].split("&")[0] in provider._auth_codes
 
 
 # --------------------------------------------------------------------------- #

@@ -176,7 +176,9 @@ tool runs:
      `UNITARES_OAUTH_*` variable) in the LaunchAgent plist or process
      environment because they are read at import, before `~/.env.mcp` loads.
      Close the enrollment window by setting both values to `false` and
-     restarting. The OAuth startup line states whether registration is open.
+     restarting. The OAuth startup line states both controls; opening
+     registration without automatic approval logs a warning because new
+     clients can register but cannot complete their first sign-in.
      One static client can serve several
      connectors: list each connector's redirect URI in
      `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
@@ -189,13 +191,16 @@ tool runs:
      expire, up to an hour); revoking a **refresh** token ends only that one. Give each connector its own client via DCR
      if either matters. Alternatively, open registration and approval briefly
      to add a DCR connector and close both again: a registration that received a token
-     is kept in Redis, so it stays connected. `POST /register` alone writes
+     is kept in Redis and remains approved for later sign-ins while that
+     stored registration exists. `POST /register` alone writes
      nothing to Redis, but while registration and approval are open, anyone
      can still register, sign in and obtain a token,
-     which writes a client and its tokens to Redis; only closing
-     registration bounds that. Closing it bounds **new** registrations
-     only: a DCR client that already holds a token stays admitted (each
-     refresh renews it). To evict every client and token, **stop** the
+     which writes a client and its tokens to Redis. Closing either control
+     stops that enrollment path; close both to make the operator posture
+     unambiguous. Closing them bounds **new** registrations only: a DCR
+     client that has received a token stays admitted, and later token issuance
+     renews its registration for 30 days. A client idle beyond that window must
+     be enrolled again. To evict every client and token, **stop** the
      server, delete the OAuth keys, then start it. Deleting while it runs
      does not work: the process still holds the tokens in memory and writes
      them back on the next refresh or sign-in. With launchd (KeepAlive

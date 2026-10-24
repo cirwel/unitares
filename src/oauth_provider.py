@@ -73,10 +73,10 @@ logger = logging.getLogger(__name__)
 
 #: A DCR registration is written to the store only when a token is issued
 #: to it, then expires unless another token is issued within this window.
-#: POST /register alone writes nothing; with registration open and sign-in
-#: auto-approved, anyone can still obtain a token (and so a stored client),
-#: which only UNITARES_OAUTH_DYNAMIC_REGISTRATION=false bounds.
+#: POST /register alone writes nothing; with registration and auto-approval
+#: both open, anyone can still obtain a token (and so a stored client).
 CLIENT_STATE_TTL = 30 * 86400
+PENDING_CLIENT_TTL = 10 * 60
 
 # Process-local OAuth state is a cache, not an authority. Keep it bounded even
 # when Redis is unavailable or a caller abandons registration/authorization
@@ -84,6 +84,7 @@ CLIENT_STATE_TTL = 30 * 86400
 # deployments and focused tests, but they are not caller-controlled.
 DEFAULT_MAX_DYNAMIC_CLIENTS = 256
 DEFAULT_MAX_AUTH_CODES = 1024
+DEFAULT_MAX_AUTH_CODES_PER_CLIENT = 32
 DEFAULT_MAX_ACCESS_TOKENS = 2048
 DEFAULT_MAX_REFRESH_TOKENS = 2048
 
@@ -187,6 +188,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         store: OAuthStateStore | None = None,
         max_dynamic_clients: int = DEFAULT_MAX_DYNAMIC_CLIENTS,
         max_auth_codes: int = DEFAULT_MAX_AUTH_CODES,
+        max_auth_codes_per_client: int = DEFAULT_MAX_AUTH_CODES_PER_CLIENT,
         max_access_tokens: int = DEFAULT_MAX_ACCESS_TOKENS,
         max_refresh_tokens: int = DEFAULT_MAX_REFRESH_TOKENS,
     ):
@@ -197,6 +199,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._auth_code_ttl = auth_code_ttl
         self._max_dynamic_clients = max(1, int(max_dynamic_clients))
         self._max_auth_codes = max(1, int(max_auth_codes))
+        self._max_auth_codes_per_client = max(
+            1, min(int(max_auth_codes_per_client), self._max_auth_codes)
+        )
         self._max_access_tokens = max(1, int(max_access_tokens))
         self._max_refresh_tokens = max(1, int(max_refresh_tokens))
 
@@ -211,6 +216,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
         self._store = store
         self._static_client_ids = frozenset(self._clients)
+        self._dynamic_client_expires_at: dict[str, float] = {}
+        self._approved_dynamic_client_ids: set[str] = set()
         # Digests of refresh tokens already exchanged, with their expiry. The
         # store delete is awaited (and can fail), so without this a request
         # arriving meanwhile would reload the used token from the store.
@@ -219,6 +226,15 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     def _prune_expired_state(self) -> None:
         """Remove expired process-local entries before accepting new state."""
         now = time.time()
+        expired_clients = [
+            client_id
+            for client_id, expires_at in self._dynamic_client_expires_at.items()
+            if expires_at <= now
+        ]
+        for client_id in expired_clients:
+            self._clients.pop(client_id, None)
+            self._dynamic_client_expires_at.pop(client_id, None)
+            self._approved_dynamic_client_ids.discard(client_id)
         self._auth_codes = {
             code: entry
             for code, entry in self._auth_codes.items()
@@ -242,6 +258,38 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
 
     def _dynamic_client_count(self) -> int:
         return sum(client_id not in self._static_client_ids for client_id in self._clients)
+
+    def _evict_oldest_pending_client(self) -> bool:
+        pending = {
+            client_id: expires_at
+            for client_id, expires_at in self._dynamic_client_expires_at.items()
+            if client_id not in self._approved_dynamic_client_ids
+        }
+        if not pending:
+            return False
+        client_id = min(pending, key=pending.__getitem__)
+        self._clients.pop(client_id, None)
+        self._dynamic_client_expires_at.pop(client_id, None)
+        return True
+
+    def _make_auth_code_room(self, client_id: str) -> None:
+        self._prune_expired_state()
+        client_codes = [
+            entry for entry in self._auth_codes.values() if entry.client_id == client_id
+        ]
+        if len(client_codes) >= self._max_auth_codes_per_client:
+            oldest = min(client_codes, key=lambda entry: entry.created_at)
+            self._auth_codes.pop(oldest.code, None)
+        if len(self._auth_codes) >= self._max_auth_codes:
+            oldest = min(self._auth_codes.values(), key=lambda entry: entry.created_at)
+            self._auth_codes.pop(oldest.code, None)
+
+    def _cache_refresh(self, entry: RefreshTokenEntry) -> None:
+        self._prune_expired_state()
+        if len(self._refresh_tokens) >= self._max_refresh_tokens:
+            oldest = min(self._refresh_tokens.values(), key=lambda token: token.created_at)
+            self._refresh_tokens.pop(oldest.token, None)
+        self._refresh_tokens[entry.token] = entry
 
     def _ensure_token_capacity(self, *, replacing_refresh: bool = False) -> None:
         self._prune_expired_state()
@@ -291,6 +339,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def _issued(self, client: OAuthClientInformationFull,
                       access: AccessToken, refresh: RefreshTokenEntry) -> None:
+        if client.client_id not in self._static_client_ids:
+            self._approved_dynamic_client_ids.add(client.client_id)
+            self._dynamic_client_expires_at[client.client_id] = time.time() + CLIENT_STATE_TTL
         await self._persist_access(access)
         await self._persist_refresh(refresh)
         # A client that just got a token is in use; keep its registration.
@@ -328,9 +379,12 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                 self._prune_expired_state()
                 if self._dynamic_client_count() < self._max_dynamic_clients:
                     self._clients[client_id] = client
+                    self._dynamic_client_expires_at[client_id] = time.time() + CLIENT_STATE_TTL
+                self._approved_dynamic_client_ids.add(client_id)
         return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        self._prune_expired_state()
         if not client_info.client_id:
             client_info.client_id = f"unitares_{secrets.token_hex(16)}"
         if not client_info.client_secret:
@@ -340,18 +394,31 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         if (
             client_info.client_id not in self._clients
             and self._dynamic_client_count() >= self._max_dynamic_clients
+            and not self._evict_oldest_pending_client()
         ):
             raise RegistrationError(
                 error="invalid_client_metadata",
                 error_description="dynamic client capacity reached",
             )
-        # Memory only until a token is issued to it (see CLIENT_STATE_TTL).
+        # Memory only until a token is issued; abandoned registrations expire
+        # quickly and may be evicted to admit another pending registration.
         self._clients[client_info.client_id] = client_info
+        if (
+            client_info.client_id not in self._static_client_ids
+            and client_info.client_id not in self._approved_dynamic_client_ids
+        ):
+            self._dynamic_client_expires_at[client_info.client_id] = (
+                time.time() + PENDING_CLIENT_TTL
+            )
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams,
     ) -> str:
-        if not self._auto_approve and client.client_id not in self._static_client_ids:
+        if (
+            not self._auto_approve
+            and client.client_id not in self._static_client_ids
+            and client.client_id not in self._approved_dynamic_client_ids
+        ):
             raise AuthorizeError(
                 error="access_denied",
                 error_description=(
@@ -359,12 +426,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     "pre-register this client or enable auto-approval deliberately"
                 ),
             )
-        self._prune_expired_state()
-        if len(self._auth_codes) >= self._max_auth_codes:
-            raise AuthorizeError(
-                error="temporarily_unavailable",
-                error_description="authorization-code capacity reached; retry after expiry",
-            )
+        self._make_auth_code_room(client.client_id)
         code = secrets.token_hex(24)
 
         entry = AuthCodeEntry(
@@ -464,7 +526,6 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                     )
                 except (ValueError, KeyError, TypeError):
                     return None
-                self._refresh_tokens[refresh_token] = entry
         if entry is None:
             return None
         if entry.client_id != client.client_id:
@@ -474,6 +535,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             if self._store is not None:
                 await self._store.delete(f"rt:{_digest(refresh_token)}")
             return None
+        if refresh_token not in self._refresh_tokens:
+            self._cache_refresh(entry)
         return entry
 
     async def exchange_refresh_token(
