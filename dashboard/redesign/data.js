@@ -15,9 +15,9 @@
   "use strict";
 
   // Read bearer. A ?token=… page URL is accepted once as a handoff: persisted
-  // to localStorage and scrubbed from the address bar and history, same as
-  // ?operator_token= below. Prefer setting localStorage directly — a URL
-  // credential is still seen by whatever proxies that first page load.
+  // to localStorage and scrubbed from the address bar and history. Prefer
+  // setting localStorage directly — a URL credential is still seen by whatever
+  // proxies that first page load.
   function token() {
     try {
       const params = new URLSearchParams(location.search);
@@ -59,26 +59,43 @@
     return out.action || out.reasoning || out.rootCause || out.conditions ? out : null;
   }
 
-  // Operator write credential (X-Unitares-Operator). Provision once via
-  // ?operator_token=… — persisted to localStorage and scrubbed from the URL
-  // (same handoff pattern the classic dashboard used, #643).
+  // Operator write credential (X-Unitares-Operator). It is provisioned only
+  // through the password input on the Security pane; remote deployments must
+  // use HTTPS. Query-string provisioning is intentionally unsupported because
+  // request lines leak into browser history, proxies, tunnels, and access logs
+  // before JS can scrub them.
   function operatorToken() {
     try {
-      const params = new URLSearchParams(location.search);
-      const fromUrl = params.get("operator_token");
-      if (fromUrl) {
-        localStorage.setItem("unitares_operator_token", fromUrl);
-        params.delete("operator_token");
-        const qs = params.toString();
-        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
-      }
       return localStorage.getItem("unitares_operator_token") || null;
     } catch { return null; }
+  }
+
+  function scrubLegacyOperatorTokenQuery() {
+    try {
+      const params = new URLSearchParams(location.search);
+      if (!params.has("operator_token")) return;
+      params.delete("operator_token");
+      const qs = params.toString();
+      history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+    } catch { /* best-effort cleanup of an unsupported legacy URL */ }
+  }
+
+  function setOperatorToken(value) {
+    try {
+      const tokenValue = String(value || "").trim();
+      if (tokenValue) localStorage.setItem("unitares_operator_token", tokenValue);
+      else localStorage.removeItem("unitares_operator_token");
+      return !!tokenValue;
+    } catch { return false; }
   }
 
   async function authFetch(path, opts) {
     opts = opts || {};
     const headers = Object.assign({}, opts.headers);
+    const method = (opts.method || "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+      headers["X-Unitares-Csrf"] = "1";
+    }
     const t = token();
     if (t) headers["Authorization"] = "Bearer " + t;
     const r = await fetch(path, Object.assign({}, opts, {
@@ -697,6 +714,7 @@
     },
 
     operatorToken,
+    setOperatorToken,
 
     // Read bearer, exposed so ws.js can offer it as a /ws/eisv subprotocol —
     // a browser cannot set headers on a WebSocket. Same credential authFetch
@@ -845,9 +863,7 @@
 
   window.DATA = DATA;
 
-  // Absorb ?operator_token= at load. Sections call operatorToken() lazily,
-  // so without this the credential only persists if the Adjudication pane
-  // opens while the param is still in the URL — a provisioning URL that
-  // lands on any other pane silently does nothing.
-  operatorToken();
+  // Never consume a legacy URL credential, but remove it from the visible URL
+  // after load so accidental old links are not propagated any further.
+  scrubLegacyOperatorTokenQuery();
 })();

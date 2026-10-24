@@ -4,6 +4,7 @@
 
   const mountSel = "#security-mount";
   let state = { credentials: [], sessions: [] };
+  let passkeysConfigured = null;
 
   const esc = (value) => String(value == null ? "" : value)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -61,6 +62,14 @@
           </div>
           <div id="enrollmentCode" hidden></div>
           <p class="security-note" id="operatorHint"></p>
+          <label class="security-secret-label" for="operatorCredential">Operator credential</label>
+          <div class="security-actions security-secret-row">
+            <input class="security-secret" id="operatorCredential" type="password"
+              autocomplete="off" autocapitalize="none" spellcheck="false"
+              placeholder="Paste directly; use HTTPS remotely">
+            <button class="security-btn" id="saveOperatorCredential" type="button">Store in this browser</button>
+            <button class="security-btn" id="forgetOperatorCredential" type="button">Forget</button>
+          </div>
         </section>
         <section class="panel">
           <div class="panel-head"><h2>Active sessions</h2><span class="who" id="sessionCount"></span></div>
@@ -81,6 +90,16 @@
     el.className = "security-status" + (kind ? " " + kind : "");
   }
 
+  function renderOperatorCredential() {
+    const opAvailable = !!window.DATA.operatorToken();
+    document.querySelector("#mintCode").disabled = !opAvailable || passkeysConfigured === false;
+    document.querySelector("#operatorHint").textContent = passkeysConfigured === false
+      ? ""
+      : opAvailable
+      ? "Type the displayed code on the target device. It is never placed in a URL."
+      : "Paste the operator credential below to mint a code. It is never placed in a URL. Existing codes can still be typed on the enrollment page.";
+  }
+
   function render() {
     const credentials = document.querySelector("#credentialList");
     const sessions = document.querySelector("#sessionList");
@@ -92,26 +111,25 @@
     sessions.innerHTML = state.sessions.length
       ? state.sessions.map(sessionHtml).join("")
       : '<div class="empty">No active sessions.</div>';
-    const opAvailable = !!window.DATA.operatorToken();
-    document.querySelector("#mintCode").disabled = !opAvailable;
-    document.querySelector("#operatorHint").textContent = opAvailable
-      ? "Type the displayed code on the target device. It is never placed in a URL."
-      : "An operator credential is required to mint a code. Existing codes can still be typed on the enrollment page.";
+    renderOperatorCredential();
   }
 
   async function refresh() {
     try {
       state = await window.DATA.passkeySecurity();
+      passkeysConfigured = true;
       render();
       message("");
     } catch (error) {
-      document.querySelectorAll("#security-mount button").forEach((button) => { button.disabled = true; });
+      document.querySelectorAll('#credentialList button, #logout, #revokeAll')
+        .forEach((button) => { button.disabled = true; });
       // A server with no passkey relying party refuses every session call too,
       // so the 403 above says nothing about this browser. Ask the server which
       // case this is before calling it a failure: "not configured" is a setup
       // state, not an error, and it has a named fix.
       const config = window.DATA.passkeyConfig ? await window.DATA.passkeyConfig() : null;
       if (config && config.configured === false) {
+        passkeysConfigured = false;
         notConfigured(config.fix);
         return;
       }
@@ -120,6 +138,7 @@
   }
 
   function notConfigured(fix) {
+    renderOperatorCredential();
     document.querySelector("#credentialCount").textContent = "";
     document.querySelector("#sessionCount").textContent = "";
     document.querySelector("#credentialList").innerHTML = '<div class="empty">Passkeys are not configured on this server.</div>';
@@ -186,10 +205,34 @@
     }
   }
 
+  function storeOperatorCredential() {
+    const input = document.querySelector("#operatorCredential");
+    if (!input.value.trim()) {
+      message("Enter a non-empty operator credential.", "error");
+      return;
+    }
+    const stored = window.DATA.setOperatorToken(input.value);
+    input.value = "";
+    renderOperatorCredential();
+    message(
+      stored ? "Operator credential stored in this browser." : "This browser could not store the operator credential.",
+      stored ? "ok" : "error",
+    );
+  }
+
+  function forgetOperatorCredential() {
+    window.DATA.setOperatorToken("");
+    document.querySelector("#operatorCredential").value = "";
+    renderOperatorCredential();
+    message("Operator credential removed from this browser.", "ok");
+  }
+
   function wire() {
     document.querySelector("#mintCode").addEventListener("click", (event) => mintCode(event.currentTarget));
     document.querySelector("#logout").addEventListener("click", () => endSessions(false));
     document.querySelector("#revokeAll").addEventListener("click", () => endSessions(true));
+    document.querySelector("#saveOperatorCredential").addEventListener("click", storeOperatorCredential);
+    document.querySelector("#forgetOperatorCredential").addEventListener("click", forgetOperatorCredential);
     document.querySelector("#credentialList").addEventListener("click", (event) => {
       const button = event.target.closest('[data-action="revoke-credential"]');
       if (button) revokeCredential(button);
@@ -201,6 +244,7 @@
     if (!mount) return;
     mount.innerHTML = shell();
     wire();
+    render();
     await refresh();
   }
 

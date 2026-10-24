@@ -959,9 +959,9 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     # Scoped to the CALL form, deliberately, not to the protocol name near the
     # word "emit". A proximity pattern would fire on the corrected prose itself
     # ("this protocol has no `emit` action") and on the flat action list in
-    # docs/operations/tool-surface-audit-2026-09-12.md:145, which is a merged
-    # deliverable quoting the pre-correction vocabulary. The copyable call is
-    # what a reader actually re-introduces.
+    # docs/operations/tool-surface-audit-2026-09-12.md (finding F4), which is a
+    # merged deliverable quoting the pre-correction vocabulary. The copyable call
+    # is what a reader actually re-introduces.
     (
         re.compile(
             r"protocol=[\"']?(?:coherence_report|governance_action)[\"']?"

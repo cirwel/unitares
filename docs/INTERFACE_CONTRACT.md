@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.0.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.1.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1214,3 +1214,27 @@ schema remains `unitares.interface-contract.v1`. No tool or argument is removed.
   together with `surface_sha256`. `consult`’s schema digest is unchanged;
   its routing change is recorded in the negotiated release. Hash-pinning
   clients should inspect the new schema and refresh that pin.
+
+## 2.1.0 (2026-10-23)
+
+Knowledge details adds bounded response-chain depth, limit, and offset controls
+with deterministic pagination.
+
+- **What changed:** `knowledge(action="details")` now advertises
+  `max_chain_depth` (1-32, default 10), `response_chain_limit` (1-200,
+  default 100), and `response_chain_offset` (0-10,000, default 0). AGE
+  traversal deduplicates discoveries, orders them by minimum depth and id,
+  applies the requested page, and runs under a two-second database statement
+  timeout.
+- **Compatibility:** ordinary details reads are unchanged. Existing
+  `include_response_chain=true` calls keep depth 10 by default and now return
+  at most 100 discoveries. Explicit depths outside 1-32, limits above 200, and
+  offsets above 10,000 are intentionally rejected by schema validation;
+  direct storage callers are clamped defensively.
+- **Schema digests:** `knowledge` and its complete-catalog surface digest move
+  because the public input schema gains two fields and bounds the existing
+  depth field.
+- **Client action:** the response reports `has_more`, `next_offset`, and
+  `truncated`. Clients should advance `response_chain_offset` while `has_more`
+  is true, using pages no larger than 200. `truncated=true` means additional
+  rows exist beyond the maximum permitted starting offset.

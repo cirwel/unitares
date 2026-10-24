@@ -48,5 +48,4 @@ and the backend's `get_stats` in
 or [`src/storage/knowledge_graph_postgres.py`](../../src/storage/knowledge_graph_postgres.py).
 
 Source audit: discovery `2026-10-13T06:48:37.234783+00:00` (read with
-`knowledge(action="details", discovery_id=...)`). This guide documents the
-existing response; it changes no counts, retention rules or interface schema.
+`knowledge(action="details", discovery_id=...)`).

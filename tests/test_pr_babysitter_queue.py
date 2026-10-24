@@ -8,6 +8,7 @@ the script would have mutated.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -121,6 +122,7 @@ def _check(
 def _pr(
     number: int,
     *,
+    title: str | None = None,
     labels: tuple[str, ...] = (LABEL,),
     draft: bool = False,
     armed_min_ago: float | None = None,
@@ -138,6 +140,7 @@ def _pr(
         rollup.append(_check("review", review, run=900))
     return {
         "number": number,
+        "title": title or f"fix: change {number}",
         "isDraft": draft,
         "mergeable": mergeable,
         "mergeStateStatus": state,
@@ -200,6 +203,7 @@ def _run(
     rollups: dict[int, list[dict] | None] | None = None,
     timeline_fails: tuple[int, ...] = (),
     arms: dict[int, float] | None = None,
+    arm_subjects: dict[int, str] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -232,11 +236,13 @@ def _run(
             (d / f"rollup_{number}.json").write_text(json.dumps({"statusCheckRollup": full_checks}))
     state_file = tmp_path / "state" / "approvals"
     if arms:
-        # Arms this script made: the arming time GitHub reports must match.
+        # Arms this script made: the arming time and stored subject must match.
         state_file.parent.mkdir(exist_ok=True)
         with (tmp_path / "state" / "approvals.arms").open("a") as handle:
             for number, minutes_ago in arms.items():
-                handle.write(f"{number} {_iso(minutes_ago)}\n")
+                subject = (arm_subjects or {}).get(number, "")
+                key = "default" if not subject else "b64:" + base64.b64encode(subject.encode()).decode()
+                handle.write(f"{number} {_iso(minutes_ago)} {key}\n")
     for key, value in (states or {}).items():
         repo, number = key.split("#")
         (d / f"state_{repo.replace('/', '_')}_{number}").write_text(value + "\n")
@@ -274,12 +280,82 @@ def _run(
     return [line for line in (d / "calls.log").read_text().splitlines() if line], result.stdout
 
 
-def _arm(n: int, head: str | None = None) -> str:
-    return f"pr merge {n} -R o/r --auto --squash --match-head-commit {head or f'sha{n}'}"
+def _arm(n: int, head: str | None = None, *, title: str | None = None, model: str | None = None) -> str:
+    subject = f" --subject {title or f'fix: change {n}'} [model:{model}] (#{n})" if model else ""
+    return f"pr merge {n} -R o/r --auto --squash{subject} --match-head-commit {head or f'sha{n}'}"
 
 
 
 # --- the queue -----------------------------------------------------------------
+
+
+def test_the_agent_model_survives_in_the_squash_subject(tmp_path: Path) -> None:
+    body = """Classification: fix
+
+---
+Model: openai/gpt-5.3-codex
+UNITARES agent: 11111111-2222-4333-8444-555555555555
+"""
+    calls, _ = _run(tmp_path, [_pr(1, title="fix: make attribution durable", body=body)])
+    assert calls == [
+        _arm(1, title="fix: make attribution durable", model="openai/gpt-5.3-codex")
+    ]
+
+
+def test_the_last_model_signature_controls_the_squash_subject(tmp_path: Path) -> None:
+    body = "Model: claude-old\nnotes\nModel: claude-opus-5-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1, model="claude-opus-5-5")]
+
+
+@pytest.mark.parametrize("changed", ["title", "model"])
+def test_an_armed_subject_is_refreshed_after_signed_metadata_changes(tmp_path: Path, changed: str) -> None:
+    old_body = "Model: gpt-5-old\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    first, _ = _run(tmp_path, [_pr(1, title="fix: old title", body=old_body)])
+    assert first == [_arm(1, title="fix: old title", model="gpt-5-old")]
+
+    new_title = "fix: new title" if changed == "title" else "fix: old title"
+    new_model = "gpt-5-new" if changed == "model" else "gpt-5-old"
+    new_body = f"Model: {new_model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    armed = _pr(1, title=new_title, body=new_body, armed_min_ago=0.2, state="BLOCKED")
+    second, out = _run(tmp_path, [armed])
+    assert second == ["pr merge 1 -R o/r --disable-auto"]
+    assert "title or Model signature changed" in out
+
+    third, _ = _run(tmp_path, [_pr(1, title=new_title, body=new_body)])
+    assert third == [_arm(1, title=new_title, model=new_model)]
+
+
+def _legacy_arm(tmp_path: Path, number: int, minutes_ago: float = 20) -> None:
+    path = tmp_path / "state" / "approvals.arms"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{number} {_iso(minutes_ago)}\n")
+
+
+def test_an_unsigned_legacy_arm_keeps_githubs_default_subject(tmp_path: Path) -> None:
+    _legacy_arm(tmp_path, 1)
+    calls, _ = _run(tmp_path, [_pr(1, armed_min_ago=20, state="BLOCKED")])
+    assert calls == []
+
+
+def test_a_signed_legacy_arm_refreshes_once_with_an_accurate_reason(tmp_path: Path) -> None:
+    _legacy_arm(tmp_path, 1)
+    body = "Model: gpt-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, out = _run(tmp_path, [_pr(1, body=body, armed_min_ago=20, state="BLOCKED")])
+    assert calls == ["pr merge 1 -R o/r --disable-auto"]
+    assert "predates model-subject journaling" in out
+    assert "needs its squash subject refreshed; nothing else armed" in out
+    assert "waiting on a required check" not in out
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["unavailable", "Gemini 3.1 Pro", "gpt-5] --admin", "<actual model identifier>"],
+)
+def test_an_unusable_model_signature_keeps_githubs_default_subject(tmp_path: Path, model: str) -> None:
+    body = f"Model: {model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1)]
 
 
 def test_arms_in_approval_order_not_pr_number(tmp_path: Path) -> None:

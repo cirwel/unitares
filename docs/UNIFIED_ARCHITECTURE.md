@@ -320,10 +320,7 @@ from six observe sub-handlers, removing a 3221-await `load_metadata_async` loop
 from the request path, and steady-state fell to 92–182ms. The V0.2 RESOLUTION of
 [`proposals/active/beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md)
 records the verdict — "the 60× amplification floor was the 3221-await loop, not
-anyio/asyncio coupling at the substrate layer". That surface is the one this
-section cited until now as the class's most recent new variant: PR #348's
-follow-up and PR #350 are the same change, so the 2026-05-04 measurement and the
-"recent recurrence" were one event counted twice. Every floor raised since
+anyio/asyncio coupling at the substrate layer". Every floor raised since
 resolved Python-side as well (#354, #360, #361, and #533's 104× p50 collapse),
 and the roadmap's V0.4 RESOLUTION (2026-06-25) retired latency as a migration
 decision gate on that basis.

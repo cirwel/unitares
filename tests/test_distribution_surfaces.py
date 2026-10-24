@@ -252,3 +252,101 @@ def test_content_readers_are_reported_including_none() -> None:
         "content checked by: claims check",
         "content checked by: nothing reads this surface's words",
     ]
+
+
+def test_delegated_checker_is_not_a_live_pass():
+    results = ds.probe_covered('package', {'covered_by': ['release-check.py']}, FakeNet(), PROJECT_ROOT)
+    assert _statuses(results) == ['SKIP']
+    report = ds.make_report({'surface': [{'id': 'package', 'title': 'Package', 'where': 'https://example.org', 'probe': {'type': 'covered'}, 'refresh': 'release'}]}, results, [], ds.deployment_observation(PROJECT_ROOT, False))
+    assert report['surfaces'][0]['status'] == 'UNKNOWN'
+    assert report['deployments']['status'] == 'UNKNOWN'
+
+
+def test_workflow_acceptance_must_cover_current_head():
+    probe = {'repo': 'owner/tap', 'branch': 'main', 'workflow': 'accept.yml'}
+    endpoint = 'repos/owner/tap/actions/workflows/accept.yml/runs?branch=main&event=push&per_page=20'
+    gh = {'repos/owner/tap/commits/main': {'sha': NEW}, endpoint: {'workflow_runs': [{'head_sha': PIN, 'status': 'completed', 'conclusion': 'success'}]}}
+    assert _statuses(ds.probe_github_workflow('tap', probe, FakeNet(gh=gh), PROJECT_ROOT)) == ['SKIP']
+    run = {'head_sha': NEW, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.org/run/2'}
+    gh[endpoint]['workflow_runs'].insert(0, run)
+    result = ds.probe_github_workflow('tap', probe, FakeNet(gh=gh), PROJECT_ROOT)[0]
+    assert result.status == 'OK' and NEW in result.message and run['html_url'] in result.message
+    run['conclusion'] = 'failure'
+    assert _statuses(ds.probe_github_workflow('tap', probe, FakeNet(gh=gh), PROJECT_ROOT)) == ['DRIFT']
+    run['conclusion'] = 'cancelled'
+    assert _statuses(ds.probe_github_workflow('tap', probe, FakeNet(gh=gh), PROJECT_ROOT)) == ['SKIP']
+    run['status'] = 'queued'
+    assert _statuses(ds.probe_github_workflow('tap', probe, FakeNet(gh=gh), PROJECT_ROOT)) == ['PENDING']
+
+
+def test_report_keeps_partial_verification_unknown_and_escapes_table():
+    registry = {'surface': [{'id': 'site', 'title': 'A | B', 'where': 'https://example.org', 'source': 'source', 'probe': {'type': 'http-ok'}, 'refresh': 'publish'}]}
+    results = [ds.Result('OK', 'site', 'reachable'), ds.Result('SKIP', 'site', 'unverified <content>')]
+    report = ds.make_report(registry, results, [], ds.deployment_observation(PROJECT_ROOT, False))
+    assert report['surfaces'][0]['status'] == 'UNKNOWN'
+    rendered = ds.render_markdown(report)
+    assert 'A &#124; B' in rendered and '&lt;content&gt;' in rendered
+    assert 'Reachability does not verify content' in rendered
+    assert report['checked_at']
+
+
+def test_deployment_observation_preserves_verdict_without_claiming_health(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    rows = [{'name': 'sample', 'verdict': 'CURRENT', 'commit': 'abc', 'health': 'unreachable', 'checkout': '/private/checkout'}]
+    def run(cmd, **kwargs):
+        assert cmd[-1] == '--json' and '--fetch' not in cmd
+        return SimpleNamespace(returncode=0, stdout=json.dumps(rows))
+    monkeypatch.setattr(ds.subprocess, 'run', run)
+    observed = ds.deployment_observation(PROJECT_ROOT, True)
+    assert observed['status'] == 'OBSERVED'
+    assert observed['services'][0]['health'] == 'unreachable'
+    assert 'checkout' not in observed['services'][0]
+    rows.clear()
+    assert ds.deployment_observation(PROJECT_ROOT, True)['status'] == 'UNKNOWN'
+    rows.append({'name': 'incomplete'})
+    assert ds.deployment_observation(PROJECT_ROOT, True)['status'] == 'UNKNOWN'
+
+
+def test_deployment_failure_does_not_export_stderr(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ds.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=2, stdout='', stderr='private configuration'))
+    observed = ds.deployment_observation(PROJECT_ROOT, True)
+    assert observed['status'] == 'UNKNOWN'
+    assert 'private configuration' not in str(observed)
+
+
+def test_unknown_surface_selection_is_an_error():
+    import pytest
+    with pytest.raises(SystemExit) as error:
+        ds.main(['--only', 'typo-does-not-exist'])
+    assert error.value.code == 2
+
+
+def test_app_reads_are_repo_scoped_and_do_not_fallback(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(ds.shutil, 'which', lambda name: '/bin/' + name)
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=1, stdout='')
+    monkeypatch.setattr(ds.subprocess, 'run', run)
+    assert ds.LiveNet(github_app=True).gh_json('repos/cirwel/homebrew-unitares/commits/main') is None
+    assert calls == [['unitares-github', '--repo', 'cirwel/homebrew-unitares', '--read-only', '--', 'gh', 'api', 'repos/cirwel/homebrew-unitares/commits/main']]
+
+
+def test_missing_id_with_dependencies_reports_validation_error(tmp_path):
+    surface = {'kind': 'site', 'title': 'bad', 'where': 'https://example.org', 'refresh': 'publish', 'probe': {'type': 'http-ok', 'url': 'https://example.org'}, 'depends_on': ['missing']}
+    errors = ds.offline_errors({'schema': 1, 'surface': [surface]}, root=tmp_path)
+    assert '<missing id>: missing id' in errors
+    assert '<missing id>: invalid dependency missing' in errors
+
+
+def test_only_filter_does_not_crash_on_malformed_registry(monkeypatch, capsys):
+    import pytest
+    monkeypatch.setattr(ds, 'load_registry', lambda: {'schema': 1, 'surface': [{'depends_on': []}]})
+    monkeypatch.setattr(ds, '_tracked_files', lambda root: [])
+    with pytest.raises(SystemExit) as error:
+        ds.main(['--offline', '--only', 'missing'])
+    assert error.value.code == 2
+    assert '<missing id>: missing id' in capsys.readouterr().out

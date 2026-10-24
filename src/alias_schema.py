@@ -49,6 +49,8 @@ ALIAS_SCHEMA_DROP = {
         "including_cold",
         "length",
         "max_chain_depth",
+        "response_chain_limit",
+        "response_chain_offset",
         "memory_context",
         "min_members",
         "top_n",

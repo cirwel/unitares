@@ -291,10 +291,13 @@ credential gate to every extension handler; no fleet packs are built in.)
   Only that exact 503 body counts as "not configured"; any other answer, or
   none, keeps the error.
 
-The operator credential can be provisioned once via `?operator_token=…`
-(persisted to localStorage and scrubbed from the URL by
-`DATA.operatorToken()`). These live-only security calls deliberately do not fall
-back to snapshots. Other operator actions such as agent archive/resume, review
+The operator credential is provisioned directly through the Security pane's
+password input and retained only in that browser's local storage. Use HTTPS for
+non-loopback dashboard deployments. Never place the credential in a URL: request
+lines can reach browser history, proxies, tunnels, and access logs before
+client-side code can scrub them. These
+live-only security calls deliberately do not fall back to snapshots. Other
+operator actions such as agent archive/resume, review
 requests, and discovery status changes are still not wired. Treat every new
 write surface as a capability and design its auth/CSRF/failure behavior
 explicitly.
