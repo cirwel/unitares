@@ -82,30 +82,41 @@ RISK_CAUTION_THRESHOLD = 0.60
 # "high-risk" at exactly 0.60): the nearest thing is the basin/void/
 # coherence pause layer in governance_monitor.py, but it reads the
 # diagnostic ODE state, which follows this signal only through the sensor
-# spring coupling, with lag -- not a same-check-in guarantee. Whether any
-# of this should force at least "caution" sooner is a calibration question
-# for the operator — issue #1995; the baselined-only verdict floor below is
-# that thread's candidate answer, shipped default-OFF behind flags.
+# spring coupling, with lag -- not a same-check-in guarantee. Issue #1995
+# closed under Option 1 (2026-10-23) keeping these floors as component-level
+# bounds after the 2026-09-13 wake read (8,857 check-ins, 0 baselined E/I/S
+# breach-and-safe rows; all 59 baselined rows were derived |V| ceiling jitter
+# on a single healthy agent); the baselined-only verdict floor below remains
+# default-OFF behind flags.
 ABSOLUTE_E_FLOOR = 0.30
 ABSOLUTE_I_FLOOR = 0.30
 ABSOLUTE_S_CEILING = 0.70
 ABSOLUTE_V_CEILING = 0.50
 
-# --- Baselined floor-breach verdict floor (issue #1995) -----------------------
+# --- Baselined floor-breach verdict floor (issue #1995, KEEP-DORMANT) ---------
 # The thread's stop rule (2026-09-02) woke on 2026-09-13: the #2047 counter
-# recorded its first baselined breach-and-safe rows (59 in window). The
-# candidate change it names is option 2 in its baselined-only form: when the
-# agent's baseline is warm AND an absolute floor is breached, the verdict is
-# at least "caution". Risk, health, and components are untouched — this is a
-# verdict floor, not a reweight (option 3), so the graded region below the
-# floors is unchanged. The as-written option 2 (any breach) is ruled out by
+# recorded its first baselined breach-and-safe rows (59 in window across 8,857
+# check-ins / 342 agents). Issue #1995 closed under Option 1 on 2026-10-23 with
+# APPLY kept OFF: 0 of the 59 rows were E, I, or S breaches, and all 59 were
+# boundary |V| jitter (V in [-0.517, -0.501], E ~ 0.42, I ~ 0.80) on one agent
+# (69a1a4f7), where enabling APPLY=1 without hysteresis or primary-vs-derived V
+# separation flips safe<->caution 5 of 11 check-ins and manufactures synthetic
+# cirs_resonance (is_bad=true) outcomes.
+#
+# The candidate mechanism retained below is option 2 in its baselined-only form:
+# when the agent's baseline is warm AND an absolute floor is breached, the
+# verdict is at least "caution". Risk, health, and components are untouched —
+# this is a verdict floor, not a reweight (option 3), so the graded region below
+# the floors is unchanged. The as-written option 2 (any breach) is ruled out by
 # the thread's cold-start finding: the harness's canned first three check-ins
 # breach |V| for every fresh agent by arithmetic.
 #
 # Both flags default OFF. SHADOW records what the floor would have done on
 # the AssessmentResult (and from there into the #2047 observation row in
 # audit.events) without touching the verdict; APPLY changes the verdict and
-# records that it did. Read at call time, not import time, so a deployment
+# records that it did. Do NOT enable APPLY=1 in production without separating
+# derived high_V from primary E/I/S floors and adding an exit hysteresis
+# deadband. Read at call time, not import time, so a deployment
 # flips them with a restart and tests can set them per case. They are read
 # straight from the environment, unlike the verdict-floor flags that live in
 # config.governance_config (e.g. VERIFICATION_FLOOR_ENABLED); moving them
@@ -119,8 +130,8 @@ def floor_breach_caution_shadow_enabled() -> bool:
 
     Measurement only: the verdict is never changed. The record lands on
     ``AssessmentResult.floor_breach_caution`` and is carried into the issue
-    #1995 ``absolute_floor_observation`` telemetry row, so the shadow pass the
-    thread asks for reads from the same sink as the counter that woke it.
+    #1995 ``absolute_floor_observation`` telemetry row, reading from the same
+    sink as the #2047 counter.
     """
     return os.getenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", "").strip().lower() in {
         "1", "true", "on", "yes",
