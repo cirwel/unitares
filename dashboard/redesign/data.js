@@ -471,8 +471,11 @@
       const o = opts || {};
       const h = Number.isFinite(o.hours) ? Math.max(1, Math.min(168, Math.round(o.hours))) : 6;
       const sub = o.includeSubstrate !== false;
+      // Windows past 1h ask for the server's per-kind maximum: 6h already
+      // holds more check-ins than the default 500 (portal-live-timeline-v0 §3).
+      const lim = h > 1 ? "&limit=2000" : "";
       return withFallback(async () => {
-        const j = await authFetch("/v1/timeline?hours=" + h + "&include_substrate=" + (sub ? "1" : "0"));
+        const j = await authFetch("/v1/timeline?hours=" + h + "&include_substrate=" + (sub ? "1" : "0") + lim);
         if (!j || !j.success || !Array.isArray(j.events)) return null;
         return {
           hours: h, window: j.window || null, events: j.events, agents: j.agents || [],
