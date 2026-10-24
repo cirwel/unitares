@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-10-24T07:08:39Z",
+  "verified_date": "2026-10-24",
+  "verifier": "Codex gpt-6.1-sol f508feda-5c10-455d-93cc-82b731610f81: rechecked dashboard authFetch unsafe-method CSRF behavior against the live-or-snapshot data seam",
+  "source_digests": {
+    "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
+    "unitares/dashboard/package.json": "bd561bf1e89166b2",
+    "unitares/dashboard/redesign/app.html": "fae43a7732909bb1",
+    "unitares/dashboard/redesign/data.js": "4b94573a31fad898",
+    "unitares/dashboard/redesign/sections/discoveries.js": "2adb8b060e6d6744",
+    "unitares/dashboard/redesign/sections/eisv.js": "ba80ff7087d22e98",
+    "unitares/dashboard/redesign/sections/knowledge-flow.js": "c8f60496ac6b245f",
+    "unitares/dashboard/redesign/sections/landing.js": "3248181369d783aa",
+    "unitares/dashboard/redesign/sections/risk.js": "21a582a7b27757fe",
+    "unitares/dashboard/redesign/sections/security.js": "c5cc0003f1a84c18",
+    "unitares/dashboard/redesign/snapshot.js": "663fcf8dede3b3db",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "5cf2d3484b008032",
+    "unitares/dashboard/tests/app-extensions.test.js": "81987796faecb7b5",
+    "unitares/dashboard/tests/landing-agent-first.test.js": "0c4b061aed6f6550",
+    "unitares/dashboard/tests/risk-history.test.js": "29a3974763326e8b",
+    "unitares/src/dashboard_auth.py": "bb47591c1956df8a",
+    "unitares/src/governance_trend.py": "6b01c226fe69acf2",
+    "unitares/src/http_api.py": "3339000d8c08b8b5",
+    "unitares/src/http_routes/dashboard.py": "0555fe02b0b6da54",
+    "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
+    "unitares/src/http_routes/telemetry.py": "67d6c37cc3241a1b"
+  },
+  "skill_digest": "be7f58946c4fce8c",
+  "superseded_digests": {
+    "unitares/dashboard/redesign/data.js": [
+      "ee1f7e47f718fb92"
+    ]
+  }
+}
