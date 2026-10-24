@@ -7,19 +7,24 @@ the first copy's data or switch its clients.
 
 ## Available paths
 
-- **Docker Compose:** the current published, supported installation and update
+- **Homebrew preview for Apple Silicon Macs:** the published
+  [cirwel/unitares tap](https://github.com/cirwel/homebrew-unitares) installs the
+  native server, lease plane, PostgreSQL 17 with AGE/pgvector, and Redis. Docker
+  is not required. Follow the tap's install and first-time database steps, then
+  the [native setup guide](HOMEBREW_SETUP.md). Services run in the Homebrew
+  owner's logged-in macOS account. Intel macOS and Linux are outside this preview.
+- **Docker Compose:** the supported container installation and automated update
   path. It runs the services together and keeps data in Docker volumes. Follow
   the [installation manual](../manual/02-install.md#21-docker-quickstart).
-- **Native macOS:** runs services directly on the Mac. Follow the
-  [native install playbook](PLAYBOOK.md). The Homebrew tap is still a local,
-  unpublished draft tracked in [#2964](https://github.com/cirwel/unitares/issues/2964);
-  do not use an invented public tap command.
+- **Native source checkout:** the advanced operator/developer path, maintained
+  in the [source install playbook](PLAYBOOK.md). Its manual extension builds
+  and Python environment are separate from the packaged Homebrew installation.
 
-Homebrew is the intended recommended Mac experience once first-time setup,
-startup, backup/migration/update, and recovery are available through the same
-CLI and the tap is approved for publication. Until then, its successful local
-package validation does not replace the supported Docker installation path.
-Docker remains a supported choice for server and advanced deployments.
+Homebrew provides package installation, private configuration and native service
+control. Database creation/bootstrap and backed-up upgrades remain explicit
+operator steps; `unitares update` is still Compose-only. The tap builds from
+source and does not publish bottles. Docker remains supported for container
+and server deployments. Choose the path whose operating procedure fits your host.
 
 Installation method and optional capabilities are separate choices. Semantic
 search needs embeddings; model-assisted consultation needs a configured model.
@@ -122,7 +127,8 @@ expansion is refused. Custom Homebrew per-service environment files and custom
 writer commands require their existing service procedure. A shell-only
 `UNITARES_NATIVE_ENV` override cannot select a different launchd configuration.
 
-Native upgrades still use the documented stop/backup/migrate/restart procedure.
+Native upgrades use the tap's documented
+[stop/backup/migrate/restart procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 `unitares update` and Docker model configuration refuse a Homebrew package;
 invoke the CLI in the owning Docker checkout to manage that stack.
 
