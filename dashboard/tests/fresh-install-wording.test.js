@@ -73,6 +73,20 @@ describe("Security tab on a server without passkeys", () => {
     const status = dom.window.document.getElementById("securityStatus");
     expect(status.className).toContain("error");
     expect(status.textContent).toMatch(/requires an active dashboard session/);
+    const input = dom.window.document.getElementById("operatorCredential");
+    const store = dom.window.document.getElementById("saveOperatorCredential");
+    const forget = dom.window.document.getElementById("forgetOperatorCredential");
+    expect(store.disabled).toBe(false);
+    expect(forget.disabled).toBe(false);
+
+    input.value = "operator-secret";
+    store.click();
+    expect(dom.window.DATA.operatorToken()).toBe("operator-secret");
+    expect(dom.window.document.getElementById("mintCode").disabled).toBe(false);
+
+    forget.click();
+    expect(dom.window.DATA.operatorToken()).toBeNull();
+    expect(dom.window.document.getElementById("mintCode").disabled).toBe(true);
   });
 
   it("does not guess when the configuration probe cannot answer", async () => {
@@ -88,6 +102,22 @@ describe("Security tab on a server without passkeys", () => {
   it("reads another 503 as unknown, not as unconfigured", async () => {
     const dom = boot(vi.fn(async () => json(503, { error: "authentication storage unavailable" })));
     expect(await dom.window.DATA.passkeyConfig()).toBeNull();
+  });
+
+  it("provisions the operator credential through a password input, never a URL", async () => {
+    const dom = boot(vi.fn(async () => json(200, { credentials: [], sessions: [] })));
+    await dom.window.Security.load();
+    const input = dom.window.document.getElementById("operatorCredential");
+    expect(input.type).toBe("password");
+    input.value = "operator-secret";
+    dom.window.document.getElementById("saveOperatorCredential").click();
+    expect(dom.window.DATA.operatorToken()).toBe("operator-secret");
+    expect(input.value).toBe("");
+    expect(dom.window.location.search).not.toContain("operator");
+
+    dom.window.document.getElementById("forgetOperatorCredential").click();
+    expect(dom.window.DATA.operatorToken()).toBeNull();
+    expect(input.value).toBe("");
   });
 });
 
