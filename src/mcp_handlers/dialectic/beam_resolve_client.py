@@ -14,7 +14,10 @@ writer. The Python B-4 guards protect every ordinary fallback path.
 """
 
 import asyncio
+import hashlib
+import json
 import os
+import uuid
 from typing import Any, Dict, Optional
 
 from src.dialectic_session_writes import (
@@ -44,6 +47,7 @@ _GOVERNANCE_POLICY_REFUSALS = {
     "reviewer_recused",
     "invalid_review_authorship",
     "session_identity_mismatch",
+    "permission_denied",
 }
 
 
@@ -68,7 +72,21 @@ def _raise_governance_policy_refusal(
     status: int, body: Any, *, operation: str
 ) -> None:
     error_code = body.get("error") if isinstance(body, dict) else None
-    if status == 409 and error_code in _GOVERNANCE_POLICY_REFUSALS:
+    identity_reason = body.get("reason") if isinstance(body, dict) else None
+    if (
+        status == 409
+        and error_code in _GOVERNANCE_POLICY_REFUSALS
+    ) or (
+        status in (403, 503)
+        and error_code in {"permission_denied", "service_unavailable"}
+        and identity_reason
+        in {
+            "identity_proof_invalid",
+            "identity_proof_replayed",
+            "identity_verification_unavailable",
+        }
+    ):
+        error_code = identity_reason or error_code
         raise BeamDialecticPolicyRefusal(error_code, operation=operation)
 
 
@@ -116,6 +134,58 @@ def beam_resolution_enabled() -> bool:
     return os.getenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "0").strip().lower() in _TRUTHY
 
 
+def _identity_bound_request(
+    path: str,
+    payload: Dict[str, Any],
+    *,
+    expected_agent_id: Optional[str] = None,
+    include_actor: bool = False,
+) -> Optional[tuple[bytes, Dict[str, str]]]:
+    """Encode one BEAM mutation and bind it to the resolved MCP caller.
+
+    The shared lease-plane bearer authenticates this deployment, not the agent
+    whose dialectic row will change. A short-lived Ed25519 attestation binds the
+    resolved caller to the exact path and bytes. Calls without a resolved
+    request identity (for example a trusted background reconciliation task)
+    stay on the existing direct-PostgreSQL fallback instead of minting a claim.
+    """
+    from src.mcp_handlers.context import get_context_resolved_agent_id
+    from src.lease_attestation import LeaseAttestationError, mint_lease_attestation
+
+    actor = get_context_resolved_agent_id()
+    try:
+        actor = str(uuid.UUID(str(actor)))
+        expected = str(uuid.UUID(str(expected_agent_id))) if expected_agent_id else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if expected is not None and actor != expected:
+        return None
+
+    wire_payload = dict(payload)
+    if include_actor:
+        wire_payload["actor_agent_id"] = actor
+    body = json.dumps(
+        wire_payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    try:
+        proof = mint_lease_attestation(
+            holder_agent_uuid=actor,
+            method="POST",
+            path=path,
+            body_sha256=hashlib.sha256(body).hexdigest(),
+        )
+    except LeaseAttestationError:
+        return None
+    return body, {
+        "Authorization": f"Bearer {os.environ['LEASE_PLANE_BEARER_TOKEN']}",
+        "Content-Type": "application/json",
+        "X-Unitares-Identity-Proof": proof,
+    }
+
+
 async def beam_create_session(
     session_id: str,
     paused_agent_id: Optional[str],
@@ -145,6 +215,15 @@ async def beam_create_session(
         if v is not None:
             payload[k] = v
 
+    bound_request = _identity_bound_request(
+        "/v1/dialectic/session",
+        payload,
+        expected_agent_id=paused_agent_id,
+    )
+    if bound_request is None:
+        return None
+    body_bytes, headers = bound_request
+
     try:
         import httpx
     except Exception:  # pragma: no cover
@@ -154,8 +233,8 @@ async def beam_create_session(
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
                 f"{base_url}/v1/dialectic/session",
-                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                json=payload,
+                headers=headers,
+                content=body_bytes,
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
@@ -219,6 +298,15 @@ async def beam_update_phase(
         return None
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
+    payload = _phase_payload(session_id, phase, synthesis_round)
+    bound_request = _identity_bound_request(
+        "/v1/dialectic/phase",
+        payload,
+        include_actor=True,
+    )
+    if bound_request is None:
+        return None
+    body_bytes, headers = bound_request
 
     try:
         import httpx
@@ -229,8 +317,8 @@ async def beam_update_phase(
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
                 f"{base_url}/v1/dialectic/phase",
-                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                json=_phase_payload(session_id, phase, synthesis_round),
+                headers=headers,
+                content=body_bytes,
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
@@ -254,6 +342,7 @@ async def beam_update_phase(
         logger.warning(f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
         rec.respond(outcome="not_written", http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
+        _raise_governance_policy_refusal(status, body, operation="update_phase")
         return None
 
 
@@ -281,6 +370,26 @@ async def beam_update_reviewer(
         return None
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
+    route = (
+        "/v1/dialectic/reviewer/claim"
+        if claim_if_unassigned
+        else "/v1/dialectic/reviewer"
+    )
+    payload = {
+        "session_id": session_id,
+        "reviewer_agent_id": reviewer_agent_id,
+    }
+    if claim_if_unassigned:
+        payload["claim_if_unassigned"] = True
+    bound_request = _identity_bound_request(
+        route,
+        payload,
+        expected_agent_id=reviewer_agent_id if claim_if_unassigned else None,
+        include_actor=True,
+    )
+    if bound_request is None:
+        return None
+    body_bytes, headers = bound_request
 
     try:
         import httpx
@@ -291,23 +400,12 @@ async def beam_update_reviewer(
 
     def _post():
         nonlocal post_started
-        route = (
-            "/v1/dialectic/reviewer/claim"
-            if claim_if_unassigned
-            else "/v1/dialectic/reviewer"
-        )
-        payload = {
-            "session_id": session_id,
-            "reviewer_agent_id": reviewer_agent_id,
-        }
-        if claim_if_unassigned:
-            payload["claim_if_unassigned"] = True
         with httpx.Client(timeout=5.0) as client:
             post_started = True
             resp = client.post(
                 f"{base_url}{route}",
-                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                json=payload,
+                headers=headers,
+                content=body_bytes,
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
@@ -404,6 +502,14 @@ async def beam_resolve(
             if hasattr(expected_updated_at, "isoformat")
             else str(expected_updated_at)
         )
+    bound_request = _identity_bound_request(
+        "/v2/dialectic/resolve-with-effect",
+        payload,
+        expected_agent_id=reviewer_agent_id,
+    )
+    if bound_request is None:
+        return None
+    body_bytes, headers = bound_request
 
     try:
         import httpx
@@ -418,11 +524,8 @@ async def beam_resolve(
             post_started = True
             resp = client.post(
                 f"{base_url}/v2/dialectic/resolve-with-effect",
-                headers={
-                    "Authorization": f"Bearer {bearer}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
+                headers=headers,
+                content=body_bytes,
             )
             body = resp.json() if resp.content else {}
             return resp.status_code, body

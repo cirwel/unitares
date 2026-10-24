@@ -62,7 +62,7 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
   end
 
   test "mode parser fails closed on a misspelled rollout value" do
-    assert IdentityBinding.parse_mode(nil) == :off
+    assert IdentityBinding.parse_mode(nil) == :enforce
     assert IdentityBinding.parse_mode("LOG") == :log
     assert IdentityBinding.parse_mode(" enforce ") == :enforce
 

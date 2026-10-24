@@ -1238,6 +1238,25 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
+  @doc "Return the persisted dialectic principals used by HTTP identity policy."
+  @spec get_session_principals(String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def get_session_principals(session_id) when is_binary(session_id) do
+    case Postgrex.query(
+           DB,
+           "SELECT paused_agent_id, reviewer_agent_id FROM core.dialectic_sessions WHERE session_id = $1",
+           [session_id]
+         ) do
+      {:ok, %{rows: [[paused, reviewer]]}} ->
+        {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}}
+
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @doc "Return the in-flight saga_id for a session, or nil. Used by recovery + the Python sweeper guard's BEAM-side mirror."
   @spec get_inflight(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def get_inflight(session_id) when is_binary(session_id) do

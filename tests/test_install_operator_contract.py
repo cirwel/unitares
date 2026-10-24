@@ -195,7 +195,7 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "UNITARES_LEASE_TRUSTED_ISSUERS:" in compose
     assert (
         "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: "
-        "${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}"
+        "${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-all}"
     ) in compose
     assert len(
         re.findall(r"^      UNITARES_LEASE_ATTESTATION_AUDIENCE:", compose, re.MULTILINE)

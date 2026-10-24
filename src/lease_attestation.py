@@ -176,11 +176,12 @@ def validate_method(value: object) -> str:
 def validate_path(value: object) -> str:
     if (
         not isinstance(value, str)
-        or not value.startswith("/v1/lease/")
-        or not re.fullmatch(r"/v1/lease/[A-Za-z0-9_/-]+", value)
+        or not re.fullmatch(r"/(?:v1/lease|v[12]/dialectic)/[A-Za-z0-9_/-]+", value)
         or len(value) > 256
     ):
-        raise LeaseAttestationError("path must be a /v1/lease/ mutation path")
+        raise LeaseAttestationError(
+            "path must be a supported lease or dialectic mutation path"
+        )
     return value
 
 
