@@ -326,6 +326,28 @@ def test_an_armed_subject_is_refreshed_after_signed_metadata_changes(tmp_path: P
     assert third == [_arm(1, title=new_title, model=new_model)]
 
 
+def _legacy_arm(tmp_path: Path, number: int, minutes_ago: float = 20) -> None:
+    path = tmp_path / "state" / "approvals.arms"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{number} {_iso(minutes_ago)}\n")
+
+
+def test_an_unsigned_legacy_arm_keeps_githubs_default_subject(tmp_path: Path) -> None:
+    _legacy_arm(tmp_path, 1)
+    calls, _ = _run(tmp_path, [_pr(1, armed_min_ago=20, state="BLOCKED")])
+    assert calls == []
+
+
+def test_a_signed_legacy_arm_refreshes_once_with_an_accurate_reason(tmp_path: Path) -> None:
+    _legacy_arm(tmp_path, 1)
+    body = "Model: gpt-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    calls, out = _run(tmp_path, [_pr(1, body=body, armed_min_ago=20, state="BLOCKED")])
+    assert calls == ["pr merge 1 -R o/r --disable-auto"]
+    assert "predates model-subject journaling" in out
+    assert "needs its squash subject refreshed; nothing else armed" in out
+    assert "waiting on a required check" not in out
+
+
 @pytest.mark.parametrize(
     "model",
     ["unavailable", "Gemini 3.1 Pro", "gpt-5] --admin", "<actual model identifier>"],

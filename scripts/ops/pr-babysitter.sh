@@ -419,6 +419,22 @@ recorded_subject_key() {  # <pr>
   [ -f "$ARMS_FILE" ] || return 1
   awk -v n="$1" '$1 == n { k = $3 } END { if (k) print k }' "$ARMS_FILE"
 }
+arm_subject_issue() {  # <pr> <pr-json> -> legacy_signed or changed; fails when current
+  local recorded subject current
+  recorded=$(recorded_subject_key "$1")
+  subject=$(squash_subject "$2")
+  current=$(subject_key "$subject")
+  if [ -z "$recorded" ]; then
+    # Pre-upgrade arms have no key. GitHub's default subject is still correct
+    # for an unsigned PR; only a signed PR needs one deliberate refresh so its
+    # model token reaches Git history.
+    [ -n "$subject" ] && echo "legacy_signed"
+  elif [ "$recorded" != "$current" ]; then
+    echo "changed"
+  else
+    return 1
+  fi
+}
 # Re-runs GitHub refused to start: "<pr> <head-sha>" per refused tick.
 RERUNS_FILE="$STATE_FILE.reruns"
 record_refused_rerun() {  # <pr> <head>
@@ -441,7 +457,7 @@ armed=$(q -c --arg b "$BASE" \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 disarmed=" "
-hold_order=0
+hold_reason=""
 # An operator's arm takes the slot: any queue arm alongside it is disarmed (it
 # keeps its label and returns in turn), so there is never more than one arm.
 operator_arm=$(jq -rs --arg l "$OPERATOR_ARMED_LABEL" \
@@ -474,10 +490,14 @@ while read -r pr; do
     reason="it touches a governance-sensitive surface ($why), which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
-  elif [ "$(recorded_subject_key "$n")" != "$(subject_key "$(squash_subject "$pr")")" ]; then
-    reason="its title or Model signature changed since it was armed"
+  elif subject_issue=$(arm_subject_issue "$n" "$pr"); then
+    if [ "$subject_issue" = "legacy_signed" ]; then
+      reason="it predates model-subject journaling and needs its signed subject added"
+    else
+      reason="its title or Model signature changed since it was armed"
+    fi
     # Keep its queue position. The next tick re-arms it with the fresh subject.
-    hold_order=1
+    hold_reason="a disarmed PR needs its squash subject refreshed"
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
@@ -489,7 +509,9 @@ while read -r pr; do
     # update; the PR keeps its place, since the tick stops here and the next
     # one re-arms it once the check passes.
     reason="$unmet is not passing"
-    case " $unmet" in *=MISSING*|*=PENDING*) hold_order=1 ;; esac
+    case " $unmet" in
+      *=MISSING*|*=PENDING*) hold_reason="a disarmed PR is waiting on a required check" ;;
+    esac
   elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
@@ -508,8 +530,8 @@ while read -r pr; do
     fi
   fi
 done <<<"$armed"
-if [ "$hold_order" = "1" ]; then
-  log "a disarmed PR is waiting on a required check; nothing else armed this tick"
+if [ -n "$hold_reason" ]; then
+  log "$hold_reason; nothing else armed this tick"
   exit 0
 fi
 
