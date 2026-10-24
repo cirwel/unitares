@@ -8,6 +8,7 @@ the script would have mutated.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -202,6 +203,7 @@ def _run(
     rollups: dict[int, list[dict] | None] | None = None,
     timeline_fails: tuple[int, ...] = (),
     arms: dict[int, float] | None = None,
+    arm_subjects: dict[int, str] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -234,11 +236,13 @@ def _run(
             (d / f"rollup_{number}.json").write_text(json.dumps({"statusCheckRollup": full_checks}))
     state_file = tmp_path / "state" / "approvals"
     if arms:
-        # Arms this script made: the arming time GitHub reports must match.
+        # Arms this script made: the arming time and stored subject must match.
         state_file.parent.mkdir(exist_ok=True)
         with (tmp_path / "state" / "approvals.arms").open("a") as handle:
             for number, minutes_ago in arms.items():
-                handle.write(f"{number} {_iso(minutes_ago)}\n")
+                subject = (arm_subjects or {}).get(number, "")
+                key = "default" if not subject else "b64:" + base64.b64encode(subject.encode()).decode()
+                handle.write(f"{number} {_iso(minutes_ago)} {key}\n")
     for key, value in (states or {}).items():
         repo, number = key.split("#")
         (d / f"state_{repo.replace('/', '_')}_{number}").write_text(value + "\n")
@@ -302,6 +306,24 @@ def test_the_last_model_signature_controls_the_squash_subject(tmp_path: Path) ->
     body = "Model: claude-old\nnotes\nModel: claude-opus-5-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
     calls, _ = _run(tmp_path, [_pr(1, body=body)])
     assert calls == [_arm(1, model="claude-opus-5-5")]
+
+
+@pytest.mark.parametrize("changed", ["title", "model"])
+def test_an_armed_subject_is_refreshed_after_signed_metadata_changes(tmp_path: Path, changed: str) -> None:
+    old_body = "Model: gpt-5-old\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    first, _ = _run(tmp_path, [_pr(1, title="fix: old title", body=old_body)])
+    assert first == [_arm(1, title="fix: old title", model="gpt-5-old")]
+
+    new_title = "fix: new title" if changed == "title" else "fix: old title"
+    new_model = "gpt-5-new" if changed == "model" else "gpt-5-old"
+    new_body = f"Model: {new_model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    armed = _pr(1, title=new_title, body=new_body, armed_min_ago=0.2, state="BLOCKED")
+    second, out = _run(tmp_path, [armed])
+    assert second == ["pr merge 1 -R o/r --disable-auto"]
+    assert "title or Model signature changed" in out
+
+    third, _ = _run(tmp_path, [_pr(1, title=new_title, body=new_body)])
+    assert third == [_arm(1, title=new_title, model=new_model)]
 
 
 @pytest.mark.parametrize(

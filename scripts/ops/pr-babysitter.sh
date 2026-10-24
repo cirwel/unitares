@@ -208,6 +208,12 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
   ' <<<"$1"
 }
 
+subject_key() {  # <subject> -> whitespace-free value for the arm journal
+  jq -rn --arg subject "$1" '
+    if $subject == "" then "default" else "b64:" + ($subject | @base64) end
+  '
+}
+
 # --- approval helpers -----------------------------------------------------------
 # When did the approval label last go on, and when was the last commit that
 # was not a base-update merge (GitHub's updater, `gh pr update-branch`)?
@@ -396,14 +402,22 @@ load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
 load_review_policy  # likewise for auth_path
 
 # --- 1. tidy the slot -----------------------------------------------------------
-# Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
-# script's when GitHub's arming time matches a recorded one. Only those are
-# ever disarmed; a PR the maintainer armed by hand (labelled or not, or
-# re-armed later, which carries a later time) is left alone.
+# Arms this script made: "<pr> <armed-at> <subject-key>" per line. An armed PR
+# is the script's when GitHub's arming time matches a recorded one. Only those
+# are ever disarmed; a PR the maintainer armed by hand (labelled or not, or
+# re-armed later, which carries a later time) is left alone. The subject key
+# makes a title or Model-signature edit refresh the stored auto-merge subject
+# instead of landing the value that was current when the PR was first armed.
 ARMS_FILE="$STATE_FILE.arms"
-record_arm() {
+record_arm() {  # <pr> <subject>
+  local key
   [ "$DRY_RUN" = "1" ] && return 0
-  mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ)" >>"$ARMS_FILE"
+  key=$(subject_key "$2") || return 1
+  mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ) $key" >>"$ARMS_FILE"
+}
+recorded_subject_key() {  # <pr>
+  [ -f "$ARMS_FILE" ] || return 1
+  awk -v n="$1" '$1 == n { k = $3 } END { if (k) print k }' "$ARMS_FILE"
 }
 # Re-runs GitHub refused to start: "<pr> <head-sha>" per refused tick.
 RERUNS_FILE="$STATE_FILE.reruns"
@@ -460,6 +474,10 @@ while read -r pr; do
     reason="it touches a governance-sensitive surface ($why), which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
+  elif [ "$(recorded_subject_key "$n")" != "$(subject_key "$(squash_subject "$pr")")" ]; then
+    reason="its title or Model signature changed since it was armed"
+    # Keep its queue position. The next tick re-arms it with the fresh subject.
+    hold_order=1
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
@@ -797,7 +815,7 @@ while read -r _ n head; do
   merge_args+=(--match-head-commit "$head")
   if act "${merge_args[@]}"; then
     # Unrecorded, the arm could not be withdrawn by removing the label later.
-    if ! record_arm "$n"; then
+    if ! record_arm "$n" "$subject"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
     fi

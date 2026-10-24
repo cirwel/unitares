@@ -82,6 +82,9 @@ veto by removing the label.
   `(#N)` in the squash subject. This keeps the exact self-reported model visible
   in `git log` after the branch is deleted while retaining the conventional
   commit prefix, PR number, default commit body and GitHub co-author trailers.
+  If the PR title or final `Model:` line changes while auto-merge is armed, the
+  queue disarms it and re-arms it on the next tick with the refreshed subject;
+  the PR keeps its queue position.
   Like the PR's `agent/*` family label, the token is a filter and attribution
   aid, not verified model provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
