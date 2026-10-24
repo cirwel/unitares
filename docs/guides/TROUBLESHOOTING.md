@@ -372,6 +372,16 @@ python3 --version
 
 ## Recovery Procedures
 
+### Interrupted Native Database Initialization
+
+If bootstrap fails after applying SQL, preserve the log and database. Do not
+rerun bootstrap or use the database reset below as a retry procedure. Follow
+[interrupted native bootstrap recovery](../install/PLAYBOOK.md#recovering-an-interrupted-native-bootstrap)
+to verify the committed state, stop both writers, back up, and resume pending
+migrations. This includes the 3.4.0 checksum-update failure after migration 062;
+the bootstrap fix ships in 3.5.0. An existing NULL checksum must not be replaced
+with an invented record of what ran.
+
 ### Service Restart
 
 ```bash

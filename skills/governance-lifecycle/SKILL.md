@@ -177,6 +177,13 @@ Use raw `process_agent_update(...)` when you need the raw handler payload, or
 call `sync_state(..., response_mode="full")` to retain it under
 `raw_governance` in the primary workflow response.
 
+The check-in row keeps a bounded excerpt of `response_text` (500 characters
+by default, cut at a word boundary, common credential shapes redacted), so the
+check-in's record shows what you reported. Put the identifiers that matter (PR
+numbers, paths) early, and never paste secrets: redaction is best effort. The
+excerpt is your own report, not a verified claim; a durable claim still needs
+`store_finding`.
+
 ### When to Check In
 
 - After completing a meaningful unit of work

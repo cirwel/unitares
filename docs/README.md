@@ -70,8 +70,9 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 ### `install/` — installation
 
-- [`CHOOSING_INSTALLATION.md`](install/CHOOSING_INSTALLATION.md) — choose one primary installation per machine: Docker Compose (the supported path, with an opt-in [core profile](manual/02-install.md#a-smaller-stack-the-core-profile)) or native macOS; the Homebrew tap is an unpublished draft (#2964)
-- [`PLAYBOOK.md`](install/PLAYBOOK.md) — bare-metal install playbook (Homebrew Postgres, native Python). The Docker path is in the repo README and [the installation manual](manual/02-install.md#21-docker-quickstart). **Live reference** — keep this current.
+- [`CHOOSING_INSTALLATION.md`](install/CHOOSING_INSTALLATION.md) — choose one primary installation: Homebrew preview, Docker Compose (including its opt-in [core profile](manual/02-install.md#a-smaller-stack-the-core-profile)), or a source checkout.
+- [`HOMEBREW_SETUP.md`](install/HOMEBREW_SETUP.md) — published Apple Silicon Homebrew preview, private configuration, database readiness and native service control. Package install and first-time provisioning are in the [tap README](https://github.com/cirwel/homebrew-unitares).
+- [`PLAYBOOK.md`](install/PLAYBOOK.md) — advanced source-checkout install (Homebrew Postgres, manually built extensions, native Python). Docker setup is in the [installation manual](manual/02-install.md#21-docker-quickstart). **Live reference** — keep this current.
 - [`cross-machine-surface.md`](install/cross-machine-surface.md) — *point-in-time install-surface audit (2026-04-24), preserved as a record.* Inventory of machine-varying values; useful background for a cross-machine setup, but the install path itself is `PLAYBOOK.md`, not this.
 
 ### `deployment/` — hosted installation

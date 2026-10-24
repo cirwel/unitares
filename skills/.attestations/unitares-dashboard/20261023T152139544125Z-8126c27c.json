@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-10-23T15:21:39Z",
+  "verified_date": "2026-10-23",
+  "verifier": "claude 3adf1802 (#2925): re-checked unitares-dashboard against merged http_api.py after #3045; /, /dashboard, /dashboard/redesign/**, /dashboard/ext/, /v1/governance/trend, /v1/eisv/agents, /v1/knowledge/flow and /api/activity are all still registered as the skill says",
+  "source_digests": {
+    "unitares/dashboard/EXTENSIONS.md": "8bdf0fa280516004",
+    "unitares/dashboard/package.json": "bd561bf1e89166b2",
+    "unitares/dashboard/redesign/app.html": "759b7b71452c5c1d",
+    "unitares/dashboard/redesign/data.js": "0b5ac3f4944ee519",
+    "unitares/dashboard/redesign/sections/discoveries.js": "2adb8b060e6d6744",
+    "unitares/dashboard/redesign/sections/eisv.js": "ba80ff7087d22e98",
+    "unitares/dashboard/redesign/sections/knowledge-flow.js": "c8f60496ac6b245f",
+    "unitares/dashboard/redesign/sections/landing.js": "3248181369d783aa",
+    "unitares/dashboard/redesign/sections/risk.js": "21a582a7b27757fe",
+    "unitares/dashboard/redesign/sections/security.js": "c5cc0003f1a84c18",
+    "unitares/dashboard/redesign/snapshot.js": "ee8a3c95e40b20e6",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "5cf2d3484b008032",
+    "unitares/dashboard/tests/app-extensions.test.js": "de603e7ea1811693",
+    "unitares/dashboard/tests/landing-agent-first.test.js": "0c4b061aed6f6550",
+    "unitares/dashboard/tests/risk-history.test.js": "29a3974763326e8b",
+    "unitares/src/dashboard_auth.py": "bb47591c1956df8a",
+    "unitares/src/governance_trend.py": "6b01c226fe69acf2",
+    "unitares/src/http_api.py": "3339000d8c08b8b5",
+    "unitares/src/http_routes/dashboard.py": "0555fe02b0b6da54",
+    "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
+    "unitares/src/http_routes/telemetry.py": "67d6c37cc3241a1b"
+  },
+  "skill_digest": "8933bc855314f953"
+}

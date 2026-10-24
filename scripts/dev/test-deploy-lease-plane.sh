@@ -117,6 +117,7 @@ SH
   <key>WorkingDirectory</key><string>$CASE/deploy/elixir/lease_plane</string>
   <key>EnvironmentVariables</key><dict>
     <key>HOME</key><string>$CASE/home</string>
+    <key>UNITARES_SECRETS_ENV</key><string>$CASE/home/.config/unitares/secrets.env</string>
   </dict>
 </dict></plist>
 EOF
@@ -325,7 +326,7 @@ export UNITARES_LEASE_PLANE_DATABASE_URL='postgresql://plist/secrets-db'
 export LEASE_PLANE_BEARER_TOKEN='fixture-token'
 SH
 "$PLIST_BUDDY_FIXTURE" -c \
-  "Add :EnvironmentVariables:UNITARES_SECRETS_ENV string $CASE/plist-secrets.env" \
+  "Set :EnvironmentVariables:UNITARES_SECRETS_ENV $CASE/plist-secrets.env" \
   "$CASE/fixture.plist"
 "$PLIST_BUDDY_FIXTURE" -c \
   'Add :EnvironmentVariables:UNITARES_LEASE_PLANE_DATABASE_URL string postgresql://plist/pre-source-db' \
@@ -365,6 +366,9 @@ export LEASE_PLANE_BEARER_TOKEN='fixture-token'
 SH
 "$PLIST_BUDDY_FIXTURE" -c \
   "Set :EnvironmentVariables:HOME $CASE/runtime-home" \
+  "$CASE/fixture.plist"
+"$PLIST_BUDDY_FIXTURE" -c \
+  "Set :EnvironmentVariables:UNITARES_SECRETS_ENV $CASE/runtime-home/.config/unitares/secrets.env" \
   "$CASE/fixture.plist"
 run_case "" \
   "UNITARES_DEPLOY_DB_URL=postgresql://plist/home-db?runtime_home=$CASE/runtime-home"
@@ -416,6 +420,17 @@ if [[ "$LAST_RC" != 0 ]] && grep -q '^restore$' "$CASE/log" \
   ok "unexported service database is refused before migration or restart"
 else
   bad "unexported database refusal"
+fi
+
+setup_case no-persisted-source
+: > "$CASE/deploy/scripts/dev/apply_migrations.py"
+"$PLIST_BUDDY_FIXTURE" -c 'Delete :EnvironmentVariables:UNITARES_SECRETS_ENV' "$CASE/fixture.plist"
+run_case ""
+if [[ "$LAST_RC" != 0 ]] && grep -q 'persisted UNITARES_SECRETS_ENV' "$CASE/out" \
+  && ! grep -qE '^(python3|mix|restart)' "$CASE/log"; then
+  ok "absent persisted source refuses instead of discovering a home file"
+else
+  bad "missing persisted secrets source refusal"
 fi
 
 if [[ "$fail" != 0 ]]; then
