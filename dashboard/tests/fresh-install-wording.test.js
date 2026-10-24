@@ -55,6 +55,7 @@ describe("Security tab on a server without passkeys", () => {
       ? json(503, { error: "passkey sign-in is not configured", fix })
       : json(403, { error: "dashboard session and X-Unitares-Csrf: 1 required" }));
     const dom = boot(fetch);
+    dom.window.DATA.setOperatorToken("operator-secret");
     await dom.window.Security.load();
     const status = dom.window.document.getElementById("securityStatus");
     expect(status.className).not.toContain("error");
