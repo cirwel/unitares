@@ -143,6 +143,13 @@ optionally, smooth the caution-band slope in `monitor_risk.py:70-79`.
 
 ## Safety constraint (load-bearing — needs the owners + a council pass)
 
+> **Disposition note (2026-10-22, D2 option C in [`../active/open-decisions-packet-v0.md`](../active/open-decisions-packet-v0.md)):**
+> "The owners" resolves to the single operator (`.github/CODEOWNERS`). The two-word
+> review phrase here names the agent-run merge-time review (advisory for merging,
+> operator decision 2026-10-08; a council can supply it, 2026-10-14); enabling a
+> verdict-path flag such as `GOVERNANCE_VERIFICATION_FLOOR` in a live deployment
+> requires explicit operator sign-off.
+
 The Φ floor is a deliberate **safety prior**: it exists so a confident-but-wrong
 behavioral assessment cannot erase a worse self-attested Φ/drift signal. Blending
 it down must NOT blunt genuine high-risk detection. Required before merge:
