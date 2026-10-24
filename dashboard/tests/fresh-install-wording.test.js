@@ -62,6 +62,19 @@ describe("Security tab on a server without passkeys", () => {
     expect(status.textContent).toContain(fix);
     expect(status.textContent).not.toMatch(/403/);
     expect(dom.window.document.getElementById("mintCode").disabled).toBe(true);
+
+    const input = dom.window.document.getElementById("operatorCredential");
+    input.value = "operator-secret";
+    dom.window.document.getElementById("saveOperatorCredential").click();
+    expect(dom.window.document.getElementById("credentialList").textContent)
+      .toContain("Passkeys are not configured on this server");
+    expect(dom.window.document.getElementById("operatorHint").textContent).toBe("");
+    expect(dom.window.document.getElementById("mintCode").disabled).toBe(true);
+
+    dom.window.document.getElementById("forgetOperatorCredential").click();
+    expect(dom.window.document.getElementById("credentialList").textContent)
+      .toContain("Passkeys are not configured on this server");
+    expect(dom.window.document.getElementById("mintCode").disabled).toBe(true);
   });
 
   it("keeps the session error when passkeys are configured", async () => {

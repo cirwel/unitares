@@ -4,6 +4,7 @@
 
   const mountSel = "#security-mount";
   let state = { credentials: [], sessions: [] };
+  let passkeysConfigured = null;
 
   const esc = (value) => String(value == null ? "" : value)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -65,7 +66,7 @@
           <div class="security-actions security-secret-row">
             <input class="security-secret" id="operatorCredential" type="password"
               autocomplete="off" autocapitalize="none" spellcheck="false"
-              placeholder="Paste over this TLS session">
+              placeholder="Paste directly; use HTTPS remotely">
             <button class="security-btn" id="saveOperatorCredential" type="button">Store in this browser</button>
             <button class="security-btn" id="forgetOperatorCredential" type="button">Forget</button>
           </div>
@@ -89,6 +90,16 @@
     el.className = "security-status" + (kind ? " " + kind : "");
   }
 
+  function renderOperatorCredential() {
+    const opAvailable = !!window.DATA.operatorToken();
+    document.querySelector("#mintCode").disabled = !opAvailable || passkeysConfigured === false;
+    document.querySelector("#operatorHint").textContent = passkeysConfigured === false
+      ? ""
+      : opAvailable
+      ? "Type the displayed code on the target device. It is never placed in a URL."
+      : "Paste the operator credential below to mint a code. It is never placed in a URL. Existing codes can still be typed on the enrollment page.";
+  }
+
   function render() {
     const credentials = document.querySelector("#credentialList");
     const sessions = document.querySelector("#sessionList");
@@ -100,16 +111,13 @@
     sessions.innerHTML = state.sessions.length
       ? state.sessions.map(sessionHtml).join("")
       : '<div class="empty">No active sessions.</div>';
-    const opAvailable = !!window.DATA.operatorToken();
-    document.querySelector("#mintCode").disabled = !opAvailable;
-    document.querySelector("#operatorHint").textContent = opAvailable
-      ? "Type the displayed code on the target device. It is never placed in a URL."
-      : "Paste the operator credential below to mint a code. It is never placed in a URL. Existing codes can still be typed on the enrollment page.";
+    renderOperatorCredential();
   }
 
   async function refresh() {
     try {
       state = await window.DATA.passkeySecurity();
+      passkeysConfigured = true;
       render();
       message("");
     } catch (error) {
@@ -121,6 +129,7 @@
       // state, not an error, and it has a named fix.
       const config = window.DATA.passkeyConfig ? await window.DATA.passkeyConfig() : null;
       if (config && config.configured === false) {
+        passkeysConfigured = false;
         notConfigured(config.fix);
         return;
       }
@@ -203,7 +212,7 @@
     }
     const stored = window.DATA.setOperatorToken(input.value);
     input.value = "";
-    render();
+    renderOperatorCredential();
     message(
       stored ? "Operator credential stored in this browser." : "This browser could not store the operator credential.",
       stored ? "ok" : "error",
@@ -213,7 +222,7 @@
   function forgetOperatorCredential() {
     window.DATA.setOperatorToken("");
     document.querySelector("#operatorCredential").value = "";
-    render();
+    renderOperatorCredential();
     message("Operator credential removed from this browser.", "ok");
   }
 
