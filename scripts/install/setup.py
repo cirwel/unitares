@@ -146,17 +146,17 @@ SECRETS_TEMPLATE = """\
 # The governance server does NOT read this file: it reads its own process
 # environment (.env under Docker Compose, the plist on a launchd install).
 # Helper scripts that run beside it (scripts/dev/ship.sh, the BEAM start
-# scripts under elixir/) source it. Keep the `export`: some of those scripts
+# scripts under elixir/) source it only when UNITARES_SECRETS_ENV explicitly
+# names this file. Persist that selection in the service environment.
+# Keep the `export`: some of those scripts
 # source without `set -a`, and an unexported variable never reaches the
 # process they launch. For example:
 # export LEASE_PLANE_BEARER_TOKEN=
 # export UNITARES_HTTP_API_TOKEN=
 """
 
-# Where the secrets env file lives. UNITARES_SECRETS_ENV wins; otherwise the
-# neutral default, unless only the pre-2026-09 location exists, in which case
-# that file is kept where its scripts already look. Mirrors
-# resolve_secrets_file() in scripts/dev/unitares_doctor.py.
+# New template destination only; launchers require UNITARES_SECRETS_ENV to
+# select this file explicitly. Existing credential files are never discovered.
 SECRETS_ENV_VAR = "UNITARES_SECRETS_ENV"
 
 
@@ -166,9 +166,6 @@ def resolve_secrets_path(home: Path, environ: dict | None = None) -> Path:
     if override:
         return Path(override).expanduser()
     default = home / ".config" / "unitares" / "secrets.env"
-    legacy = home / ".config" / "cirwel" / "secrets.env"
-    if not default.exists() and legacy.exists():
-        return legacy
     return default
 
 

@@ -51,12 +51,12 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-10-17
+**Last Updated:** 2026-10-24
 
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.49.0` on 2026-10-17.
+contract `2.1.0` on 2026-10-24.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -176,6 +176,13 @@ sync_state(
 Use raw `process_agent_update(...)` when you need the raw handler payload, or
 call `sync_state(..., response_mode="full")` to retain it under
 `raw_governance` in the primary workflow response.
+
+The check-in row keeps a bounded excerpt of `response_text` (500 characters
+by default, cut at a word boundary, common credential shapes redacted), so the
+check-in's record shows what you reported. Put the identifiers that matter (PR
+numbers, paths) early, and never paste secrets: redaction is best effort. The
+excerpt is your own report, not a verified claim; a durable claim still needs
+`store_finding`.
 
 ### When to Check In
 

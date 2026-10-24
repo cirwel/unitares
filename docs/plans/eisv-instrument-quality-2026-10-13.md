@@ -52,8 +52,8 @@ existing evidence before opening another feature workstream.
 | Protect the measurement path | Done. [#2762](https://github.com/cirwel/unitares/pull/2762) closed unmerged on 2026-10-13; the same isolation had already landed in [#2761](https://github.com/cirwel/unitares/pull/2761) (`fc5d15a63`, merged 2026-10-12), which guards all three behavioral-sensor shadows in `src/mcp_handlers/updates/phases.py`. | Injected shadow failures cannot skip the deployed observation handoff; `tests/test_behavioral_sensor.py` (`test_a_failing_shadow_cannot_interrupt_the_deployed_handoff`, parametrized over the three shadows) pins it. |
 | Verify the S starting point | Reproduced the existing eight-seed offline run and paired regime ablation on 2026-10-13 at `87dd33c37`; commands and results below. | Reproduction of the existing synthetic fixture; no additional efficacy or confirmatory claim. |
 | Specify S's next validation | Draft a protocol covering separate confidence and complexity interventions, vocabulary controls, cadence variation, agent classes, and tool-usage inputs. Include raw drift/complexity baselines to test what the combined reading adds. | Fix the independent unit, seed/stream selection, outcomes, uncertainty reporting, and proposed deciding standard before collection. Operator approval of the standard precedes a confirmatory run. |
-| Repair I's evidence supply | Audit the existing confidence capture and prediction/outcome binding with controlled fixtures; specify how an explicit forecast and its verified outcome reach the per-agent estimator. | Missing or mismatched pairs remain missing; a nearby generic confidence statement cannot silently become a task-specific forecast. Live producer or estimator changes require the registered study's preservation review (amended 2026-10-15: under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), they record `instrument_change_at` first). |
-| Repair E and S feedback | Use the existing offline/shadow comparisons to specify E's verdict-history repair and S's regime-loop repair; report remaining sensitivity and lost information as well as noise reduction. | Keep deployed predictors fixed through the preservation horizon (amended 2026-10-15: until a PR records `instrument_change_at` under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)). Any replacement has its own version and an evaluation protocol; it inherits no validity claim from the old instrument. |
+| Repair I's evidence supply | Audit the existing confidence capture and prediction/outcome binding with controlled fixtures; specify how an explicit forecast and its verified outcome reach the per-agent estimator. | Missing or mismatched pairs remain missing; a nearby generic confidence statement cannot silently become a task-specific forecast. Live producer or estimator changes record `instrument_change_at` first under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change). |
+| Repair E and S feedback | Use the existing offline/shadow comparisons to specify E's verdict-history repair and S's regime-loop repair; report remaining sensitivity and lost information as well as noise reduction. | Keep deployed predictors fixed until a PR records `instrument_change_at` under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change). Any replacement has its own version and an evaluation protocol; it inherits no validity claim from the old instrument. |
 | Test agent-facing usefulness | Specify a bounded comparison of source observations alone versus observations plus EISV explanations on matched work. Keep context and review budgets equal and record misleading as well as useful guidance. | A future study of a named consumer and task. It does not follow automatically from faithful measurement and does not authorize pausing agents. |
 
 Work on input audits and protocol drafts can proceed independently. Changing
@@ -92,23 +92,20 @@ those inputs.
 
 ## Preservation and authority
 
-- The feature freeze this plan was written under was lifted by the operator
-  on 2026-10-15. This priority change does not by itself authorize new runtime
-  feature work: new tools, actions, instruments and model channels stay
-  operator-reserved, and the scientific gates below are unchanged.
+- This priority change does not by itself authorize new runtime feature work:
+  new tools, actions, instruments, and model channels stay operator-reserved,
+  and the scientific gates below are unchanged.
 - The [registered December 1 outcome read](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
   keeps its inputs, selection rules, thresholds, and reporting obligations.
   Do not run ad hoc live discrimination analyses or reinterpret this synthetic
   reproduction as another outcome read.
-- The preservation horizon ends when the operator declares the registered
-  report final, including correction or reproduction inspection, as specified
-  in the boundary proposal. October 22 and December 1 are not automatic release
-  dates for the held numerical fix or predictor changes.
-  *Amended 2026-10-15:* the horizon no longer gates live-path changes. Under the
-  [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), the held numerical fix and predictor changes may land once their PR
-  records `instrument_change_at`, a UTC instant no later than their deployment;
-  the registered read then admits only outcomes before it. Flag and
-  configuration changes count too, and the CI guard does not see them.
+- Under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change),
+  the held numerical fix and predictor changes may land once their PR records
+  `instrument_change_at`, a UTC instant no later than their deployment; the
+  registered read then admits only outcomes before it. Flag and configuration
+  changes count too, and the CI guard does not see them. October 22 and
+  December 1 are not automatic release dates for the held numerical fix or
+  predictor changes.
 - No new pass/fail threshold, fitted estimator, enforcement change, module
   default, or waiver is authorized here. Proposed scientific standards go to
   the operator before use. The boundary proposal's Stage 3 and Stage 4 decisions

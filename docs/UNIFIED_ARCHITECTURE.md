@@ -245,7 +245,7 @@ An agent calls `process_agent_update` (advertised to agents as `sync_state`) wit
 - `complexity` — optional reflective self-report [0, 1]
 - `confidence` — optional reflective self-report [0, 1]
 
-At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer (`src/dual_log/`) compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available. The original report text is transient; durable claims belong in a finding.
+At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer (`src/dual_log/`) compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available. Each check-in keeps a bounded excerpt of its report text (`src/report_excerpt.py`), not the full text; durable claims belong in a finding.
 
 The check-in returns an EISV behavioral state estimate and a policy action. The decision engine (`src/monitor_decision.py`) returns one of two actions, `proceed` or `pause`; `guide` is a `sub_action` of `proceed` that the response surfaces as its own policy action:
 
@@ -320,10 +320,7 @@ from six observe sub-handlers, removing a 3221-await `load_metadata_async` loop
 from the request path, and steady-state fell to 92–182ms. The V0.2 RESOLUTION of
 [`proposals/active/beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md)
 records the verdict — "the 60× amplification floor was the 3221-await loop, not
-anyio/asyncio coupling at the substrate layer". That surface is the one this
-section cited until now as the class's most recent new variant: PR #348's
-follow-up and PR #350 are the same change, so the 2026-05-04 measurement and the
-"recent recurrence" were one event counted twice. Every floor raised since
+anyio/asyncio coupling at the substrate layer". Every floor raised since
 resolved Python-side as well (#354, #360, #361, and #533's 104× p50 collapse),
 and the roadmap's V0.4 RESOLUTION (2026-06-25) retired latency as a migration
 decision gate on that basis.

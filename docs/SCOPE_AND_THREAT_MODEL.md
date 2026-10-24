@@ -79,11 +79,7 @@ behavioral signal telemetry-only. A
 self-reported `ethical_drift` does not enter the drift vector, Φ, or the verdict
 in any phase, on any path: it is never an input. This is a stated rule. MCP
 check-ins still record the report as telemetry (the per-agent profile and the
-response echo); a direct Python call to `UNITARESMonitor.process_update()` does not record it. Until 2026-10 a capped 30% blend existed for Python callers passing a list
-or tuple, but the MCP handler passes an array the blend's type check rejected, so
-it never ran on live check-ins (found 2026-09-23); it was also not escalate-only,
-so a caller could have lowered its own computed deviation. The blend was removed
-rather than repaired (operator-delegated decision, 2026-10-11). Whether
+response echo); a direct Python call to `UNITARESMonitor.process_update()` does not record it. Whether
 self-reports should ever affect the decision remains an open policy question,
 parked when PR #2372 was closed. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
@@ -132,11 +128,6 @@ owns, and it does not trap every action an agent can take through its host. A
 capable process can conceal or optimize behavior outside the monitored signals;
 correctness, safety, and resistance to a motivated attacker require independent
 evidence and controls.
-
-These boundary statements used to be repeated as a tail on several README
-sections. They are stated here instead, because a caveat restated in every
-section reads as hedging and a caveat stated once in the document that owns it
-reads as a boundary.
 
 UNITARES exposes several adversarial boundaries rather than claiming to close
 them. Trusted external outcomes are harder for a monitored agent to forge than

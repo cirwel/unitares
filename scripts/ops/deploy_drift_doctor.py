@@ -165,15 +165,34 @@ class Surface:
         self.check_version = check_version
 
 
-_BUILTIN_SURFACES: List[Surface] = [
-    # Adapter bundle, also live from its checkout.
-    Surface("unitares-governance-plugin", "~/projects/unitares-governance-plugin", "master",
-            "com.unitares.governance-mcp"),
-    # Pinned deploy worktree: lagging origin is deliberate, restart lag is not.
-    Surface("unitares-deploy", "~/projects/unitares-deploy", "master",
-            "com.unitares.governance-mcp", check_behind=False, check_version=True),
-]
-DEFAULT_SURFACES: List[Surface] = _BUILTIN_SURFACES
+DEFAULT_SURFACES: List[Surface] = []
+
+
+def configured_surfaces() -> List[Surface]:
+    """Read explicit deployment policy; an unset configuration selects nothing."""
+    path = os.environ.get("UNITARES_DEPLOY_DRIFT_SURFACES", "")
+    if not path:
+        return DEFAULT_SURFACES
+    values = json.loads(Path(path).read_text())
+    if not isinstance(values, list):
+        raise ValueError("drift surfaces must be a JSON array")
+    surfaces = []
+    names = set()
+    allowed = {"name", "path", "branch", "launchd_label", "check_behind", "check_version"}
+    for item in values:
+        if not isinstance(item, dict) or set(item) - allowed:
+            raise ValueError("unexpected drift surface fields")
+        if any(not isinstance(item.get(key), str) or not item[key] for key in ("name", "path", "branch")):
+            raise ValueError("drift surfaces require name, path, and branch")
+        if item["name"] in names or not Path(os.path.expanduser(item["path"])).is_absolute():
+            raise ValueError("drift surface names must be unique and paths absolute")
+        if not (item.get("launchd_label") is None or isinstance(item["launchd_label"], str)):
+            raise ValueError("launchd_label must be a string or null")
+        if any(key in item and not isinstance(item[key], bool) for key in ("check_behind", "check_version")):
+            raise ValueError("drift check choices must be boolean")
+        names.add(item["name"])
+        surfaces.append(Surface(**{**item, "launchd_label": item.get("launchd_label")}))
+    return surfaces
 
 
 class PreflightSpec:
@@ -215,140 +234,50 @@ class PreflightSpec:
         self.uds_socket = os.path.expanduser(uds_socket) if uds_socket else None
 
 
-def default_preflights(env: Optional[Dict[str, str]] = None) -> List[PreflightSpec]:
-    """Build the default read-only deploy preflights honoring the same environment
-    path overrides as the ``deploy-*.sh`` scripts."""
-    environ = os.environ if env is None else env
-    unitares_deploy = environ.get("UNITARES_DEPLOY", "~/projects/unitares-deploy")
-    mcp_deploy = environ.get("UNITARES_MCP_DEPLOY", unitares_deploy)
-    lease_plane_deploy = environ.get("UNITARES_LEASE_PLANE_DEPLOY", unitares_deploy)
-    orchestrator_deploy = environ.get(
-        "UNITARES_ORCHESTRATOR_DEPLOY", "~/projects/unitares-orchestrator-deploy"
-    )
-    bridge_deploy = environ.get(
-        "BRIDGE_DEPLOY", "~/projects/unitares-discord-bridge-deploy"
-    )
-    host_adapter_deploy = environ.get(
-        "HOST_ADAPTER_DEPLOY", "~/projects/unitares-host-adapter-deploy"
-    )
-    dispatch_deploy = environ.get(
-        "DISPATCH_DEPLOY", "~/projects/dispatch_beam-deploy"
-    )
-    governance_plist = environ.get(
-        "UNITARES_GOVERNANCE_PLIST",
-        "~/Library/LaunchAgents/com.unitares.governance-mcp.plist",
-    )
-    uds_socket = environ.get("UNITARES_UDS_SOCKET", "~/.unitares/governance.sock")
-
-    return [
-        PreflightSpec(
-            "governance-mcp",
-            governance_plist,
-            [f"{mcp_deploy}/src/mcp_server.py"],
-            require_exists=True,
-            require_env_keys=["DB_POSTGRES_URL"],
-        ),
-        PreflightSpec(
-            "sentinel-beam",
-            environ.get(
-                "UNITARES_SENTINEL_PLIST",
-                "~/Library/LaunchAgents/com.unitares.sentinel-beam.plist",
-            ),
-            [unitares_deploy],
-            allow_env="UNITARES_SENTINEL_ALLOW_DEV",
-            check_sentinel_plist=True,
-            governance_plist=governance_plist,
-            uds_socket=uds_socket,
-        ),
-        PreflightSpec(
-            "gateway-mcp",
-            environ.get(
-                "UNITARES_GATEWAY_PLIST",
-                "~/Library/LaunchAgents/com.unitares.gateway-mcp.plist",
-            ),
-            [f"{unitares_deploy}/src/gateway_server.py"],
-            allow_env="UNITARES_GATEWAY_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "lease-plane",
-            environ.get(
-                "UNITARES_LEASE_PLANE_PLIST",
-                "~/Library/LaunchAgents/com.unitares.lease-plane.plist",
-            ),
-            [lease_plane_deploy],
-            allow_env="UNITARES_LEASE_PLANE_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "wave3a-handlers",
-            environ.get(
-                "UNITARES_WAVE3A_PLIST",
-                "~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist",
-            ),
-            [unitares_deploy],
-            allow_env="UNITARES_WAVE3A_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "dialectic-live",
-            environ.get(
-                "UNITARES_DIALECTIC_LIVE_PLIST",
-                "~/Library/LaunchAgents/com.unitares.dialectic-live.plist",
-            ),
-            [unitares_deploy],
-            allow_env="UNITARES_DIALECTIC_LIVE_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "agent-orchestrator",
-            environ.get(
-                "UNITARES_ORCHESTRATOR_PLIST",
-                "~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist",
-            ),
-            [f"{orchestrator_deploy}/elixir/agent_orchestrator"],
-            require_exists=True,
-            allow_env="UNITARES_ORCHESTRATOR_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "discord-bridge",
-            environ.get(
-                "BRIDGE_PLIST",
-                "~/Library/LaunchAgents/com.unitares.discord-bridge.plist",
-            ),
-            [f"{bridge_deploy}/.venv/bin/python3"],
-            allow_env="BRIDGE_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "openai-gov-proxy",
-            environ.get(
-                "OPENAI_GOV_PROXY_PLIST",
-                "~/Library/LaunchAgents/com.unitares.openai-governance-proxy.plist",
-            ),
-            [
-                f"{host_adapter_deploy}/.venv/bin/python3",
-                f"{host_adapter_deploy}/src",
-            ],
-        ),
-        PreflightSpec(
-            "dispatch-beam",
-            environ.get(
-                "DISPATCH_PLIST",
-                "~/Library/LaunchAgents/com.cirwel.dispatch-beam.plist",
-            ),
-            [dispatch_deploy],
-            allow_env="DISPATCH_ALLOW_DEV",
-        ),
-        PreflightSpec(
-            "dispatch-beam-codex",
-            environ.get(
-                "DISPATCH_CODEX_PLIST",
-                "~/Library/LaunchAgents/com.cirwel.dispatch-beam-codex.plist",
-            ),
-            [dispatch_deploy],
-            allow_env="DISPATCH_ALLOW_DEV",
-        ),
-    ]
+_PREFLIGHT_FIELDS = {
+    "service", "plist", "needles", "require_exists", "allow_env", "require_env_keys",
+    "check_governance_bearer", "check_sentinel_plist", "governance_plist", "uds_socket",
+}
+DEFAULT_PREFLIGHTS: List[PreflightSpec] = []
 
 
-_BUILTIN_PREFLIGHTS: List[PreflightSpec] = default_preflights()
-DEFAULT_PREFLIGHTS: List[PreflightSpec] = _BUILTIN_PREFLIGHTS
+def configured_preflights() -> List[PreflightSpec]:
+    """Read the deployment's preflight list; an unset configuration selects none.
+
+    ``UNITARES_DEPLOY_PREFLIGHTS`` names a JSON array of objects with
+    ``PreflightSpec``'s fields. Which services a host runs, and where their
+    plists and checkouts live, is deployment configuration, not shipped code."""
+    path = os.environ.get("UNITARES_DEPLOY_PREFLIGHTS", "")
+    if not path:
+        return DEFAULT_PREFLIGHTS
+    values = json.loads(Path(path).read_text())
+    if not isinstance(values, list):
+        raise ValueError("deploy preflights must be a JSON array")
+    specs = []
+    services = set()
+    for item in values:
+        if not isinstance(item, dict) or set(item) - _PREFLIGHT_FIELDS:
+            raise ValueError("unexpected deploy preflight fields")
+        if any(not isinstance(item.get(key), str) or not item[key] for key in ("service", "plist")):
+            raise ValueError("deploy preflights require service and plist")
+        if item["service"] in services:
+            raise ValueError("deploy preflight services must be unique")
+        if not Path(os.path.expanduser(item["plist"])).is_absolute():
+            raise ValueError("deploy preflight plist paths must be absolute")
+        for key in ("needles", "require_env_keys"):
+            if key in item and (not isinstance(item[key], list)
+                                or not all(isinstance(v, str) and v for v in item[key])):
+                raise ValueError(f"{key} must be a list of strings")
+        for key in ("require_exists", "check_governance_bearer", "check_sentinel_plist"):
+            if key in item and not isinstance(item[key], bool):
+                raise ValueError(f"{key} must be boolean")
+        for key in ("allow_env", "governance_plist", "uds_socket"):
+            if item.get(key) is not None and not isinstance(item[key], str):
+                raise ValueError(f"{key} must be a string or null")
+        services.add(item["service"])
+        fields = {k: v for k, v in item.items() if k not in ("service", "plist", "needles")}
+        specs.append(PreflightSpec(item["service"], item["plist"], item.get("needles", []), **fields))
+    return specs
 
 
 # ---------------------------------------------------------------------------
@@ -793,21 +722,11 @@ class Doctor:
                  io: Optional[Dict[str, Callable[..., Any]]] = None,
                  dry_run: bool = False,
                  preflights: Optional[List[PreflightSpec]] = None):
-        self.surfaces = surfaces if surfaces is not None else DEFAULT_SURFACES
+        self.surfaces = surfaces if surfaces is not None else configured_surfaces()
         if preflights is not None:
             self.preflights = preflights
-        elif (
-            surfaces is None
-            and DEFAULT_SURFACES is _BUILTIN_SURFACES
-            and (io is None or "sentinel_plist_check" in io)
-        ):
-            self.preflights = (
-                default_preflights()
-                if DEFAULT_PREFLIGHTS is _BUILTIN_PREFLIGHTS
-                else DEFAULT_PREFLIGHTS
-            )
         else:
-            self.preflights = []
+            self.preflights = configured_preflights() if surfaces is None else []
         self.io = {**DEFAULT_IO, **(io or {})}
         self.dry_run = dry_run
         self.state = self._load_state()
@@ -836,6 +755,9 @@ class Doctor:
             return hashlib.sha256("|".join(d.fingerprint_parts).encode()).hexdigest()[:16]
 
     def run(self) -> int:
+        if not self.surfaces and not self.preflights:
+            log("no deployment surfaces or preflights configured; no checks or resolutions performed")
+            return 2
         open_findings: Dict[str, Any] = self.state.setdefault("open", {})
         seen: set[str] = set()
         drift_count = 0
@@ -962,7 +884,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="diagnose and print; post no findings, write no state")
     args = parser.parse_args()
-    return Doctor(dry_run=args.dry_run).run()
+    try:
+        return Doctor(dry_run=args.dry_run).run()
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":

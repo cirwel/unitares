@@ -21,10 +21,10 @@
           > ~/Library/LaunchAgents/com.unitares.bridge-liveness-watchdog.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.bridge-liveness-watchdog.plist
 
-    The watchdog reads UNITARES_HTTP_API_TOKEN from the secrets env file
-    ($UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env, legacy
-    ~/.config/cirwel/secrets.env still read) itself, so no secret is placed
-    in this plist.
+    Supply UNITARES_HTTP_API_TOKEN in the service environment, or set
+    UNITARES_SECRETS_ENV to an absolute, readable env file that contains it.
+    The watchdog loads only that explicitly selected file; keep secrets out
+    of this template.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

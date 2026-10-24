@@ -305,3 +305,11 @@ def test_unresolvable_base_ref_fails(root: Path):
 
 def test_init_refuses_to_overwrite(root: Path):
     assert mod.init(root) == 1
+
+
+def test_reference_routes_discovered_without_core_fleet_table(tmp_path):
+    from scripts.dev.check_component_boundaries import route_packs
+    path = tmp_path / "agents/example/routes.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Installed by an explicit deployment manifest\n")
+    assert route_packs(tmp_path) == {"agents/example/routes.py"}

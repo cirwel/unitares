@@ -521,6 +521,11 @@ class TestGetDiscoveryDetails:
         assert data["success"] is True
         assert "response_chain" in data
         assert data["response_chain"]["count"] == 2
+        assert data["response_chain"]["limit"] == 100
+        assert data["response_chain"]["offset"] == 0
+        assert data["response_chain"]["has_more"] is False
+        assert data["response_chain"]["next_offset"] is None
+        assert data["response_chain"]["truncated"] is False
 
     @pytest.mark.asyncio
     async def test_get_details_null_chain_depth_uses_default(self, patch_common):
@@ -544,6 +549,121 @@ class TestGetDiscoveryDetails:
         mock_graph.get_response_chain.assert_awaited_once_with(
             disc.id,
             max_depth=10,
+            limit=100,
+            offset=0,
+            lookahead=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_bounds_and_pagination(self, patch_common):
+        """Chain parameters are capped before reaching the graph backend."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        disc = make_discovery(id="2026-01-01T00:00:00.000000", details="Details")
+        mock_graph.get_discovery = AsyncMock(return_value=disc)
+        mock_graph.get_response_chain = AsyncMock(return_value=[disc])
+
+        result = await handle_get_discovery_details({
+            "discovery_id": disc.id,
+            "include_response_chain": True,
+            "max_chain_depth": 999,
+            "response_chain_limit": 999,
+            "response_chain_offset": 99_999,
+        })
+
+        data = parse_result(result)
+        assert data["response_chain"]["max_depth"] == 32
+        assert data["response_chain"]["limit"] == 200
+        assert data["response_chain"]["offset"] == 10_000
+        mock_graph.get_response_chain.assert_awaited_once_with(
+            disc.id,
+            max_depth=32,
+            limit=200,
+            offset=10_000,
+            lookahead=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_reports_next_page(self, patch_common):
+        """One-row lookahead distinguishes a full page from a terminal page."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        root = make_discovery(id="2026-01-01T00:00:00.000000", details="Details")
+        reply = make_discovery(id="2026-01-02T00:00:00.000000", summary="Response")
+        sentinel = make_discovery(id="2026-01-03T00:00:00.000000", summary="More")
+        mock_graph.get_discovery = AsyncMock(return_value=root)
+        mock_graph.get_response_chain = AsyncMock(return_value=[root, reply, sentinel])
+
+        result = await handle_get_discovery_details({
+            "discovery_id": root.id,
+            "include_response_chain": True,
+            "response_chain_limit": 2,
+            "response_chain_offset": 4,
+        })
+
+        chain = parse_result(result)["response_chain"]
+        assert chain["count"] == 2
+        assert chain["has_more"] is True
+        assert chain["next_offset"] == 6
+        assert chain["truncated"] is False
+        assert [row["id"] for row in chain["discoveries"]] == [root.id, reply.id]
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_reports_offset_ceiling(self, patch_common):
+        """A caller never receives a next offset that schema validation rejects."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        root = make_discovery(id="2026-01-01T00:00:00.000000", details="Details")
+        sentinel = make_discovery(id="2026-01-02T00:00:00.000000", summary="More")
+        mock_graph.get_discovery = AsyncMock(return_value=root)
+        mock_graph.get_response_chain = AsyncMock(return_value=[root, sentinel])
+
+        result = await handle_get_discovery_details({
+            "discovery_id": root.id,
+            "include_response_chain": True,
+            "response_chain_limit": 1,
+            "response_chain_offset": 10_000,
+        })
+
+        chain = parse_result(result)["response_chain"]
+        assert chain["has_more"] is False
+        assert chain["next_offset"] is None
+        assert chain["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_details_response_chain_lands_exactly_on_offset_ceiling(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        rows = [
+            make_discovery(id=f"chain-{i:03d}", summary=str(i))
+            for i in range(101)
+        ]
+        root = rows[0]
+        mock_graph.get_discovery = AsyncMock(return_value=root)
+        mock_graph.get_response_chain = AsyncMock(return_value=rows)
+
+        result = await handle_get_discovery_details({
+            "discovery_id": root.id,
+            "include_response_chain": True,
+            "response_chain_limit": 150,
+            "response_chain_offset": 9_900,
+        })
+
+        chain = parse_result(result)["response_chain"]
+        assert chain["count"] == 100
+        assert chain["has_more"] is True
+        assert chain["next_offset"] == 10_000
+        assert chain["truncated"] is False
+        mock_graph.get_response_chain.assert_awaited_once_with(
+            root.id,
+            max_depth=10,
+            limit=100,
+            offset=9_900,
+            lookahead=True,
         )
 
     @pytest.mark.asyncio

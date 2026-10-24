@@ -57,8 +57,8 @@ if [[ "$APPLY_MIGRATIONS" == 1 && "$DIALECTIC_WRITERS_QUIESCED" != 1 ]]; then
   exit 2
 fi
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_LEASE_PLANE_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_LEASE_PLANE_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.lease-plane"
 PLIST="${UNITARES_LEASE_PLANE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
@@ -170,10 +170,12 @@ if [[ "$PLIST_DB_URL_PRESENT" == 1 && -z "$PLIST_DB_URL" ]]; then
 fi
 
 export HOME="$PLIST_HOME"
-SECRETS_FILE="${PLIST_SECRETS_ENV:-$PLIST_HOME/.config/unitares/secrets.env}"
-if [[ -z "$PLIST_SECRETS_ENV" && ! -f "$SECRETS_FILE" \
-      && -f "$PLIST_HOME/.config/cirwel/secrets.env" ]]; then
-  SECRETS_FILE="$PLIST_HOME/.config/cirwel/secrets.env"
+SECRETS_FILE="$PLIST_SECRETS_ENV"
+if [[ -z "$SECRETS_FILE" || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ]]; then
+  echo "[deploy] REFUSING: persisted UNITARES_SECRETS_ENV must name a readable regular file." >&2
+  echo "[deploy] Select the runtime secrets source in the service plist before deploying." >&2
+  deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
+  exit 1
 fi
 if [[ -n "$DEPLOY_AMBIENT_SECRETS_ENV" && "$DEPLOY_AMBIENT_SECRETS_ENV" != "$SECRETS_FILE" ]]; then
   echo "[deploy] REFUSING: ambient UNITARES_SECRETS_ENV is not inherited by the lease-plane LaunchAgent." >&2

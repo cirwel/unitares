@@ -1,118 +1,162 @@
-"""Opt-in route packs: HTTP routes that belong to one kind of deployment.
+"""Load explicitly configured HTTP extensions without a built-in fleet registry.
 
-The core server mounts only routes any install can use. Some routes exist
-because a deployment runs something specific: the reference residents that
-ship under ``agents/`` (their summaries and finding backlog), or a local
-automation census. Their code lives next to what they serve, not in ``src/``:
-``agents/<resident>/routes.py`` and ``scripts/ops/automation_census_route.py``.
-This module names each pack's routes and imports that code only when
-``UNITARES_ROUTE_PACKS`` names the pack (comma-separated). Unset, which is the
-shipped default, imports and mounts none.
-
-Packs are named for what they serve, never for a resident: which residents a
-deployment runs is configuration, and shipped source does not branch on a
-resident name (see the fleet-neutrality rules in AGENTS.md).
-
-Every pack route is credential-gated like the rest of the REST surface
-(tests/test_http_route_auth_parity.py resolves this table and checks each
-handler).
+UNITARES_ROUTE_PACKS selects pack names. UNITARES_ROUTE_PACKS_FILE names a
+deployment-owned JSON manifest describing those packs and their installed
+handlers. Neither setting is enabled by default. A manifest is trusted local
+deployment configuration, never request input: its handlers execute server code.
+Every mounted handler passes the existing REST credential gate before execution.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
+import inspect
+import json
 import os
 from pathlib import Path
+import re
+import sys
 from typing import Callable
 
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
 ENV_VAR = "UNITARES_ROUTE_PACKS"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_ENV = "UNITARES_ROUTE_PACKS_FILE"
+_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
-# pack -> [(path, "module:attr" or "relative/file.py:attr", methods)]
-PACK_SPECS: dict[str, list[tuple[str, str, list[str]]]] = {
-    # The reference residents' read surfaces. Consumers are this deployment's
-    # own tooling: the monitoring resident's backlog calls and a dashboard
-    # extension.
-    "reference-residents": [
-        ("/v1/sentinel/backlog", "agents.sentinel.routes:http_sentinel_backlog", ["GET"]),
-        ("/v1/sentinel/summary", "agents.sentinel.routes:http_sentinel_summary", ["GET"]),
-        ("/v1/watcher/summary", "agents.watcher.routes:http_watcher_summary", ["GET"]),
-        ("/v1/vigil/summary", "agents.vigil.routes:http_vigil_summary", ["GET"]),
-    ],
-    # A census of one machine's scheduled jobs, read from a snapshot file the
-    # `unitares-automations` CLI writes (UNITARES_AUTOMATION_CENSUS_PATH). The
-    # route file sits beside that tool in scripts/ops/, outside the package.
-    "automation-census": [
-        ("/api/automations", "scripts/ops/automation_census_route.py:http_automations", ["GET"]),
-    ],
-}
+
+def load_pack_specs(manifest: str | Path | None = None) -> dict:
+    """Read and validate the complete manifest before importing any handler."""
+    selected = manifest if manifest is not None else os.getenv(MANIFEST_ENV, "")
+    if not selected or not str(selected).strip():
+        return {}
+    path = Path(selected).expanduser().resolve()
+    document = json.loads(path.read_text())
+    if not isinstance(document, dict) or document.get("schema") != "unitares.route-packs.v1":
+        raise ValueError("route-pack manifest needs schema unitares.route-packs.v1")
+    packs = document.get("packs")
+    if not isinstance(packs, dict):
+        raise ValueError("route-pack manifest needs a packs object")
+    result = {}
+    for name, entries in packs.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            raise ValueError("invalid route-pack name")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(f"route pack {name!r} needs a nonempty route list")
+        routes = []
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {"path", "handler", "methods"}:
+                raise ValueError(f"invalid route specification in {name!r}")
+            route, ref, methods = entry["path"], entry["handler"], entry["methods"]
+            if not isinstance(route, str) or not route.startswith("/") or any(c.isspace() for c in route):
+                raise ValueError(f"invalid route path in {name!r}")
+            if not isinstance(ref, str) or ":" not in ref:
+                raise ValueError(f"invalid handler reference in {name!r}")
+            target, attr = ref.rsplit(":", 1)
+            if not target or not attr.isidentifier():
+                raise ValueError(f"invalid handler reference in {name!r}")
+            if target.endswith(".py"):
+                target = str((path.parent / target).resolve())
+            elif not all(part.isidentifier() for part in target.split(".")):
+                raise ValueError(f"invalid handler module in {name!r}")
+            if (not isinstance(methods, list) or not methods
+                    or any(not isinstance(m, str) or m not in _METHODS for m in methods)):
+                raise ValueError(f"invalid methods in {name!r}")
+            routes.append((route, f"{target}:{attr}", list(dict.fromkeys(methods))))
+        result[name] = routes
+    return result
 
 
 def resolve_handler(ref: str) -> Callable:
-    """Import ``module:attr`` or ``relative/path.py:attr`` (from the repo root)."""
+    """Import an installed module or a manifest-resolved Python file."""
     target, attr = ref.rsplit(":", 1)
     if target.endswith(".py"):
-        path = _REPO_ROOT / target
-        spec = importlib.util.spec_from_file_location(
-            "unitares_route_pack_" + path.stem, path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"cannot load {path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        path = Path(target)
+        key = hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        name = f"unitares_route_pack_{key}"
+        module = sys.modules.get(name)
+        if module is None:
+            spec = importlib.util.spec_from_file_location(name, path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"cannot load {path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            try:
+                spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop(name, None)
+                raise
     else:
         module = importlib.import_module(target)
-    return getattr(module, attr)
+    handler = getattr(module, attr)
+    if not inspect.iscoroutinefunction(handler):
+        raise TypeError(f"route-pack handler must be an async function: {ref}")
+    return handler
 
 
-def pack_routes(names=None) -> dict[str, list[Route]]:
-    """Routes for the named packs (default: every pack), handlers imported."""
-    wanted = PACK_SPECS if names is None else {n: PACK_SPECS[n] for n in names if n in PACK_SPECS}
+def _credential_gated(handler: Callable) -> Callable:
+    async def endpoint(request):
+        from src.http_routes import access
+
+        if not access._check_http_auth(request, http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN")):
+            return access._http_unauthorized()
+        return await handler(request)
+
+    return endpoint
+
+
+def pack_routes(names=None, *, specs=None) -> dict[str, list[Route]]:
+    """Resolve selected packs from an explicit manifest, with the REST gate."""
+    available = load_pack_specs() if specs is None else specs
+    wanted = available if names is None else {n: available[n] for n in names if n in available}
     return {
-        name: [Route(path, resolve_handler(ref), methods=methods) for path, ref, methods in specs]
-        for name, specs in wanted.items()
+        name: [Route(path, _credential_gated(resolve_handler(ref)), methods=methods)
+               for path, ref, methods in entries]
+        for name, entries in wanted.items()
     }
 
 
 def enabled_packs(raw: str | None = None) -> list[str]:
-    """Pack names from UNITARES_ROUTE_PACKS, in order, deduplicated.
-
-    Unknown names are returned too, so the caller can report them: a typo
-    should say so at startup, not silently mount nothing.
-    """
+    """Selected pack names in order, deduplicated; unset selects none."""
     value = os.getenv(ENV_VAR, "") if raw is None else raw
-    out: list[str] = []
-    for part in value.split(","):
-        name = part.strip()
-        if name and name not in out:
-            out.append(name)
-    return out
+    return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
 
 
 def register_route_packs(app, *, logger=None, raw: str | None = None) -> list[str]:
-    """Append the enabled packs' routes to ``app``; return the mounted names.
-
-    A pack whose code cannot be imported (e.g. scripts/ops is absent from a
-    container image) is logged and skipped; the server still starts.
-    """
-    mounted: list[str] = []
-    for name in enabled_packs(raw):
-        if name not in PACK_SPECS:
+    """Mount configured extensions; report unavailable packs without mounting them."""
+    names = enabled_packs(raw)
+    if not names:
+        return []
+    try:
+        specs = load_pack_specs()
+    except (OSError, ValueError) as exc:
+        if logger is not None:
+            logger.error("route-pack manifest could not be loaded: %s", exc)
+        return []
+    mounted = []
+    occupied = {(r.path, method) for r in app.routes if isinstance(r, Route)
+                for method in (r.methods or ())}
+    mounts = tuple(r.path for r in app.routes if isinstance(r, Mount))
+    for name in names:
+        if name not in specs:
             if logger is not None:
-                logger.warning(
-                    "%s names unknown route pack %r (known: %s)",
-                    ENV_VAR, name, ", ".join(sorted(PACK_SPECS)),
-                )
+                logger.warning("%s names unknown route pack %r; configure %s", ENV_VAR, name, MANIFEST_ENV)
             continue
         try:
-            routes = pack_routes([name])[name]
-        except Exception as exc:  # noqa: BLE001 — a missing pack must not stop the server
+            routes = pack_routes([name], specs=specs)[name]
+            proposed = [(r.path, method) for r in routes for method in (r.methods or ())]
+            if len(set(proposed)) != len(proposed) or occupied.intersection(proposed):
+                raise ValueError("extension routes collide with an existing route")
+            if any(r.path == m or r.path.startswith(m.rstrip("/") + "/") for r in routes for m in mounts):
+                raise ValueError("extension routes fall under an existing mount")
+        except Exception as exc:  # A missing optional extension does not stop core startup.
             if logger is not None:
                 logger.error("route pack %r could not be loaded: %s", name, exc)
             continue
         app.routes.extend(routes)
+        occupied.update(proposed)
         mounted.append(name)
     if logger is not None and mounted:
         logger.info("Route packs mounted: %s", ", ".join(mounted))

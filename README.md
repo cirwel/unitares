@@ -41,8 +41,8 @@ agent, or you, can read it back and see where each piece came from.
 
 Two more pieces sit around the record. **Runtime policy**: each check-in returns
 `proceed`, `guide`, or `pause`, with a reason; a pause refuses that process's
-check-ins and new findings until review or recovery lifts it. **Second
-opinions**: `consult` asks another connected model (Claude, Codex, Antigravity,
+check-ins and new findings until review or recovery lifts it or it expires.
+**Second opinions**: `consult` asks another connected model (Claude, Codex, Antigravity,
 or local Ollama) and keeps the answer with the task.
 
 ## See it
@@ -62,7 +62,7 @@ record_result  {"outcome_type": "test_failed", ...}
 # Agent B (Claude Code), in its own session, later
 start_session  {"force_new": true}                                     -> agent B's id
 store_finding  {"summary": "upload retry fails on clock skew", ...}     -> finding b
-use_tool       {"tool_name": "knowledge", "arguments": {"action": "supersede", "discovery_id": "<b>", "supersedes_id": "<a>"}}
+use_tool       {"tool_name": "knowledge", "arguments": {"action": "supersede", "discovery_id": "<b>", "supersedes_id": "<a>"}, ...}
 
 # Agent C (Hermes Agent), after A's restart
 search_shared_memory {"query": "upload retry test"}   -> finding a (superseded, points to b), finding b
@@ -75,17 +75,15 @@ session start points it there. A simpler handoff, call by call: the
 
 ## Install
 
-With Git, curl, and Docker Compose installed, one command starts the latest
-published release of the local stack (the server, PostgreSQL with AGE and
-pgvector, Redis, and the coordination plane; the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the first two):
+**Docker Compose**, on any platform: with Git, curl, and Docker Compose installed, one command starts the latest published release of the local stack (the server, PostgreSQL with AGE and pgvector, Redis, and the coordination plane; the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the first two):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
 
-Then connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard
-at `http://localhost:8767/dashboard`. Ports, volumes, models, and upgrades:
-[Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
+**Homebrew preview**, on an Apple Silicon Mac without Docker: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the same services natively. Installing the package does not provision the database: follow the tap's [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup), then run `unitares start`. Upgrades follow its [backup-and-migrate steps](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
+
+Either way, connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard at `http://localhost:8767/dashboard`. Pick one path; they keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). No model connection is configured by default. Ports, volumes, models, and Docker upgrades: [Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
 
 **Connect your agents** ([Integrating agents](docs/manual/04-integrating-agents.md)):
 - **Claude Code and Codex:** [`unitares-governance-plugin`](https://github.com/cirwel/unitares-governance-plugin) wires MCP, lifecycle hooks, and edit leases.
@@ -105,7 +103,7 @@ repository or session.
 Not a sandbox, an output validator, or a hosted agent platform. It runs beside
 your evals and guardrails and replaces neither. It does not run the agent's
 loop: the plugin's hooks and edit leases coordinate around the agent's work,
-and a pause refuses only writes to the record.
+and a pause refuses only that process's check-ins and new findings.
 
 ## How it fits together
 

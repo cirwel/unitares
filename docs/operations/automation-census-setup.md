@@ -101,10 +101,25 @@ from the census.
    ```
    Schedule it (cron / systemd timer / launchd) so the registry stays fresh; the
    dashboard shows the snapshot age and flags it stale.
-4. Mount the endpoint: add `automation-census` to `UNITARES_ROUTE_PACKS` in the
-   governance server's environment (e.g. `UNITARES_ROUTE_PACKS=automation-census`).
-   The shipped default mounts no route packs, so without this `/api/automations`
-   answers 404. See "Route packs" in `docs/operations/resident-roster.md`.
+4. Mount the endpoint. The shipped default mounts no route packs, so without
+   this step `/api/automations` answers 404. Declare the handler in a route-pack
+   manifest, for example `~/.config/unitares/route-packs.json`:
+   ```json
+   {
+     "schema": "unitares.route-packs.v1",
+     "packs": {
+       "automation-census": [
+         {"path": "/api/automations",
+          "handler": "/path/to/unitares/scripts/ops/automation_census_route.py:http_automations",
+          "methods": ["GET"]}
+       ]
+     }
+   }
+   ```
+   Then set both `UNITARES_ROUTE_PACKS_FILE` (the manifest's path) and
+   `UNITARES_ROUTE_PACKS=automation-census` in the governance server's
+   environment. A pack name with no manifest entry mounts nothing. See "Route
+   packs" in `docs/operations/resident-roster.md`.
    The endpoint (`/api/automations`) serves `last.json` from
    `$UNITARES_AUTOMATION_STATE_DIR` when that is set in the governance server's
    environment, else from `~/.local/state/unitares-automations/last.json`. Set

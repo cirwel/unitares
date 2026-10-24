@@ -10,10 +10,10 @@ defmodule DialecticLive.Application do
     children =
       [
         DialecticLiveWeb.Telemetry,
-        {DNSCluster, query: Application.get_env(:dialectic_live, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: DialecticLive.PubSub}
       ] ++
         firehose_child() ++
+        timeline_children() ++
         [
           # Start to serve requests, typically the last entry
           DialecticLiveWeb.Endpoint
@@ -30,6 +30,31 @@ defmodule DialecticLive.Application do
   defp firehose_child do
     if Keyword.get(Application.get_env(:dialectic_live, :governance, []), :start_firehose, false) do
       [DialecticLive.Firehose]
+    else
+      []
+    end
+  end
+
+  # The Timeline pane's feed, its fetch tasks and its ETS heir. Gated so tests
+  # start their own instances with start_supervised. The feed makes no request
+  # until a Timeline LiveView subscribes.
+  defp timeline_children do
+    if Keyword.get(
+         Application.get_env(:dialectic_live, :timeline, []),
+         :start_timeline_feed,
+         false
+       ) do
+      firehose =
+        if firehose_child() == [], do: nil, else: DialecticLive.Firehose
+
+      [
+        DialecticLive.TimelineTableHeir,
+        {Task.Supervisor, name: DialecticLive.TaskSupervisor},
+        {DialecticLive.TimelineFeed,
+         firehose: firehose,
+         reread_ms:
+           Keyword.get(Application.get_env(:dialectic_live, :timeline, []), :reread_ms, 60_000)}
+      ]
     else
       []
     end

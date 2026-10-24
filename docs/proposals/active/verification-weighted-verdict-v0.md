@@ -3,9 +3,11 @@
 **Status:** v0 — **not enabled.** Phase 1 (detector) + Phase 1.5 (local-model backend) +
 Phase 2 (actuator wiring) have landed, but the wiring is behind a **default-off** flag
 (`GOVERNANCE_VERIFICATION_FLOOR`). The draft can merge as inert scaffolding; **enabling
-the flag in a live deployment is the gated act.** What satisfies that gate is
-open — see D2 in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md). For the
-Φ→telemetry / `resolve_verdict_risk` owners.
+the flag in a live deployment is the gated act:** under D2 option C in
+[`open-decisions-packet-v0.md`](open-decisions-packet-v0.md) (disposed 2026-10-22),
+the review phrase in `continuous-verdict-blending-v0.md` names the agent-run
+merge-time review, while live actuation requires explicit operator sign-off in
+addition to the false-positive corpus pass.
 **Author:** follow-up to the self-report-dependence worked example, 2026-06-28.
 **Why now:** the worked example
 ([`docs/operations/self-report-verdict-dependence-2026-06-28.md`](../../operations/self-report-verdict-dependence-2026-06-28.md))
@@ -194,9 +196,11 @@ record — the pronoun-free stratum, and unscored-is-not-cleared.
 **Still required before the flag is enabled in any live deployment** (the draft can
 merge as inert scaffolding, but enabling is the deliberate, gated act):
 
-- Whatever satisfies the enable gate `continuous-verdict-blending-v0.md` states for
-  verdict-path changes. What that gate requires — one referent or two — is open; see
-  D2 in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md).
+- Explicit operator sign-off (D2 option C in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md),
+  disposed 2026-10-22: the review phrase in `continuous-verdict-blending-v0.md`
+  names the agent-run merge-time review, whereas enabling `GOVERNANCE_VERIFICATION_FLOOR`
+  in a live deployment changes verdicts and can pause agents, so it requires
+  explicit operator sign-off).
 - A real false-positive-regression pass on a larger benign-coding corpus (the bundled
   eval corpus is small by design). Live shadow traffic is now recorded against a
   denominator and can serve as that corpus — see Phase 2.5. Recording it is not running
@@ -223,9 +227,9 @@ merge as inert scaffolding, but enabling is the deliberate, gated act):
 - [x] (Phase 2.5) the shadow's durable sink + denominator + reader
   (`src/verification_floor_shadow.py`, `scripts/analysis/verification_floor_shadow_read.py`),
   closing issue #2169 — the shadow ran default-on and persisted nowhere.
-- [ ] (Phase 2 enable) the enable gate `continuous-verdict-blending-v0.md` states, once
-  D2 in `open-decisions-packet-v0.md` is decided, plus a larger
-  false-positive-regression corpus, before the flag is turned on in any live deployment.
+- [ ] (Phase 2 enable) explicit operator sign-off (D2 option C in
+  `open-decisions-packet-v0.md`, disposed 2026-10-22) plus a larger
+  false-positive-regression corpus pass, before the flag is turned on in any live deployment.
 
 ## Relation to neighboring work
 

@@ -9,10 +9,12 @@ traffic *is* that corpus; this script reads what the sink
 recorded and reports the rate.
 
 Measurement only. This script changes no flag, threshold, verdict or weight, and
-it does not recommend enabling anything. Enabling the floor stays gated by what
-`continuous-verdict-blending-v0.md` states for verdict-path changes — what that
-requires is open as D2 in `open-decisions-packet-v0.md`; a number here discharges
-one clause of one bullet of that gate, and nothing else.
+it does not recommend enabling anything. Enabling `GOVERNANCE_VERIFICATION_FLOOR`
+in a live deployment requires explicit operator sign-off in addition to this
+corpus pass (D2 option C in `docs/proposals/active/open-decisions-packet-v0.md`,
+disposed 2026-10-22: the review phrase in `continuous-verdict-blending-v0.md`
+names the agent-run merge-time review, not live actuation); a number here
+discharges only the corpus clause of that gate.
 
 What it refuses to do
 ---------------------
@@ -327,8 +329,9 @@ def render(report: Dict[str, Any]) -> str:
     lines.append(
         "A candidate false positive is a candidate. Read its `matches` before "
         "calling it wrong. This report discharges the corpus clause of the enable "
-        "gate and nothing else; what the rest of that gate requires is open as D2 "
-        "in docs/proposals/active/open-decisions-packet-v0.md."
+        "gate and nothing else; enabling GOVERNANCE_VERIFICATION_FLOOR in a live "
+        "deployment still requires explicit operator sign-off (D2 option C in "
+        "docs/proposals/active/open-decisions-packet-v0.md, disposed 2026-10-22)."
     )
     return "\n".join(lines)
 

@@ -23,9 +23,18 @@ class _Req:
         ip: str = "10.1.2.3",
         auth: str | None = None,
         dashboard_session: dict | None = None,
+        method: str = "GET",
+        origin: str | None = None,
+        csrf: str | None = None,
     ):
         self.headers = {"authorization": auth} if auth is not None else {}
+        if origin is not None:
+            self.headers["origin"] = origin
+        if csrf is not None:
+            self.headers["x-unitares-csrf"] = csrf
         self.client = type("C", (), {"host": ip})()
+        self.method = method
+        self.scope = {}
         self.state = type("State", (), {})()
         if dashboard_session is not None:
             self.state.dashboard_session = dashboard_session
@@ -87,6 +96,30 @@ def test_local_untrusted_valid_dashboard_session_is_accepted(monkeypatch):
     assert _check_http_auth(req, http_api_token=None) is True
 
 
+def test_local_untrusted_cookie_mutation_requires_exact_csrf_proof(monkeypatch):
+    from src.http_routes import access
+
+    monkeypatch.setattr(
+        access, "DASHBOARD_EXPECTED_ORIGIN", "https://gov.example.org", raising=False
+    )
+    refused = _Req(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        method="POST",
+        origin="https://sibling.example.org",
+        csrf="1",
+    )
+    accepted = _Req(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        method="POST",
+        origin="https://gov.example.org",
+        csrf="1",
+    )
+    assert _check_http_auth(refused, http_api_token=None) is False
+    assert _check_http_auth(accepted, http_api_token=None) is True
+
+
 def test_strict_posture_accepts_a_validated_dashboard_session(monkeypatch):
     """Reversed by operator decision, 2026-08-28.
 
@@ -100,6 +133,61 @@ def test_strict_posture_accepts_a_validated_dashboard_session(monkeypatch):
     """
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
     req = _Req(ip="8.8.8.8", dashboard_session={"operator_label": "operator"})
+    assert _check_http_auth(req, http_api_token=None) is True
+
+
+@pytest.mark.parametrize(
+    "origin,csrf",
+    [
+        (None, None),
+        ("https://gov.example.org", None),
+        ("https://sibling.example.org", "1"),
+        ("https://gov.example.org", "0"),
+    ],
+)
+def test_strict_posture_rejects_cookie_mutation_without_exact_csrf_proof(
+    monkeypatch, origin, csrf
+):
+    from src.http_routes import access
+
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    monkeypatch.setattr(
+        access, "DASHBOARD_EXPECTED_ORIGIN", "https://gov.example.org", raising=False
+    )
+    req = _Req(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        method="POST",
+        origin=origin,
+        csrf=csrf,
+    )
+    assert _check_http_auth(req, http_api_token=None) is False
+
+
+def test_strict_posture_accepts_cookie_mutation_with_exact_csrf_proof(monkeypatch):
+    from src.http_routes import access
+
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    monkeypatch.setattr(
+        access, "DASHBOARD_EXPECTED_ORIGIN", "https://gov.example.org", raising=False
+    )
+    req = _Req(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        method="POST",
+        origin="https://gov.example.org",
+        csrf="1",
+    )
+    assert _check_http_auth(req, http_api_token=None) is True
+
+
+def test_bearer_mutation_does_not_require_browser_csrf_headers(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    req = _Req(
+        ip="8.8.8.8",
+        auth="Bearer hosted-tok",
+        method="POST",
+    )
     assert _check_http_auth(req, http_api_token=None) is True
 
 

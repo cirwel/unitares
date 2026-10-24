@@ -54,9 +54,7 @@ every step."* The generalisation is one step further out — **the tree is not t
 deployment**, and a comment, a template, a default, or a static constant is not
 a reading of the running system.
 
-Three other findings that day had the same shape — tagged explicitly below,
-because getting this tagging right is exactly the discipline the rule asks
-for, and the first draft of this table got one entry wrong:
+Three other findings from the same audit are tagged below by source:
 
 - **Tree, refuted by system (UNVERIFIED here).** A plist comment said the
   process is a jetsam target. The system reading: 9h 3m uptime across every
@@ -67,20 +65,14 @@ for, and the first draft of this table got one entry wrong:
   inside the SDK's own 405-rejection function, and `stateless=True` means
   `mcp_session_id` is always `None`, so `DELETE` 405s unconditionally. Nothing
   here required a live probe; a closer reading of the same source was enough.
-  This row does not fit a tree-vs-system frame at all — both readings are
-  tree — which is itself worth naming: not every correction needs a system
-  reading, and forcing one into this table would have been the same
-  misclassification in the other direction.
+  This row does not fit a tree-vs-system frame: not every correction needs a
+  system reading.
 - **System, qualified by inference, not by a second system reading
   (UNVERIFIED here).** `launchctl` showed the tunnel `runs = 1` — that count
   is itself a system reading, not a tree claim. But reading it as settling
   whether edge-connection churn occurred is an **inference** layered on top
   of that measurement, not a second measurement; `runs = 1` is process-level
   and says nothing about what happened on the connections the process held.
-  The first draft of this document placed both halves of this row backwards
-  — the tunnel count under "tree" and the inference under "what the system
-  said" — which is the exact error this document exists to prevent,
-  reproduced in its own worked example.
 
 ## What this does not license
 

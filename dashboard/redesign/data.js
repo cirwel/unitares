@@ -79,6 +79,10 @@
   async function authFetch(path, opts) {
     opts = opts || {};
     const headers = Object.assign({}, opts.headers);
+    const method = (opts.method || "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+      headers["X-Unitares-Csrf"] = "1";
+    }
     const t = token();
     if (t) headers["Authorization"] = "Bearer " + t;
     const r = await fetch(path, Object.assign({}, opts, {
@@ -460,6 +464,38 @@
       }, () => {
         const k = S().knowledgeFlow || {};
         return { graphAvailable: k.graphAvailable !== false, flows: k.flows || [] };
+      });
+    },
+
+    // Every agent's events in one window (/v1/timeline): check-ins, outcomes,
+    // lifecycle, knowledge writes, lineage and dialectic sessions, oldest
+    // first, plus the agents they name. An empty window is live ("nothing
+    // happened"); only a failed or malformed response falls back.
+    async timeline(opts) {
+      const o = opts || {};
+      const h = Number.isFinite(o.hours) ? Math.max(1, Math.min(168, Math.round(o.hours))) : 6;
+      const sub = o.includeSubstrate !== false;
+      // Every window asks for the server's per-kind maximum: 6h already holds
+      // more check-ins than the default 500 (portal-live-timeline-v0 §3), and a
+      // shorter window must never show fewer rows than a longer one.
+      return withFallback(async () => {
+        const j = await authFetch("/v1/timeline?hours=" + h + "&include_substrate=" + (sub ? "1" : "0") + "&limit=2000");
+        if (!j || !j.success || !Array.isArray(j.events)) return null;
+        return {
+          hours: h, window: j.window || null, events: j.events, agents: j.agents || [],
+          truncated: j.truncated || [], counts: j.counts || {}, limitPerKind: j.limit_per_kind || null,
+        };
+      }, () => {
+        // Offline: apply the window and the hook toggle to the bundled six
+        // hours, as the server would, so the controls do what they say.
+        const t = S().timeline || {};
+        const end = t.window ? Date.parse(t.window.end) : NaN;
+        const from = isNaN(end) ? -Infinity : end - h * 3600e3;
+        const events = (t.events || []).filter((e) => Date.parse(e.ts) >= from && (sub || e.authored_by !== "substrate"));
+        const counts = {};
+        events.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+        const win = isNaN(end) ? null : { start: new Date(from).toISOString(), end: t.window.end, hours: h };
+        return { hours: h, window: win, events, agents: t.agents || [], truncated: t.truncated || [], counts, limitPerKind: null };
       });
     },
 

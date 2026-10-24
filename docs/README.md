@@ -42,7 +42,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md)** — versioned, transport-neutral capability names and the boundary between tool reachability and host lifecycle integration.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
-- **[`DEPLOYMENT_SECURITY.md`](DEPLOYMENT_SECURITY.md)** — the infra/deployment counterpart: the Compose quickstart's container hardening, what's published to the host by default, and the hardening gaps that pass didn't close.
+- **[`DEPLOYMENT_SECURITY.md`](DEPLOYMENT_SECURITY.md)** — the current Compose security posture: deployment profiles, default controls, exposure requirements, verification, and known limitations.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named cross-operator blocker. The root README and the public landing page link here rather than summarizing it.
 - **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
@@ -70,8 +70,9 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 ### `install/` — installation
 
-- [`CHOOSING_INSTALLATION.md`](install/CHOOSING_INSTALLATION.md) — choose one primary installation per machine: Docker Compose (the supported path, with an opt-in [core profile](manual/02-install.md#a-smaller-stack-the-core-profile)) or native macOS; the Homebrew tap is an unpublished draft (#2964)
-- [`PLAYBOOK.md`](install/PLAYBOOK.md) — bare-metal install playbook (Homebrew Postgres, native Python). The Docker path is in the repo README and [the installation manual](manual/02-install.md#21-docker-quickstart). **Live reference** — keep this current.
+- [`CHOOSING_INSTALLATION.md`](install/CHOOSING_INSTALLATION.md) — choose one primary installation: Homebrew preview, Docker Compose (including its opt-in [core profile](manual/02-install.md#a-smaller-stack-the-core-profile)), or a source checkout.
+- [`HOMEBREW_SETUP.md`](install/HOMEBREW_SETUP.md) — published Apple Silicon Homebrew preview, private configuration, database readiness and native service control. Package install and first-time provisioning are in the [tap README](https://github.com/cirwel/homebrew-unitares).
+- [`PLAYBOOK.md`](install/PLAYBOOK.md) — advanced source-checkout install (Homebrew Postgres, manually built extensions, native Python). Docker setup is in the [installation manual](manual/02-install.md#21-docker-quickstart). **Live reference** — keep this current.
 - [`cross-machine-surface.md`](install/cross-machine-surface.md) — *point-in-time install-surface audit (2026-04-24), preserved as a record.* Inventory of machine-varying values; useful background for a cross-machine setup, but the install path itself is `PLAYBOOK.md`, not this.
 
 ### `deployment/` — hosted installation

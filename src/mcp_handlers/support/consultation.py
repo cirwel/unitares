@@ -124,37 +124,12 @@ _STANDARD_HOST_ROUTES = {
 }
 _SELECTABLE_HOST_ROUTES = {**_STANDARD_HOST_ROUTES, **_THOROUGH_HOST_ROUTES}
 
-# The consult.thorough job's order when the operator's inference hosts file
-# does not set one (docs/proposals/active/inference-hosts-config-v0.md 2.4).
-# The caller's own family is excluded from it, so every caller family gets the
-# order the earlier per-family peer table gave: Claude first wherever it is
-# eligible, which keeps the pre-Antigravity default for unknown callers.
-_DEFAULT_THOROUGH_ORDER: tuple[str, ...] = (
-    "claude:host-adapter",
-    "codex:host-adapter",
-    "antigravity:host-adapter",
-)
-
-
-# The default order per caller family, kept as a read-only view for readers of
-# the earlier peer table (open work such as #2792 asserts against it). It is
-# derived from _DEFAULT_THOROUGH_ORDER and the shared family vocabulary, and
-# routing never reads it: _thorough_plan does, so an operator's job applies.
-_THOROUGH_PEERS: dict[str | None, tuple[str, ...]] = {
-    family: tuple(
-        host_id for host_id in _DEFAULT_THOROUGH_ORDER
-        if inference_config.BUILTIN_DEFAULT_FAMILY[host_id] != family
-    )
-    for family in ("anthropic", "openai", "google")
-}
-_THOROUGH_PEERS[None] = _DEFAULT_THOROUGH_ORDER
-
-
 @dataclass(frozen=True, slots=True)
 class ThoroughPlan:
-    """The consult.thorough order for one caller, before availability.
+    """The consult.thorough candidates for one caller.
 
-    ``peers`` keeps the operator's order with only static skips removed
+    Without an operator order, only a single available peer can be selected.
+    ``peers`` keeps an operator's order with only static skips removed
     (``skipped``): a host the file switches off, the caller's own family, or a
     host the thorough lane cannot call. The system may only shorten the list,
     never add to or reorder it. ``config_error`` is set when the operator's
@@ -165,6 +140,7 @@ class ThoroughPlan:
     skipped: tuple[dict[str, str], ...]
     config_error: str | None = None
     job_configured: bool = False
+    selection_required: bool = False
     # Every host in the operator's order with its static skip, or None when it
     # is a peer; the walk that reports `skipped` follows this, in order.
     order: tuple[tuple[str, dict[str, str] | None], ...] = ()
@@ -174,13 +150,16 @@ def _skip(host_id: str, reason: str, detail: str) -> dict[str, str]:
     return {"host_id": host_id, "reason": reason, "detail": detail}
 
 
-def _thorough_plan(caller_family: str | None) -> ThoroughPlan:
-    loaded = inference_config.load()
+def _thorough_plan(
+    caller_family: str | None, *, loaded: inference_config.LoadResult | None = None,
+) -> ThoroughPlan:
+    loaded = loaded if loaded is not None else inference_config.load()
     if loaded.state == "error" or loaded.config is None:
         return ThoroughPlan((), (), config_error=str(loaded.error))
     config = loaded.config
     job = config.jobs.get("consult.thorough")
-    order = job.prefer if job is not None else _DEFAULT_THOROUGH_ORDER
+    # Without an operator order, inventory order cannot choose a provider.
+    order = job.prefer if job is not None else tuple(_THOROUGH_HOST_ROUTES)
     walk: list[tuple[str, dict[str, str] | None]] = []
     for host_id in order:
         entry = config.hosts.get(host_id)
@@ -194,11 +173,16 @@ def _thorough_plan(caller_family: str | None) -> ThoroughPlan:
             static = _skip(host_id, "disabled", "switched off in the inference hosts file")
         elif caller_family is not None and entry is not None and entry.family == caller_family:
             static = _skip(host_id, "excluded_family", f"same family as the caller ({caller_family})")
+        elif job is None and not host_adapter_available(host_id):
+            static = _availability_skip(host_id)
         walk.append((host_id, static))
+    peers = tuple(h for h, static in walk if static is None)
     return ThoroughPlan(
-        peers=tuple(h for h, static in walk if static is None),
+        peers=peers,
         skipped=tuple(static for _, static in walk if static is not None),
         job_configured=job is not None,
+        # Zero peers is a missing host, not an ambiguity a selection resolves.
+        selection_required=job is None and len(peers) > 1,
         order=tuple(walk),
     )
 
@@ -248,8 +232,8 @@ class ConsultRequest:
     # The local model the caller chose (standard lane only); None uses the
     # operator's default or the endpoint's only served model.
     model: str | None = None
-    # Explicitly pinned, or derived from transport provenance when unselected.
-    thorough_host_id: str = "claude:host-adapter"
+    # Explicitly pinned, or selected from the deployment policy.
+    thorough_host_id: str | None = None
     # The caller's eligible peers in preference order (never its own family);
     # a thorough attempt that finds its provider unavailable fails over along
     # this list. Empty = no failover (the pre-failover behaviour).
@@ -270,6 +254,7 @@ class ConsultRequest:
     # Every host in the job was skipped: refuse, or degrade when permitted,
     # without contacting any host.
     thorough_blocked: bool = False
+    thorough_selection_required: bool = False
     # A policy refusal decided before routing (code, message, recovery); the
     # router returns it so it is recorded like every other routed refusal.
     policy_refusal: tuple[str, str, str] | None = None
@@ -374,23 +359,15 @@ def _caller_family() -> str | None:
     return None
 
 
-def _thorough_host_for_caller() -> str:
-    """Choose the reciprocal strong-model lane from descriptive harness data.
+def _thorough_host_for_caller() -> str | None:
+    """Select only from explicit preferences or a single available peer.
 
-    The caller's own family is excluded; of the rest, the first the operator
-    has available wins (``host_adapter_available`` covers the opt-in flag,
-    per-host switch-off, CLI and bearer). When none is available the first
-    peer the operator has not switched off is returned, so the failure names
-    a route that setup can fix; a switched-off host is named only when every
-    peer is switched off.
-    Every route has the same privacy/cost/accountability class, so this
-    selects between already-authorized peers; the public consult schema
-    exposes no host control.
+    Caller family exclusion remains descriptive; it never establishes host
+    authorization. The adapter's configuration and availability gates still
+    apply, and no configured preference means no arbitrary vendor tie-break.
     """
     chosen, _ = _thorough_choice(_thorough_plan(_caller_family()))
-    # No eligible host: the handler refuses or degrades before any call, so this
-    # name is never contacted; it only keeps the request well-formed.
-    return chosen or _DEFAULT_THOROUGH_ORDER[0]
+    return chosen
 
 
 def _thorough_peers_for_caller() -> tuple[str, ...]:
@@ -405,7 +382,7 @@ def _thorough_choice(plan: ThoroughPlan) -> tuple[str | None, tuple[dict[str, st
     host is named only when every peer is switched off); the skips are then the
     hosts before that one. With no eligible peer at all, None and every skip.
     """
-    if not plan.peers:
+    if not plan.peers or plan.selection_required:
         return None, plan.skipped
     walk = plan.order or tuple((h, None) for h in plan.peers)
     passed: list[dict[str, str]] = []
@@ -1212,25 +1189,39 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             prompt_hash=prompt_hash,
         )
 
-    if request.thorough_blocked:
-        # Every host in the consult.thorough job was skipped. No host is
-        # contacted: refuse, or answer locally when the caller permitted it.
+    if request.thorough_blocked or request.thorough_host_id is None:
+        # No eligible or unambiguous host was selected. Refuse, or answer
+        # locally when the caller permitted it, without contacting a peer.
+        selection_required = request.thorough_selection_required or (
+            request.thorough_host_id is None and not request.thorough_blocked
+        )
+        reason_code = "CONSULT_HOST_SELECTION_REQUIRED" if selection_required else "CONSULT_NO_ELIGIBLE_HOST"
+        # No host and no orchestrator: choosing a host cannot help, so say what is missing.
+        not_configured = not selection_required and not host_adapter_lane_configured()
         if not request.allow_degraded:
+            failure_details = {"skipped": [dict(item) for item in request.skipped]}
+            if not_configured:
+                failure_details["reason"] = "extension_not_configured"
             return _failed(
                 request,
-                message="No host in the consult.thorough job is eligible for this caller",
-                code="CONSULT_NO_ELIGIBLE_HOST",
+                message=("A thorough consultation needs an explicit or unambiguous host selection"
+                         if selection_required else
+                         "No thorough-lane host is eligible for this caller"),
+                code=reason_code,
                 category="system_error",
                 recovery_action=(
-                    "Read skipped for each host's reason; the operator can add or enable "
-                    "a host of another family in the inference hosts file, or pass "
-                    "allow_degraded=true for a standard local answer."
+                    _THOROUGH_NOT_CONFIGURED_RECOVERY if not_configured else
+                    "Pass host_id from list_inference_hosts, or configure "
+                    "consult.thorough.prefer in UNITARES_INFERENCE_HOSTS_FILE. "
+                    "Without a preference, exactly one enabled and available peer "
+                    "of another family is required. Read skipped for setup details; "
+                    "allow_degraded=true permits a standard local answer."
                 ),
-                failure_details={"skipped": [dict(item) for item in request.skipped]},
+                failure_details=failure_details,
             )
         degradation = {
             "occurred": True,
-            "reason_code": "CONSULT_NO_ELIGIBLE_HOST",
+            "reason_code": reason_code,
             "fallback_from": "thorough",
             "fallback_to": "standard_local",
         }
@@ -1498,6 +1489,7 @@ def _consultation_record(
         request.effort == "thorough"
         and request.privacy == "cloud_allowed"
         and not request.thorough_blocked
+        and request.thorough_host_id is not None
         and request.policy_refusal is None
     ):
         # Only when the thorough lane can be attempted: under privacy='local'
@@ -1970,11 +1962,6 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     ))
     privacy = str(arguments.get("privacy", "local"))
     thorough_fields: dict[str, Any] = {}
-    if effort == "thorough" and selected_host is None:
-        thorough_fields = {
-            "thorough_host_id": _thorough_host_for_caller(),
-            "thorough_peers": _thorough_peers_for_caller(),
-        }
     # The consult.thorough job applies only where the thorough lane can run:
     # privacy='local' never contacts a thorough host, so it neither reports
     # skips nor refuses on the operator's hosts file.
@@ -1984,14 +1971,15 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         if loaded.state == "error" or loaded.config is None:
             policy_refusal = _hosts_file_refusal(loaded.error)
         elif selected_host is None:
-            plan = _thorough_plan(_caller_family())
-            chosen = thorough_fields["thorough_host_id"]
-            _, skipped = _thorough_choice(plan)
+            plan = _thorough_plan(_caller_family(), loaded=loaded)
+            chosen, skipped = _thorough_choice(plan)
             thorough_fields.update(
+                thorough_host_id=chosen,
+                thorough_peers=plan.peers,
                 thorough_order=plan.order,
-                thorough_blocked=not plan.peers,
-                # When every host is skipped, `chosen` is a placeholder that is
-                # never contacted; keep every skip.
+                thorough_blocked=not plan.peers or plan.selection_required,
+                thorough_selection_required=plan.selection_required,
+                # No selection means no host is contacted; keep every skip.
                 skipped=[dict(item) for item in skipped
                          if not plan.peers or item["host_id"] != chosen],
             )

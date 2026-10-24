@@ -12,10 +12,8 @@ Each caller wraps its unit-of-work in `lease_advisory_scope` without changing
 behavior on lease outcome.
 
 Environment:
-    LEASE_PLANE_BEARER_TOKEN — bearer token, read from the process
-        environment (an operator typically sources it from the secrets env
-        file: $UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env).
-        If unset, the helper returns a
+    LEASE_PLANE_BEARER_TOKEN — bearer token supplied by the deployment
+        environment. If unset, the helper returns a
         disabled client and every acquire surfaces as service_unavailable
         in the log; the caller proceeds normally.
     LEASE_PLANE_BASE_URL — defaults to http://127.0.0.1:8788.
