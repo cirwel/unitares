@@ -3124,8 +3124,12 @@ def cmd_review(args) -> int:
                 family = provider_family(reviewer)
                 sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                 families = passing_families(comments, key, snapshot.records) if sensitive else set()
+                already_attempted = bool(
+                    family and any(family in cycle.families for cycle in rounds.cycles)
+                )
                 missing_required_family = bool(
                     sensitive and family and 1 <= len(families) < 2 and family not in families
+                    and not already_attempted
                     and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head)
                 )
                 joining_cycle = rounds.can_join(head, key, family) or missing_required_family

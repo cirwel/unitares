@@ -195,10 +195,11 @@ history and failure counts. It preserves the diff, provenance, findings and
 model-family checks; a shared bot identity does not prove reviewer independence.
 Bot comments cannot grant an operator waiver, even with a write association.
 The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
-user-authored approval; it never lets the App issue one. The `waive` and
-legacy `--authorize-full-review` CLI paths verify a user account via
-GitHub and refuse App credentials or an unreadable actor. All agents use the
-shared App; the operator's user account is reserved for operator actions.
+user-authored approval; it never lets the App issue one. The `waive` CLI path
+verifies a user account via GitHub and refuses App credentials or an unreadable
+actor; `--authorize-full-review REASON` records an explicit reason for an
+additional full review cycle under either user or App credentials. All agents
+use the shared App; the operator's user account is reserved for operator waivers.
 
 The purpose is another useful perspective on substantive work, not a required
 sequence of model invocations. Choose the review that helps the change:

@@ -5851,4 +5851,18 @@ def test_missing_second_family_on_sensitive_path_is_not_blocked_by_round_cap(rep
     args_repeat = SimpleNamespace(base=fix.base, budget=30, fresh=True, reviewer='codex')
     assert rg.cmd_review(args_repeat) == rg.UNREVIEWED
     assert not ran
+    # Once the second family (anthropic) has already spent a full cycle, a later
+    # non-joining full cycle by anthropic does not get another free exemption.
+    rounds_with_anthropic = rg.CodexRounds(
+        4,
+        cycles=[
+            rg.ReviewCycle('1' * 40, 'old1', {'openai'}),
+            rg.ReviewCycle('2' * 40, 'old2', {'openai'}),
+            rg.ReviewCycle('3' * 40, 'old3', {'anthropic'}),
+            rg.ReviewCycle(fix.from_head, fix.from_key, {'openai'}),
+        ],
+    )
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds_with_anthropic)
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+    assert not ran
 
