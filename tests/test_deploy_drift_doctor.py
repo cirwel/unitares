@@ -8,6 +8,7 @@ old module.
 from __future__ import annotations
 
 import importlib.util
+import json
 import time
 from pathlib import Path
 
@@ -329,6 +330,30 @@ def test_deduped_escalation_is_recorded(tmp_path):
     assert doc.state.get("open", {}) != {}, "dedup means it reached governance"
 
 
+def test_no_surface_configuration_does_not_resolve_existing_findings(tmp_path, monkeypatch):
+    monkeypatch.delenv('UNITARES_DEPLOY_DRIFT_SURFACES', raising=False)
+    monkeypatch.setattr(ddd, 'DEFAULT_SURFACES', [])
+    path = Path(ddd.STATE_FILE)
+    existing = '{"open":{"existing":{"surface":"old","condition":"behind_origin"}}}'
+    path.write_text(existing)
+    doctor = ddd.Doctor(io=make_io())
+    assert doctor.run() == 2
+    assert path.read_text() == existing
+    assert not posted and not outcomes
+
+
+def test_explicit_surface_configuration_selects_only_declared_paths(tmp_path, monkeypatch):
+    path = tmp_path / 'surfaces.json'
+    path.write_text(json.dumps([dict(name='custom', path=str(tmp_path), branch='main', launchd_label=None, check_behind=False)]))
+    monkeypatch.setenv('UNITARES_DEPLOY_DRIFT_SURFACES', str(path))
+    surfaces = ddd.configured_surfaces()
+    assert [s.name for s in surfaces] == ['custom']
+    assert surfaces[0].check_behind is False
+    path.write_text('[{"name":"custom","path":"relative","branch":"main"}]')
+    with pytest.raises(ValueError, match='absolute'):
+        ddd.configured_surfaces()
+
+
 def test_preflight_refusal_is_diagnosed_and_fingerprinted_by_service_and_refusal(
     tmp_path, monkeypatch
 ):
@@ -453,41 +478,68 @@ def test_optional_missing_plist_and_allow_env_do_not_refuse(tmp_path, monkeypatc
     assert ddd.diagnose_preflight(allow_spec, make_io()) == []
 
 
-def test_default_preflights_honor_deploy_env_overrides_and_non_utf8_secrets_do_not_crash(
-    tmp_path, monkeypatch
-):
-    """default_preflights() honors the deploy-*.sh environment overrides, marks
-    agent-orchestrator require_exists=True, includes dispatch-beam, and a
-    non-UTF-8 secrets file produces a preflight_refused diagnosis rather than
-    crashing Doctor.run()."""
-    specs = ddd.default_preflights(
-        {
-            "UNITARES_MCP_DEPLOY": "/srv/custom-mcp",
-            "UNITARES_ORCHESTRATOR_DEPLOY": "/srv/custom-orch",
-            "DISPATCH_DEPLOY": "/srv/custom-dispatch",
-        }
-    )
-    by_service = {s.service: s for s in specs}
+def test_preflights_come_only_from_explicit_configuration(tmp_path, monkeypatch):
+    monkeypatch.delenv("UNITARES_DEPLOY_PREFLIGHTS", raising=False)
+    assert ddd.configured_preflights() == []
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([
+        {"service": "governance-mcp", "plist": "/srv/agents/governance.plist",
+         "needles": ["/srv/custom-mcp/src/mcp_server.py"], "require_exists": True,
+         "require_env_keys": ["DB_POSTGRES_URL"]},
+        {"service": "orchestrator", "plist": "/srv/agents/orchestrator.plist",
+         "needles": ["/srv/custom-orch/elixir/agent_orchestrator"], "require_exists": True,
+         "allow_env": "ORCH_ALLOW_DEV"},
+    ]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    by_service = {s.service: s for s in ddd.configured_preflights()}
+    assert set(by_service) == {"governance-mcp", "orchestrator"}
     assert by_service["governance-mcp"].needles == ["/srv/custom-mcp/src/mcp_server.py"]
-    assert by_service["agent-orchestrator"].require_exists is True
-    assert by_service["agent-orchestrator"].needles == [
-        "/srv/custom-orch/elixir/agent_orchestrator"
-    ]
-    assert "dispatch-beam" in by_service
-    assert by_service["dispatch-beam"].needles == ["/srv/custom-dispatch"]
+    assert by_service["governance-mcp"].require_env_keys == ["DB_POSTGRES_URL"]
+    assert by_service["orchestrator"].require_exists is True
+    assert by_service["orchestrator"].allow_env == "ORCH_ALLOW_DEV"
 
-    bad_secrets = tmp_path / "bad-secrets.env"
-    bad_secrets.write_bytes(b"\xff\xfeUNITARES_HTTP_API_TOKEN=broken\n")
-    bad_secrets.chmod(0o600)
-    plist = tmp_path / "com.unitares.governance-mcp.plist"
+
+@pytest.mark.parametrize("entry", [
+    {"service": "x"},                                         # no plist
+    {"service": "x", "plist": "relative.plist"},              # not absolute
+    {"service": "x", "plist": "/a.plist", "needles": "/one"},  # needles not a list
+    {"service": "x", "plist": "/a.plist", "require_exists": "yes"},
+    {"service": "x", "plist": "/a.plist", "unknown": 1},
+])
+def test_invalid_preflight_configuration_is_refused(tmp_path, monkeypatch, entry):
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([entry]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    with pytest.raises(ValueError):
+        ddd.configured_preflights()
+
+
+def test_configured_preflights_run_without_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(ddd, "DEFAULT_SURFACES", [])
+    monkeypatch.delenv("UNITARES_DEPLOY_DRIFT_SURFACES", raising=False)
+    config = tmp_path / "preflights.json"
+    config.write_text(json.dumps([{"service": "svc", "plist": str(tmp_path / "missing.plist")}]))
+    monkeypatch.setenv("UNITARES_DEPLOY_PREFLIGHTS", str(config))
+    doctor = ddd.Doctor(io=make_io(), dry_run=True)
+    assert [s.service for s in doctor.preflights] == ["svc"]
+
+
+def test_non_utf8_secrets_file_is_a_preflight_refusal_not_a_crash(tmp_path):
+    """A wrapped governance plist whose explicitly selected secrets file is not
+    UTF-8 produces a preflight_refused diagnosis rather than crashing."""
+    bad_file = tmp_path / "bad-values.env"
+    bad_file.write_bytes(b"\xff\xfeUNITARES_HTTP_API_TOKEN=broken\n")
+    bad_file.chmod(0o600)
+    wrapper = "/usr/local/bin/secrets-wrapper"
+    plist = tmp_path / "governance.plist"
     import plistlib
 
     with plist.open("wb") as handle:
         plistlib.dump(
             {
-                "Label": "com.unitares.governance-mcp",
+                "Label": "governance",
                 "ProgramArguments": [
-                    "/usr/local/bin/with-cirwel-secrets",
+                    wrapper,
                     "--keys",
                     "UNITARES_HTTP_API_TOKEN",
                     "--",
@@ -495,7 +547,8 @@ def test_default_preflights_honor_deploy_env_overrides_and_non_utf8_secrets_do_n
                 ],
                 "EnvironmentVariables": {
                     "DB_POSTGRES_URL": "postgresql://localhost/governance",
-                    "CIRWEL_SECRETS_FILE": str(bad_secrets),
+                    "UNITARES_SECRETS_WRAPPER": wrapper,
+                    "UNITARES_SECRETS_ENV": str(bad_file),
                 },
             },
             handle,
@@ -512,5 +565,4 @@ def test_default_preflights_honor_deploy_env_overrides_and_non_utf8_secrets_do_n
     assert len(found) == 1
     assert found[0].condition == "preflight_refused"
     assert "cannot read secrets file" in found[0].detail
-
 

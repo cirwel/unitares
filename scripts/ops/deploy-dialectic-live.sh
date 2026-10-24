@@ -19,8 +19,8 @@
 # commits, so raw distance is not evidence THIS app is stale.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.dialectic-live"
 PLIST="${UNITARES_DIALECTIC_LIVE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${UNITARES_DIALECTIC_LIVE_PORT:-8790}"
@@ -38,6 +38,8 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
   --allow-env UNITARES_DIALECTIC_LIVE_ALLOW_DEV \
   --recipe "[deploy]   re-render the plist against the deploy worktree
 [deploy]   (sed __UNITARES_ROOT__ -> $DEPLOY ; see the template header)"
+
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
@@ -58,6 +60,7 @@ echo "[deploy] compiling dialectic_live + assets (MIX_ENV=prod; surfaces errors 
 )
 
 echo "[deploy] restarting $LABEL"
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
 # Probes /health — the route added alongside this script — NOT the LiveView
@@ -93,6 +96,7 @@ else
   ( cd "$DEPLOY/elixir/dialectic_live" && export MIX_ENV=prod && mix compile \
       && if [ -x scripts/build-assets.sh ]; then scripts/build-assets.sh --strict; else mix assets.deploy; fi ) || \
     echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
+  deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
   launchctl kickstart -k "gui/$UID_NUM/$LABEL"
   echo "[deploy] rolled back. Investigate:" >&2
   echo "[deploy]   launchctl list | grep $LABEL" >&2

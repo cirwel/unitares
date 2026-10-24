@@ -31,7 +31,7 @@ from .host_adapter import (
     host_cli_env_var,
     invoke_host_adapter,
 )
-from .inference_registry import get_inference_host, sha256_text as _sha256_text
+from .inference_registry import get_inference_host, list_inference_hosts, sha256_text as _sha256_text
 from .inference_outcome import InferenceOutcome
 
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ class DelegatedInferenceRequest:
 
     prompt: str
     requesting_agent_uuid: str | None
-    host_id: str = "claude:host-adapter"
+    host_id: str | None = None
     model: str | None = None
     task_type: str = "reasoning"
     timeout_s: int = DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
@@ -220,16 +220,101 @@ async def run_delegated_inference(
     being called: one wall-clock deadline bounds host resolution, the spawn
     request and every await, so their own timeouts cannot add up past it.
     """
-    host_id = request.host_id
     deadline = time.monotonic() + request.timeout_s + DELEGATE_INFERENCE_OVERHEAD_S
-    # Registry construction includes a cached blocking Ollama probe even when
-    # looking up Claude. Keep that probe off the MCP event loop, and off the
+    loaded = inference_config.load()
+    if loaded.state == "error":
+        return InferenceOutcome.failed(
+            "The inference hosts file does not load, so delegated inference refuses",
+            code="INFERENCE_CONFIG_INVALID",
+            category="system_error",
+            details={"error": str(loaded.error)},
+            recovery={
+                "action": (
+                    f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
+                    "the doctor's inference_hosts_file check names the line or field."
+                ),
+                "related_tools": ["list_inference_hosts"],
+            },
+        )
+    host_id = request.host_id
+    # Registry construction includes a cached blocking local-endpoint probe.
+    # Keep it off the MCP event loop, including host selection, and off the
     # caller's clock: past the overhead allowance it is a pre-execution failure.
     try:
-        host = await asyncio.wait_for(
-            asyncio.to_thread(get_inference_host, host_id),
-            timeout=DELEGATE_INFERENCE_OVERHEAD_S,
-        )
+        if host_id is None:
+            hosts = await asyncio.wait_for(
+                asyncio.to_thread(list_inference_hosts, include_unconfigured=True),
+                timeout=DELEGATE_INFERENCE_OVERHEAD_S,
+            )
+            reachable = {
+                host["host_id"]: host for host in hosts
+                if "delegate_inference" in (host.get("accepts_host_id_from") or [])
+            }
+            config = loaded.config
+            assert config is not None
+            job = config.jobs.get("consult.thorough")
+            if job is not None:
+                # An explicit preference authorizes an order, not a retry.
+                # Use its first supported, enabled entry; availability is
+                # checked below, so a failure never silently changes providers.
+                candidates = [
+                    hid for hid in job.prefer if hid in reachable
+                    and config.hosts[hid].enabled
+                    and hid not in host_adapter_disabled_hosts()
+                ]
+                host_id = candidates[0] if candidates else None
+            else:
+                candidates = [
+                    hid for hid, item in reachable.items()
+                    if item.get("configured") and item.get("available")
+                    and (hid not in config.hosts or config.hosts[hid].enabled)
+                    and hid not in host_adapter_disabled_hosts()
+                ]
+                host_id = candidates[0] if len(candidates) == 1 else None
+            if not candidates:
+                # Nothing to choose between: report the missing host rather
+                # than a selection that passing host_id could not satisfy.
+                needs_extension = not host_adapter_lane_configured() and any(
+                    item.get("extension") == HOST_ADAPTER_EXTENSION
+                    for item in reachable.values()
+                )
+                return InferenceOutcome.failed(
+                    "No enabled, configured and available inference host can "
+                    "serve delegate_inference",
+                    code="INFERENCE_HOST_UNAVAILABLE",
+                    category="system_error",
+                    details={"reason": "no_eligible_host"},
+                    recovery={
+                        "action": (
+                            "Use consult(effort='standard') for the local lane. "
+                            + (HOST_ADAPTER_EXTENSION_NOTE if needs_extension else
+                               "Configure and enable a host listed by list_inference_hosts.")
+                        ),
+                        "related_tools": ["consult", "list_inference_hosts"],
+                    },
+                )
+            if host_id is None:
+                return InferenceOutcome.failed(
+                    "Delegated inference needs an explicit or unambiguous host selection",
+                    code="INFERENCE_HOST_SELECTION_REQUIRED",
+                    category="validation_error",
+                    details={"eligible_hosts": candidates},
+                    recovery={
+                        "action": (
+                            "Pass host_id from list_inference_hosts, or configure "
+                            "consult.thorough.prefer in the file named by "
+                            f"{inference_config.HOSTS_FILE_ENV}. With no preference, "
+                            "exactly one enabled, configured and available host is required."
+                        ),
+                        "related_tools": ["list_inference_hosts", "consult"],
+                    },
+                )
+            host = reachable[host_id]
+        else:
+            host = await asyncio.wait_for(
+                asyncio.to_thread(get_inference_host, host_id),
+                timeout=DELEGATE_INFERENCE_OVERHEAD_S,
+            )
     except Exception as exc:  # noqa: BLE001 - registry failure is pre-execution
         logger.warning("Could not resolve inference host %s: %s", host_id, exc)
         return InferenceOutcome.failed(
@@ -295,21 +380,6 @@ async def run_delegated_inference(
             },
         )
 
-    loaded = inference_config.load()
-    if loaded.state == "error":
-        return InferenceOutcome.failed(
-            "The inference hosts file does not load, so delegated inference refuses",
-            code="INFERENCE_CONFIG_INVALID",
-            category="system_error",
-            details={"error": str(loaded.error)},
-            recovery={
-                "action": (
-                    f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
-                    "the doctor's inference_hosts_file check names the line or field."
-                ),
-                "related_tools": ["list_inference_hosts"],
-            },
-        )
     entry = loaded.config.hosts.get(host_id) if loaded.config is not None else None
     if entry is not None and not entry.enabled:
         return InferenceOutcome.failed(
@@ -615,7 +685,7 @@ async def handle_delegate_inference(
     request = DelegatedInferenceRequest(
         prompt=str(prompt),
         requesting_agent_uuid=requesting_agent_uuid,
-        host_id=str(arguments.get("host_id") or "claude:host-adapter"),
+        host_id=(str(arguments["host_id"]) if arguments.get("host_id") is not None else None),
         model=(str(arguments["model"]) if arguments.get("model") else None),
         task_type=str(arguments.get("task_type") or "reasoning"),
         timeout_s=int(

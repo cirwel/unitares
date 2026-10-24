@@ -17,8 +17,8 @@
 # deploy-lib.sh.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_DEPLOY:?set the dedicated deployment worktree path}"
 LABEL="com.unitares.gateway-mcp"
 PLIST="${UNITARES_GATEWAY_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${UNITARES_GATEWAY_PORT:-8768}"

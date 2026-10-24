@@ -4,7 +4,7 @@
 # Rotation steps:
 #   1. Generate new secret values (32 bytes, base64url).
 #   2. Write them into the operator secrets file, for the keys it defines.
-#      Jobs that launch through the secrets wrapper (with-cirwel-secrets)
+#      Jobs that launch through the configured secrets wrapper
 #      hold no value in their plist and read this file when they start.
 #   3. Write them into the installed LaunchAgent plists that reference them.
 #   4. Surgical-strip each anchor in ~/.unitares/anchors/:
@@ -209,7 +209,8 @@ fi
 wrapped=()
 for plist in "${LAUNCHAGENTS_DIR}"/*.plist; do
   [[ -e "$plist" && "$plist" != "${GOVERNANCE_PLIST}" ]] || continue
-  if grep -q "with-cirwel-secrets" "$plist" && grep -q -E "${ROTATED_KEYS_RE}" "$plist"; then
+  if "${PLIST_BUDDY}" -c 'Print :EnvironmentVariables:UNITARES_SECRETS_WRAPPER' "$plist" >/dev/null 2>&1 \
+     && grep -q -E "${ROTATED_KEYS_RE}" "$plist"; then
     wrapped+=("$(basename "$plist" .plist)")
   fi
 done

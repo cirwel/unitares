@@ -495,7 +495,7 @@ def resolve_merged_head(sha: str, pr_number: int) -> str | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repo", default="cirwel/unitares")
+    ap.add_argument("--repo", required=True, help="GitHub owner/repository to audit")
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument(
         "--check",

@@ -8,6 +8,23 @@ from src.mcp_handlers.decorators import get_call_identity_requirement
 from src.mcp_handlers.support import delegated_inference as di
 
 
+@pytest.fixture(autouse=True)
+def explicit_host_preference(monkeypatch, tmp_path):
+    """Legacy routing cases now declare their deployment's preference."""
+    from src import inference_config
+
+    path = tmp_path / "explicit-hosts.json"
+    path.write_text(json.dumps({"version": 1, "jobs": {"consult.thorough": {
+        "prefer": ["claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"]
+    }}}))
+    path.chmod(0o600)
+    monkeypatch.setenv(inference_config.HOSTS_FILE_ENV, str(path))
+    inference_config._cache.update(key=None, result=None)
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: [di.get_inference_host("claude:host-adapter")])
+    yield
+    inference_config._cache.update(key=None, result=None)
+
+
 def _payload(result):
     return json.loads(result[0].text)
 
@@ -140,7 +157,7 @@ async def test_a_switched_off_host_names_the_switch_not_the_setup(monkeypatch):
         "get_inference_host",
         lambda _host_id: _claude_host(configured=True, available=False),
     )
-    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello", "host_id": "claude:host-adapter"}))
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
     assert parsed["possibly_running"] is False
     assert "UNITARES_HOST_ADAPTER_DISABLED_HOSTS" in parsed["recovery"]["action"]
@@ -339,8 +356,8 @@ def test_schema_accepts_the_codex_host_id():
     assert DelegateInferenceParams(
         prompt="hi", host_id="codex:host-adapter"
     ).host_id == "codex:host-adapter"
-    # Preserve the established explicit-tool default; consult handles reciprocity.
-    assert DelegateInferenceParams(prompt="hi").host_id == "claude:host-adapter"
+    # Omission stays unset until deployment configuration is consulted.
+    assert DelegateInferenceParams(prompt="hi").host_id is None
     with pytest.raises(ValidationError):
         DelegateInferenceParams(prompt="hi", host_id="")
 
@@ -833,10 +850,98 @@ async def test_a_host_switched_off_in_the_hosts_file_is_refused(monkeypatch, tmp
     inference_config._cache.update(key=None, result=None)
     monkeypatch.setattr(
         di, "get_inference_host", lambda _host_id: _claude_host(configured=True, available=True))
-    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello", "host_id": "claude:host-adapter"}))
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
     assert "inference hosts file" in parsed["error"] or "inference hosts file" in json.dumps(parsed)
     inference_config._cache.update(key=None, result=None)
+
+
+@pytest.mark.asyncio
+async def test_no_preference_refuses_ambiguous_hosts(monkeypatch):
+    from unittest.mock import AsyncMock
+    from src import inference_config
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    host_ids = ["claude:host-adapter", "codex:host-adapter"]
+    hosts = [dict(_claude_host(), host_id=hid) for hid in host_ids]
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
+    invoke = AsyncMock()
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "review"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_SELECTION_REQUIRED"
+    assert parsed["execution_started"] is False
+    assert parsed["eligible_hosts"] == host_ids
+    assert "consult.thorough.prefer" in parsed["recovery"]["action"]
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed", [False, True])
+async def test_no_eligible_host_reports_the_missing_host(monkeypatch, listed):
+    from unittest.mock import AsyncMock
+    from src import inference_config
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    # Listed but neither configured nor available, as on a default install.
+    hosts = [_claude_host(configured=False, available=False)] if listed else []
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
+    invoke = AsyncMock()
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "review"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert parsed["reason"] == "no_eligible_host"
+    assert parsed["execution_started"] is False
+    assert "consult(effort='standard')" in parsed["recovery"]["action"]
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_preference_selects_only_available_authorized_host(monkeypatch):
+    from unittest.mock import AsyncMock
+    from src import inference_config
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    hosts = [
+        dict(_claude_host(), host_id="codex:host-adapter"),
+        _claude_host(available=False),
+        dict(_claude_host(), host_id="antigravity:host-adapter", configured=False),
+        dict(_claude_host(), host_id="hf:router", accepts_host_id_from=["call_model"]),
+    ]
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
+    invoke = AsyncMock(return_value={"ok": False, "error": "test refusal",
+                                    "dispatch_phase": "spawn_rejected", "provenance": {}})
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    await di.handle_delegate_inference({"prompt": "review"})
+    assert invoke.await_args.args[0] == "codex:host-adapter"
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_preference_controls_selection_without_silent_failover(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    # Registry order and availability cannot overwrite an explicit preference.
+    hosts = [dict(_claude_host(), host_id="codex:host-adapter"),
+             _claude_host(available=False)]
+    monkeypatch.setattr(di, "list_inference_hosts", lambda **_: hosts)
+    invoke = AsyncMock()
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "review"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert parsed["host"]["host_id"] == "claude:host-adapter"
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_host_overrides_deployment_preference(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(di, "get_inference_host", lambda hid: dict(_claude_host(), host_id=hid))
+    invoke = AsyncMock(return_value={"ok": False, "error": "test refusal",
+                                    "dispatch_phase": "spawn_rejected", "provenance": {}})
+    monkeypatch.setattr(di, "invoke_host_adapter", invoke)
+    await di.handle_delegate_inference({"prompt": "review", "host_id": "codex:host-adapter"})
+    assert invoke.await_args.args[0] == "codex:host-adapter"
 
 
 # --- #2285: the default fits a ~60s per-tool MCP client timeout -------------

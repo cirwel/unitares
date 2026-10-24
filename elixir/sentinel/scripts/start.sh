@@ -11,11 +11,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SENTINEL_DIR="$REPO_ROOT/elixir/sentinel"
-# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
-# pre-2026-09 ~/.config/cirwel path when only that one exists.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
-    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# Credentials come from the service environment, or an explicitly selected file.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-}"
+if [[ -n "$SECRETS_FILE" && ( "$SECRETS_FILE" != /* || ! -f "$SECRETS_FILE" || ! -r "$SECRETS_FILE" ) ]]; then
+    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
+    exit 1
 fi
 
 # The rendered LaunchAgent bearer is synchronized with governance and rotated
@@ -27,8 +27,6 @@ sentinel_launchd_http_token="${UNITARES_HTTP_API_TOKEN:-}"
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$SECRETS_FILE"
-else
-    echo "[sentinel-beam] WARNING: $SECRETS_FILE missing - HTTP/lease auth may fail closed" >&2
 fi
 if [[ -n "$sentinel_launchd_http_token" ]]; then
     export UNITARES_HTTP_API_TOKEN="$sentinel_launchd_http_token"

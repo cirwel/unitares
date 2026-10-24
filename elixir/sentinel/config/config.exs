@@ -11,8 +11,7 @@ bool_env = fn name, default ->
     raw ->
       # Total for exactly the reason `int_env` below is, and the argument is not
       # weaker here — it is stronger. `scripts/start.sh` sources the secrets
-      # env file (`$UNITARES_SECRETS_ENV`, default `~/.config/unitares/secrets.env`,
-      # legacy `~/.config/cirwel/secrets.env` still read) and then exports all
+      # env file explicitly named by `$UNITARES_SECRETS_ENV` and then exports all
       # NINE of these knobs from `${VAR:-default}`, so both the launchd plist and secrets.env can set them;
       # config.exs is evaluated on every `mix run --no-halt`, so a raise here
       # exits non-zero and hands launchd (`KeepAlive=true`) a crash-looping

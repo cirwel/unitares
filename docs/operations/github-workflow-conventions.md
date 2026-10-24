@@ -183,15 +183,13 @@ Ordinary work may still proceed after validation with that fact in the body;
 sensitive paths retain their required coverage. `approved-to-merge` remains
 the owning author's separate readiness declaration.
 
-On the reference deployment, `com.unitares.review-sweep` is the designated runner.
-`scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
-clean checkout of merged `origin/master`, reads PR heads separately, and uses
-`unitares-github` for this repository's fetches and review publication. It
-refuses a missing App runner instead of using the human login across `cirwel`
-repositories. Cloud agents use explicitly provisioned repository-scoped App
-credentials; a missing cloud integration must be reported, never replaced
-with the operator's login. Other installers opt in to their own host and
-credentials.
+A scheduled host runs the same `scripts/dev/review.sh sweep` entrypoint from
+clean, trusted merged code, using a separate checkout only as PR review
+context. The deployment repository owns its bootstrap, scheduler, paths,
+credential runner and worktree locations. For this repository, host and cloud
+runners use the repository-scoped GitHub App described above; missing App
+integration must be reported rather than replaced with the operator's login.
+Other installations select their own host and credentials explicitly.
 
 <a id="operator-login-agent-prs"></a>**Agent PRs through the operator
 login.** Hosted Claude sessions cannot use the App: their GitHub proxy
@@ -581,8 +579,8 @@ sweep starts nothing and says so. A
 local Codex CLI cooldown does not prevent its separately enabled native route. It
 never adds providers to the list. `UNITARES_REVIEWER` supplies a single choice
 when no flags are given. With neither, it reports the missing configuration and
-starts nothing. The installer requires at least one `--reviewer` and saves the
-choices in the job arguments. Existing jobs need that explicit configuration
+starts nothing. A scheduler that runs the sweep supplies its choices in its own
+job configuration. Existing jobs need that explicit configuration
 before this driver is deployed; updating repository code does not modify or
 reload installed jobs. Candidate lists printed by the runner are alphabetical
 for display, not a ranking.
@@ -597,34 +595,17 @@ to the next configured provider. There is no same-tick cascade. Select another
 provider first for that host or have the author explicitly choose another
 provider; this selection change does not redesign native retry scheduling.
 
-**Migrating an existing launchd sweep.** Its bootstrap refreshes the driver from
-`origin/master` on every tick, so merging this change deploys the new requirement.
-Stage a single explicit environment choice before merge: the old driver ignores
-it and the new driver honors it. Choose the provider for this host; `claude`
-below is an example. Wait for any active review to finish before unloading the
-job, and preserve its other settings:
-
-```bash
-review_plist="$HOME/Library/LaunchAgents/com.unitares.review-sweep.plist"
-launchctl bootout "gui/$(id -u)" "$review_plist"
-python3 - "$review_plist" claude <<'PY'
-import pathlib, plistlib, sys
-path = pathlib.Path(sys.argv[1])
-config = plistlib.loads(path.read_bytes())
-config.setdefault("EnvironmentVariables", {})["UNITARES_REVIEWER"] = sys.argv[2]
-path.write_bytes(plistlib.dumps(config))
-PY
-launchctl bootstrap "gui/$(id -u)" "$review_plist"
-```
-
-After the new driver is available, a host wanting an ordered list can wait for
-the active review to finish, unload the job with the same `bootout` command,
-and run `install-review-sweep.py --repo PATH --reviewer PROVIDER` with additional
-`--reviewer` arguments as desired. The installer bootstraps the replacement;
-it deliberately refuses to overwrite a loaded job. A single configured family
-cannot satisfy a sensitive diff by itself; configure another eligible family
-or have the author explicitly request it. These are deployment steps, not
-actions performed by a source-only PR.
+**Migrating an existing scheduled sweep.** A bootstrap that refreshes the
+driver from `origin/master` on every tick deploys the new requirement at
+merge. Stage an explicit choice in the job first, either `UNITARES_REVIEWER`
+in its environment (the old driver ignores it and the new driver honors it) or
+ordered `--reviewer` arguments once the new driver is available. Wait for any
+active review to finish before reloading the job, and preserve its other
+settings. The deployment repository that owns the scheduler owns this
+procedure. A single configured family cannot satisfy a sensitive diff by
+itself; configure another eligible family or have the author explicitly
+request it. These are deployment steps, not actions performed by a source-only
+PR.
 
 #### Review provider availability
 
@@ -845,23 +826,26 @@ so it may still be marked ready (section above). Exit 3 is not this case: it sta
 The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
-The fallback needs an actual scheduler installation. On a macOS LaunchAgent
-install such as the reference deployment (`--repo` defaults to
-`~/projects/unitares`; pass your own checkout):
+The fallback needs an actual scheduler installation. Host installers,
+schedules, log locations and runtime inventory procedures belong in the
+operator's deployment repository. A reusable invocation is:
 
 ```bash
-python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares --reviewer claude --reviewer antigravity
-launchctl print gui/$(id -u)/com.unitares.review-sweep
-unitares-automations census --grep review-sweep --all
+./scripts/dev/review.sh sweep --worktree /path/to/review-context --dry-run
 ```
 
-This opt-in installer copies a small bootstrap outside the development
-checkout, loads a 30-minute launchd job, and records run outcomes through
-`unitares-automation-run` when installed. It uses existing CLI authentication.
-Each run refreshes a locked trusted checkout from `origin/master`; a separate
-locked checkout supplies PR context. Logs are in
-`~/Library/Logs/unitares-review-sweep.log`. Merely having `review-sweep.sh` on
-disk is not evidence that the job is installed or running.
+Run the entrypoint from a clean checkout of the repository's trusted merged
+base. PR code may supply review context, but must not replace the review
+driver. Preserve separate locked worktrees for the trusted driver and PR
+context. The maintainer's private fleet-ops repository owns its launchd
+installer and scoped App wrapper. Having the entrypoint on disk or a request
+label on a PR is not evidence that any scheduler is installed or running.
+
+The reusable merge-queue engine (`scripts/ops/pr-babysitter.sh`) likewise
+requires explicit `PR_BABYSITTER_REPO` and `PR_QUEUE_BASE`; it selects no
+repository by default. Its default state directory is scoped to that repo.
+An existing deployment must set `PR_QUEUE_STATE_FILE` to its current approval
+state during migration so approval pins and arm history are retained.
 
 The `review` check describes review evidence; it is separate from the test
 suite. A neutral warning asks the author to start/join review and links here.
