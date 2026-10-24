@@ -1548,6 +1548,42 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                "proof:paused"
              ).status == 200
     end
+
+    test "only the current reviewer may reassign a filled reviewer slot" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          phase: "antithesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      paused_change = %{
+        session_id: session_id,
+        reviewer_agent_id: "paused-choice",
+        actor_agent_id: "paused"
+      }
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer",
+               paused_change,
+               "proof:paused"
+             ).status == 403
+
+      reviewer_change = %{
+        session_id: session_id,
+        reviewer_agent_id: "reviewer-choice",
+        actor_agent_id: "reviewer"
+      }
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer",
+               reviewer_change,
+               "proof:reviewer"
+             ).status == 200
+    end
   end
 
   describe "/v1/health identity observability" do

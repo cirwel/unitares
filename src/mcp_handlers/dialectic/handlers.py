@@ -2581,6 +2581,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         # BEAM owns the write + starts a liveness watcher at birth when flagged;
         # otherwise (or on any BEAM error) fall back to the Python insert.
         # (dialectic-on-BEAM Slice 2.1)
+        beam_detail: Dict[str, Any] = {}
         beam_created = await beam_create_session(
             session_id=session.session_id,
             paused_agent_id=session.paused_agent_id,
@@ -2596,7 +2597,24 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "paused_agent_state": paused_agent_state,
                 "trigger_source": trigger_source,
             },
+            detail=beam_detail,
         )
+        if beam_created is None and beam_detail.get("commit_unknown"):
+            return [error_response(
+                "The session-creation outcome is unknown; do not open another "
+                "session until this session ID is reconciled.",
+                error_code="DIALECTIC_SESSION_CREATE_COMMIT_UNKNOWN",
+                error_category="system_error",
+                details={
+                    "session_id": session.session_id,
+                    "commit_unknown": True,
+                },
+                recovery={
+                    "action": "Inspect this session ID before retrying creation.",
+                    "related_tools": ["dialectic"],
+                },
+                arguments=arguments,
+            )]
         if beam_created is None:
             await pg_create_session(
                 session_id=session.session_id,

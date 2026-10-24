@@ -447,6 +447,34 @@ class TestHandleRequestDialecticReview:
         assert [call.args[0] for call in emit.await_args_list] == ["dialectic_opened"]
 
     @pytest.mark.asyncio
+    async def test_unknown_beam_create_never_opens_a_second_writer(
+        self, mock_server, mock_require_registered, mock_verify_ownership,
+        mock_pg_create, mock_is_in_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        async def unknown_create(*_args, detail=None, **_kwargs):
+            detail["commit_unknown"] = True
+            return None
+
+        with mock_require_registered("agent-paused"), mock_verify_ownership, \
+             mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
+             patch(f"{DIALECTIC}.beam_create_session", new=unknown_create):
+            result = await handle_request_dialectic_review({
+                "agent_id": "agent-paused",
+                "_agent_uuid": "agent-paused",
+                "reason": "Test recovery",
+                "reviewer_mode": "self",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "DIALECTIC_SESSION_CREATE_COMMIT_UNKNOWN"
+        assert data["commit_unknown"] is True
+        assert data["session_id"]
+        pg_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_explicit_self_review_still_self_assigns(
         self, mock_server, mock_require_registered, mock_verify_ownership,
         mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer,

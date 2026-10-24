@@ -519,6 +519,24 @@ async def test_create_non_ok_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_lost_response_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = RuntimeError("response body lost")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_create_session(
+            "s1", "p", {"reason": "x"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
+
+
+@pytest.mark.asyncio
 async def test_create_authorship_policy_refusal_never_falls_back(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
@@ -851,6 +869,25 @@ async def test_enforced_beam_controls_leave_unassigned_timeout_to_system_writer(
         status="failed",
         expected_phase="thesis",
         expected_transcript_revision=0,
+    )
+
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_enforced_beam_controls_allow_unassigned_timeout_when_beam_is_off(
+    monkeypatch,
+):
+    monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+
+    out = await brc.beam_resolve(
+        "s1",
+        "paused",
+        None,
+        {"reason": "timeout"},
+        status="failed",
     )
 
     assert out is None

@@ -1185,12 +1185,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
          claim_if_unassigned
        ) do
     case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
-      {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
+      {:ok, %{reviewer_agent_id: reviewer}} ->
         allowed =
           if claim_if_unassigned do
             is_nil(reviewer) and actor_agent_id == new_reviewer_agent_id
           else
-            actor_agent_id in [paused, reviewer]
+            not is_nil(reviewer) and actor_agent_id == reviewer
           end
 
         cond do

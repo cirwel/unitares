@@ -260,6 +260,8 @@ async def beam_create_session(
     session_id: str,
     paused_agent_id: Optional[str],
     fields: Optional[Dict[str, Any]] = None,
+    *,
+    detail: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Create a dialectic session via BEAM (it owns the write + starts a liveness
     watcher at birth). `fields` carries the optional columns (reviewer_agent_id,
@@ -299,8 +301,12 @@ async def beam_create_session(
     except Exception:  # pragma: no cover
         return _fallback_or_refuse("create_session")
 
+    post_started = False
+
     def _post():
+        nonlocal post_started
         with httpx.Client(timeout=5.0) as client:
+            post_started = True
             resp = client.post(
                 f"{base_url}/v1/dialectic/session",
                 headers=headers,
@@ -322,6 +328,9 @@ async def beam_create_session(
                 f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}"
             )
             rec.respond(outcome="no_response", error=type(e).__name__)
+            if post_started and detail is not None:
+                detail["commit_unknown"] = True
+                return None
             return _fallback_or_refuse("create_session")
 
         if status in (200, 201) and isinstance(body, dict) and body.get("ok"):
@@ -335,15 +344,29 @@ async def beam_create_session(
             )
             return body
 
+        error_code = body.get("error") if isinstance(body, dict) else None
+        try:
+            _raise_governance_policy_refusal(
+                status, body, operation="create_session"
+            )
+        except BeamDialecticPolicyRefusal:
+            rec.respond(
+                outcome="not_written", http_status=status, error=error_code
+            )
+            raise
+        commit_unknown = status >= 500 or 200 <= status < 300
         rec.respond(
-            outcome="not_written",
+            outcome=("commit_unknown" if commit_unknown else "not_written"),
             http_status=status,
-            error=body.get("error") if isinstance(body, dict) else None,
+            error=error_code,
         )
-        _raise_governance_policy_refusal(status, body, operation="create_session")
         logger.warning(
             f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )
+        if commit_unknown and detail is not None:
+            detail["commit_unknown"] = True
+            detail["http_status"] = status
+            return None
         return _fallback_or_refuse("create_session")
 
 
@@ -578,6 +601,15 @@ async def beam_resolve(
     failure that may have followed the row commit from an early/definitive
     non-write. Governance-policy refusals still raise.
     """
+    if (
+        status == "failed"
+        and session_id
+        and paused_agent_id
+        and not reviewer_agent_id
+    ):
+        # A reviewer-less timeout is a system-authored liveness transition,
+        # outside the principal-attributed BEAM control surface.
+        return None
     if not beam_resolution_enabled():
         return _fallback_or_refuse("resolve_session")
     if status not in ("resolved", "failed"):
@@ -592,18 +624,8 @@ async def beam_resolve(
         return _fallback_or_refuse("resolve_session")
 
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
-    # The BEAM endpoint requires non-empty session/paused/reviewer; a session
-    # with no assigned reviewer cannot enter its reviewer-owned saga. A FAILED
-    # timeout is a system-authored liveness transition, not a principal action,
-    # so it retains the guarded PostgreSQL path even when BEAM controls enforce
-    # identity. RESOLVED always requires a named reviewer.
-    if (
-        status == "failed"
-        and session_id
-        and paused_agent_id
-        and not reviewer_agent_id
-    ):
-        return None
+    # The BEAM endpoint requires non-empty session/paused/reviewer. RESOLVED
+    # always requires a named reviewer.
     if not (bearer and session_id and paused_agent_id and reviewer_agent_id):
         return _fallback_or_refuse("resolve_session")
 
