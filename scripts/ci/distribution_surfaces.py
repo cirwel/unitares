@@ -689,11 +689,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("report and deployment options require live mode")
 
     registry = load_registry()
-    if args.only and args.only not in {s["id"] for s in registry["surface"]}:
-        parser.error(f"unknown surface: {args.only}")
     errors = offline_errors(registry)
     for error in errors:
         print(f"ERROR    {error}")
+    if args.only and args.only not in {s.get("id") for s in registry.get("surface", [])}:
+        parser.error(f"unknown surface: {args.only}")
     if args.offline:
         if not errors:
             count = len(registry.get("surface", []))

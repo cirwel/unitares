@@ -94,7 +94,22 @@ python3 scripts/ci/distribution_surfaces.py \
 
 On a maintainer workstation, add `--github-app` to that command
 for repository-scoped App reads through the installed runner. CI supplies
-its own read-only GitHub token. The existing Positioning Surfaces workflow
+its own read-only GitHub token. The installed runner supports an explicit
+repository scope, for example:
+
+```sh
+unitares-github --repo cirwel/homebrew-unitares --read-only -- \
+  gh api repos/cirwel/homebrew-unitares/commits/main --jq .sha
+```
+
+The report selects that scope for each cirwel repository. Reads of public
+third-party listings use the server repository's App token as a public GitHub
+API caller; they gain no installation access to those repositories. Refused
+calls stay UNKNOWN, with no retry through a human login. The maintainer's
+2026-10-24 live run verified this interface against Homebrew's current head and
+its acceptance run, plus the public upstream listing probes.
+
+The existing Positioning Surfaces workflow
 publishes the same report in its job summary and retains both files for 30 days.
 It runs weekly and supports manual dispatch; no additional scheduler is needed.
 

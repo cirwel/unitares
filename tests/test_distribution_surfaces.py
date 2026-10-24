@@ -340,3 +340,13 @@ def test_missing_id_with_dependencies_reports_validation_error(tmp_path):
     errors = ds.offline_errors({'schema': 1, 'surface': [surface]}, root=tmp_path)
     assert '<missing id>: missing id' in errors
     assert '<missing id>: invalid dependency missing' in errors
+
+
+def test_only_filter_does_not_crash_on_malformed_registry(monkeypatch, capsys):
+    import pytest
+    monkeypatch.setattr(ds, 'load_registry', lambda: {'schema': 1, 'surface': [{'depends_on': []}]})
+    monkeypatch.setattr(ds, '_tracked_files', lambda root: [])
+    with pytest.raises(SystemExit) as error:
+        ds.main(['--offline', '--only', 'missing'])
+    assert error.value.code == 2
+    assert '<missing id>: missing id' in capsys.readouterr().out
