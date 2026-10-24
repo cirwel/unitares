@@ -138,6 +138,7 @@
   }
 
   function notConfigured(fix) {
+    renderOperatorCredential();
     document.querySelector("#credentialCount").textContent = "";
     document.querySelector("#sessionCount").textContent = "";
     document.querySelector("#credentialList").innerHTML = '<div class="empty">Passkeys are not configured on this server.</div>';
