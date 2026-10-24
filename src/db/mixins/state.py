@@ -490,14 +490,22 @@ async def fetch_timeline_checkins(
 
     `identity_ids` None reads every agent. `classes` filters on the epistemic
     class (agent report vs substrate). Synthetic bootstrap rows are excluded.
+    Each row carries its `state_id`, the stored report excerpt and the
+    confidence the agent reported, each None where the row has none;
+    `has_self_report` says whether the row recorded a self-report at all.
     """
     return await conn.fetch(
         """
-        SELECT s.recorded_at, s.identity_id,
+        SELECT s.state_id, s.recorded_at, s.identity_id,
                coalesce(s.epistemic_class,
                         s.state_json->>'epistemic_class') AS epistemic_class,
                s.state_json->>'action' AS action,
                s.state_json->>'verdict' AS verdict,
+               s.state_json->>'report_excerpt' AS report_excerpt,
+               s.state_json #>> '{eisv_telemetry,self_report,confidence_reported}'
+                   AS confidence_reported,
+               coalesce(jsonb_typeof(s.state_json #> '{eisv_telemetry,self_report}')
+                        = 'object', false) AS has_self_report,
                s.risk_score
         FROM core.agent_state s
         WHERE s.recorded_at >= $1 AND s.synthetic = false

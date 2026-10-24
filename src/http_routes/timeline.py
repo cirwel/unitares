@@ -183,6 +183,7 @@ async def http_timeline(request):
                 for r in rows:
                     event = {
                         "kind": "checkin",
+                        "state_id": r["state_id"],
                         "ts": _iso(r["recorded_at"]),
                         "agent_id": None,
                         "authored_by": _authored_by(r["epistemic_class"]),
@@ -190,7 +191,12 @@ async def http_timeline(request):
                         "action": r["action"],
                         "verdict": r["verdict"],
                         "risk_score": _float_or_none(r["risk_score"]),
+                        "report_excerpt": r["report_excerpt"],
                     }
+                    # Only rows that recorded a self-report say what confidence
+                    # was reported (None: none supplied); elsewhere it is unknown.
+                    if r["has_self_report"]:
+                        event["confidence_reported"] = _float_or_none(r["confidence_reported"])
                     checkin_events.append((r["identity_id"], event))
                     events.append(event)
 
