@@ -67,6 +67,8 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 - [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
 - [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)
+- [`kg-audit-limits.md`](guides/kg-audit-limits.md) — reading bounded `knowledge(action="audit")` results and fetch/return limits
+- [`kg-statistics.md`](guides/kg-statistics.md) — reading `knowledge(action="stats")` corpus totals versus lifecycle-managed counts
 
 ### `install/` — installation
 
@@ -114,10 +116,14 @@ For people working on UNITARES itself, not using it.
 
 - [`CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) — arch-dispute resolution
 - [`DRIFT_LEDGER.md`](dev/DRIFT_LEDGER.md) — guard/seam index for drift prevention and known unguarded seams
+- [`GOVERNANCE_SENSITIVITY.md`](dev/GOVERNANCE_SENSITIVITY.md) — inventory of enforcement-sensitive paths that require human merge approval
+- [`KNOWLEDGE_GRAPH_SEMANTICS.md`](dev/KNOWLEDGE_GRAPH_SEMANTICS.md) — discovery store flow, consistency, and search/store semantics
+- [`SESSION_KEY_DERIVATION.md`](dev/SESSION_KEY_DERIVATION.md) — caller session-key derivation schemes, stability, and privacy/security boundaries
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
 - [`TOOL_EDGE_INDEX.md`](dev/TOOL_EDGE_INDEX.md) — generated: every tool resolved to its handler, action delegates, and params schema
 - [`TOOL_REFERENCE.md`](dev/TOOL_REFERENCE.md) — generated: what every tool does, with its identity requirement, timeouts, and other names
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
+- [`proposals-layout-2347.md`](dev/proposals-layout-2347.md) — record of the `docs/proposals/` three-directory layout migration (`#2347`)
 
 ### `releases/` — release notes and errata
 
@@ -155,15 +161,26 @@ labels what dialectic reviewer antithesis messages actually do.
 
 ### `analysis/` — dated audits and one-off reads
 
-Point-in-time audits and measurement reads (for example the
-[paper evidence audit](analysis/paper-evidence-audit-2026-10-11.md)). Each file
-states its own scope and date; none is a deployed contract.
+Point-in-time audits and measurement reads. Each file states its own scope and
+date; none is a deployed contract:
+
+- [`paper-evidence-audit-2026-10-11.md`](analysis/paper-evidence-audit-2026-10-11.md) — source-and-evidence audit of v6 paper claims and targeted correction text
+- [`contraction-proof-audit-2026-10-12.md`](analysis/contraction-proof-audit-2026-10-12.md) — audit of the v6 contraction proof and discrete RK4 one-step counterexample
+- [`integrator-shadow-2026-10-12.md`](analysis/integrator-shadow-2026-10-12.md) — offline synthetic shadow comparison for the substepped RK4 candidate
+- [`shadow-overhead-and-mirror-review-2026-10-12.md`](analysis/shadow-overhead-and-mirror-review-2026-10-12.md) — synthetic overhead benchmark and session-mirror consumer review
+- [`tagged-search-closure-2026-10-13.md`](analysis/tagged-search-closure-2026-10-13.md) — dialectic closure benchmark and live probe evidence for tagged KG search
+- [`shadow-reads-2026-10-14.md`](analysis/shadow-reads-2026-10-14.md) — descriptive 30-day reads of the coherence-gate and legacy-coherence identity shadows
+- [`envelope-field-audit-2026-10-19.md`](analysis/envelope-field-audit-2026-10-19.md) — bounded audit of canonical handler fields dropped by `build_experience_envelope` (`#2125`)
 
 ### `plans/` — dated plans and review records
 
-Execution plans and point-in-time review records, for example the
-[EISV instrument-quality sequence](plans/eisv-instrument-quality-2026-10-13.md).
-Each carries its own status line; a plan authorizes nothing beyond what it states.
+Execution plans and point-in-time review records. Each carries its own status
+line; a plan authorizes nothing beyond what it states:
+
+- [`eisv-instrument-quality-2026-10-13.md`](plans/eisv-instrument-quality-2026-10-13.md) — operator-authorized EISV repair and evaluation sequence
+- [`competitive-survival-audit-review-2026-09-17.md`](plans/competitive-survival-audit-review-2026-09-17.md) — point-in-time independent review of the competitive survival audit (`#2257`)
+- [`public-presentation-critique-2026-09-16.md`](plans/public-presentation-critique-2026-09-16.md) — compatibility locator to [`proposals/archive/public-presentation-critique-2026-09-16.md`](proposals/archive/public-presentation-critique-2026-09-16.md)
+- [`2026-04-20-kg-retrieval-rebuild.md`](plans/2026-04-20-kg-retrieval-rebuild.md) — pointer to the 2026-04-20 KG retrieval rebuild phases and baselines
 
 ### `proposals/` — internal RFCs and decision history
 
