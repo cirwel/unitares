@@ -32,8 +32,8 @@ see the [interface contract](INTERFACE_CONTRACT.md) for the authoritative mappin
 |---|---|---|
 | Behavioral state and policy | `sync_state`, `check_working_state`, `self_recovery` | State estimates and policy actions come from the deployed heuristic instrument ([EISV computation](EISV_COMPUTATION.md)). A host integration enforces actions beyond governed writes. |
 | Advisory inference | `consult` | Needs a configured provider/host and appropriate privacy/authorization. Cloud-enabled processing may send submitted content externally. No bundled model is implied. |
-| Observation and calibration | `observe`, `calibration` | Reads retained observations and outcomes. |
-| Operations and configuration | `agent`, `config`, `admin`, `health_check` | Action-specific authorization applies. `health_check` reports the running deployment's readiness. |
+| Observation and calibration | `observe`, `calibration` | Built from retained observations and outcomes. `calibration` `update`, `backfill` and `rebuild` write calibration state; `check` reads it. |
+| Operations and configuration | `agent`, `config`, `admin`, `health_check` | Action-specific authorization applies. `health_check` returns the latest background probe snapshot; read `_cache.age_seconds` and `_cache.stale` before treating it as current. |
 | History and specialist knowledge | `export`, `knowledge` | Export, retention, graph, and backend-specific actions have their own parameters and prerequisites. |
 | Signed coordination | Deployment's lease-plane interface | Needs the configured lease service and identity proofs. A lease covers the surface it names. |
 
