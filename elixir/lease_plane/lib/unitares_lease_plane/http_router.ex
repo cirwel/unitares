@@ -1094,6 +1094,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp authorize_dialectic_participant(conn, session_id, actor_agent_id, roles) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?("dialectic") do
+        authorize_dialectic_participant_membership(session_id, actor_agent_id, roles)
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_participant_membership(session_id, actor_agent_id, roles) do
     case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
       {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
         allowed =
@@ -1102,11 +1112,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             :reviewer -> actor_agent_id == reviewer
           end)
 
-        with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-          if IdentityBinding.enforced_for_surface?("dialectic") and not allowed,
-            do: {:error, :identity_proof_invalid},
-            else: :ok
-        end
+        if allowed, do: :ok, else: {:error, :identity_proof_invalid}
 
       {:ok, nil} ->
         {:error, :not_found}
@@ -1117,14 +1123,21 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?("dialectic") do
+        authorize_dialectic_resolution_membership(session_id, actor_agent_id)
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_resolution_membership(session_id, actor_agent_id) do
     case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
       {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
-        with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
-          if IdentityBinding.enforced_for_surface?("dialectic") and
-               actor_agent_id not in [paused, reviewer],
-             do: {:error, :session_identity_mismatch},
-             else: :ok
-        end
+        if actor_agent_id in [paused, reviewer],
+          do: :ok,
+          else: {:error, :session_identity_mismatch}
 
       {:ok, nil} ->
         {:error, :not_found}
@@ -1136,6 +1149,26 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp authorize_dialectic_reviewer_change(
          conn,
+         session_id,
+         actor_agent_id,
+         new_reviewer_agent_id,
+         claim_if_unassigned
+       ) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?("dialectic") do
+        authorize_dialectic_reviewer_membership(
+          session_id,
+          actor_agent_id,
+          new_reviewer_agent_id,
+          claim_if_unassigned
+        )
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_reviewer_membership(
          session_id,
          actor_agent_id,
          new_reviewer_agent_id,
@@ -1154,8 +1187,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           claim_if_unassigned and not is_nil(reviewer) ->
             {:error, :reviewer_write_refused}
 
-          allowed or not IdentityBinding.enforced_for_surface?("dialectic") ->
-            authorize_dialectic_actor(conn, actor_agent_id)
+          allowed ->
+            :ok
 
           true ->
             {:error, :identity_proof_invalid}

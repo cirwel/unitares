@@ -5,12 +5,13 @@ the Python convergence path hands the finished resolution payload to the BEAM
 lease plane (`POST /v2/dialectic/resolve-with-effect`), which owns the cross-runtime saga
 slot and is the sole writer of the terminal `core.dialectic_sessions` row.
 
-Fail-safe by construction: this returns ``None`` — telling the caller to use the
+In compatibility mode this returns ``None`` — telling the caller to use the
 Python persistence path — whenever the flag is off, the lease plane is not
 configured, a required field is missing, or BEAM is unreachable / returns an
-ordinary non-OK response. Typed policy, in-flight-saga, and transcript-frontier
-refusals are authoritative and raise instead of falling through to a second
-writer. The Python B-4 guards protect every ordinary fallback path.
+ordinary non-OK response. When dialectic identity binding is enforced, those
+same paths fail closed: falling through would bypass the only writer that can
+verify request-bound identity. Typed policy, in-flight-saga, and
+transcript-frontier refusals are always authoritative.
 """
 
 import asyncio
@@ -77,15 +78,10 @@ class BeamDialecticTranscriptConflict(RuntimeError):
     """BEAM refused a terminal write from stale protocol state."""
 
 
-def _raise_governance_policy_refusal(
-    status: int, body: Any, *, operation: str
-) -> None:
+def _raise_governance_policy_refusal(status: int, body: Any, *, operation: str) -> None:
     error_code = body.get("error") if isinstance(body, dict) else None
     identity_reason = body.get("reason") if isinstance(body, dict) else None
-    if (
-        status == 409
-        and error_code in _GOVERNANCE_POLICY_REFUSALS
-    ) or (
+    if (status == 409 and error_code in _GOVERNANCE_POLICY_REFUSALS) or (
         status in (403, 503)
         and error_code in {"permission_denied", "service_unavailable"}
         and identity_reason
@@ -130,7 +126,10 @@ async def _already_terminal_reason(session_id: str) -> Dict[str, Any]:
         from src.dialectic_db import get_session_terminal_state_async
 
         row = await get_session_terminal_state_async(session_id)
-        return {"terminal_reason": (row or {}).get("reason"), "terminal_reason_read": True}
+        return {
+            "terminal_reason": (row or {}).get("reason"),
+            "terminal_reason_read": True,
+        }
     except Exception as e:
         logger.debug(
             f"[BEAM_RESOLVE] already_terminal reason read failed for {session_id[:16]}: {e}"
@@ -140,7 +139,31 @@ async def _already_terminal_reason(session_id: str) -> Dict[str, Any]:
 
 def beam_resolution_enabled() -> bool:
     """True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on."""
-    return os.getenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "0").strip().lower() in _TRUTHY
+    return (
+        os.getenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "0").strip().lower() in _TRUTHY
+    )
+
+
+def dialectic_identity_enforced() -> bool:
+    """Mirror the lease plane's effective enforcement mode for dialectic writes."""
+    if os.getenv("UNITARES_LEASE_IDENTITY_BINDING", "off").strip().lower() != "enforce":
+        return False
+    raw_kinds = os.getenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS")
+    if raw_kinds is None or not raw_kinds.strip():
+        return True
+    if raw_kinds.strip().lower() == "all":
+        return True
+    kinds = {kind.strip() for kind in raw_kinds.split(",") if kind.strip()}
+    return "dialectic" in kinds
+
+
+def _fallback_or_refuse(operation: str) -> None:
+    """Allow the legacy PostgreSQL writer only outside identity enforcement."""
+    if dialectic_identity_enforced():
+        raise BeamDialecticPolicyRefusal(
+            "identity_verification_unavailable", operation=operation
+        )
+    return None
 
 
 def _identity_bound_request(
@@ -241,11 +264,11 @@ async def beam_create_session(
     UNITARES_DIALECTIC_BEAM_RESOLUTION flag as the resolve routing.
     """
     if not beam_resolution_enabled():
-        return None
+        return _fallback_or_refuse("create_session")
 
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
     if not (bearer and session_id and paused_agent_id):
-        return None
+        return _fallback_or_refuse("create_session")
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
     payload = {"session_id": session_id, "paused_agent_id": paused_agent_id}
@@ -259,13 +282,13 @@ async def beam_create_session(
         expected_agent_id=paused_agent_id,
     )
     if bound_request is None:
-        return None
+        return _fallback_or_refuse("create_session")
     body_bytes, headers = bound_request
 
     try:
         import httpx
     except Exception:  # pragma: no cover
-        return None
+        return _fallback_or_refuse("create_session")
 
     def _post():
         with httpx.Client(timeout=5.0) as client:
@@ -277,28 +300,42 @@ async def beam_create_session(
             return resp.status_code, (resp.json() if resp.content else {})
 
     async with record_session_write(
-        kind=KIND_CREATE, session_id=session_id, default_via="beam", requested=None,
+        kind=KIND_CREATE,
+        session_id=session_id,
+        default_via="beam",
+        requested=None,
     ) as rec:
         try:
             loop = asyncio.get_running_loop()
             status, body = await loop.run_in_executor(None, _post)
         except Exception as e:
-            logger.warning(f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}")
+            logger.warning(
+                f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}"
+            )
             rec.respond(outcome="no_response", error=type(e).__name__)
-            return None
+            return _fallback_or_refuse("create_session")
 
         if status in (200, 201) and isinstance(body, dict) and body.get("ok"):
-            logger.info(f"[BEAM_CREATE] session {session_id[:16]} created on BEAM (created={body.get('created')})")
+            logger.info(
+                f"[BEAM_CREATE] session {session_id[:16]} created on BEAM (created={body.get('created')})"
+            )
             # BEAM answers a duplicate id with ok=true, created=false: no write.
-            rec.respond(outcome="not_written" if body.get("created") is False else "written",
-                        http_status=status)
+            rec.respond(
+                outcome="not_written" if body.get("created") is False else "written",
+                http_status=status,
+            )
             return body
 
-        rec.respond(outcome="not_written", http_status=status,
-                    error=body.get("error") if isinstance(body, dict) else None)
+        rec.respond(
+            outcome="not_written",
+            http_status=status,
+            error=body.get("error") if isinstance(body, dict) else None,
+        )
         _raise_governance_policy_refusal(status, body, operation="create_session")
-        logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
-        return None
+        logger.warning(
+            f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
+        )
+        return _fallback_or_refuse("create_session")
 
 
 def _phase_payload(
@@ -324,17 +361,17 @@ async def beam_update_phase(
     Python `pg_update_phase` path. Governance-policy refusals raise. Terminal phases are NOT routed
     here (those go via resolve); BEAM rejects them with 422 -> None -> fallback.
 
-    ``synthesis_round`` is sent only when supplied. Deploy order is safe in both
-    directions: the BEAM router pattern-matches on ``session_id``/``phase``, so a
-    lease-plane that predates this field ignores the extra key and updates phase
-    exactly as before; a lease-plane that has it treats an absent key as "leave
-    the stored round alone".
+    ``synthesis_round`` is sent only when supplied. A BEAM version that predates
+    that field ignores the extra key. Current BEAM also requires
+    ``actor_agent_id``; an older Python caller therefore receives 422 and may
+    use its compatibility fallback only while dialectic identity enforcement is
+    off.
     """
     if not beam_resolution_enabled():
-        return None
+        return _fallback_or_refuse("update_phase")
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
     if not (bearer and session_id and phase):
-        return None
+        return _fallback_or_refuse("update_phase")
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
     payload = _phase_payload(session_id, phase, synthesis_round)
@@ -345,13 +382,13 @@ async def beam_update_phase(
         fallback_actor_id=actor_agent_id,
     )
     if bound_request is None:
-        return None
+        return _fallback_or_refuse("update_phase")
     body_bytes, headers = bound_request
 
     try:
         import httpx
     except Exception:  # pragma: no cover
-        return None
+        return _fallback_or_refuse("update_phase")
 
     def _post():
         with httpx.Client(timeout=5.0) as client:
@@ -363,15 +400,20 @@ async def beam_update_phase(
             return resp.status_code, (resp.json() if resp.content else {})
 
     async with record_session_write(
-        kind=KIND_PHASE, session_id=session_id, default_via="beam", requested=phase,
+        kind=KIND_PHASE,
+        session_id=session_id,
+        default_via="beam",
+        requested=phase,
     ) as rec:
         try:
             loop = asyncio.get_running_loop()
             status, body = await loop.run_in_executor(None, _post)
         except Exception as e:
-            logger.warning(f"[BEAM_PHASE] call failed for {session_id[:16]}, falling back: {e}")
+            logger.warning(
+                f"[BEAM_PHASE] call failed for {session_id[:16]}, falling back: {e}"
+            )
             rec.respond(outcome="no_response", error=type(e).__name__)
-            return None
+            return _fallback_or_refuse("update_phase")
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
             # BEAM's update_phase answers :ok for a row that is already
@@ -379,11 +421,16 @@ async def beam_update_phase(
             # OK here does not prove the phase changed: its effect is unknown.
             rec.respond(outcome="accepted_effect_unknown", http_status=status)
             return body
-        logger.warning(f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
-        rec.respond(outcome="not_written", http_status=status,
-                    error=body.get("error") if isinstance(body, dict) else None)
+        logger.warning(
+            f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back"
+        )
+        rec.respond(
+            outcome="not_written",
+            http_status=status,
+            error=body.get("error") if isinstance(body, dict) else None,
+        )
         _raise_governance_policy_refusal(status, body, operation="update_phase")
-        return None
+        return _fallback_or_refuse("update_phase")
 
 
 async def beam_update_reviewer(
@@ -404,10 +451,10 @@ async def beam_update_reviewer(
     instead of mistaking its own committed claim for a competing reviewer.
     """
     if not beam_resolution_enabled():
-        return None
+        return _fallback_or_refuse("update_reviewer")
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
     if not (bearer and session_id and reviewer_agent_id):
-        return None
+        return _fallback_or_refuse("update_reviewer")
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
     route = (
@@ -429,13 +476,13 @@ async def beam_update_reviewer(
         fallback_actor_id=reviewer_agent_id,
     )
     if bound_request is None:
-        return None
+        return _fallback_or_refuse("update_reviewer")
     body_bytes, headers = bound_request
 
     try:
         import httpx
     except Exception:  # pragma: no cover
-        return None
+        return _fallback_or_refuse("update_reviewer")
 
     post_started = False
 
@@ -451,31 +498,40 @@ async def beam_update_reviewer(
             return resp.status_code, (resp.json() if resp.content else {})
 
     async with record_session_write(
-        kind=KIND_REVIEWER, session_id=session_id, default_via="beam", requested=reviewer_agent_id,
+        kind=KIND_REVIEWER,
+        session_id=session_id,
+        default_via="beam",
+        requested=reviewer_agent_id,
     ) as rec:
         try:
             loop = asyncio.get_running_loop()
             status, body = await loop.run_in_executor(None, _post)
         except Exception as e:
-            logger.warning(f"[BEAM_REVIEWER] call failed for {session_id[:16]}, falling back: {e}")
+            logger.warning(
+                f"[BEAM_REVIEWER] call failed for {session_id[:16]}, falling back: {e}"
+            )
             rec.respond(outcome="no_response", error=type(e).__name__)
             if post_started and detail is not None:
                 detail["commit_unknown"] = True
-            return None
+            return _fallback_or_refuse("update_reviewer")
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
             rec.respond(outcome="written", http_status=status)
             return body
         commit_unknown = status >= 500 or 200 <= status < 300
-        rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
-                    http_status=status,
-                    error=body.get("error") if isinstance(body, dict) else None)
+        rec.respond(
+            outcome=("commit_unknown" if commit_unknown else "not_written"),
+            http_status=status,
+            error=body.get("error") if isinstance(body, dict) else None,
+        )
         _raise_governance_policy_refusal(status, body, operation="update_reviewer")
         if commit_unknown and detail is not None:
             detail["commit_unknown"] = True
             detail["http_status"] = status
-        logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
-        return None
+        logger.warning(
+            f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back"
+        )
+        return _fallback_or_refuse("update_reviewer")
 
 
 async def beam_resolve(
@@ -501,7 +557,7 @@ async def beam_resolve(
     non-write. Governance-policy refusals still raise.
     """
     if not beam_resolution_enabled():
-        return None
+        return _fallback_or_refuse("resolve_session")
     if status not in ("resolved", "failed"):
         return None
     # Only the distinct v2 route attests that BEAM understands the transcript
@@ -511,13 +567,13 @@ async def beam_resolve(
     # frontier uses the Python CAS path; old Python retains the v1 route for
     # rollback compatibility.
     if expected_transcript_revision is None:
-        return None
+        return _fallback_or_refuse("resolve_session")
 
     bearer = os.getenv("LEASE_PLANE_BEARER_TOKEN") or ""
     # The BEAM endpoint requires non-empty session/paused/reviewer; a session
     # with no assigned reviewer falls back to the Python path.
     if not (bearer and session_id and paused_agent_id and reviewer_agent_id):
-        return None
+        return _fallback_or_refuse("resolve_session")
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
     # `status` is rebound to the HTTP status code below; keep what was asked.
@@ -534,9 +590,7 @@ async def beam_resolve(
     if expected_phase is not None:
         payload["expected_phase"] = expected_phase
     if expected_awaiting_facilitation is not None:
-        payload["expected_awaiting_facilitation"] = (
-            expected_awaiting_facilitation
-        )
+        payload["expected_awaiting_facilitation"] = expected_awaiting_facilitation
     if expected_updated_at is not None:
         payload["expected_updated_at"] = (
             expected_updated_at.isoformat()
@@ -550,13 +604,13 @@ async def beam_resolve(
         fallback_actor_id=paused_agent_id,
     )
     if bound_request is None:
-        return None
+        return _fallback_or_refuse("resolve_session")
     body_bytes, headers = bound_request
 
     try:
         import httpx
     except Exception:  # pragma: no cover - httpx always present in this deploy
-        return None
+        return _fallback_or_refuse("resolve_session")
 
     post_started = False
 
@@ -576,14 +630,18 @@ async def beam_resolve(
     # paired by attempt_id (src/dialectic_session_writes.py). Recorded only
     # when a request is actually made: the early returns above sent nothing.
     async with record_session_write(
-        kind=KIND_RESOLVE, session_id=session_id, default_via="beam",
+        kind=KIND_RESOLVE,
+        session_id=session_id,
+        default_via="beam",
         requested=requested_status,
     ) as rec:
         try:
             loop = asyncio.get_running_loop()
             status, body = await loop.run_in_executor(None, _post)
         except Exception as e:
-            logger.warning(f"[BEAM_RESOLVE] call failed for {session_id[:16]}, falling back to Python: {e}")
+            logger.warning(
+                f"[BEAM_RESOLVE] call failed for {session_id[:16]}, falling back to Python: {e}"
+            )
             rec.respond(outcome="no_response", error=type(e).__name__)
             if post_started and detail is not None:
                 # Once Client.post() is entered, a timeout, response decode
@@ -591,7 +649,7 @@ async def beam_resolve(
                 # not commit before the response was lost. Exact PostgreSQL
                 # readback decides whether the caller must route reconciliation.
                 detail["commit_unknown"] = True
-            return None
+            return _fallback_or_refuse("resolve_session")
 
         if (
             status == 200
@@ -604,8 +662,11 @@ async def beam_resolve(
             )
             origin = body.get("origin")
             fields: Dict[str, Any] = {
-                "outcome": "written", "http_status": status, "origin": origin,
-                "reported_status": body.get("status"), "saga_id": body.get("saga_id"),
+                "outcome": "written",
+                "http_status": status,
+                "origin": origin,
+                "reported_status": body.get("status"),
+                "saga_id": body.get("saga_id"),
             }
             if origin == ALREADY_TERMINAL_ORIGIN:
                 # Nothing was written: the row was already terminal.
@@ -631,12 +692,14 @@ async def beam_resolve(
                 f"[BEAM_RESOLVE] invalid positive acknowledgement for "
                 f"{session_id[:16]}: {body}"
             )
-            return None
+            return _fallback_or_refuse("resolve_session")
 
         commit_unknown = status >= 500 or 200 <= status < 300
-        rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
-                    http_status=status,
-                    error=body.get("error") if isinstance(body, dict) else None)
+        rec.respond(
+            outcome=("commit_unknown" if commit_unknown else "not_written"),
+            http_status=status,
+            error=body.get("error") if isinstance(body, dict) else None,
+        )
         error_code = body.get("error") if isinstance(body, dict) else None
         if status == 409 and error_code == "saga_in_flight":
             raise BeamDialecticSagaInFlight(
@@ -665,4 +728,4 @@ async def beam_resolve(
         logger.warning(
             f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )
-        return None
+        return _fallback_or_refuse("resolve_session")

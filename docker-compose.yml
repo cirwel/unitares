@@ -203,6 +203,11 @@ services:
       UNITARES_KNOWLEDGE_BACKEND: ${UNITARES_KNOWLEDGE_BACKEND:-age}
       UNITARES_DIALECTIC_BACKEND: postgres
       UNITARES_DIALECTIC_BEAM_RESOLUTION: ${UNITARES_DIALECTIC_BEAM_RESOLUTION:-1}
+      # Keep Python's fallback decision aligned with the lease plane. Under
+      # dialectic enforcement, an unavailable BEAM writer must fail closed
+      # instead of bypassing request-bound identity via direct PostgreSQL.
+      UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic}
       # Coordination boundary used by governed clients and spawned workers.
       LEASE_PLANE_BASE_URL: http://lease-plane:8788
       UNITARES_LEASE_PLANE_URL: http://lease-plane:8788

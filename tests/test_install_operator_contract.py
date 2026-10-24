@@ -197,6 +197,16 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
         "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: "
         "${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance,dialectic}"
     ) in compose
+    assert len(
+        re.findall(r"^      UNITARES_LEASE_IDENTITY_BINDING:", server, re.MULTILINE)
+    ) == 1
+    assert len(
+        re.findall(
+            r"^      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:",
+            server,
+            re.MULTILINE,
+        )
+    ) == 1
     assert "UNITARES_DIALECTIC_BEAM_RESOLUTION: ${UNITARES_DIALECTIC_BEAM_RESOLUTION:-1}" in compose
     assert len(
         re.findall(r"^      UNITARES_LEASE_ATTESTATION_AUDIENCE:", compose, re.MULTILINE)
