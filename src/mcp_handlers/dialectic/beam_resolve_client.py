@@ -146,7 +146,14 @@ def beam_resolution_enabled() -> bool:
 
 def dialectic_identity_enforced() -> bool:
     """Whether identity is enforced for the BEAM-routed dialectic controls."""
-    if os.getenv("UNITARES_LEASE_IDENTITY_BINDING", "off").strip().lower() != "enforce":
+    raw_mode = os.getenv("UNITARES_LEASE_IDENTITY_BINDING")
+    # A BEAM-enabled native worker may not share the lease-plane process's
+    # environment. Missing mode is therefore uncertainty, not evidence that
+    # the remote verifier is off: fail closed until the worker explicitly
+    # receives `off` or `log` too.
+    if raw_mode is None:
+        return beam_resolution_enabled()
+    if raw_mode.strip().lower() != "enforce":
         return False
     raw_kinds = os.getenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS")
     if raw_kinds is None or not raw_kinds.strip():
@@ -521,13 +528,23 @@ async def beam_update_reviewer(
         if status == 200 and isinstance(body, dict) and body.get("ok"):
             rec.respond(outcome="written", http_status=status)
             return body
+        try:
+            _raise_governance_policy_refusal(
+                status, body, operation="update_reviewer"
+            )
+        except BeamDialecticPolicyRefusal:
+            rec.respond(
+                outcome="not_written",
+                http_status=status,
+                error=body.get("error") if isinstance(body, dict) else None,
+            )
+            raise
         commit_unknown = status >= 500 or 200 <= status < 300
         rec.respond(
             outcome=("commit_unknown" if commit_unknown else "not_written"),
             http_status=status,
             error=body.get("error") if isinstance(body, dict) else None,
         )
-        _raise_governance_policy_refusal(status, body, operation="update_reviewer")
         if commit_unknown and detail is not None:
             detail["commit_unknown"] = True
             detail["http_status"] = status
@@ -712,14 +729,11 @@ async def beam_resolve(
                 return None
             return _fallback_or_refuse("resolve_session")
 
-        commit_unknown = status >= 500 or 200 <= status < 300
-        rec.respond(
-            outcome=("commit_unknown" if commit_unknown else "not_written"),
-            http_status=status,
-            error=body.get("error") if isinstance(body, dict) else None,
-        )
         error_code = body.get("error") if isinstance(body, dict) else None
         if status == 409 and error_code == "saga_in_flight":
+            rec.respond(
+                outcome="not_written", http_status=status, error=error_code
+            )
             raise BeamDialecticSagaInFlight(
                 "a different resolution saga is already in flight"
             )
@@ -730,10 +744,27 @@ async def beam_resolve(
             "session_activity_mismatch",
             "saga_claim_lost",
         }:
+            rec.respond(
+                outcome="not_written", http_status=status, error=error_code
+            )
             raise BeamDialecticTranscriptConflict(
                 "the dialectic protocol state changed before terminal commit"
             )
-        _raise_governance_policy_refusal(status, body, operation="resolve_session")
+        try:
+            _raise_governance_policy_refusal(
+                status, body, operation="resolve_session"
+            )
+        except BeamDialecticPolicyRefusal:
+            rec.respond(
+                outcome="not_written", http_status=status, error=error_code
+            )
+            raise
+        commit_unknown = status >= 500 or 200 <= status < 300
+        rec.respond(
+            outcome=("commit_unknown" if commit_unknown else "not_written"),
+            http_status=status,
+            error=error_code,
+        )
         if commit_unknown and detail is not None:
             # A 5xx can be returned after commit_session_row succeeded but saga
             # finalization failed. A malformed/negative 2xx is equally

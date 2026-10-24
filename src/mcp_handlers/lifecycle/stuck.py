@@ -133,7 +133,7 @@ async def _trigger_dialectic_for_stuck_agent(
         await save_session(session)
     except BeamDialecticPolicyRefusal as exc:
         logger.warning(
-            "[STUCK_AGENT_RECOVERY] BEAM refused session creation for %s: %s",
+            "[STUCK_AGENT_RECOVERY] BEAM refused session persistence for %s: %s",
             agent_id[:8],
             exc.error_code,
         )

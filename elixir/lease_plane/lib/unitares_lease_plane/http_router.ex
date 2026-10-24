@@ -1054,44 +1054,52 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp authorize_active_lease(conn, lease_id) do
-    case Repo.active_lease(lease_id) do
-      {:ok, lease} ->
-        IdentityBinding.authorize(
-          lease.holder_agent_uuid,
-          IdentityBinding.proof_from_conn(conn),
-          lease.surface_kind,
-          IdentityBinding.request_context(conn)
-        )
+    if IdentityBinding.enabled?() do
+      case Repo.active_lease(lease_id) do
+        {:ok, lease} ->
+          IdentityBinding.authorize(
+            lease.holder_agent_uuid,
+            IdentityBinding.proof_from_conn(conn),
+            lease.surface_kind,
+            IdentityBinding.request_context(conn)
+          )
 
-      {:error, :not_found} ->
-        {:error, :not_found}
+        {:error, :not_found} ->
+          {:error, :not_found}
 
-      {:error, _reason} ->
-        {:error, :identity_verification_unavailable}
+        {:error, _reason} ->
+          {:error, :identity_verification_unavailable}
+      end
+    else
+      :ok
     end
   end
 
   defp authorize_handoff_recipient(conn, handoff_id) do
-    case HandoffServer.authorization_context(handoff_id) do
-      {:ok, %{recipient_uuid: recipient_uuid, lease_id: lease_id}} ->
-        case Repo.active_lease(lease_id) do
-          {:ok, lease} ->
-            IdentityBinding.authorize(
-              recipient_uuid,
-              IdentityBinding.proof_from_conn(conn),
-              lease.surface_kind,
-              IdentityBinding.request_context(conn)
-            )
+    if IdentityBinding.enabled?() do
+      case HandoffServer.authorization_context(handoff_id) do
+        {:ok, %{recipient_uuid: recipient_uuid, lease_id: lease_id}} ->
+          case Repo.active_lease(lease_id) do
+            {:ok, lease} ->
+              IdentityBinding.authorize(
+                recipient_uuid,
+                IdentityBinding.proof_from_conn(conn),
+                lease.surface_kind,
+                IdentityBinding.request_context(conn)
+              )
 
-          {:error, :not_found} ->
-            {:error, :not_found}
+            {:error, :not_found} ->
+              {:error, :not_found}
 
-          {:error, _reason} ->
-            {:error, :identity_verification_unavailable}
-        end
+            {:error, _reason} ->
+              {:error, :identity_verification_unavailable}
+          end
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      :ok
     end
   end
 

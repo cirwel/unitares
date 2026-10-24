@@ -31,7 +31,7 @@ def _stub_request_bound_identity(monkeypatch):
     """Keep transport-contract tests focused; dedicated tests cover minting."""
     from src.mcp_handlers.context import set_credential_proof_uuid
 
-    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BINDING", raising=False)
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "off")
     monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", raising=False)
     set_credential_proof_uuid(None)
 
@@ -153,6 +153,7 @@ def test_identity_bound_request_refuses_a_resolved_caller_mismatch():
 def test_identity_bound_request_without_attestation_still_targets_beam(monkeypatch):
     from src.mcp_handlers.context import (
         reset_session_context,
+        set_credential_proof_uuid,
         set_session_context,
         set_session_proof_origin,
         update_context_agent_id,
@@ -164,6 +165,7 @@ def test_identity_bound_request_without_attestation_still_targets_beam(monkeypat
     context_token = set_session_context(client_session_id="session-test")
     update_context_agent_id(actor)
     set_session_proof_origin("caller_asserted")
+    set_credential_proof_uuid(actor)
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
@@ -172,6 +174,7 @@ def test_identity_bound_request_without_attestation_still_targets_beam(monkeypat
             fallback_actor_id=actor,
         )
     finally:
+        set_credential_proof_uuid(None)
         set_session_proof_origin(None)
         reset_session_context(context_token)
 
@@ -184,6 +187,7 @@ def test_identity_bound_request_without_attestation_still_targets_beam(monkeypat
 def test_identity_bound_request_does_not_launder_server_inferred_identity(monkeypatch):
     from src.mcp_handlers.context import (
         reset_session_context,
+        set_credential_proof_uuid,
         set_session_context,
         set_session_proof_origin,
         update_context_agent_id,
@@ -194,6 +198,7 @@ def test_identity_bound_request_does_not_launder_server_inferred_identity(monkey
     context_token = set_session_context(client_session_id="session-test")
     update_context_agent_id(actor)
     set_session_proof_origin("server_inferred")
+    set_credential_proof_uuid(actor)
     try:
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
@@ -201,6 +206,7 @@ def test_identity_bound_request_does_not_launder_server_inferred_identity(monkey
             include_actor=True,
         )
     finally:
+        set_credential_proof_uuid(None)
         set_session_proof_origin(None)
         reset_session_context(context_token)
 
@@ -211,24 +217,32 @@ def test_identity_bound_request_does_not_launder_server_inferred_identity(monkey
 
 def test_identity_bound_request_does_not_launder_application_identity(monkeypatch):
     from src.mcp_handlers.context import (
+        get_credential_proof_uuid,
         reset_session_context,
+        reset_session_resolution_source,
+        set_session_resolution_source,
         set_session_context,
         set_session_proof_origin,
         update_context_agent_id,
     )
+    from src.mcp_handlers.identity.credential_issuance import note_session_proof
 
     actor = "11111111-1111-4111-8111-111111111111"
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     context_token = set_session_context(client_session_id="shared-application")
     update_context_agent_id(actor)
     set_session_proof_origin("caller_asserted")
+    source_token = set_session_resolution_source("x_client_id")
     try:
+        note_session_proof(actor, "shared-application")
+        assert get_credential_proof_uuid() is None
         bound = _REAL_IDENTITY_BOUND_REQUEST(
             "/v1/dialectic/phase",
             {"session_id": "s1", "phase": "antithesis"},
             include_actor=True,
         )
     finally:
+        reset_session_resolution_source(source_token)
         set_session_proof_origin(None)
         reset_session_context(context_token)
 
@@ -775,6 +789,18 @@ async def test_enforced_dialectic_disabled_route_never_falls_back(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
     monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+
+    with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+        await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_verification_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_beam_enabled_missing_native_mode_fails_closed(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BINDING", raising=False)
+    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", raising=False)
 
     with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
         await brc.beam_update_phase("s1", "antithesis")
