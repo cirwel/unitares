@@ -53,8 +53,8 @@ def test_other_params_survive_and_every_secret_param_is_scrubbed():
 
 
 def test_prefixed_credential_params_are_scrubbed():
-    # The dashboard provisions ?operator_token=… by page URL; the page GET is
-    # logged on uvicorn.access like any other request line.
+    # Unsupported legacy links or attacker-supplied URLs can still reach the
+    # access log before the dashboard scrubs the query from browser history.
     out = redact(f'"GET /dashboard?operator_token={SECRET}&x=1 HTTP/1.1" 200')
     assert SECRET not in out
     assert "x=1" in out

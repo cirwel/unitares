@@ -291,10 +291,11 @@ credential gate to every extension handler; no fleet packs are built in.)
   Only that exact 503 body counts as "not configured"; any other answer, or
   none, keeps the error.
 
-The operator credential is provisioned through the Security pane's password
-input over the dashboard's TLS session and retained only in that browser's
-local storage. Never place it in a URL: request lines can reach browser history,
-proxies, tunnels, and access logs before client-side code can scrub them. These
+The operator credential is provisioned directly through the Security pane's
+password input and retained only in that browser's local storage. Use HTTPS for
+non-loopback dashboard deployments. Never place the credential in a URL: request
+lines can reach browser history, proxies, tunnels, and access logs before
+client-side code can scrub them. These
 live-only security calls deliberately do not fall back to snapshots. Other
 operator actions such as agent archive/resume, review
 requests, and discovery status changes are still not wired. Treat every new

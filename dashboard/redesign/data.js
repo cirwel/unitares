@@ -60,9 +60,10 @@
   }
 
   // Operator write credential (X-Unitares-Operator). It is provisioned only
-  // through the password input on the TLS-delivered Security pane. Query-string
-  // provisioning is intentionally unsupported because request lines leak into
-  // browser history, proxies, tunnels, and access logs before JS can scrub them.
+  // through the password input on the Security pane; remote deployments must
+  // use HTTPS. Query-string provisioning is intentionally unsupported because
+  // request lines leak into browser history, proxies, tunnels, and access logs
+  // before JS can scrub them.
   function operatorToken() {
     try {
       return localStorage.getItem("unitares_operator_token") || null;
