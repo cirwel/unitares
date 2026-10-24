@@ -75,9 +75,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/acquire" do
     case extract_acquire_params(conn.body_params) do
       {:ok, params} ->
-        case IdentityBinding.authorize_strict(
+        case IdentityBinding.authorize(
                params.holder_agent_uuid,
                IdentityBinding.proof_from_conn(conn),
+               surface_kind(params.surface_id),
                IdentityBinding.request_context(conn)
              ) do
           :ok ->
@@ -338,9 +339,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     case extract_create_params(conn.body_params) do
       {:ok, params} ->
         with :ok <-
-               IdentityBinding.authorize_strict(
+               IdentityBinding.authorize(
                  params.paused_agent_id,
                  IdentityBinding.proof_from_conn(conn),
+                 "dialectic",
                  IdentityBinding.request_context(conn)
                ) do
           case UnitaresLeasePlane.DialecticSaga.create_session(params) do
@@ -488,6 +490,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       {:error, :not_found} ->
         json(conn, 404, %{ok: false, error: "session_not_found"})
 
+      {:error, :reviewer_write_refused} ->
+        json(conn, 409, %{ok: false, error: "reviewer_write_refused"})
+
       {:error, identity_reason}
       when identity_reason in [
              :identity_proof_invalid,
@@ -551,9 +556,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           params = Map.put(params, :effect_protocol, effect_protocol)
 
           with :ok <-
-                 IdentityBinding.authorize_strict(
+                 IdentityBinding.authorize(
                    params.reviewer_agent_id,
                    IdentityBinding.proof_from_conn(conn),
+                   "dialectic",
                    IdentityBinding.request_context(conn)
                  ) do
             case UnitaresLeasePlane.DialecticSaga.resolve(params) do
@@ -649,7 +655,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       ok: true,
       status: "ok",
       identity_binding: %{
-        mode: Application.get_env(:lease_plane, :identity_binding_mode, :off),
+        mode: Application.get_env(:lease_plane, :identity_binding_mode, :enforce),
         proof_format: Application.get_env(:lease_plane, :identity_proof_format, :hybrid),
         metrics: UnitaresLeasePlane.IdentityMetrics.snapshot()
       }
@@ -1042,9 +1048,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   defp authorize_active_lease(conn, lease_id) do
     case Repo.active_lease(lease_id) do
       {:ok, lease} ->
-        IdentityBinding.authorize_strict(
+        IdentityBinding.authorize(
           lease.holder_agent_uuid,
           IdentityBinding.proof_from_conn(conn),
+          lease.surface_kind,
           IdentityBinding.request_context(conn)
         )
 
@@ -1060,10 +1067,11 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     case HandoffServer.authorization_context(handoff_id) do
       {:ok, %{recipient_uuid: recipient_uuid, lease_id: lease_id}} ->
         case Repo.active_lease(lease_id) do
-          {:ok, _lease} ->
-            IdentityBinding.authorize_strict(
+          {:ok, lease} ->
+            IdentityBinding.authorize(
               recipient_uuid,
               IdentityBinding.proof_from_conn(conn),
+              lease.surface_kind,
               IdentityBinding.request_context(conn)
             )
 
@@ -1089,9 +1097,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           end)
 
         if allowed do
-          IdentityBinding.authorize_strict(
+          IdentityBinding.authorize(
             actor_agent_id,
             IdentityBinding.proof_from_conn(conn),
+            "dialectic",
             IdentityBinding.request_context(conn)
           )
         else
@@ -1122,14 +1131,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             actor_agent_id in [paused, reviewer]
           end
 
-        if allowed do
-          IdentityBinding.authorize_strict(
-            actor_agent_id,
-            IdentityBinding.proof_from_conn(conn),
-            IdentityBinding.request_context(conn)
-          )
-        else
-          {:error, :identity_proof_invalid}
+        cond do
+          claim_if_unassigned and not is_nil(reviewer) ->
+            {:error, :reviewer_write_refused}
+
+          allowed ->
+            IdentityBinding.authorize(
+              actor_agent_id,
+              IdentityBinding.proof_from_conn(conn),
+              "dialectic",
+              IdentityBinding.request_context(conn)
+            )
+
+          true ->
+            {:error, :identity_proof_invalid}
         end
 
       {:ok, nil} ->
@@ -1170,6 +1185,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       error: "service_unavailable",
       reason: "identity_verification_unavailable"
     })
+  end
+
+  defp surface_kind(surface_id) when is_binary(surface_id) do
+    surface_id |> String.split(":", parts: 2) |> List.first()
   end
 
   defp extract_acquire_params(%{} = body) do

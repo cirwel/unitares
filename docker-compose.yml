@@ -146,8 +146,8 @@ services:
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
       # Principal-attributed mutations fail closed with request-bound operator
-      # attestations. Keep the rollout selector at all for any legacy helper
-      # that still consults it; core lease/dialectic routes verify strictly.
+      # attestations. Explicit `log` or `off` values remain rollback postures;
+      # the default selector covers every lease and dialectic surface kind.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
       UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
       UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-all}

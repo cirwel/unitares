@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root))
 
 from src.dialectic_protocol import DialecticPhase
 from src.mcp_handlers.dialectic import session as sess_mod
+from src.mcp_handlers.dialectic.beam_resolve_client import BeamDialecticPolicyRefusal
 
 
 def _resolved_session():
@@ -117,6 +118,33 @@ async def test_save_session_snapshot_only_never_replays_a_stale_phase(monkeypatc
         await sess_mod.save_session(session, primary_already_synced=True)
 
     beam_phase.assert_not_awaited()
+    pg_phase.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_session_surfaces_identity_refusal_without_python_fallback(monkeypatch):
+    monkeypatch.setattr(
+        sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False
+    )
+    session = SimpleNamespace(
+        session_id="sess-save-refused",
+        phase=DialecticPhase.ANTITHESIS,
+        synthesis_round=0,
+        resolution=None,
+    )
+    refusal = BeamDialecticPolicyRefusal(
+        "identity_proof_invalid", operation="update_phase"
+    )
+    beam_phase = AsyncMock(side_effect=refusal)
+    pg_phase = AsyncMock()
+
+    with patch(
+        "src.mcp_handlers.dialectic.beam_resolve_client.beam_update_phase",
+        beam_phase,
+    ), patch("src.dialectic_db.update_session_phase_async", pg_phase):
+        with pytest.raises(BeamDialecticPolicyRefusal):
+            await sess_mod.save_session(session)
+
     pg_phase.assert_not_awaited()
 
 

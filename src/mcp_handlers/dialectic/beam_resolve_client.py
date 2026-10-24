@@ -152,14 +152,20 @@ def _identity_bound_request(
     from src.mcp_handlers.context import get_context_resolved_agent_id
     from src.lease_attestation import LeaseAttestationError, mint_lease_attestation
 
-    actor = get_context_resolved_agent_id()
+    raw_actor = get_context_resolved_agent_id()
+    if raw_actor is None:
+        return None
     try:
-        actor = str(uuid.UUID(str(actor)))
+        actor = str(uuid.UUID(str(raw_actor)))
         expected = str(uuid.UUID(str(expected_agent_id))) if expected_agent_id else None
     except (TypeError, ValueError, AttributeError):
-        return None
+        raise BeamDialecticPolicyRefusal(
+            "identity_proof_invalid", operation=f"identity_binding:{path}"
+        )
     if expected is not None and actor != expected:
-        return None
+        raise BeamDialecticPolicyRefusal(
+            "identity_proof_invalid", operation=f"identity_binding:{path}"
+        )
 
     wire_payload = dict(payload)
     if include_actor:

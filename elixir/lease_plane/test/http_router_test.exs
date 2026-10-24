@@ -689,8 +689,8 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
           claim_if_unassigned: true
         })
 
-      assert late.status == 403
-      assert parsed(late)["error"] == "permission_denied"
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
     end
   end
 
@@ -714,8 +714,8 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
           reviewer_agent_id: "rev-late"
         })
 
-      assert late.status == 403
-      assert parsed(late)["error"] == "permission_denied"
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
     end
   end
 
@@ -1428,14 +1428,19 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
   end
 
-  describe "strict principal binding is configuration-independent" do
-    test "lease acquire still rejects a missing proof in compatibility mode", ctx do
+  describe "principal-bound lease and dialectic mutations" do
+    setup do
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+      :ok
+    end
+
+    test "explicit compatibility mode permits a missing lease proof", ctx do
       Application.put_env(:lease_plane, :identity_binding_mode, :off)
 
       response = post_json_without_proof("/v1/lease/acquire", acquire_body(ctx.surface))
 
-      assert response.status == 403
-      assert parsed(response)["reason"] == "identity_proof_invalid"
+      assert response.status == 200
+      assert parsed(response)["ok"] == true
     end
 
     test "dialectic session creation binds proof to the paused participant" do

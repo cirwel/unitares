@@ -102,6 +102,30 @@ def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
     ) is not None
 
 
+def test_identity_bound_request_refuses_a_resolved_caller_mismatch():
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    expected = "22222222-2222-4222-8222-222222222222"
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    try:
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            _REAL_IDENTITY_BOUND_REQUEST(
+                "/v2/dialectic/resolve-with-effect",
+                {"session_id": "s1"},
+                expected_agent_id=expected,
+            )
+    finally:
+        reset_session_context(context_token)
+
+    assert exc.value.error_code == "identity_proof_invalid"
+
+
 @pytest.mark.asyncio
 async def test_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
