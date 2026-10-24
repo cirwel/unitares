@@ -59,10 +59,17 @@ separate local-versus-strict auth policy: a credential does not replace MCP
 In local REST posture, loopback and private-network callers may be trusted
 without presenting `UNITARES_HTTP_API_TOKEN`. A Compose-bridge caller normally
 arrives from such a trusted address, so setting that token alone does not require
-it on every REST request. A non-empty `UNITARES_MCP_BEARER_TOKENS` allowlist
-turns strict REST on by default; set `UNITARES_MCP_BEARER_TOKEN` to one member
-for in-repo callers such as the lease plane, and leave `UNITARES_REST_STRICT`
-enabled for an exposed deployment. See [Running the server: exposing beyond
+it on every REST request. That trusted-network bypass does not apply to a
+browser request with a foreign `Origin`, or to any request whose dotted DNS
+`Host` is absent from `UNITARES_MCP_ALLOWED_HOSTS`; the caller must instead
+present an accepted bearer or dashboard session. This prevents a web page from
+becoming a trusted caller merely because it connects through the operator's
+loopback interface.
+
+A non-empty `UNITARES_MCP_BEARER_TOKENS` allowlist turns strict REST on by
+default; set `UNITARES_MCP_BEARER_TOKEN` to one member for in-repo callers such
+as the lease plane, and leave `UNITARES_REST_STRICT` enabled for an exposed
+deployment. See [Running the server: exposing beyond
 loopback](manual/03-running-the-server.md#35-exposing-beyond-loopback) for the
 complete transport procedure.
 
