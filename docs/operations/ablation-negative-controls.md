@@ -1,7 +1,7 @@
 # Ablation Negative Controls
 
 **Created:** June 14, 2026
-**Last Updated:** June 26, 2026
+**Last reviewed:** October 18, 2026 (checked against the code in the living-doc audit, #2877; body last revised June 26, 2026)
 **Status:** Experimental
 
 ---

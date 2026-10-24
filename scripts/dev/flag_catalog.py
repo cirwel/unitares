@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -468,22 +467,15 @@ def _alias_rows(path: str, table: str, consts: dict[str, str]) -> list[tuple[str
 
 
 def _pack_route_files() -> list[Path]:
-    """Route-pack handler files the server imports by path from outside SCAN_DIRS.
+    """Optional repository route implementations, independent of fleet selection.
 
-    ``src/http_routes/packs.py`` names these as ``relative/file.py:attr``; the
-    server loads them when their pack is enabled, so their env reads are
-    runtime flags even though the file lives under ``scripts/``. Read with
-    ``ast`` rather than imported, so the catalog needs no server dependencies.
+    Deployed extensions are configured outside this repository. The reference
+    handlers still document their runtime flags, without importing that config.
     """
-    tree = ast.parse((REPO / "src/http_routes/packs.py").read_text(encoding="utf-8"))
+    files = set((REPO / "agents").glob("*/routes.py"))
+    files.update((REPO / "scripts/ops").glob("*_route.py"))
     scanned = tuple(f"{d}/" for d in SCAN_DIRS)
-    out: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            m = re.fullmatch(r"([\w./-]+\.py):\w+", node.value)
-            if m and not m.group(1).startswith(scanned):
-                out.add(m.group(1))
-    return [REPO / rel for rel in sorted(out)]
+    return sorted(p for p in files if not p.relative_to(REPO).as_posix().startswith(scanned))
 
 
 def collect() -> dict[str, Flag]:

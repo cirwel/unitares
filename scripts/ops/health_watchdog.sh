@@ -1,5 +1,5 @@
 #!/bin/bash
-# UNITARES + Anima health watchdog
+# UNITARES health watchdog with explicit optional external probes
 # Runs every 5 minutes via launchd. Logs failures to /tmp/unitares_health.log.
 # Exits silently on success — only writes when something is wrong.
 #
@@ -13,7 +13,7 @@
 # Add a service to PORTS with a `health` block and it is monitored from the next
 # run. Forget to, and tests/test_ports_catalog_health_coverage.py fails.
 
-LOG="/tmp/unitares_health.log"
+LOG="${UNITARES_HEALTH_LOG:-/tmp/unitares_health.log}"
 MAX_LOG_LINES=500
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${UNITARES_PYTHON:-python3}"
@@ -106,16 +106,26 @@ else
     fi
 fi
 
-# --- edge node ----------------------------------------------------------------
-# Anima runs on a separate host (e.g. a Pi over Tailscale), so it is deliberately
-# not in the governance-host roster. The hardcoded default is KEPT: the live
-# com.unitares.health-watchdog.plist sets no EnvironmentVariables, so making this
-# opt-in would silently stop monitoring that is working today — the exact failure
-# class this script exists to prevent. See the "Deferred" note in
-# docs/install/cross-machine-surface.md; removing the default is a follow-up that
-# must come AFTER the operator sets the env var, not before.
-ANIMA_HEALTH_URL="${ANIMA_HEALTH_URL:-http://localhost:8766/health}"
-check "anima" "$ANIMA_HEALTH_URL" 200 10 || failures=$((failures + 1))
+# --- explicitly configured external services --------------------------------
+# TSV columns: display name, absolute HTTP(S) URL, accepted codes, timeout.
+# An absent file setting means no external service is selected. A configured
+# but unreadable or malformed file is a visible monitoring failure.
+if [ -n "${UNITARES_HEALTH_EXTRA_PROBES:-}" ]; then
+    if [ ! -r "$UNITARES_HEALTH_EXTRA_PROBES" ]; then
+        echo "[$(ts)] FAIL health-watchdog external probes — configured file is unreadable" >> "$LOG"
+        failures=$((failures + 1))
+    else
+        while IFS=$'\t' read -r extra_name extra_url extra_codes extra_timeout || [ -n "$extra_name$extra_url$extra_codes$extra_timeout" ]; do
+            [ -n "$extra_name$extra_url$extra_codes$extra_timeout" ] || continue
+            if [[ -z "$extra_name" || ! "$extra_url" =~ ^https?:// || ! "$extra_codes" =~ ^[0-9]{3}(,[0-9]{3})*$ || ! "$extra_timeout" =~ ^[1-9][0-9]*$ ]]; then
+                echo "[$(ts)] FAIL health-watchdog external probes — malformed entry" >> "$LOG"
+                failures=$((failures + 1))
+                continue
+            fi
+            check "$extra_name" "$extra_url" "$extra_codes" "$extra_timeout" || failures=$((failures + 1))
+        done < "$UNITARES_HEALTH_EXTRA_PROBES"
+    fi
+fi
 
 # --- PostgreSQL, via the governance health detail -----------------------------
 # Gated on the GOVERNANCE probe specifically, not on the aggregate. With six

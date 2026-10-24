@@ -41,7 +41,7 @@ def test_identity():
 
     check = PluginHookLiveness()
     assert check.name == "plugin_hook_liveness"
-    assert check.service_key == "governance"
+    assert check.service_key == "plugin_hooks"
 
 
 def test_registered_as_builtin():
@@ -119,7 +119,7 @@ def test_indeterminate_when_no_history(tmp_path):
     from agents.vigil.checks import plugin_hook_liveness as p
 
     res = p.assess(
-        str(tmp_path / "absent.jsonl"), [], NOW, activity_hours=12, stale_hours=24
+        str(tmp_path / "absent.jsonl"), [str(tmp_path / "artifact")], NOW, activity_hours=12, stale_hours=24
     )
     assert res.ok is True
     assert "indeterminate" in res.summary
@@ -139,3 +139,13 @@ def test_run_wires_real_paths(tmp_path, monkeypatch):
 
     res = asyncio.run(p.PluginHookLiveness().run())
     assert res.ok is True
+
+
+@pytest.mark.parametrize("history,artifacts", [("", []), ("", ["/private/log"]), ("/private/history", [])])
+def test_unconfigured_hook_check_does_not_stat_files(history, artifacts, monkeypatch):
+    from agents.vigil.checks import plugin_hook_liveness as p
+
+    monkeypatch.setattr(p.os.path, "getmtime", lambda _path: pytest.fail("unexpected file inspection"))
+    res = p.assess(history, artifacts, NOW, activity_hours=12, stale_hours=24)
+    assert res.ok
+    assert "not configured" in res.summary

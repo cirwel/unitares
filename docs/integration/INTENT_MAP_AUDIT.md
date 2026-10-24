@@ -55,8 +55,8 @@ the questions at the end are for the maintainer.
    reviewer field; the backend is deployment config, and the default reviewer
    is the local model.
 4. *"What is another agent working on now?"* `agent(action="list")` and
-   `observe` report lifecycle and EISV state; check-in text is not kept as
-   history, and `cirs_protocol` state announcements carry EISV state, not a
+   `observe` report lifecycle and EISV state; check-in text is kept only as a
+   bounded excerpt in each state row (`report_excerpt`), and `cirs_protocol` state announcements carry EISV state, not a
    task (`src/mcp_handlers/cirs/state.py`).
 5. *Coordinating over a surface.* No lease or claim tool is in the catalog;
    `cirs_protocol` is the only live channel and is lost on restart.

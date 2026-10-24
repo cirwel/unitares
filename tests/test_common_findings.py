@@ -81,7 +81,6 @@ class TestDoctorOutcomeLabelStaysPerFamily:
         expected = {
             "scripts/ops/doctor_findings.py": "doctor_check_finding",
             "scripts/ops/deploy_drift_doctor.py": "deploy_drift_finding",
-            "scripts/ops/lumen_checkin_doctor.py": "lumen_checkin_finding",
             "scripts/ops/bridge_liveness_watchdog.sh": "bridge_liveness_finding",
         }
         for rel, event_type in expected.items():

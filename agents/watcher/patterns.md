@@ -285,8 +285,7 @@ expected state change never arrives.
 ### P010 — Missing test coverage on behavior change (severity: medium, violation_class: INT)
 
 New behavior (a bound, cap, eviction, cleanup branch) added without a matching
-test. This is a standing rule for this project — see
-`feedback_tests-with-fixes.md`.
+test. The test should exercise the changed boundary or failure path.
 
 **Hint template:** `behavior change needs test in same commit`
 

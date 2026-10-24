@@ -257,6 +257,7 @@ services:
       # only. Dashboard extensions: set the variable AND mount that directory
       # into this container, or the extension route has nothing to serve.
       UNITARES_ROUTE_PACKS: ${UNITARES_ROUTE_PACKS:-}
+      UNITARES_ROUTE_PACKS_FILE: ${UNITARES_ROUTE_PACKS_FILE:-}
       UNITARES_DASHBOARD_EXT_DIR: ${UNITARES_DASHBOARD_EXT_DIR:-}
       # Deployment metrics catalog (JSON path inside the container); empty
       # registers only the product metrics. See .env.example.

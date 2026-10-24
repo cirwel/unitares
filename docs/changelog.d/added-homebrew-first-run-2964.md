@@ -1,0 +1,1 @@
+- Add `unitares setup --homebrew`: inspect native configuration and database readiness, or use `--apply` to create missing private configuration with a shared lease bearer and optional models disabled. Existing configuration and databases are preserved; an absent migration registry is never treated as proof that a database is empty.

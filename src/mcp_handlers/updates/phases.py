@@ -21,6 +21,7 @@ from mcp.types import TextContent
 from src.logging_utils import get_logger
 from src import agent_storage
 from src.perf_monitor import record_ms as _perf_record_ms
+from src.report_excerpt import make_report_excerpt
 
 from .context import UpdateContext
 from ..identity_bootstrap import (
@@ -2046,6 +2047,10 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             exc,
         )
 
+    # Computed once, before the write: make_report_excerpt never raises, so a
+    # bad report can cost the excerpt but never the state row.
+    report_excerpt = make_report_excerpt(ctx.response_text)
+
     # PostgreSQL: Record EISV state
     try:
         await agent_storage.record_agent_state(
@@ -2069,6 +2074,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             eisv_telemetry=eisv_telemetry,
             coherence_form=getattr(ctx, "coherence_form", None),
             eisv_instrument=_eisv_instrument_stamp(monitor),
+            report_excerpt=report_excerpt,
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -2155,6 +2161,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 eisv_telemetry=eisv_telemetry,
                 coherence_form=getattr(ctx, "coherence_form", None),
                 eisv_instrument=_eisv_instrument_stamp(monitor),
+                report_excerpt=report_excerpt,
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:

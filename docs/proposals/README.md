@@ -44,7 +44,7 @@ Read its body and linked implementation before choosing work.
 | **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
 
 Current counts:
-Built 44 · Registered 7 · Active 24 · Parked 29 · Closed 32
+Built 44 · Registered 7 · Active 26 · Parked 29 · Closed 32
 
 These counts cover the tagged entries across all three indexes. They include
 the 19 older records previously indexed under `resolved/`, tagged from their own

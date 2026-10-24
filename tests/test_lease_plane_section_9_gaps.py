@@ -217,9 +217,9 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
         "GOVERNANCE_TOKEN in env must not satisfy LEASE_FORCE_RELEASE_TOKEN"
     )
 
-    # Case 2: GOVERNANCE_TOKEN in secrets.env (no LEASE_FORCE_RELEASE_TOKEN),
-    # at the legacy ~/.config/cirwel path. Only the legacy file exists, so
-    # the resolver's pre-2026-09 fallback branch reads it.
+    # Case 2: GOVERNANCE_TOKEN in a home secrets.env (no
+    # LEASE_FORCE_RELEASE_TOKEN) that nothing selected. The resolver never
+    # discovers home files, so this stays None either way.
     monkeypatch.delenv("GOVERNANCE_TOKEN", raising=False)
     secrets_dir = tmp_path / ".config" / "cirwel"
     secrets_dir.mkdir(parents=True)
@@ -232,21 +232,21 @@ def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
         "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
     )
 
-    # Case 2b: the same negative case at the neutral default
-    # ~/.config/unitares/secrets.env (the path a fresh install gets; it wins
-    # over the legacy file once both exist).
+    # Case 2b: the same negative case in a file explicitly selected by
+    # UNITARES_SECRETS_ENV, which the resolver does read.
     neutral_dir = tmp_path / ".config" / "unitares"
     neutral_dir.mkdir(parents=True)
     (neutral_dir / "secrets.env").write_text(
         'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
         "OTHER_VAR=irrelevant\n"
     )
+    monkeypatch.setenv("UNITARES_SECRETS_ENV", str(neutral_dir / "secrets.env"))
     assert _read_force_release_token() is None, (
-        "GOVERNANCE_TOKEN in the neutral secrets.env must not satisfy "
+        "GOVERNANCE_TOKEN in the selected secrets.env must not satisfy "
         "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
     )
 
-    # File-path positive control: the neutral file IS read, so Case 2b's
+    # File-path positive control: the selected file IS read, so Case 2b's
     # None came from the credential boundary, not from a missed file.
     (neutral_dir / "secrets.env").write_text(
         'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'

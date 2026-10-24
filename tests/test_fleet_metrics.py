@@ -22,16 +22,16 @@ from src.fleet_metrics.catalog import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHRONICLER_EXTRA_CATALOG = REPO_ROOT / "agents" / "chronicler" / "metrics_catalog.json"
 
-# Metric names that name one operator's repo, GitHub org or reference
-# resident. They belong to Chronicler's extra catalog, never the core layer.
-OPERATOR_METRICS = (
+# Metrics supplied by the optional reference catalog, never the core layer.
+# Historical deployment namespaces belong in the deployment's own catalog.
+REFERENCE_METRICS = (
     "tokei.unitares.src.code",
     "tests.unitares.count",
     "governance.sentinel.findings.7d",
-    "github.cirwel.traffic.views.14d",
-    "github.cirwel.traffic.views.uniques.14d",
-    "github.cirwel.traffic.clones.14d",
-    "github.cirwel.traffic.clones.uniques.14d",
+    "github.traffic.views.14d",
+    "github.traffic.views.uniques.14d",
+    "github.traffic.clones.14d",
+    "github.traffic.clones.uniques.14d",
 )
 
 
@@ -65,7 +65,8 @@ class TestCatalog:
         ):
             assert name in _catalog, f"{name} missing from catalog"
 
-    def test_every_scraper_has_a_catalog_entry(self):
+    @pytest.mark.parametrize("owner", ["", "example-owner"])
+    def test_every_scraper_has_a_catalog_entry(self, owner):
         """Invariant: every name Chronicler scrapes must be catalog-registered
         once its deployment loads Chronicler's extra catalog.
 
@@ -74,11 +75,12 @@ class TestCatalog:
         silent 404 each daily run. This subset check guards all current and
         future scrapers at once, rather than relying on per-name lists
         drifting in step."""
-        from agents.chronicler.scrapers import SCRAPERS
+        from agents.chronicler.scrapers import build_scrapers
 
+        scrapers = build_scrapers(owner, "github")
         extra = {m["name"] for m in json.loads(CHRONICLER_EXTRA_CATALOG.read_text())["metrics"]}
         missing = sorted(
-            name for name in SCRAPERS if name not in _catalog and name not in extra
+            name for name in scrapers if name not in _catalog and name not in extra
         )
         assert not missing, f"scrapers missing catalog entries (will 404): {missing}"
 
@@ -189,21 +191,21 @@ def _write(tmp_path, doc) -> Path:
 
 
 class TestExtraCatalog:
-    def test_core_layer_names_no_operator_metric(self):
+    def test_core_layer_names_no_reference_or_operator_metric(self):
         """The suite leaves UNITARES_METRICS_CATALOG_EXTRA unset, so the
         imported catalog is the core layer every install ships."""
         leaked = sorted(
             n for n in _catalog
-            if n.removesuffix(".error") in OPERATOR_METRICS or "cirwel" in n
+            if n.removesuffix(".error") in REFERENCE_METRICS or "cirwel" in n
         )
         assert not leaked, f"operator metrics in the core catalog: {leaked}"
 
-    def test_chronicler_file_declares_exactly_the_operator_metrics(
+    def test_chronicler_file_declares_exactly_the_reference_metrics(
         self, restore_catalog
     ):
         loaded = load_extra_catalog(CHRONICLER_EXTRA_CATALOG)
-        assert sorted(m.name for m in loaded) == sorted(OPERATOR_METRICS)
-        for name in OPERATOR_METRICS:
+        assert sorted(m.name for m in loaded) == sorted(REFERENCE_METRICS)
+        for name in REFERENCE_METRICS:
             assert name in _catalog
             assert f"{name}.error" in _catalog, f"missing .error twin for {name}"
 
@@ -265,16 +267,16 @@ class TestExtraCatalog:
 
     @pytest.mark.asyncio
     async def test_write_gate_follows_the_extra_catalog(self, restore_catalog):
-        """Without the extra catalog an operator metric is refused at the
+        """Without the extra catalog a reference metric is refused at the
         write gate; with it, the write reaches the table."""
         from src.fleet_metrics import record
 
         db, conn = _make_db_mock()
         with patch("src.agent_storage.get_db", return_value=db):
             with pytest.raises(KeyError, match="UNITARES_METRICS_CATALOG_EXTRA"):
-                await record("github.cirwel.traffic.views.14d", 3.0)
+                await record("github.traffic.views.14d", 3.0)
             load_extra_catalog(CHRONICLER_EXTRA_CATALOG)
-            await record("github.cirwel.traffic.views.14d", 3.0)
+            await record("github.traffic.views.14d", 3.0)
         conn.execute.assert_awaited_once()
 
 

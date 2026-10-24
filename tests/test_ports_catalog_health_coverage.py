@@ -123,7 +123,7 @@ def test_probe_roster_cli_matches_the_api():
 EXPECTED_CHECK_SITES = {
     "$name",                   # the roster loop, one call for every registry row
     "governance (fallback)",   # degraded path, when the registry is unreadable
-    "anima",                   # edge node on another host — see the script
+    "$extra_name",             # explicit deployment-owned external probes
 }
 
 
@@ -243,3 +243,38 @@ def test_bearer_gated_surfaces_accept_their_gate_response(port, accepted):
     assert entry["health"]["expect"] == accepted, (
         f"port {port} should accept {accepted}; a 200-only check false-alarms."
     )
+
+
+def test_watchdog_external_probes_are_explicit(tmp_path):
+    import os
+    import shutil
+
+    root = tmp_path / 'fixture'
+    ops = root / 'scripts/ops'
+    dev = root / 'scripts/dev'
+    ops.mkdir(parents=True)
+    dev.mkdir(parents=True)
+    shutil.copy2(WATCHDOG, ops / WATCHDOG.name)
+    shutil.copy2(CATALOG, dev / CATALOG.name)
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    curl = bin_dir / 'curl'
+    curl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$PROBE_TRACE"\ncase "$*" in *http_code*) printf 200;; *) printf \'{"database":{"status":"connected"}}\';; esac\n')
+    curl.chmod(0o755)
+    trace = tmp_path / 'trace'
+    log = tmp_path / 'log'
+    env = dict(os.environ, PATH=str(bin_dir)+':'+os.environ['PATH'], PROBE_TRACE=str(trace), UNITARES_HEALTH_LOG=str(log), UNITARES_PYTHON=sys.executable)
+    env.pop('UNITARES_HEALTH_EXTRA_PROBES', None)
+    # The formerly implicit variable alone must not select any external host.
+    env['ANIMA_HEALTH_URL'] = 'http://unselected.invalid/health'
+    subprocess.run(['bash', str(ops/WATCHDOG.name)], env=env, check=True)
+    assert 'unselected.invalid' not in trace.read_text()
+    assert ':8766/' not in trace.read_text()
+    probes = tmp_path / 'extra.tsv'
+    probes.write_text('sample\thttp://configured.invalid/health\t200\t10\n')
+    env['UNITARES_HEALTH_EXTRA_PROBES'] = str(probes)
+    subprocess.run(['bash', str(ops/WATCHDOG.name)], env=env, check=True)
+    assert 'configured.invalid' in trace.read_text()
+    probes.unlink()
+    subprocess.run(['bash', str(ops/WATCHDOG.name)], env=env, check=True)
+    assert 'configured file is unreadable' in log.read_text()

@@ -1,0 +1,12 @@
+{
+  "_doc": "The lifecycle event types GET /v1/timeline reads (src/http_routes/telemetry.py _LIFECYCLE_EVENT_TYPES), in order. The live pane maps exactly these lifecycle frames; other lifecycle_* names are dropped until proposal §4 item 3.",
+  "types": [
+    "lifecycle_paused",
+    "lifecycle_resumed",
+    "lifecycle_archived",
+    "lifecycle_loop_detected",
+    "lifecycle_stuck_detected",
+    "circuit_breaker_trip",
+    "circuit_breaker_reset"
+  ]
+}
