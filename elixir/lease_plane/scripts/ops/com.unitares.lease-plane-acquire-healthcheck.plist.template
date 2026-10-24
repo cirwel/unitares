@@ -22,9 +22,8 @@
           > ~/Library/LaunchAgents/com.unitares.lease-plane-acquire-healthcheck.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane-acquire-healthcheck.plist
 
-    The check reads LEASE_PLANE_BEARER_TOKEN from the secrets env file
-    ($UNITARES_SECRETS_ENV, default ~/.config/unitares/secrets.env, legacy
-    ~/.config/cirwel/secrets.env still read) itself, so no secret is placed
+    The check reads LEASE_PLANE_BEARER_TOKEN from the service environment or
+    the file explicitly named by UNITARES_SECRETS_ENV, so no secret is placed
     in this plist.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"

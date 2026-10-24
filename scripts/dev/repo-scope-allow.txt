@@ -72,3 +72,6 @@ docs/proposals/archive/wave-1-window-evaluation-2026-05-18.md
 # (2026-10-18).
 docs/evaluations/accountability-journey/capture-stage-2168-unitares-arm.md
 docs/evaluations/accountability-journey/capture-stage-2168-v0.md
+
+# Negative scanner fixtures intentionally contain the private defaults they detect.
+tests/test_operator_defaults_guard.py

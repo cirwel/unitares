@@ -139,8 +139,8 @@ def repo_root(cwd: Path) -> Path:
 
 # Names whose presence in the workspace path marks a live/shared checkout that is
 # linked-but-not-agent-owned (the deploy worktree). Override via env (comma-sep).
-# The default is the deploy worktree name the scripts/ops/deploy-*.sh scripts
-# fall back to. The main dev checkout is detected structurally
+# The default also recognizes the conventional deploy worktree name; deploy
+# scripts require an explicitly selected path. The main dev checkout is detected structurally
 # (git_dir == git_common_dir) and needs no name match.
 _DEFAULT_LIVE_CHECKOUT_NAMES = ("unitares-deploy",)
 

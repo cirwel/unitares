@@ -412,6 +412,8 @@ def test_mcp_overlay_gate_runs_before_any_deployment_effect(tmp_path, case):
     elif case != "missing":
         overlay.write_bytes(content)
     env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"],
+           "UNITARES_REPO": str(tmp_path / "source"),
+           "UNITARES_MCP_DEPLOY": str(tmp_path / "deployed"),
            "TEST_EFFECT_MARKER": str(marker)}
     if case != "no_selection":
         env["UNITARES_MCP_ENV_OVERLAY"] = str(overlay)

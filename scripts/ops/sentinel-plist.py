@@ -6,15 +6,12 @@ it is never accepted as a command-line argument or written to stdout/stderr.
 The same utility also provides the deploy-time authenticated UDS probe and the
 rotation-time update used by ``rotate-secrets.sh``.
 
-A plist may instead launch through the operator's secrets wrapper
-(``with-cirwel-secrets --keys K1,K2 -- program ...``), which supplies the named
-keys from a secrets file at exec time so the plist holds no value. For such a
-plist the bearer is read exactly where the wrapper reads it: the job's
-``CIRWEL_SECRETS_FILE``, else ``~/.config/cirwel/secrets.env``. Rotation
-(``set-secret``) updates every secrets file a reader may use: the wrapper's,
-and the one ``elixir/sentinel/scripts/start.sh`` and ``deploy-lease-plane.sh``
-source (``UNITARES_SECRETS_ENV``, else ``~/.config/unitares/secrets.env``, else
-the cirwel file).
+A plist may launch through an explicitly configured secrets wrapper. Set
+``UNITARES_SECRETS_WRAPPER`` to its absolute executable path and
+``UNITARES_SECRETS_ENV`` to the absolute private file it reads. The supported
+wrapper protocol is ``--keys K1,K2 -- program ...``. No wrapper or credential
+file is discovered by name. Rotation updates explicitly selected source files
+in this process and installed job environments.
 
 The governance plist may also keep no bearer at all, when its job loads the
 bearer from a store outside the plist before exec'ing the server. Then
@@ -31,6 +28,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
 import secrets
 import stat
 import sys
@@ -45,7 +43,8 @@ from governance_bearer import (  # noqa: E402
     EXTERNAL_ROTATE_CMD_ENV,
     HTTP_TOKEN_KEY,
     PLACEHOLDER_RE,
-    SECRETS_WRAPPER,
+    SECRETS_FILE_ENV,
+    SECRETS_WRAPPER_ENV,
     TOKEN_PLACEHOLDER,
     UDS_SOCKET_KEY,
     BearerShape,
@@ -65,6 +64,7 @@ from governance_bearer import (  # noqa: E402
     rotate_token as _shared_rotate_token,
     rotation_files,
     rotation_preflight as _shared_rotation_preflight,
+    selected_secrets_file,
     set_secret,
     sourced_secrets_file,
     split_secret_line,
@@ -79,16 +79,37 @@ AUDIT_SESSION_KEY = "UNITARES_SENTINEL_AUDIT_SESSION"
 ENFORCED_KINDS_KEY = "LEASE_PLANE_ENFORCED_SURFACE_KINDS"
 
 
+def _selected_secrets_file(environment: dict[str, Any] | None = None) -> Path | None:
+    return selected_secrets_file(environment)
+
+
 def _wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
     return wrapper_secrets_file(environment)
 
 
-def _sourced_secrets_file() -> Path:
+def _sourced_secrets_file() -> Path | None:
     return sourced_secrets_file()
 
 
 def _rotation_files() -> list[Path]:
     return rotation_files()
+
+
+def _launches_unconfigured_wrapper(payload: dict[str, Any]) -> bool:
+    """Whether ``ProgramArguments`` has the ``<wrapper> --keys …BEARER… --``
+    launch shape for the bearer while the environment names no wrapper."""
+    arguments = payload.get("ProgramArguments")
+    environment = payload.get("EnvironmentVariables") or {}
+    return (
+        isinstance(arguments, list)
+        and len(arguments) >= 5
+        and all(isinstance(argument, str) for argument in arguments[:4])
+        and arguments[1] == "--keys"
+        and arguments[3] == "--"
+        and HTTP_TOKEN_KEY in arguments[2].split(",")
+        and isinstance(environment, dict)
+        and SECRETS_WRAPPER_ENV not in environment
+    )
 
 
 def _check_private(path: Path) -> None:
@@ -196,16 +217,27 @@ def render_plist(
     # differs from the installed one cannot move the job's credential source.
     wrapper: list[str] = []
     wrapper_file = None
+    startup_file = _selected_secrets_file(dict(os.environ))
     if output.exists():
         installed = _load_plist(output)
+        startup_file = _selected_secrets_file(_environment(installed, output)) or startup_file
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
             wrapper_file = str(_wrapper_secrets_file(_environment(installed, output)))
+        elif _launches_unconfigured_wrapper(installed):
+            # Rendering now would drop the wrapper and write the bearer into
+            # a plist that was deliberately moved off holding it.
+            raise PlistConfigError(
+                f"{output} launches through a secrets wrapper ({installed['ProgramArguments'][0]}) "
+                f"that its environment does not name; set {SECRETS_WRAPPER_ENV} to that "
+                f"wrapper and {SECRETS_FILE_ENV} to the file it reads, then re-render"
+            )
     if token is None and not wrapper:
         raise PlistConfigError(
             f"{governance_plist} keeps no {HTTP_TOKEN_KEY}, so there is no bearer to "
-            "copy; launch the Sentinel through the secrets wrapper "
-            f"({SECRETS_WRAPPER} --keys {HTTP_TOKEN_KEY} -- ...) with the bearer in its secrets file"
+            "copy; launch the Sentinel through a secrets wrapper named by "
+            f"{SECRETS_WRAPPER_ENV} (<wrapper> --keys {HTTP_TOKEN_KEY} -- ...), with the "
+            f"bearer in the file named by {SECRETS_FILE_ENV}"
         )
     if audit_session is None:
         audit_session = existing.get(AUDIT_SESSION_KEY, "")
@@ -225,9 +257,12 @@ def render_plist(
         },
     )
     environment = _environment(payload, template)
+    if startup_file is not None:
+        environment[SECRETS_FILE_ENV] = str(startup_file)
     if wrapper:
         environment.pop(HTTP_TOKEN_KEY, None)
-        environment["CIRWEL_SECRETS_FILE"] = wrapper_file
+        environment[SECRETS_FILE_ENV] = wrapper_file
+        environment[SECRETS_WRAPPER_ENV] = wrapper[0]
         payload["ProgramArguments"] = wrapper + list(payload.get("ProgramArguments") or [])
     else:
         environment[HTTP_TOKEN_KEY] = token

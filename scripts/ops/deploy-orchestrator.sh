@@ -47,8 +47,8 @@
 # service's alone, so there is nothing else to disturb.
 set -euo pipefail
 
-REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:-$HOME/projects/unitares-orchestrator-deploy}"
+REPO="${UNITARES_REPO:?set the source repository path}"
+DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:?set the dedicated deployment worktree path}"
 APP_SUBDIR="elixir/agent_orchestrator"
 LABEL="com.unitares.agent-orchestrator"
 PLIST="${UNITARES_ORCHESTRATOR_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
@@ -177,6 +177,8 @@ if ! launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null; then
          echo "[$TAG]     launchctl bootstrap gui/$UID_NUM $PLIST" >&2
          exit 1; }
 fi
+
+deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
 
 # Verify: registered with launchd AND answering on the port. 401 is the healthy
 # answer for this bearer-gated endpoint (see header note 3).

@@ -43,6 +43,7 @@ HOME_PLACEHOLDER_RE='^/Users/([A-Za-z0-9]|you|me|user|username|name|alice|bob|ex
 is_self() {
   case "$1" in
     scripts/dev/check-repo-scope.sh|\
+    scripts/dev/check_operator_defaults.py|\
     scripts/dev/repo-scope-allow.txt|\
     docs/REPO_SCOPE.md|\
     .github/workflows/repo-scope.yml) return 0;;
@@ -258,3 +259,6 @@ if [ "$violations" -gt 0 ]; then
 fi
 
 echo "✅ Repo scope guard: clean"
+
+# Full runtime scan also covers unchanged files beyond Python package roots.
+python3 scripts/dev/check_operator_defaults.py || exit 1
