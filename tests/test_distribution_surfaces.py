@@ -333,3 +333,10 @@ def test_app_reads_are_repo_scoped_and_do_not_fallback(monkeypatch):
     monkeypatch.setattr(ds.subprocess, 'run', run)
     assert ds.LiveNet(github_app=True).gh_json('repos/cirwel/homebrew-unitares/commits/main') is None
     assert calls == [['unitares-github', '--repo', 'cirwel/homebrew-unitares', '--read-only', '--', 'gh', 'api', 'repos/cirwel/homebrew-unitares/commits/main']]
+
+
+def test_missing_id_with_dependencies_reports_validation_error(tmp_path):
+    surface = {'kind': 'site', 'title': 'bad', 'where': 'https://example.org', 'refresh': 'publish', 'probe': {'type': 'http-ok', 'url': 'https://example.org'}, 'depends_on': ['missing']}
+    errors = ds.offline_errors({'schema': 1, 'surface': [surface]}, root=tmp_path)
+    assert '<missing id>: missing id' in errors
+    assert '<missing id>: invalid dependency missing' in errors

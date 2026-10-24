@@ -552,13 +552,14 @@ def offline_errors(registry: dict, root: Path = REPO_ROOT) -> list[str]:
                 errors.append(f"{sid}: {rel} does not exist")
 
     for surface in surfaces:
+        sid = surface.get("id", "<missing id>")
         dependencies = surface.get("depends_on", [])
         if not isinstance(dependencies, list) or any(not isinstance(d, str) for d in dependencies):
-            errors.append(f"{surface['id']}: depends_on must be a list of surface ids")
+            errors.append(f"{sid}: depends_on must be a list of surface ids")
         else:
             for dependency in dependencies:
-                if dependency not in seen or dependency == surface["id"]:
-                    errors.append(f"{surface['id']}: invalid dependency {dependency}")
+                if dependency not in seen or dependency == sid:
+                    errors.append(f"{sid}: invalid dependency {dependency}")
 
     for entry in registry.get("not_listed", []):
         for key in ("where", "checked", "note"):
