@@ -30,11 +30,10 @@ does not own the agent's reasoning, tool-execution, or user-interaction loop;
 MCP is its primary agent-facing contract. (Full scope:
 [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
 
-The first-party **UNITARES Resident** is intended to supply that agent
-experience, but it remains a separate userland built on the same public MCP/SDK
-contract as every other harness. Its repository currently ships an early
-runtime skeleton, not a usable general-purpose agent. The specialized residents
-shipped as examples in this repository are not that product.
+The first-party **UNITARES Resident** supplies that agent experience as a
+separate userland on the same public MCP/SDK contract as every other harness.
+Its repository ships a runtime skeleton today; the agent itself has not shipped yet.
+The specialized residents in this repository are reference examples.
 
 **Use UNITARES if** you run several long-lived agents (coding, research, ops or
 resident), want their work attributable across restarts and handoffs, want
@@ -98,7 +97,7 @@ The shared record answers five questions about any piece of work:
 - **Shared memory (knowledge graph, KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Search it with `search_shared_memory` (no identity needed), write with `store_finding`, and revise with `update_finding`; `supersede` links require the AGE backend. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
 - **Review (dialectic)** — a structured protocol (thesis → antithesis →
   synthesis) that an agent or operator requests with `request_review`, for
-  disputed work or a disputed decision. Requesting review does not complete it.
+  disputed work or a disputed decision. A review completes when its session resolves.
 - **Outcomes** — `record_result` stores test, build, exit-code or review
   results. Evidence from CI or an operator is stronger than an agent-authored
   outcome; if the agent controls both its confidence and every result record,
@@ -123,8 +122,8 @@ definitions live in [`src/governance_glossary.py`](../../src/governance_glossary
 ## 1.6 The check-in instrument: EISV
 
 The policy action is derived from EISV, a behavioral state estimate computed at
-each check-in. EISV still ships in the core path; its move to an optional module
-subscribed to check-ins follows a
+each check-in. EISV ships in the core path today and moves to an optional
+module subscribed to check-ins under a
 [staged plan](../proposals/active/eisv-core-boundary-v0.md). You do not need
 its vocabulary to use the record; it matters when you want to act on *why* a
 check-in returned the action it did.
