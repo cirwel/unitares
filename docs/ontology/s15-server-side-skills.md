@@ -1,5 +1,7 @@
 # S15 — Server-side skills surface
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time (2026-04-25) and lags the running repo where `.github/workflows/plugin-skill-sync.yml` now mirrors canonical `skills/` changes to `unitares-governance-plugin`. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md).
+
 **Date:** 2026-04-25
 **Scope:** Plan doc for promoting `skills/` from a per-client artifact to a server-authored surface, addressed via the MCP wire protocol. Inventories the current drift between `unitares/skills/` and `unitares-governance-plugin/skills/`, motivates the change with a concrete cross-client failure (Hermes-driven proposal to auto-inject `continuity_token` at the client transport layer, 2026-04-25), and lays out a sequenced delivery path.
 **Stance:** Descriptive + recommendation. No code changes in this pass.
