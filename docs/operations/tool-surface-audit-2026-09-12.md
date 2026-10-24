@@ -1,5 +1,7 @@
 # Tool surface audit — 2026-09-12
 
+**Status:** Point-in-time audit record (2026-09-12, baseline `be117c2`). Preserved as historical evidence; for the current live tool surface and wire contract, see [`../INTERFACE_CONTRACT.md`](../INTERFACE_CONTRACT.md) and [`../dev/TOOL_REFERENCE.md`](../dev/TOOL_REFERENCE.md).
+
 Scope: the MCP tool surface as shipped in this repository — registration and
 dispatch (`@mcp_tool`, `action_router`, the alias table), the advertised wire
 catalog on every transport, the introspection tools (`list_tools`,
