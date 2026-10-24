@@ -175,19 +175,11 @@ waiting for a peer or the operator. That also happens with a model when the
 thesis is about the review system itself (recusal), when the model runs past
 the review time budget, or when its synthesis does not approve.
 
-This model is the only one a default install uses. The tools also describe a
-stronger lane, `consult(effort='thorough')` and `delegate_inference`, which hand
-a brief to a Codex, Claude or Antigravity CLI. That lane is an operator
-extension: it runs through the agent orchestrator, which no Compose service
-starts, so on a default install those calls fail and say the extension is not
-configured. `list_inference_hosts` reports it under
-`extensions.agent_orchestrator`. Nothing in this manual needs it.
-
-The orchestrator is not a model and is not an inference host. It is a separate
-BEAM service that starts each CLI as a supervised child, enforces its timeout,
-scrubs its environment and stops it. The hosts are the models it runs. It lives
-outside the governance server so a long or stuck CLI cannot hold memory or a
-request in that process.
+This model is the only one a default install uses. The stronger CLI lane
+(`consult(effort='thorough')` and `delegate_inference`, reported under
+`extensions.agent_orchestrator` by `list_inference_hosts`) requires the separate
+BEAM agent orchestrator service, which no Compose service starts by default (see
+[§2.4](#24-quickstart-defaults-and-a-full-setup)).
 
 The model is reached through one OpenAI-compatible endpoint, named by two
 settings:
@@ -197,41 +189,26 @@ settings:
 | `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | Explicit model requests use `http://localhost:11434/v1` when unset. Set this explicitly to enable automatic selection of the endpoint's sole served model. |
 | `UNITARES_MODEL_ID` | The default model, used when an agent names none | None. An agent can pick with `consult(model=...)`. Otherwise use this configured default, or the sole model at an explicitly configured endpoint; without either, return `MODEL_NOT_CONFIGURED`. |
 
-Ollama is the server these steps are tested with. Other servers that speak the
-same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
-but they are not yet verified end to end. A URL with no path at all, such as
-`http://gpu-box:11434`, gets `/v1` added. A server that requires an API key is
-not supported yet: the setting for one comes in a later release.
-
-The quickest way is to run, from the checkout, once your model server is
-running and has a model:
+Ollama is the server these steps are tested with; other OpenAI-compatible
+servers (vLLM, LM Studio, llama.cpp's server) can be named the same way (a URL
+with no path gets `/v1` added; API-key-protected servers are not supported yet).
+From the checkout, once your model server is running and has a model:
 
 ```bash
 ./scripts/unitares model
 ```
 
 It lists the models the server offers (`GET {base}/models`), writes your choice
-to `.env`, rebuilds the server, and checks that the server can reach the model.
-`--base-url` points it at a server other than Ollama on this machine. When the
-server is Ollama, it also gives Ollama's hints, such as `ollama pull`. `--help`
-shows the non-interactive flags; `--no-docker` prints the two settings for a
-source install instead. To run it as plain `unitares`, link it onto your `PATH`
-once: `ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
+to `.env`, rebuilds the server, and checks that the server can reach the model
+(`--base-url` points at another server; `--no-docker` prints the settings for
+Homebrew or source installs, where Homebrew uses
+`$(brew --prefix)/etc/unitares/native.env`; link `./scripts/unitares` to
+`~/.local/bin/unitares` to run it as `unitares`). After configuring local
+inference, `consult(effort='thorough', allow_degraded=True)` permits standard
+local advice when the thorough lane is unavailable (`allow_degraded` is false by
+default and never grants cloud-provider access).
 
-For Homebrew or a source installation, `unitares model --no-docker` prints the
-settings. Save them in the server's own environment (Homebrew uses
-`$(brew --prefix)/etc/unitares/native.env`) and restart the native server through
-its service manager. The core installation remains usable when this step is skipped.
-
-**Optional fallback:** after configuring local inference, a caller can use
-`consult(effort='thorough', allow_degraded=True)` to permit standard local advice
-when the thorough lane cannot run and its safety checks permit degradation.
-The response records that degradation. `allow_degraded` is false by default;
-this is not a universal retry switch for every provider or review workflow.
-Configuring Ollama does not grant permission to send prompts to a cloud provider.
-
-To do the same by hand with Ollama on the Docker host, pull a model and name
-both in `.env`:
+To configure Ollama on the Docker host manually:
 
 ```bash
 ollama pull <your-model>
@@ -242,70 +219,41 @@ EOF
 docker compose up -d --build governance-mcp
 ```
 
-Inside the container, `localhost` is the container itself, so a server on the
-Docker host is reached as `host.docker.internal`. On Docker Desktop the
-container reaches the host's Ollama as is. On Linux, Ollama listens only on
-127.0.0.1 by default: set `OLLAMA_HOST=0.0.0.0` for the Ollama service and allow
-port 11434 from the Docker bridge, without exposing it beyond the machine,
-because Ollama has no authentication. `--build` matters on an existing
-install: the model client is installed when the image is built, and `up -d`
-alone keeps an image built before this step. If your `docker-compose.yml` has
-no `UNITARES_MODEL_BASE_URL` line, the checkout predates this step. If it has
-one but `consult` reports a missing dependency, the image predates it; rebuild
-with `--build`.
-
-The older names `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (for
-the endpoint) and `UNITARES_LLM_MODEL` (for the model) were removed in v3.3.0.
-Nothing reads them any more, and nothing warns about them: an install that
-still sets only those uses the default endpoint (Ollama on `localhost:11434`)
-and has no model. Rename them to `UNITARES_MODEL_BASE_URL` and
-`UNITARES_MODEL_ID`, in `.env` or in the LaunchAgent plist. An Ollama root URL
-can be moved over as it is: a base with no path gets `/v1` added. Running
-`./scripts/unitares model` rewrites `.env` with the new names and removes the old
-`UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
+Inside the container, the Docker host is reached as `host.docker.internal` (on
+Linux, set `OLLAMA_HOST=0.0.0.0` for Ollama and allow port 11434 from the Docker
+bridge only). Pass `--build` when enabling a model on an existing install. The
+legacy `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL`, and
+`UNITARES_LLM_MODEL` names were removed in v3.3.0 and are ignored (`./scripts/unitares model`
+rewrites `.env` to `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID`).
 
 **Where the prompt goes.** `consult` (and the deprecated `call_model`, removed
 no earlier than 2026-12-02) default to `privacy='local'`, and the in-process reviewer, check-in coaching and
-knowledge synthesis always count as local. The server sends those only to an
-endpoint it classifies as local, and it decides that from the URL alone,
-never from DNS:
+knowledge synthesis always count as local. The server classifies an endpoint as
+local from the URL alone, never from DNS:
 
 - an IP address is local when it is loopback, in a private RFC 1918 range, or
-  in a network listed in `UNITARES_TRUSTED_NETWORKS` (the same networks the
-  server's own access checks trust; list an IPv6 unique-local range there if
-  your model server uses one);
+  in a network listed in `UNITARES_TRUSTED_NETWORKS` (add `100.64.0.0/10` there
+  for a Tailscale peer, or an IPv6 unique-local range);
 - a hostname is local only when it is `localhost`, `host.docker.internal`, or
-  listed in `UNITARES_MODEL_LOCAL_HOSTS` (comma-separated). A Compose service
-  name such as `vllm`, or a machine on your network such as `gpu-box.lan`, is
-  local only once listed there;
-- `UNITARES_MODEL_PRIVACY=local` or `external` overrides both, for your own
-  server on a public address.
+  listed in `UNITARES_MODEL_LOCAL_HOSTS` (comma-separated, e.g. `vllm` or
+  `gpu-box.lan`);
+- `UNITARES_MODEL_PRIVACY=local` or `external` overrides both.
 
-Anything else is external, and a local request to it is refused before
-anything is sent, with the error `MODEL_ENDPOINT_NOT_LOCAL` naming the setting
-to change. A model on a Tailscale peer (a 100.64.0.0/10 address) is external
-until you add that range to `UNITARES_TRUSTED_NETWORKS`. On a source install
-that also lets callers from that network reach the REST API without a token;
-under Compose, callers arrive through the Docker bridge, so it changes only
-which model endpoints count as local.
-`consult(privacy='cloud_allowed')` (or the deprecated
-`call_model(privacy='auto')`) may still use an external endpoint.
+Anything else is refused for local requests with `MODEL_ENDPOINT_NOT_LOCAL`
+before anything is sent. `consult(privacy='cloud_allowed')` (or the deprecated
+`call_model(privacy='auto')`) may use an external endpoint.
 
 ### Reinstalling and side-by-side installs
 
-Compose names the project after the checkout directory (`unitares`), and the
-database, Redis and other state live in named volumes under that project name.
-Running the clone-and-start command again, even from a fresh clone, reuses
-those volumes, so the old database and its data come back. That is what makes
-an upgrade keep its data.
+Compose names the project after the checkout directory (`unitares`) and keeps
+state in named volumes under that project name, so upgrades and fresh clones
+reuse existing data:
 
-- For a clean install, run `docker compose down -v` in the old checkout first.
-  This deletes the stack's data.
-- To keep the old install and add a second one, set `COMPOSE_PROJECT_NAME` to a
-  different value in the new checkout's `.env`. The compose file also sets
-  fixed `container_name` values, so run `docker compose down` (without `-v`, which
-  keeps the old volumes) in the first checkout before starting the second one.
-  `docker compose stop` is not enough: stopped containers keep their names.
+- For a clean install (deleting stack data), run `docker compose down -v` in the
+  old checkout first.
+- For a side-by-side install, set `COMPOSE_PROJECT_NAME` in the new checkout's
+  `.env` and run `docker compose down` (without `-v`) in the first checkout so
+  fixed `container_name` values do not collide.
 
 ### Updating
 
@@ -317,74 +265,45 @@ From the checkout, see whether a newer release is published, then move to it:
 ```
 
 `update` resolves the newest published release (or `--to <tag>`), prints the
-installed and target versions, and asks before changing anything. `--yes`
-skips the question; without a terminal and without `--yes` it stops rather than
-assume an answer. `--check` only reports and changes nothing. The command
-manages only this checkout's Docker Compose stack, and it refuses, leaving the
-code and the database schema as they were, when:
+installed and target versions, and asks before changing anything (`--yes` skips
+the prompt; `--check` only reports). It manages only this checkout's Docker
+Compose stack and refuses without changing code or schema when:
 
-- tracked files in the checkout have local changes, or `db/postgres` holds
-  untracked files (the database container would read a stray `NNN_*.sql` there
-  as a migration);
-- the database schema is newer than anything the target release knows, so
-  moving to an older release is not supported (it learns this only after
-  fetching the target's tag and starting the database, which stay fetched and
-  running);
-- this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent))
-  rather than from Compose.
+- tracked files have local changes, or `db/postgres` holds untracked files;
+- the database schema is newer than the target release (downgrades are not
+  supported);
+- this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)).
 
-On confirmation it:
+On confirmation it checks out the target, stops the governance server and lease
+plane, starts the database, writes a `0600` backup to
+`~/.unitares/backups/unitares-<time>-before-<tag>.sql.gz` (or
+`UNITARES_BACKUP_DIR`), applies pending migrations with
+`scripts/dev/apply_migrations.py` inside the database container, and rebuilds,
+restarts, and verifies deep health (`healthy` or `moderate`). If the dump fails,
+nothing is migrated. If a migration or rebuild fails before crossing the
+protected dialectic schema frontier (migrations 077 and 078), `update` checks
+the previous release back out and rebuilds it; once 077/078 are crossed (or the
+schema version is unreadable), it leaves the target release checked out with the
+writers stopped for forward repair.
 
-1. checks out the target and stops the governance server and the lease plane,
-   so nothing writes while the schema changes; it goes on only once both are
-   confirmed stopped;
-2. starts the database and, if the release has pending migrations, backs the
-   database up, then applies them with `scripts/dev/apply_migrations.py` inside
-   the database container, so no `psql` is needed on the host;
-3. rebuilds and restarts the stack and reports deep health.
-
-The backup is a gzipped plain-SQL `pg_dump` written to
-`~/.unitares/backups/unitares-<time>-before-<tag>.sql.gz` (set
-`UNITARES_BACKUP_DIR` to put it elsewhere) and readable only by your account.
-If the dump fails, nothing is migrated. If a migration or the rebuild fails,
-`update` checks the previous release back out and rebuilds it; migrations that
-already applied stay applied, and the error names the backup. The exception is
-an attempt that crossed the protected dialectic schema frontier (migrations 077
-and 078), or whose schema cannot be read afterwards: then `update` does not
-roll the code back, but leaves the target release checked out with the
-governance server and lease plane stopped for forward repair. The command exits
-non-zero unless deep health comes back healthy or moderate. A checkout already
-on the target release goes through the same steps without moving the code.
-
-Releases before this command existed shipped a `scripts/unitares update` that
-posted a check-in instead, and the `update` in v3.0.0 to v3.3.0 runs
-migrations without the attestation that migrations 077 and 078 require, so
-moving from any of them to v3.4.0 or later refuses and rolls back. From any of
-those releases, move the code once by hand and let the new `update` do the
-rest:
+When upgrading from v3.3.0 or earlier, fetch and check out the target tag first
+so the new `update` script runs with the 077/078 quiescence attestation:
 
 ```bash
 git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
 git checkout --detach vX.Y.Z
-docker compose up -d --build --wait postgres-age   # only from a release before `update` existed
+docker compose up -d --build --wait postgres-age   # only from a release before v3.0.0
 ./scripts/unitares update --to vX.Y.Z
 ```
-
-From a release before `update` existed, the database starts first so the new
-server never runs against the old schema. From v3.0.0 to v3.3.0, leave that
-line out: the new `update` stops the server and the lease plane before it
-starts the database. `update` then applies the release's migrations and
-rebuilds, restarts and health-checks the stack. If it stops before a release's
-protected migrations are applied (077 and 078 for v3.4.0), it restarts the
-stack from the checked-out Compose file; to run the previous release instead,
-check that release out and run `docker compose up -d --wait`.
 
 #### Updating a bare-metal or LaunchAgent install
 
 `update` manages only a Compose stack, so on a [bare-metal install](#22-bare-metal-installation)
 or a [LaunchAgent](03-running-the-server.md#37-run-at-login-macos-launchagent)
-you run the same steps by hand, from the checkout. Set `DB_POSTGRES_URL` to
-the URL your server uses (the playbook's is shown):
+run the same steps by hand from the checkout. Set `DB_POSTGRES_URL` to your
+server's database URL, verify a clean checkout and no untracked files under
+`db/postgres` (the migration runner applies every `NNN_*.sql` file under
+`db/postgres/migrations/`), and fetch the target release:
 
 ```bash
 export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
@@ -396,14 +315,8 @@ echo "$TAG"                                     # the newest release; set TAG yo
 git fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
 ```
 
-The `db/postgres` check matters because the migration tool applies every
-`NNN_*.sql` file it finds under `db/postgres/migrations/`, so an untracked file
-there would reach the database even though the release does not ship it. Move
-or delete anything it lists first.
-
-Confirm this is not a downgrade. The first number is the database's schema,
-the second the newest migration the release ships; if the first is larger,
-stop, because moving to an older release is not supported:
+Confirm this is not a downgrade (stop if the database's current version on the
+first line exceeds the target release's newest migration on the second):
 
 ```bash
 psql "$DB_POSTGRES_URL" -Atqc "SELECT COALESCE(MAX(version), 0) FROM core.schema_migrations"
@@ -411,13 +324,8 @@ git ls-tree --name-only "$TAG" -- db/postgres/migrations/ \
   | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1 | sed 's/^0*//'
 ```
 
-Stop the server, and the lease plane if you run one, so nothing writes while
-the schema changes: unload each LaunchAgent you use, and press Ctrl-C in the
-terminal of a server started in the foreground. Note which ones were running;
-you start the same ones again at the end. Confirm they are gone by service
-registration, process and listening port, not by an unanswered health check,
-which a timeout would also produce. Then move the code and its Python
-dependencies:
+Stop the server and lease plane, confirm they are gone by service registration,
+process, and listening port, then update the checkout and virtualenv:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # if you use it
@@ -430,7 +338,9 @@ source .venv/bin/activate
 pip install -r requirements-full.txt -c constraints.txt
 ```
 
-Back the database up, list the pending migrations, then apply them:
+Back up the database, inspect pending migrations, and apply them (do not migrate
+unless the backup prints `backup ok`, and pass `--dialectic-writers-quiesced`
+only after verifying all writers to this database are stopped):
 
 ```bash
 mkdir -p ~/.unitares/backups && chmod 700 ~/.unitares/backups
@@ -441,27 +351,13 @@ python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL"
 python3 scripts/dev/apply_migrations.py --db-url "$DB_POSTGRES_URL" --apply --dialectic-writers-quiesced
 ```
 
-Do not migrate unless the backup printed `backup ok`. `--dialectic-writers-quiesced` is your
-statement that the server and lease plane are stopped; migrations 077 and 078
-refuse to apply without it, and the tool does not check it for you, so pass it
-only once the three checks above printed nothing. Those checks cover the whole
-machine, so they also list another UNITARES instance, and the `mix run` pattern
-matches any Elixir service. Look at what each listed process is
-(`ps -o command= -p <pid>`), and stop anything that writes to this database. The migration tool calls
-`psql`, which the Homebrew PostgreSQL install puts on your `PATH`.
-
 If `git diff "$PREV" "$TAG" -- scripts/ops/com.unitares.governance-mcp.plist`
-shows changes, carry them into your installed plist by hand before loading it.
-Do not render it again with the [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
-command: that writes new tokens and secrets and resets the database URL and
-any other setting you changed, so clients stop authenticating and the server
-can start against a database other than the one you just migrated.
-
-The lease plane runs from whatever checkout its plist's `WorkingDirectory`
-names, and the [lease-plane runbook](../operations/lease-plane-operator-runbook.md)
-uses a separate deploy checkout for it. If that is not this checkout, move it
-to the same release before you load the plist, or the previous release's
-lease plane starts over the migrated schema:
+shows changes, merge them into your installed plist by hand rather than
+re-rendering from [§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent)
+(re-rendering overwrites tokens, secrets, and `DB_POSTGRES_URL`). If the lease
+plane runs from a separate deploy checkout (see the
+[lease-plane runbook](../operations/lease-plane-operator-runbook.md)), advance
+that checkout to `$TAG` before loading its plist:
 
 ```bash
 plutil -extract WorkingDirectory raw ~/Library/LaunchAgents/com.unitares.lease-plane.plist
@@ -470,10 +366,8 @@ git -C "$LP" fetch --depth 1 --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
 git -C "$LP" checkout --detach "$TAG"
 ```
 
-Then start what you stopped. The lease plane fetches its dependencies and
-compiles at boot, so its first start on a new release takes longer. Deep
-health should report `healthy` or `moderate`, and the lease plane's
-`build_sha` should match the release:
+Restart the services and verify deep health (`healthy` or `moderate`) and the
+lease plane's `build_sha`:
 
 ```bash
 launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist   # or: python src/mcp_server.py --port 8767
@@ -483,23 +377,17 @@ curl -s http://localhost:8767/health/deep
 curl -s http://127.0.0.1:8788/health; git rev-parse --short "$TAG^{commit}"   # if you run the lease plane
 ```
 
-If a migration fails, do not start the previous release over the database
-until you know where the schema stopped (the `psql` query above). If it did not
-cross 077 or 078 during this update, you can go back with
-`git checkout --detach "$PREV"`, reinstall its dependencies and start what
-you stopped again. If it crossed either one, or you cannot read the version,
-stay on the new release, fix the cause the error names and run the `--apply`
-line again; the backup is the way back.
+If a migration fails before crossing 077 or 078, you may roll the code back with
+`git checkout --detach "$PREV"` and reinstall dependencies; once 077 or 078 has
+applied (or if the schema version cannot be read), stay on `$TAG` and repair
+forward or restore from the backup.
 
 #### Updating the agent plugin
 
 The [governance plugin](https://github.com/cirwel/unitares-governance-plugin)
-is installed into each agent client, not the server, so neither path above
-touches it. It publishes a new version alongside each server release, whose
-release notes name the server version its skills match; update it after the
-server. Claude Code
-does not auto-update third-party marketplaces unless you turn that on under
-`/plugin` > Marketplaces.
+is installed into each agent client rather than the server; update it after
+upgrading the server, then start a new session (or run `/reload-plugins` in
+Claude Code; in Codex, review updated hooks under `/hooks`):
 
 ```bash
 # Claude Code
@@ -510,36 +398,18 @@ claude plugin update unitares-governance@unitares-governance
 codex plugin marketplace upgrade unitares-governance
 ```
 
-In Codex, open `/plugins` and confirm the new version is installed, then open
-`/hooks` to review and trust any hooks that changed. In both clients, hooks
-load when a session starts: running sessions keep the old ones until you start
-a new session (or run `/reload-plugins` in Claude Code).
-
 ### Tool discovery (interface 1.13.0 and later)
 
-The current source negotiates one complete catalog, including installed plugin
-tools, while advertising a small progressive surface initially. Use
+The server negotiates one complete catalog, including installed plugin tools,
+while advertising a small progressive surface initially. Use
 `list_tools(lite=true)` for every capability name, `describe_tool(tool_name=...,
 action=...)` for its parameters, and `use_tool(tool_name=..., arguments={...})`
 to invoke an omitted capability through its normal gates. Set
 `UNITARES_TOOL_ADVERTISEMENT=full` in `.env` to advertise every schema up front,
 then recreate the service and reconnect the client. Old `GOVERNANCE_TOOL_MODE`
-values are ignored. Action authorization and identity gates are unchanged.
-
-Earlier releases used `minimal`, `lite`, and `full` discovery profiles. The
-`standard` profile existed only on unreleased master between #2102 and #2137
-and never shipped in a release; v2.22.1 is the last 2.x release and defaults to
-`minimal` as described below. Those releases still require their own
-configuration instructions; changing an old server's environment does not
-install the unified catalog.
-
-v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`. Its
-published Compose file does not forward `GOVERNANCE_TOOL_MODE` either, so
-selecting a profile there needs the explicit override in the [release
-errata](../releases/2.22.0-errata.md). v2.21.0 has an older six-tool `minimal`
-profile and registration-time filtering on the HTTP MCP mount. Selecting a
-profile on either does not reproduce this surface or its dispatch
-compatibility; upgrade the server for those changes.
+values are ignored, and action authorization and identity gates are unchanged
+(for legacy 2.x profile behavior prior to v3.0.0, see the
+[v2.22.0 release errata](../releases/2.22.0-errata.md)).
 
 ## 2.2 Bare-metal installation
 

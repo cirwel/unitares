@@ -10,24 +10,7 @@ summary in their shared-contract block and point here for the detail.
 
 ## Why this exists
 
-Before this convention, delivery behavior diverged by *entrypoint*, not by
-intent:
-
-- **`ship.sh` default (`auto`)** routed runtime code to a draft PR but
-  direct-pushed docs/tests/"other" straight to the current branch — landing
-  immediately, no PR.
-- **`ship.sh --auto-merge`** opened a PR and enabled GitHub
-  auto-merge-on-green ("the old behavior").
-- **Claude on the web/cloud harness** was handed a fixed
-  `claude/<topic>-<id>` branch and always parked a *draft PR*, bypassing
-  `ship.sh` routing entirely.
-
-So Codex tended to direct-push docs and could opt into auto-merge, while
-Claude-on-web parked draft PRs that sat until a human merged them. With many
-sessions running at once that is unpredictable: three branch-naming schemes,
-and merge behavior that depended on which tool and which agent shipped the
-change. This document collapses that to one rule set, and `ship.sh`'s default
-`auto` route now opens a draft PR for every change (see *Delivery* below).
+All entrypoints — `./scripts/dev/ship.sh`, CLI agents, and web/cloud harnesses — share one branch-naming pattern (`<author>/<topic>-<short-id>`), one delivery artifact (a draft PR), and one serial merge queue (`approved-to-merge`). This prevents concurrent sessions from colliding or direct-pushing to shared branches.
 
 ## The convention
 
@@ -89,11 +72,9 @@ veto by removing the label.
   aid, not verified model provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
   opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
-  session's UNITARES identity: a later session finds the owner by it and can
-  check it against the server. Do not push commits to another session's PR branch, even to
-  fix something small. The `claude/` prefix does not tell sessions apart, and
-  neither does the commit author reliably: local sessions commit as the
-  operator, web sessions as `Claude`, and two web sessions look identical.
+  session's UNITARES identity. Do not push commits to another session's PR branch, even to
+  fix something small. Branch prefixes (`claude/`, `codex/`) and commit authors
+  do not distinguish sessions reliably.
   If it wasn't created in your session and its owner didn't hand it to you,
   it isn't yours. To contribute, either comment on the PR with the change,
   or branch from its head (`<author>/<topic>-on-<N>`), open your own draft
@@ -102,28 +83,19 @@ veto by removing the label.
   handover. If your own push is rejected because the remote has commits you
   did not author, somebody else is on your branch: keep your work on a local
   `backup/*` branch, build on the remote head, and ask who it is. Never
-  force-push over it (see *Git Rules*). Why (2026-09-26): on #2493 a web
-  session pushed a review-fix commit onto the branch while the local session
-  that owned it was still working. The owner's push was rejected, and only
-  its backup branch kept the two from overwriting each other.
-- <a id="adoption"></a>**A stuck queued PR may be adopted.** Sessions rarely
-  leave a trace that identifies them (most work through `git -C` from
-  elsewhere, and dozens are open at once), so "ask the owner" often has no
-  one to ask. When a PR carrying `approved-to-merge` has been stuck for 12
-  hours (conflicting, a required check failing or unreviewed, or its
-  approval stale) with no activity on the PR at all in that time (no commit,
-  comment, review or label change from anyone: sessions share one GitHub
-  account, so "the owner" cannot be told apart from anyone else), any agent
-  may take it over:
+  force-push over it (see *Git Rules*).
+- <a id="adoption"></a>**A stuck queued PR may be adopted.** When a PR carrying
+  `approved-to-merge` has been stuck for 12 hours (conflicting, a required check
+  failing or unreviewed, or its approval stale) with no activity on the PR at
+  all in that time (no commit, comment, review or label change from anyone), any
+  agent may take it over:
   1. Post a handover comment on the PR saying you are adopting it and why.
      That comment is the handover.
   2. Fix it on the same branch with fast-forward pushes only: merge the base
      in, never rebase or force-push.
   3. Run the review, and renew the label (remove, then add) once validation
      passes.
-  If the owner replies on the PR, stop and hand it back. Operator decision,
-  2026-09-27, after the first queue run left seven PRs stuck with no
-  findable owner.
+  If the owner replies on the PR, stop and hand it back.
 - **Do not** enable auto-merge by default.
 - A draft PR means "visible, not claiming merged." **Merging** is the merge
   queue's, entered by the owning agent's `approved-to-merge` label (section
@@ -133,45 +105,27 @@ veto by removing the label.
   "Review workflow" below) with any findings addressed (fixed, or answered
   with `review.sh dispose`), and no collision with an in-flight branch.
   **An unreviewed PR is not held** (operator decision, 2026-10-08), except on
-  an auth path (below): the
-  `review` check is not a required check, and the merge queue no longer waits
-  for it to pass (`PR_QUEUE_REQUIRED_CHECKS=review` in
-  `scripts/ops/pr-babysitter.sh` restores that). A neutral `review` (no review,
-  or a reviewer that could not finish) no longer holds a labelled PR. A
-  `review` of `action_required` still does: findings without dispositions, or
-  a sensitive diff that has passed one model family but not two, park the PR
-  in the queue like any check waiting on action. Where no review ran (a cloud
-  session, a disabled provider, the round cap spent before any pass), the
-  check stays neutral: the PR body says so, names the unavailable reviewer,
-  and the PR proceeds. A sensitive diff with one passing family (`review.sh`
-  exit 3) is the other case: it stays parked until a second eligible family
-  passes or the operator grants a [waiver](#second-family-review); saying so
-  in the PR body does not release it. Earlier decision,
-  2026-10-04: cloud sessions cannot run `review.sh`, and the gate had become
-  the main thing stopping finished PRs; 2026-10-08 removed the last queue-side
-  block. **Auth paths are the exception:** a diff touching any of
-  `scripts/dev/review_policy.json`'s `second_family_paths` is not armed until
-  `review` passes, whatever `PR_QUEUE_REQUIRED_CHECKS` says, because on those
-  files a neutral review would otherwise let a PR through with no review at
-  all (operator decision, 2026-10-08, made with #2684). The queue reads the
-  policy from the base, as CI does, and fails closed when it cannot read the
-  policy or the diff.
-- **Readiness is agent-declared, never operator-inferred.** The operator
-  pressing merge in order cannot verify content and should not have to
-  guess doneness: a PR still in draft is "still working — hands off," even
-  when the diff looks finished, and nobody marks another agent's PR ready
-  on its behalf. A draft whose owner went silent is a question for the
-  owner (KG channel) first — the stranded-work audit will NOT surface it,
-  since it skips branches with an open PR. If the owner cannot return,
-  the operator may mark it ready as an explicit override, saying so in a
-  PR comment: an override with stated rationale is a decision, not the
-  blind inference this rule forbids.
-  Ordering constraints the agent knows about ("merge after #N") belong in
-  the PR body, so in-order merging acts on declared state. Rationale
-  (2026-08-27): marking agent PRs ready on inference while the agent was
-  still revising is the trigger shape of the post-merge orphan-push
-  incidents — the human gate authorizes; the evidence lives with CI,
-  reviews, and the merge-loss guards.
+  an auth path (below): the `review` check is not a required check, and the
+  merge queue no longer waits for it to pass (`PR_QUEUE_REQUIRED_CHECKS=review`
+  in `scripts/ops/pr-babysitter.sh` restores that). A neutral `review` (no
+  review, or a reviewer that could not finish) no longer holds a labelled PR;
+  the PR body states the unavailable reviewer and the PR proceeds. A `review`
+  of `action_required` still parks the PR in the queue: findings without
+  dispositions, or a sensitive diff that has passed one model family but not
+  two (`review.sh` exit 3, which stays parked until a second eligible family
+  passes or the operator grants a [waiver](#second-family-review)). **Auth paths
+  are the exception:** a diff touching any of `scripts/dev/review_policy.json`'s
+  `second_family_paths` is not armed until `review` passes, whatever
+  `PR_QUEUE_REQUIRED_CHECKS` says. The queue reads the policy from the base, as
+  CI does, and fails closed when it cannot read the policy or the diff.
+- **Readiness is agent-declared, never operator-inferred.** A PR still in draft
+  is "still working — hands off," even when the diff looks finished, and nobody
+  marks another agent's PR ready on its behalf. A draft whose owner went silent
+  is a question for the owner (KG channel) first — the stranded-work audit will
+  NOT surface it, since it skips branches with an open PR. If the owner cannot
+  return, the operator may mark it ready as an explicit override, saying so in a
+  PR comment. Ordering constraints the agent knows about ("merge after #N")
+  belong in the PR body, so in-order merging acts on declared state.
 
 ### Review workflow
 
@@ -246,17 +200,6 @@ legacy `--authorize-full-review` CLI paths verify a user account via
 GitHub and refuse App credentials or an unreadable actor. All agents use the
 shared App; the operator's user account is reserved for operator actions.
 
-> **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
-> longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
-> `second_family_paths` file still needs `review` to pass. What
-> follows still applies to the review you run. The round cap still bounds paid
-> full cycles (another needs a scoped operator grant or the operator's own
-> `--authorize-full-review`), and
-> a `review` check of `action_required` (undisposed findings, or a sensitive
-> diff with one passing family of two) still parks the PR in the queue. Quality
-> still comes first; the point is that an unavailable reviewer never stops a
-> finished PR.
-
 The purpose is another useful perspective on substantive work, not a required
 sequence of model invocations. Choose the review that helps the change:
 
@@ -278,11 +221,6 @@ work into two: sensitive changes need each credited family's actual review.
 If publishing with `ship.sh`, use its existing `SHIP_NO_REVIEW=1` option for
 that push, then immediately record the completed council review. This avoids
 starting an automatic model review before its evidence has been recorded.
-
-"Review round joined" used to be prose: some PRs carried a
-review in the body, some in a comment, most in neither, and nothing could tell
-which. It is now a command and a status check, the way `test-cache.sh` made
-the test run one.
 
 - `./scripts/dev/review.sh --reviewer PROVIDER` reviews the PR diff for `HEAD`
   in a fresh reviewer session, read-only, within
@@ -339,19 +277,18 @@ the test run one.
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own
   author is not a review.
-- Bot PRs use the same evidence rules: the incident that motivated "no
-  mechanical exemption" was a dependency bump. Nobody has to remember them
-  either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
-  from the owner's account, Dependabot, or the already trusted UNITARES agents
-  App after 15 minutes without an update. Forks and unknown publishers wait
-  for explicit human handling.
-  Drafts require the owner's explicit `review-requested` label; unfinished
-  drafts are excluded by default. `no-auto-review` holds
-  automatic review of intentionally unfinished work. Outside contributors'
-  PRs get a human first. A lock in the git common dir keeps the sweep and an
-  author's review from running on the same PR concurrently across heads/worktrees. Failed runs retry at most
-  three times per provider per diff; unresolved findings and exhausted retries are reported
-  as author follow-up in the sweep log, never silently treated as clean.
+- Bot PRs use the same evidence rules. The optional `review_gate.py sweep`
+  fallback reviews one quiet PR per run from the owner's account, Dependabot,
+  or the already trusted UNITARES agents App after 15 minutes without an
+  update. Forks and unknown publishers wait for explicit human handling. Drafts
+  require the owner's explicit `review-requested` label; unfinished drafts are
+  excluded by default. `no-auto-review` holds automatic review of intentionally
+  unfinished work. Outside contributors' PRs get a human first. A lock in the
+  git common dir keeps the sweep and an author's review from running on the
+  same PR concurrently across heads/worktrees. Failed runs retry at most three
+  times per provider per diff; unresolved findings and exhausted retries are
+  reported as author follow-up in the sweep log, never silently treated as
+  clean.
 
 Quota, authentication, and startup failures put that provider on a one-hour
 cooldown shared across worktrees. One provider is attempted per invocation;
@@ -371,13 +308,6 @@ Enable this integration in the shared local repository:
 ```bash
 git config review.native true
 ```
-
-The 2026-09-23 pilot exposed overlapping triggers: **Every push** reviewed
-base updates and finished after #2352 merged; **On PR open** then started
-another review when #2353 was marked ready, even though that exact commit
-had already passed native review. The command-owned request avoids both
-retriggers. Authors run `review.sh` for changed diffs as part of delivery;
-the operator does not need to request reviews or chase their comments.
 
 `review.sh` reads native completion evidence regardless of provider choice.
 With `UNITARES_REVIEWER=codex` and `review.native=true`, if nothing has started
@@ -428,27 +358,19 @@ focused design advice. A council may supply the independent implementation
 review or help resolve design disagreement; neither route adds a mandatory
 second ritual.
 
-Pilot evidence: [draft #2340 native completion](https://github.com/cirwel/unitares/pull/2340#issuecomment-5794562451)
-named its reviewed commit after an explicit request. Automatic review did not
-start on the initial draft of #2352 during the pilot; the command-owned request
-is therefore necessary for this workflow. See the PR for subsequent push and
-fallback validation.
-
 #### Round cap
 
-Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
-gets three **full review cycles**. Operator direction, 2026-10-15, makes the
-budget context-based: a cycle that found a serious problem (a P0/P1 finding,
-or an unlabelled one) does not count toward the three, because the fix of a
-serious finding earns a full review of the fix however many cycles came
-before (a re-review of the same unchanged diff does not). Only posted review
-records can show a serious finding; an unposted local run always counts.
-Clean cycles and cycles with only lesser findings count. The cap stops review that
-has stopped finding serious problems, not review that keeps finding them; a
-convergence warning at ten total cycles asks the agent to reassess scope and
-recurring findings (operator refinement, 2026-10-21). Total count alone no longer
-blocks verification of useful fixes. Narrow the work or change the independent
-perspective when a review is not converging; do not repeat unchanged review work.
+A PR gets three **full review cycles** in its redundancy budget. A cycle that
+found a serious problem (a P0/P1 finding, or an unlabelled one) does not count
+toward the three, because the fix of a serious finding earns a full review of
+the fix however many cycles came before (a re-review of the same unchanged diff
+does not). Only posted review records can show a serious finding; an unposted
+local run always counts. Clean cycles and cycles with only lesser findings
+count. A convergence warning at ten total cycles asks the agent to reassess
+scope and recurring findings; total count alone does not block verification of
+useful fixes. Narrow the work or change the independent perspective when a
+review is not converging; do not repeat unchanged review work.
+
 The three-cycle redundancy budget, provider cooldown/retry limits, actual
 findings and mandatory model-family coverage remain authoritative. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
@@ -464,8 +386,7 @@ and targeted follow-ups do not spend cycles. Existing provenance is used
 without inventing a head or family. Unknown legacy history still requires
 escalation. Retargeting or rewriting work does not reset the PR's ledger.
 
-**Review is collaboration: more minds on the work, with coverage proportional
-to the change (operator direction, 2026-10-13).** Keep completed full reviews
+**Proportional follow-up coverage.** Keep completed full reviews
 as evidence. After a clean review or minor findings, `review.sh` normally asks
 an independent reviewer to examine the complete cumulative delta from that
 full review, its interactions with the original work, and all prior findings.
@@ -482,9 +403,7 @@ and current PR diffs. Upstream file count alone is not expanded PR scope, and an
 empty author delta does not prove that prior reasoning still applies. If Git
 reconstructs conflicts, the reviewer sees each actual resolution against both
 the reviewed side and the integrated base. Other paths use the automatic merge
-baseline. Keeping the old PR version therefore still exposes an upstream fix
-that the resolution rejected, without classifying every upstream file as new
-author work. Unreadable reconstruction falls back to the complete unseparated
+baseline. Unreadable reconstruction falls back to the complete unseparated
 delta. Reviewers still decline uncertain scope; this changes input preparation,
 not review authority or coverage requirements.
 
@@ -589,36 +508,14 @@ a Codex PR to Claude and then agy, an agy PR to Claude and then Codex, and a
 Claude PR to Codex and then agy. A branch without an agent prefix is reviewed
 in the configured order. When only the author's family is configured, the
 sweep starts nothing and says so. A
-local Codex CLI cooldown does not prevent its separately enabled native route. It
-never adds providers to the list. `UNITARES_REVIEWER` supplies a single choice
-when no flags are given. With neither, it reports the missing configuration and
-starts nothing. A scheduler that runs the sweep supplies its choices in its own
-job configuration. Existing jobs need that explicit configuration
-before this driver is deployed; updating repository code does not modify or
-reload installed jobs. Candidate lists printed by the runner are alphabetical
-for display, not a ranking.
-The legacy Python helper names remain importable: `PROVIDER_ORDER` is that
-display inventory, and `default_reviewer` returns only the environment choice
-or `None`; neither supplies a built-in preference.
-
-The native-route cooldown exception retains an existing scheduling limitation:
-if a selected Codex native request has expired or is unavailable while the local
-CLI is cooling down, that PR can consume subsequent sweep ticks without moving
-to the next configured provider. There is no same-tick cascade. Select another
-provider first for that host or have the author explicitly choose another
-provider; this selection change does not redesign native retry scheduling.
-
-**Migrating an existing scheduled sweep.** A bootstrap that refreshes the
-driver from `origin/master` on every tick deploys the new requirement at
-merge. Stage an explicit choice in the job first, either `UNITARES_REVIEWER`
-in its environment (the old driver ignores it and the new driver honors it) or
-ordered `--reviewer` arguments once the new driver is available. Wait for any
-active review to finish before reloading the job, and preserve its other
-settings. The deployment repository that owns the scheduler owns this
-procedure. A single configured family cannot satisfy a sensitive diff by
-itself; configure another eligible family or have the author explicitly
-request it. These are deployment steps, not actions performed by a source-only
-PR.
+local Codex CLI cooldown does not prevent its separately enabled native route
+(though if a selected Codex native request has expired or is unavailable while
+the local CLI is cooling down, that PR can consume subsequent sweep ticks
+without moving to the next configured provider). `UNITARES_REVIEWER` supplies a
+single choice when no flags are given; with neither, the sweep reports the
+missing configuration and starts nothing. Candidate lists printed by the runner
+are alphabetical for display (`PROVIDER_ORDER`), and `default_reviewer` returns
+only the environment choice or `None`.
 
 #### Review provider availability
 
@@ -674,12 +571,7 @@ and prints the next step: the exact
 `review.sh --fresh --reviewer <provider>` commands for providers that are
 eligible now (not disabled, cooling down or exhausted on this diff), or that
 none is, with `review.sh record --independent` as the alternative. The author
-chooses; the round cap and the scheduled sweep are unchanged by this rule. (An
-automatic second run was tried and removed: it kept colliding with the round
-cap, fresh runs and the sweep, over a dozen review rounds on PR #2504.) Why the
-rule exists: on PR #2486 the first reviewer returned a bare CLEAN and a second
-family then found two P2 defects; the `agy` isolation hole (standing grants in
-`~/.gemini`) was found by one family and would have shipped on another's pass.
+chooses; the round cap and the scheduled sweep are unchanged by this rule.
 
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
@@ -688,38 +580,26 @@ used only when the `agy` command is installed. Select it with
 is attempted per invocation; selecting a distinct family for a sensitive diff
 remains explicit.
 
-It is deliberately **not** run inside the checkout. A PR can carry
-`.agents/` hooks, rules and project permission rules, and `agy` loads those
-from its working directory. That is the same class of hole that ruled out the
-Gemini CLI (#2423, reverted). So `agy` runs in a **temporary workspace**
+It is deliberately **not** run inside the checkout because a PR can carry
+`.agents/` hooks, rules, and project permission rules that `agy` loads from its
+working directory. Instead, `agy` runs in a **temporary workspace**
 that holds only the review material: `diff.patch` and, under `files/`, the
-full post-change text of every changed file at its repository path. It reads
-them with its own file tool, which needs no permission grant inside its
-workspace, and never executes them. A changed file whose name `agy` would load
+full post-change text of every changed file at its repository path (read only
+from committed git objects; symlinks, submodules, and paths outside the
+repository are excluded). A changed file whose name `agy` would load
 as instructions (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, anything under
-`.agents/`, `.agent/` or `.gemini/`) is written with a `.review-copy` suffix.
-Two changed files that would land on the same path keep the first, and any file
-not placed is listed in `omitted.txt`. It also gets
-a fresh temporary `HOME` (only the login keychain is linked in), so the
-operator's standing permission grants and MCP servers in `~/.gemini` never
-load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
-`agy` 1.2.11 switches plan mode off when it is set.) The trade-off is
-that the reviewer cannot browse the rest of the repository. There is no size
-limit: the material used to be inlined as one command-line argument, capped
-at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
-default model is Gemini 4 Argon (High); `REVIEW_AGY_MODEL` overrides it
-(`default` leaves the choice to `agy`). The prior 3.1 Pro pin was no longer
-served on 2026-10-13. Argon replaced the interim 3.8 Flash pin after a replay
-of three past PRs with known defects (one run each): Argon found 5 of them,
-Flash 1 and 3.1 Pro 1. That is a small sample, not a quality guarantee. A
-shell command `agy` reaches for is denied and the conversation is resumed with
-a reminder that only file reads work.
-Content is read only from committed git objects: symlinks, submodules and paths
-outside the repository never reach the prompt. The dialectic reviewer can use
-Antigravity too (`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
-orchestrator's environment), but through its own backend: it inlines a short
-self-contained prompt, keeps the ~120 KB argument cap, and does not read
-`REVIEW_AGY_MODEL`. Setup on a machine:
+`.agents/`, `.agent/` or `.gemini/`) is written with a `.review-copy` suffix;
+collisions keep the first file and list omitted files in `omitted.txt`. It also gets
+a fresh temporary `HOME` (only the login keychain is linked in), so standing
+permission grants and MCP servers in `~/.gemini` never load, plus
+`--mode plan --sandbox` (without `--disable-slash-commands`, which disables plan
+mode in `agy` 1.2.11). The default model is Gemini 4 Argon (High);
+`REVIEW_AGY_MODEL` overrides it (`default` leaves the choice to `agy`). Shell
+commands are denied. The dialectic reviewer can use Antigravity too
+(`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the orchestrator's
+environment) through its own backend, which inlines a short self-contained
+prompt (~120 KB argument cap) and does not read `REVIEW_AGY_MODEL`. Setup on a
+machine:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
@@ -730,10 +610,6 @@ agy        # once, interactively: sign in, then /exit
 Antigravity's terms let Google collect interaction data unless you opt out in
 its settings. A review sends the diff and the changed files.
 
-Provider availability is controlled by `review_providers.json`; historical
-outage notes are not a current provider policy. Existing independent human,
-subagent or council reviews can be recorded regardless of CLI availability.
-
 #### Requesting review without local tooling
 
 **Check [provider availability](#review-provider-availability) first:** while
@@ -742,8 +618,8 @@ Codex is disabled there, skip this section and use
 
 `review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
 run in cloud sessions, sandboxed runtimes, or any environment without them.
-When native Codex review is enabled for the repository (it is on this
-operator's), the environment-independent path is a PR comment:
+When native Codex review is enabled for the repository, the
+environment-independent path is a PR comment:
 
 1. Post `@codex review` as a top-level comment on the PR. Any agent that can
    write a GitHub comment (through the `gh` CLI, a GitHub MCP connector, or
@@ -758,33 +634,22 @@ operator's), the environment-independent path is a PR comment:
    `gh`, reply on the thread with the rebuttal, then render the record with
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
-   verbatim. Do not assemble the disposition record by hand.
-   The enabled [round cap](#round-cap) applies here too: after three full
-   cycles that found no P0/P1, stop redundant full-review requests and escalate
-   unresolved findings. Ordinary minor
-   fixes may receive honest targeted verification; security needs full current
-   coverage from two families. P0/P1 remain blockers, and fixes of serious
-   findings still earn a full pass. Ten total cycles warn and prompt scope
-   reassessment; only the redundancy budget requires additional-cycle approval.
+   verbatim. Do not assemble the disposition record by hand. The
+   [round cap](#round-cap) rules above apply here too.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
-   does not exist` right after a push), post the request once more. That
-   error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
-   the retry succeeded. A second identical failure is an outage to report,
-   not something to loop on.
+   does not exist` right after a push), post the request once more; a second
+   identical failure is an outage to report, not something to loop on.
 
-Do not hand-build a `unitares-review v1` record in place of this. The gate
-trusts records from the owner's account, which every agent posts through, so
-a hand-assembled record is indistinguishable from a real one (#2356 posted one
-and retracted it). `review.sh` remains the path when native review is not
-enabled, and the fallback when Codex is unavailable. Without `gh` either, use
-the next section.
+Do not hand-build a `unitares-review v1` record in place of this. `review.sh`
+remains the path when native review is not enabled, and the fallback when Codex
+is unavailable. Without `gh` either, use the next section.
 
 #### Recording a review without gh
 
-Operator decision, 2026-09-24: an agent without `gh` (a cloud session with
-only a GitHub connector) may record a **subagent or council review**, as long
-as the record says which it was. This is equally valid when `gh` is installed:
-omit `--emit` to post directly. It is not an outage-only alternative.
+An agent without `gh` (a cloud session with only a GitHub connector) may record
+a **subagent or council review**, as long as the record says which it was. This
+is equally valid when `gh` is installed: omit `--emit` to post directly. It is
+not an outage-only alternative.
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
@@ -892,64 +757,28 @@ For an already-pushed docs/tests/tooling fix, resume delivery from the named bra
 UNITARES_AGENT_UUID=<your-bound-uuid> ./scripts/dev/ship.sh --resume --reviewer claude --wait
 ```
 
-This joins the existing diff-bound review, waits for CI when `--wait` is set,
-runs `git prepr`, declares readiness and adds `approved-to-merge`, then runs
-strict closeout. It uses the installed GitHub App runner when available;
-this optional command also requires the shared host `git-prepr` and
-`git-closeout` tools (or equivalent Git aliases). Those tools are installed
-separately, not supplied by this checkout; missing prerequisites park before
-any review spending. Other hosts need those tools plus an explicitly
-provisioned `GH_TOKEN`/`GITHUB_TOKEN`.
-It refuses an implicit fallback to the interactive `gh` login.
-It neither commits nor pushes, starts no local full test run, and never updates
-the base or arms auto-merge. Use `--resume --plan` for a read-only preview.
-Without `--wait`, pending validation exits 2 with the command to resume later.
-An error after approval can leave the PR ready and queued: inspect the live
-state and journal before retrying. A lost readiness receipt can cause label
-renewal on retry and change queue order. Ambiguous failed reviewer transcripts
-may conservatively retain echoed finding titles as open findings; inspect and
-dispose those with reasons rather than treating an uncertain failure as clean.
-Disposal answers the alleged findings but does not complete an interrupted review.
-Run `./scripts/dev/review.sh --fresh --reviewer PROVIDER` with a healthy provider
-(within the spending budget), then resume delivery. Automatic resume deliberately
-parks incomplete/full-required evidence instead of inferring completed coverage.
+This joins the existing diff-bound review, waits for CI when `--wait` is set
+(without `--wait`, pending validation exits 2 with the command to resume later),
+runs `git prepr`, declares readiness, adds `approved-to-merge`, and runs strict
+closeout. Use `--resume --plan` for a read-only preview. It requires the host
+`git-prepr` and `git-closeout` tools plus the installed GitHub App runner (or an
+explicitly provisioned `GH_TOKEN`/`GITHUB_TOKEN`; it refuses an implicit
+fallback to the interactive `gh` login). It neither commits nor pushes, starts
+no local full test run, and never updates the base or arms auto-merge.
 
-The ownership footer must match the bound UUID. Automatic completion is limited
-to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`, `tests/`, `scripts/dev/`,
-`scripts/diagnostics/`, and `.github/workflows/`. Scientific proposals, registered
-stop rules, identity ontology and public-site prose remain outside that lane,
-along with runtime authentication/identity enforcement and their operator decisions.
-Review-controller and review-workflow tooling listed in `second_family_paths`
-remains eligible within this technical tooling lane only after passing its
-required two-family review; the advisory exception never substitutes for that
-coverage.
-Dirty work, a different local or remote head, open findings, pending review or CI,
-incomplete mandatory family coverage, explicit holds, capability classification,
-and governance-sensitive paths park delivery. An unavailable selected reviewer
-parks automatic delivery. For an ordinary fix the owning agent may document
-the advisory exception in the PR body and complete the normal prepr/readiness
-steps under existing authority. That is an explicit owner decision; resume
-never infers it from a failed process. Mandatory family coverage remains required. A head/base change during validation
-requires another inspection. Successful readiness is recorded against the head
-on the PR; repeating resume rechecks the live evidence without renewing the
-queue label. Approval-removal event history is read across all PR heads, even
-when an earlier readiness receipt is absent. A missing receipt causes a pre-existing label to be renewed once
-after validation, covering a follow-up push. Renewal intent is journalled before
-removal, binding the head, previous label event, writer and server timestamp.
-The visible label must agree with the pre-removal history, and a successful
-removal acknowledgement is recorded before any recovery can re-add approval.
-An unconfirmed intent cannot adopt a later same-login veto. A matching removal
-can resume after API lag or a failed addition. A different
-actor, an ambiguous event sequence or a later external veto stays parked. Removing approval
-after a recorded readiness parks the command rather than undoing the removal. Surface claims
-must already be released; ownership handoffs and operator decisions remain
-explicit prerequisites.
-
-Delivery proceeds only after the review command succeeds. Incomplete history,
-provider failures, pending review, declined scope and partial findings park
-automatic delivery; there is no provider-failure approval fallback. Missing base objects
-are fetched through the App/read-only route before policy and diff inspection;
-the plan can refresh that base history too.
+The PR's ownership footer must match `UNITARES_AGENT_UUID`, and automatic
+completion is limited to `docs/operations/`, `docs/dev/`, `docs/changelog.d/`,
+`tests/`, `scripts/dev/`, `scripts/diagnostics/`, and `.github/workflows/`.
+Paths in `second_family_paths` remain eligible only after passing their required
+two-family review; scientific proposals, registered stop rules, identity
+ontology, public-site prose, and runtime auth/identity enforcement remain
+outside this lane. Dirty worktrees, mismatched local/remote heads, active
+surface claims, open findings, incomplete or failed review/CI, unavailable
+reviewers, capability classification, or governance-sensitive paths park
+automatic delivery. Successful readiness is recorded against the head on the PR;
+repeating `--resume` rechecks live evidence without renewing the queue label,
+whereas a follow-up push with no readiness receipt renews a pre-existing label
+once after validation (unless an external removal or veto occurred).
 
 ### 3. Parallel / simultaneous work
 
@@ -966,8 +795,7 @@ guards keep concurrent sessions from clobbering each other:
   `AGENTS.md`/`CLAUDE.md`) for the old claim and updates every copy, and adds
   a row + deny-pattern to the Contested Claims Registry in
   `docs/dev/CANONICAL_SOURCES.md` so `check_doc_health.py` blocks the stale
-  wording from reappearing. Corrections that land in one doc and drift in the
-  others were the entire defect class of the 2026-07-02 coherence audit.
+  wording from reappearing.
 - **Changelog entries**: add a `docs/changelog.d/` fragment, never edit
   `docs/CHANGELOG.md` directly in an ordinary PR; the format is in
   [`docs/changelog.d/README.md`](../changelog.d/README.md).
@@ -980,85 +808,31 @@ guards keep concurrent sessions from clobbering each other:
 
 `master` requires branches to be up to date before merging (`strict`), and
 `enforce_admins` is on, so nobody can bypass it. With seven required checks and
-a ~15-minute slowest job, **every merge invalidates every other open PR**. At
-nine open PRs that is nine update-branch clicks and over two hours of CI per
-pass through the queue, and each merge re-dirties the rest. That is arithmetic,
-not a discipline problem — no amount of care makes it cheaper.
+a ~15-minute slowest job, **every merge invalidates every other open PR**.
 
 **Queue it instead of watching.** When your PR is ready (CI green, known findings addressed, and required
 sensitive-path review coverage passing), mark it ready and apply `approved-to-merge` in the same step.
-The queue below arms it in turn, GitHub updates the branch when the base moves
-(the repo has "always suggest updating pull request branches" enabled), and it
-merges as soon as the required checks pass. Do not arm with `gh pr merge
---auto` yourself: a PR armed outside the queue holds the queue's slot until it
-lands, and two armed PRs are the cascade below. Arming by hand stays the
-operator's tool. Draft PRs cannot be queued, so mark ready first.
-
-**What GitHub's updater actually does.** On 2026-09-27 it updated armed #2524
-43 s after #2518 merged and 101 s after #2507 merged, with no script involved
-(the babysitter logs every update it makes, and has no line at either time).
-It did not update every armed PR: after the 08:41 merge #2507, also armed, was
-still `BEHIND` four minutes later and was updated by the babysitter. An earlier
-version of this section cited #1658 (2026-08-14) as proof of the native
-updater; the babysitter log shows `09:47:22Z update-branch #1658`, two seconds
-before that update, so it was the script. **Do not write or run an
-update-branch babysitter that updates every behind PR** — racing GitHub's
-updater burns a CI cycle per redundant update, and updating every armed PR is
-the N² cascade below. The one sanctioned exception is the queue script's
-single fallback update, described below. `unitares-governance-plugin` still
-needs manual `gh pr update-branch`, because auto-merge is disallowed there.
-
-A workflow that predates this, `.github/workflows/pr-queue-autoupdate.yml`, was
-removed in the same pass. It was a poor-man's queue added before the repo
-setting existed, it required a PAT (`PR_AUTOUPDATE_TOKEN`) that was never
-created, and so every run since — on each push to master plus hourly — exited
-early having done nothing. Restoring it would put a second updater in a race
-with GitHub's native one.
-
-**Arming many PRs at once is its own cascade.** Every merge makes every armed
-PR stale; update them all and each merge re-runs CI on the other N−1, of which
-one wins: roughly N²/2 CI runs to land N PRs, all competing for the same
-Actions concurrency. The operator's queue avoids that. Label a ready PR
-`approved-to-merge`, and `scripts/ops/pr-babysitter.sh` (launchd, every five
-minutes) keeps exactly one PR armed, taking labelled PRs in the order the
-label went on. What it buys is the maintainer's attention and the wasted CI,
-not speed: one merge per CI cycle is still the ceiling under `strict`, and a
-hand-merging maintainer who is watching reaches it too. It runs only while
-the operator's machine is awake.
+`scripts/ops/pr-babysitter.sh` (launchd, every five minutes while the operator's
+machine is awake) keeps exactly one PR armed at a time in the order the label
+went on, avoiding the N² CI cascade of arming or updating multiple behind PRs at
+once. Do not arm with `gh pr merge --auto` yourself, and **do not write or run
+an update-branch babysitter that updates every behind PR** (`unitares-governance-plugin`
+still uses manual `gh pr update-branch` because auto-merge is disallowed there).
+Draft PRs cannot be queued, so mark ready first.
 
 - **The label is the merge decision, and the owning agent makes it.** Apply
   it when you mark your PR ready, on the same validation (CI green, `review`
   passing), and never on another agent's PR; the operator vetoes by removing
-  it. The gate exists for coordination, which the queue does more reliably
-  than hand-merging (operator decision, 2026-09-27). The exception is a PR
-  labelled `governance-sensitive` (CI applies it to PRs touching enforcement
-  constants; see `docs/dev/GOVERNANCE_SENSITIVITY.md`), or whose diff the
-  queue itself finds touching that manifest, or that comes from a fork: the
-  queue never arms it, and the operator merges it by hand, because the threat model names the
-  human merge gate as the control for exactly those diffs. It approves the
-  PR as it stood: the
-  script pins the head and a fingerprint of what it changes when it first
-  sees the label (GitHub's compare of `master...<that SHA>`: per file the
-  added and removed lines, or the blob SHA where there is no patch, as for a
-  binary file). A later head stays covered only while the fingerprint is
-  unchanged, which a clean base update preserves; commit metadata is
-  author-controlled and proves nothing. It arms with `--match-head-commit` on
-  that head. A push after the label makes the approval stale, and the PR is
-  skipped until the label is removed and re-added. A label is pinned only if the
-  script sees it within 15 minutes of going on; an older label with no pin
-  (the machine was asleep, or the script's state was lost) must be
-  removed and re-added. The residual gap is a commit made before the label but pushed
-  before the script first sees it (normally the next five-minute tick, never
-  beyond those 15 minutes), which gets pinned as approved.
-- **What the pin is for.** It catches honest mistakes: a follow-up pushed
-  after approval, whether before arming or after (an armed, labelled PR whose
-  content no longer matches its pin is disarmed at the next tick), or a
-  branch changing under the label. It is not a boundary against a hostile
-  agent: every actor authenticates as the same account, so such an agent
-  could apply the label or run `gh pr merge --auto` itself. Forged history
-  (an edit moved to a spot with identical context, backdated or
-  GitHub-imitating commits) is out of scope for the same reason; the guard
-  there is who holds the credentials.
+  it. The exception is a PR labelled `governance-sensitive` (see
+  `docs/dev/GOVERNANCE_SENSITIVITY.md`), touching that manifest, or coming from
+  a fork: the queue never arms it, and the operator merges it by hand. When the
+  queue first sees `approved-to-merge` (within 15 minutes of application), it
+  pins the head and a diff fingerprint (`master...<SHA>` added/removed lines or
+  blob SHA) and arms with `--match-head-commit`. A clean base update preserves
+  the fingerprint; a follow-up push or an unpinned label older than 15 minutes
+  is skipped until the label is removed and re-added. The pin catches honest
+  follow-up pushes or branch mutations after approval, not hostile actors
+  sharing the same credentials.
 - **It honours declared order.** A "merge after #N" (or
   `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
   unreadable dependency holds it too.
@@ -1069,18 +843,11 @@ the operator's machine is awake.
   label (applied before the re-run, removed again if nothing started); after
   that it is skipped until someone removes `merge-retried`. A failure on a
   stale head is simply armed, since GitHub re-runs everything on update. A
-  check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
-  the silent-disarm gap for labelled PRs, and it means a flaky check shows up
-  as `merge-retried` on the PR and a line in the script's log.
+  check parked for approval (`ACTION_REQUIRED`) is never re-run.
 - **The slot, and who arms.** The queue owns arming. Any arm it did not
   make is disarmed on the next tick, with a notice on the PR, and its label
-  stays, so the queue arms it in turn. Agents never arm by hand, and on
-  2026-09-27 seven hand-armed PRs, none of them mergeable, held the slot and
-  stalled the queue for hours. The one exception is the operator's: an arm
-  on a PR labelled `operator-armed` is left alone and holds the slot. The
-  queue never overrides the operator's own arms, so arming two such PRs at
-  once is the operator's choice, and it gives up the one-arm guarantee for
-  those two. A PR
+  stays, so the queue arms it in turn. The one exception is an arm on a PR
+  labelled `operator-armed`, which is left alone and holds the slot. A PR
   the queue armed is disarmed when it turns `CONFLICTING`, when its checks
   fail on its current head, when a check is parked for approval, when its
   content changes, or when its label is removed; its label stays except in
@@ -1089,49 +856,28 @@ the operator's machine is awake.
   that will not clear by itself (a conflict, an approval gone stale, a
   required check that concluded without passing, a check parked for
   approval, failures that survived the one re-run), it posts one comment on
-  the PR saying why and what fixes it, so whoever looks next (the owner, or
-  an agent adopting it) does not need this machine's log. A hidden marker
-  keeps it to one notice per reason and head. Transient waits (a pending
-  check, a dependency still open) post nothing.
+  the PR saying why and what fixes it (deduped per reason and head). Transient
+  waits post nothing.
 - **Updates: never armed across an unchecked head.** When the head of the
   queue is `BEHIND`, the script updates it unarmed and holds its place; a
   later tick arms the updated head once its content still matches the
-  approval and its required checks pass. Arming first would leave auto-merge
-  on across a head nothing had re-checked, while `review` is not
-  branch-protected. GitHub's own updater is not relied on: in the queue's
-  first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
-  falls `BEHIND` later, the script disarms it at once, updates it, and
-  re-arms it by the same rule (no grace: GitHub's updater can move the head
-  within a minute). A PR armed by hand is only updated, and only if GitHub
-  has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
-  updated, so there is nothing to race.
+  approval and its required checks pass. If a PR the script armed falls `BEHIND`
+  later, the script disarms it at once, updates it, and re-arms it by the same
+  rule. A PR armed by hand (`operator-armed`) is only updated if GitHub has not
+  done so within 3 minutes. Only the one head-of-queue or armed PR is ever
+  updated.
 
-**Drafts stay pinned.** A draft cannot enter the queue, but that is not a gap to
-fill with a scheduled updater: it is not yet a merge candidate. The former
-four-hour `draft-base-refresh.yml` sweep merged every new base into every idle,
-behind draft and started the full PR matrix each time. That recreated the
-N-wide CI cascade this section forbids without advancing any PR toward landing.
-PR #2836 made the failure concrete on 2026-10-17: after its owner froze and
-validated `89888ed7b`, the schedule replaced it with base-only merge
-`a234075f3`, launched the matrix again, and produced a failing smoke head before
-any author change or readiness decision.
-
-`.github/workflows/draft-base-refresh.yml` is therefore a manual recovery action
-for exactly one positive PR number. It has no schedule and rejects an empty
-all-draft sweep. The 12-hour quiet-period, same-repository, live-state,
-exact-OID lease, `no-base-refresh`, dedicated-token and post-push CI guards all
-remain. Normal flow is cheaper and finite: leave the draft on its evidence-bound
-head; when its work is complete, mark it ready and label it; the serial queue
-updates that one merge candidate against the then-current base. A later base
-commit does not invalidate review or tests for lines it did not change. Invoke
-the manual action only when preserving one long-lived draft justifies a
-deliberate pre-readiness merge.
+**Drafts stay pinned.** Do not merge the base into idle drafts on a schedule:
+`.github/workflows/draft-base-refresh.yml` is a manual recovery action for
+exactly one positive PR number (preserving the 12-hour quiet-period,
+same-repository, live-state, exact-OID lease, `no-base-refresh`,
+dedicated-token, and post-push CI guards) and rejects an all-draft sweep. Leave
+a draft on its evidence-bound head until ready; the serial queue updates it once
+when it becomes the merge candidate.
 
 **Do not stack more than two deep.** Each level must land in order, and every
-merge below re-dirties everything above. A three-deep stack built 2026-08-13
-produced a conflicted middle PR within hours, purely from its own base moving.
-If two changes touch the same file, they are one PR — splitting them buys
-reviewability and pays for it in cascade.
+merge below re-dirties everything above. If two changes touch the same file,
+keep them in one PR.
 
 **Land or close drafts quickly.** An open draft accrues cascade debt: it needs
 a rebuild every time anything merges, whether or not anyone is working on it.
