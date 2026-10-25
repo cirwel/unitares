@@ -64,10 +64,14 @@ veto by removing the label.
   identifier, the merge queue appends `[model:<identifier>]` before the final
   `(#N)` in the squash subject. This keeps the exact self-reported model visible
   in `git log` after the branch is deleted while retaining the conventional
-  commit prefix, PR number, default commit body and GitHub co-author trailers.
-  If the PR title or final `Model:` line changes while auto-merge is armed, the
-  queue disarms it and re-arms it on the next tick with the refreshed subject;
-  the PR keeps its queue position.
+  commit prefix and PR number. For a signed PR the queue also writes the squash
+  body: GitHub's commit list and co-author trailers, rebuilt, with the PR's
+  final `Model:` and `UNITARES agent:` lines as a paragraph just above the
+  co-author trailers. The landed commit then names both together, whatever the
+  branch commits said; an unsigned PR keeps GitHub's default body.
+  If the PR title or either signature line changes while auto-merge is armed,
+  the queue disarms it and re-arms it on the next tick with the refreshed
+  message; the PR keeps its queue position.
   Like the PR's `agent/*` family label, the token is a filter and attribution
   aid, not verified model provenance.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that

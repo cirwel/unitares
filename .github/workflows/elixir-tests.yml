@@ -38,7 +38,8 @@ name: Elixir Tests
 #   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
 #   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
 #   db/postgres, tests/vectors, tests/vendored (cross-runtime fixtures the
-#   lease_plane suite reads), docker-compose.yml, docker-compose.admin.yml,
+#   lease_plane suite reads), tests/fixtures/timeline_parity (the fixture the
+#   dialectic_live suite reads), docker-compose.yml, docker-compose.admin.yml,
 #   Dockerfile, .dockerignore, .github/workflows/elixir-tests.yml,
 #   scripts/ci/elixir_paths_changed.py, scripts/ci/elixir_gate.py
 #
