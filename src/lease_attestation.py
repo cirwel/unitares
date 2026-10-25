@@ -27,6 +27,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
+from collections.abc import Collection
 from typing import Any
 
 try:
@@ -176,11 +177,10 @@ def validate_method(value: object) -> str:
 def validate_path(value: object) -> str:
     if (
         not isinstance(value, str)
-        or not value.startswith("/v1/lease/")
-        or not re.fullmatch(r"/v1/lease/[A-Za-z0-9_/-]+", value)
+        or not re.fullmatch(r"/v[0-9]+/[A-Za-z0-9_/-]+", value)
         or len(value) > 256
     ):
-        raise LeaseAttestationError("path must be a /v1/lease/ mutation path")
+        raise LeaseAttestationError("path must be a supported mutation path")
     return value
 
 
@@ -190,6 +190,7 @@ def mint_lease_attestation(
     method: str,
     path: str,
     body_sha256: str,
+    request_scope: Collection[tuple[str, str]],
     signing_key: "Ed25519PrivateKey" | None = None,
     issuer: str | None = None,
     audience: str | None = None,
@@ -214,6 +215,11 @@ def mint_lease_attestation(
     if ttl < 1 or ttl > 60:
         raise LeaseAttestationError("ttl_seconds must be between 1 and 60")
 
+    canonical_method = validate_method(method)
+    canonical_path = validate_path(path)
+    if (canonical_method, canonical_path) not in request_scope:
+        raise LeaseAttestationError("path is outside this mint site's declared scope")
+
     claims: dict[str, Any] = {
         "v": LEASE_ATTESTATION_VERSION,
         "typ": "lease-attestation",
@@ -222,8 +228,8 @@ def mint_lease_attestation(
         "iss": canonical_issuer,
         "sub": holder,
         "aud": canonical_audience,
-        "mth": validate_method(method),
-        "pth": validate_path(path),
+        "mth": canonical_method,
+        "pth": canonical_path,
         "bsha": validate_body_sha256(body_sha256),
         "iat": issued,
         "nbf": issued,

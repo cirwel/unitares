@@ -21,6 +21,7 @@ from src.dialectic_protocol import (
 from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
+from .beam_resolve_client import BeamDialecticPolicyRefusal
 
 logger = get_logger(__name__)
 # PostgreSQL backend (cross-process shared state)
@@ -471,12 +472,21 @@ async def save_session(
         else:
             round_ = getattr(session, "synthesis_round", None)
             beam_ph = await beam_update_phase(
-                session.session_id, session.phase.value, round_
+                session.session_id,
+                session.phase.value,
+                round_,
+                actor_agent_id=getattr(session, "paused_agent_id", None),
             )
             if beam_ph is None:
                 with session_write_via("python_fallback", site="save_session_phase"):
                     await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
+    except BeamDialecticPolicyRefusal:
+        if terminal_minted and session.resolution is not None:
+            discard_receipt_unless_written(
+                session.resolution, written=False, had_receipt=False
+            )
+        raise
     except Exception as e:
         if terminal_minted and session.resolution is not None:
             discard_receipt_unless_written(session.resolution, written=False, had_receipt=False)

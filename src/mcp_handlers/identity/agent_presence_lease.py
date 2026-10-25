@@ -44,6 +44,13 @@ logger = get_logger(__name__)
 # plane's 3600s cap. 600s balances "survives a normal check-in gap" against "a
 # dead agent's row self-heals (TTL-reaped) within ~10 min".
 _PRESENCE_TTL_S = 600
+PRESENCE_ATTESTATION_SCOPE = frozenset(
+    {
+        ("POST", "/v1/lease/acquire"),
+        ("POST", "/v1/lease/heartbeat"),
+        ("POST", "/v1/lease/release"),
+    }
+)
 
 # In-process uuid -> lease_id cache. Acquire once, heartbeat after; on heartbeat
 # failure (expired / reaped) drop it and re-acquire. Lost on restart -> simply
@@ -397,6 +404,7 @@ def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> s
             method="POST",
             path=path,
             body_sha256=hashlib.sha256(wire_body).hexdigest(),
+            request_scope=PRESENCE_ATTESTATION_SCOPE,
         )
     except Exception as exc:  # noqa: BLE001 — presence maintenance is best-effort
         logger.debug(

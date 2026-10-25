@@ -18,6 +18,11 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
 
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
+
+    Application.put_env(:lease_plane, :identity_verifier, fn holder, proof ->
+      if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+    end)
+
     surface = unique_surface_id("effect")
 
     on_exit(fn ->
@@ -31,11 +36,20 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
   end
 
   defp post_json(path, body) do
-    :post
-    |> conn(path, Jason.encode!(body))
-    |> put_req_header("content-type", "application/json")
-    |> put_req_header("authorization", "Bearer #{@bearer}")
-    |> HTTPRouter.call(@opts)
+    conn =
+      :post
+      |> conn(path, Jason.encode!(body))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer #{@bearer}")
+
+    holder = Map.get(body, :holder_agent_uuid)
+
+    conn =
+      if holder,
+        do: put_req_header(conn, "x-unitares-identity-proof", "proof:" <> holder),
+        else: conn
+
+    HTTPRouter.call(conn, @opts)
   end
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)

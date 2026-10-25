@@ -1,23 +1,61 @@
 """
 Tests for the BEAM dialectic-resolve client (dialectic-on-BEAM Slice 1.2).
 
-The client must be fail-safe: it returns None (caller falls back to the Python
+In compatibility mode the client returns None (caller falls back to the Python
 pg_resolve_session path) whenever the flag is off, the lease plane is not
 configured, a required field is missing, or BEAM returns an ordinary non-OK.
-Authoritative governance-policy, transcript-frontier, and in-flight-saga
-refusals raise rather than fall back to a second writer.
+With dialectic identity enforcement enabled, those same paths refuse instead
+of bypassing identity through a second writer. Authoritative governance-policy,
+transcript-frontier, and in-flight-saga refusals always raise.
 """
 
+import base64
+import hashlib
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.dialectic import beam_resolve_client as brc
+
+_REAL_IDENTITY_BOUND_REQUEST = brc._identity_bound_request
+
+
+@pytest.fixture(autouse=True)
+def _stub_request_bound_identity(monkeypatch):
+    """Keep transport-contract tests focused; dedicated tests cover minting."""
+    from src.mcp_handlers.context import set_credential_proof_uuid
+
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "off")
+    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", raising=False)
+    set_credential_proof_uuid(None)
+
+    def bind(
+        path,
+        payload,
+        *,
+        expected_agent_id=None,
+        include_actor=False,
+        fallback_actor_id=None,
+    ):
+        wire = dict(payload)
+        if include_actor:
+            wire["actor_agent_id"] = expected_agent_id or fallback_actor_id or "actor"
+        return json.dumps(wire).encode(), {
+            "Authorization": "Bearer tok",
+            "Content-Type": "application/json",
+            "X-Unitares-Identity-Proof": "lat.v1.test.signature",
+        }
+
+    monkeypatch.setattr(brc, "_identity_bound_request", bind)
+    yield
+    set_credential_proof_uuid(None)
 
 
 def _fake_httpx(status_code, body):
@@ -32,6 +70,186 @@ def _fake_httpx(status_code, body):
     fake = MagicMock()
     fake.Client.return_value = client_cm
     return fake
+
+
+def test_identity_bound_request_mints_exact_request_attestation(monkeypatch):
+    from src.lease_attestation import export_public_jwks, verify_lease_attestation
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_credential_proof_uuid,
+        set_session_proof_origin,
+        set_session_context,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    monkeypatch.setenv(
+        "UNITARES_LEASE_ATTESTATION_SIGNING_KEY",
+        base64.urlsafe_b64encode(b"1" * 32).rstrip(b"=").decode(),
+    )
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "test-issuer")
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_AUDIENCE", "test-plane")
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
+    set_credential_proof_uuid(actor)
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        set_credential_proof_uuid(None)
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    body, headers = bound
+    assert json.loads(body) == {
+        "session_id": "s1",
+        "phase": "antithesis",
+        "actor_agent_id": actor,
+    }
+    proof = headers["X-Unitares-Identity-Proof"]
+    assert (
+        verify_lease_attestation(
+            proof,
+            jwks=export_public_jwks(),
+            holder_agent_uuid=actor,
+            method="POST",
+            path="/v1/dialectic/phase",
+            body_sha256=hashlib.sha256(body).hexdigest(),
+            audience="test-plane",
+        )
+        is not None
+    )
+
+
+def test_identity_bound_request_refuses_a_resolved_caller_mismatch():
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    expected = "22222222-2222-4222-8222-222222222222"
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    try:
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            _REAL_IDENTITY_BOUND_REQUEST(
+                "/v2/dialectic/resolve-with-effect",
+                {"session_id": "s1"},
+                expected_agent_id=expected,
+            )
+    finally:
+        reset_session_context(context_token)
+
+    assert exc.value.error_code == "identity_proof_invalid"
+
+
+def test_identity_bound_request_without_attestation_still_targets_beam(monkeypatch):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_credential_proof_uuid,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    monkeypatch.delenv("UNITARES_LEASE_ATTESTATION_SIGNING_KEY", raising=False)
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
+    set_credential_proof_uuid(actor)
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+            fallback_actor_id=actor,
+        )
+    finally:
+        set_credential_proof_uuid(None)
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    body, headers = bound
+    assert json.loads(body)["actor_agent_id"] == actor
+    assert "X-Unitares-Identity-Proof" not in headers
+
+
+def test_identity_bound_request_does_not_launder_server_inferred_identity(monkeypatch):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_credential_proof_uuid,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    context_token = set_session_context(client_session_id="session-test")
+    update_context_agent_id(actor)
+    set_session_proof_origin("server_inferred")
+    set_credential_proof_uuid(actor)
+    try:
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        set_credential_proof_uuid(None)
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    _, headers = bound
+    assert "X-Unitares-Identity-Proof" not in headers
+
+
+def test_identity_bound_request_does_not_launder_application_identity(monkeypatch):
+    from src.mcp_handlers.context import (
+        get_credential_proof_uuid,
+        reset_session_context,
+        reset_session_resolution_source,
+        set_session_resolution_source,
+        set_session_context,
+        set_session_proof_origin,
+        update_context_agent_id,
+    )
+    from src.mcp_handlers.identity.credential_issuance import note_session_proof
+
+    actor = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    context_token = set_session_context(client_session_id="shared-application")
+    update_context_agent_id(actor)
+    set_session_proof_origin("caller_asserted")
+    source_token = set_session_resolution_source("x_client_id")
+    try:
+        note_session_proof(actor, "shared-application")
+        assert get_credential_proof_uuid() is None
+        bound = _REAL_IDENTITY_BOUND_REQUEST(
+            "/v1/dialectic/phase",
+            {"session_id": "s1", "phase": "antithesis"},
+            include_actor=True,
+        )
+    finally:
+        reset_session_resolution_source(source_token)
+        set_session_proof_origin(None)
+        reset_session_context(context_token)
+
+    assert bound is not None
+    _, headers = bound
+    assert "X-Unitares-Identity-Proof" not in headers
 
 
 @pytest.mark.asyncio
@@ -84,12 +302,17 @@ async def test_success_returns_body(monkeypatch):
     fake = _fake_httpx(200, body)
     with patch.dict(sys.modules, {"httpx": fake}):
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"verdict": "resume"},
-            expected_phase="synthesis", expected_transcript_revision=0,
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
         )
     assert out == body
     post = fake.Client.return_value.__enter__.return_value.post
     assert post.call_args.args[0].endswith("/v2/dialectic/resolve-with-effect")
+    assert json.loads(post.call_args.kwargs["content"])["actor_agent_id"] == "p"
 
 
 @pytest.mark.asyncio
@@ -143,8 +366,13 @@ async def test_missing_effect_route_is_definitive_fallback(monkeypatch):
         {"httpx": _fake_httpx(404, {"ok": False, "error": "not_found"})},
     ):
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
-            expected_phase="synthesis", expected_transcript_revision=0,
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
         )
 
     assert out is None
@@ -160,8 +388,13 @@ async def test_saga_in_flight_never_falls_back(monkeypatch):
     with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
         with pytest.raises(brc.BeamDialecticSagaInFlight):
             await brc.beam_resolve(
-                "s1", "p", "r", {"verdict": "resume"}, detail=detail,
-                expected_phase="synthesis", expected_transcript_revision=0,
+                "s1",
+                "p",
+                "r",
+                {"verdict": "resume"},
+                detail=detail,
+                expected_phase="synthesis",
+                expected_transcript_revision=0,
             )
     assert detail == {}
 
@@ -191,8 +424,12 @@ async def test_pause_bound_self_review_refusal_never_falls_back(monkeypatch):
     with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
         with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
             await brc.beam_resolve(
-                "s1", "p", "p", {"verdict": "resume"},
-                expected_phase="synthesis", expected_transcript_revision=0,
+                "s1",
+                "p",
+                "p",
+                {"verdict": "resume"},
+                expected_phase="synthesis",
+                expected_transcript_revision=0,
             )
     assert exc.value.error_code == "self_review_not_authorizing"
 
@@ -205,8 +442,13 @@ async def test_postcommit_503_marks_commit_unknown(monkeypatch):
     detail = {}
     with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
-            expected_phase="synthesis", expected_transcript_revision=0,
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
         )
     assert out is None
     assert detail == {"commit_unknown": True, "http_status": 503}
@@ -216,15 +458,23 @@ async def test_postcommit_503_marks_commit_unknown(monkeypatch):
 async def test_status_failed_is_sent_and_validated(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
-    fake = _fake_httpx(200, {"ok": True, "status": "failed", "saga_id": "x", "origin": "new"})
+    fake = _fake_httpx(
+        200, {"ok": True, "status": "failed", "saga_id": "x", "origin": "new"}
+    )
     with patch.dict(sys.modules, {"httpx": fake}):
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"reason": "boom"}, status="failed",
+            "s1",
+            "p",
+            "r",
+            {"reason": "boom"},
+            status="failed",
             expected_transcript_revision=0,
         )
     assert out is not None and out["status"] == "failed"
     # The status was forwarded in the POST body.
-    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    sent = json.loads(
+        fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["content"]
+    )
     assert sent["status"] == "failed"
 
 
@@ -253,7 +503,9 @@ async def test_create_success_filters_none_fields(monkeypatch):
             "s1", "p", {"reviewer_agent_id": "r", "topic": None, "reason": "boom"}
         )
     assert out is not None and out["created"] is True
-    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    sent = json.loads(
+        fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["content"]
+    )
     assert sent["reviewer_agent_id"] == "r"
     assert "topic" not in sent  # None-valued fields are dropped
 
@@ -265,6 +517,69 @@ async def test_create_non_ok_falls_back(monkeypatch):
     with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
         out = await brc.beam_create_session("s1", "p", {"reason": "x"})
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_create_lost_response_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = RuntimeError("response body lost")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_create_session(
+            "s1", "p", {"reason": "x"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
+
+
+@pytest.mark.asyncio
+async def test_create_connect_failure_falls_back_without_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    fake.ConnectError = httpx.ConnectError
+    fake.ConnectTimeout = httpx.ConnectTimeout
+    fake.Client.return_value.__enter__.return_value.post.side_effect = (
+        httpx.ConnectError("connection refused")
+    )
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_create_session(
+            "s1", "p", {"reason": "x"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_create_enforced_connect_failure_refuses(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv(
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam"
+    )
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(201, {"ok": True})
+    fake.ConnectError = httpx.ConnectError
+    fake.ConnectTimeout = httpx.ConnectTimeout
+    fake.Client.return_value.__enter__.return_value.post.side_effect = (
+        httpx.ConnectError("connection refused")
+    )
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_create_session(
+                "s1", "p", {"reason": "x"}, detail={}
+            )
+
+    assert exc.value.error_code == "identity_verification_unavailable"
 
 
 @pytest.mark.asyncio
@@ -303,6 +618,23 @@ async def test_update_phase_non_ok_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_phase_identity_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {
+        "ok": False,
+        "error": "permission_denied",
+        "reason": "identity_proof_invalid",
+    }
+
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(403, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_proof_invalid"
+
+
+@pytest.mark.asyncio
 async def test_update_reviewer_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     assert await brc.beam_update_reviewer("s1", "rev") is None
@@ -312,7 +644,9 @@ async def test_update_reviewer_disabled_returns_none(monkeypatch):
 async def test_update_reviewer_success(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
-    fake = _fake_httpx(200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"})
+    fake = _fake_httpx(
+        200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"}
+    )
     with patch.dict(sys.modules, {"httpx": fake}):
         out = await brc.beam_update_reviewer("s1", "rev")
     assert out is not None and out["reviewer_agent_id"] == "rev"
@@ -322,20 +656,21 @@ async def test_update_reviewer_success(monkeypatch):
 async def test_update_reviewer_open_slot_claim_is_sent(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
-    fake = _fake_httpx(200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"})
+    fake = _fake_httpx(
+        200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"}
+    )
     with patch.dict(sys.modules, {"httpx": fake}):
-        out = await brc.beam_update_reviewer(
-            "s1", "rev", claim_if_unassigned=True
-        )
+        out = await brc.beam_update_reviewer("s1", "rev", claim_if_unassigned=True)
 
     assert out is not None
     post = fake.Client.return_value.__enter__.return_value.post
     assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
-    sent = post.call_args.kwargs["json"]
+    sent = json.loads(post.call_args.kwargs["content"])
     assert sent == {
         "session_id": "s1",
         "reviewer_agent_id": "rev",
         "claim_if_unassigned": True,
+        "actor_agent_id": "rev",
     }
 
 
@@ -421,8 +756,12 @@ async def test_resolve_identity_policy_refusal_never_falls_back(monkeypatch):
     with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
         with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
             await brc.beam_resolve(
-                "s1", "p", "r", {"action": "resume"},
-                expected_phase="synthesis", expected_transcript_revision=0,
+                "s1",
+                "p",
+                "r",
+                {"action": "resume"},
+                expected_phase="synthesis",
+                expected_transcript_revision=0,
             )
     assert exc.value.error_code == "session_identity_mismatch"
 
@@ -436,13 +775,168 @@ async def test_transport_error_falls_back_to_none(monkeypatch):
     with patch.dict(sys.modules, {"httpx": boom}):
         detail = {}
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
-            expected_phase="synthesis", expected_transcript_revision=0,
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
         )
     assert out is None
     # Client construction failed before post() was entered, so there is no
     # ambiguous server-side commit to reconcile.
     assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_enforced_dialectic_transport_error_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv(
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "maintenance,dialectic_beam"
+    )
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    boom = MagicMock()
+    boom.Client.side_effect = RuntimeError("connection refused")
+
+    with patch.dict(sys.modules, {"httpx": boom}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_resolve(
+                "s1",
+                "p",
+                "r",
+                {"verdict": "resume"},
+                expected_phase="synthesis",
+                expected_transcript_revision=0,
+            )
+
+    assert exc.value.error_code == "identity_verification_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["lost_response", "server_error", "invalid_ack"])
+async def test_enforced_dialectic_commit_unknown_reaches_readback(
+    monkeypatch, failure
+):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+
+    if failure == "server_error":
+        fake = _fake_httpx(503, {"ok": False})
+    else:
+        fake = _fake_httpx(200, {"ok": True})
+        response = fake.Client.return_value.__enter__.return_value.post.return_value
+        if failure == "lost_response":
+            response.json.side_effect = RuntimeError("response body lost")
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
+        )
+
+    assert out is None
+    assert detail["commit_unknown"] is True
+
+
+@pytest.mark.asyncio
+async def test_enforced_dialectic_disabled_route_never_falls_back(monkeypatch):
+    monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+
+    with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+        await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_verification_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_beam_enabled_missing_native_mode_fails_closed(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BINDING", raising=False)
+    monkeypatch.delenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", raising=False)
+
+    with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+        await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_verification_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enforced_dialectic_non_ok_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+
+    with patch.dict(
+        sys.modules,
+        {"httpx": _fake_httpx(404, {"ok": False, "error": "not_found"})},
+    ):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_update_phase("s1", "antithesis")
+
+    assert exc.value.error_code == "identity_verification_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enforcement_for_other_surface_keeps_compatibility_fallback(monkeypatch):
+    monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "maintenance")
+
+    assert await brc.beam_update_phase("s1", "antithesis") is None
+
+
+@pytest.mark.asyncio
+async def test_enforced_beam_controls_leave_unassigned_timeout_to_system_writer(
+    monkeypatch,
+):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+
+    out = await brc.beam_resolve(
+        "s1",
+        "paused",
+        None,
+        {"reason": "timeout"},
+        status="failed",
+        expected_phase="thesis",
+        expected_transcript_revision=0,
+    )
+
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_enforced_beam_controls_allow_unassigned_timeout_when_beam_is_off(
+    monkeypatch,
+):
+    monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BINDING", "enforce")
+    monkeypatch.setenv("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS", "dialectic_beam")
+
+    out = await brc.beam_resolve(
+        "s1",
+        "paused",
+        None,
+        {"reason": "timeout"},
+        status="failed",
+    )
+
+    assert out is None
 
 
 @pytest.mark.asyncio
@@ -456,8 +950,13 @@ async def test_response_decode_failure_after_post_marks_commit_unknown(monkeypat
 
     with patch.dict(sys.modules, {"httpx": fake}):
         out = await brc.beam_resolve(
-            "s1", "p", "r", {"verdict": "resume"}, detail=detail,
-            expected_phase="synthesis", expected_transcript_revision=0,
+            "s1",
+            "p",
+            "r",
+            {"verdict": "resume"},
+            detail=detail,
+            expected_phase="synthesis",
+            expected_transcript_revision=0,
         )
 
     assert out is None

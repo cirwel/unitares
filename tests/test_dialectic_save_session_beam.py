@@ -10,7 +10,7 @@ snapshot. default=str fixes it. (DB writes were never affected.)
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root))
 
 from src.dialectic_protocol import DialecticPhase
 from src.mcp_handlers.dialectic import session as sess_mod
+from src.mcp_handlers.dialectic.beam_resolve_client import BeamDialecticPolicyRefusal
 
 
 def _resolved_session():
@@ -118,6 +119,68 @@ async def test_save_session_snapshot_only_never_replays_a_stale_phase(monkeypatc
 
     beam_phase.assert_not_awaited()
     pg_phase.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_session_surfaces_identity_refusal_without_python_fallback(monkeypatch):
+    monkeypatch.setattr(
+        sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False
+    )
+    session = SimpleNamespace(
+        session_id="sess-save-refused",
+        phase=DialecticPhase.ANTITHESIS,
+        synthesis_round=0,
+        resolution=None,
+    )
+    refusal = BeamDialecticPolicyRefusal(
+        "identity_proof_invalid", operation="update_phase"
+    )
+    beam_phase = AsyncMock(side_effect=refusal)
+    pg_phase = AsyncMock()
+
+    with patch(
+        "src.mcp_handlers.dialectic.beam_resolve_client.beam_update_phase",
+        beam_phase,
+    ), patch("src.dialectic_db.update_session_phase_async", pg_phase):
+        with pytest.raises(BeamDialecticPolicyRefusal):
+            await sess_mod.save_session(session)
+
+    pg_phase.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_session_discards_new_receipt_before_identity_refusal(monkeypatch):
+    monkeypatch.setattr(
+        sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False
+    )
+    resolution = SimpleNamespace(
+        receipt="",
+        to_dict=lambda: {"action": "resume"},
+    )
+    session = _resolved_session()
+    session.resolution = resolution
+    beam = AsyncMock(
+        side_effect=BeamDialecticPolicyRefusal(
+            "identity_verification_unavailable", operation="resolve_session"
+        )
+    )
+    discard = MagicMock()
+
+    def seal(_session, _resolution, *, status):
+        resolution.receipt = "new-receipt"
+        return {"action": "resume", "receipt": resolution.receipt}
+
+    with patch(
+        "src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", beam
+    ), patch.object(sess_mod, "seal_resolution_for_persistence", new=seal), patch.object(
+        sess_mod, "discard_receipt_unless_written", new=discard
+    ):
+        with pytest.raises(BeamDialecticPolicyRefusal):
+            await sess_mod.save_session(session)
+
+    discard.assert_called_once_with(
+        resolution, written=False, had_receipt=False
+    )
 
 
 @pytest.mark.asyncio

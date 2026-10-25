@@ -16,6 +16,18 @@ from starlette.responses import JSONResponse
 
 from src.http_routes import access
 
+LEASE_HOLDER_ATTESTATION_SCOPE = frozenset(
+    {
+        ("POST", "/v1/lease/acquire"),
+        ("POST", "/v1/lease/renew"),
+        ("POST", "/v1/lease/heartbeat"),
+        ("POST", "/v1/lease/release"),
+        ("POST", "/v1/lease/force-release"),
+        ("POST", "/v1/lease/handoff/offer"),
+        ("POST", "/v1/lease/handoff/accept"),
+    }
+)
+
 
 async def http_verify_lease_holder(request):
     """POST /v1/lease-holder/verify — verify proof ownership of a UUID.
@@ -137,6 +149,7 @@ async def http_attest_lease_holder(request):
             method=body.get("method"),
             path=body.get("path"),
             body_sha256=body.get("body_sha256"),
+            request_scope=LEASE_HOLDER_ATTESTATION_SCOPE,
         )
     except LeaseAttestationError as exc:
         message = str(exc)

@@ -16,7 +16,11 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
     Application.put_env(:lease_plane, :force_release_token, @force_release_token)
     Application.put_env(:lease_plane, :identity_binding_mode, :off)
-    Application.delete_env(:lease_plane, :identity_verifier)
+
+    Application.put_env(:lease_plane, :identity_verifier, fn holder, proof ->
+      if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+    end)
+
     surface = unique_surface_id("http")
 
     on_exit(fn ->
@@ -46,12 +50,109 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
   end
 
   defp post_json(path, body) do
+    {body, principal} = bind_test_principal(path, body)
+
+    conn =
+      :post
+      |> conn(path, Jason.encode!(body))
+      |> put_req_header("content-type", "application/json")
+      |> authed()
+
+    conn =
+      if principal,
+        do: put_req_header(conn, "x-unitares-identity-proof", "proof:" <> principal),
+        else: conn
+
+    HTTPRouter.call(conn, @opts)
+  end
+
+  defp post_json_without_proof(path, body) do
     :post
     |> conn(path, Jason.encode!(body))
     |> put_req_header("content-type", "application/json")
     |> authed()
     |> HTTPRouter.call(@opts)
   end
+
+  defp bind_test_principal("/v1/lease/acquire", body),
+    do: {body, Map.get(body, :holder_agent_uuid) || Map.get(body, "holder_agent_uuid")}
+
+  defp bind_test_principal(path, body)
+       when path in [
+              "/v1/lease/renew",
+              "/v1/lease/heartbeat",
+              "/v1/lease/release",
+              "/v1/lease/handoff/offer"
+            ] do
+    lease_id = Map.get(body, :lease_id) || Map.get(body, "lease_id")
+
+    principal =
+      if is_binary(lease_id) do
+        case UnitaresLeasePlane.Repo.active_lease(lease_id) do
+          {:ok, lease} -> lease.holder_agent_uuid
+          _ -> nil
+        end
+      else
+        nil
+      end
+
+    {body, principal}
+  end
+
+  defp bind_test_principal("/v1/lease/handoff/accept", body) do
+    handoff_id = Map.get(body, :handoff_id) || Map.get(body, "handoff_id")
+
+    principal =
+      case UnitaresLeasePlane.HandoffServer.authorization_context(handoff_id) do
+        {:ok, %{recipient_uuid: recipient_uuid}} -> recipient_uuid
+        _ -> nil
+      end
+
+    {body, principal}
+  end
+
+  defp bind_test_principal("/v1/dialectic/session", body),
+    do: {body, Map.get(body, :paused_agent_id) || Map.get(body, "paused_agent_id")}
+
+  defp bind_test_principal(path, body)
+       when path in [
+              "/v1/dialectic/phase",
+              "/v1/dialectic/reviewer",
+              "/v1/dialectic/reviewer/claim"
+            ] do
+    session_id = Map.get(body, :session_id) || Map.get(body, "session_id")
+
+    principals =
+      case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
+        {:ok, value} -> value
+        _ -> nil
+      end
+
+    claim =
+      path == "/v1/dialectic/reviewer/claim" or
+        Map.get(body, :claim_if_unassigned) == true or
+        Map.get(body, "claim_if_unassigned") == true
+
+    principal =
+      if claim do
+        Map.get(body, :reviewer_agent_id) || Map.get(body, "reviewer_agent_id")
+      else
+        principals && principals.paused_agent_id
+      end
+
+    body = Map.put(body, :actor_agent_id, principal || "unknown-test-actor")
+    {body, principal}
+  end
+
+  defp bind_test_principal(path, body)
+       when path in [
+              "/v1/dialectic/resolve",
+              "/v1/dialectic/resolve-with-effect",
+              "/v2/dialectic/resolve-with-effect"
+            ],
+       do: {body, Map.get(body, :reviewer_agent_id) || Map.get(body, "reviewer_agent_id")}
+
+  defp bind_test_principal(_path, body), do: {body, nil}
 
   defp post_json_with_proof(path, body, proof) do
     :post
@@ -646,11 +747,15 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       # mainstream HTTP clients (e.g. Python httpx defaults) send lowercase
       # "bearer". Reject those and you break interoperability for no security
       # gain. The token value itself is still compared via secure_compare.
+      body = acquire_body(ctx.surface)
+      holder = body.holder_agent_uuid
+
       resp =
         :post
-        |> conn("/v1/lease/acquire", Jason.encode!(acquire_body(ctx.surface)))
+        |> conn("/v1/lease/acquire", Jason.encode!(body))
         |> put_req_header("content-type", "application/json")
         |> put_req_header("authorization", "bearer #{@bearer}")
+        |> put_req_header("x-unitares-identity-proof", "proof:" <> holder)
         |> HTTPRouter.call(@opts)
 
       assert resp.status == 200
@@ -1170,7 +1275,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       other = random_uuid()
       body = acquire_body(ctx.surface, holder_agent_uuid: holder)
 
-      missing = post_json("/v1/lease/acquire", body)
+      missing = post_json_without_proof("/v1/lease/acquire", body)
       assert missing.status == 403
       assert parsed(missing)["reason"] == "identity_proof_invalid"
 
@@ -1182,7 +1287,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert acquired.status == 200
       lease_id = parsed(acquired)["lease"]["lease_id"]
 
-      renew_without_proof = post_json("/v1/lease/renew", %{lease_id: lease_id})
+      renew_without_proof = post_json_without_proof("/v1/lease/renew", %{lease_id: lease_id})
       assert renew_without_proof.status == 403
 
       renew_with_proof =
@@ -1320,6 +1425,164 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert response.status == 403
       assert parsed(response)["reason"] == "identity_proof_replayed"
+    end
+  end
+
+  describe "principal-bound lease and dialectic mutations" do
+    setup do
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+      :ok
+    end
+
+    test "explicit compatibility mode permits a missing lease proof", ctx do
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+      response = post_json_without_proof("/v1/lease/acquire", acquire_body(ctx.surface))
+
+      assert response.status == 200
+      assert parsed(response)["ok"] == true
+    end
+
+    test "explicit compatibility mode permits a non-participant dialectic actor" do
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          phase: "thesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      response =
+        post_json_without_proof("/v1/dialectic/phase", %{
+          session_id: session_id,
+          phase: "antithesis",
+          actor_agent_id: "background-reconciler"
+        })
+
+      assert response.status == 200
+    end
+
+    test "dialectic session creation binds proof to the paused participant" do
+      session_id = "test_elixir_identity_create_#{System.unique_integer([:positive])}"
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      body = %{session_id: session_id, paused_agent_id: "paused", reviewer_agent_id: "reviewer"}
+
+      assert post_json_without_proof("/v1/dialectic/session", body).status == 403
+
+      mismatched =
+        post_json_with_proof("/v1/dialectic/session", body, "proof:reviewer")
+
+      assert mismatched.status == 403
+
+      authorized =
+        post_json_with_proof("/v1/dialectic/session", body, "proof:paused")
+
+      assert authorized.status == 201
+    end
+
+    test "dialectic phase loads participants before accepting the actor" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          phase: "thesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      body = %{session_id: session_id, phase: "antithesis", actor_agent_id: "paused"}
+
+      assert post_json_without_proof("/v1/dialectic/phase", body).status == 403
+      assert post_json_with_proof("/v1/dialectic/phase", body, "proof:reviewer").status == 403
+      assert post_json_with_proof("/v1/dialectic/phase", body, "proof:paused").status == 200
+    end
+
+    test "reviewer claims and terminal resolutions require a named participant proof" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: nil,
+          phase: "synthesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      claim = %{
+        session_id: session_id,
+        reviewer_agent_id: "reviewer",
+        actor_agent_id: "reviewer"
+      }
+
+      assert post_json_without_proof("/v1/dialectic/reviewer/claim", claim).status == 403
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer/claim",
+               claim,
+               "proof:paused"
+             ).status == 403
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer/claim",
+               claim,
+               "proof:reviewer"
+             ).status == 200
+
+      resolve = %{
+        session_id: session_id,
+        paused_agent_id: "paused",
+        reviewer_agent_id: "reviewer",
+        actor_agent_id: "paused",
+        resolution: %{"reason" => "test"}
+      }
+
+      assert post_json_without_proof("/v1/dialectic/resolve", resolve).status == 403
+
+      assert post_json_with_proof(
+               "/v1/dialectic/resolve",
+               resolve,
+               "proof:paused"
+             ).status == 200
+    end
+
+    test "only the current reviewer may reassign a filled reviewer slot" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "paused",
+          reviewer_agent_id: "reviewer",
+          phase: "antithesis",
+          status: "active"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      paused_change = %{
+        session_id: session_id,
+        reviewer_agent_id: "paused-choice",
+        actor_agent_id: "paused"
+      }
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer",
+               paused_change,
+               "proof:paused"
+             ).status == 403
+
+      reviewer_change = %{
+        session_id: session_id,
+        reviewer_agent_id: "reviewer-choice",
+        actor_agent_id: "reviewer"
+      }
+
+      assert post_json_with_proof(
+               "/v1/dialectic/reviewer",
+               reviewer_change,
+               "proof:reviewer"
+             ).status == 200
     end
   end
 

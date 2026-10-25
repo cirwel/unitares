@@ -26,6 +26,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   alias UnitaresLeasePlane
   alias UnitaresLeasePlane.{Canonicalize, HandoffServer, IdentityBinding, Repo}
 
+  @dialectic_identity_surface "dialectic_beam"
+
   plug(:match)
 
   # Liveness exemption — the ONLY pre-auth path. Exact match on GET /health;
@@ -78,7 +80,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         case IdentityBinding.authorize(
                params.holder_agent_uuid,
                IdentityBinding.proof_from_conn(conn),
-               surface_kind_from_id(params.surface_id),
+               surface_kind(params.surface_id),
                IdentityBinding.request_context(conn)
              ) do
           :ok ->
@@ -338,21 +340,31 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/dialectic/session" do
     case extract_create_params(conn.body_params) do
       {:ok, params} ->
-        case UnitaresLeasePlane.DialecticSaga.create_session(params) do
-          {:ok, :created} ->
-            json(conn, 201, %{ok: true, session_id: params.session_id, created: true})
+        with :ok <-
+               IdentityBinding.authorize(
+                 params.paused_agent_id,
+                 IdentityBinding.proof_from_conn(conn),
+                 @dialectic_identity_surface,
+                 IdentityBinding.request_context(conn)
+               ) do
+          case UnitaresLeasePlane.DialecticSaga.create_session(params) do
+            {:ok, :created} ->
+              json(conn, 201, %{ok: true, session_id: params.session_id, created: true})
 
-          {:ok, :exists} ->
-            json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
+            {:ok, :exists} ->
+              json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
 
-          {:error, :reviewer_recused} ->
-            json(conn, 409, %{ok: false, error: "reviewer_recused"})
+            {:error, :reviewer_recused} ->
+              json(conn, 409, %{ok: false, error: "reviewer_recused"})
 
-          {:error, :invalid_review_authorship} ->
-            json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+            {:error, :invalid_review_authorship} ->
+              json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
 
-          {:error, _} ->
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            {:error, _} ->
+              json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+          end
+        else
+          {:error, identity_reason} -> identity_refusal(conn, identity_reason)
         end
 
       {:error, detail} ->
@@ -367,9 +379,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/dialectic/phase" do
     round = Map.get(conn.body_params, "synthesis_round")
 
-    with %{"session_id" => sid, "phase" => phase} <- conn.body_params,
+    with %{"session_id" => sid, "phase" => phase, "actor_agent_id" => actor} <- conn.body_params,
          true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(phase),
-         true <- is_nil(round) or (is_integer(round) and round >= 0) do
+         true <- phase in ~w(awaiting_thesis thesis antithesis synthesis quorum_voting),
+         true <- is_binary(actor) and byte_size(actor) > 0,
+         true <- is_nil(round) or (is_integer(round) and round >= 0),
+         :ok <- authorize_dialectic_participant(conn, sid, actor, [:paused, :reviewer]) do
       case UnitaresLeasePlane.DialecticSaga.update_phase(sid, phase, round) do
         :ok ->
           json(conn, 200, %{ok: true, session_id: sid, phase: phase})
@@ -388,6 +403,17 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
       end
     else
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "session_not_found"})
+
+      {:error, identity_reason}
+      when identity_reason in [
+             :identity_proof_invalid,
+             :identity_proof_replayed,
+             :identity_verification_unavailable
+           ] ->
+        identity_refusal(conn, identity_reason)
+
       _ ->
         json(conn, 422, %{
           ok: false,
@@ -412,9 +438,22 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp update_dialectic_reviewer(conn, claim_if_unassigned) do
-    with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
+    with %{
+           "session_id" => sid,
+           "reviewer_agent_id" => rev,
+           "actor_agent_id" => actor
+         } <- conn.body_params,
          true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0,
-         true <- is_boolean(claim_if_unassigned) do
+         true <- is_binary(actor) and byte_size(actor) > 0,
+         true <- is_boolean(claim_if_unassigned),
+         :ok <-
+           authorize_dialectic_reviewer_change(
+             conn,
+             sid,
+             actor,
+             rev,
+             claim_if_unassigned
+           ) do
       case UnitaresLeasePlane.DialecticSaga.update_reviewer(
              sid,
              rev,
@@ -450,6 +489,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
       end
     else
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "session_not_found"})
+
+      {:error, :reviewer_write_refused} ->
+        json(conn, 409, %{ok: false, error: "reviewer_write_refused"})
+
+      {:error, identity_reason}
+      when identity_reason in [
+             :identity_proof_invalid,
+             :identity_proof_replayed,
+             :identity_verification_unavailable
+           ] ->
+        identity_refusal(conn, identity_reason)
+
       _ ->
         json(conn, 422, %{
           ok: false,
@@ -504,49 +557,65 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         else
           params = Map.put(params, :effect_protocol, effect_protocol)
 
-          case UnitaresLeasePlane.DialecticSaga.resolve(params) do
-            {:ok, result} ->
-              json(conn, 200, Map.put(result, :ok, true))
+          with :ok <-
+                 authorize_dialectic_resolution_participant(
+                   conn,
+                   params.session_id,
+                   params.actor_agent_id
+                 ) do
+            case UnitaresLeasePlane.DialecticSaga.resolve(params) do
+              {:ok, result} ->
+                json(conn, 200, Map.put(result, :ok, true))
 
-            {:error, :saga_in_flight} ->
-              json(conn, 409, %{
-                ok: false,
-                error: "saga_in_flight",
-                reason: "a resolution is already in progress for this session"
-              })
+              {:error, :saga_in_flight} ->
+                json(conn, 409, %{
+                  ok: false,
+                  error: "saga_in_flight",
+                  reason: "a resolution is already in progress for this session"
+                })
 
-            {:error, :session_not_found} ->
+              {:error, :session_not_found} ->
+                json(conn, 404, %{ok: false, error: "session_not_found"})
+
+              {:error, :reviewer_recused} ->
+                json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+              {:error, :invalid_review_authorship} ->
+                json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
+              {:error, :session_identity_mismatch} ->
+                json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
+
+              {:error, :self_review_not_authorizing} ->
+                json(conn, 409, %{ok: false, error: "self_review_not_authorizing"})
+
+              {:error, reason}
+              when reason in [
+                     :session_phase_mismatch,
+                     :session_revision_mismatch,
+                     :session_facilitation_mismatch,
+                     :session_activity_mismatch,
+                     :saga_claim_lost,
+                     :session_write_refused
+                   ] ->
+                json(conn, 409, %{ok: false, error: Atom.to_string(reason)})
+
+              {:error, _other} ->
+                json(conn, 503, %{
+                  ok: false,
+                  error: "service_unavailable",
+                  reason: "internal error"
+                })
+            end
+          else
+            {:error, :not_found} ->
               json(conn, 404, %{ok: false, error: "session_not_found"})
-
-            {:error, :reviewer_recused} ->
-              json(conn, 409, %{ok: false, error: "reviewer_recused"})
-
-            {:error, :invalid_review_authorship} ->
-              json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
 
             {:error, :session_identity_mismatch} ->
               json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
 
-            {:error, :self_review_not_authorizing} ->
-              json(conn, 409, %{ok: false, error: "self_review_not_authorizing"})
-
-            {:error, reason}
-            when reason in [
-                   :session_phase_mismatch,
-                   :session_revision_mismatch,
-                   :session_facilitation_mismatch,
-                   :session_activity_mismatch,
-                   :saga_claim_lost,
-                   :session_write_refused
-                 ] ->
-              json(conn, 409, %{ok: false, error: Atom.to_string(reason)})
-
-            {:error, _other} ->
-              json(conn, 503, %{
-                ok: false,
-                error: "service_unavailable",
-                reason: "internal error"
-              })
+            {:error, identity_reason} ->
+              identity_refusal(conn, identity_reason)
           end
         end
 
@@ -1034,6 +1103,124 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  defp authorize_dialectic_participant(conn, session_id, actor_agent_id, roles) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
+        authorize_dialectic_participant_membership(session_id, actor_agent_id, roles)
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_participant_membership(session_id, actor_agent_id, roles) do
+    case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
+      {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
+        allowed =
+          Enum.any?(roles, fn
+            :paused -> actor_agent_id == paused
+            :reviewer -> actor_agent_id == reviewer
+          end)
+
+        if allowed, do: :ok, else: {:error, :identity_proof_invalid}
+
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        {:error, :identity_verification_unavailable}
+    end
+  end
+
+  defp authorize_dialectic_resolution_participant(conn, session_id, actor_agent_id) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
+        authorize_dialectic_resolution_membership(session_id, actor_agent_id)
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_resolution_membership(session_id, actor_agent_id) do
+    case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
+      {:ok, %{paused_agent_id: paused, reviewer_agent_id: reviewer}} ->
+        if actor_agent_id in [paused, reviewer],
+          do: :ok,
+          else: {:error, :session_identity_mismatch}
+
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        {:error, :identity_verification_unavailable}
+    end
+  end
+
+  defp authorize_dialectic_reviewer_change(
+         conn,
+         session_id,
+         actor_agent_id,
+         new_reviewer_agent_id,
+         claim_if_unassigned
+       ) do
+    with :ok <- authorize_dialectic_actor(conn, actor_agent_id) do
+      if IdentityBinding.enforced_for_surface?(@dialectic_identity_surface) do
+        authorize_dialectic_reviewer_membership(
+          session_id,
+          actor_agent_id,
+          new_reviewer_agent_id,
+          claim_if_unassigned
+        )
+      else
+        :ok
+      end
+    end
+  end
+
+  defp authorize_dialectic_reviewer_membership(
+         session_id,
+         actor_agent_id,
+         new_reviewer_agent_id,
+         claim_if_unassigned
+       ) do
+    case UnitaresLeasePlane.DialecticSaga.get_session_principals(session_id) do
+      {:ok, %{reviewer_agent_id: reviewer}} ->
+        allowed =
+          if claim_if_unassigned do
+            is_nil(reviewer) and actor_agent_id == new_reviewer_agent_id
+          else
+            not is_nil(reviewer) and actor_agent_id == reviewer
+          end
+
+        cond do
+          claim_if_unassigned and not is_nil(reviewer) ->
+            {:error, :reviewer_write_refused}
+
+          allowed ->
+            :ok
+
+          true ->
+            {:error, :identity_proof_invalid}
+        end
+
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        {:error, :identity_verification_unavailable}
+    end
+  end
+
+  defp authorize_dialectic_actor(conn, actor_agent_id) do
+    IdentityBinding.authorize(
+      actor_agent_id,
+      IdentityBinding.proof_from_conn(conn),
+      @dialectic_identity_surface,
+      IdentityBinding.request_context(conn)
+    )
+  end
+
   defp identity_refusal(conn, :identity_proof_invalid) do
     json(conn, 403, %{
       ok: false,
@@ -1066,10 +1253,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     })
   end
 
-  defp surface_kind_from_id(surface_id) when is_binary(surface_id) do
-    surface_id
-    |> String.split(":", parts: 2)
-    |> hd()
+  defp surface_kind(surface_id) when is_binary(surface_id) do
+    surface_id |> String.split(":", parts: 2) |> List.first()
   end
 
   defp extract_acquire_params(%{} = body) do
@@ -1247,6 +1432,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     expected_phase = Map.get(body, "expected_phase")
     expected_revision = Map.get(body, "expected_transcript_revision")
     expected_awaiting = Map.get(body, "expected_awaiting_facilitation")
+    actor_agent_id = Map.get(body, "actor_agent_id", reviewer)
 
     expected_updated_at =
       case Map.get(body, "expected_updated_at") do
@@ -1278,6 +1464,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       not is_nil(expected_awaiting) and not is_boolean(expected_awaiting) ->
         {:error, "expected_awaiting_facilitation must be a boolean or null"}
 
+      not is_binary(actor_agent_id) or byte_size(actor_agent_id) == 0 ->
+        {:error, "actor_agent_id must be a non-empty string"}
+
       expected_updated_at == :invalid ->
         {:error, "expected_updated_at must be an ISO-8601 timestamp or null"}
 
@@ -1287,6 +1476,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
            session_id: session_id,
            paused_agent_id: paused,
            reviewer_agent_id: reviewer,
+           actor_agent_id: actor_agent_id,
            resolution_payload: resolution,
            status: status,
            expected_phase: expected_phase,
