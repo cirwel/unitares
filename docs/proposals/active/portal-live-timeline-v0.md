@@ -176,6 +176,8 @@ A second-family review is requested voluntarily, because the PR touches the endp
 
 First reading, 2026-10-25 (operator): the feed form lost to the tab's swimlane. That decides the visual form, not the live mechanism, so the pane now draws the tab's lanes live (§3.4) and the trial continues on like-for-like forms.
 
+Second reading, 2026-10-25 (operator delegated it to the agent: "you can see and use"): the lanes showed who was alive, not what anyone was doing, and scheduled agents crowded the working sessions. The pane gained each agent's latest note on its row, a collapsed group for agents tagged `autonomous` (`GET /v1/timeline` now returns each agent's `tags`), a "needs your attention" box for open pauses and pause verdicts, and one live light in place of the status lines. The trial continues on that form.
+
 **M2, only if M1.5 says yes:** port the swimlane after §4 item 4.
 
 **M3:** §4 items 1–3 and 5, then possibly 0 and 6, each gate-checked. With `state_id`, check-in merge becomes exact.
