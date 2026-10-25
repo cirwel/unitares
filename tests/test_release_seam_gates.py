@@ -457,6 +457,44 @@ def test_followup_fragment_deletion_commit_on_release_branch_advances_anchor(rep
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_base_branch_selection_with_maintenance_and_master_remotes(repo: Repo):
+    """Ensure _base_branch picks origin/master for mainline patch releases (even when
+    origin/release/1.0 exists and origin/master moved ahead) and picks origin/release/1.0
+    only when HEAD carries maintenance commits not on origin/master."""
+    # 1. Mainline patch 1.0.1 with origin/release/1.0 at v1.0.0 and origin/master ahead:
+    repo._git("update-ref", "refs/remotes/origin/release/1.0", "v1.0.0")
+    repo.commit("direct push on master without PR ref", {"m.txt": "1\n"})
+    master_with_direct = repo._git("rev-parse", "HEAD")
+    repo._git(" checkout", "-q", "-b", "pr-patch") if False else repo._git("checkout", "-q", "-b", "pr-patch")
+    repo.commit("chore(release): 1.0.1 (#99)", {
+        "VERSION": "1.0.1\n",
+        "docs/CHANGELOG.md": _entry("1.0.1", "_nothing_"),
+    })
+    # Simulate origin/master moving one commit ahead of where pr-patch branched
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: later master commit (#50)", {"later.txt": "2\n"})
+    repo._git("update-ref", "refs/remotes/origin/master", "HEAD")
+    # Check out detached merge commit (simulating GitHub Actions pull_request ref)
+    repo._git("checkout", "-q", "--detach", master_with_direct)
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge pr-patch into master", "pr-patch")
+    res_mainline = _run(repo.path, COVERAGE)
+    assert res_mainline.returncode == 1
+    assert "direct push on master without PR ref" in res_mainline.stdout
+
+    # 2. Maintenance branch release/1.0 diverged from origin/master:
+    repo._git("checkout", "-q", "-b", "release/1.0", "v1.0.0")
+    repo.commit("direct push on release/1.0 without PR ref", {"r.txt": "1\n"})
+    repo._git("update-ref", "refs/remotes/origin/release/1.0", "HEAD")
+    repo._git("checkout", "-q", "--detach", "HEAD")
+    repo.commit("chore(release): 1.0.2 (#99)", {
+        "VERSION": "1.0.2\n",
+        "docs/CHANGELOG.md": _entry("1.0.2", "_nothing_"),
+    })
+    res_maint = _run(repo.path, COVERAGE)
+    assert res_maint.returncode == 1
+    assert "direct push on release/1.0 without PR ref" in res_maint.stdout
+
+
 def test_pr_merge_commit_into_master_includes_master_prs_since_branch_point(repo: Repo):
     """In GitHub Actions pull_request runs, HEAD merges the PR branch into master.
     PRs that landed on master after the release branch forked must still be checked."""

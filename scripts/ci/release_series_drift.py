@@ -134,6 +134,15 @@ def _is_ancestor(commit: str, of: str) -> bool:
     ).returncode == 0
 
 
+def _merge_base(a: str, b: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "merge-base", a, b],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
 def _base_branch(version: str | None = None) -> str | None:
     """The upstream target branch (`origin/release/X.Y` or `origin/master`), if visible."""
     branch_proc = subprocess.run(
@@ -155,14 +164,15 @@ def _base_branch(version: str | None = None) -> str | None:
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
             capture_output=True,
         ).returncode == 0:
-            if _is_ancestor(ref, "HEAD") or _is_ancestor("HEAD", ref) or not version or "." not in version:
-                return ref
-            series_ref = f"origin/release/{version.rsplit('.', 1)[0]}"
-            if subprocess.run(
-                ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", series_ref],
-                capture_output=True,
-            ).returncode == 0 and _is_ancestor(series_ref, "HEAD"):
-                return series_ref
+            if version and "." in version:
+                series_ref = f"origin/release/{version.rsplit('.', 1)[0]}"
+                if subprocess.run(
+                    ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", series_ref],
+                    capture_output=True,
+                ).returncode == 0:
+                    mb_series = _merge_base(series_ref, "HEAD")
+                    if mb_series and not _is_ancestor(mb_series, ref):
+                        return series_ref
             return ref
 
     if version and "." in version:
