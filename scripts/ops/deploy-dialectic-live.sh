@@ -79,9 +79,33 @@ check_dialectic_live_health() {
   curl -fsS -m 4 -o /dev/null "http://127.0.0.1:$PORT/health" 2>/dev/null
 }
 
+# The LiveView socket is what makes the Timeline pane live, and /health says
+# nothing about it: prod pins the socket to the endpoint host (`localhost`), so
+# an upgrade with Origin http://127.0.0.1:$PORT is refused with 403 and the
+# page silently never goes live (portal-live-timeline-v0 §3.1). Check the
+# documented trial origin gets 101. On a 101 curl holds the socket open until
+# -m expires, so read the status code and ignore curl's exit code.
+check_dialectic_live_socket() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 --http1.1 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    -H "Origin: http://localhost:$PORT" \
+    "http://127.0.0.1:$PORT/live/websocket?vsn=2.0.0" 2>/dev/null || true)"
+  [ "$code" = "101" ]
+}
+
 echo "[deploy] verifying /health on :$PORT"
 if deploy_lib_poll 15 3 check_dialectic_live_health; then
   echo "[deploy] OK — dialectic-live healthy on :$PORT (serving from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD))"
+  # A warning, not a rollback: the node is serving, and a socket refusal is a
+  # config fault (check_origin, PHX_HOST) a code rollback would not fix.
+  if check_dialectic_live_socket; then
+    echo "[deploy] OK — LiveView socket upgrades for Origin http://localhost:$PORT"
+  else
+    echo "[deploy] WARNING — /live/websocket did not return 101 for Origin http://localhost:$PORT;" >&2
+    echo "[deploy] the Timeline pane at http://localhost:$PORT/timeline will not go live. Check check_origin / PHX_HOST." >&2
+  fi
 else
   echo "[deploy] FAILED — /health on :$PORT did not respond within timeout." >&2
   echo "[deploy] Phoenix prod needs SECRET_KEY_BASE (DIALECTIC_LIVE_SECRET_KEY_BASE in secrets.env);" >&2
