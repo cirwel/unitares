@@ -263,8 +263,9 @@ reuse existing data:
 - For a side-by-side install, set `COMPOSE_PROJECT_NAME` in the new checkout's
   `.env` and run `docker compose down` (without `-v`) in the first checkout so
   fixed `container_name` values do not collide (`stop` is not enough, because
-  `restart: unless-stopped` revives stopped containers when the Docker daemon
-  starts).
+  stopped containers still hold their fixed `container_name` values, and
+  `restart: unless-stopped` revives un-stopped containers when the Docker daemon
+  restarts).
 
 ### Updating
 
