@@ -530,8 +530,8 @@ entries expire at their recorded `retry_after` UTC time.
 path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth, the
 MCP authorization gate, lease and effect authorization, the strong-model host
 adapter and Antigravity client, the dialectic reviewer's backends, and the
-review gate's policy file and workflow, but not `review_gate.py` itself;
-`_boundary` in the file says what is deliberately left off and why) needs a passing full review from **two different model families** before
+review gate itself; `_boundary` in the file says what is deliberately left
+off) needs a passing full review from **two different model families** before
 the `review` check goes green: OpenAI (Codex, native or local), Anthropic
 (Claude) or Google. An Antigravity review counts by the model it ran, which
 its record carries (`agy` can run Gemini, Claude or GPT-OSS models); a review
