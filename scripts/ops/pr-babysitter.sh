@@ -208,9 +208,50 @@ squash_subject() {  # <pr-json> -> custom subject, or empty for GitHub's default
   ' <<<"$1"
 }
 
-subject_key() {  # <subject> -> whitespace-free value for the arm journal
-  jq -rn --arg subject "$1" '
-    if $subject == "" then "default" else "b64:" + ($subject | @base64) end
+# The subject holds only the model. The squash body ends with the PR's final
+# `Model:` and `UNITARES agent:` lines as trailers, so the landed commit names
+# both together whatever its branch commits said. Same self-reported values;
+# an unusable Model line is left out. Empty for an unsigned PR, which keeps
+# GitHub's default body.
+squash_signature() {  # <pr-json> -> trailer lines, or empty
+  jq -r '
+    [(.body // "") | splits("\\r?\\n")] as $lines
+    | ([$lines[] | capture("^Model:[ \\t]*(?<v>[^\\r\\n]*?)[ \\t]*$"; "i") | .v] | last // "") as $model
+    | ([$lines[] | capture("^UNITARES agent:[ \\t]*(?<v>[0-9A-Fa-f-]{36})[ \\t]*$"; "i") | .v]
+       | last // "") as $agent
+    | [ (if ($model | ascii_downcase) == "unavailable" then "Model: unavailable"
+         elif ($model | test("^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,127}$")) then "Model: \($model)"
+         else empty end),
+        (if $agent != "" then "UNITARES agent: \($agent)" else empty end) ]
+    | join("\n")
+  ' <<<"$1"
+}
+
+# GitHub's default squash body lists the branch commits and then credits their
+# authors; a custom body replaces all of it, so rebuild that with the
+# signature as its own paragraph just above the credits. `UNITARES agent` is
+# not a valid Git trailer key (it has a space), and inside the final paragraph
+# it would stop Git, and GitHub's co-author credit, reading that block.
+squash_body() {  # <commits-json> <signature> -> squash commit body
+  jq -r --arg sig "$2" '
+    ([.[] | .commit.author | select(.email != "noreply@github.com")
+          | "Co-authored-by: \(.name) <\(.email)>"]
+     + [.[] | .commit.message | splits("\\r?\\n") | select(test("^Co-authored-by:"; "i"))]
+     | reduce .[] as $c ([]; if any(.[]; . == $c) then . else . + [$c] end)) as $co
+    | ([.[] | select((.parents // []) | length < 2)  # GitHub lists no merge commits
+          | "* " + (.commit.message | sub("\\s+$"; ""))] | join("\n\n")) as $list
+    | [(if $list == "" then empty else $list, "---------" end),
+       (if $sig == "" then empty else $sig end),
+       (if ($co | length) == 0 then empty else ($co | join("\n")) end)]
+    | join("\n\n")
+  ' <<<"$1"
+}
+
+subject_key() {  # <subject> [signature] -> whitespace-free value for the arm journal
+  # Unsigned keys keep their old form, so upgrading re-arms only signed PRs.
+  jq -rn --arg subject "$1" --arg sig "${2:-}" '
+    if $sig != "" then "b64:" + (($subject + "\n" + $sig) | @base64)
+    elif $subject == "" then "default" else "b64:" + ($subject | @base64) end
   '
 }
 
@@ -406,13 +447,13 @@ load_review_policy  # likewise for auth_path
 # is the script's when GitHub's arming time matches a recorded one. Only those
 # are ever disarmed; a PR the maintainer armed by hand (labelled or not, or
 # re-armed later, which carries a later time) is left alone. The subject key
-# makes a title or Model-signature edit refresh the stored auto-merge subject
+# makes a title or signature edit refresh the stored auto-merge message
 # instead of landing the value that was current when the PR was first armed.
 ARMS_FILE="$STATE_FILE.arms"
-record_arm() {  # <pr> <subject>
+record_arm() {  # <pr> <subject> <signature>
   local key
   [ "$DRY_RUN" = "1" ] && return 0
-  key=$(subject_key "$2") || return 1
+  key=$(subject_key "$2" "$3") || return 1
   mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ) $key" >>"$ARMS_FILE"
 }
 recorded_subject_key() {  # <pr>
@@ -423,7 +464,7 @@ arm_subject_issue() {  # <pr> <pr-json> -> legacy_signed or changed; fails when 
   local recorded subject current
   recorded=$(recorded_subject_key "$1")
   subject=$(squash_subject "$2")
-  current=$(subject_key "$subject")
+  current=$(subject_key "$subject" "$(squash_signature "$2")")
   if [ -z "$recorded" ]; then
     # Pre-upgrade arms have no key. GitHub's default subject is still correct
     # for an unsigned PR; only a signed PR needs one deliberate refresh so its
@@ -494,7 +535,7 @@ while read -r pr; do
     if [ "$subject_issue" = "legacy_signed" ]; then
       reason="it predates model-subject journaling and needs its signed subject added"
     else
-      reason="its title or Model signature changed since it was armed"
+      reason="its title or signature changed since it was armed"
     fi
     # Keep its queue position. The next tick re-arms it with the fresh subject.
     hold_reason="a disarmed PR needs its squash subject refreshed"
@@ -834,10 +875,20 @@ while read -r _ n head; do
   merge_args=(gh pr merge "$n" -R "$REPO" --auto --squash)
   subject=$(squash_subject "$pr")
   [ -z "$subject" ] || merge_args+=(--subject "$subject")
+  signature=$(squash_signature "$pr")
+  if [ -n "$signature" ]; then
+    # 250 is the API's ceiling: a longer branch cannot be listed in full.
+    if ! commits=$(gh api --paginate "repos/$REPO/pulls/$n/commits?per_page=100" 2>/dev/null | jq -s 'add // []') \
+       || [ "$(jq length <<<"$commits")" -ge 250 ]; then
+      log "#$n: its commits could not be read for the squash body; nothing armed this tick"
+      exit 0
+    fi
+    merge_args+=(--body "$(squash_body "$commits" "$signature")")
+  fi
   merge_args+=(--match-head-commit "$head")
   if act "${merge_args[@]}"; then
     # Unrecorded, the arm could not be withdrawn by removing the label later.
-    if ! record_arm "$n" "$subject"; then
+    if ! record_arm "$n" "$subject" "$signature"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
     fi

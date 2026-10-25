@@ -280,9 +280,25 @@ def _run(
     return [line for line in (d / "calls.log").read_text().splitlines() if line], result.stdout
 
 
-def _arm(n: int, head: str | None = None, *, title: str | None = None, model: str | None = None) -> str:
+def _arm(n: int, head: str | None = None, *, title: str | None = None, model: str | None = None,
+         body: str | None = None) -> str:
     subject = f" --subject {title or f'fix: change {n}'} [model:{model}] (#{n})" if model else ""
-    return f"pr merge {n} -R o/r --auto --squash{subject} --match-head-commit {head or f'sha{n}'}"
+    # The fake gh logs each call on one line, so the body's newlines read as spaces.
+    squash = f" --body {body.replace(chr(10), ' ')}" if body is not None else ""
+    return f"pr merge {n} -R o/r --auto --squash{subject}{squash} --match-head-commit {head or f'sha{n}'}"
+
+
+AGENT = "11111111-2222-4333-8444-555555555555"
+
+
+def _commits(tmp_path: Path, n: int, commits: list[dict]) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(exist_ok=True)
+    (d / f"commits_{n}.json").write_text(json.dumps(commits))
+
+
+def _commit(message: str, name: str = "Kenny Wang", email: str = "k@example.org") -> dict:
+    return {"commit": {"message": message, "author": {"name": name, "email": email}}}
 
 
 
@@ -298,32 +314,35 @@ UNITARES agent: 11111111-2222-4333-8444-555555555555
 """
     calls, _ = _run(tmp_path, [_pr(1, title="fix: make attribution durable", body=body)])
     assert calls == [
-        _arm(1, title="fix: make attribution durable", model="openai/gpt-5.3-codex")
+        _arm(1, title="fix: make attribution durable", model="openai/gpt-5.3-codex",
+             body=f"Model: openai/gpt-5.3-codex\nUNITARES agent: {AGENT}")
     ]
 
 
 def test_the_last_model_signature_controls_the_squash_subject(tmp_path: Path) -> None:
     body = "Model: claude-old\nnotes\nModel: claude-opus-5-5\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
     calls, _ = _run(tmp_path, [_pr(1, body=body)])
-    assert calls == [_arm(1, model="claude-opus-5-5")]
+    assert calls == [_arm(1, model="claude-opus-5-5",
+                          body=f"Model: claude-opus-5-5\nUNITARES agent: {AGENT}")]
 
 
-@pytest.mark.parametrize("changed", ["title", "model"])
+@pytest.mark.parametrize("changed", ["title", "model", "agent"])
 def test_an_armed_subject_is_refreshed_after_signed_metadata_changes(tmp_path: Path, changed: str) -> None:
-    old_body = "Model: gpt-5-old\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    old_body = f"Model: gpt-5-old\nUNITARES agent: {AGENT}"
     first, _ = _run(tmp_path, [_pr(1, title="fix: old title", body=old_body)])
-    assert first == [_arm(1, title="fix: old title", model="gpt-5-old")]
+    assert first == [_arm(1, title="fix: old title", model="gpt-5-old", body=old_body)]
 
     new_title = "fix: new title" if changed == "title" else "fix: old title"
     new_model = "gpt-5-new" if changed == "model" else "gpt-5-old"
-    new_body = f"Model: {new_model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    new_agent = "99999999-2222-4333-8444-555555555555" if changed == "agent" else AGENT
+    new_body = f"Model: {new_model}\nUNITARES agent: {new_agent}"
     armed = _pr(1, title=new_title, body=new_body, armed_min_ago=0.2, state="BLOCKED")
     second, out = _run(tmp_path, [armed])
     assert second == ["pr merge 1 -R o/r --disable-auto"]
-    assert "title or Model signature changed" in out
+    assert "title or signature changed" in out
 
     third, _ = _run(tmp_path, [_pr(1, title=new_title, body=new_body)])
-    assert third == [_arm(1, title=new_title, model=new_model)]
+    assert third == [_arm(1, title=new_title, model=new_model, body=new_body)]
 
 
 def _legacy_arm(tmp_path: Path, number: int, minutes_ago: float = 20) -> None:
@@ -353,9 +372,64 @@ def test_a_signed_legacy_arm_refreshes_once_with_an_accurate_reason(tmp_path: Pa
     ["unavailable", "Gemini 3.1 Pro", "gpt-5] --admin", "<actual model identifier>"],
 )
 def test_an_unusable_model_signature_keeps_githubs_default_subject(tmp_path: Path, model: str) -> None:
-    body = f"Model: {model}\nUNITARES agent: 11111111-2222-4333-8444-555555555555"
+    body = f"Model: {model}\nUNITARES agent: {AGENT}"
     calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    expected = f"Model: unavailable\nUNITARES agent: {AGENT}" if model == "unavailable" else f"UNITARES agent: {AGENT}"
+    assert calls == [_arm(1, body=expected)]
+
+
+def test_the_squash_body_lists_commits_credits_authors_and_ends_with_the_signature(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [
+        _commit("fix: first\n\nwhy it was wrong\n"),
+        _commit("fix: second\n\nCo-authored-by: Pat <p@example.org>", name="unitares-agents[bot]",
+                email="342195540+unitares-agents[bot]@users.noreply.github.com"),
+        # A base merge (two parents) is not listed; GitHub's own web-flow author is not credited.
+        {**_commit("Merge branch 'master' into claude/x", name="GitHub", email="noreply@github.com"),
+         "parents": [{"sha": "a"}, {"sha": "b"}]},
+        _commit("fix: third"),
+    ])
+    body = f"Classification: fix\n\n---\nModel: claude-opus-5-5\nUNITARES agent: {AGENT}\n"
+    calls, _ = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == [_arm(1, model="claude-opus-5-5", body=(
+        "* fix: first\n\nwhy it was wrong\n\n"
+        "* fix: second\n\nCo-authored-by: Pat <p@example.org>\n\n"
+        "* fix: third\n\n"
+        "---------\n\n"
+        f"Model: claude-opus-5-5\nUNITARES agent: {AGENT}\n\n"
+        "Co-authored-by: Kenny Wang <k@example.org>\n"
+        "Co-authored-by: unitares-agents[bot] <342195540+unitares-agents[bot]@users.noreply.github.com>\n"
+        "Co-authored-by: Pat <p@example.org>"
+    ))]
+
+
+def test_the_co_author_credits_stay_a_trailer_block_git_can_parse(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [_commit("fix: only")])
+    script = SCRIPT.read_text()
+    funcs = "\n".join(script[script.index(f"{name}() {{"):].split("\n}\n", 1)[0] + "\n}"
+                      for name in ("squash_signature", "squash_body"))
+    out = subprocess.run(
+        ["bash", "-c", funcs + '\nsquash_body "$1" "$(squash_signature "$2")"', "_",
+         (tmp_path / "gh" / "commits_1.json").read_text(),
+         json.dumps({"body": f"Model: gpt-5\nUNITARES agent: {AGENT}"})],
+        text=True, capture_output=True, check=True,
+    ).stdout
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input="fix: x\n\n" + out,
+                            text=True, capture_output=True, check=True).stdout
+    assert parsed == "Co-authored-by: Kenny Wang <k@example.org>\n"
+
+
+def test_an_unsigned_pr_keeps_githubs_default_body(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [_commit("fix: only")])
+    calls, _ = _run(tmp_path, [_pr(1, body="Classification: fix")])
     assert calls == [_arm(1)]
+
+
+def test_a_branch_too_long_to_list_is_not_armed_with_a_partial_body(tmp_path: Path) -> None:
+    _commits(tmp_path, 1, [_commit(f"fix: {i}") for i in range(250)])
+    body = f"Model: gpt-5\nUNITARES agent: {AGENT}"
+    calls, out = _run(tmp_path, [_pr(1, body=body)])
+    assert calls == []
+    assert "could not be read for the squash body" in out
 
 
 def test_arms_in_approval_order_not_pr_number(tmp_path: Path) -> None:
