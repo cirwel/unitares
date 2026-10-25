@@ -52,6 +52,9 @@ RELEVANT_PREFIXES: tuple[str, ...] = (
     # relative paths (tests/vectors/*.json, tests/vendored/*.schema.json).
     "tests/vectors/",
     "tests/vendored/",
+    # The timeline parity fixture: dialectic_live's timeline_parity_test.exs
+    # and tests/test_timeline_parity_fixture.py assert the same files.
+    "tests/fixtures/timeline_parity/",
 )
 
 # Single files the suites consume. The docker trio is what the lease_plane

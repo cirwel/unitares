@@ -62,6 +62,8 @@ SUITES = (
         # Cross-runtime fixtures the lease_plane suite reads by relative path.
         (["tests/vectors/effect_payload_canonical.json"], True),
         (["tests/vendored/fermata-governed-effect-ir-v0.schema.json"], True),
+        # The timeline parity fixture the dialectic_live suite reads.
+        (["tests/fixtures/timeline_parity/frames.json"], True),
         # What the lease_plane job's `docker compose up postgres-age` consumes.
         (["docker-compose.yml"], True),
         # The admin overlay the same step layers on top to publish postgres-age's
@@ -92,9 +94,19 @@ def test_shared_fixture_prefixes_referenced_by_elixir_tests_are_relevant():
     a relevant prefix, or a fixture edit passes the gate without running them."""
     referenced: set[str] = set()
     for exs in (REPO_ROOT / "elixir").glob("*/test/**/*.exs"):
-        for match in re.finditer(r"tests/(vectors|vendored)/", exs.read_text(errors="replace")):
-            referenced.add(match.group(0))
+        # Comment lines only point at a fixture (wave3a's get_server_info_test
+        # names the Python golden file it mirrors but never reads it).
+        code = "\n".join(
+            line
+            for line in exs.read_text(errors="replace").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for match in re.finditer(r"tests/(vectors|vendored|fixtures/\w+)\b", code):
+            referenced.add(f"tests/{match.group(1)}/")
     assert referenced, "expected the lease_plane suite to reference shared fixtures"
+    assert "tests/fixtures/timeline_parity/" in referenced, (
+        "expected the dialectic_live suite to reference the timeline parity fixture"
+    )
     for prefix in sorted(referenced):
         assert prefix in paths_changed.RELEVANT_PREFIXES, prefix
 
