@@ -85,6 +85,81 @@ async def test_tokens_and_dcr_client_survive_a_restart():
 
 
 @pytest.mark.asyncio
+async def test_persisted_dcr_client_remains_approved_when_enrollment_closes():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await before.register_client(client)
+    await _sign_in(before, client)
+
+    after = GovernanceOAuthProvider(store=store, auto_approve=False)
+    reloaded = await after.get_client(client.client_id)
+
+    assert reloaded is not None
+    assert "code=" in await after.authorize(
+        reloaded,
+        AuthorizationParams(
+            state="s",
+            scopes=["mcp:tools"],
+            code_challenge="c",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_provided_explicitly=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_slow_first_exchange_restores_pruned_dynamic_client():
+    provider = GovernanceOAuthProvider(max_dynamic_clients=1)
+    client = _dcr_client()
+    await provider.register_client(client)
+    redirect = await provider.authorize(
+        client,
+        AuthorizationParams(
+            state="s",
+            scopes=["mcp:tools"],
+            code_challenge="c",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_provided_explicitly=True,
+        ),
+    )
+    code = redirect.split("code=")[1].split("&")[0]
+    entry = await provider.load_authorization_code(client, code)
+    replacement = _dcr_client("dcr-2")
+    await provider.register_client(replacement)
+    assert set(provider._clients) == {replacement.client_id}
+
+    await provider.exchange_authorization_code(client, entry)
+
+    assert await provider.get_client(client.client_id) is client
+    assert client.client_id in provider._approved_dynamic_client_ids
+    assert set(provider._clients) == {client.client_id}
+    assert provider._dynamic_client_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_persisted_client_load_evicts_an_old_cache_entry_without_growing_approval_state():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    clients = [_dcr_client(f"dcr-{index}") for index in range(3)]
+    for client in clients:
+        await before.register_client(client)
+        await _sign_in(before, client)
+
+    after = GovernanceOAuthProvider(
+        store=store,
+        auto_approve=False,
+        max_dynamic_clients=2,
+    )
+    for client in clients:
+        assert await after.get_client(client.client_id) is not None
+
+    assert len(after._clients) == 2
+    assert len(after._approved_dynamic_client_ids) == 2
+    assert set(after._approved_dynamic_client_ids) == set(after._dynamic_client_expires_at)
+
+
+@pytest.mark.asyncio
 async def test_refresh_works_after_a_restart_and_is_single_use():
     store = _DictStore()
     before = GovernanceOAuthProvider(store=store)
@@ -101,6 +176,24 @@ async def test_refresh_works_after_a_restart_and_is_single_use():
     again = GovernanceOAuthProvider(store=store)
     assert await again.load_refresh_token(client, tokens.refresh_token) is None
     assert await again.load_refresh_token(client, rotated.refresh_token) is not None
+
+
+@pytest.mark.asyncio
+async def test_persisted_refresh_cache_is_bounded_per_client():
+    store = _DictStore()
+    before = GovernanceOAuthProvider(store=store)
+    first_client = _dcr_client("dcr-1")
+    second_client = _dcr_client("dcr-2")
+    for client in (first_client, second_client):
+        await before.register_client(client)
+    first = await _sign_in(before, first_client)
+    second = await _sign_in(before, second_client)
+
+    after = GovernanceOAuthProvider(store=store, max_refresh_tokens=1)
+    assert await after.load_refresh_token(first_client, first.refresh_token) is not None
+    assert await after.load_refresh_token(second_client, second.refresh_token) is not None
+
+    assert set(after._refresh_tokens) == {first.refresh_token, second.refresh_token}
 
 
 @pytest.mark.asyncio
@@ -352,7 +445,7 @@ async def test_a_revocation_that_misses_the_store_is_logged(caplog):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [(None, True), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
+    [(None, False), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
 )
 def test_dynamic_registration_switch(monkeypatch, raw, expected):
     from src.mcp_listen_config import oauth_dynamic_registration_enabled
