@@ -462,6 +462,47 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     Process.sleep(200)
     send(view.pid, :tick)
     refute has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
+    # Seen only live, so its row and last-seen leave with the mark.
+    refute has_element?(view, "#agent-#{@b}")
+    refute Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
+  end
+
+  test "the cap keeps a live resume over newer marks of other kinds", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    base = DateTime.utc_now()
+    at = fn s -> base |> DateTime.add(s, :second) |> DateTime.to_iso8601() end
+
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => at.(-1_000),
+         "agent_id" => @a,
+         "event_type" => "lifecycle_resumed",
+         "provisional" => true
+       }}
+    )
+
+    for i <- 1..500 do
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "knowledge",
+           "ts" => at.(-i),
+           "agent_id" => @b,
+           "discovery_id" => "d-#{i}",
+           "provisional" => true
+         }}
+      )
+    end
+
+    _ = render(view)
+    marks = Map.values(:sys.get_state(view.pid).socket.assigns.marks)
+    assert length(marks) == 500
+    assert Enum.any?(marks, &(&1["event_type"] == "lifecycle_resumed"))
   end
 
   test "pruning keeps an unresumed pause but lets a resumed one age out with its resume",
