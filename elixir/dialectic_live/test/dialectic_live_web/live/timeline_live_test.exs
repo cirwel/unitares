@@ -41,13 +41,32 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     :ok
   end
 
-  # The feed's rows in DOM order, as text, read through LazyHTML selectors.
-  defp feed_rows(view) do
+  defp nodes(view, selector) do
     view
     |> render()
     |> LazyHTML.from_fragment()
-    |> LazyHTML.query("#timeline-feed > li")
-    |> Enum.map(&LazyHTML.text/1)
+    |> LazyHTML.query(selector)
+    |> Enum.to_list()
+  end
+
+  # The agent lanes in DOM order, as agent ids.
+  defp lane_order(view) do
+    view
+    |> nodes("#timeline-lanes > .tl-row:not(.tl-axis)")
+    |> Enum.map(fn node -> node |> LazyHTML.attribute("id") |> hd() end)
+    |> Enum.map(&String.replace_prefix(&1, "agent-", ""))
+  end
+
+  # The marks on one lane, as {data-kind, --t seconds}, in DOM order.
+  defp lane_marks(view, id) do
+    view
+    |> nodes("#agent-#{id} .tl-mk")
+    |> Enum.map(fn node ->
+      [kind] = LazyHTML.attribute(node, "data-kind")
+      [style] = LazyHTML.attribute(node, "style")
+      [_, t] = Regex.run(~r/--t:(-?[\d.]+)/, style)
+      {kind, String.to_float(t)}
+    end)
   end
 
   defp feed_with(events, agents \\ [], extra \\ %{}) do
@@ -55,13 +74,16 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     |> use_feed()
   end
 
-  defp agent(id, label, model_type \\ nil) do
-    %{
-      "agent_id" => id,
-      "label" => label,
-      "model_type" => model_type,
-      "last_activity_at" => iso(-60_000)
-    }
+  defp agent(id, label, model_type \\ nil, extra \\ %{}) do
+    Map.merge(
+      %{
+        "agent_id" => id,
+        "label" => label,
+        "model_type" => model_type,
+        "last_activity_at" => iso(-60_000)
+      },
+      extra
+    )
   end
 
   test "the dead render serves the pane before the socket connects", %{conn: conn} do
@@ -107,18 +129,25 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
       feed_with(events, [%{"agent_id" => @a, "label" => %{"x" => 1}, "last_activity_at" => 5}])
 
     view = mount_live(conn, ctx)
-    assert has_element?(view, "#timeline-feed li[data-kind=outcome]")
-    assert has_element?(view, "#timeline-feed li[data-kind=lineage]")
+    assert has_element?(view, "#agent-#{@a} .tl-mk[data-kind=outcome]")
+    assert has_element?(view, "#agent-#{@a} .tl-mk[data-kind=lineage]")
+
+    # The detail panel takes the same odd record without raising.
+    [id] =
+      view |> nodes("#agent-#{@a} .tl-mk[data-kind=outcome]") |> hd() |> LazyHTML.attribute("id")
+
+    view |> element("##{id}") |> render_click()
+    assert has_element?(view, "#mark-detail", "Outcome · passed")
   end
 
   test "an empty window renders its empty states", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
 
-    assert has_element?(view, "#feed-empty")
-    assert has_element?(view, "#agents-empty")
+    assert has_element?(view, "#lanes-empty")
     assert has_element?(view, "#socket-status", "connected")
     assert has_element?(view, "#source-status", "ok")
+    assert has_element?(view, "#mark-detail", "Select a mark")
     refute has_element?(view, "#truncation-banner")
   end
 
@@ -149,11 +178,19 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     {:ok, view, _} = live(conn, ~p"/timeline")
     assert has_element?(view, "#feed-unavailable")
-    assert has_element?(view, "#feed-empty")
+    assert has_element?(view, "#lanes-empty")
   end
 
-  test "history rows render newest first, with the truncation banner", %{conn: conn} do
+  test "history marks sit on their agent's lane in time order, with the truncation banner",
+       %{conn: conn} do
     events = [
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-60_000),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "action" => "guide"
+      },
       %{
         "kind" => "outcome",
         "ts" => iso(-120_000),
@@ -161,13 +198,6 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
         "outcome_id" => "o-1",
         "outcome_type" => "test_failed",
         "is_bad" => true
-      },
-      %{
-        "kind" => "checkin",
-        "ts" => iso(-60_000),
-        "agent_id" => @a,
-        "authored_by" => "agent",
-        "action" => "guide"
       }
     ]
 
@@ -175,10 +205,110 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     view = mount_live(conn, ctx)
 
     assert has_element?(view, "#truncation-banner", "checkin")
-    assert [checkin, outcome] = feed_rows(view)
-    assert checkin =~ "assessment: guide"
-    assert outcome =~ "test_failed"
-    assert has_element?(view, "#timeline-feed li[data-kind=outcome]", "worker one")
+    assert has_element?(view, "#agent-#{@a} .tl-name", "worker one")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.guide[title*='assessment: guide']")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.outcome.bad", "✕")
+
+    assert [{"outcome", t_outcome}, {"checkin", t_checkin}] = lane_marks(view, @a)
+    assert_in_delta t_checkin - t_outcome, 60.0, 0.2
+    assert has_element?(view, "#timeline-lanes[style*='--span:3600']")
+  end
+
+  test "lanes order by most recent event, with a subagent nested under its parent",
+       %{conn: conn} do
+    c = "00000000-0000-4000-8000-0000000000c3"
+
+    agents = [
+      agent(@a, "older parent"),
+      agent(@b, "busy child", nil, %{"parent_agent_id" => @a, "spawn_reason" => "subagent"}),
+      agent(c, "newest loner")
+    ]
+
+    events = [
+      %{"kind" => "outcome", "ts" => iso(-50_000), "agent_id" => @a, "outcome_id" => "1"},
+      %{"kind" => "outcome", "ts" => iso(-20_000), "agent_id" => @b, "outcome_id" => "2"},
+      %{"kind" => "outcome", "ts" => iso(-30_000), "agent_id" => c, "outcome_id" => "3"},
+      %{
+        "kind" => "lineage",
+        "ts" => iso(-40_000),
+        "agent_id" => @b,
+        "event_id" => "l",
+        "parent_agent_id" => @a
+      }
+    ]
+
+    ctx = feed_with(events, agents)
+    view = mount_live(conn, ctx)
+
+    # The family sorts by its busiest member, so the parent leads over c.
+    assert lane_order(view) == [@a, @b, c]
+    assert has_element?(view, "#agent-#{@b}.child", "subagent of older parent")
+    # The lineage mark is drawn on the parent's lane.
+    assert has_element?(view, "#agent-#{@a} .tl-mk.lineage[title*='Started a subagent']")
+    refute has_element?(view, "#agent-#{@b} .tl-mk.lineage")
+  end
+
+  test "a pause and its resume draw a band; an unresumed pause runs to now", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(-50_000),
+        "agent_id" => @a,
+        "event_type" => "lifecycle_paused",
+        "event_id" => "p1"
+      },
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(-40_000),
+        "agent_id" => @a,
+        "event_type" => "lifecycle_resumed",
+        "event_id" => "r1"
+      },
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(-10_000),
+        "agent_id" => @b,
+        "event_type" => "lifecycle_paused",
+        "event_id" => "p2"
+      }
+    ]
+
+    ctx = feed_with(events)
+    view = mount_live(conn, ctx)
+
+    assert [closed] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert [style] = LazyHTML.attribute(closed, "style")
+    assert style =~ "--t2:"
+    assert [open] = nodes(view, "#agent-#{@b} .tl-band.pause")
+    refute open |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+  end
+
+  test "selecting a check-in shows its record; selecting it again clears it", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-5_000),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "action" => "proceed",
+        "report_excerpt" => "shipped the lanes",
+        "confidence_reported" => 0.8
+      }
+    ]
+
+    ctx = feed_with(events, [agent(@a, "worker one")])
+    view = mount_live(conn, ctx)
+
+    [id] = view |> nodes("#agent-#{@a} .tl-mk") |> hd() |> LazyHTML.attribute("id")
+    view |> element("##{id}") |> render_click()
+
+    assert has_element?(view, "##{id}.sel")
+    assert has_element?(view, "#mark-detail", "shipped the lanes")
+    assert has_element?(view, "#mark-detail", "0.80")
+    assert has_element?(view, "#mark-detail", "The agent (sync_state)")
+
+    view |> element("##{id}") |> render_click()
+    assert has_element?(view, "#mark-detail", "Select a mark")
   end
 
   test "a live delta renders without a refetch", %{conn: conn} do
@@ -197,31 +327,16 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
 
-    assert has_element?(view, "#timeline-feed li[data-provisional=true]", "a fresh note")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.knowledge[data-provisional=true]")
     assert has_element?(view, "#push-latency", "median")
     refute_receive {:timeline_get, _}, 100
   end
 
-  test "a delayed delta takes its place in time, not the top", %{conn: conn} do
-    events = [
-      %{
-        "kind" => "outcome",
-        "ts" => iso(-60_000),
-        "agent_id" => @a,
-        "outcome_id" => "old",
-        "outcome_type" => "oldest_row"
-      },
-      %{
-        "kind" => "outcome",
-        "ts" => iso(-1_000),
-        "agent_id" => @a,
-        "outcome_id" => "new",
-        "outcome_type" => "newest_row"
-      }
-    ]
-
+  test "an agent first seen live joins at the top", %{conn: conn} do
+    events = [%{"kind" => "outcome", "ts" => iso(-1_000), "agent_id" => @a, "outcome_id" => "o"}]
     ctx = feed_with(events)
     view = mount_live(conn, ctx)
+    assert lane_order(view) == [@a]
 
     broadcast_frame(ctx, %{
       "type" => "lifecycle_paused",
@@ -233,35 +348,14 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
 
-    assert [newest, delayed, oldest] = feed_rows(view)
-    assert newest =~ "newest_row"
-    assert delayed =~ "delayed_frame"
-    assert oldest =~ "oldest_row"
+    assert lane_order(view) == [@b, @a]
+    assert has_element?(view, "#agent-#{@b} .tl-mk.lifecycle[data-provisional=true]")
   end
 
-  test "a delta for a row the re-read already showed is not counted twice", %{conn: conn} do
-    events = [
-      %{
-        "kind" => "outcome",
-        "ts" => iso(-1_000),
-        "agent_id" => @a,
-        "outcome_id" => "n",
-        "outcome_type" => "newer_row"
-      },
-      %{
-        "kind" => "outcome",
-        "ts" => iso(-20_000),
-        "agent_id" => @a,
-        "outcome_id" => "o",
-        "outcome_type" => "older_row"
-      }
-    ]
-
-    ctx = feed_with(events)
+  test "a delta the pane already holds is drawn once", %{conn: conn} do
+    ctx = feed_with([])
     view = mount_live(conn, ctx)
 
-    # A live mark the LiveView already has (as if the re-read held it) arrives
-    # again as a delta; then a mark between the two rows.
     mark = %{
       "kind" => "lifecycle",
       "ts" => iso(-500),
@@ -274,45 +368,269 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     send(view.pid, {:timeline_delta, "1h", mark})
     send(view.pid, {:timeline_delta, "1h", mark})
 
-    between = %{mark | "ts" => iso(-10_000), "reason" => "between_rows"}
-    send(view.pid, {:timeline_delta, "1h", between})
-
-    assert [first, newer, middle, older] = feed_rows(view)
-    assert first =~ "already_shown"
-    assert newer =~ "newer_row"
-    assert middle =~ "between_rows"
-    assert older =~ "older_row"
+    assert [_one] = nodes(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
   end
 
-  test "a delta older than a full feed is not shown and evicts nothing", %{conn: conn} do
-    events =
-      for i <- 1..200 do
-        %{
-          "kind" => "outcome",
-          "ts" => iso(-i * 1_000),
-          "agent_id" => @a,
-          "outcome_id" => "o#{i}",
-          "outcome_type" => "row#{i}"
-        }
-      end
-
-    ctx = feed_with(events)
+  test "a delta from before the window is not drawn, but its agent was seen", %{conn: conn} do
+    ctx = feed_with([])
     view = mount_live(conn, ctx)
 
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => iso(-2 * 3_600_000),
+         "agent_id" => @b,
+         "event_type" => "lifecycle_paused",
+         "provisional" => true
+       }}
+    )
+
+    _ = render(view)
+    refute has_element?(view, "#agent-#{@b}")
+    assert Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
+  end
+
+  # Polls the rendered view until `check` holds (a re-read lands
+  # asynchronously after its doorbell).
+  defp eventually(check, tries \\ 50) do
+    cond do
+      check.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && eventually(check, tries - 1)
+    end
+  end
+
+  test "a selection on a live mark follows it when the re-read confirms it", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    ts = iso(-1_000)
+
     broadcast_frame(ctx, %{
-      "type" => "lifecycle_paused",
-      "agent_id" => @b,
-      "timestamp" => iso(-500_000),
-      "reason" => "too_old"
+      "type" => "knowledge_write",
+      "agent_id" => @a,
+      "timestamp" => ts,
+      "discovery_id" => "d-7",
+      "discovery_type" => "note",
+      "summary" => "confirmed note"
     })
 
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
+    [live_id] = view |> nodes("#agent-#{@a} .tl-mk.knowledge") |> hd() |> LazyHTML.attribute("id")
+    assert String.starts_with?(live_id, "p-")
+    view |> element("##{live_id}") |> render_click()
 
-    refute has_element?(view, "#timeline-feed", "too_old")
-    assert has_element?(view, "#timeline-feed", "row200")
-    # The agent was still seen: the strip's last-seen moves even so.
-    assert Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
+    row = %{
+      "kind" => "knowledge",
+      "ts" => ts,
+      "agent_id" => @a,
+      "event_id" => "k-7",
+      "discovery_id" => "d-7",
+      "discovery_type" => "note",
+      "summary" => "confirmed note"
+    }
+
+    serve(ctx.stub, fn conn -> Req.Test.json(conn, window_body([row])) end)
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn ->
+             has_element?(view, "#agent-#{@a} .tl-mk.knowledge.sel:not([data-provisional])")
+           end)
+
+    assert has_element?(view, "#mark-detail", "confirmed note")
+  end
+
+  test "marks that slide out of the window are pruned even without a re-read", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => iso(-3_599_900),
+         "agent_id" => @b,
+         "event_type" => "lifecycle_resumed",
+         "provisional" => true
+       }}
+    )
+
+    assert has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
+    Process.sleep(200)
+    send(view.pid, :tick)
+    refute has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
+    # Seen only live, so its row and last-seen leave with the mark.
+    refute has_element?(view, "#agent-#{@b}")
+    refute Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
+  end
+
+  test "a pause stays closed after the cap evicts its live resume", %{conn: conn} do
+    base = DateTime.utc_now()
+    at = fn s -> base |> DateTime.add(s, :second) |> DateTime.to_iso8601() end
+
+    paused = %{
+      "kind" => "lifecycle",
+      "ts" => at.(-1_100),
+      "agent_id" => @a,
+      "event_type" => "lifecycle_paused",
+      "event_id" => "p"
+    }
+
+    ctx = feed_with([paused])
+    view = mount_live(conn, ctx)
+
+    resume = fn agent, s ->
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => at.(s),
+           "agent_id" => agent,
+           "event_type" => "lifecycle_resumed",
+           "provisional" => true
+         }}
+      )
+    end
+
+    resume.(@a, -1_000)
+    # 500 newer live lifecycle marks from another agent push @a's resume out.
+    for i <- 1..500, do: resume.(@b, -i)
+
+    _ = render(view)
+    marks = Map.values(:sys.get_state(view.pid).socket.assigns.marks)
+    refute Enum.any?(marks, &(&1["agent_id"] == @a and &1["event_type"] == "lifecycle_resumed"))
+
+    [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    assert band |> LazyHTML.attribute("title") |> hd() =~ "since resumed"
+  end
+
+  test "rows freed by the cap leave on the next prune", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    base = DateTime.utc_now()
+
+    # 501 live marks from 501 agents: the cap drops the oldest agent's mark.
+    for i <- 1..501 do
+      id = "00000000-0000-4000-9000-#{String.pad_leading(Integer.to_string(i), 12, "0")}"
+
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => base |> DateTime.add(-i, :second) |> DateTime.to_iso8601(),
+           "agent_id" => id,
+           "event_type" => "lifecycle_resumed",
+           "provisional" => true
+         }}
+      )
+    end
+
+    send(view.pid, :tick)
+    _ = render(view)
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert length(assigns.row_order) == 500
+    assert map_size(assigns.last_seen) == 500
+  end
+
+  test "a confirmed check-in selection takes the latest matching history row",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    frame_ts = iso(-500)
+
+    broadcast_frame(ctx, %{"type" => "eisv_update", "agent_id" => @a, "timestamp" => frame_ts})
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+    [live_id] = view |> nodes("#agent-#{@a} .tl-mk.checkin") |> hd() |> LazyHTML.attribute("id")
+    view |> element("##{live_id}") |> render_click()
+
+    row = fn ms, text ->
+      %{
+        "kind" => "checkin",
+        "ts" => iso(ms),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "state_id" => text,
+        "report_excerpt" => text
+      }
+    end
+
+    # Two history check-ins within the 2 s lag before the frame.
+    serve(ctx.stub, fn conn ->
+      Req.Test.json(
+        conn,
+        window_body([row.(-2_000, "earlier report"), row.(-700, "later report")])
+      )
+    end)
+
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn -> has_element?(view, "#mark-detail", "later report") end)
+  end
+
+  test "pruning keeps an unresumed pause but lets a resumed one age out with its resume",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+
+    delta = fn agent, type, ms ->
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => iso(ms),
+           "agent_id" => agent,
+           "event_type" => type,
+           "provisional" => true
+         }}
+      )
+    end
+
+    # @a paused and resumed just inside the window; @b paused and never resumed.
+    delta.(@a, "lifecycle_paused", -3_599_900)
+    delta.(@a, "lifecycle_resumed", -3_599_850)
+    delta.(@b, "lifecycle_paused", -3_599_900)
+    assert has_element?(view, "#agent-#{@a} .tl-band.pause")
+
+    Process.sleep(200)
+    send(view.pid, :tick)
+    refute has_element?(view, "#agent-#{@a} .tl-band.pause")
+    assert has_element?(view, "#agent-#{@b} .tl-band.pause")
+  end
+
+  test "live marks are capped at the feed's provisional cap", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    base = DateTime.utc_now()
+
+    for i <- 1..501 do
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => base |> DateTime.add(-i, :second) |> DateTime.to_iso8601(),
+           "agent_id" => @b,
+           "event_type" => "lifecycle_resumed",
+           "provisional" => true
+         }}
+      )
+    end
+
+    _ = render(view)
+    marks = Map.values(:sys.get_state(view.pid).socket.assigns.marks)
+    assert length(marks) == 500
+
+    # The oldest went: the earliest kept is 500 s before the base.
+    oldest = marks |> Enum.map(&DialecticLive.TimelineAdapter.ts_us(&1["ts"])) |> Enum.min()
+    assert oldest == DateTime.to_unix(DateTime.add(base, -500, :second), :microsecond)
   end
 
   test "a foreign roster renders from record fields alone", %{conn: conn} do
@@ -335,11 +653,11 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     view = mount_live(conn, ctx)
 
     assert has_element?(view, "#agent-#{@a}", "unheard-harness-9")
-    assert has_element?(view, "#agent-#{@b}", String.slice(@b, 0, 8))
-    assert has_element?(view, "#timeline-feed li[data-kind=lifecycle]", String.slice(@b, 0, 8))
+    assert has_element?(view, "#agent-#{@b} .tl-name", String.slice(@b, 0, 8))
+    assert has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
   end
 
-  test "an empty roster still renders every row by id", %{conn: conn} do
+  test "an empty roster still draws every lane by id", %{conn: conn} do
     events = [
       %{"kind" => "checkin", "ts" => iso(-1_000), "agent_id" => @a, "authored_by" => "agent"}
     ]
@@ -347,8 +665,8 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     ctx = feed_with(events, [])
     view = mount_live(conn, ctx)
 
-    assert has_element?(view, "#agents-empty")
-    assert has_element?(view, "#timeline-feed li[data-kind=checkin]", String.slice(@a, 0, 8))
+    assert has_element?(view, "#agent-#{@a} .tl-name", String.slice(@a, 0, 8))
+    assert has_element?(view, "#agent-#{@a} .tl-mk[data-kind=checkin]")
   end
 
   test "with EISV absent the header says check-ins arrive on re-read", %{conn: conn} do
@@ -367,10 +685,14 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     broadcast_frame(ctx, %{"type" => "lifecycle_resumed", "agent_id" => @a, "timestamp" => iso()})
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
-    assert has_element?(view, "#timeline-feed li[data-provisional=true][data-kind=lifecycle]")
+
+    assert has_element?(
+             view,
+             "#timeline-lanes .tl-mk[data-provisional=true][data-kind=lifecycle]"
+           )
   end
 
-  test "with zero optional subscribers a check-in renders with no assessment", %{conn: conn} do
+  test "with zero optional subscribers a live check-in renders unassessed", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
 
@@ -378,11 +700,12 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
 
-    assert has_element?(view, "#timeline-feed li[data-provisional=true][data-kind=checkin]")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.unassessed[data-provisional=true]")
     refute render(view) =~ "assessment:"
   end
 
-  test "an EISV assessment renders labelled as an assessment", %{conn: conn} do
+  test "an EISV assessment shapes a live check-in and is labelled as an assessment",
+       %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
 
@@ -395,7 +718,7 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
-    assert has_element?(view, "#timeline-feed li[data-kind=checkin]", "assessment: guide")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.guide[title*='assessment: guide']")
   end
 
   test "substrate off hides provisional and substrate check-ins and says why", %{conn: conn} do
@@ -418,11 +741,11 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     ctx = feed_with(events)
     view = mount_live(conn, ctx)
-    assert has_element?(view, "#timeline-feed", "substrate_interpretation")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.substrate")
 
     view |> element("#substrate-toggle") |> render_click()
-    refute has_element?(view, "#timeline-feed", "substrate_interpretation")
-    assert has_element?(view, "#timeline-feed", "agent_report")
+    refute has_element?(view, "#agent-#{@a} .tl-mk.checkin.substrate")
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.proceed")
     assert has_element?(view, "#checkin-reread-only", "Substrate is off")
 
     # Another agent: a frame from @a within 2 s of its history row would be
@@ -430,7 +753,7 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     broadcast_frame(ctx, %{"type" => "eisv_update", "agent_id" => @b, "timestamp" => iso()})
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
-    refute has_element?(view, "#timeline-feed li[data-provisional=true]")
+    refute has_element?(view, "#timeline-lanes .tl-mk[data-provisional=true]")
   end
 
   test "the window toggle switches to the 6 h window", %{conn: conn} do
@@ -440,15 +763,35 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
 
     view |> element("#window-6h") |> render_click()
     assert has_element?(view, "#window-6h.btn-active")
+    assert has_element?(view, "#timeline-lanes[style*='--span:21600']")
   end
 
-  test "the agent filter narrows the strip", %{conn: conn} do
+  test "the agent filter narrows the lanes", %{conn: conn} do
     ctx = feed_with([], [agent(@a, "alpha worker"), agent(@b, "beta worker")])
     view = mount_live(conn, ctx)
+    assert has_element?(view, "#agent-#{@b}")
 
     view |> form("#agent-filter", %{"q" => "alpha"}) |> render_change()
     assert has_element?(view, "#agent-#{@a}")
     refute has_element?(view, "#agent-#{@b}")
+
+    view |> form("#agent-filter", %{"q" => "nobody"}) |> render_change()
+    assert has_element?(view, "#lanes-nomatch", "nobody")
+  end
+
+  test "more than 25 lanes show the most recent until show all", %{conn: conn} do
+    agents =
+      for i <- 1..30 do
+        id = "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(i), 12, "0")}"
+        agent(id, "worker #{i}", nil, %{"last_activity_at" => iso(-i * 1_000)})
+      end
+
+    ctx = feed_with([], agents)
+    view = mount_live(conn, ctx)
+
+    assert length(lane_order(view)) == 25
+    view |> element("#show-all-agents") |> render_click()
+    assert length(lane_order(view)) == 30
   end
 
   test "a feed restart re-subscribes the open pane", %{conn: conn} do

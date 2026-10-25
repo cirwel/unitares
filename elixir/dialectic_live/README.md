@@ -38,9 +38,11 @@ a *consumer*, through three reads:
 - **`DialecticLiveWeb.DialecticLive`** subscribes to `dialectic:events` and
   treats any event as a doorbell to refetch, with a 10 s floor. Sessions flagged
   `awaiting_facilitation` float to the top with a badge.
-- **`DialecticLiveWeb.TimelineLive`** renders a feed (newest 200 rows), an
-  "agents now" strip, and a header naming what is live and what is re-read
-  only.
+- **`DialecticLiveWeb.TimelineLive`** draws the dashboard Timeline tab's lanes
+  live: one row per agent across the window, marks placed in time, bands for
+  pauses and dialectic reviews, subagents nested under their parent, and a
+  panel showing the selected mark's record. A header names what is live and
+  what is re-read only.
 
 ### What the Timeline shows live
 
