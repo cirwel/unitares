@@ -937,6 +937,74 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert has_element?(view, "#mark-detail", "paused")
   end
 
+  test "a live verdict updates the attention box without a re-read", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-30_000),
+        "agent_id" => @b,
+        "authored_by" => "agent",
+        "action" => "reject"
+      }
+    ]
+
+    ctx = feed_with(events, [agent(@a, "worker one"), agent(@b, "worker two")])
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#attention-#{@b}")
+
+    broadcast_frame(ctx, %{
+      "type" => "eisv_update",
+      "agent_id" => @a,
+      "timestamp" => iso(),
+      "decision" => %{"action" => "pause"}
+    })
+
+    broadcast_frame(ctx, %{
+      "type" => "eisv_update",
+      "agent_id" => @b,
+      "timestamp" => iso(),
+      "decision" => %{"action" => "proceed"}
+    })
+
+    assert_receive {:timeline_delta, "1h", _}
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+
+    assert has_element?(view, "#attention-#{@a}", "pause verdict")
+    refute has_element?(view, "#attention-#{@b}")
+  end
+
+  test "with no successful read the attention box makes no claim", %{conn: conn} do
+    ctx = start_feed(respond: &Plug.Conn.send_resp(&1, 500, "boom")) |> use_feed()
+    view = mount_live(conn, ctx)
+    refute has_element?(view, "#needs-attention")
+  end
+
+  test "during an outage the attention box says it is stale", %{conn: conn} do
+    {:ok, fail} = Agent.start_link(fn -> false end)
+
+    ctx =
+      start_feed(
+        respond: fn conn ->
+          if Agent.get(fail, & &1),
+            do: Plug.Conn.send_resp(conn, 500, "boom"),
+            else: Req.Test.json(conn, window_body([], [agent(@a, "worker one")]))
+        end
+      )
+      |> use_feed()
+
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#needs-attention", "Nothing needs your attention")
+    refute has_element?(view, "#attention-stale")
+
+    Agent.update(fail, fn _ -> true end)
+    broadcast_status(ctx, :connected)
+    _ = await_reread_gets()
+    await_reread_delivered(ctx, view)
+
+    assert has_element?(view, "#attention-stale", "last successful read")
+  end
+
   test "nothing to attend to says so", %{conn: conn} do
     ctx = feed_with([], [agent(@a, "worker one")])
     view = mount_live(conn, ctx)

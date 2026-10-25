@@ -664,14 +664,14 @@ defmodule DialecticLiveWeb.TimelineLive do
     resume = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_resumed" end)
 
     verdict =
-      Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(m["action"]) end)
+      Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(verdict_of(m)) end)
 
     cond do
       pause && open_pause?(pause, resume, resumed_us) ->
         {pid, pm} = pause
         %{sel: pid, reason: "paused since " <> clock(pm["ts"])}
 
-      verdict && action_class(elem(verdict, 1)["action"]) == "pause" ->
+      verdict && action_class(verdict_of(elem(verdict, 1))) == "pause" ->
         {vid, vm} = verdict
         %{sel: vid, reason: "its latest check-in drew a pause verdict at " <> clock(vm["ts"])}
 
@@ -679,6 +679,10 @@ defmodule DialecticLiveWeb.TimelineLive do
         nil
     end
   end
+
+  # A history row's persisted action, or a live mark's EISV assessment: the
+  # same verdict either way, as `assessment/1` reads it.
+  defp verdict_of(m), do: txt(m["action"]) || live_verdict(m)
 
   defp open_pause?({_, pause}, resume, resumed_us) do
     resume_us = if resume, do: sort_key(elem(resume, 1)), else: -1
@@ -1309,15 +1313,22 @@ defmodule DialecticLiveWeb.TimelineLive do
         The timeline feed is unavailable. Nothing is shown until it runs.
       </div>
 
-      <%!-- Only over data: "nothing needs you" is a claim about a window. --%>
+      <%!-- Only after a successful read: "nothing needs you" is a claim about
+           a window, and during an outage it is a claim about an older one. --%>
       <section
-        :if={@source in [:ok, :unavailable]}
+        :if={@last_reread_at}
         id="needs-attention"
         class={[
           "rounded-box border p-4 text-sm",
           if(@attention == [], do: "border-base-300", else: "border-error/60")
         ]}
       >
+        <p :if={@source != :ok} id="attention-stale" class="text-warning mb-1">
+          History is not updating; this is as of the last successful read, {ago(
+            @last_reread_at,
+            @now
+          )}.
+        </p>
         <%= if @attention == [] do %>
           <p class="text-base-content/70">Nothing needs your attention right now.</p>
         <% else %>
