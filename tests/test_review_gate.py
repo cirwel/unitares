@@ -3591,10 +3591,12 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
                  "src/agent_identity_auth.py", "src/effect_grant.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
-                 "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
+                 "scripts/dev/review_policy.json",
                  ".github/workflows/review-gate.yml"):
         assert rg.sensitive_paths([path], globs) == [path], path
-    assert rg.sensitive_paths(["README.md", "src/mcp_handlers/support/consultation.py"],
+    # The gate's code gets ordinary review; its policy file and workflow stay listed.
+    assert rg.sensitive_paths(["README.md", "src/mcp_handlers/support/consultation.py",
+                               "scripts/dev/review_gate.py"],
                               globs) == []
 
 
