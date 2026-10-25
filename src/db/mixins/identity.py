@@ -1466,7 +1466,10 @@ async def fetch_timeline_identities(
                last_activity_at, status,
                coalesce(metadata->>'display_name', metadata->>'label') AS label,
                metadata->>'model_type' AS model_type,
-               metadata->'trust_tier'->>'name' AS trust_tier
+               metadata->'trust_tier'->>'name' AS trust_tier,
+               CASE WHEN jsonb_typeof(metadata->'tags') = 'array'
+                    THEN ARRAY(SELECT jsonb_array_elements_text(metadata->'tags'))
+                    ELSE ARRAY[]::text[] END AS tags
         FROM core.identities
         WHERE identity_id = ANY($1::bigint[]) OR agent_id = ANY($2::text[])
         """,

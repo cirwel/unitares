@@ -1,0 +1,1 @@
+- **timeline:** `GET /v1/timeline` returns each agent's `tags`. The live Timeline pane uses them to fold agents tagged `autonomous` into a collapsed background group. Each row now shows what its agent last said, a "needs your attention" box names agents paused with no later resume or whose latest check-in drew a pause verdict, and one light replaces the status lines.

@@ -52,7 +52,7 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
   # The agent lanes in DOM order, as agent ids.
   defp lane_order(view) do
     view
-    |> nodes("#timeline-lanes > .tl-row:not(.tl-axis)")
+    |> nodes("#timeline-lanes > .tl-row:not(.tl-axis):not(.tl-group)")
     |> Enum.map(fn node -> node |> LazyHTML.attribute("id") |> hd() end)
     |> Enum.map(&String.replace_prefix(&1, "agent-", ""))
   end
@@ -808,5 +808,156 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     _ = render(view)
     assert %{viewers: viewers} = :sys.get_state(ctx.feed)
     assert Map.has_key?(viewers, view.pid)
+  end
+
+  test "a lane shows the agent's latest note, without a hook's framing", %{conn: conn} do
+    events = [
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-20_000),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "action" => "proceed",
+        "report_excerpt" => "an older report"
+      },
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-10_000),
+        "agent_id" => @a,
+        "authored_by" => "substrate",
+        "action" => "proceed",
+        "report_excerpt" =>
+          "Turn summary (claude; tool count unavailable); response excerpt: Fixing PR #3076"
+      },
+      %{"kind" => "outcome", "ts" => iso(-5_000), "agent_id" => @a, "outcome_id" => "o"},
+      # A newer mechanical note does not displace what the agent said.
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-4_000),
+        "agent_id" => @a,
+        "authored_by" => "substrate",
+        "report_excerpt" => "Auto: 5 edits across 2 files"
+      },
+      %{"kind" => "checkin", "ts" => iso(-1_000), "agent_id" => @b, "authored_by" => "agent"},
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-1_500),
+        "agent_id" => c = "00000000-0000-4000-8000-0000000000c3",
+        "authored_by" => "substrate",
+        "report_excerpt" => "35 tool calls completed over 10m"
+      }
+    ]
+
+    ctx = feed_with(events, [agent(@a, "worker one"), agent(@b, "worker two")])
+    view = mount_live(conn, ctx)
+
+    assert [note] = nodes(view, "#agent-#{@a} .tl-note")
+    assert LazyHTML.text(note) == "Fixing PR #3076"
+    assert note |> LazyHTML.attribute("title") |> hd() =~ "UTC"
+    refute has_element?(view, "#agent-#{@b} .tl-note")
+    # With nothing the agent said, the mechanical note stands in.
+    assert has_element?(view, "#agent-#{c} .tl-note", "35 tool calls")
+
+    # With substrate off, the hook's note goes with its mark.
+    view |> element("#substrate-toggle") |> render_click()
+    assert has_element?(view, "#agent-#{@a} .tl-note", "an older report")
+  end
+
+  test "agents tagged autonomous fold into a background group until opened", %{conn: conn} do
+    c = "00000000-0000-4000-8000-0000000000c3"
+
+    agents = [
+      agent(@a, "session worker"),
+      agent(@b, "scheduled one", nil, %{"tags" => ["persistent", "autonomous"]}),
+      agent(c, "its helper", nil, %{"parent_agent_id" => @b, "spawn_reason" => "subagent"})
+    ]
+
+    events = [
+      %{"kind" => "outcome", "ts" => iso(-1_000), "agent_id" => @b, "outcome_id" => "1"},
+      %{"kind" => "outcome", "ts" => iso(-2_000), "agent_id" => c, "outcome_id" => "2"},
+      %{"kind" => "outcome", "ts" => iso(-30_000), "agent_id" => @a, "outcome_id" => "3"}
+    ]
+
+    ctx = feed_with(events, agents)
+    view = mount_live(conn, ctx)
+
+    # The session leads although the scheduled family is newer.
+    assert lane_order(view) == [@a]
+    assert has_element?(view, "#toggle-background", "Background agents (2)")
+    assert has_element?(view, "#background-agents", "scheduled one")
+
+    view |> element("#toggle-background") |> render_click()
+    assert lane_order(view) == [@a, @b, c]
+    assert has_element?(view, "#agent-#{c}.child")
+
+    view |> element("#toggle-background") |> render_click()
+    view |> form("#agent-filter", %{"q" => "scheduled"}) |> render_change()
+    assert lane_order(view) == [@b]
+  end
+
+  test "needs attention lists an open pause and a pause verdict, not a resumed pause",
+       %{conn: conn} do
+    c = "00000000-0000-4000-8000-0000000000c3"
+
+    lifecycle = fn agent_id, type, ms, id ->
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(ms),
+        "agent_id" => agent_id,
+        "event_type" => type,
+        "event_id" => id
+      }
+    end
+
+    events = [
+      lifecycle.(@a, "lifecycle_paused", -30_000, "p1"),
+      lifecycle.(@b, "lifecycle_paused", -30_000, "p2"),
+      lifecycle.(@b, "lifecycle_resumed", -20_000, "r2"),
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-5_000),
+        "agent_id" => c,
+        "authored_by" => "agent",
+        "action" => "reject"
+      }
+    ]
+
+    ctx =
+      feed_with(events, [agent(@a, "held one"), agent(@b, "resumed one"), agent(c, "flagged")])
+
+    view = mount_live(conn, ctx)
+
+    assert has_element?(view, "#attention-#{@a}", "paused since")
+    assert has_element?(view, "#attention-#{c}", "pause verdict")
+    refute has_element?(view, "#attention-#{@b}")
+    assert has_element?(view, "#agent-#{@a}.needs")
+    refute has_element?(view, "#agent-#{@b}.needs")
+
+    view |> element("#attention-#{@a} button") |> render_click()
+    assert has_element?(view, "#mark-detail", "paused")
+  end
+
+  test "nothing to attend to says so", %{conn: conn} do
+    ctx = feed_with([], [agent(@a, "worker one")])
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#needs-attention", "Nothing needs your attention")
+  end
+
+  test "one light says how current the page is", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#live-light[data-state=slow]", "about once a minute")
+
+    broadcast_status(ctx, :connected)
+    _ = await_reread_gets()
+    await_reread_delivered(ctx, view)
+    send(view.pid, :tick)
+    assert has_element?(view, "#live-light[data-state=live]", "Live")
+  end
+
+  test "an unavailable source turns the light off", %{conn: conn} do
+    ctx = start_feed(respond: &Plug.Conn.send_resp(&1, 500, "boom")) |> use_feed()
+    view = mount_live(conn, ctx)
+    assert has_element?(view, "#live-light[data-state=down]", "Not updating")
   end
 end

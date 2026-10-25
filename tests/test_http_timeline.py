@@ -88,11 +88,11 @@ def _rows():
             {"identity_id": 1, "agent_id": PARENT, "parent_agent_id": None, "spawn_reason": None,
              "created_at": NOW - timedelta(days=1), "last_activity_at": NOW,
              "status": "active", "label": "parent-agent", "model_type": "claude",
-             "trust_tier": "established"},
+             "trust_tier": "established", "tags": ["persistent", "autonomous"]},
             {"identity_id": 2, "agent_id": CHILD, "parent_agent_id": PARENT, "spawn_reason": "subagent",
              "created_at": NOW - timedelta(minutes=45), "last_activity_at": NOW,
              "status": "active", "label": None, "model_type": None,
-             "trust_tier": None},
+             "trust_tier": None, "tags": None},
         ],
     }
 
@@ -292,6 +292,9 @@ class TestResponseShape:
         assert [a["agent_id"] for a in body["agents"]] == sorted([PARENT, CHILD])
         child = next(a for a in body["agents"] if a["agent_id"] == CHILD)
         assert child["parent_agent_id"] == PARENT
+        assert child["tags"] == []
+        parent = next(a for a in body["agents"] if a["agent_id"] == PARENT)
+        assert parent["tags"] == ["persistent", "autonomous"]
 
     def test_active_dialectic_has_no_end(self, client):
         rows = _rows()
@@ -351,8 +354,9 @@ _SEED_SQL = f"""
 INSERT INTO core.agents (id, api_key) VALUES ('{PARENT}', 'k1'), ('{CHILD}', 'k2');
 
 INSERT INTO core.identities (agent_id, api_key_hash, metadata, parent_agent_id, spawn_reason)
-VALUES ('{PARENT}', 'h1', '{{"label": "parent-agent", "trust_tier": {{"name": "established"}}}}'::jsonb, NULL, NULL),
-       ('{CHILD}', 'h2', '{{}}'::jsonb, '{PARENT}', 'subagent');
+VALUES ('{PARENT}', 'h1', '{{"label": "parent-agent", "trust_tier": {{"name": "established"}},
+                              "tags": ["persistent", "autonomous"]}}'::jsonb, NULL, NULL),
+       ('{CHILD}', 'h2', '{{"tags": "not-a-list"}}'::jsonb, '{PARENT}', 'subagent');
 
 INSERT INTO core.agent_state (identity_id, recorded_at, state_json, epistemic_class, synthetic, risk_score)
 SELECT identity_id, now() - interval '10 minutes',
@@ -444,8 +448,10 @@ async def test_sql_against_live_db(live_postgres_backend, monkeypatch):
     parent = next(a for a in body["agents"] if a["agent_id"] == PARENT)
     assert parent["label"] == "parent-agent"
     assert parent["trust_tier"] == "established"
+    assert parent["tags"] == ["persistent", "autonomous"]
     child = next(a for a in body["agents"] if a["agent_id"] == CHILD)
     assert child["parent_agent_id"] == PARENT
+    assert child["tags"] == []  # a non-array tags value reads as none
 
     with patch("src.db.get_db", return_value=be):
         filtered = json.loads((await http_timeline(

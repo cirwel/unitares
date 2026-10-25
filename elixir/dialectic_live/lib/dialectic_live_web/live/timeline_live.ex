@@ -14,10 +14,17 @@ defmodule DialecticLiveWeb.TimelineLive do
       re-read only so rows do not jump while you read; an agent first seen
       live joins at the top. The first 25 show until "show all", with a text
       filter on label, id or model type;
-    * a header naming the firehose and LiveView socket state, time since the
-      last frame and the last re-read, truncation, which kinds are live and
-      which re-read only, and the event-to-push latency (frame timestamp to
-      the mark's arrival here, server side) as trial telemetry.
+    * each row shows what its agent last said in the window: its own report,
+      or a hook's excerpt of its reply;
+    * agents tagged `autonomous` (they run on their own schedule) fold into
+      one collapsed group under the working sessions;
+    * a "needs your attention" box naming agents paused with no later resume
+      or whose latest check-in drew a pause verdict;
+    * one light saying whether the page is live, slower or not updating.
+      Under "connection details" sit the firehose and LiveView socket state,
+      time since the last frame and the last re-read, which kinds are live
+      and which re-read only, and the event-to-push latency (frame timestamp
+      to the mark's arrival here, server side) as trial telemetry.
 
   The window slides without re-rendering the marks: each mark carries its
   time as `--t` (seconds from a per-page anchor, small enough for `calc()`
@@ -26,10 +33,13 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   The M1 form, a reverse-chronological feed plus an "agents now" strip, read
   as a long list beside the tab in the operator's first look (2026-10-25), so
-  the pane took the tab's lanes.
+  the pane took the tab's lanes. A second look the same day found the lanes
+  said who was alive but not what anyone was doing, which the notes, the
+  background group and the attention box answer.
 
-  Grouping and styling use record fields only; nothing here branches on an
-  agent's name, resident or vendor. The pane only reads: it makes no
+  Grouping and styling use record fields only (the background group reads
+  the roster's `tags`); nothing here branches on an agent's name, resident
+  or vendor. The pane only reads: it makes no
   governance call of its own.
   """
   use DialecticLiveWeb, :live_view
@@ -84,7 +94,8 @@ defmodule DialecticLiveWeb.TimelineLive do
         marks: %{},
         resumed_at: %{},
         row_order: [],
-        selected: nil
+        selected: nil,
+        show_background: false
       )
 
     socket =
@@ -167,6 +178,9 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   def handle_event("show_all_agents", _params, socket),
     do: {:noreply, socket |> assign(show_all_agents: !socket.assigns.show_all_agents) |> relane()}
+
+  def handle_event("show_background", _params, socket),
+    do: {:noreply, socket |> assign(show_background: !socket.assigns.show_background) |> relane()}
 
   def handle_event("select", %{"id" => id}, socket) do
     selected = if socket.assigns.selected == id, do: nil, else: id
@@ -513,12 +527,15 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   # Builds the shown lanes into an assign, so the one-second tick, which only
   # moves the window's CSS variables, never re-renders a mark.
+  # Agents that run on their own schedule fold into one collapsed group, so
+  # the rows on top are the sessions doing work. A family follows its root.
   defp relane(socket) do
     %{row_order: order, marks: marks, labels: labels, roster: roster} = socket.assigns
     by_owner = marks |> Enum.group_by(fn {_id, m} -> owner(m) end) |> Map.delete(nil)
+    filter = String.downcase(socket.assigns.filter)
 
     matching =
-      case String.downcase(socket.assigns.filter) do
+      case filter do
         "" ->
           order
 
@@ -530,36 +547,142 @@ defmodule DialecticLiveWeb.TimelineLive do
           end)
       end
 
+    root = family_roots(order)
+
+    {background, working} =
+      Enum.split_with(matching, fn {id, _, _} -> background?(roster, root[id]) end)
+
     shown =
-      if socket.assigns.show_all_agents, do: matching, else: Enum.take(matching, @agents_cap)
+      if socket.assigns.show_all_agents, do: working, else: Enum.take(working, @agents_cap)
 
-    anchor = socket.assigns.anchor
-
-    lanes =
-      for {id, depth, parent} <- shown do
-        own = by_owner |> Map.get(id, []) |> Enum.sort_by(fn {_, m} -> sort_key(m) end)
-        meta = Map.get(roster, id, %{})
-
-        %{
-          id: id,
-          depth: depth,
-          name: agent_name(labels, id),
-          sub: lane_sub(depth, parent, meta, own, labels),
-          marks:
-            for(
-              {mid, m} <- own,
-              m["kind"] != "dialectic",
-              do: mark_view(mid, m, anchor, roster, labels)
-            ),
-          bands: bands(own, anchor, labels, Map.get(socket.assigns.resumed_at, id))
-        }
-      end
+    attention = needs_attention(order, by_owner, labels, socket.assigns.resumed_at)
+    flagged = MapSet.new(attention, & &1.agent)
+    lane = &build_lane(&1, by_owner, flagged, socket.assigns)
+    open_background = socket.assigns.show_background or filter != ""
 
     assign(socket,
-      lanes: lanes,
-      lanes_matching: length(matching),
+      lanes: Enum.map(shown, lane),
+      background_lanes: if(open_background, do: Enum.map(background, lane), else: []),
+      background_open: open_background,
+      background_count: length(background),
+      background_names:
+        for({id, 0, _} <- background, do: agent_name(labels, id)) |> Enum.join(" · "),
+      attention: attention,
+      lanes_matching: length(working),
+      lanes_any: length(matching),
       lanes_total: length(order)
     )
+  end
+
+  defp build_lane({id, depth, parent}, by_owner, flagged, assigns) do
+    %{anchor: anchor, labels: labels, roster: roster} = assigns
+    own = by_owner |> Map.get(id, []) |> Enum.sort_by(fn {_, m} -> sort_key(m) end)
+    meta = Map.get(roster, id, %{})
+    note = latest_note(own)
+
+    %{
+      id: id,
+      depth: depth,
+      name: agent_name(labels, id),
+      note: note && elem(note, 0),
+      note_title: note && elem(note, 0) <> " (" <> utc(elem(note, 1)) <> ")",
+      needs: MapSet.member?(flagged, id),
+      sub: lane_sub(depth, parent, meta, own, labels),
+      marks:
+        for(
+          {mid, m} <- own,
+          m["kind"] != "dialectic",
+          do: mark_view(mid, m, anchor, roster, labels)
+        ),
+      bands: bands(own, anchor, labels, Map.get(assigns.resumed_at, id))
+    }
+  end
+
+  # Each row's family root: the nearest row above it at depth 0.
+  defp family_roots(order) do
+    {pairs, _} =
+      Enum.map_reduce(order, nil, fn {id, depth, _}, root ->
+        root = if depth == 0 or is_nil(root), do: id, else: root
+        {{id, root}, root}
+      end)
+
+    Map.new(pairs)
+  end
+
+  # By the `autonomous` capability tag, which the server's resident
+  # classifier also reads; never by name.
+  defp background?(roster, id) do
+    case get_in(roster, [id, "tags"]) do
+      tags when is_list(tags) -> "autonomous" in tags
+      _ -> false
+    end
+  end
+
+  @turn_summary ~r/^Turn summary \([^)]*\);\s*(response excerpt:\s*)?/
+
+  # What the agent last said in the window, so the row reads as what it is
+  # doing: its own report or a hook's excerpt of its reply, with the hook's
+  # framing dropped. Only without either does a mechanical note (an edit or
+  # tool count) stand in.
+  defp latest_note(own) do
+    notes =
+      for {_id, %{"kind" => "checkin"} = m} <- Enum.reverse(own),
+          text = txt(m["report_excerpt"]),
+          is_binary(text),
+          do: {text, m}
+
+    case Enum.find(notes, fn {text, m} ->
+           m["authored_by"] == "agent" or Regex.match?(@turn_summary, text)
+         end) || List.first(notes) do
+      nil -> nil
+      {text, m} -> {note_text(text), m["ts"]}
+    end
+  end
+
+  defp note_text(text) do
+    case Regex.replace(@turn_summary, text, "") |> String.trim() do
+      "" -> text
+      stripped -> stripped
+    end
+  end
+
+  # Rows that need a person, each pointing at the mark that says so: an
+  # agent paused with no later resume, or whose latest recorded check-in drew
+  # a pause verdict.
+  defp needs_attention(order, by_owner, labels, resumed_at) do
+    Enum.flat_map(order, fn {id, _depth, _parent} ->
+      case attention(Map.get(by_owner, id, []), Map.get(resumed_at, id)) do
+        nil -> []
+        item -> [Map.merge(item, %{agent: id, name: agent_name(labels, id)})]
+      end
+    end)
+  end
+
+  defp attention(own, resumed_us) do
+    newest = Enum.sort_by(own, fn {_, m} -> sort_key(m) end, :desc)
+    pause = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_paused" end)
+    resume = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_resumed" end)
+
+    verdict =
+      Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(m["action"]) end)
+
+    cond do
+      pause && open_pause?(pause, resume, resumed_us) ->
+        {pid, pm} = pause
+        %{sel: pid, reason: "paused since " <> clock(pm["ts"])}
+
+      verdict && action_class(elem(verdict, 1)["action"]) == "pause" ->
+        {vid, vm} = verdict
+        %{sel: vid, reason: "its latest check-in drew a pause verdict at " <> clock(vm["ts"])}
+
+      true ->
+        nil
+    end
+  end
+
+  defp open_pause?({_, pause}, resume, resumed_us) do
+    resume_us = if resume, do: sort_key(elem(resume, 1)), else: -1
+    sort_key(pause) > max(resume_us, resumed_us || -1)
   end
 
   defp lane_sub(depth, parent, meta, _own, labels) when depth > 0 and is_binary(parent),
@@ -764,6 +887,37 @@ defmodule DialecticLiveWeb.TimelineLive do
     case TimelineAdapter.ts_us(ts) do
       nil -> "—"
       us -> us |> DateTime.from_unix!(:microsecond) |> Calendar.strftime("%Y-%m-%d %H:%M:%S UTC")
+    end
+  end
+
+  defp clock(ts) do
+    case TimelineAdapter.ts_us(ts) do
+      nil -> "an unknown time"
+      us -> us |> DateTime.from_unix!(:microsecond) |> Calendar.strftime("%H:%M UTC")
+    end
+  end
+
+  # One light for the person reading: live, slower, or not updating. The
+  # detail behind it stays under "connection details".
+  defp light(assigns) do
+    cond do
+      !Phoenix.LiveView.connected?(assigns.socket) ->
+        {"connecting", "Connecting…"}
+
+      !assigns.feed_reachable or assigns.source in [:no_feed, :refused] ->
+        {"down", "Not updating: " <> (assigns.source_error || "the timeline feed is not running")}
+
+      assigns.source == :unavailable ->
+        {"down", "Not updating: governance is unreachable, showing the last window"}
+
+      assigns.source == :loading ->
+        {"connecting", "Loading…"}
+
+      Map.get(assigns.meta, :firehose) != :connected ->
+        {"slow", "Updating about once a minute: the live stream is not connected"}
+
+      true ->
+        {"live", "Live: marks appear as agents work"}
     end
   end
 
@@ -1004,6 +1158,55 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   # --- render ---
 
+  attr :lane, :map, required: true
+  attr :selected, :any, default: nil
+
+  defp lane_row(assigns) do
+    ~H"""
+    <div
+      id={"agent-#{@lane.id}"}
+      class={["tl-row", @lane.depth > 0 && "child", @lane.needs && "needs"]}
+    >
+      <div class="tl-lab">
+        <div class="tl-name" title={@lane.id}>{@lane.name}</div>
+        <div :if={@lane.note} class="tl-note" title={@lane.note_title}>{@lane.note}</div>
+        <div class="tl-sub">{@lane.sub}</div>
+      </div>
+      <div class="tl-track">
+        <button
+          :for={b <- @lane.bands}
+          :key={b.id}
+          type="button"
+          id={b.id}
+          class={["tl-band", b.cls, @selected == b.sel && "sel"]}
+          style={band_style(b)}
+          phx-click="select"
+          phx-value-id={b.sel}
+          title={b.label}
+          aria-label={b.label}
+        ></button>
+        <button
+          :for={m <- @lane.marks}
+          :key={m.id}
+          type="button"
+          id={m.id}
+          class={["tl-mk", m.cls, @selected == m.id && "sel"]}
+          style={mark_style(m)}
+          data-kind={m.kind}
+          data-provisional={m.provisional && "true"}
+          data-seen-live={m.seen_live && "true"}
+          phx-click="select"
+          phx-value-id={m.id}
+          title={m.label}
+          aria-label={m.label}
+        >
+          <span class="tl-dot">{m.glyph}</span>
+        </button>
+      </div>
+    </div>
+    """
+  end
+
   @impl true
   def render(assigns) do
     assigns =
@@ -1039,43 +1242,55 @@ defmodule DialecticLiveWeb.TimelineLive do
         </div>
       </div>
 
-      <section id="timeline-header" class="text-sm grid gap-1 sm:grid-cols-2">
-        <div id="firehose-status">
-          Firehose: <span class="font-medium">{firehose_label(Map.get(@meta, :firehose))}</span>
-        </div>
-        <div
-          id="socket-status"
-          phx-disconnected={JS.show(to: "#socket-lost")}
-          phx-connected={JS.hide(to: "#socket-lost")}
-        >
-          Page socket:
-          <span class="font-medium">{if connected?(@socket), do: "connected", else: "connecting"}</span>
-        </div>
-        <div id="last-frame">
-          Last frame: {ago(Map.get(@meta, :last_frame_at), @now)} · last eisv_update: {ago(
-            Map.get(@meta, :last_eisv_at),
-            @now
-          )}
-        </div>
-        <div id="source-status">
-          History: <span class="font-medium">{source_label(@source)}</span>
-          · re-read {ago(@last_reread_at, @now)}
-          <span :if={@source_error} class="text-warning">({@source_error})</span>
-        </div>
-        <div id="live-kinds" class="sm:col-span-2 text-base-content/70">
-          Live: {Enum.join(DialecticLive.TimelineAdapter.live_kinds(), ", ")} ·
-          re-read only (at least every 60 s while viewed): {Enum.join(
-            DialecticLive.TimelineAdapter.reread_only_kinds(),
-            ", "
-          )}
-        </div>
-        <div id="push-latency" class="sm:col-span-2 text-base-content/70">
-          <%= if @latency do %>
-            Event-to-push latency (server side): last {@latency.last} ms · median {@latency.median} ms over {@latency.n}
-          <% else %>
-            Event-to-push latency: no live mark yet
-          <% end %>
-        </div>
+      <section id="timeline-header" class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <% {state, text} = light(assigns) %>
+        <span id="live-light" data-state={state} class="inline-flex items-center gap-2 font-medium">
+          <span class={["tl-light", state]}></span>{text}
+        </span>
+        <details id="connection-details" class="text-base-content/70">
+          <summary class="cursor-pointer select-none">connection details</summary>
+          <div class="grid gap-1 sm:grid-cols-2 mt-2">
+            <div id="firehose-status">
+              Firehose: <span class="font-medium">{firehose_label(Map.get(@meta, :firehose))}</span>
+            </div>
+            <div
+              id="socket-status"
+              phx-disconnected={JS.show(to: "#socket-lost")}
+              phx-connected={JS.hide(to: "#socket-lost")}
+            >
+              Page socket:
+              <span class="font-medium">{if connected?(@socket), do: "connected", else: "connecting"}</span>
+            </div>
+            <div id="last-frame">
+              Last frame: {ago(Map.get(@meta, :last_frame_at), @now)} · last eisv_update: {ago(
+                Map.get(@meta, :last_eisv_at),
+                @now
+              )}
+            </div>
+            <div id="source-status">
+              History: <span class="font-medium">{source_label(@source)}</span>
+              · re-read {ago(@last_reread_at, @now)}
+              <span :if={@source_error} class="text-warning">({@source_error})</span>
+            </div>
+            <div id="live-kinds" class="sm:col-span-2 text-base-content/70">
+              Live: {Enum.join(DialecticLive.TimelineAdapter.live_kinds(), ", ")} ·
+              re-read only (at least every 60 s while viewed): {Enum.join(
+                DialecticLive.TimelineAdapter.reread_only_kinds(),
+                ", "
+              )}
+            </div>
+            <div id="push-latency" class="sm:col-span-2 text-base-content/70">
+              <%= if @latency do %>
+                Event-to-push latency (server side): last {@latency.last} ms · median {@latency.median} ms over {@latency.n}
+              <% else %>
+                Event-to-push latency: no live mark yet
+              <% end %>
+            </div>
+            <div :if={@reread_only_reason} id="checkin-reread-only" class="sm:col-span-2">
+              {@reread_only_reason}
+            </div>
+          </div>
+        </details>
       </section>
 
       <div id="socket-lost" class="alert alert-error text-sm hidden">
@@ -1086,10 +1301,6 @@ defmodule DialecticLiveWeb.TimelineLive do
         Truncated: {Enum.join(@truncated, ", ")}. The server keeps the newest rows per kind, so the oldest part of this window is missing for those kinds.
       </div>
 
-      <div :if={@reread_only_reason} id="checkin-reread-only" class="alert alert-info text-sm">
-        {@reread_only_reason}
-      </div>
-
       <div
         :if={!@feed_reachable or @source == :no_feed}
         id="feed-unavailable"
@@ -1097,6 +1308,29 @@ defmodule DialecticLiveWeb.TimelineLive do
       >
         The timeline feed is unavailable. Nothing is shown until it runs.
       </div>
+
+      <%!-- Only over data: "nothing needs you" is a claim about a window. --%>
+      <section
+        :if={@source in [:ok, :unavailable]}
+        id="needs-attention"
+        class={[
+          "rounded-box border p-4 text-sm",
+          if(@attention == [], do: "border-base-300", else: "border-error/60")
+        ]}
+      >
+        <%= if @attention == [] do %>
+          <p class="text-base-content/70">Nothing needs your attention right now.</p>
+        <% else %>
+          <h2 class="font-semibold mb-1">Needs your attention</h2>
+          <ul class="space-y-1">
+            <li :for={a <- @attention} id={"attention-#{a.agent}"}>
+              <button type="button" class="link" phx-click="select" phx-value-id={a.sel}>
+                {a.name}
+              </button>: {a.reason}
+            </li>
+          </ul>
+        <% end %>
+      </section>
 
       <div class="flex flex-wrap items-center justify-between gap-2">
         <p id="lane-counts" class="text-sm text-base-content/70">
@@ -1130,54 +1364,34 @@ defmodule DialecticLiveWeb.TimelineLive do
           Nothing in this window yet.
         </p>
         <p
-          :if={@lanes_total > 0 and @lanes == []}
+          :if={@lanes_total > 0 and @lanes_any == 0}
           id="lanes-nomatch"
           class="px-5 py-4 text-sm text-base-content/60"
         >
           No agent matches “{@filter}”.
         </p>
-        <div
-          :for={lane <- @lanes}
-          :key={lane.id}
-          id={"agent-#{lane.id}"}
-          class={["tl-row", lane.depth > 0 && "child"]}
-        >
+        <.lane_row :for={lane <- @lanes} :key={lane.id} lane={lane} selected={@selected} />
+        <div :if={@background_count > 0} id="background-agents" class="tl-row tl-group">
           <div class="tl-lab">
-            <div class="tl-name" title={lane.id}>{lane.name}</div>
-            <div class="tl-sub">{lane.sub}</div>
-          </div>
-          <div class="tl-track">
             <button
-              :for={b <- lane.bands}
-              :key={b.id}
               type="button"
-              id={b.id}
-              class={["tl-band", b.cls, @selected == b.sel && "sel"]}
-              style={band_style(b)}
-              phx-click="select"
-              phx-value-id={b.sel}
-              title={b.label}
-              aria-label={b.label}
-            ></button>
-            <button
-              :for={m <- lane.marks}
-              :key={m.id}
-              type="button"
-              id={m.id}
-              class={["tl-mk", m.cls, @selected == m.id && "sel"]}
-              style={mark_style(m)}
-              data-kind={m.kind}
-              data-provisional={m.provisional && "true"}
-              data-seen-live={m.seen_live && "true"}
-              phx-click="select"
-              phx-value-id={m.id}
-              title={m.label}
-              aria-label={m.label}
+              id="toggle-background"
+              phx-click="show_background"
+              class="tl-name text-left cursor-pointer"
+              aria-expanded={to_string(@background_open)}
             >
-              <span class="tl-dot">{m.glyph}</span>
+              {if @background_open, do: "▾", else: "▸"} Background agents ({@background_count})
             </button>
+            <div class="tl-sub">run on their own schedule</div>
           </div>
+          <div class="tl-groupnames">{@background_names}</div>
         </div>
+        <.lane_row
+          :for={lane <- @background_lanes}
+          :key={lane.id}
+          lane={lane}
+          selected={@selected}
+        />
       </section>
 
       <div :if={@lanes_matching > length(@lanes) or @show_all_agents} class="flex items-center gap-3">

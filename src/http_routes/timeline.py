@@ -302,6 +302,7 @@ async def http_timeline(request):
                     "label": r["label"],
                     "model_type": r["model_type"],
                     "trust_tier": r["trust_tier"],
+                    "tags": list(r["tags"] or []),
                     "status": r["status"],
                     "parent_agent_id": r["parent_agent_id"],
                     "spawn_reason": r["spawn_reason"],

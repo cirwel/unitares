@@ -41,8 +41,10 @@ a *consumer*, through three reads:
 - **`DialecticLiveWeb.TimelineLive`** draws the dashboard Timeline tab's lanes
   live: one row per agent across the window, marks placed in time, bands for
   pauses and dialectic reviews, subagents nested under their parent, and a
-  panel showing the selected mark's record. A header names what is live and
-  what is re-read only.
+  panel showing the selected mark's record. Each row shows what its agent
+  last said; agents tagged `autonomous` fold into a collapsed background
+  group; a box names agents that are paused or drew a pause verdict. One
+  light says whether the page is live, with the connection detail behind it.
 
 ### What the Timeline shows live
 
