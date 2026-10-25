@@ -467,42 +467,111 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     refute Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
   end
 
-  test "the cap keeps a live resume over newer marks of other kinds", %{conn: conn} do
-    ctx = feed_with([])
-    view = mount_live(conn, ctx)
+  test "a pause stays closed after the cap evicts its live resume", %{conn: conn} do
     base = DateTime.utc_now()
     at = fn s -> base |> DateTime.add(s, :second) |> DateTime.to_iso8601() end
 
-    send(
-      view.pid,
-      {:timeline_delta, "1h",
-       %{
-         "kind" => "lifecycle",
-         "ts" => at.(-1_000),
-         "agent_id" => @a,
-         "event_type" => "lifecycle_resumed",
-         "provisional" => true
-       }}
-    )
+    paused = %{
+      "kind" => "lifecycle",
+      "ts" => at.(-1_100),
+      "agent_id" => @a,
+      "event_type" => "lifecycle_paused",
+      "event_id" => "p"
+    }
 
-    for i <- 1..500 do
+    ctx = feed_with([paused])
+    view = mount_live(conn, ctx)
+
+    resume = fn agent, s ->
       send(
         view.pid,
         {:timeline_delta, "1h",
          %{
-           "kind" => "knowledge",
-           "ts" => at.(-i),
-           "agent_id" => @b,
-           "discovery_id" => "d-#{i}",
+           "kind" => "lifecycle",
+           "ts" => at.(s),
+           "agent_id" => agent,
+           "event_type" => "lifecycle_resumed",
            "provisional" => true
          }}
       )
     end
 
+    resume.(@a, -1_000)
+    # 500 newer live lifecycle marks from another agent push @a's resume out.
+    for i <- 1..500, do: resume.(@b, -i)
+
     _ = render(view)
     marks = Map.values(:sys.get_state(view.pid).socket.assigns.marks)
-    assert length(marks) == 500
-    assert Enum.any?(marks, &(&1["event_type"] == "lifecycle_resumed"))
+    refute Enum.any?(marks, &(&1["agent_id"] == @a and &1["event_type"] == "lifecycle_resumed"))
+
+    [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    assert band |> LazyHTML.attribute("title") |> hd() =~ "since resumed"
+  end
+
+  test "rows freed by the cap leave on the next prune", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    base = DateTime.utc_now()
+
+    # 501 live marks from 501 agents: the cap drops the oldest agent's mark.
+    for i <- 1..501 do
+      id = "00000000-0000-4000-9000-#{String.pad_leading(Integer.to_string(i), 12, "0")}"
+
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => base |> DateTime.add(-i, :second) |> DateTime.to_iso8601(),
+           "agent_id" => id,
+           "event_type" => "lifecycle_resumed",
+           "provisional" => true
+         }}
+      )
+    end
+
+    send(view.pid, :tick)
+    _ = render(view)
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert length(assigns.row_order) == 500
+    assert map_size(assigns.last_seen) == 500
+  end
+
+  test "a confirmed check-in selection takes the latest matching history row",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    frame_ts = iso(-500)
+
+    broadcast_frame(ctx, %{"type" => "eisv_update", "agent_id" => @a, "timestamp" => frame_ts})
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+    [live_id] = view |> nodes("#agent-#{@a} .tl-mk.checkin") |> hd() |> LazyHTML.attribute("id")
+    view |> element("##{live_id}") |> render_click()
+
+    row = fn ms, text ->
+      %{
+        "kind" => "checkin",
+        "ts" => iso(ms),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "state_id" => text,
+        "report_excerpt" => text
+      }
+    end
+
+    # Two history check-ins within the 2 s lag before the frame.
+    serve(ctx.stub, fn conn ->
+      Req.Test.json(
+        conn,
+        window_body([row.(-2_000, "earlier report"), row.(-700, "later report")])
+      )
+    end)
+
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn -> has_element?(view, "#mark-detail", "later report") end)
   end
 
   test "pruning keeps an unresumed pause but lets a resumed one age out with its resume",

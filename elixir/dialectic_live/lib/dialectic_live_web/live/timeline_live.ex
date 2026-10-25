@@ -82,6 +82,7 @@ defmodule DialecticLiveWeb.TimelineLive do
         meta: %{},
         feed_reachable: true,
         marks: %{},
+        resumed_at: %{},
         row_order: [],
         selected: nil
       )
@@ -198,6 +199,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           roster: roster,
           last_seen: last_seen,
           marks: marks,
+          resumed_at: Enum.reduce(all, %{}, &note_resume(&2, &1)),
           selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks),
           row_order: order_rows(roster, marks, last_seen)
         )
@@ -214,6 +216,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           roster: %{},
           last_seen: %{},
           marks: %{},
+          resumed_at: %{},
           row_order: []
         )
         |> relane()
@@ -222,7 +225,9 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   # A re-read that confirms a provisional mark gives it a history id (`p-`
   # becomes `h-`), so a selection on the live mark follows it to the row
-  # that absorbed it rather than clearing as the record arrives.
+  # that absorbed it rather than clearing as the record arrives. Several
+  # rows can match one live check-in (two within the 2 s lag); like the feed,
+  # take the latest.
   defp carry_selection(nil, _old, _new), do: nil
 
   defp carry_selection(id, old, new) do
@@ -231,80 +236,85 @@ defmodule DialecticLiveWeb.TimelineLive do
         id
 
       mark = Map.get(old, id) ->
-        Enum.find_value(new, fn {new_id, row} ->
-          if TimelineAdapter.matches?(mark, row), do: new_id
-        end)
+        new
+        |> Enum.filter(fn {_new_id, row} -> TimelineAdapter.matches?(mark, row) end)
+        |> Enum.max_by(fn {_new_id, row} -> sort_key(row) end, fn -> {nil, nil} end)
+        |> elem(0)
 
       true ->
         nil
     end
   end
 
-  # Drops marks that slid out of the window and caps provisional ones, so a
-  # history outage with the firehose still flowing cannot grow the page
-  # without bound. A successful re-read replaces the set anyway. A pause
-  # stays while unresumed: its band runs to now. Dialectic sessions arrive
-  # on re-read only, so a re-read bounds them.
+  # Each agent's latest resume, kept apart from the marks: it is what closes
+  # a pause band, so it must survive the cap and the window prune that drop
+  # the resume mark itself.
+  defp note_resume(acc, %{"event_type" => "lifecycle_resumed", "agent_id" => a} = m)
+       when is_binary(a) do
+    case TimelineAdapter.ts_us(m["ts"]) do
+      nil -> acc
+      us -> Map.update(acc, a, us, &max(&1, us))
+    end
+  end
+
+  defp note_resume(acc, _mark), do: acc
+
+  # Drops marks that slid out of the window, so a history outage with the
+  # firehose still flowing cannot grow the page without bound (the cap on
+  # insert bounds a burst inside the window). A successful re-read replaces
+  # the set anyway. A pause stays while no later resume is known: its band
+  # runs to now. Dialectic sessions arrive on re-read only, so a re-read
+  # bounds them. Rows and per-agent state then keep only agents the roster
+  # names or a kept mark is drawn for, whether the mark left by age or by
+  # the cap.
   defp prune(socket) do
+    %{marks: marks, resumed_at: resumed, roster: roster} = socket.assigns
+
     start =
       DateTime.to_unix(socket.assigns.now, :microsecond) - hours(socket.assigns) * 3_600_000_000
 
-    # Each agent's latest resume: a pause before it was lifted, so it ages
-    # out with its resume instead of reopening as "paused since".
-    resumed =
-      for {_id, %{"event_type" => "lifecycle_resumed", "agent_id" => a} = m} <-
-            socket.assigns.marks,
-          us = TimelineAdapter.ts_us(m["ts"]),
-          reduce: %{} do
-        acc -> Map.update(acc, a, us, &max(&1, us))
-      end
-
     kept =
-      socket.assigns.marks
+      marks
       |> Enum.filter(fn {_id, m} ->
         us = TimelineAdapter.ts_us(m["ts"]) || 0
 
         m["kind"] == "dialectic" or us >= start or
           (m["event_type"] == "lifecycle_paused" and us >= Map.get(resumed, m["agent_id"], -1))
       end)
-      |> cap_provisional()
       |> Map.new()
 
-    if map_size(kept) == map_size(socket.assigns.marks) do
+    live =
+      kept
+      |> Map.values()
+      |> Enum.flat_map(&lane_ids/1)
+      |> Enum.concat(Map.keys(roster))
+      |> MapSet.new()
+
+    in_live? = fn {id, _} -> MapSet.member?(live, id) end
+
+    row_order =
+      Enum.filter(socket.assigns.row_order, fn {id, _, _} -> MapSet.member?(live, id) end)
+
+    if map_size(kept) == map_size(marks) and length(row_order) == length(socket.assigns.row_order) do
       socket
     else
-      # A row stays while the roster names it or a kept mark is drawn on it,
-      # so agents seen only live during an outage leave with their marks.
-      live =
-        kept
-        |> Map.values()
-        |> Enum.flat_map(&lane_ids/1)
-        |> Enum.concat(Map.keys(socket.assigns.roster))
-        |> MapSet.new()
-
       socket
       |> assign(
         marks: kept,
-        row_order:
-          Enum.filter(socket.assigns.row_order, fn {id, _, _} -> MapSet.member?(live, id) end),
-        last_seen:
-          Map.filter(socket.assigns.last_seen, fn {id, _} -> MapSet.member?(live, id) end)
+        row_order: row_order,
+        last_seen: Map.filter(socket.assigns.last_seen, in_live?),
+        resumed_at: Map.filter(resumed, in_live?)
       )
       |> relane()
     end
   end
 
-  # Over the cap, the oldest live marks go first, lifecycle events last: a
-  # resume is what closes a pause band, and dropping it would reopen the
-  # pause. Lifecycle frames are rare, and the window prune bounds them.
   defp cap_provisional(marks) do
     {live, held} = Enum.split_with(marks, fn {_id, m} -> m["provisional"] == true end)
 
     if length(live) > @provisional_cap do
-      keep =
-        Enum.sort_by(live, fn {_, m} -> {m["kind"] == "lifecycle", sort_key(m)} end, :desc)
-
-      held ++ Enum.take(keep, @provisional_cap)
+      held ++
+        (live |> Enum.sort_by(fn {_, m} -> sort_key(m) end, :desc) |> Enum.take(@provisional_cap))
     else
       marks
     end
@@ -332,7 +342,12 @@ defmodule DialecticLiveWeb.TimelineLive do
   # is added. The agent was seen either way. An owner with no row yet joins
   # at the top; the rest keep their order until the next re-read.
   defp insert_mark(socket, mark) do
-    socket = assign(socket, last_seen: bump_last_seen(socket.assigns.last_seen, mark))
+    socket =
+      assign(socket,
+        last_seen: bump_last_seen(socket.assigns.last_seen, mark),
+        resumed_at: note_resume(socket.assigns.resumed_at, mark)
+      )
+
     id = TimelineAdapter.dom_id(mark)
 
     cond do
@@ -536,7 +551,7 @@ defmodule DialecticLiveWeb.TimelineLive do
               m["kind"] != "dialectic",
               do: mark_view(mid, m, anchor, roster, labels)
             ),
-          bands: bands(own, anchor, labels)
+          bands: bands(own, anchor, labels, Map.get(socket.assigns.resumed_at, id))
         }
       end
 
@@ -652,7 +667,7 @@ defmodule DialecticLiveWeb.TimelineLive do
   # pause with no resume runs to now. Dialectic sessions draw from creation
   # to close, or to now while active; the server's `ts` may precede the
   # window, which the CSS clamps.
-  defp bands(own, anchor, labels) do
+  defp bands(own, anchor, labels, resumed_us) do
     {pauses, open} =
       Enum.reduce(own, {[], nil}, fn
         {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"} = m}, {acc, nil} ->
@@ -686,16 +701,26 @@ defmodule DialecticLiveWeb.TimelineLive do
         nil ->
           pauses
 
+        # The resume mark may be gone (capped or aged out) while the agent's
+        # latest resume is still known: the pause ended there.
         {id, m} ->
+          pause_us = TimelineAdapter.ts_us(m["ts"]) || 0
+
+          band =
+            if is_integer(resumed_us) and resumed_us >= pause_us do
+              t2 = Float.round(resumed_us / 1_000_000 - anchor, 1)
+              %{t2: t2, label: "Paused, " <> utc(m["ts"]) <> ", since resumed"}
+            else
+              %{t2: nil, label: "Paused since " <> utc(m["ts"])}
+            end
+
           [
-            %{
+            Map.merge(band, %{
               id: "pause-" <> id,
               sel: id,
               cls: "pause",
-              t: rel_s(m["ts"], anchor),
-              t2: nil,
-              label: "Paused since " <> utc(m["ts"])
-            }
+              t: rel_s(m["ts"], anchor)
+            })
             | pauses
           ]
       end
