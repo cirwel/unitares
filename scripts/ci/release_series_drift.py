@@ -115,8 +115,20 @@ def latest_tag(glob: str, pattern: str, anchor: str = "HEAD") -> str | None:
     return None
 
 
+RELEASE_CHORE = re.compile(r"^chore\(release\):", re.IGNORECASE)
+
+
+def _version_at(ref: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{ref}:VERSION"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
 def release_anchor(version: str) -> str:
-    """Commit that cut `version`, so post-release commits before tagging stay out of range."""
+    """Commit on the first-parent chain that cut `version`."""
     dirty = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "diff", "--quiet", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
         capture_output=True,
@@ -125,20 +137,19 @@ def release_anchor(version: str) -> str:
         return "HEAD"
 
     proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "log", "-n", "1", "--format=%H", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        ["git", "-C", str(REPO_ROOT), "log", "--first-parent", "--format=%H\t%s", "HEAD"],
         capture_output=True,
         text=True,
     )
-    sha = proc.stdout.strip()
-    if not sha:
+    if proc.returncode != 0:
         return "HEAD"
-    ver_proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{sha}:VERSION"],
-        capture_output=True,
-        text=True,
-    )
-    if ver_proc.returncode == 0 and ver_proc.stdout.strip() == version:
-        return sha
+
+    for line in proc.stdout.splitlines():
+        sha, _, subject = line.partition("\t")
+        if _version_at(sha) != version:
+            break
+        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version:
+            return sha
     return "HEAD"
 
 

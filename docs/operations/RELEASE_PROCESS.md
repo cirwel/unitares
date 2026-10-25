@@ -24,11 +24,14 @@ citation triage and skill-attestation pruning into a multi-hour audit.
 
 ## Server release checklist
 
-The releasing agent performs every preparation, dispatch, and PR step below; the
-operator's two actions per release are signing the tag if hardware-backed GPG/SSH
-signing requires a YubiKey touch (or approving the agent's tag) and approving the
-`release-promotion` GitHub environment (operator decisions, 2026-10-17 and
-2026-10-18).
+The releasing agent performs every step in this section and in *SDK release*:
+the version choice, changelog, review, merge, tag, release page, Promote
+Release dispatch, the pin pull request and the `sdk-v*` tag (operator decision,
+2026-10-17, KG `2026-10-18T05:54:48.538440+00:00`). The operator's one act per
+release is approving the `release-promotion` environment, which GitHub enforces
+with a required reviewer who must be a user or team. The agents' GitHub App
+holds `actions: write` for the dispatch (operator decision, 2026-10-18, KG
+`2026-10-18T10:37:46.085398+00:00`).
 
 1. **[Releasing agent] Start from current `master` on a clean branch.**
    Confirm no open PR is already preparing the release
@@ -50,8 +53,8 @@ signing requires a YubiKey touch (or approving the agent's tag) and approving th
      would push the release diff past 300 files, land the prune first in its own
      `chore(release)` PR so GitHub's 300-file merge-queue fingerprint API does
      not refuse the PR),
-   - runs `scripts/ci/changelog_coverage.py --list`,
-     `scripts/ci/release_series_drift.py --list`, and
+   - runs `scripts/ci/changelog_coverage.py`,
+     `scripts/ci/release_series_drift.py`, and
      `scripts/ops/version_manager.py --check`,
    - checks the release range for container build input changes with
      `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py scripts/ci/kg_graph_proof.py docker-compose.full.yml .github/workflows/docker-quickstart.yml`,
@@ -74,12 +77,15 @@ signing requires a YubiKey touch (or approving the agent's tag) and approving th
    (or passes in the required CI workflow) and record the result in the PR body.
    Open the release PR, obtain independent cross-family review on the release
    notes, version choice, and compatibility claims, and merge via the merge queue.
-5. **[Releasing agent / Operator] Tag the merged release commit immediately.**
+5. **[Releasing agent] Tag the merged release commit immediately.**
    Run `python3 scripts/ops/prepare_release.py --after-merge --sha <merged-sha>`
    to print the exact post-merge commands with the SHA and version filled in.
-   Create and push the annotated tag on the merged release commit:
-   `git tag -s vX.Y.Z <merged-sha> -m "UNITARES vX.Y.Z" && git push origin vX.Y.Z`.
-   Do not replace an existing public tag merely to add a signature.
+   Create and push the annotated tag on the merged release commit when signing is
+   available:
+   `git tag -s vX.Y.Z <merged-sha> -m "UNITARES vX.Y.Z" && unitares-github -- git push origin vX.Y.Z`.
+   Do not replace an existing public tag merely to add a signature. A tag an agent
+   creates names that agent as its tagger, not the Git identity configured on the
+   host.
 6. **[Releasing agent] Publish the GitHub release page (triggers `Publish Container` and Zenodo).**
    Run `unitares-github -- gh release create vX.Y.Z --title "vX.Y.Z" --notes-file .git/release-prep/release-notes-X.Y.Z.md`.
    Publishing the release page automatically triggers `Publish Container`

@@ -224,12 +224,25 @@ def previous_release_tag(version: str, tags: list[str]) -> str | None:
     return next((t for t in tags if t != f"v{version}"), None)
 
 
-def release_anchor(version: str) -> str:
-    """Commit that cut `version`, so post-release commits before tagging stay out of range.
+def _version_at(ref: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{ref}:VERSION"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
 
-    Fails closed to `HEAD` when the working tree has uncommitted changes to
-    `VERSION` or `docs/CHANGELOG.md`, or when no commit in history set
-    `VERSION` to `version`.
+
+def release_anchor(version: str) -> str:
+    """Commit on the first-parent chain that cut `version`.
+
+    Walking `--first-parent` preserves GitHub Actions `pull_request` merge
+    commits (where `HEAD` merges the release branch into `master`, so
+    `HEAD:VERSION == version` while `HEAD^1:VERSION != version`, keeping the
+    anchor at `HEAD` and walking `master` history). Once the release commit has
+    landed on `master`, later non-release commits (including errata edits to
+    older changelog entries) have `<sha>^1:VERSION == version` and a non-release
+    subject, so the anchor stays at the release commit.
     """
     dirty = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "diff", "--quiet", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
@@ -239,20 +252,19 @@ def release_anchor(version: str) -> str:
         return "HEAD"
 
     proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "log", "-n", "1", "--format=%H", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        ["git", "-C", str(REPO_ROOT), "log", "--first-parent", "--format=%H\t%s", "HEAD"],
         capture_output=True,
         text=True,
     )
-    sha = proc.stdout.strip()
-    if not sha:
+    if proc.returncode != 0:
         return "HEAD"
-    ver_proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{sha}:VERSION"],
-        capture_output=True,
-        text=True,
-    )
-    if ver_proc.returncode == 0 and ver_proc.stdout.strip() == version:
-        return sha
+
+    for line in proc.stdout.splitlines():
+        sha, _, subject = line.partition("\t")
+        if _version_at(sha) != version:
+            break
+        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version:
+            return sha
     return "HEAD"
 
 

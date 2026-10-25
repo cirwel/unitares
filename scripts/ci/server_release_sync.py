@@ -197,7 +197,10 @@ def assess(
 
     latest_digest = digests.get("latest")
     if latest_digest is None:
-        next_cmd = f"unitares-github -- gh workflow run promote-release.yml -f tag=v{published}"
+        next_cmd = (
+            "docker buildx imagetools create --prefer-index=false "
+            f"--tag ghcr.io/{REPOSITORY}:latest ghcr.io/{REPOSITORY}:v{published}"
+        )
         issues.append(
             {
                 "code": "latest_image_missing",
@@ -211,7 +214,10 @@ def assess(
             key=lambda ref: _key(ref[1:]),
         )
         serves = ", ".join(matches) if matches else "an image no checked tag names"
-        next_cmd = f"unitares-github -- gh workflow run promote-release.yml -f tag=v{published}"
+        next_cmd = (
+            "docker buildx imagetools create --prefer-index=false "
+            f"--tag ghcr.io/{REPOSITORY}:latest ghcr.io/{REPOSITORY}:v{published}"
+        )
         issues.append(
             {
                 "code": "latest_not_published_version",
@@ -260,7 +266,10 @@ def assess(
     # Every tag, not only the newest: a maintenance tag left unmerged must stay
     # visible after a newer mainline tag exists.
     for version in sorted(tagged - on_head, key=_key):
-        next_cmd = f"git checkout master && git merge --no-ff v{version}"
+        next_cmd = (
+            f"git checkout -b chore/forward-merge-v{version} origin/master && "
+            f"git merge --no-ff v{version} && unitares-github -- gh pr create --draft"
+        )
         issues.append(
             {
                 "code": "tag_not_on_master",

@@ -104,11 +104,13 @@ def test_check_ghcr_visibility_distinguishes_public_private_and_missing():
 
 def test_format_after_merge_renders_copy_paste_sequence():
     card = prepare_release.format_after_merge("3.5.1", "deadbeef1234", Path("/tmp/notes.md"))
-    assert 'git tag -s v3.5.1 deadbeef1234 -m "v3.5.1"' in card
+    assert 'git tag -s v3.5.1 deadbeef1234 -m "UNITARES v3.5.1"' in card
+    assert "unitares-github -- git push origin v3.5.1" in card
     assert "unitares-github -- gh release create v3.5.1" in card
     assert "python3 scripts/ops/prepare_release.py --check-ghcr --version 3.5.1" in card
     assert "unitares-github -- gh workflow run promote-release.yml -f tag=v3.5.1" in card
     assert "--head publish/v3.5.1" in card
+    assert "UNITARES agent:" in card
 
 
 def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
@@ -118,32 +120,46 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
 
-    # Copy required scripts into temp repo
+    # Copy required scripts and version_manager target files into temp repo
     root = Path(__file__).resolve().parents[1]
     for rel in (
         "scripts/dev/changelog_assemble.py",
         "scripts/ci/changelog_coverage.py",
         "scripts/ci/release_series_drift.py",
         "scripts/ops/version_manager.py",
+        "pyproject.toml",
+        "docker-compose.yml",
+        "src/version.py",
+        "src/interface_contract.py",
+        "agents/sdk/pyproject.toml",
+        "agents/sdk/README.md",
+        "docs/COMPATIBILITY.md",
+        "docs/operations/OPERATOR_RUNBOOK.md",
+        "docs/public-site/index.md",
     ):
-        dst = repo / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text((root / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        src = root / rel
+        if src.exists():
+            dst = repo / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
-    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
-    (repo / "PUBLISHED_VERSION").write_text("1.0.0\n", encoding="utf-8")
+    current_ver = (root / "VERSION").read_text(encoding="utf-8").strip()
+    (repo / "VERSION").write_text(f"{current_ver}\n", encoding="utf-8")
+    (repo / "PUBLISHED_VERSION").write_text(f"{current_ver}\n", encoding="utf-8")
     (repo / "CITATION.cff").write_text(
-        'cff-version: 1.2.0\nversion: "1.0.0"\ndate-released: "2026-01-01"\n',
+        f'cff-version: 1.2.0\nversion: "{current_ver}"\ndate-released: "2026-01-01"\n',
         encoding="utf-8",
     )
-    (repo / "docs").mkdir()
     (repo / "docs" / "CHANGELOG.md").write_text(
-        "# Changelog\n\n---\n\n## [Unreleased]\n\n---\n\n## [1.0.0] - 2026-01-01\n\n### Added\n- Initial (#1).\n",
+        f"# Changelog\n\n---\n\n## [Unreleased]\n\n---\n\n## [{current_ver}] - 2026-01-01\n\n### Added\n- Initial (#1).\n",
         encoding="utf-8",
     )
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "chore: seed (#1)")
-    _git(repo, "tag", "v1.0.0")
+    _git(repo, "tag", f"v{current_ver}")
+    sdk_ver = prepare_release.read_component_versions(repo)["sdk"]
+    assert sdk_ver != "unknown"
+    _git(repo, "tag", f"sdk-v{sdk_ver}")
 
     # Add an uncited commit and a Dockerfile touch so both uncited list and quickstart gate trigger
     (repo / "Dockerfile").write_text("FROM python:3.14-slim\n", encoding="utf-8")
@@ -158,13 +174,21 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
         output_dir=out_dir,
         dry_run=True,
     )
-    assert summary["from_version"] == "1.0.0"
-    assert summary["version"] == "1.0.1"
+    assert summary["from_version"] == current_ver
     assert summary["quickstart_gate"] == "NEEDS-QUICKSTART"
+    assert not summary["coverage_ok"]
+    assert any("#10" in line for line in summary["uncited_prs"])
+    assert summary["uncited_prs_file"] is not None
+    assert Path(summary["uncited_prs_file"]).exists()
     assert Path(summary["release_notes_file"]).exists()
+    notes_text = Path(summary["release_notes_file"]).read_text(encoding="utf-8")
+    assert f"`unitares-sdk`: `{sdk_ver}`" in notes_text
     assert Path(summary["pr_body_file"]).exists()
     pr_body = Path(summary["pr_body_file"]).read_text(encoding="utf-8")
     assert "NEEDS-QUICKSTART" in pr_body
+    assert "1 uncited PR(s)" in pr_body
+    # Dry-run restores the working tree
+    assert (repo / "VERSION").read_text(encoding="utf-8").strip() == current_ver
 
 
 def test_release_sync_issues_include_next_commands():

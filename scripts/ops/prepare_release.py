@@ -282,7 +282,7 @@ def read_component_versions(repo_root: Path) -> dict[str, str]:
         if m:
             interface_version = m.group(1)
 
-    sdk_file = repo_root / "packages" / "unitares-sdk" / "pyproject.toml"
+    sdk_file = repo_root / "agents" / "sdk" / "pyproject.toml"
     sdk_version = "unknown"
     if sdk_file.exists():
         m = re.search(r'^version\s*=\s*"([^"]+)"', sdk_file.read_text(encoding="utf-8"), re.M)
@@ -327,28 +327,36 @@ def build_pr_body(
     needs_quickstart: bool,
     quickstart_commits: list[str],
     uncited_prs: list[str],
+    coverage_ok: bool,
     notes_path: Path,
 ) -> str:
+    paths_str = " ".join(DOCKER_GATE_PATHS)
     if needs_quickstart:
         commit_bullets = "\n".join(f"  - `{c}`" for c in quickstart_commits)
         quickstart_line = (
             f"- **Quickstart gate:** `NEEDS-QUICKSTART` — `{prev_tag or 'initial'}..HEAD` touched "
-            "Docker/Compose/requirements/migrations:\n"
+            f"quickstart-monitored paths (`{paths_str}`):\n"
             f"{commit_bullets}\n"
             "  Run a fresh-clone `docker compose up --build -d` check and record the result here before marking ready."
         )
     else:
         quickstart_line = (
             f"- **Quickstart gate:** `NOT-REQUIRED` (`git log --oneline {prev_tag or 'HEAD'}..HEAD -- "
-            "Dockerfile docker-compose.yml requirements.txt db/postgres/` is empty)."
+            f"{paths_str}` is empty)."
         )
 
-    uncited_line = (
-        f"- **Changelog coverage:** {len(uncited_prs)} uncited PR(s) require either a user-facing bullet "
-        "or a reviewed `<!-- changelog-coverage-exempt: #<num> <reason> -->` line."
-        if uncited_prs
-        else "- **Changelog coverage:** `scripts/ci/changelog_coverage.py --list` passed (0 uncited PRs)."
-    )
+    if uncited_prs:
+        uncited_line = (
+            f"- **Changelog coverage:** {len(uncited_prs)} uncited PR(s) require either a user-facing bullet "
+            "or a reviewed `<!-- changelog-coverage-exempt: #<num> <reason> -->` line."
+        )
+    elif not coverage_ok:
+        uncited_line = (
+            "- **Changelog coverage:** `scripts/ci/changelog_coverage.py` failed "
+            "(check unattributed commits, leftover fragments, or exemption syntax)."
+        )
+    else:
+        uncited_line = "- **Changelog coverage:** `scripts/ci/changelog_coverage.py` passed (0 uncited PRs)."
 
     return (
         f"## Summary\n\n"
@@ -360,6 +368,30 @@ def build_pr_body(
         f"{uncited_line}\n"
         f"{quickstart_line}\n"
     )
+
+
+def _snapshot_tree(repo_root: Path) -> dict[Path, bytes | None]:
+    """Capture tracked files and `docs/changelog.d/` so `--dry-run` can restore them."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=repo_root,
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8", errors="replace")
+    paths = {repo_root / rel for rel in tracked.split("\0") if rel}
+    frag_dir = repo_root / "docs" / "changelog.d"
+    if frag_dir.is_dir():
+        paths.update(p for p in frag_dir.rglob("*") if p.is_file())
+    return {p: (p.read_bytes() if p.exists() else None) for p in paths}
+
+
+def _restore_tree(snapshot: dict[Path, bytes | None]) -> None:
+    for path, content in snapshot.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
 
 
 def prepare_release(
@@ -376,7 +408,8 @@ def prepare_release(
     old_version = read_current_version(repo_root)
     new_version = bump_semver(old_version, part)
 
-    if not dry_run:
+    snapshot = _snapshot_tree(repo_root) if dry_run else {}
+    try:
         # 1. Fold changelog fragments into ## [Unreleased]
         assemble_proc = subprocess.run(
             [sys.executable, str(repo_root / "scripts/dev/changelog_assemble.py"), "--root", str(repo_root)],
@@ -418,55 +451,54 @@ def prepare_release(
                 update_citation_date(citation_text, release_date),
                 encoding="utf-8",
             )
-    else:
-        changelog_path = repo_root / "docs" / "CHANGELOG.md"
-        stamped_changelog = stamp_changelog_release(
-            changelog_path.read_text(encoding="utf-8"), new_version, release_date
+
+        # 4. Run skill freshness check (with --prune 3 when not dry-run)
+        run_skill_freshness(
+            repo_root,
+            projects_root,
+            prune_keep=None if dry_run else 3,
         )
 
-    # 4. Run skill freshness check (with --prune 3 when not dry-run)
-    run_skill_freshness(
-        repo_root,
-        projects_root,
-        prune_keep=None if dry_run else 3,
-    )
+        # 5. Run release seam checks against the bumped release tree
+        cov_proc = subprocess.run(
+            [sys.executable, str(repo_root / "scripts/ci/changelog_coverage.py")],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        coverage_ok = cov_proc.returncode == 0
+        uncited_prs = [
+            line.strip()
+            for line in (cov_proc.stdout or "").splitlines()
+            if re.match(r"^#\d+\s+", line.strip())
+        ]
 
-    # 5. Run release seam checks
-    cov_proc = subprocess.run(
-        [sys.executable, str(repo_root / "scripts/ci/changelog_coverage.py"), "--list"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    uncited_prs = [
-        line.strip()
-        for line in (cov_proc.stdout or "").splitlines()
-        if line.strip().startswith("- #")
-    ]
+        drift_proc = subprocess.run(
+            [sys.executable, str(repo_root / "scripts/ci/release_series_drift.py")],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        drift_ok = drift_proc.returncode == 0
 
-    drift_proc = subprocess.run(
-        [sys.executable, str(repo_root / "scripts/ci/release_series_drift.py"), "--list"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    drift_ok = drift_proc.returncode == 0
-
-    vm_check_proc = subprocess.run(
-        [sys.executable, str(repo_root / "scripts/ops/version_manager.py"), "--check"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    version_sync_ok = vm_check_proc.returncode == 0 if not dry_run else True
+        vm_check_proc = subprocess.run(
+            [sys.executable, str(repo_root / "scripts/ops/version_manager.py"), "--check"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        version_sync_ok = vm_check_proc.returncode == 0
+        components = read_component_versions(repo_root)
+    finally:
+        if dry_run:
+            _restore_tree(snapshot)
 
     # 6. Check range-scoped quickstart gate
     needs_quickstart, quickstart_commits = check_quickstart_gate(repo_root, prev_tag)
     migrations = detect_migrations_since(repo_root, prev_tag)
-    components = read_component_versions(repo_root)
     changelog_section = extract_changelog_section(stamped_changelog, new_version)
 
     # 7. Write artifacts to output_dir
@@ -486,6 +518,7 @@ def prepare_release(
             needs_quickstart,
             quickstart_commits,
             uncited_prs,
+            coverage_ok,
             notes_path,
         ),
         encoding="utf-8",
@@ -503,6 +536,8 @@ def prepare_release(
         "projects_root": str(projects_root),
         "quickstart_gate": "NEEDS-QUICKSTART" if needs_quickstart else "NOT-REQUIRED",
         "quickstart_commits": quickstart_commits,
+        "coverage_ok": coverage_ok,
+        "coverage_output": ((cov_proc.stdout or "") + (cov_proc.stderr or "")).strip(),
         "uncited_prs": uncited_prs,
         "uncited_prs_file": str(uncited_path) if uncited_prs else None,
         "release_series_drift_ok": drift_ok,
@@ -607,11 +642,11 @@ def format_after_merge(version: str, sha: str, notes_file: Path | None = None) -
     notes_arg = str(notes_file) if notes_file else f".git/release-prep/release-notes-{clean_version}.md"
     return (
         f"# Post-Merge Release Sequence for {tag} (merged commit: {sha})\n\n"
-        f"## 1. Operator — Create and push the signed tag (YubiKey touch required)\n"
+        f"## 1. Releasing Agent — Create and push the release tag\n"
         f"```bash\n"
         f"git fetch origin master\n"
-        f'git tag -s {tag} {sha} -m "{tag}"\n'
-        f"git push origin {tag}\n"
+        f'git tag -s {tag} {sha} -m "UNITARES {tag}"\n'
+        f"unitares-github -- git push origin {tag}\n"
         f"```\n\n"
         f"## 2. Releasing Agent — Publish the GitHub release page (triggers Publish Container)\n"
         f"```bash\n"
@@ -630,13 +665,10 @@ def format_after_merge(version: str, sha: str, notes_file: Path | None = None) -
         f"## 5. Operator — Approve the `release-promotion` environment in GitHub UI\n"
         f"https://github.com/cirwel/unitares/actions/workflows/promote-release.yml\n\n"
         f"## 6. Releasing Agent — Open and merge the automated pin PR (`publish/{tag}`)\n"
-        f"```bash\n"
-        f"unitares-github -- gh pr create \\\n"
-        f"  --base master \\\n"
-        f"  --head publish/{tag} \\\n"
-        f'  --title "chore(release): publish {tag} as the current release" \\\n'
-        f'  --body "Automated pin from Promote Release for {tag}."\n'
-        f"```\n"
+        f"Run the `gh pr create --base master --head publish/{tag} ...` command printed in the\n"
+        f"`Promote Release` workflow run summary (which embeds the verified index digest and\n"
+        f"run evidence link), appending the required provenance footer (`Model:` and\n"
+        f"`UNITARES agent: <uuid>`) to the PR body.\n"
     )
 
 
@@ -737,6 +769,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"\nAction required: {len(summary['uncited_prs'])} uncited PR(s) listed in "
             f"{summary['uncited_prs_file']}. Add changelog entries or reviewed exemptions.",
+            file=sys.stderr,
+        )
+        return 1
+    if not summary["coverage_ok"]:
+        print(
+            f"\nAction required: changelog_coverage.py failed:\n"
+            f"{summary['coverage_output']}",
             file=sys.stderr,
         )
         return 1

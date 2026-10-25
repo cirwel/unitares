@@ -423,6 +423,31 @@ def test_post_release_commits_before_tagging_stay_out_of_coverage_and_fragments(
     assert "1 of 1 cited" in result.stdout
     assert "added-post.md" not in result.stderr
 
+    # Even if an errata edit to an older released entry lands before v1.1.0 is tagged,
+    # the anchor stays on the 1.1.0 release commit:
+    old_changelog = (repo.path / "docs/CHANGELOG.md").read_text(encoding="utf-8")
+    repo.commit(
+        "docs: errata for 1.0.0 (#101)",
+        {"docs/CHANGELOG.md": old_changelog + "\n### Errata\n- Note (#1).\n"},
+    )
+    result_after_errata = _run(repo.path, COVERAGE)
+    assert result_after_errata.returncode == 0, result_after_errata.stdout + result_after_errata.stderr
+
+
+def test_pr_merge_commit_into_master_includes_master_prs_since_branch_point(repo: Repo):
+    """In GitHub Actions pull_request runs, HEAD merges the PR branch into master.
+    PRs that landed on master after the release branch forked must still be checked."""
+    repo.commit("feat: alpha (#10)")
+    repo._git("checkout", "-q", "-b", "release-prep")
+    _release(repo, cited="- **things:** alpha (#10)")
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: landed on master after release branched (#20)", {"master_only.txt": "1\n"})
+    # Simulate GitHub Actions pull_request synthetic merge commit (first parent = master, second = PR)
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge release-prep into master", "release-prep")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "#20" in result.stdout
+
 
 def test_nearest_ancestor_previous_tag_ignores_higher_side_branch_tag(repo: Repo):
     """A higher tag on a maintenance branch must not replace the nearest ancestor tag."""
