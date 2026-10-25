@@ -407,6 +407,36 @@ def test_list_mode_reports_a_leftover_fragment_without_failing(repo: Repo):
     assert FRAGMENT in result.stderr
 
 
+def test_post_release_commits_before_tagging_stay_out_of_coverage_and_fragments(repo: Repo):
+    """After the release commit lands on master, an ordinary PR that merges
+    before the operator pushes v1.1.0 must not turn coverage or fragment gates red."""
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    repo._git("rm", "-q", FRAGMENT)
+    _release(repo, cited="- **things:** alpha (#10)")
+    # Post-release PR lands on master before v1.1.0 is tagged:
+    repo.commit(
+        "feat: post-release work (#100)",
+        {"docs/changelog.d/added-post.md": "- **post:** next release (#100).\n"},
+    )
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 of 1 cited" in result.stdout
+    assert "added-post.md" not in result.stderr
+
+
+def test_nearest_ancestor_previous_tag_ignores_higher_side_branch_tag(repo: Repo):
+    """A higher tag on a maintenance branch must not replace the nearest ancestor tag."""
+    repo._git("checkout", "-q", "-b", "release/1.0")
+    repo.commit("fix: maintenance (#5)", {"maint.txt": "1\n"})
+    repo.tag("v1.0.5")
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: alpha (#10)")
+    _release(repo, cited="- **things:** alpha (#10)")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1.1.0 since v1.0.0" in result.stdout
+
+
 # --- ordinary PRs add a fragment, not an Unreleased edit ----------------------
 
 DIRECT_EDIT = REPO_ROOT / "scripts/ci/changelog_direct_edit.py"
@@ -667,6 +697,25 @@ def test_a_changed_skills_bundle_asks_for_a_plugin_re_cut(repo: Repo):
     assert result.returncode == 1
     assert "plugin skills bundle" in result.stdout
     assert "plugin-bundle-recut" in result.stdout
+
+
+def test_post_release_sdk_or_skills_commit_before_tagging_does_not_block_drift(repo: Repo):
+    """Commits landing after the release commit belong to the next release."""
+    _with_sdk(repo, "0.1.0")
+    repo.commit("docs(skills): seed", {"skills/x/SKILL.md": "seed\n"})
+    repo.tag("v1.0.1")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", "- **things:** release (#99)"),
+    })
+    # Post-release commit touches both SDK and skills before v1.1.0 is tagged:
+    repo.commit("feat(sdk): post-release (#100)", {
+        "agents/sdk/src/client.py": "def next_release(): ...\n",
+        "skills/x/SKILL.md": "post-release edit\n",
+    })
+    result = _run(repo.path, DRIFT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "level with its tag" in result.stdout
 
 
 # --- published claims -------------------------------------------------------

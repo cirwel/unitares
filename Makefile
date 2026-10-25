@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo accountability-journey clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump release-prep restart logs serve docs demo coordination-demo accountability-journey clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -17,6 +17,9 @@ version-bump: ## Bump version (usage: make version-bump PART=patch)
 	@python3 scripts/ops/version_manager.py --bump $(PART)
 	@python3 scripts/ops/version_manager.py --update
 	@echo "Review the generated changes and follow docs/operations/RELEASE_PROCESS.md"
+
+release-prep: ## Prepare a server release branch (usage: make release-prep PART=patch)
+	@python3 scripts/ops/prepare_release.py --part $(PART)
 
 # ── Testing ──────────────────────────────────────────────
 

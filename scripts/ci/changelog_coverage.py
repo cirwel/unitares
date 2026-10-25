@@ -199,6 +199,63 @@ def release_tags() -> list[str]:
     return [t for t in out.splitlines() if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
 
 
+def previous_release_tag(version: str, tags: list[str]) -> str | None:
+    """Nearest ancestor release tag of HEAD, falling back to `tags` for error reporting."""
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*.[0-9]*.[0-9]*",
+            "--exclude",
+            f"v{version}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        candidate = proc.stdout.strip()
+        if re.fullmatch(r"v\d+\.\d+\.\d+", candidate) and candidate != f"v{version}":
+            return candidate
+    return next((t for t in tags if t != f"v{version}"), None)
+
+
+def release_anchor(version: str) -> str:
+    """Commit that cut `version`, so post-release commits before tagging stay out of range.
+
+    Fails closed to `HEAD` when the working tree has uncommitted changes to
+    `VERSION` or `docs/CHANGELOG.md`, or when no commit in history set
+    `VERSION` to `version`.
+    """
+    dirty = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "diff", "--quiet", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        capture_output=True,
+    )
+    if dirty.returncode != 0:
+        return "HEAD"
+
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "log", "-n", "1", "--format=%H", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        capture_output=True,
+        text=True,
+    )
+    sha = proc.stdout.strip()
+    if not sha:
+        return "HEAD"
+    ver_proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{sha}:VERSION"],
+        capture_output=True,
+        text=True,
+    )
+    if ver_proc.returncode == 0 and ver_proc.stdout.strip() == version:
+        return sha
+    return "HEAD"
+
+
 def entry_section(version: str) -> str | None:
     """The `## [version]` block of the changelog, or None if absent."""
     text = CHANGELOG.read_text(encoding="utf-8")
@@ -209,7 +266,7 @@ def entry_section(version: str) -> str | None:
     return text[start:] if nxt == -1 else text[start:nxt]
 
 
-def merged_prs(since_tag: str) -> tuple[dict[int, tuple[str, str]], list[str]]:
+def merged_prs(since_tag: str, until_ref: str = "HEAD") -> tuple[dict[int, tuple[str, str]], list[str]]:
     """(PR number -> (subject, sha), unattributed subjects) over the first-parent walk.
 
     First-parent is the list of changes that landed on this branch, one entry per
@@ -223,7 +280,7 @@ def merged_prs(since_tag: str) -> tuple[dict[int, tuple[str, str]], list[str]]:
     Silently narrowing the denominator to what the parser happens to recognise
     is the defect this function was rewritten to remove.
     """
-    out = _git("log", "--first-parent", "--format=%H\t%s", f"{since_tag}..HEAD")
+    out = _git("log", "--first-parent", "--format=%H\t%s", f"{since_tag}..{until_ref}")
     # Commits on the release branch itself have not been merged yet, so they
     # carry no reference and never will until this PR lands. Only a commit that
     # is ALREADY on the base branch without a reference indicates a real gap.
@@ -270,7 +327,7 @@ def is_ancestor(commit: str, of: str) -> bool:
     ).returncode == 0
 
 
-def pending_fragments() -> list[str]:
+def pending_fragments(anchor: str = "HEAD") -> list[str]:
     """Files still waiting in docs/changelog.d/, which a release must not carry.
 
     Every file except the directory's README counts, a malformed one included:
@@ -278,6 +335,13 @@ def pending_fragments() -> list[str]:
     a valid one that was never assembled. The scan is recursive for the same
     reason: a file in a subdirectory is a malformed fragment, not nothing.
     """
+    head_sha = _git("rev-parse", "HEAD")
+    if anchor not in ("HEAD", head_sha):
+        out = _git("ls-tree", "-r", "--name-only", anchor, "--", "docs/changelog.d")
+        return sorted(
+            line for line in out.splitlines()
+            if line and Path(line).relative_to("docs/changelog.d").as_posix() not in FRAGMENT_DIR_DOCS
+        )
     if not FRAGMENT_DIR.is_dir():
         return []
     return sorted(p.relative_to(REPO_ROOT).as_posix() for p in FRAGMENT_DIR.rglob("*")
@@ -332,7 +396,8 @@ def main() -> int:
 
     # A leftover fragment is an entry this release would not ship. Reported
     # before anything else so an early return below cannot hide it.
-    leftovers = pending_fragments()
+    anchor = release_anchor(version)
+    leftovers = pending_fragments(anchor)
     if leftovers:
         print(f"[changelog-coverage] {len(leftovers)} changelog fragment(s) are "
               "still in docs/changelog.d/, so their entries are missing from the "
@@ -356,19 +421,19 @@ def main() -> int:
               "be measured. Check out with fetch-depth: 0.", file=sys.stderr)
         return 0 if list_only else 1
 
-    previous = next((t for t in tags if t != f"v{version}"), None)
+    previous = previous_release_tag(version, tags)
     if previous is None:
         print("[changelog-coverage] no prior release tag — cannot establish a "
               "baseline. This is a genuine first release only if the tag list is "
               "genuinely empty; verify tags were fetched.", file=sys.stderr)
         return 0 if list_only else 1
 
-    if not is_ancestor(tag_commit(previous), "HEAD"):
+    if not is_ancestor(tag_commit(previous), anchor):
         print(f"[changelog-coverage] {previous} is not an ancestor of HEAD — the "
               "range would be meaningless.", file=sys.stderr)
         return 0 if list_only else 1
 
-    merged_with_sha, unattributed = merged_prs(previous)
+    merged_with_sha, unattributed = merged_prs(previous, anchor)
     merged = {n: subj for n, (subj, _sha) in merged_with_sha.items()}
 
     # A dependabot bump is excluded only when its own merge proves it inert;

@@ -104,42 +104,71 @@ def assess(
     issues: list[dict[str, str]] = []
 
     if declared != published:
+        if declared not in tagged:
+            next_cmd = f'git tag -s sdk-v{declared} <sdk-commit-sha> -m "unitares-sdk v{declared}" && git push origin sdk-v{declared}'
+        else:
+            next_cmd = (
+                f'unitares-github -- gh release create sdk-v{declared} '
+                f'--title "unitares-sdk v{declared}" --notes "Release unitares-sdk {declared}"'
+            )
         issues.append(
             {
                 "code": "declared_registry_mismatch",
                 "detail": (
-                    f"agents/sdk declares {declared}, but PyPI serves {published}"
+                    f"agents/sdk declares {declared}, but PyPI serves {published} "
+                    f"(next: `{next_cmd}`)"
                 ),
+                "next_command": next_cmd,
             }
         )
     if declared not in tagged:
+        next_cmd = f'git tag -s sdk-v{declared} <sdk-commit-sha> -m "unitares-sdk v{declared}" && git push origin sdk-v{declared}'
         issues.append(
             {
                 "code": "declared_tag_missing",
-                "detail": f"agents/sdk declares {declared}, but sdk-v{declared} is absent",
+                "detail": (
+                    f"agents/sdk declares {declared}, but sdk-v{declared} is absent "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
     if published not in tagged:
+        next_cmd = f'git tag -s sdk-v{published} <sdk-commit-sha> -m "unitares-sdk v{published}" && git push origin sdk-v{published}'
         issues.append(
             {
                 "code": "published_tag_missing",
-                "detail": f"PyPI serves {published}, but sdk-v{published} is absent",
+                "detail": (
+                    f"PyPI serves {published}, but sdk-v{published} is absent "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
 
     for surface, version in sorted(advertised.items()):
         if version is None:
+            next_cmd = f"rg -n 'pip install unitares-sdk' {surface}"
             issues.append(
                 {
                     "code": "public_claim_missing",
-                    "detail": f"{surface} has no pinned unitares-sdk install command",
+                    "detail": (
+                        f"{surface} has no pinned unitares-sdk install command "
+                        f"(next: `{next_cmd}`)"
+                    ),
+                    "next_command": next_cmd,
                 }
             )
         elif version != published:
+            next_cmd = f"rg -n 'pip install unitares-sdk' {surface}"
             issues.append(
                 {
                     "code": "public_claim_registry_mismatch",
-                    "detail": f"{surface} advertises {version}, but PyPI serves {published}",
+                    "detail": (
+                        f"{surface} advertises {version}, but PyPI serves {published} "
+                        f"(next: `{next_cmd}`)"
+                    ),
+                    "next_command": next_cmd,
                 }
             )
 

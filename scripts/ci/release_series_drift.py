@@ -93,7 +93,20 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
-def latest_tag(glob: str, pattern: str) -> str | None:
+def latest_tag(glob: str, pattern: str, anchor: str = "HEAD") -> str | None:
+    describe_glob = glob.removeprefix("refs/tags/")
+    if describe_glob == "v*":
+        describe_glob = "v[0-9]*.[0-9]*.[0-9]*"
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "describe", "--tags", "--abbrev=0", "--match", describe_glob, anchor],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        candidate = proc.stdout.strip()
+        if re.fullmatch(pattern, candidate):
+            return candidate
+
     out = _git("for-each-ref", "--sort=-creatordate",
                "--format=%(refname:short)", glob)
     for tag in out.splitlines():
@@ -102,7 +115,34 @@ def latest_tag(glob: str, pattern: str) -> str | None:
     return None
 
 
-def declared_version(relative: str | None) -> str | None:
+def release_anchor(version: str) -> str:
+    """Commit that cut `version`, so post-release commits before tagging stay out of range."""
+    dirty = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "diff", "--quiet", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        capture_output=True,
+    )
+    if dirty.returncode != 0:
+        return "HEAD"
+
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "log", "-n", "1", "--format=%H", "HEAD", "--", "VERSION", "docs/CHANGELOG.md"],
+        capture_output=True,
+        text=True,
+    )
+    sha = proc.stdout.strip()
+    if not sha:
+        return "HEAD"
+    ver_proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{sha}:VERSION"],
+        capture_output=True,
+        text=True,
+    )
+    if ver_proc.returncode == 0 and ver_proc.stdout.strip() == version:
+        return sha
+    return "HEAD"
+
+
+def declared_version(relative: str | None, anchor: str = "HEAD") -> str | None:
     """The version the series declares, or None when it cannot be read.
 
     None is an indeterminate result, not a benign one. A missing or malformed
@@ -111,6 +151,19 @@ def declared_version(relative: str | None) -> str | None:
     """
     if relative is None:
         return None
+    head_sha = _git("rev-parse", "HEAD")
+    if anchor not in ("HEAD", head_sha):
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "show", f"{anchor}:{relative}"],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            return None
+        try:
+            return tomllib.loads(proc.stdout)["project"]["version"]
+        except (tomllib.TOMLDecodeError, KeyError):
+            return None
     path = REPO_ROOT / relative
     if not path.exists():
         return None
@@ -176,17 +229,17 @@ def is_release_tree() -> bool:
     ).returncode != 0
 
 
-def inspect(series: dict) -> dict | None:
-    tag = latest_tag(series["tag_glob"], series["tag_pattern"])
+def inspect(series: dict, anchor: str = "HEAD") -> dict | None:
+    tag = latest_tag(series["tag_glob"], series["tag_pattern"], anchor=anchor)
     if tag is None:
         return None
 
     commits = _git("log", "--no-merges", "--format=%h %s",
-                   f"{tag}..HEAD", "--", *series["paths"]).splitlines()
+                   f"{tag}..{anchor}", "--", *series["paths"]).splitlines()
     if not commits:
         return None
 
-    declared = declared_version(series["version_file"])
+    declared = declared_version(series["version_file"], anchor=anchor)
     tagged = tag[len(series["tag_prefix"]):] if series["version_file"] else None
     forward = is_forward_bump(declared, tagged) if series["version_file"] else None
 
@@ -208,6 +261,8 @@ def inspect(series: dict) -> dict | None:
 def main() -> int:
     list_only = "--list" in sys.argv
     release = is_release_tree()
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    anchor = release_anchor(version) if release else "HEAD"
 
     # No tags for a series is "cannot measure", not "nothing to report". The
     # previous version returned the same clean exit for a repository with tags
@@ -218,14 +273,14 @@ def main() -> int:
     present = [s for s in SERIES
                if any((REPO_ROOT / path).exists() for path in s["paths"])]
     missing = [s["name"] for s in present
-               if latest_tag(s["tag_glob"], s["tag_pattern"]) is None]
+               if latest_tag(s["tag_glob"], s["tag_pattern"], anchor=anchor) is None]
     if missing:
         print(f"[series-drift] no tags visible for: {', '.join(missing)} — the "
               "baseline cannot be established. Check out with fetch-depth: 0.",
               file=sys.stderr)
         return 0 if list_only else 1
 
-    findings = [f for f in (inspect(s) for s in present) if f]
+    findings = [f for f in (inspect(s, anchor=anchor) for s in present) if f]
     if not findings:
         print("[series-drift] every tracked series is level with its tag")
         return 0
