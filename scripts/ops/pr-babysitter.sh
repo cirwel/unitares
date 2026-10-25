@@ -877,13 +877,15 @@ while read -r _ n head; do
   [ -z "$subject" ] || merge_args+=(--subject "$subject")
   signature=$(squash_signature "$pr")
   if [ -n "$signature" ]; then
-    # 250 is the API's ceiling: a longer branch cannot be listed in full.
-    if ! commits=$(gh api --paginate "repos/$REPO/pulls/$n/commits?per_page=100" 2>/dev/null | jq -s 'add // []') \
-       || [ "$(jq length <<<"$commits")" -ge 250 ]; then
-      log "#$n: its commits could not be read for the squash body; nothing armed this tick"
-      exit 0
+    # 250 is the API's ceiling: a longer branch cannot be listed in full. Fall
+    # back to GitHub's default body rather than hold the queue on this PR; the
+    # arm is still recorded with the signature, so it is not re-armed in a loop.
+    if commits=$(gh api --paginate "repos/$REPO/pulls/$n/commits?per_page=100" 2>/dev/null | jq -s 'add // []') \
+       && [ "$(jq length <<<"$commits")" -lt 250 ]; then
+      merge_args+=(--body "$(squash_body "$commits" "$signature")")
+    else
+      log "#$n: its commits could not be listed in full; arming with GitHub's default squash body, without the signature"
     fi
-    merge_args+=(--body "$(squash_body "$commits" "$signature")")
   fi
   merge_args+=(--match-head-commit "$head")
   if act "${merge_args[@]}"; then

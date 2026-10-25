@@ -424,12 +424,16 @@ def test_an_unsigned_pr_keeps_githubs_default_body(tmp_path: Path) -> None:
     assert calls == [_arm(1)]
 
 
-def test_a_branch_too_long_to_list_is_not_armed_with_a_partial_body(tmp_path: Path) -> None:
+def test_a_branch_too_long_to_list_arms_with_the_default_body_and_does_not_hold_the_queue(
+        tmp_path: Path) -> None:
     _commits(tmp_path, 1, [_commit(f"fix: {i}") for i in range(250)])
     body = f"Model: gpt-5\nUNITARES agent: {AGENT}"
     calls, out = _run(tmp_path, [_pr(1, body=body)])
-    assert calls == []
-    assert "could not be read for the squash body" in out
+    assert calls == [_arm(1, model="gpt-5")]
+    assert "could not be listed in full" in out
+    # Armed with the signature in its key, so the next tick sees it as current.
+    again, _ = _run(tmp_path, [_pr(1, body=body, armed_min_ago=0.2, state="BLOCKED")])
+    assert again == []
 
 
 def test_arms_in_approval_order_not_pr_number(tmp_path: Path) -> None:
