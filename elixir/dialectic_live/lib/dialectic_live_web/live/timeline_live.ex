@@ -202,6 +202,11 @@ defmodule DialecticLiveWeb.TimelineLive do
 
         roster = for %{"agent_id" => id} = a <- snap.agents, is_binary(id), into: %{}, do: {id, a}
 
+        resumed_seed =
+          if snap.status == :ok and snap.last_reread_at != socket.assigns[:last_reread_at],
+            do: %{},
+            else: socket.assigns.resumed_at
+
         socket
         |> assign(
           source: snap.status,
@@ -213,8 +218,14 @@ defmodule DialecticLiveWeb.TimelineLive do
           roster: roster,
           last_seen: last_seen,
           marks: marks,
-          resumed_at: Enum.reduce(all, %{}, &note_resume(&2, &1)),
-          selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks),
+          resumed_at: Enum.reduce(all, resumed_seed, &note_resume(&2, &1)),
+          selected:
+            carry_selection(
+              socket.assigns.selected,
+              socket.assigns.marks,
+              marks,
+              Map.get(snap, :paired, %{})
+            ),
           row_order: order_rows(roster, marks, last_seen)
         )
         |> relane()
@@ -239,15 +250,18 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   # A re-read that confirms a provisional mark gives it a history id (`p-`
   # becomes `h-`), so a selection on the live mark follows it to the row
-  # that absorbed it rather than clearing as the record arrives. Several
-  # rows can match one live check-in (two within the 2 s lag); like the feed,
-  # take the latest.
-  defp carry_selection(nil, _old, _new), do: nil
+  # that absorbed it rather than clearing as the record arrives. Follow the
+  # feed's mark-to-row pairing first; fall back to the latest matching row when
+  # the mark arrived directly on the page without a feed pairing.
+  defp carry_selection(nil, _old, _new, _paired), do: nil
 
-  defp carry_selection(id, old, new) do
+  defp carry_selection(id, old, new, paired) do
     cond do
       Map.has_key?(new, id) ->
         id
+
+      paired_id = Map.get(paired, id) ->
+        if Map.has_key?(new, paired_id), do: paired_id, else: nil
 
       mark = Map.get(old, id) ->
         new
@@ -800,8 +814,16 @@ defmodule DialecticLiveWeb.TimelineLive do
         {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"} = m}, {acc, nil} ->
           {acc, {id, m}}
 
-        {_id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"}}, {acc, held} ->
-          {acc, held}
+        {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"} = m},
+        {acc, {_from_id, from} = held} ->
+          from_us = TimelineAdapter.ts_us(from["ts"]) || 0
+          new_us = TimelineAdapter.ts_us(m["ts"]) || 0
+
+          if is_integer(resumed_us) and resumed_us >= from_us and resumed_us < new_us do
+            {[close_evicted_pause(held, anchor, resumed_us) | acc], {id, m}}
+          else
+            {acc, held}
+          end
 
         {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_resumed"} = m}, {acc, held} ->
           {from_id, from} = held || {id, nil}
@@ -830,26 +852,17 @@ defmodule DialecticLiveWeb.TimelineLive do
 
         # The resume mark may be gone (capped or aged out) while the agent's
         # latest resume is still known: the pause ended there.
-        {id, m} ->
+        {_id, m} = held ->
           pause_us = TimelineAdapter.ts_us(m["ts"]) || 0
 
           band =
             if is_integer(resumed_us) and resumed_us >= pause_us do
-              t2 = Float.round(resumed_us / 1_000_000 - anchor, 1)
-              %{t2: t2, label: "Paused, " <> utc(m["ts"]) <> ", since resumed"}
+              close_evicted_pause(held, anchor, resumed_us)
             else
-              %{t2: nil, label: "Paused since " <> utc(m["ts"])}
+              pause_band(held, anchor, nil, "Paused since " <> utc(m["ts"]))
             end
 
-          [
-            Map.merge(band, %{
-              id: "pause-" <> id,
-              sel: id,
-              cls: "pause",
-              t: rel_s(m["ts"], anchor)
-            })
-            | pauses
-          ]
+          [band | pauses]
       end
 
     dialectic =
@@ -870,6 +883,22 @@ defmodule DialecticLiveWeb.TimelineLive do
       end
 
     Enum.reverse(pauses) ++ dialectic
+  end
+
+  defp pause_band({id, m}, anchor, t2, label) do
+    %{
+      id: "pause-" <> id,
+      sel: id,
+      cls: "pause",
+      t: rel_s(m["ts"], anchor),
+      t2: t2,
+      label: label
+    }
+  end
+
+  defp close_evicted_pause({_id, m} = held, anchor, resumed_us) do
+    t2 = Float.round(resumed_us / 1_000_000 - anchor, 1)
+    pause_band(held, anchor, t2, "Paused, " <> utc(m["ts"]) <> ", since resumed")
   end
 
   defp sort_key(mark), do: TimelineAdapter.ts_us(mark["ts"]) || 0

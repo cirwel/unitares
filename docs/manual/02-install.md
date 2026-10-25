@@ -53,6 +53,9 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
+Cloning an annotated release tag with `--depth 1` prints a harmless Git notice
+(`warning: refs/tags/vX.Y.Z … is not a commit!`).
+
 ### Managed checkout alternative
 
 With Docker running, Git, curl and a POSIX shell, the launcher creates and
@@ -259,7 +262,9 @@ reuse existing data:
   old checkout first.
 - For a side-by-side install, set `COMPOSE_PROJECT_NAME` in the new checkout's
   `.env` and run `docker compose down` (without `-v`) in the first checkout so
-  fixed `container_name` values do not collide.
+  fixed `container_name` values do not collide (`stop` is not enough, because
+  `restart: unless-stopped` revives stopped containers when the Docker daemon
+  starts).
 
 ### Updating
 
