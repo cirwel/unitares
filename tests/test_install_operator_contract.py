@@ -148,6 +148,8 @@ def test_tier_one_install_is_release_pinned_and_single_command() -> None:
     assert install.count(lookup) == 1
     assert re.search(r"--branch v\d", readme) is None
     assert "docker compose up -d --wait" in install
+    assert "docker compose down" in install
+    assert "scripts/install/launch.sh" in install
     assert "make demo" not in readme
     assert "make coordination-demo" not in readme
 

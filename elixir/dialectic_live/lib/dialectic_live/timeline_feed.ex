@@ -180,6 +180,7 @@ defmodule DialecticLive.TimelineFeed do
       error: nil,
       history: [],
       provisional: [],
+      paired: %{},
       agents: [],
       truncated: [],
       counts: %{},
@@ -256,6 +257,7 @@ defmodule DialecticLive.TimelineFeed do
                 error: saved.error,
                 history: Enum.map(saved.events, &Map.delete(&1, "seen_live")),
                 provisional: Enum.map(saved.provisional, &{&1, now, 0}),
+                paired: Map.get(saved, :paired, %{}),
                 agents: saved.agents,
                 truncated: saved.truncated,
                 counts: saved.counts,
@@ -553,15 +555,21 @@ defmodule DialecticLive.TimelineFeed do
     events = Enum.filter(events, &is_map/1)
     old = state.held[window]
 
-    {provisional, matched} =
-      merge(old.provisional, events, fetch.started, old.hours, state.seen_live[window])
+    {provisional, matched, new_pairs} =
+      merge_with_pairs(old.provisional, events, fetch.started, old.hours, state.seen_live[window])
 
     history_keys = MapSet.new(events, &TimelineAdapter.key/1)
+    history_ids = MapSet.new(events, &TimelineAdapter.dom_id/1)
 
     seen_live =
       state.seen_live[window]
       |> MapSet.intersection(history_keys)
       |> MapSet.union(matched)
+
+    paired =
+      old.paired
+      |> Map.filter(fn {_mark_id, row_id} -> MapSet.member?(history_ids, row_id) end)
+      |> Map.merge(new_pairs)
 
     held = %{
       old
@@ -569,6 +577,7 @@ defmodule DialecticLive.TimelineFeed do
         error: nil,
         history: events,
         provisional: provisional,
+        paired: paired,
         agents: body["agents"] |> list_or_empty() |> Enum.filter(&agent?/1),
         truncated: list_or_empty(body["truncated"]),
         counts: map_or_empty(body["counts"]),
@@ -632,12 +641,20 @@ defmodule DialecticLive.TimelineFeed do
   # paired oldest first, each with the latest unclaimed row in its window.
   # Rows that absorbed a mark at an earlier re-read (`claimed`) are taken.
   def merge(provisional, history, fetch_started, hours, claimed \\ MapSet.new()) do
+    {kept, matched, _pairs} =
+      merge_with_pairs(provisional, history, fetch_started, hours, claimed)
+
+    {kept, matched}
+  end
+
+  defp merge_with_pairs(provisional, history, fetch_started, hours, claimed) do
     cutoff_us = System.os_time(:microsecond) - hours * 3_600_000_000
 
-    {kept, matched} =
+    {kept, matched, pairs} =
       provisional
       |> Enum.reverse()
-      |> Enum.reduce({[], MapSet.new()}, fn {mark, received, misses}, {kept, matched} ->
+      |> Enum.reduce({[], MapSet.new(), %{}}, fn {mark, received, misses},
+                                                 {kept, matched, pairs} ->
         taken = MapSet.union(claimed, matched)
 
         case best_row(mark, history, taken) do
@@ -646,18 +663,19 @@ defmodule DialecticLive.TimelineFeed do
             ts = TimelineAdapter.ts_us(mark["ts"])
 
             if misses >= @rereads_to_expire or (is_integer(ts) and ts < cutoff_us) do
-              {kept, matched}
+              {kept, matched, pairs}
             else
-              {[{mark, received, misses} | kept], matched}
+              {[{mark, received, misses} | kept], matched, pairs}
             end
 
           row ->
-            {kept, MapSet.put(matched, TimelineAdapter.key(row))}
+            {kept, MapSet.put(matched, TimelineAdapter.key(row)),
+             Map.put(pairs, TimelineAdapter.dom_id(mark), TimelineAdapter.dom_id(row))}
         end
       end)
 
     # `kept` was built oldest first, prepending: it is newest first again.
-    {kept, matched}
+    {kept, matched, pairs}
   end
 
   defp best_row(%{"kind" => "checkin"} = mark, history, taken) do
@@ -734,6 +752,7 @@ defmodule DialecticLive.TimelineFeed do
       error: held.error,
       events: history,
       provisional: Enum.map(held.provisional, fn {mark, _, _} -> mark end),
+      paired: held.paired,
       agents: held.agents,
       truncated: held.truncated,
       counts: held.counts,
