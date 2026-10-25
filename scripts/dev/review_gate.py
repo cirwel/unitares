@@ -981,7 +981,7 @@ class CodexRounds:
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
     def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
-        """Require operator approval after too many unproductive cycles.
+        """Require explicit authorization after too many unproductive cycles.
 
         Total cycle count prompts reassessment, never grants or denies coverage.
         """
@@ -3027,8 +3027,6 @@ class review_lock:
 
 
 def cmd_review(args) -> int:
-    if getattr(args, "authorize_full_review", None):
-        require_operator_account()
     args.base = getattr(args, "base", DEFAULT_BASE)
     pr, repo, key, branch = _resolve(args)
     choices = selected_reviewers(args.reviewer)
@@ -3108,8 +3106,10 @@ def cmd_review(args) -> int:
                         return second_family_pass(
                             args, repo, pr, key, head,
                             completed_review_exit(repo, pr, key, head, result))
-                # The second family completes an existing cycle, including at
-                # the cap. A new cycle beyond it needs operator authorization.
+                # The second family completes an existing cycle or supplies
+                # still-missing sensitive-path coverage, including at the cap.
+                # Another cycle beyond the cap uses --authorize-full-review REASON.
+                snapshot = read_native(repo, pr, key, head, comments)
                 rounds = pr_rounds(repo, pr, key, head, comments)
                 try:
                     rounds = review_budget(rounds, pr, comments)
@@ -3121,23 +3121,35 @@ def cmd_review(args) -> int:
                           "reassess scope and recurring findings before proceeding. "
                           "The three-cycle redundancy budget, provider limits and required "
                           "model-family coverage still apply.")
-                joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
+                family = provider_family(reviewer)
+                sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
+                families = passing_families(comments, key, snapshot.records) if sensitive else set()
+                already_attempted = bool(
+                    family and any(family in cycle.families for cycle in rounds.cycles)
+                )
+                missing_required_family = bool(
+                    sensitive and family and 1 <= len(families) < 2 and family not in families
+                    and not already_attempted
+                    and not waiver_reason_for(comments, key, changed, sensitive, families, args.base, head)
+                )
+                joining_cycle = rounds.can_join(head, key, family) or missing_required_family
                 if grant_id:
                     if not cycle_grant(comments, grant_id, head, key, rounds,
-                                       provider_family(reviewer), time.time()):
+                                       family, time.time()):
                         print("[review] UNREVIEWED: cycle grant is missing, expired, consumed, untrusted, or for different work")
                         return UNREVIEWED
                     args.cycle_grant_url = f"https://github.com/{repo}/pull/{pr}#issuecomment-{grant_id}"
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
-                          "Escalate or explicitly authorize an additional full review with a reason.")
+                          "Escalate or pass --authorize-full-review REASON.")
                     return UNREVIEWED
                 if (rounds.exhausted(joining_cycle, key, head)
+                        and not missing_required_family
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
                     print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
                           f"a P0/P1 finding; {rounds.count} in all); "
-                          "escalate unresolved issues. "
-                          "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
+                          "pass --authorize-full-review REASON to run another full review cycle, "
+                          "or escalate unresolved issues.")
                     print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
                 # After an ordinary findings round, verify fixes instead of
@@ -3145,7 +3157,6 @@ def cmd_review(args) -> int:
                 # round followed by new work still needs a fresh full review.
                 if (rounds.last_findings and not rounds.answered_since and not args.fresh
                         and not joining_cycle and not grant_id and not getattr(args, "authorize_full_review", None)):
-                    sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
                 if native and reviewer == "codex" and not args.reviewer and not args.fresh:
@@ -4109,7 +4120,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="agent-selected provider; otherwise UNITARES_REVIEWER (no built-in default)")
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
     authorization = r.add_mutually_exclusive_group()
-    authorization.add_argument("--authorize-full-review", metavar="REASON", help="operator account: authorize an additional full review; explain why")
+    authorization.add_argument("--authorize-full-review", metavar="REASON", help="authorize an additional full review past the cycle cap; explain why")
     authorization.add_argument("--review-cycle-grant", type=int, metavar="COMMENT_ID",
                                help="consume a user-authored, revision-bound grant for one extra review cycle")
     r.add_argument("--codex-model", default="gpt-6.1-sol")
