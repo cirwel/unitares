@@ -407,6 +407,122 @@ def test_list_mode_reports_a_leftover_fragment_without_failing(repo: Repo):
     assert FRAGMENT in result.stderr
 
 
+def test_post_release_commits_before_tagging_stay_out_of_coverage_and_fragments(repo: Repo):
+    """After the release commit lands on master, an ordinary PR that merges
+    before the operator pushes v1.1.0 must not turn coverage or fragment gates red."""
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    repo._git("rm", "-q", FRAGMENT)
+    _release(repo, cited="- **things:** alpha (#10)")
+    # Post-release PR lands on master before v1.1.0 is tagged:
+    repo.commit(
+        "feat: post-release work (#100)",
+        {"docs/changelog.d/added-post.md": "- **post:** next release (#100).\n"},
+    )
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 of 1 cited" in result.stdout
+    assert "added-post.md" not in result.stderr
+
+    # Even if an errata edit to an older released entry lands before v1.1.0 is tagged,
+    # the anchor stays on the 1.1.0 release commit:
+    old_changelog = (repo.path / "docs/CHANGELOG.md").read_text(encoding="utf-8")
+    repo.commit(
+        "docs: errata for 1.0.0 (#101)",
+        {"docs/CHANGELOG.md": old_changelog + "\n### Errata\n- Note (#1).\n"},
+    )
+    result_after_errata = _run(repo.path, COVERAGE)
+    assert result_after_errata.returncode == 0, result_after_errata.stdout + result_after_errata.stderr
+
+    # Even if an older maintenance tag (v1.0.5) is forward-merged onto master after the 1.1.0
+    # release commit before v1.1.0 is tagged, previous_release_tag describes from the anchor:
+    repo._git("checkout", "-q", "-b", "maint/1.0", "v1.0.0")
+    repo.commit("fix: maint (#50)", {"maint.txt": "1\n"})
+    repo.tag("v1.0.5")
+    repo._git("checkout", "-q", "master")
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge v1.0.5 into master (#102)", "v1.0.5")
+    result_after_maint = _run(repo.path, COVERAGE)
+    assert result_after_maint.returncode == 0, result_after_maint.stdout + result_after_maint.stderr
+    assert "1.1.0 since v1.0.0" in result_after_maint.stdout
+
+
+def test_followup_fragment_deletion_commit_on_release_branch_advances_anchor(repo: Repo):
+    """Deleting a leftover fragment in a follow-up commit on an unmerged release branch clears the gate."""
+    repo._git("update-ref", "refs/remotes/origin/master", "v1.0.0")
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    _release(repo, cited="- **things:** alpha (#10)")
+    assert _run(repo.path, COVERAGE).returncode == 1
+    repo._git("rm", "-q", FRAGMENT)
+    repo._git("commit", "-q", "-m", "fix: remove assembled fragment")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_base_branch_selection_with_maintenance_and_master_remotes(repo: Repo):
+    """Ensure _base_branch picks origin/master for mainline patch releases (even when
+    origin/release/1.0 exists and origin/master moved ahead) and picks origin/release/1.0
+    only when HEAD carries maintenance commits not on origin/master."""
+    # 1. Mainline patch 1.0.1 with origin/release/1.0 at v1.0.0 and origin/master ahead:
+    repo._git("update-ref", "refs/remotes/origin/release/1.0", "v1.0.0")
+    repo.commit("direct push on master without PR ref", {"m.txt": "1\n"})
+    master_with_direct = repo._git("rev-parse", "HEAD")
+    repo._git(" checkout", "-q", "-b", "pr-patch") if False else repo._git("checkout", "-q", "-b", "pr-patch")
+    repo.commit("chore(release): 1.0.1 (#99)", {
+        "VERSION": "1.0.1\n",
+        "docs/CHANGELOG.md": _entry("1.0.1", "_nothing_"),
+    })
+    # Simulate origin/master moving one commit ahead of where pr-patch branched
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: later master commit (#50)", {"later.txt": "2\n"})
+    repo._git("update-ref", "refs/remotes/origin/master", "HEAD")
+    # Check out detached merge commit (simulating GitHub Actions pull_request ref)
+    repo._git("checkout", "-q", "--detach", master_with_direct)
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge pr-patch into master", "pr-patch")
+    res_mainline = _run(repo.path, COVERAGE)
+    assert res_mainline.returncode == 1
+    assert "direct push on master without PR ref" in res_mainline.stdout
+
+    # 2. Maintenance branch release/1.0 diverged from origin/master:
+    repo._git("checkout", "-q", "-b", "release/1.0", "v1.0.0")
+    repo.commit("direct push on release/1.0 without PR ref", {"r.txt": "1\n"})
+    repo._git("update-ref", "refs/remotes/origin/release/1.0", "HEAD")
+    repo._git("checkout", "-q", "--detach", "HEAD")
+    repo.commit("chore(release): 1.0.2 (#99)", {
+        "VERSION": "1.0.2\n",
+        "docs/CHANGELOG.md": _entry("1.0.2", "_nothing_"),
+    })
+    res_maint = _run(repo.path, COVERAGE)
+    assert res_maint.returncode == 1
+    assert "direct push on release/1.0 without PR ref" in res_maint.stdout
+
+
+def test_pr_merge_commit_into_master_includes_master_prs_since_branch_point(repo: Repo):
+    """In GitHub Actions pull_request runs, HEAD merges the PR branch into master.
+    PRs that landed on master after the release branch forked must still be checked."""
+    repo.commit("feat: alpha (#10)")
+    repo._git("checkout", "-q", "-b", "release-prep")
+    _release(repo, cited="- **things:** alpha (#10)")
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: landed on master after release branched (#20)", {"master_only.txt": "1\n"})
+    # Simulate GitHub Actions pull_request synthetic merge commit (first parent = master, second = PR)
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge release-prep into master", "release-prep")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "#20" in result.stdout
+
+
+def test_nearest_ancestor_previous_tag_ignores_higher_side_branch_tag(repo: Repo):
+    """A higher tag on a maintenance branch must not replace the nearest ancestor tag."""
+    repo._git("checkout", "-q", "-b", "release/1.0")
+    repo.commit("fix: maintenance (#5)", {"maint.txt": "1\n"})
+    repo.tag("v1.0.5")
+    repo._git("checkout", "-q", "master")
+    repo.commit("feat: alpha (#10)")
+    _release(repo, cited="- **things:** alpha (#10)")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1.1.0 since v1.0.0" in result.stdout
+
+
 # --- ordinary PRs add a fragment, not an Unreleased edit ----------------------
 
 DIRECT_EDIT = REPO_ROOT / "scripts/ci/changelog_direct_edit.py"
@@ -667,6 +783,25 @@ def test_a_changed_skills_bundle_asks_for_a_plugin_re_cut(repo: Repo):
     assert result.returncode == 1
     assert "plugin skills bundle" in result.stdout
     assert "plugin-bundle-recut" in result.stdout
+
+
+def test_post_release_sdk_or_skills_commit_before_tagging_does_not_block_drift(repo: Repo):
+    """Commits landing after the release commit belong to the next release."""
+    _with_sdk(repo, "0.1.0")
+    repo.commit("docs(skills): seed", {"skills/x/SKILL.md": "seed\n"})
+    repo.tag("v1.0.1")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", "- **things:** release (#99)"),
+    })
+    # Post-release commit touches both SDK and skills before v1.1.0 is tagged:
+    repo.commit("feat(sdk): post-release (#100)", {
+        "agents/sdk/src/client.py": "def next_release(): ...\n",
+        "skills/x/SKILL.md": "post-release edit\n",
+    })
+    result = _run(repo.path, DRIFT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "level with its tag" in result.stdout
 
 
 # --- published claims -------------------------------------------------------

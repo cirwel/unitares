@@ -1,7 +1,7 @@
 # Simplify the server release process
 
-**Status:** proposal with its seven reserved decisions taken, 2026-10-22 (see *Decisions, 2026-10-22*). Documentation only. Nothing is implemented. Steps 1 to 3 and the approved reserved items each land as their own PR.
-**Last Updated:** 2026-10-22
+**Status:** in progress — Steps 1–3, Decision 2, and Decision 7 implemented; Decision 1 (release-commit anchor implemented; weekly advisory issue workflow remains open) and Decision 4 (`workflow_call` / automated pin PR creation) remain open.
+**Last Updated:** 2026-10-25
 
 Scope: cirwel/unitares server releases (tags `vX.Y.Z`). The SDK release chain is mentioned only where it shares a fix. Evidence below was gathered read-only at worktree HEAD 50bece6b5 (VERSION and PUBLISHED_VERSION both 3.3.0, newest tag v3.3.0). The claims come from four reader reports and three design drafts; I did not re-run the scripts or workflows myself. See "What was not verified".
 

@@ -155,34 +155,54 @@ def assess(
     newest = max(tagged, key=_key) if tagged else None
 
     if published not in tagged:
+        next_cmd = f'git tag -s v{published} <release-commit-sha> -m "v{published}" && git push origin v{published}'
         issues.append(
             {
                 "code": "published_tag_missing",
-                "detail": f"PUBLISHED_VERSION is {published}, but v{published} is absent",
+                "detail": (
+                    f"PUBLISHED_VERSION is {published}, but v{published} is absent "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
     if published not in released:
+        next_cmd = (
+            f'unitares-github -- gh release create v{published} '
+            f'--title "v{published}" --notes-file "$(git rev-parse --git-dir)/release-prep/release-notes-{published}.md"'
+        )
         issues.append(
             {
                 "code": "published_release_page_missing",
-                "detail": f"PUBLISHED_VERSION is {published}, but v{published} has no published release page",
+                "detail": (
+                    f"PUBLISHED_VERSION is {published}, but v{published} has no published release page "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
     published_digest = digests.get(f"v{published}")
     if published_digest is None:
+        next_cmd = f"unitares-github -- gh workflow run publish-container.yml --ref v{published} -f ref=v{published}"
         issues.append(
             {
                 "code": "published_image_missing",
-                "detail": f"PUBLISHED_VERSION is {published}, but ghcr.io/{REPOSITORY}:v{published} is absent",
+                "detail": (
+                    f"PUBLISHED_VERSION is {published}, but ghcr.io/{REPOSITORY}:v{published} is absent "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
 
     latest_digest = digests.get("latest")
     if latest_digest is None:
+        next_cmd = "see docs/operations/RELEASE_PROCESS.md#promoting-a-verified-container-manual-fallback"
         issues.append(
             {
                 "code": "latest_image_missing",
-                "detail": f"ghcr.io/{REPOSITORY}:latest is absent",
+                "detail": f"ghcr.io/{REPOSITORY}:latest is absent (next: `{next_cmd}`)",
+                "next_command": next_cmd,
             }
         )
     elif published_digest is not None and latest_digest != published_digest:
@@ -191,39 +211,72 @@ def assess(
             key=lambda ref: _key(ref[1:]),
         )
         serves = ", ".join(matches) if matches else "an image no checked tag names"
+        if matches and _key(matches[-1][1:]) > _key(published):
+            # Promotion already moved `latest` to the newer tag; the pin PR just needs to land.
+            ahead_tag = matches[-1]
+            next_cmd = f"unitares-github --read-only -- gh pr list --head publish/{ahead_tag} --state open"
+        else:
+            next_cmd = "see docs/operations/RELEASE_PROCESS.md#promoting-a-verified-container-manual-fallback"
         issues.append(
             {
                 "code": "latest_not_published_version",
-                "detail": f"latest serves {serves}, but PUBLISHED_VERSION is {published}",
+                "detail": (
+                    f"latest serves {serves}, but PUBLISHED_VERSION is {published} "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
 
     if newest is not None:
         if _key(newest) > _key(published):
+            if newest not in released:
+                next_cmd = (
+                    f'unitares-github -- gh release create v{newest} '
+                    f'--title "v{newest}" --notes-file "$(git rev-parse --git-dir)/release-prep/release-notes-{newest}.md"'
+                )
+            elif digests.get(f"v{newest}") is None:
+                next_cmd = f"python3 scripts/ops/prepare_release.py --check-ghcr --version {newest}"
+            else:
+                next_cmd = f"unitares-github -- gh workflow run promote-release.yml -f tag=v{newest}"
             issues.append(
                 {
                     "code": "release_awaiting_publication",
                     "detail": (
                         f"v{newest} is tagged, but PUBLISHED_VERSION is still {published}; "
-                        "verify and promote it, or record why it is skipped"
+                        f"verify and promote it, or record why it is skipped (next: `{next_cmd}`)"
                     ),
+                    "next_command": next_cmd,
                 }
             )
         if _key(source) < _key(newest):
+            next_cmd = f"printf '%s\\n' '{newest}' > VERSION && python3 scripts/ops/version_manager.py --update"
             issues.append(
                 {
                     "code": "source_version_behind_tag",
-                    "detail": f"VERSION is {source}, older than the existing tag v{newest}",
+                    "detail": (
+                        f"VERSION is {source}, older than the existing tag v{newest} "
+                        f"(next: `{next_cmd}`)"
+                    ),
+                    "next_command": next_cmd,
                 }
             )
 
     # Every tag, not only the newest: a maintenance tag left unmerged must stay
     # visible after a newer mainline tag exists.
     for version in sorted(tagged - on_head, key=_key):
+        next_cmd = (
+            f"git checkout -b <author>/forward-merge-v{version}-<id> origin/master && "
+            f"git merge --no-ff v{version} && unitares-github -- gh pr create --draft"
+        )
         issues.append(
             {
                 "code": "tag_not_on_master",
-                "detail": f"v{version} is not an ancestor of master; forward-merge it",
+                "detail": (
+                    f"v{version} is not an ancestor of master; forward-merge it "
+                    f"(next: `{next_cmd}`)"
+                ),
+                "next_command": next_cmd,
             }
         )
 
