@@ -270,17 +270,39 @@ defmodule DialecticLiveWeb.TimelineLive do
       |> cap_provisional()
       |> Map.new()
 
-    if map_size(kept) == map_size(socket.assigns.marks),
-      do: socket,
-      else: socket |> assign(marks: kept) |> relane()
+    if map_size(kept) == map_size(socket.assigns.marks) do
+      socket
+    else
+      # A row stays while the roster names it or a kept mark is drawn on it,
+      # so agents seen only live during an outage leave with their marks.
+      live =
+        kept
+        |> Map.values()
+        |> Enum.flat_map(&lane_ids/1)
+        |> Enum.concat(Map.keys(socket.assigns.roster))
+        |> MapSet.new()
+
+      socket
+      |> assign(
+        marks: kept,
+        row_order: Enum.filter(socket.assigns.row_order, fn {id, _, _} -> MapSet.member?(live, id) end),
+        last_seen: Map.filter(socket.assigns.last_seen, fn {id, _} -> MapSet.member?(live, id) end)
+      )
+      |> relane()
+    end
   end
 
+  # Over the cap, the oldest live marks go first, lifecycle events last: a
+  # resume is what closes a pause band, and dropping it would reopen the
+  # pause. Lifecycle frames are rare, and the window prune bounds them.
   defp cap_provisional(marks) do
     {live, held} = Enum.split_with(marks, fn {_id, m} -> m["provisional"] == true end)
 
     if length(live) > @provisional_cap do
-      held ++
-        (live |> Enum.sort_by(fn {_, m} -> sort_key(m) end, :desc) |> Enum.take(@provisional_cap))
+      keep =
+        Enum.sort_by(live, fn {_, m} -> {m["kind"] == "lifecycle", sort_key(m)} end, :desc)
+
+      held ++ Enum.take(keep, @provisional_cap)
     else
       marks
     end
