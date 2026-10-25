@@ -249,11 +249,23 @@ defmodule DialecticLiveWeb.TimelineLive do
     start =
       DateTime.to_unix(socket.assigns.now, :microsecond) - hours(socket.assigns) * 3_600_000_000
 
+    # Each agent's latest resume: a pause before it was lifted, so it ages
+    # out with its resume instead of reopening as "paused since".
+    resumed =
+      for {_id, %{"event_type" => "lifecycle_resumed", "agent_id" => a} = m} <-
+            socket.assigns.marks,
+          us = TimelineAdapter.ts_us(m["ts"]),
+          reduce: %{} do
+        acc -> Map.update(acc, a, us, &max(&1, us))
+      end
+
     kept =
       socket.assigns.marks
       |> Enum.filter(fn {_id, m} ->
-        m["kind"] == "dialectic" or m["event_type"] == "lifecycle_paused" or
-          (TimelineAdapter.ts_us(m["ts"]) || 0) >= start
+        us = TimelineAdapter.ts_us(m["ts"]) || 0
+
+        m["kind"] == "dialectic" or us >= start or
+          (m["event_type"] == "lifecycle_paused" and us >= Map.get(resumed, m["agent_id"], -1))
       end)
       |> cap_provisional()
       |> Map.new()

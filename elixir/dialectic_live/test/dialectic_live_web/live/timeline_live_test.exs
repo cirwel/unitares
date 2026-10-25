@@ -464,6 +464,37 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     refute has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
   end
 
+  test "pruning keeps an unresumed pause but lets a resumed one age out with its resume",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+
+    delta = fn agent, type, ms ->
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => iso(ms),
+           "agent_id" => agent,
+           "event_type" => type,
+           "provisional" => true
+         }}
+      )
+    end
+
+    # @a paused and resumed just inside the window; @b paused and never resumed.
+    delta.(@a, "lifecycle_paused", -3_599_900)
+    delta.(@a, "lifecycle_resumed", -3_599_850)
+    delta.(@b, "lifecycle_paused", -3_599_900)
+    assert has_element?(view, "#agent-#{@a} .tl-band.pause")
+
+    Process.sleep(200)
+    send(view.pid, :tick)
+    refute has_element?(view, "#agent-#{@a} .tl-band.pause")
+    assert has_element?(view, "#agent-#{@b} .tl-band.pause")
+  end
+
   test "live marks are capped at the feed's provisional cap", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)
