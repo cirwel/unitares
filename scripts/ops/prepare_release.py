@@ -207,7 +207,9 @@ def run_skill_freshness(
     """Run `check-skill-freshness.sh` with `UNITARES_PROJECTS_ROOT` and fail on absent sources."""
     script = repo_root / "scripts" / "client" / "check-skill-freshness.sh"
     if not script.exists():
-        return ""
+        raise FileNotFoundError(
+            f"Required skill freshness script is missing: {script}"
+        )
 
     env = {**os.environ, "UNITARES_PROJECTS_ROOT": str(projects_root)}
     if prune_keep is not None:
@@ -639,7 +641,11 @@ def check_ghcr_visibility(
 def format_after_merge(version: str, sha: str, notes_file: Path | None = None) -> str:
     clean_version = version.lstrip("v")
     tag = f"v{clean_version}"
-    notes_arg = str(notes_file) if notes_file else f".git/release-prep/release-notes-{clean_version}.md"
+    notes_arg = (
+        str(notes_file)
+        if notes_file
+        else f'"$(git rev-parse --git-dir)/release-prep/release-notes-{clean_version}.md"'
+    )
     return (
         f"# Post-Merge Release Sequence for {tag} (merged commit: {sha})\n\n"
         f"## 1. Releasing Agent — Create and push the release tag\n"

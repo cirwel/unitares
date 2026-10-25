@@ -169,7 +169,7 @@ def assess(
     if published not in released:
         next_cmd = (
             f'unitares-github -- gh release create v{published} '
-            f'--title "v{published}" --notes-file .git/release-prep/release-notes-{published}.md'
+            f'--title "v{published}" --notes-file "$(git rev-parse --git-dir)/release-prep/release-notes-{published}.md"'
         )
         issues.append(
             {
@@ -197,10 +197,7 @@ def assess(
 
     latest_digest = digests.get("latest")
     if latest_digest is None:
-        next_cmd = (
-            "docker buildx imagetools create --prefer-index=false "
-            f"--tag ghcr.io/{REPOSITORY}:latest ghcr.io/{REPOSITORY}:v{published}"
-        )
+        next_cmd = "see docs/operations/RELEASE_PROCESS.md#promoting-a-verified-container-manual-fallback"
         issues.append(
             {
                 "code": "latest_image_missing",
@@ -214,10 +211,12 @@ def assess(
             key=lambda ref: _key(ref[1:]),
         )
         serves = ", ".join(matches) if matches else "an image no checked tag names"
-        next_cmd = (
-            "docker buildx imagetools create --prefer-index=false "
-            f"--tag ghcr.io/{REPOSITORY}:latest ghcr.io/{REPOSITORY}:v{published}"
-        )
+        if matches and _key(matches[-1][1:]) > _key(published):
+            # Promotion already moved `latest` to the newer tag; the pin PR just needs to land.
+            ahead_tag = matches[-1]
+            next_cmd = f"unitares-github --read-only -- gh pr list --head publish/{ahead_tag} --state open"
+        else:
+            next_cmd = "see docs/operations/RELEASE_PROCESS.md#promoting-a-verified-container-manual-fallback"
         issues.append(
             {
                 "code": "latest_not_published_version",
@@ -234,7 +233,7 @@ def assess(
             if newest not in released:
                 next_cmd = (
                     f'unitares-github -- gh release create v{newest} '
-                    f'--title "v{newest}" --notes-file .git/release-prep/release-notes-{newest}.md'
+                    f'--title "v{newest}" --notes-file "$(git rev-parse --git-dir)/release-prep/release-notes-{newest}.md"'
                 )
             elif digests.get(f"v{newest}") is None:
                 next_cmd = f"python3 scripts/ops/prepare_release.py --check-ghcr --version {newest}"
@@ -251,7 +250,7 @@ def assess(
                 }
             )
         if _key(source) < _key(newest):
-            next_cmd = "python3 scripts/ops/version_manager.py --check"
+            next_cmd = f"python3 scripts/ops/version_manager.py --set {newest} && python3 scripts/ops/version_manager.py --update"
             issues.append(
                 {
                     "code": "source_version_behind_tag",
@@ -267,7 +266,7 @@ def assess(
     # visible after a newer mainline tag exists.
     for version in sorted(tagged - on_head, key=_key):
         next_cmd = (
-            f"git checkout -b chore/forward-merge-v{version} origin/master && "
+            f"git checkout -b <author>/forward-merge-v{version}-<id> origin/master && "
             f"git merge --no-ff v{version} && unitares-github -- gh pr create --draft"
         )
         issues.append(

@@ -433,6 +433,28 @@ def test_post_release_commits_before_tagging_stay_out_of_coverage_and_fragments(
     result_after_errata = _run(repo.path, COVERAGE)
     assert result_after_errata.returncode == 0, result_after_errata.stdout + result_after_errata.stderr
 
+    # Even if an older maintenance tag (v1.0.5) is forward-merged onto master after the 1.1.0
+    # release commit before v1.1.0 is tagged, previous_release_tag describes from the anchor:
+    repo._git("checkout", "-q", "-b", "maint/1.0", "v1.0.0")
+    repo.commit("fix: maint (#50)", {"maint.txt": "1\n"})
+    repo.tag("v1.0.5")
+    repo._git("checkout", "-q", "master")
+    repo._git("merge", "--no-ff", "-q", "-m", "Merge v1.0.5 into master (#102)", "v1.0.5")
+    result_after_maint = _run(repo.path, COVERAGE)
+    assert result_after_maint.returncode == 0, result_after_maint.stdout + result_after_maint.stderr
+    assert "1.1.0 since v1.0.0" in result_after_maint.stdout
+
+
+def test_followup_fragment_deletion_commit_on_release_branch_advances_anchor(repo: Repo):
+    """Deleting a leftover fragment in a follow-up commit on a release branch clears the gate."""
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    _release(repo, cited="- **things:** alpha (#10)")
+    assert _run(repo.path, COVERAGE).returncode == 1
+    repo._git("rm", "-q", FRAGMENT)
+    repo._git("commit", "-q", "-m", "fix: remove assembled fragment")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout + result.stderr
+
 
 def test_pr_merge_commit_into_master_includes_master_prs_since_branch_point(repo: Repo):
     """In GitHub Actions pull_request runs, HEAD merges the PR branch into master.

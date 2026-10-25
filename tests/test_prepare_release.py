@@ -77,6 +77,10 @@ def test_run_skill_freshness_fails_closed_on_absent_cited_source(tmp_path: Path)
     with pytest.raises(RuntimeError, match="absent cited sources"):
         prepare_release.run_skill_freshness(tmp_path, tmp_path.parent, prune_keep=None)
 
+    script.unlink()
+    with pytest.raises(FileNotFoundError, match="Required skill freshness script is missing"):
+        prepare_release.run_skill_freshness(tmp_path, tmp_path.parent, prune_keep=None)
+
 
 def test_check_ghcr_visibility_distinguishes_public_private_and_missing():
     responses = {
@@ -144,6 +148,10 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
             dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
     current_ver = (root / "VERSION").read_text(encoding="utf-8").strip()
+    freshness_stub = repo / "scripts" / "client" / "check-skill-freshness.sh"
+    freshness_stub.parent.mkdir(parents=True, exist_ok=True)
+    freshness_stub.write_text("#!/usr/bin/env bash\necho '[FRESH] all skills'\nexit 0\n", encoding="utf-8")
+    freshness_stub.chmod(freshness_stub.stat().st_mode | stat.S_IEXEC)
     (repo / "VERSION").write_text(f"{current_ver}\n", encoding="utf-8")
     (repo / "PUBLISHED_VERSION").write_text(f"{current_ver}\n", encoding="utf-8")
     (repo / "CITATION.cff").write_text(

@@ -199,8 +199,8 @@ def release_tags() -> list[str]:
     return [t for t in out.splitlines() if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
 
 
-def previous_release_tag(version: str, tags: list[str]) -> str | None:
-    """Nearest ancestor release tag of HEAD, falling back to `tags` for error reporting."""
+def previous_release_tag(version: str, tags: list[str], anchor: str = "HEAD") -> str | None:
+    """Nearest ancestor release tag of `anchor`, falling back to `tags` for error reporting."""
     proc = subprocess.run(
         [
             "git",
@@ -213,6 +213,7 @@ def previous_release_tag(version: str, tags: list[str]) -> str | None:
             "v[0-9]*.[0-9]*.[0-9]*",
             "--exclude",
             f"v{version}",
+            anchor,
         ],
         capture_output=True,
         text=True,
@@ -233,13 +234,24 @@ def _version_at(ref: str) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
+def _deletes_fragment(sha: str) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "diff-tree", "--no-commit-id", "--name-status", "-r", sha, "--", "docs/changelog.d"],
+        capture_output=True,
+        text=True,
+    )
+    return any(line.startswith("D\t") for line in proc.stdout.splitlines())
+
+
 def release_anchor(version: str) -> str:
     """Commit on the first-parent chain that cut `version`.
 
     Walking `--first-parent` preserves GitHub Actions `pull_request` merge
     commits (where `HEAD` merges the release branch into `master`, so
     `HEAD:VERSION == version` while `HEAD^1:VERSION != version`, keeping the
-    anchor at `HEAD` and walking `master` history). Once the release commit has
+    anchor at `HEAD` and walking `master` history). When an upstream base branch
+    exists and still carries an older `VERSION`, the current checkout is an
+    unmerged release branch and anchors at `HEAD`. Once the release commit has
     landed on `master`, later non-release commits (including errata edits to
     older changelog entries) have `<sha>^1:VERSION == version` and a non-release
     subject, so the anchor stays at the release commit.
@@ -249,6 +261,10 @@ def release_anchor(version: str) -> str:
         capture_output=True,
     )
     if dirty.returncode != 0:
+        return "HEAD"
+
+    base = _base_branch(version)
+    if base and _version_at(base) != version:
         return "HEAD"
 
     proc = subprocess.run(
@@ -263,7 +279,7 @@ def release_anchor(version: str) -> str:
         sha, _, subject = line.partition("\t")
         if _version_at(sha) != version:
             break
-        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version:
+        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version or _deletes_fragment(sha):
             return sha
     return "HEAD"
 
@@ -278,7 +294,11 @@ def entry_section(version: str) -> str | None:
     return text[start:] if nxt == -1 else text[start:nxt]
 
 
-def merged_prs(since_tag: str, until_ref: str = "HEAD") -> tuple[dict[int, tuple[str, str]], list[str]]:
+def merged_prs(
+    since_tag: str,
+    until_ref: str = "HEAD",
+    version: str | None = None,
+) -> tuple[dict[int, tuple[str, str]], list[str]]:
     """(PR number -> (subject, sha), unattributed subjects) over the first-parent walk.
 
     First-parent is the list of changes that landed on this branch, one entry per
@@ -296,7 +316,7 @@ def merged_prs(since_tag: str, until_ref: str = "HEAD") -> tuple[dict[int, tuple
     # Commits on the release branch itself have not been merged yet, so they
     # carry no reference and never will until this PR lands. Only a commit that
     # is ALREADY on the base branch without a reference indicates a real gap.
-    base = _base_branch()
+    base = _base_branch(version)
     found: dict[int, tuple[str, str]] = {}
     unattributed: list[str] = []
     for line in out.splitlines():
@@ -304,7 +324,7 @@ def merged_prs(since_tag: str, until_ref: str = "HEAD") -> tuple[dict[int, tuple
         match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
         if match:
             found[int(match.group(1))] = (subject, sha)
-        elif RELEASE_CHORE.match(subject):
+        elif RELEASE_CHORE.match(subject) or _deletes_fragment(sha):
             continue
         elif base and not is_ancestor(sha, base):
             continue
@@ -313,9 +333,23 @@ def merged_prs(since_tag: str, until_ref: str = "HEAD") -> tuple[dict[int, tuple
     return found, unattributed
 
 
-def _base_branch() -> str | None:
-    """The upstream default branch, if this checkout can see it."""
-    for ref in ("origin/master", "origin/main"):
+def _base_branch(version: str | None = None) -> str | None:
+    """The upstream target branch (`origin/release/X.Y` or `origin/master`), if visible."""
+    candidates: list[str] = []
+    if version and "." in version:
+        series = version.rsplit(".", 1)[0]
+        candidates.append(f"origin/release/{series}")
+    branch_proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "symbolic-ref", "-q", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if branch_proc.returncode == 0:
+        branch = branch_proc.stdout.strip()
+        if branch.startswith("release/"):
+            candidates.append(f"origin/{branch}")
+    candidates.extend(["origin/master", "origin/main"])
+    for ref in candidates:
         if subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
             capture_output=True,
@@ -433,7 +467,7 @@ def main() -> int:
               "be measured. Check out with fetch-depth: 0.", file=sys.stderr)
         return 0 if list_only else 1
 
-    previous = previous_release_tag(version, tags)
+    previous = previous_release_tag(version, tags, anchor=anchor)
     if previous is None:
         print("[changelog-coverage] no prior release tag — cannot establish a "
               "baseline. This is a genuine first release only if the tag list is "
@@ -445,7 +479,7 @@ def main() -> int:
               "range would be meaningless.", file=sys.stderr)
         return 0 if list_only else 1
 
-    merged_with_sha, unattributed = merged_prs(previous, anchor)
+    merged_with_sha, unattributed = merged_prs(previous, anchor, version=version)
     merged = {n: subj for n, (subj, _sha) in merged_with_sha.items()}
 
     # A dependabot bump is excluded only when its own merge proves it inert;

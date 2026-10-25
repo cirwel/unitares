@@ -60,8 +60,8 @@ holds `actions: write` for the dispatch (operator decision, 2026-10-18, KG
      `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py scripts/ci/plugin_file_lease_proof.py scripts/ci/kg_graph_proof.py docker-compose.full.yml .github/workflows/docker-quickstart.yml`,
    - writes draft release notes (`release-notes-X.Y.Z.md`), PR body
      (`pr-body-X.Y.Z.md`), and any uncited PR candidates (`uncited-prs-X.Y.Z.txt`)
-     under `.git/release-prep/` so untracked `.md` files never trip
-     `check_doc_sprawl.py`.
+     under `$(git rev-parse --git-dir)/release-prep/` so untracked `.md` files
+     never trip `check_doc_sprawl.py`.
 3. **[Releasing agent] Resolve remaining release-seam items and compatibility prose.**
    - For every uncited PR listed by `changelog_coverage.py`, either fold a bullet
      into `## [X.Y.Z]` or add a reviewed one-line exemption comment
@@ -87,7 +87,7 @@ holds `actions: write` for the dispatch (operator decision, 2026-10-18, KG
    creates names that agent as its tagger, not the Git identity configured on the
    host.
 6. **[Releasing agent] Publish the GitHub release page (triggers `Publish Container` and Zenodo).**
-   Run `unitares-github -- gh release create vX.Y.Z --title "vX.Y.Z" --notes-file .git/release-prep/release-notes-X.Y.Z.md`.
+   Run `unitares-github -- gh release create vX.Y.Z --title "vX.Y.Z" --notes-file "$(git rev-parse --git-dir)/release-prep/release-notes-X.Y.Z.md"`.
    Publishing the release page automatically triggers `Publish Container`
    (`publish-container.yml`, `on: release: types: [published]`), which builds
    and attests `linux/amd64` and `linux/arm64` images for `ghcr.io/cirwel/unitares`,
