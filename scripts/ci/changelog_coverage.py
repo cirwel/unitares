@@ -326,26 +326,42 @@ def merged_prs(
 
 def _base_branch(version: str | None = None) -> str | None:
     """The upstream target branch (`origin/release/X.Y` or `origin/master`), if visible."""
-    candidates: list[str] = []
-    if version and "." in version:
-        series = version.rsplit(".", 1)[0]
-        candidates.append(f"origin/release/{series}")
     branch_proc = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "symbolic-ref", "-q", "--short", "HEAD"],
         capture_output=True,
         text=True,
     )
-    if branch_proc.returncode == 0:
-        branch = branch_proc.stdout.strip()
-        if branch.startswith("release/"):
-            candidates.append(f"origin/{branch}")
-    candidates.extend(["origin/master", "origin/main"])
-    for ref in candidates:
+    branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else ""
+    if branch.startswith("release/"):
+        ref = f"origin/{branch}"
         if subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
             capture_output=True,
         ).returncode == 0:
             return ref
+
+    for ref in ("origin/master", "origin/main"):
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
+            capture_output=True,
+        ).returncode == 0:
+            if is_ancestor(ref, "HEAD") or not version or "." not in version:
+                return ref
+            series_ref = f"origin/release/{version.rsplit('.', 1)[0]}"
+            if subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", series_ref],
+                capture_output=True,
+            ).returncode == 0 and is_ancestor(series_ref, "HEAD"):
+                return series_ref
+            return ref
+
+    if version and "." in version:
+        series_ref = f"origin/release/{version.rsplit('.', 1)[0]}"
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", series_ref],
+            capture_output=True,
+        ).returncode == 0:
+            return series_ref
     return None
 
 

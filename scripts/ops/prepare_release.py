@@ -494,7 +494,7 @@ def prepare_release(
         )
         version_sync_ok = vm_check_proc.returncode == 0
         components = read_component_versions(repo_root)
-    except Exception:
+    except BaseException:
         _restore_tree(snapshot)
         raise
     finally:
