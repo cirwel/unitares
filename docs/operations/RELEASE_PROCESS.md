@@ -226,15 +226,13 @@ The SDK has its own version series in `agents/sdk/pyproject.toml`.
    `pytest agents/sdk/tests -q`, and merge the PR to `master` before advertising
    the new SDK version on any public install surface (`published_claims.py` blocks
    advertising an untagged SDK version).
-2. **[Releasing agent] Tag `sdk-vX.Y.Z` at the merged `master` commit.**
+2. **[Releasing agent] Tag and push `sdk-vX.Y.Z` at the merged `master` commit (triggers `publish-sdk.yml`).**
    Confirm the `pypi` GitHub environment and PyPI trusted publisher are
    registered for `cirwel/unitares` / `publish-sdk.yml`. Create and push
-   `sdk-vX.Y.Z` at the merged commit (`publish-sdk.yml` refuses a tag whose
-   version differs from `agents/sdk/pyproject.toml`).
-3. **[Releasing agent] Publish the GitHub release for `sdk-vX.Y.Z` (triggers PyPI publish).**
-   Run `unitares-github -- gh release create sdk-vX.Y.Z --title "unitares-sdk vX.Y.Z" --notes "..."`
-   (or dispatch `publish-sdk.yml`).
-4. **[Operator] Approve the `pypi` environment if gated, then verify PyPI.**
+   `sdk-vX.Y.Z` at the merged commit (`git tag -s sdk-vX.Y.Z <merged-sha> -m "unitares-sdk vX.Y.Z" && unitares-github -- git push origin sdk-vX.Y.Z`);
+   pushing the `sdk-v*` tag triggers `publish-sdk.yml`, which refuses a tag whose
+   version differs from `agents/sdk/pyproject.toml`.
+3. **[Operator / Releasing agent] Approve the `pypi` environment if gated, then verify PyPI.**
    Verify the published distribution and test `pip install unitares-sdk==X.Y.Z`
    in a clean environment before updating public install pins. PyPI names and
    released versions are permanent public state; never publish from an unmerged

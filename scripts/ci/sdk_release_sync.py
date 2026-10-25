@@ -105,11 +105,11 @@ def assess(
 
     if declared != published:
         if declared not in tagged:
-            next_cmd = f'git tag -s sdk-v{declared} <sdk-commit-sha> -m "unitares-sdk v{declared}" && git push origin sdk-v{declared}'
+            next_cmd = f'git tag -s sdk-v{declared} <sdk-commit-sha> -m "unitares-sdk v{declared}" && unitares-github -- git push origin sdk-v{declared}'
         else:
             next_cmd = (
-                f'unitares-github -- gh release create sdk-v{declared} '
-                f'--title "unitares-sdk v{declared}" --notes "Release unitares-sdk {declared}"'
+                f"unitares-github --read-only -- gh run list "
+                f"--workflow publish-sdk.yml --branch sdk-v{declared} --limit 1"
             )
         issues.append(
             {

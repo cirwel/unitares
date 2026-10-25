@@ -234,15 +234,6 @@ def _version_at(ref: str) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def _deletes_fragment(sha: str) -> bool:
-    proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "diff-tree", "--no-commit-id", "--name-status", "-r", sha, "--", "docs/changelog.d"],
-        capture_output=True,
-        text=True,
-    )
-    return any(line.startswith("D\t") for line in proc.stdout.splitlines())
-
-
 def release_anchor(version: str) -> str:
     """Commit on the first-parent chain that cut `version`.
 
@@ -279,7 +270,7 @@ def release_anchor(version: str) -> str:
         sha, _, subject = line.partition("\t")
         if _version_at(sha) != version:
             break
-        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version or _deletes_fragment(sha):
+        if RELEASE_CHORE.match(subject) or _version_at(f"{sha}^1") != version:
             return sha
     return "HEAD"
 
@@ -324,7 +315,7 @@ def merged_prs(
         match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
         if match:
             found[int(match.group(1))] = (subject, sha)
-        elif RELEASE_CHORE.match(subject) or _deletes_fragment(sha):
+        elif RELEASE_CHORE.match(subject):
             continue
         elif base and not is_ancestor(sha, base):
             continue

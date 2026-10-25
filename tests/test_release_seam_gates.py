@@ -446,7 +446,8 @@ def test_post_release_commits_before_tagging_stay_out_of_coverage_and_fragments(
 
 
 def test_followup_fragment_deletion_commit_on_release_branch_advances_anchor(repo: Repo):
-    """Deleting a leftover fragment in a follow-up commit on a release branch clears the gate."""
+    """Deleting a leftover fragment in a follow-up commit on an unmerged release branch clears the gate."""
+    repo._git("update-ref", "refs/remotes/origin/master", "v1.0.0")
     repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
     _release(repo, cited="- **things:** alpha (#10)")
     assert _run(repo.path, COVERAGE).returncode == 1

@@ -127,6 +127,31 @@ def _version_at(ref: str) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
+def _base_branch(version: str | None = None) -> str | None:
+    """The upstream target branch (`origin/release/X.Y` or `origin/master`), if visible."""
+    candidates: list[str] = []
+    if version and "." in version:
+        series = version.rsplit(".", 1)[0]
+        candidates.append(f"origin/release/{series}")
+    branch_proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "symbolic-ref", "-q", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if branch_proc.returncode == 0:
+        branch = branch_proc.stdout.strip()
+        if branch.startswith("release/"):
+            candidates.append(f"origin/{branch}")
+    candidates.extend(["origin/master", "origin/main"])
+    for ref in candidates:
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
+            capture_output=True,
+        ).returncode == 0:
+            return ref
+    return None
+
+
 def release_anchor(version: str) -> str:
     """Commit on the first-parent chain that cut `version`."""
     dirty = subprocess.run(
@@ -134,6 +159,10 @@ def release_anchor(version: str) -> str:
         capture_output=True,
     )
     if dirty.returncode != 0:
+        return "HEAD"
+
+    base = _base_branch(version)
+    if base and _version_at(base) != version:
         return "HEAD"
 
     proc = subprocess.run(

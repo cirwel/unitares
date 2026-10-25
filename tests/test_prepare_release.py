@@ -74,7 +74,7 @@ def test_run_skill_freshness_fails_closed_on_absent_cited_source(tmp_path: Path)
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
-    with pytest.raises(RuntimeError, match="absent cited sources"):
+    with pytest.raises(RuntimeError, match=r"cited source\(s\) absent"):
         prepare_release.run_skill_freshness(tmp_path, tmp_path.parent, prune_keep=None)
 
     script.unlink()
@@ -196,6 +196,23 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
     assert "NEEDS-QUICKSTART" in pr_body
     assert "1 uncited PR(s)" in pr_body
     # Dry-run restores the working tree
+    assert (repo / "VERSION").read_text(encoding="utf-8").strip() == current_ver
+
+    # Non-dry-run rolls back the working tree if skill freshness fails
+    freshness_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "FRESH skill (1 cited source(s) absent from this checkout, not covered)"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match=r"cited source\(s\) absent"):
+        prepare_release.prepare_release(
+            repo_root=repo,
+            part="patch",
+            release_date="2026-10-25",
+            output_dir=out_dir,
+            dry_run=False,
+        )
     assert (repo / "VERSION").read_text(encoding="utf-8").strip() == current_ver
 
 

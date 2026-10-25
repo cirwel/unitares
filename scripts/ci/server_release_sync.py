@@ -250,7 +250,7 @@ def assess(
                 }
             )
         if _key(source) < _key(newest):
-            next_cmd = f"python3 scripts/ops/version_manager.py --set {newest} && python3 scripts/ops/version_manager.py --update"
+            next_cmd = f"printf '%s\\n' '{newest}' > VERSION && python3 scripts/ops/version_manager.py --update"
             issues.append(
                 {
                     "code": "source_version_behind_tag",

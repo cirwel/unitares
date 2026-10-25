@@ -410,7 +410,7 @@ def prepare_release(
     old_version = read_current_version(repo_root)
     new_version = bump_semver(old_version, part)
 
-    snapshot = _snapshot_tree(repo_root) if dry_run else {}
+    snapshot = _snapshot_tree(repo_root)
     try:
         # 1. Fold changelog fragments into ## [Unreleased]
         assemble_proc = subprocess.run(
@@ -494,6 +494,9 @@ def prepare_release(
         )
         version_sync_ok = vm_check_proc.returncode == 0
         components = read_component_versions(repo_root)
+    except Exception:
+        _restore_tree(snapshot)
+        raise
     finally:
         if dry_run:
             _restore_tree(snapshot)
