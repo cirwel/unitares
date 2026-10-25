@@ -94,7 +94,7 @@ python src/mcp_server.py --port 8767
    export UNITARES_MCP_BEARER_TOKENS="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
    ```
 
-   Comma-separated values let an old and a new token overlap during a rotation; the server reads the list from its environment, so a changed list takes effect on restart. For OAuth 2.1 with Dynamic Client Registration, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-hosted-claudeai-perplexity-etc) and `src/oauth_provider.py`). OAuth protects the `/mcp` resource by default; use `UNITARES_OAUTH_RESOURCE_URL` only if a proxy exposes it at a different public URL. OAuth gates `/mcp` on every request, which locks out local clients that do not speak OAuth; set `UNITARES_OAUTH_PUBLIC_PORT` to give the tunnel its own OAuth-gated loopback listener. While dynamic registration is open (the default) and sign-in auto-approves, any caller can mint a token: set `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false` to admit only pre-registered clients.
+   Comma-separated values let an old and a new token overlap during a rotation; the server reads the list from its environment, so a changed list takes effect on restart. For OAuth 2.1, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-hosted-claudeai-perplexity-etc) and `src/oauth_provider.py`). OAuth protects the `/mcp` resource by default; use `UNITARES_OAUTH_RESOURCE_URL` only if a proxy exposes it at a different public URL. OAuth gates `/mcp` on every request, which locks out local clients that do not speak OAuth; set `UNITARES_OAUTH_PUBLIC_PORT` to give the tunnel its own OAuth-gated loopback listener. Dynamic registration and automatic approval are closed by default. Configure a static client for ordinary use, or deliberately set both `UNITARES_OAUTH_DYNAMIC_REGISTRATION=true` and `UNITARES_OAUTH_AUTO_APPROVE=true` during a bounded enrollment window, then close them and restart.
 
 After changing any of these, restart and sanity-check from outside:
 
@@ -117,7 +117,8 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_OAUTH_ISSUER_URL` | Enable OAuth 2.1 / DCR |
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_OAUTH_PUBLIC_PORT` | Confine OAuth to a separate loopback listener, so local non-OAuth clients keep `/mcp` |
-| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `false` admits only pre-registered OAuth clients (open by default) |
+| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | Open dynamic client registration deliberately (`false` by default) |
+| `UNITARES_OAUTH_AUTO_APPROVE` | Approve newly registered dynamic clients during a bounded enrollment window (`false` by default) |
 | `UNITARES_TRUSTED_NETWORKS` | Extra CIDRs whose callers skip REST auth, added to the built-in loopback and private RFC1918 ranges |
 | `REDIS_URL` | Redis URL (default `redis://localhost:6379/0`) |
 | `UNITARES_TOOL_ADVERTISEMENT` | `progressive` (default, small initial `tools/list`) or `full` |

@@ -110,13 +110,19 @@ tool runs:
      values keep old and new tokens valid together, so a rotation needs a
      restart but no lockout window.
 
-   - **OAuth 2.1.** Set `UNITARES_OAUTH_ISSUER_URL` to the public base URL. The
-     server then advertises Dynamic Client Registration, so a DCR-capable
-     client (e.g. Claude.ai custom connector) leaves client_id/client_secret
-     blank and self-registers. Client registrations and issued tokens are
+   - **OAuth 2.1.** Set `UNITARES_OAUTH_ISSUER_URL` to the public base URL.
+     Dynamic Client Registration is closed by default; when an operator opens
+     it, a DCR-capable client (e.g. Claude.ai custom connector) leaves
+     client_id/client_secret blank and self-registers. Client registrations and issued tokens are
      kept in Redis (keys `unitares:oauth:*`, token keys are SHA-256 digests,
      TTLs follow token lifetimes), so a restart does not sign connectors out;
-     with Redis unavailable they fall back to memory and reset on restart.
+     with Redis unavailable they fall back to per-client-bounded memory and
+     reset on restart. One client's token-cache churn cannot evict another
+     client's live tokens. The separate dynamic-client cache is globally
+     bounded; without Redis, churn during an open registration window can
+     evict a cached registration and require that client to register again.
+     Authorization codes carry signed, five-minute state rather than occupying
+     a server-side pending-code cache.
      The protected MCP resource defaults to
      `<UNITARES_OAUTH_ISSUER_URL>/mcp`; set `UNITARES_OAUTH_RESOURCE_URL` only
      if a reverse proxy exposes the MCP resource at a different public URL.
@@ -132,7 +138,7 @@ tool runs:
      export UNITARES_OAUTH_STATIC_REDIRECT_URIS="<redirect URI the connector shows>"
      ```
 
-     The static client comes from the environment on every start (it is
+     A configured static client is explicitly approved. It comes from the environment on every start (it is
      never written to Redis, so rotating its secret takes effect on the next
      restart); its tokens persist like any other. The token
      endpoint accepts its secret either in the form body or as HTTP Basic.
@@ -161,15 +167,25 @@ tool runs:
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 
-     **Close registration if the gate should exclude anyone.** Sign-in is
-     auto-approved, so while dynamic registration is open any caller can
-     register a client and mint a token. Set
-     `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false` to admit only
-     pre-registered clients. Set it (like every `UNITARES_OAUTH_*` variable)
-     in the LaunchAgent plist or process environment: it is read at import,
-     before `~/.env.mcp` loads, and a value that arrives only from
-     `~/.env.mcp` leaves registration open (startup logs an error; the
-     OAuth startup line states whether registration is open). One static client can serve several
+     **Open enrollment only as a bounded operator action.** Dynamic
+     registration and automatic approval are both closed by default. A
+     dynamically registered client cannot complete authorization unless the
+     operator deliberately enables both controls:
+
+     ```bash
+     export UNITARES_OAUTH_DYNAMIC_REGISTRATION=true
+     export UNITARES_OAUTH_AUTO_APPROVE=true
+     ```
+
+     While both are enabled, any caller that can reach the endpoint can
+     register and mint a token. Put the values (like every
+     `UNITARES_OAUTH_*` variable) in the LaunchAgent plist or process
+     environment because they are read at import, before `~/.env.mcp` loads.
+     Close the enrollment window by setting both values to `false` and
+     restarting. The OAuth startup line states both controls; opening
+     registration without automatic approval logs a warning because new
+     clients can register but cannot complete their first sign-in.
+     One static client can serve several
      connectors: list each connector's redirect URI in
      `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
      same ID and secret into each (claude.ai: the custom connector's
@@ -179,15 +195,18 @@ tool runs:
      **access** token stops every connector on that client from refreshing,
      across restarts (their current access tokens still work until they
      expire, up to an hour); revoking a **refresh** token ends only that one. Give each connector its own client via DCR
-     if either matters. Alternatively, open registration briefly to add a
-     DCR connector and close it again: a registration that received a token
-     is kept in Redis, so it stays connected. `POST /register` alone writes
-     nothing to Redis, but while registration is open and sign-in is
-     auto-approved, anyone can still register, sign in and obtain a token,
-     which writes a client and its tokens to Redis; only closing
-     registration bounds that. Closing it bounds **new** registrations
-     only: a DCR client that already holds a token stays admitted (each
-     refresh renews it). To evict every client and token, **stop** the
+     if either matters. Alternatively, open registration and approval briefly
+     to add a DCR connector and close both again: a registration that received a token
+     is kept in Redis and remains approved for later sign-ins while that
+     stored registration exists. `POST /register` alone writes
+     nothing to Redis, but while registration and approval are open, anyone
+     can still register, sign in and obtain a token,
+     which writes a client and its tokens to Redis. Closing either control
+     stops that enrollment path; close both to make the operator posture
+     unambiguous. Closing them bounds **new** registrations only: a DCR
+     client that has received a token stays admitted, and later token issuance
+     renews its registration for 30 days. A client idle beyond that window must
+     be enrolled again. To evict every client and token, **stop** the
      server, delete the OAuth keys, then start it. Deleting while it runs
      does not work: the process still holds the tokens in memory and writes
      them back on the next refresh or sign-in. With launchd (KeepAlive
