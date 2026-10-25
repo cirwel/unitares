@@ -507,6 +507,33 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
     assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
     assert band |> LazyHTML.attribute("title") |> hd() =~ "since resumed"
+
+    # Reloading during an outage (or toggling substrate without a new re-read)
+    # preserves the retained pause closure even though the resume mark is gone.
+    view |> element("#substrate-toggle") |> render_click()
+    [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    assert band |> LazyHTML.attribute("title") |> hd() =~ "since resumed"
+
+    # A second live pause after the evicted resume closes the first pause at
+    # the retained resume and draws an open band for the new pause.
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => at.(-500),
+         "agent_id" => @a,
+         "event_type" => "lifecycle_paused",
+         "provisional" => true
+       }}
+    )
+
+    [first_band, second_band] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert first_band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    assert first_band |> LazyHTML.attribute("title") |> hd() =~ "since resumed"
+    refute second_band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    assert second_band |> LazyHTML.attribute("title") |> hd() =~ "Paused since"
   end
 
   test "rows freed by the cap leave on the next prune", %{conn: conn} do
@@ -572,6 +599,60 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
 
     assert eventually(fn -> has_element?(view, "#mark-detail", "later report") end)
+  end
+
+  test "a confirmed check-in selection follows the feed's claimed pairing across rapid frames",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    first_frame_ts = iso(-600)
+    second_frame_ts = iso(-400)
+
+    broadcast_frame(ctx, %{
+      "type" => "eisv_update",
+      "agent_id" => @a,
+      "timestamp" => first_frame_ts
+    })
+
+    broadcast_frame(ctx, %{
+      "type" => "eisv_update",
+      "agent_id" => @a,
+      "timestamp" => second_frame_ts
+    })
+
+    assert_receive {:timeline_delta, "1h", _}
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+
+    # Select the second live check-in mark (lanes render marks oldest first).
+    [_first_node, second_node] = nodes(view, "#agent-#{@a} .tl-mk.checkin")
+    [second_live_id] = LazyHTML.attribute(second_node, "id")
+    view |> element("##{second_live_id}") |> render_click()
+
+    row = fn ms, text ->
+      %{
+        "kind" => "checkin",
+        "ts" => iso(ms),
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "state_id" => text,
+        "report_excerpt" => text
+      }
+    end
+
+    # Both rows fall within both 2 s lag windows; the feed claims the latest
+    # row (-700 ms) for the oldest mark and pairs the remaining row (-800 ms)
+    # with the second mark.
+    serve(ctx.stub, fn conn ->
+      Req.Test.json(
+        conn,
+        window_body([row.(-800, "paired with second mark"), row.(-700, "claimed by first mark")])
+      )
+    end)
+
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn -> has_element?(view, "#mark-detail", "paired with second mark") end)
   end
 
   test "pruning keeps an unresumed pause but lets a resumed one age out with its resume",
