@@ -7,6 +7,11 @@ Local authors can run a reviewer directly. Any author with GitHub access can
 request the shared host with the review-requested label. Both routes publish
 the same diff-bound records; an unavailable reviewer never counts as a pass.
 
+Keep this file from growing. Most of its commits have been fixes to the gate
+itself, so a new edge case is answered with a disposition (`dispose`, with a
+reason), not with new code. Change the gate when it is wrong, not to cover a
+case a reason would settle.
+
     review         run a review of HEAD's diff and post the record on its PR
     record         post a review that already happened elsewhere (a council,
                    a human, another model) as the record for this diff
