@@ -195,10 +195,11 @@ history and failure counts. It preserves the diff, provenance, findings and
 model-family checks; a shared bot identity does not prove reviewer independence.
 Bot comments cannot grant an operator waiver, even with a write association.
 The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
-user-authored approval; it never lets the App issue one. The `waive` and
-legacy `--authorize-full-review` CLI paths verify a user account via
-GitHub and refuse App credentials or an unreadable actor. All agents use the
-shared App; the operator's user account is reserved for operator actions.
+user-authored approval; it never lets the App issue one. The `waive` CLI path
+verifies a user account via GitHub and refuses App credentials or an unreadable
+actor; `--authorize-full-review REASON` records an explicit reason for an
+additional full review cycle under either user or App credentials. All agents
+use the shared App; the operator's user account is reserved for operator waivers.
 
 The purpose is another useful perspective on substantive work, not a required
 sequence of model invocations. Choose the review that helps the change:
@@ -433,13 +434,9 @@ confirmed a bounded correction or clarification without scope expansion.
 The optional `git config review.verifier ollama:<model>` route remains
 available for minor-finding verification; no verifier is required by default.
 
-After cycle three, a new full cycle needs explicit operator approval. P0/P1
-and security findings remain blockers; exhausting the budget never creates
-approval. The operator may still invoke
-`review.sh --authorize-full-review "operator request and reason"` using a user
-account for one additional invocation. App credentials cannot use that flag.
+After cycle three, a new full cycle requires an explicit reason (`review.sh --authorize-full-review "reason"`). P0/P1 and security findings remain blockers; exhausting the budget never turns an unreviewed diff into a passing review. When the first model family completed via a `scope=fix` follow-up and the second family has not yet run a full cycle on the PR, that missing second family can run directly on the current diff without extra flags. Agents running under `unitares-github` App credentials can pass `--authorize-full-review "reason"` directly without needing a separate operator account or comment.
 
-For an App-executable approval, the capped CLI prints a ready-to-post comment:
+For compatibility, the capped CLI also supports a scoped PR comment (`--review-cycle-grant <comment-id>`):
 
 ```text
 <!-- unitares-review-cycle v1 head=<40-hex-commit> key=<64-hex-diff-key> after=<current-cycle-count> expires=<unix-seconds> -->
