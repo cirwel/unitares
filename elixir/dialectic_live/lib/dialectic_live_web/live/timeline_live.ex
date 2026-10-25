@@ -4,17 +4,29 @@ defmodule DialecticLiveWeb.TimelineLive do
   `docs/proposals/active/portal-live-timeline-v0.md` §3.4).
 
   Reads `DialecticLive.TimelineFeed.snapshot/2` on mount and on each re-read,
-  and inserts provisional marks as they arrive, without a refetch. It renders:
+  and adds provisional marks as they arrive, without a refetch. It draws the
+  same lanes as the dashboard's Timeline tab (`dashboard/redesign/sections/
+  timeline.js`): one row per agent across the window, marks placed in time,
+  bands for pauses and dialectic reviews, subagents nested under a visible
+  parent. Selecting a mark shows its record. Around the lanes:
 
-    * a reverse-chronological feed capped at 200 rows, provisional rows
-      styled apart from history;
-    * an "agents now" strip, one row per agent in the window's roster, capped
-      at 25 with show-all and a text filter; order is recomputed on re-read
-      only, while "last seen" ticks;
+    * rows ordered by the most recent event of each family, recomputed on
+      re-read only so rows do not jump while you read; an agent first seen
+      live joins at the top. The first 25 show until "show all", with a text
+      filter on label, id or model type;
     * a header naming the firehose and LiveView socket state, time since the
       last frame and the last re-read, truncation, which kinds are live and
       which re-read only, and the event-to-push latency (frame timestamp to
-      stream insert, measured here, server side) as trial telemetry.
+      the mark's arrival here, server side) as trial telemetry.
+
+  The window slides without re-rendering the marks: each mark carries its
+  time as `--t` (seconds from a per-page anchor, small enough for `calc()`
+  to stay precise), and the lanes container sets `--start`, `--span` and
+  `--now`, which the one-second tick updates (`assets/css/app.css`).
+
+  The M1 form, a reverse-chronological feed plus an "agents now" strip, read
+  as a long list beside the tab in the operator's first look (2026-10-25), so
+  the pane took the tab's lanes.
 
   Grouping and styling use record fields only; nothing here branches on an
   agent's name, resident or vendor. The pane only reads: it makes no
@@ -24,9 +36,22 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   alias DialecticLive.{Firehose, TimelineAdapter, TimelineFeed}
 
-  @feed_cap 200
   @agents_cap 25
   @latency_samples 50
+  @ticks 6
+
+  # How a lineage child relates to its parent, by its spawn_reason. Mirrors
+  # the tab and src/identity/lineage_semantics.py: only dispatched children
+  # are subagents; explicit/new_session are successions and compaction
+  # continues the same work.
+  @relations %{
+    "subagent" => :dispatched,
+    "dialectic_reviewer" => :dispatched,
+    "dispatch" => :dispatched,
+    "compaction" => :continuation,
+    "explicit" => :succession,
+    "new_session" => :succession
+  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -35,10 +60,10 @@ defmodule DialecticLiveWeb.TimelineLive do
     table = Keyword.get(cfg, :table, TimelineFeed.default_table())
     window = TimelineFeed.window_for_hours(Keyword.get(cfg, :default_window_hours, 1))
     pubsub = Keyword.get(cfg, :pubsub, DialecticLive.PubSub)
+    now = DateTime.utc_now()
 
     socket =
-      socket
-      |> assign(
+      assign(socket,
         page_title: "Timeline",
         feed: feed,
         table: table,
@@ -48,11 +73,14 @@ defmodule DialecticLiveWeb.TimelineLive do
         filter_form: to_form(%{"q" => ""}),
         show_all_agents: false,
         latencies: [],
-        now: DateTime.utc_now(),
+        now: now,
+        anchor: DateTime.to_unix(now),
         meta: %{},
-        feed_reachable: true
+        feed_reachable: true,
+        marks: %{},
+        row_order: [],
+        selected: nil
       )
-      |> stream_configure(:feed, dom_id: &TimelineAdapter.dom_id/1)
 
     socket =
       if connected?(socket) do
@@ -110,7 +138,7 @@ defmodule DialecticLiveWeb.TimelineLive do
   @impl true
   def handle_event("window", %{"w" => window}, socket) do
     if window in TimelineFeed.windows() do
-      {:noreply, socket |> assign(window: window) |> load()}
+      {:noreply, socket |> assign(window: window, selected: nil) |> load()}
     else
       {:noreply, socket}
     end
@@ -120,25 +148,32 @@ defmodule DialecticLiveWeb.TimelineLive do
     do: {:noreply, socket |> assign(substrate: !socket.assigns.substrate) |> load()}
 
   def handle_event("filter", %{"q" => q}, socket),
-    do: {:noreply, assign(socket, filter: String.trim(q), filter_form: to_form(%{"q" => q}))}
+    do:
+      {:noreply,
+       socket |> assign(filter: String.trim(q), filter_form: to_form(%{"q" => q})) |> relane()}
 
   def handle_event("show_all_agents", _params, socket),
-    do: {:noreply, assign(socket, show_all_agents: !socket.assigns.show_all_agents)}
+    do: {:noreply, socket |> assign(show_all_agents: !socket.assigns.show_all_agents) |> relane()}
+
+  def handle_event("select", %{"id" => id}, socket) do
+    selected = if socket.assigns.selected == id, do: nil, else: id
+    {:noreply, assign(socket, selected: selected)}
+  end
 
   # --- loading ---
 
   defp load(socket) do
     case TimelineFeed.snapshot(socket.assigns.window, socket.assigns.table) do
       {:ok, snap} ->
-        marks = snap.events ++ snap.provisional
+        all = snap.events ++ snap.provisional
+        last_seen = Enum.reduce(all, roster_last_seen(snap.agents), &bump_last_seen(&2, &1))
 
-        rows =
-          marks
+        marks =
+          all
           |> Enum.filter(&visible?(&1, socket.assigns.substrate))
-          |> Enum.sort_by(&sort_key/1, :desc)
-          |> Enum.take(@feed_cap)
+          |> Map.new(&{TimelineAdapter.dom_id(&1), &1})
 
-        last_seen = Enum.reduce(marks, roster_last_seen(snap.agents), &bump_last_seen(&2, &1))
+        roster = for %{"agent_id" => id} = a <- snap.agents, is_binary(id), into: %{}, do: {id, a}
 
         socket
         |> assign(
@@ -147,12 +182,13 @@ defmodule DialecticLiveWeb.TimelineLive do
           truncated: snap.truncated,
           last_reread_at: snap.last_reread_at,
           meta: snap.meta,
-          labels: Map.new(snap.agents, &{&1["agent_id"], &1["label"]}),
-          agents: order_agents(snap.agents, last_seen),
+          labels: Map.new(roster, fn {id, a} -> {id, a["label"]} end),
+          roster: roster,
           last_seen: last_seen,
-          feed_shown: Enum.map(rows, &{sort_key(&1), TimelineAdapter.dom_id(&1)})
+          marks: marks,
+          row_order: order_rows(roster, marks, last_seen)
         )
-        |> stream(:feed, rows, reset: true)
+        |> relane()
 
       :unavailable ->
         socket
@@ -162,11 +198,12 @@ defmodule DialecticLiveWeb.TimelineLive do
           truncated: [],
           last_reread_at: nil,
           labels: %{},
-          agents: [],
+          roster: %{},
           last_seen: %{},
-          feed_shown: []
+          marks: %{},
+          row_order: []
         )
-        |> stream(:feed, [], reset: true)
+        |> relane()
     end
   end
 
@@ -186,36 +223,49 @@ defmodule DialecticLiveWeb.TimelineLive do
   defp visible?(%{"kind" => "checkin", "authored_by" => by}, false), do: by == "agent"
   defp visible?(_mark, _substrate), do: true
 
-  defp sort_key(mark), do: TimelineAdapter.ts_us(mark["ts"]) || 0
-
-  # Streams cannot be read back, so the pane keeps the shown rows as
-  # `{timestamp, dom id}` (newest first, at most the cap) to insert a delta at
-  # its place in time. A delta whose row is already shown (a re-read that
-  # already held it, handled before its queued delta) changes nothing. A delta
-  # older than every row of a full feed is not shown; the cap prunes from the
-  # oldest end.
+  # A delta is drawn on its owner's lane. A delta already held (a re-read
+  # that already had it, handled before its queued delta) changes nothing,
+  # and one from before the window would sit off the left edge, so neither
+  # is added. The agent was seen either way. An owner with no row yet joins
+  # at the top; the rest keep their order until the next re-read.
   defp insert_mark(socket, mark) do
-    ts = sort_key(mark)
-    id = TimelineAdapter.dom_id(mark)
-    shown = socket.assigns.feed_shown
-    # The agent was seen whether or not its mark is shown.
     socket = assign(socket, last_seen: bump_last_seen(socket.assigns.last_seen, mark))
-
-    {newer, older} = Enum.split_while(shown, fn {t, _} -> t >= ts end)
-    at = length(newer)
+    id = TimelineAdapter.dom_id(mark)
 
     cond do
-      Enum.any?(shown, fn {_, shown_id} -> shown_id == id end) ->
+      Map.has_key?(socket.assigns.marks, id) ->
         socket
 
-      at >= @feed_cap ->
+      not in_window?(mark, socket.assigns) ->
         socket
 
       true ->
         socket
-        |> stream_insert(:feed, mark, at: at, limit: @feed_cap)
-        |> assign(feed_shown: Enum.take(newer ++ [{ts, id} | older], @feed_cap))
+        |> assign(marks: Map.put(socket.assigns.marks, id, mark))
+        |> assign(row_order: join_order(socket.assigns.row_order, mark))
+        |> relane()
     end
+  end
+
+  defp in_window?(mark, assigns) do
+    case TimelineAdapter.ts_us(mark["ts"]) do
+      nil ->
+        false
+
+      us ->
+        start = DateTime.to_unix(assigns.now, :microsecond) - hours(assigns) * 3_600_000_000
+        us >= start
+    end
+  end
+
+  defp join_order(order, mark) do
+    present = MapSet.new(order, fn {id, _depth, _parent} -> id end)
+
+    mark
+    |> lane_ids()
+    |> Enum.reject(&MapSet.member?(present, &1))
+    |> Enum.reverse()
+    |> Enum.reduce(order, fn id, acc -> [{id, 0, nil} | acc] end)
   end
 
   defp record_latency(socket, mark, now) do
@@ -230,40 +280,344 @@ defmodule DialecticLiveWeb.TimelineLive do
   end
 
   defp roster_last_seen(agents) do
-    Map.new(agents, fn a -> {a["agent_id"], TimelineAdapter.ts_us(a["last_activity_at"])} end)
-  end
-
-  defp bump_last_seen(last_seen, %{"agent_id" => id, "ts" => ts}) when is_binary(id) do
-    case TimelineAdapter.ts_us(ts) do
-      nil -> last_seen
-      us -> Map.update(last_seen, id, us, &max(&1 || 0, us))
+    for %{"agent_id" => id} = a <- agents, is_binary(id), into: %{} do
+      {id, TimelineAdapter.ts_us(a["last_activity_at"])}
     end
   end
 
-  defp bump_last_seen(last_seen, _mark), do: last_seen
+  # A lineage mark belongs to its parent's row; the child gets a row too.
+  defp bump_last_seen(last_seen, mark) do
+    case TimelineAdapter.ts_us(mark["ts"]) do
+      nil ->
+        last_seen
 
-  defp order_agents(agents, last_seen) do
-    Enum.sort_by(agents, &(Map.get(last_seen, &1["agent_id"]) || 0), :desc)
+      us ->
+        Enum.reduce(lane_ids(mark), last_seen, fn id, acc ->
+          Map.update(acc, id, us, &max(&1 || 0, us))
+        end)
+    end
   end
 
-  defp agents_cap, do: @agents_cap
+  # --- lanes ---
 
-  defp shown_agents(agents, filter, show_all?) do
+  # The row a mark is drawn on: a lineage mark on the parent that declared
+  # the child, every other mark on its own agent.
+  defp owner(%{"kind" => "lineage", "parent_agent_id" => parent}) when is_binary(parent),
+    do: parent
+
+  defp owner(%{"agent_id" => id}) when is_binary(id), do: id
+  defp owner(_mark), do: nil
+
+  # Every row a mark implies: its owner, and a lineage child's own row.
+  defp lane_ids(mark) do
+    child = if is_binary(mark["agent_id"]), do: [mark["agent_id"]], else: []
+    Enum.uniq(Enum.filter([owner(mark)], &is_binary/1) ++ child)
+  end
+
+  defp parent_of(id, roster, lineage_parents) do
+    from_roster = get_in(roster, [id, "parent_agent_id"])
+    if is_binary(from_roster), do: from_roster, else: Map.get(lineage_parents, id)
+  end
+
+  # Rows as `{agent_id, depth, parent}`. A family sorts by its most recent
+  # member, so a busy subagent under a quiet parent still lands near the top
+  # rather than past the row cap; children follow their parent.
+  defp order_rows(roster, marks, last_seen) do
+    ids =
+      marks
+      |> Map.values()
+      |> Enum.flat_map(&lane_ids/1)
+      |> Enum.concat(Map.keys(roster))
+      |> Enum.uniq()
+
+    present = MapSet.new(ids)
+
+    lineage_parents =
+      for {_, %{"kind" => "lineage", "agent_id" => child, "parent_agent_id" => parent}} <- marks,
+          is_binary(child) and is_binary(parent),
+          into: %{},
+          do: {child, parent}
+
+    parent =
+      Map.new(ids, fn id ->
+        p = parent_of(id, roster, lineage_parents)
+        {id, if(p != id and MapSet.member?(present, p), do: p, else: nil)}
+      end)
+
+    kids = Enum.group_by(Enum.filter(ids, &parent[&1]), &parent[&1])
+    recency = Map.new(ids, &{&1, family_last(&1, kids, last_seen, MapSet.new())})
+    by_recency = Enum.sort_by(ids, &recency[&1], :desc)
+
+    roots = Enum.filter(by_recency, &is_nil(parent[&1]))
+
+    {ordered, placed} =
+      Enum.reduce(roots, {[], MapSet.new()}, &place(&1, 0, &2, kids, recency, parent))
+
+    # Anything left sits in a parent cycle; place it flat.
+    {ordered, _} =
+      Enum.reduce(by_recency, {ordered, placed}, fn id, {acc, seen} ->
+        if MapSet.member?(seen, id),
+          do: {acc, seen},
+          else: {[{id, 0, nil} | acc], MapSet.put(seen, id)}
+      end)
+
+    Enum.reverse(ordered)
+  end
+
+  defp family_last(id, kids, last_seen, seen) do
+    own = Map.get(last_seen, id) || 0
+
+    if MapSet.member?(seen, id) do
+      own
+    else
+      seen = MapSet.put(seen, id)
+      Enum.reduce(Map.get(kids, id, []), own, &max(&2, family_last(&1, kids, last_seen, seen)))
+    end
+  end
+
+  defp place(id, depth, {acc, placed}, kids, recency, parent) do
+    if MapSet.member?(placed, id) do
+      {acc, placed}
+    else
+      acc = [{id, depth, if(depth > 0, do: parent[id])} | acc]
+
+      kids
+      |> Map.get(id, [])
+      |> Enum.sort_by(&recency[&1], :desc)
+      |> Enum.reduce(
+        {acc, MapSet.put(placed, id)},
+        &place(&1, depth + 1, &2, kids, recency, parent)
+      )
+    end
+  end
+
+  # Builds the shown lanes into an assign, so the one-second tick, which only
+  # moves the window's CSS variables, never re-renders a mark.
+  defp relane(socket) do
+    %{row_order: order, marks: marks, labels: labels, roster: roster} = socket.assigns
+    by_owner = marks |> Enum.group_by(fn {_id, m} -> owner(m) end) |> Map.delete(nil)
+
     matching =
-      case String.downcase(filter) do
+      case String.downcase(socket.assigns.filter) do
         "" ->
-          agents
+          order
 
         q ->
-          Enum.filter(agents, fn a ->
-            Enum.any?([a["label"], a["agent_id"], a["model_type"]], fn v ->
+          Enum.filter(order, fn {id, _, _} ->
+            Enum.any?([labels[id], id, get_in(roster, [id, "model_type"])], fn v ->
               is_binary(v) and String.contains?(String.downcase(v), q)
             end)
           end)
       end
 
-    {if(show_all?, do: matching, else: Enum.take(matching, @agents_cap)), length(matching)}
+    shown =
+      if socket.assigns.show_all_agents, do: matching, else: Enum.take(matching, @agents_cap)
+
+    anchor = socket.assigns.anchor
+
+    lanes =
+      for {id, depth, parent} <- shown do
+        own = by_owner |> Map.get(id, []) |> Enum.sort_by(fn {_, m} -> sort_key(m) end)
+        meta = Map.get(roster, id, %{})
+
+        %{
+          id: id,
+          depth: depth,
+          name: agent_name(labels, id),
+          sub: lane_sub(depth, parent, meta, own, labels),
+          marks:
+            for(
+              {mid, m} <- own,
+              m["kind"] != "dialectic",
+              do: mark_view(mid, m, anchor, roster, labels)
+            ),
+          bands: bands(own, anchor, labels)
+        }
+      end
+
+    assign(socket,
+      lanes: lanes,
+      lanes_matching: length(matching),
+      lanes_total: length(order)
+    )
   end
+
+  defp lane_sub(depth, parent, meta, _own, labels) when depth > 0 and is_binary(parent),
+    do:
+      "↳ " <> relation_row(relation_of(meta["spawn_reason"])) <> " " <> agent_name(labels, parent)
+
+  defp lane_sub(_depth, _parent, meta, own, _labels) do
+    checkins =
+      Enum.count(own, fn {_, m} -> m["kind"] == "checkin" and m["authored_by"] == "agent" end)
+
+    joined([
+      txt(meta["model_type"]),
+      txt(meta["trust_tier"]),
+      "#{checkins} check-in#{if checkins == 1, do: "", else: "s"}"
+    ])
+  end
+
+  defp relation_of(reason) when is_binary(reason), do: Map.get(@relations, reason, :unknown)
+  defp relation_of(_), do: :unknown
+
+  defp relation_row(:dispatched), do: "subagent of"
+  defp relation_row(:succession), do: "successor of"
+  defp relation_row(:continuation), do: "continues"
+  defp relation_row(:unknown), do: "declared lineage from"
+
+  defp relation_mark(:dispatched), do: "Started a subagent"
+  defp relation_mark(:succession), do: "Handed off to a successor"
+  defp relation_mark(:continuation), do: "Continued after compaction"
+  defp relation_mark(:unknown), do: "Declared lineage"
+
+  defp relation_name(:dispatched), do: "dispatched subagent"
+  defp relation_name(:succession), do: "succession (handoff)"
+  defp relation_name(:continuation), do: "context continuation"
+  defp relation_name(:unknown), do: "declared, kind not registered"
+
+  defp lineage_relation(mark, roster),
+    do: relation_of(get_in(roster, [mark["agent_id"], "spawn_reason"]))
+
+  # Seconds from the page's anchor, one decimal: small numbers keep calc()
+  # precise in every engine.
+  defp rel_s(ts, anchor) do
+    case TimelineAdapter.ts_us(ts) do
+      nil -> nil
+      us -> Float.round(us / 1_000_000 - anchor, 1)
+    end
+  end
+
+  defp mark_view(id, m, anchor, roster, labels) do
+    {cls, glyph} = mark_class(m)
+
+    %{
+      id: id,
+      kind: txt(m["kind"]),
+      cls: cls,
+      glyph: glyph,
+      t: rel_s(m["ts"], anchor),
+      provisional: m["provisional"] == true,
+      seen_live: m["seen_live"] == true,
+      label:
+        joined([
+          mark_title(m, roster),
+          agent_name(labels, owner(m)),
+          utc(m["ts"]),
+          assessment(m)
+        ])
+    }
+  end
+
+  defp mark_class(%{"kind" => "checkin"} = m) do
+    case m["authored_by"] do
+      "agent" ->
+        {"checkin " <> action_class(m["action"]), ""}
+
+      # A live check-in: the frame cannot say who wrote it. Its shape comes
+      # from the EISV assessment when one rode along.
+      "unknown" ->
+        case live_verdict(m) do
+          nil -> {"checkin unassessed", ""}
+          verdict -> {"checkin " <> action_class(verdict), ""}
+        end
+
+      _ ->
+        {"checkin substrate", ""}
+    end
+  end
+
+  defp mark_class(%{"kind" => "outcome", "is_bad" => true}), do: {"outcome bad", "✕"}
+  defp mark_class(%{"kind" => "outcome"}), do: {"outcome", "✓"}
+  defp mark_class(%{"kind" => kind}) when kind in ~w(knowledge lineage lifecycle), do: {kind, ""}
+  defp mark_class(_m), do: {"other", ""}
+
+  defp live_verdict(%{"assessment" => %{"verdict" => v}}) when is_binary(v), do: v
+  defp live_verdict(_m), do: nil
+
+  defp action_class(action) do
+    case action |> to_string() |> String.downcase() do
+      "guide" -> "guide"
+      v when v in ["pause", "reject"] -> "pause"
+      _ -> "proceed"
+    end
+  end
+
+  # Pause bands pair lifecycle_paused with the next lifecycle_resumed on the
+  # same row; a resume with no pause in the window started before it, and a
+  # pause with no resume runs to now. Dialectic sessions draw from creation
+  # to close, or to now while active; the server's `ts` may precede the
+  # window, which the CSS clamps.
+  defp bands(own, anchor, labels) do
+    {pauses, open} =
+      Enum.reduce(own, {[], nil}, fn
+        {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"} = m}, {acc, nil} ->
+          {acc, {id, m}}
+
+        {_id, %{"kind" => "lifecycle", "event_type" => "lifecycle_paused"}}, {acc, held} ->
+          {acc, held}
+
+        {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_resumed"} = m}, {acc, held} ->
+          {from_id, from} = held || {id, nil}
+
+          band = %{
+            id: "pause-" <> from_id,
+            sel: from_id,
+            cls: "pause",
+            t: if(from, do: rel_s(from["ts"], anchor), else: :before),
+            t2: rel_s(m["ts"], anchor),
+            label:
+              "Paused, " <>
+                if(from, do: utc(from["ts"]), else: "before the window") <> " to " <> utc(m["ts"])
+          }
+
+          {[band | acc], nil}
+
+        _, state ->
+          state
+      end)
+
+    pauses =
+      case open do
+        nil ->
+          pauses
+
+        {id, m} ->
+          [
+            %{
+              id: "pause-" <> id,
+              sel: id,
+              cls: "pause",
+              t: rel_s(m["ts"], anchor),
+              t2: nil,
+              label: "Paused since " <> utc(m["ts"])
+            }
+            | pauses
+          ]
+      end
+
+    dialectic =
+      for {id, %{"kind" => "dialectic"} = m} <- own do
+        %{
+          id: "dialectic-" <> id,
+          sel: id,
+          cls: "dialectic",
+          t: rel_s(m["ts"], anchor),
+          t2: rel_s(m["end"], anchor),
+          label:
+            joined([
+              "Dialectic review",
+              txt(m["status"]),
+              m["reviewer_agent_id"] && "reviewer " <> agent_name(labels, m["reviewer_agent_id"])
+            ])
+        }
+      end
+
+    Enum.reverse(pauses) ++ dialectic
+  end
+
+  defp sort_key(mark), do: TimelineAdapter.ts_us(mark["ts"]) || 0
+
+  defp hours(assigns), do: TimelineFeed.window_hours(assigns.window)
 
   # --- formatting ---
 
@@ -276,18 +630,16 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   defp agent_name(_labels, _id), do: "unknown agent"
 
-  defp clock(ts) do
+  defp utc(ts) do
     case TimelineAdapter.ts_us(ts) do
       nil -> "—"
-      us -> us |> DateTime.from_unix!(:microsecond) |> Calendar.strftime("%H:%M:%S")
+      us -> us |> DateTime.from_unix!(:microsecond) |> Calendar.strftime("%Y-%m-%d %H:%M:%S UTC")
     end
   end
 
   defp ago(nil, _now), do: "never"
 
   defp ago(%DateTime{} = then, now), do: ago_us(DateTime.to_unix(then, :microsecond), now)
-
-  defp ago_us(nil, _now), do: "—"
 
   defp ago_us(us, now) do
     secs = max(0, div(DateTime.to_unix(now, :microsecond) - us, 1_000_000))
@@ -335,6 +687,45 @@ defmodule DialecticLiveWeb.TimelineLive do
     end
   end
 
+  # The window's CSS variables, in seconds from the anchor.
+  defp lane_vars(now, anchor, hours) do
+    span = hours * 3600
+    at = DateTime.to_unix(now) - anchor
+    "--now:#{at};--start:#{at - span};--span:#{span}"
+  end
+
+  defp axis_ticks(now, hours) do
+    span = hours * 3600
+    end_s = DateTime.to_unix(now)
+
+    for i <- 0..@ticks do
+      label =
+        if i == @ticks,
+          do: "now",
+          else:
+            (end_s - span + div(i * span, @ticks))
+            |> DateTime.from_unix!()
+            |> Calendar.strftime("%H:%M")
+
+      {Float.round(i * 100 / @ticks, 3), label}
+    end
+  end
+
+  defp mark_style(%{t: nil}), do: "display:none"
+  defp mark_style(%{t: t}), do: "--t:#{t}"
+
+  defp band_style(%{t: :before} = b), do: "--t:-1000000000" <> band_end(b)
+  defp band_style(%{t: nil}), do: "display:none"
+  defp band_style(%{t: t} = b), do: "--t:#{t}" <> band_end(b)
+
+  # An open band leaves --t2 unset and the CSS falls back to --now.
+  defp band_end(%{t2: nil}), do: ""
+  defp band_end(%{t2: t2}), do: ";--t2:#{t2}"
+
+  defp counts(marks) do
+    Enum.reduce(Map.values(marks), %{}, fn m, acc -> Map.update(acc, m["kind"], 1, &(&1 + 1)) end)
+  end
+
   # Record fields arrive from the server as JSON; anything that is not text or
   # a number renders as absent rather than raising in a template.
   defp txt(v) when is_binary(v) and v != "", do: v
@@ -343,49 +734,143 @@ defmodule DialecticLiveWeb.TimelineLive do
 
   defp joined(parts), do: parts |> Enum.filter(&is_binary/1) |> Enum.join(" · ")
 
-  defp prefixed(_label, nil), do: nil
-  defp prefixed(label, value), do: label <> " " <> value
+  defp num(v) when is_number(v), do: :erlang.float_to_binary(v / 1, decimals: 2)
+  defp num(_), do: nil
 
-  defp detail(%{"kind" => "checkin"} = m),
-    do: joined([prefixed("by", txt(m["authored_by"])), txt(m["epistemic_class"])])
-
-  defp detail(%{"kind" => "outcome"} = m),
-    do:
-      joined([
-        txt(m["outcome_type"]),
-        prefixed("score", txt(m["outcome_score"])),
-        m["is_bad"] == true && "bad"
-      ])
-
-  defp detail(%{"kind" => "lifecycle"} = m), do: joined([txt(m["event_type"]), txt(m["reason"])])
-
-  defp detail(%{"kind" => "knowledge"} = m),
-    do: joined([txt(m["discovery_type"]), txt(m["summary"])])
-
-  defp detail(%{"kind" => "lineage"} = m) do
-    parent = txt(m["parent_agent_id"])
-
-    joined([
-      parent && "declared parent " <> String.slice(parent, 0, 8),
-      txt(m["successor_class"])
-    ])
+  defp mark_title(%{"kind" => "checkin"} = m, _roster) do
+    case m["authored_by"] do
+      "agent" -> "Check-in · " <> (txt(m["action"]) || "unknown")
+      "unknown" -> "Live check-in"
+      _ -> "Hook observation"
+    end
   end
 
-  defp detail(%{"kind" => "dialectic"} = m),
-    do: joined([txt(m["session_type"]), txt(m["status"]), txt(m["phase"])])
+  defp mark_title(%{"kind" => "outcome"} = m, _roster),
+    do: "Outcome · " <> if(m["is_bad"] == true, do: "failed", else: "passed")
 
-  defp detail(_m), do: ""
+  defp mark_title(%{"kind" => "knowledge"}, _roster), do: "Finding shared"
+
+  defp mark_title(%{"kind" => "lineage"} = m, roster),
+    do: relation_mark(lineage_relation(m, roster))
+
+  defp mark_title(%{"kind" => "lifecycle"} = m, _roster) do
+    case txt(m["event_type"]) do
+      nil -> "Lifecycle"
+      t -> t |> String.replace_prefix("lifecycle_", "") |> String.replace("_", " ")
+    end
+  end
+
+  defp mark_title(%{"kind" => "dialectic"}, _roster), do: "Dialectic review"
+  defp mark_title(m, _roster), do: txt(m["kind"]) || "event"
 
   # The check-in verdict is a governance assessment, not part of the core
   # record. A live mark carries it as an EISV decoration; a history row carries
-  # the persisted `action`, which is the same verdict. Both render the same way,
-  # so a row does not change label when the re-read confirms it.
+  # the persisted `action`, which is the same verdict. Both read the same way,
+  # so a mark does not change label when the re-read confirms it.
   defp assessment(%{"assessment" => %{"verdict" => verdict}}), do: assessment_text(txt(verdict))
   defp assessment(%{"kind" => "checkin", "action" => action}), do: assessment_text(txt(action))
   defp assessment(_m), do: nil
 
   defp assessment_text(nil), do: nil
   defp assessment_text(verdict), do: "assessment: " <> verdict
+
+  # The selected record as label/value rows, mirroring the tab's panel.
+  defp detail_rows(m, labels, roster) do
+    name = fn id -> if is_binary(id), do: agent_name(labels, id), else: "—" end
+    or_dash = fn v -> txt(v) || "—" end
+    base = [{"Agent", name.(owner(m))}, {"Time", utc(m["ts"])}]
+
+    kind_rows =
+      case m["kind"] do
+        "checkin" ->
+          by =
+            case m["authored_by"] do
+              "agent" -> "The agent (sync_state)"
+              "unknown" -> "Not known until the re-read confirms it"
+              _ -> "A hook, not the agent"
+            end
+
+          [
+            {"Written by", by},
+            {"Action", or_dash.(m["action"])},
+            {"Verdict", or_dash.(m["verdict"])},
+            {"Risk", num(m["risk_score"]) || "—"}
+          ] ++
+            if m["authored_by"] == "agent" do
+              [
+                {"Report",
+                 txt(m["report_excerpt"]) || "Report text not retained for this check-in."}
+              ] ++
+                if Map.has_key?(m, "confidence_reported"),
+                  do: [{"Reported confidence", num(m["confidence_reported"]) || "none reported"}],
+                  else: []
+            else
+              []
+            end ++
+            if(assessment(m) && m["authored_by"] == "unknown",
+              do: [{"Assessment", live_verdict(m) || "—"}],
+              else: []
+            )
+
+        "outcome" ->
+          [
+            {"Type", or_dash.(m["outcome_type"])},
+            {"Result", if(m["is_bad"] == true, do: "failed", else: "passed")},
+            {"Score", txt(m["outcome_score"]) || "—"},
+            {"Reported confidence", num(m["reported_confidence"]) || "none reported"},
+            {"Verified by", (txt(m["verification_source"]) || "—") |> String.replace("_", " ")}
+          ]
+
+        "knowledge" ->
+          [{"Summary", or_dash.(m["summary"])}, {"Type", or_dash.(m["discovery_type"])}]
+
+        "lineage" ->
+          relation = lineage_relation(m, roster)
+
+          [
+            {"Child", name.(m["agent_id"])},
+            {"Parent", name.(m["parent_agent_id"])},
+            {"Relationship", relation_name(relation)},
+            {"Spawn reason",
+             txt(get_in(roster, [m["agent_id"], "spawn_reason"])) || "not recorded"}
+          ]
+
+        "lifecycle" ->
+          [
+            {"Event", (txt(m["event_type"]) || "—") |> String.replace("_", " ")},
+            {"Reason", or_dash.(m["reason"])}
+          ]
+
+        "dialectic" ->
+          [
+            {"Closed", if(m["end"], do: utc(m["end"]), else: "still open")},
+            {"Reviewer", name.(m["reviewer_agent_id"])},
+            {"Status", or_dash.(m["status"])},
+            {"Phase", or_dash.(m["phase"])}
+          ]
+
+        _ ->
+          []
+      end
+
+    base ++ kind_rows
+  end
+
+  defp detail_note(m) do
+    cond do
+      m["provisional"] == true ->
+        "Arrived live. A re-read confirms it against the server's history."
+
+      m["seen_live"] == true ->
+        "Seen live before the re-read confirmed it."
+
+      m["kind"] == "checkin" and m["authored_by"] not in ["agent", "unknown"] ->
+        "Recorded automatically. It is evidence about the agent, not a claim the agent made."
+
+      true ->
+        nil
+    end
+  end
 
   # --- render ---
 
@@ -395,10 +880,11 @@ defmodule DialecticLiveWeb.TimelineLive do
       assigns
       |> assign(:reread_only_reason, checkins_reread_only_reason(assigns))
       |> assign(:latency, latency_summary(assigns.latencies))
-      |> assign(:shown, shown_agents(assigns.agents, assigns.filter, assigns.show_all_agents))
+      |> assign(:hours, hours(assigns))
+      |> assign(:sel_mark, assigns.selected && Map.get(assigns.marks, assigns.selected))
 
     ~H"""
-    <div class="mx-auto max-w-5xl p-6 space-y-4">
+    <div class="mx-auto max-w-7xl p-6 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h1 class="text-2xl font-semibold">Timeline — live</h1>
         <div class="flex items-center gap-2">
@@ -482,70 +968,133 @@ defmodule DialecticLiveWeb.TimelineLive do
         The timeline feed is unavailable. Nothing is shown until it runs.
       </div>
 
-      <section id="timeline-agents" class="space-y-2">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-semibold">Agents now ({elem(@shown, 1)})</h2>
-          <.form for={@filter_form} id="agent-filter" phx-change="filter">
-            <.input field={@filter_form[:q]} type="text" placeholder="filter agents" />
-          </.form>
-        </div>
-        <div :if={@agents == []} id="agents-empty" class="text-base-content/60 text-sm">
-          No agents in this window.
-        </div>
-        <ul class="grid gap-1 sm:grid-cols-2 text-sm">
-          <li
-            :for={a <- elem(@shown, 0)}
-            id={"agent-#{a["agent_id"]}"}
-            class="flex justify-between gap-2 rounded bg-base-200 px-2 py-1"
-          >
-            <span class="truncate">
-              {agent_name(@labels, a["agent_id"])}
-              <span :if={a["model_type"]} class="text-base-content/60">· {a["model_type"]}</span>
-            </span>
-            <span class="text-base-content/60 shrink-0">
-              {ago_us(Map.get(@last_seen, a["agent_id"]), @now)}
-            </span>
-          </li>
-        </ul>
-        <button
-          :if={elem(@shown, 1) > agents_cap()}
-          id="show-all-agents"
-          phx-click="show_all_agents"
-          class="btn btn-xs btn-ghost"
-        >
-          {if @show_all_agents, do: "show fewer", else: "show all #{elem(@shown, 1)}"}
-        </button>
-      </section>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <p id="lane-counts" class="text-sm text-base-content/70">
+          <% c = counts(@marks) %> Last {@hours} h · {@lanes_total} agent{if @lanes_total == 1,
+            do: "",
+            else: "s"} · {Map.get(c, "checkin", 0)} check-ins · {Map.get(c, "outcome", 0)} outcomes · {Map.get(
+            c,
+            "dialectic",
+            0
+          )} dialectic sessions · times UTC
+        </p>
+        <.form for={@filter_form} id="agent-filter" phx-change="filter">
+          <.input field={@filter_form[:q]} type="text" placeholder="filter agents" />
+        </.form>
+      </div>
 
-      <section class="space-y-2">
-        <h2 class="font-semibold">Feed (newest first, up to 200)</h2>
-        <%!-- Outside the stream container, so stream_insert's `at:` indexes count rows only. --%>
-        <p :if={@feed_shown == []} id="feed-empty" class="text-sm text-base-content/60">
+      <section id="timeline-lanes" class="tl-panel" style={lane_vars(@now, @anchor, @hours)}>
+        <div class="tl-row tl-axis">
+          <div class="tl-lab text-xs uppercase tracking-wide text-base-content/60">Agent</div>
+          <div class="tl-track">
+            <span
+              :for={{pct, label} <- axis_ticks(@now, @hours)}
+              class="tl-tick"
+              style={"left:#{pct}%"}
+            >
+              {label}
+            </span>
+          </div>
+        </div>
+        <p :if={@lanes_total == 0} id="lanes-empty" class="px-5 py-4 text-sm text-base-content/60">
           Nothing in this window yet.
         </p>
-        <ul id="timeline-feed" phx-update="stream" class="space-y-1 text-sm">
-          <li
-            :for={{id, m} <- @streams.feed}
-            id={id}
-            data-kind={m["kind"]}
-            data-provisional={m["provisional"] && "true"}
-            class={[
-              "rounded px-2 py-1 flex gap-3",
-              if(m["provisional"],
-                do: "border border-dashed border-info",
-                else: "bg-base-200"
-              )
-            ]}
-          >
-            <span class="font-mono text-base-content/60 shrink-0">{clock(m["ts"])}</span>
-            <span class="badge badge-ghost badge-sm shrink-0">{m["kind"]}</span>
-            <span class="truncate shrink-0 max-w-40">{agent_name(@labels, m["agent_id"])}</span>
-            <span class="truncate grow">{detail(m)}</span>
-            <span :if={assessment(m)} class="badge badge-outline badge-sm shrink-0">{assessment(m)}</span>
-            <span :if={m["provisional"]} class="badge badge-info badge-sm shrink-0">live</span>
-            <span :if={m["seen_live"]} class="badge badge-ghost badge-sm shrink-0">seen live</span>
-          </li>
-        </ul>
+        <p
+          :if={@lanes_total > 0 and @lanes == []}
+          id="lanes-nomatch"
+          class="px-5 py-4 text-sm text-base-content/60"
+        >
+          No agent matches “{@filter}”.
+        </p>
+        <div
+          :for={lane <- @lanes}
+          :key={lane.id}
+          id={"agent-#{lane.id}"}
+          class={["tl-row", lane.depth > 0 && "child"]}
+        >
+          <div class="tl-lab">
+            <div class="tl-name" title={lane.id}>{lane.name}</div>
+            <div class="tl-sub">{lane.sub}</div>
+          </div>
+          <div class="tl-track">
+            <button
+              :for={b <- lane.bands}
+              :key={b.id}
+              type="button"
+              id={b.id}
+              class={["tl-band", b.cls, @selected == b.sel && "sel"]}
+              style={band_style(b)}
+              phx-click="select"
+              phx-value-id={b.sel}
+              title={b.label}
+              aria-label={b.label}
+            ></button>
+            <button
+              :for={m <- lane.marks}
+              :key={m.id}
+              type="button"
+              id={m.id}
+              class={["tl-mk", m.cls, @selected == m.id && "sel"]}
+              style={mark_style(m)}
+              data-kind={m.kind}
+              data-provisional={m.provisional && "true"}
+              data-seen-live={m.seen_live && "true"}
+              phx-click="select"
+              phx-value-id={m.id}
+              title={m.label}
+              aria-label={m.label}
+            >
+              <span class="tl-dot">{m.glyph}</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div :if={@lanes_matching > length(@lanes) or @show_all_agents} class="flex items-center gap-3">
+        <button id="show-all-agents" phx-click="show_all_agents" class="btn btn-xs btn-ghost">
+          {if @show_all_agents,
+            do: "show the 25 most recent",
+            else: "show all #{@lanes_matching} agents"}
+        </button>
+        <span class="text-xs text-base-content/60">
+          {length(@lanes)} of {@lanes_matching} shown, most recent first
+        </span>
+      </div>
+
+      <div class="tl-legend text-xs text-base-content/70" id="lane-legend">
+        <span><span class="tl-mk checkin proceed"><span class="tl-dot"></span></span>proceed</span>
+        <span><span class="tl-mk checkin guide"><span class="tl-dot"></span></span>guide</span>
+        <span><span class="tl-mk checkin pause"><span class="tl-dot"></span></span>pause</span>
+        <span>
+          <span class="tl-mk checkin substrate"><span class="tl-dot"></span></span>hook observation
+        </span>
+        <span>
+          <span class="tl-mk checkin unassessed" data-provisional="true"><span class="tl-dot"></span></span>live, not yet confirmed
+        </span>
+        <span><span class="tl-mk outcome"><span class="tl-dot">✓</span></span>outcome passed</span>
+        <span><span class="tl-mk outcome bad"><span class="tl-dot">✕</span></span>outcome failed</span>
+        <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
+        <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage</span>
+        <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
+        <span><span class="tl-band pause"></span>paused</span>
+        <span><span class="tl-band dialectic"></span>dialectic review</span>
+      </div>
+
+      <section id="mark-detail" class="rounded-box border border-base-300 p-5 text-sm">
+        <%= if @sel_mark do %>
+          <h2 class="font-semibold mb-2">{mark_title(@sel_mark, @roster)}</h2>
+          <p :if={detail_note(@sel_mark)} class="text-base-content/70 mb-3">
+            {detail_note(@sel_mark)}
+          </p>
+          <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
+            <%= for {k, v} <- detail_rows(@sel_mark, @labels, @roster) do %>
+              <dt class="text-base-content/60">{k}</dt>
+              <dd class="break-words">{v}</dd>
+            <% end %>
+          </dl>
+        <% else %>
+          <p class="text-base-content/60">Select a mark to see its record.</p>
+        <% end %>
       </section>
     </div>
     """

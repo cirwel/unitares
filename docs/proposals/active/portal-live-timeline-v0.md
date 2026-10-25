@@ -112,6 +112,7 @@ Everything else is dropped before ETS: `knowledge_read`, `identity_*`, `dashboar
 
 - A reverse-chronological feed capped at 200 rows, with provisional rows styled distinctly.
 - An "agents now" strip: one row per agent from `agents[]`, capped at 25 with show-all, a text filter, and a ticking "last seen". Order is recomputed only on re-read.
+- **Superseded 2026-10-25 by the tab's lanes.** At the operator's first look the tab "looks like a robust timeline" and the pane "looks like a long list". The feed and strip were replaced by the tab's swimlane form, drawn live: one row per agent, marks placed in time, pause and dialectic bands, subagents nested, a selected-record panel, the same 25-row cap, filter and re-read-only ordering. The header, the provisional marks and the feed process are unchanged.
 - A substrate toggle (default **on**, matching the tab). With it off, provisional check-ins are hidden, because the frame cannot tell substrate from agent. The header then says check-ins arrive on re-read only.
 
 The header shows firehose state (connected / unreachable / refused credentials), LiveView socket state, seconds since the last frame, time since the last re-read, the truncation banner, and which kinds are live (checkin, lifecycle, knowledge) versus re-read only (outcome, lineage, dialectic). It also shows **event-to-push latency** (frame timestamp to stream insert, server side) as trial telemetry. Grouping and styling use record fields only. Nothing branches on resident or vendor names.
@@ -172,6 +173,8 @@ Each item needs its own PR, checked against the Wave 3 writer inventory and the 
 A second-family review is requested voluntarily, because the PR touches the endpoint test surface and the Firehose. M1 ships through `cirwel update`.
 
 **M1.5, operator trial** (one to two weeks, nothing sent to core). Open `http://localhost:8790/timeline` beside the tab, **both set to 1 h with substrate on**. The visual forms differ: the tab is a swimlane, the pane is a feed plus a strip. The record is therefore kept **per feature**: is the live feed or the agents-now strip more useful than the tab's equivalent, and what would make it matter? A local append-only trial log outside core (the share of marks first seen live versus at re-read, and the latency distribution) records trial telemetry with no authority. If the answer is no, the pane stays as a dev view or is removed, and §1's limits on what a "no" decides apply.
+
+First reading, 2026-10-25 (operator): the feed form lost to the tab's swimlane. That decides the visual form, not the live mechanism, so the pane now draws the tab's lanes live (§3.4) and the trial continues on like-for-like forms.
 
 **M2, only if M1.5 says yes:** port the swimlane after §4 item 4.
 
