@@ -155,7 +155,7 @@ def _base_branch(version: str | None = None) -> str | None:
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
             capture_output=True,
         ).returncode == 0:
-            if _is_ancestor(ref, "HEAD") or not version or "." not in version:
+            if _is_ancestor(ref, "HEAD") or _is_ancestor("HEAD", ref) or not version or "." not in version:
                 return ref
             series_ref = f"origin/release/{version.rsplit('.', 1)[0]}"
             if subprocess.run(
