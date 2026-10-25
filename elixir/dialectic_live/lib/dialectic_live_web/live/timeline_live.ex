@@ -39,6 +39,9 @@ defmodule DialecticLiveWeb.TimelineLive do
   @agents_cap 25
   @latency_samples 50
   @ticks 6
+  # The feed's own provisional cap.
+  @provisional_cap 500
+  @prune_every_s 10
 
   # How a lineage child relates to its parent, by its spawn_reason. Mirrors
   # the tab and src/identity/lineage_semantics.py: only dispatched children
@@ -75,6 +78,7 @@ defmodule DialecticLiveWeb.TimelineLive do
         latencies: [],
         now: now,
         anchor: DateTime.to_unix(now),
+        pruned_at: DateTime.to_unix(now) - @prune_every_s,
         meta: %{},
         feed_reachable: true,
         marks: %{},
@@ -127,7 +131,15 @@ defmodule DialecticLiveWeb.TimelineLive do
         :unavailable -> socket.assigns.meta
       end
 
-    {:noreply, assign(socket, now: DateTime.utc_now(), meta: meta)}
+    now = DateTime.utc_now()
+    socket = assign(socket, now: now, meta: meta)
+
+    {:noreply,
+     if DateTime.to_unix(now) - socket.assigns.pruned_at >= @prune_every_s do
+       socket |> assign(pruned_at: DateTime.to_unix(now)) |> prune()
+     else
+       socket
+     end}
   end
 
   # Deltas and re-reads for the other window, and anything unexpected.
@@ -186,6 +198,7 @@ defmodule DialecticLiveWeb.TimelineLive do
           roster: roster,
           last_seen: last_seen,
           marks: marks,
+          selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks),
           row_order: order_rows(roster, marks, last_seen)
         )
         |> relane()
@@ -204,6 +217,60 @@ defmodule DialecticLiveWeb.TimelineLive do
           row_order: []
         )
         |> relane()
+    end
+  end
+
+  # A re-read that confirms a provisional mark gives it a history id (`p-`
+  # becomes `h-`), so a selection on the live mark follows it to the row
+  # that absorbed it rather than clearing as the record arrives.
+  defp carry_selection(nil, _old, _new), do: nil
+
+  defp carry_selection(id, old, new) do
+    cond do
+      Map.has_key?(new, id) ->
+        id
+
+      mark = Map.get(old, id) ->
+        Enum.find_value(new, fn {new_id, row} ->
+          if TimelineAdapter.matches?(mark, row), do: new_id
+        end)
+
+      true ->
+        nil
+    end
+  end
+
+  # Drops marks that slid out of the window and caps provisional ones, so a
+  # history outage with the firehose still flowing cannot grow the page
+  # without bound. A successful re-read replaces the set anyway. A pause
+  # stays while unresumed: its band runs to now. Dialectic sessions arrive
+  # on re-read only, so a re-read bounds them.
+  defp prune(socket) do
+    start =
+      DateTime.to_unix(socket.assigns.now, :microsecond) - hours(socket.assigns) * 3_600_000_000
+
+    kept =
+      socket.assigns.marks
+      |> Enum.filter(fn {_id, m} ->
+        m["kind"] == "dialectic" or m["event_type"] == "lifecycle_paused" or
+          (TimelineAdapter.ts_us(m["ts"]) || 0) >= start
+      end)
+      |> cap_provisional()
+      |> Map.new()
+
+    if map_size(kept) == map_size(socket.assigns.marks),
+      do: socket,
+      else: socket |> assign(marks: kept) |> relane()
+  end
+
+  defp cap_provisional(marks) do
+    {live, held} = Enum.split_with(marks, fn {_id, m} -> m["provisional"] == true end)
+
+    if length(live) > @provisional_cap do
+      held ++
+        (live |> Enum.sort_by(fn {_, m} -> sort_key(m) end, :desc) |> Enum.take(@provisional_cap))
+    else
+      marks
     end
   end
 
@@ -240,8 +307,10 @@ defmodule DialecticLiveWeb.TimelineLive do
         socket
 
       true ->
+        marks = socket.assigns.marks |> Map.put(id, mark) |> cap_provisional() |> Map.new()
+
         socket
-        |> assign(marks: Map.put(socket.assigns.marks, id, mark))
+        |> assign(marks: marks)
         |> assign(row_order: join_order(socket.assigns.row_order, mark))
         |> relane()
     end

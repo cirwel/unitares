@@ -392,6 +392,106 @@ defmodule DialecticLiveWeb.TimelineLiveTest do
     assert Map.has_key?(:sys.get_state(view.pid).socket.assigns.last_seen, @b)
   end
 
+  # Polls the rendered view until `check` holds (a re-read lands
+  # asynchronously after its doorbell).
+  defp eventually(check, tries \\ 50) do
+    cond do
+      check.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && eventually(check, tries - 1)
+    end
+  end
+
+  test "a selection on a live mark follows it when the re-read confirms it", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    ts = iso(-1_000)
+
+    broadcast_frame(ctx, %{
+      "type" => "knowledge_write",
+      "agent_id" => @a,
+      "timestamp" => ts,
+      "discovery_id" => "d-7",
+      "discovery_type" => "note",
+      "summary" => "confirmed note"
+    })
+
+    assert_receive {:timeline_delta, "1h", _}
+    _ = :sys.get_state(ctx.feed)
+    [live_id] = view |> nodes("#agent-#{@a} .tl-mk.knowledge") |> hd() |> LazyHTML.attribute("id")
+    assert String.starts_with?(live_id, "p-")
+    view |> element("##{live_id}") |> render_click()
+
+    row = %{
+      "kind" => "knowledge",
+      "ts" => ts,
+      "agent_id" => @a,
+      "event_id" => "k-7",
+      "discovery_id" => "d-7",
+      "discovery_type" => "note",
+      "summary" => "confirmed note"
+    }
+
+    serve(ctx.stub, fn conn -> Req.Test.json(conn, window_body([row])) end)
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn ->
+             has_element?(view, "#agent-#{@a} .tl-mk.knowledge.sel:not([data-provisional])")
+           end)
+
+    assert has_element?(view, "#mark-detail", "confirmed note")
+  end
+
+  test "marks that slide out of the window are pruned even without a re-read", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => iso(-3_599_900),
+         "agent_id" => @b,
+         "event_type" => "lifecycle_resumed",
+         "provisional" => true
+       }}
+    )
+
+    assert has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
+    Process.sleep(200)
+    send(view.pid, :tick)
+    refute has_element?(view, "#agent-#{@b} .tl-mk[data-kind=lifecycle]")
+  end
+
+  test "live marks are capped at the feed's provisional cap", %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+    base = DateTime.utc_now()
+
+    for i <- 1..501 do
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => base |> DateTime.add(-i, :second) |> DateTime.to_iso8601(),
+           "agent_id" => @b,
+           "event_type" => "lifecycle_resumed",
+           "provisional" => true
+         }}
+      )
+    end
+
+    _ = render(view)
+    marks = Map.values(:sys.get_state(view.pid).socket.assigns.marks)
+    assert length(marks) == 500
+
+    # The oldest went: the earliest kept is 500 s before the base.
+    oldest = marks |> Enum.map(&DialecticLive.TimelineAdapter.ts_us(&1["ts"])) |> Enum.min()
+    assert oldest == DateTime.to_unix(DateTime.add(base, -500, :second), :microsecond)
+  end
+
   test "a foreign roster renders from record fields alone", %{conn: conn} do
     agents = [
       agent(@a, "an agent from a harness nobody has heard of", "unheard-harness-9"),
