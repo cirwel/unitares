@@ -40,8 +40,9 @@ defmodule AgentOrchestrator.Profiles do
   caller variable may never name an inherited, fixed, secret or provisioned
   variable, and that is checked when the file loads. Resolved secret values
   are redacted from the output the orchestrator captures and returns. A
-  profile whose secret source is unset or shorter than four bytes is
-  `unconfigured` and refuses its own spawns; the others are unaffected.
+  profile whose secret source is unset, shorter than four bytes or holds a
+  line break is `unconfigured` and refuses its own spawns; the others are
+  unaffected.
 
   ## Requests
 
@@ -114,6 +115,19 @@ defmodule AgentOrchestrator.Profiles do
 
   def finish(server \\ server(), token, result),
     do: GenServer.cast(server, {:finish, token, result})
+
+  @doc """
+  What a start result means for its admission slot: `{:ok, execution_id}`
+  keeps the slot against that execution, `:refund` returns it. A start whose
+  completion could not be recorded may be running, so it keeps its slot.
+  """
+  def admission_result({:ok, execution_id, _pid}), do: {:ok, execution_id}
+  def admission_result({:ok, execution_id, _pid, :new}), do: {:ok, execution_id}
+
+  def admission_result({:error, {:idempotency_outcome_unknown, execution_id}}),
+    do: {:ok, execution_id}
+
+  def admission_result(_other), do: :refund
 
   # ---------- pure parsing (exposed for tests) ----------
 
@@ -511,7 +525,15 @@ defmodule AgentOrchestrator.Profiles do
     Enum.reduce_while(profile.env.secrets, {:ok, []}, fn {child, source}, {:ok, acc} ->
       case getenv.(source) do
         value when is_binary(value) and byte_size(value) >= @min_secret_bytes ->
-          {:cont, {:ok, [{child, value} | acc]}}
+          # Output is redacted line by line, so a value holding a line break
+          # could leak in pieces; such a secret is refused, not half-redacted.
+          if String.contains?(value, ["\n", "\r"]) do
+            {:halt,
+             {:error, :profile_unconfigured,
+              "profile #{profile.name} is unconfigured: secret source #{source} holds a line break"}}
+          else
+            {:cont, {:ok, [{child, value} | acc]}}
+          end
 
         _ ->
           {:halt,

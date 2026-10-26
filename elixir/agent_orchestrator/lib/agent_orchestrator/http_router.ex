@@ -176,7 +176,7 @@ defmodule AgentOrchestrator.HTTPRouter do
          {:ok, prepared} <- prepare_profile(conn.body_params) do
       admit = fn ->
         case Profiles.admit(prepared.profile) do
-          {:ok, token} -> {:ok, &Profiles.finish(token, admitted(&1))}
+          {:ok, token} -> {:ok, &Profiles.finish(token, Profiles.admission_result(&1))}
           {:error, :rate_limited, detail} -> {:error, {:rate_limited, detail}}
         end
       end
@@ -246,9 +246,6 @@ defmodule AgentOrchestrator.HTTPRouter do
     end
   end
 
-  defp admitted({:ok, execution_id, _pid}), do: {:ok, execution_id}
-  defp admitted({:ok, execution_id, _pid, :new}), do: {:ok, execution_id}
-  defp admitted(_other), do: :refund
 
   # ---------- raw spawn ----------
 

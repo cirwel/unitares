@@ -317,6 +317,51 @@ defmodule AgentOrchestrator.ProfilesTest do
     end
   end
 
+  describe "redaction and admission edge cases" do
+    test "a secret holding a line break makes its profile unconfigured", %{tmp_dir: dir} do
+      name =
+        start_profiles(write_file(dir, %{"p" => profile()}),
+          env: %{"ORCH_SECRET" => "abcd\nefgh"}
+        )
+
+      assert %{unconfigured: ["p"]} = Profiles.status(name)
+
+      assert {:error, :profile_unconfigured, detail} =
+               Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
+
+      assert detail =~ "line break"
+    end
+
+    test "a secret straddling the oversized-line cut is still redacted" do
+      Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
+
+      {:ok, id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "/bin/sh",
+          # 65,530 filler bytes put the 26-byte secret across the 65,536-byte cut.
+          args: ["-c", "head -c 65530 /dev/zero | tr '\\0' a; printf '%s' \"$K\"; echo tail"],
+          env: [{"K", @secret}],
+          lease: false,
+          redact: [@secret]
+        })
+
+      {:ok, result} = AgentOrchestrator.await(id, 10_000)
+      joined = Enum.join(result.output)
+      refute joined =~ @secret
+      assert joined =~ "[redacted]tail"
+    end
+
+    test "a start whose completion is unknown keeps its slot" do
+      assert Profiles.admission_result({:error, {:idempotency_outcome_unknown, "ex-1"}}) ==
+               {:ok, "ex-1"}
+
+      assert Profiles.admission_result({:ok, "ex-2", self(), :new}) == {:ok, "ex-2"}
+      assert Profiles.admission_result({:ok, "ex-3", self()}) == {:ok, "ex-3"}
+      assert Profiles.admission_result({:error, {:executable_not_found, "x"}}) == :refund
+      assert Profiles.admission_result({:error, {:rate_limited, "x"}}) == :refund
+    end
+  end
+
   describe "HTTP surface" do
     setup %{tmp_dir: dir} do
       MemoryIdempotencyLedger.clear()

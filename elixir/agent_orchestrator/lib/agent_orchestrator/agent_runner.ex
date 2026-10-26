@@ -450,7 +450,7 @@ defmodule AgentOrchestrator.AgentRunner do
     # @line_max_bytes with no newline would otherwise grow `partial` without
     # limit. Flush the oversized fragment as a synthetic line instead.
     if byte_size(partial) >= @line_max_bytes do
-      {:noreply, push_line(%{state | partial: ""}, partial)}
+      {:noreply, flush_oversized(state, partial)}
     else
       {:noreply, %{state | partial: partial}}
     end
@@ -918,14 +918,35 @@ defmodule AgentOrchestrator.AgentRunner do
   end
 
   # Values shorter than 4 bytes are not redacted: replacing them would mangle
-  # ordinary output while hiding almost nothing. Profiles refuse such secrets.
-  defp redact_values(values) when is_list(values),
-    do: values |> Enum.filter(&(is_binary(&1) and byte_size(&1) >= 4)) |> Enum.uniq()
+  # ordinary output while hiding almost nothing. Output is redacted line by
+  # line, so a value holding a line break could pass in pieces; profiles refuse
+  # both kinds of secret, and neither is accepted here.
+  defp redact_values(values) when is_list(values) do
+    values
+    |> Enum.filter(&(is_binary(&1) and byte_size(&1) >= 4 and not String.contains?(&1, ["\n", "\r"])))
+    |> Enum.uniq()
+  end
 
   defp redact_values(_), do: []
 
   defp redact_line(line, []), do: line
   defp redact_line(line, values), do: String.replace(line, values, "[redacted]")
+
+  # An oversized fragment is published as a synthetic line. With secrets to
+  # redact, a secret may straddle the cut, so redact what is complete and hold
+  # back the last (longest secret - 1) bytes, which no complete secret can
+  # start in, as the start of the next fragment.
+  defp flush_oversized(%{redact: []} = state, partial),
+    do: push_line(%{state | partial: ""}, partial)
+
+  defp flush_oversized(state, partial) do
+    redacted = redact_line(partial, state.redact)
+    hold = (state.redact |> Enum.map(&byte_size/1) |> Enum.max()) - 1
+    cut = max(byte_size(redacted) - hold, 0)
+    head = binary_part(redacted, 0, cut)
+    tail = binary_part(redacted, cut, byte_size(redacted) - cut)
+    %{push_line(%{state | partial: ""}, head) | partial: tail}
+  end
 
   defp push_line(state, line) do
     # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)
