@@ -100,7 +100,7 @@ def test_reads_the_session_before_onboarding():
 
     thesis, parent = asyncio.run(load_thesis_from_session(SID, "http://gov", FakeClient))
     assert parent == PAUSED and thesis.root_cause == "load"
-    assert ("dialectic", {"action": "get", "session_id": SID}) in calls
+    assert ("dialectic", {"action": "get", "session_id": SID, "fields": "full"}) in calls
     assert "onboard" not in calls
     assert calls[-1] == "disconnect"
 

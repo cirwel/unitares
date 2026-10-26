@@ -393,7 +393,9 @@ async def load_thesis_from_session(
         GovernanceToolRefused = ()  # type: ignore[assignment]
     link = _GovernanceLink(governance_url, client_factory)
     try:
-        record = await link.call_tool("dialectic", {"action": "get", "session_id": session_id})
+        # fields="full": a compact read omits the transcript and the evidence.
+        record = await link.call_tool(
+            "dialectic", {"action": "get", "session_id": session_id, "fields": "full"})
     except GovernanceToolRefused as exc:
         # An answer (an unknown session, say), not an outage: the SDK raises
         # for success=false.
