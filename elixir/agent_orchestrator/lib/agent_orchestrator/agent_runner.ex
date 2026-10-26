@@ -44,8 +44,9 @@ defmodule AgentOrchestrator.AgentRunner do
         server_url: String.t() | nil,      # default nil = no server-URL provisioning
         client_session_id: String.t() | nil, # default nil = no session-anchor provisioning
         redact: [String.t()],              # values replaced in captured output (default [])
-        secret_env: (-> [{String.t(), String.t()}]) # secret variables for the child,
+        secret_env: (-> [{String.t(), String.t()}]), # secret variables for the child,
                                            # behind a closure so no report prints them
+        profile: String.t() | nil          # launch profile this execution belongs to
       }
 
       lease_cfg :: %{
@@ -203,6 +204,9 @@ defmodule AgentOrchestrator.AgentRunner do
     # Wall-clock timestamp for operator-facing execution inventory.
     :started_at,
     :cmd,
+    # The launch profile this execution was started from, if any; the
+    # profiles server recounts its limits from live executions.
+    :profile,
     output: [],
     output_count: 0,
     max_output_lines: @default_max_lines,
@@ -357,7 +361,8 @@ defmodule AgentOrchestrator.AgentRunner do
                   lease_cfg: lease_cfg,
                   lineage: if(lineage_cfg, do: :provisioned, else: :none),
                   max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines),
-                  redact: redact_closure(spec)
+                  redact: redact_closure(spec),
+                  profile: Map.get(spec, :profile)
                 }
 
                 init_with_lease(
@@ -1059,6 +1064,7 @@ defmodule AgentOrchestrator.AgentRunner do
       lease_id: state.lease_id,
       presence: state.presence,
       lineage: state.lineage,
+      profile: state.profile,
       exit_status: state.exit_status,
       running: state.exit_status == nil
     }

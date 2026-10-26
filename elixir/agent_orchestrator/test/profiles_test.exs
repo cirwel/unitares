@@ -308,6 +308,30 @@ defmodule AgentOrchestrator.ProfilesTest do
                Profiles.prepare(name, Map.put(base, "lineage", %{"parent_agent_uuid" => "x"}))
     end
 
+    test "a lineage spawn_reason with a NUL or other control is refused up front",
+         %{tmp_dir: dir} do
+      path =
+        write_file(Path.join(dir, "sr") |> tap(&File.mkdir_p!/1), %{
+          "l" => profile(%{"lineage" => "caller"})
+        })
+
+      name = start_profiles(path)
+
+      for bad <- ["x\u0000y", "a b", "", String.duplicate("a", 65)] do
+        body = %{
+          "profile" => "l",
+          "vars" => %{"GREETING" => "hi"},
+          "lineage" => %{
+            "parent_agent_uuid" => "11111111-2222-4333-8444-555555555555",
+            "spawn_reason" => bad
+          }
+        }
+
+        assert {:error, :schema_invalid, detail} = Profiles.prepare(name, body)
+        assert detail =~ "spawn_reason"
+      end
+    end
+
     test "a malformed lineage parent is a schema refusal that echoes nothing", %{tmp_dir: dir} do
       path =
         write_file(Path.join(dir, "lin") |> tap(&File.mkdir_p!/1), %{
@@ -406,6 +430,14 @@ defmodule AgentOrchestrator.ProfilesTest do
 
       assert detail =~ "retry"
       assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
+    end
+
+    test "a restarted server recounts live executions of a profile", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile(%{"max_concurrent" => 1, "max_per_hour" => 1})})
+      name = start_profiles(path, live_executions: fn -> [{"ex-old", "p"}, {"ex-raw", nil}] end)
+
+      assert {:error, :rate_limited, d} = Profiles.admit(name, "p", rev(name, "p"), "ex-new")
+      assert d =~ "max_concurrent"
     end
 
     test "with no reported outcome a slot is held while live, then for the start grace",

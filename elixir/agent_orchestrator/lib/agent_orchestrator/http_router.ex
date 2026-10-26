@@ -712,6 +712,7 @@ defmodule AgentOrchestrator.HTTPRouter do
       lease_id: details.lease_id,
       presence: details.presence,
       lineage: details.lineage,
+      profile: Map.get(details, :profile),
       exit_status: encode_status(details.exit_status),
       running: details.running
     }

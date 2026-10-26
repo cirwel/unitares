@@ -52,7 +52,10 @@ defmodule AgentOrchestrator.Profiles do
   concurrency and per-hour limits, and the profile's secrets, are checked and
   resolved at admission (`admit/3`), which runs inside the idempotent spawn
   after a retry of an already-started key has replayed: a lost response is
-  never turned into a refusal, and a replay needs no secret. Resolved secrets
+  never turned into a refusal, and a replay needs no secret. Concurrency is
+  recounted from live executions tagged with their profile, so a restart of
+  this server forgets no running child; the per-hour count after a restart
+  charges live executions but not ones that finished before it. Resolved secrets
   reach the runner only behind a closure, so no timeout message, crash report
   or supervisor report can print them.
 
@@ -178,6 +181,7 @@ defmodule AgentOrchestrator.Profiles do
       getenv: Keyword.get(opts, :getenv, &System.get_env/1),
       environ: Keyword.get(opts, :environ, &System.get_env/0),
       live?: Keyword.get(opts, :live?, &live?/1),
+      live_executions: Keyword.get(opts, :live_executions, &live_executions/0),
       start_grace_ms: Keyword.get(opts, :start_grace_ms, @start_grace_ms),
       uid: Keyword.get_lazy(opts, :uid, &current_uid/0),
       now: Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end),
@@ -187,7 +191,7 @@ defmodule AgentOrchestrator.Profiles do
 
     state = if file, do: reload(state), else: state
     if file, do: schedule_reload(state.reload_ms)
-    {:ok, state}
+    {:ok, recount_hour(state)}
   end
 
   @impl true
@@ -214,7 +218,15 @@ defmodule AgentOrchestrator.Profiles do
   defp admit_profile(profile, name, execution_id, state) do
     state = prune(state)
     now = state.now.()
-    running = Enum.count(state.slots, fn {_id, slot} -> slot.name == name end)
+    # Live executions tagged with this profile count as well as admitted
+    # slots, so a restart of this server cannot forget what is running.
+    running =
+      state.slots
+      |> Enum.flat_map(fn {id, slot} -> if slot.name == name, do: [id], else: [] end)
+      |> Enum.concat(for {id, ^name} <- state.live_executions.(), do: id)
+      |> Enum.uniq()
+      |> length()
+
     recent = Map.get(state.starts, name, [])
 
     cond do
@@ -498,7 +510,8 @@ defmodule AgentOrchestrator.Profiles do
           env: env,
           stdin: "close",
           max_runtime_ms: max_runtime,
-          max_output_lines: max_lines
+          max_output_lines: max_lines,
+          profile: name
         }
         |> put_opt(:cd, profile.cd)
         |> put_opt(:server_url, profile.server_url)
@@ -640,7 +653,7 @@ defmodule AgentOrchestrator.Profiles do
   defp request_lineage(%{} = given, "caller") do
     with :ok <- known_lineage_keys(given),
          {:ok, parent} <- uuid(given["parent_agent_uuid"], "lineage.parent_agent_uuid"),
-         {:ok, reason} <- optional_string_req(given["spawn_reason"], "lineage.spawn_reason") do
+         {:ok, reason} <- spawn_reason(given["spawn_reason"]) do
       base = %{parent_agent_uuid: parent}
       {:ok, if(reason, do: Map.put(base, :spawn_reason, reason), else: base)}
     end
@@ -662,11 +675,19 @@ defmodule AgentOrchestrator.Profiles do
       else: {:error, :schema_invalid, "#{f} must be a UUID"}
   end
 
-  defp optional_string_req(nil, _f), do: {:ok, nil}
-  defp optional_string_req(v, _f) when is_binary(v) and v != "", do: {:ok, v}
+  # It becomes UNITARES_SPAWN_REASON in the child env, where a NUL or a
+  # control character would fail the spawn after admission.
+  @spawn_reason_rule "lineage.spawn_reason must be 1-64 of A-Z a-z 0-9 _ . : -"
 
-  defp optional_string_req(_v, f),
-    do: {:error, :schema_invalid, "#{f} must be a non-empty string"}
+  defp spawn_reason(nil), do: {:ok, nil}
+
+  defp spawn_reason(v) when is_binary(v) do
+    if Regex.match?(~r/\A[A-Za-z0-9_.:-]{1,64}\z/, v),
+      do: {:ok, v},
+      else: {:error, :schema_invalid, @spawn_reason_rule}
+  end
+
+  defp spawn_reason(_v), do: {:error, :schema_invalid, @spawn_reason_rule}
 
   # Unset everything not inherited (or written here or as a secret), then
   # fixed values and the caller's variables. Secrets are resolved at admission
@@ -713,6 +734,27 @@ defmodule AgentOrchestrator.Profiles do
   defp keep?(slot, false, now, grace), do: now - slot.admitted_at < grace
 
   defp live?(execution_id), do: execution_id in AgentOrchestrator.list()
+
+  # Live executions and the profile each was started from (nil for raw ones).
+  defp live_executions do
+    Enum.map(AgentOrchestrator.list_details(), &{&1.execution_id, Map.get(&1, :profile)})
+  catch
+    :exit, _ -> []
+  end
+
+  # After a restart this server has no record of the past hour. Executions
+  # still live count as started now, so they are charged; finished ones from
+  # before the restart are not known and are not charged.
+  defp recount_hour(state) do
+    now = state.now.()
+
+    starts =
+      for {id, name} <- state.live_executions.(), is_binary(name), reduce: state.starts do
+        acc -> Map.update(acc, name, [{now, id}], &[{now, id} | &1])
+      end
+
+    %{state | starts: starts}
+  end
 
   # ---------- status ----------
 
