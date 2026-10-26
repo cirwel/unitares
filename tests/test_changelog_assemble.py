@@ -346,6 +346,16 @@ def test_git_history_attaches_uncited_pr_numbers_on_fold(tmp_path: Path):
     git("add", "-A")
     git("commit", "-q", "-m", "docs: add cli example (#48)")
 
+    # 8. Renamed fragment credits the PR that introduced it (#49), not the rename (#50):
+    (root / "docs" / "changelog.d" / "added-rename.md").write_text(
+        "- **renamed:** moved section prefix.\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "feat: original addition (#49)")
+    git("mv", "docs/changelog.d/added-rename.md", "docs/changelog.d/fixed-rename.md")
+    git("commit", "-q", "-m", "chore: rename section (#50)")
+
     result = _run(root)
     assert result.returncode == 0, result.stderr
     section = _unreleased(_changelog(root))
@@ -358,4 +368,6 @@ def test_git_history_attaches_uncited_pr_numbers_on_fold(tmp_path: Path):
     assert "(#46) (#46)" not in section
     assert "- **sec:** closes issue (#100) (#47).\n" in section
     assert "- **cli:** run the new command (#48):\n  ```bash\n  unitares setup\n  ```\n" in section
+    assert "- **renamed:** moved section prefix (#49).\n" in section
+    assert "#50" not in section
 

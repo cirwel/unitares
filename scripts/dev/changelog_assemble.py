@@ -88,6 +88,7 @@ def _fragment_pr(root: Path, rel: str) -> int | None:
             str(root),
             "log",
             "--first-parent",
+            "--follow",
             "-n",
             "1",
             "--diff-filter=A",
