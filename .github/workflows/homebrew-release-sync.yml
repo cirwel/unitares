@@ -101,11 +101,14 @@ jobs:
           lease="--force-with-lease=refs/heads/$branch:"
           if git show-ref --verify --quiet "$remote_ref"; then
             expected_remote="$(git rev-parse "$remote_ref")"
-            if git log --format='%ae' "origin/main..$remote_ref" | \
-                grep -Fvx '342195540+unitares-agents[bot]@users.noreply.github.com' >/dev/null; then
-              echo "automation branch contains a non-bot commit; refusing to overwrite it" >&2
-              exit 1
-            fi
+            authors="$(git log --format='%ae' "origin/main..$remote_ref")"
+            while IFS= read -r author; do
+              if [ -n "$author" ] && \
+                  [ "$author" != '342195540+unitares-agents[bot]@users.noreply.github.com' ]; then
+                echo "automation branch contains a non-bot commit; refusing to overwrite it" >&2
+                exit 1
+              fi
+            done <<< "$authors"
             git checkout -B "$branch" "$remote_ref"
             git reset --hard origin/main
             lease="--force-with-lease=refs/heads/$branch:$expected_remote"
@@ -150,7 +153,7 @@ jobs:
             "Evidence:" \
             "- immutable release asset: $UNITARES_ARCHIVE_URL" \
             "- SHA-256: $UNITARES_ARCHIVE_SHA256" \
-            "- the renderer removed the v3.5.0 DATA backport only after verifying the release contains the native updater and every tracked source" \
+            "- the renderer verifies the release contains the native updater and every tracked source before it may remove any remaining v3.5.0 DATA backport" \
             "" \
             "Keep this draft until installed Apple Silicon acceptance passes. This workflow never publishes bottles or authorizes merge." \
             > "$body"
