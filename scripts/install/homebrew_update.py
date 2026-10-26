@@ -467,7 +467,8 @@ class NativeUpdater:
             if cleanup["stage"] == "deleting":
                 raise Refusal(
                     "An interrupted backup cleanup must resume with its recorded "
-                    f"policy: --retain-backups {cleanup['retain']} "
+                    "policy: unitares update --cleanup-backups "
+                    f"--retain-backups {cleanup['retain']} "
                     f"--older-than-days {cleanup['older_than_days']} --yes."
                 )
             raise Refusal(

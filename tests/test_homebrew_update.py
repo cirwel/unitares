@@ -382,7 +382,10 @@ def test_backup_cleanup_interrupted_policy_mismatch_names_recorded_options(
     )
     with pytest.raises(
         update.Refusal,
-        match=r"--retain-backups 2 --older-than-days 45 --yes",
+        match=(
+            r"unitares update --cleanup-backups --retain-backups 2 "
+            r"--older-than-days 45 --yes"
+        ),
     ):
         updater.cleanup_backups(retain=1, older_than_days=30, apply=True)
 
