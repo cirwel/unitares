@@ -377,10 +377,13 @@ def test_abort_restores_prior_writer_state_only_before_package_change(
     monkeypatch.setattr(
         updater, "write_journal", lambda value: written.append(dict(value))
     )
+    pins = []
+    monkeypatch.setattr(updater, "managed_pins", lambda action: pins.append(action))
     starts = []
     updater.brew.start = lambda: starts.append(True)
     assert updater.abort() == 0
     assert written[-1]["stage"] == "aborted"
+    assert pins == ["pin"]
     assert starts == [True]
 
 

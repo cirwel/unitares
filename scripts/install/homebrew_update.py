@@ -568,6 +568,7 @@ class NativeUpdater:
                 "This update cannot be abandoned because the schema version changed; repair forward with "
                 "`unitares update --resume`."
             )
+        self.managed_pins("pin")
         state["stage"] = "aborted"
         state["aborted_at"] = _utc_now()
         state["abort_reason"] = "operator abandoned before package or schema change"
