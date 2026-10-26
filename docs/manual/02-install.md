@@ -41,14 +41,18 @@ unitares update --check
 unitares update
 ```
 
+If the installed keg does not yet contain `unitares update`, use the tap's
+[one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery)
+to reach the first revision that includes it.
+
 The apply command refreshes tap metadata, temporarily unpins only the four
 managed UNITARES formulae, stops both writers, verifies a custom-format backup,
 installs the package set without cleaning old kegs, re-executes the new package's
 updater, applies pending migrations, restores the previous running/stopped state,
 repins the set and verifies deep health when writers are restarted (or schema
 state when they remain stopped). Homebrew may update required dependencies; the
-journal records the complete installed-formula inventory before and after, and
-safe abort refuses if any formula changed. The durable journal resumes with
+journal records the complete installed-formula inventory before and after. The
+durable journal resumes with
 `unitares update --resume`, and blocks a separate `unitares start` until final.
 A retry from the backed-up stage creates a fresh verified backup. A failed
 migration leaves the new package installed and both writers stopped for forward
@@ -56,7 +60,8 @@ repair; after inspecting an identity-count mismatch, explicitly continue with
 `unitares update --resume --accept-identity-change`. An old keg does not reverse
 schema. Before any package or schema change, an unrecoverable package-build
 failure can be abandoned with `unitares update --abort`; the command refuses
-once either recorded version changed. Direct `brew services` commands bypass the
+once a managed UNITARES formula or the schema changed, while retained dependency
+changes are recorded in the journal. Direct `brew services` commands bypass the
 journal barrier. Homebrew formula hooks never migrate the database.
 
 No model connection, Ollama instance or resident roster is enabled by default.

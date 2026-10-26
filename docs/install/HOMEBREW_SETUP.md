@@ -83,8 +83,7 @@ upgrade, migration and prior-state restoration. A restarted installation must
 pass deep health; one that was already stopped remains stopped after a schema
 check. Homebrew may update dependencies required by the managed formulae; the
 journal records the complete installed-formula inventory before and after the
-transaction, and safe abort refuses if any formula changed. Formula install
-hooks and `unitares start` never apply migrations. An
+transaction. Formula install hooks and `unitares start` never apply migrations. An
 unfinished journal blocks `unitares start`. If an interruption occurs after the
 backup, run `unitares update --resume`; a retry from the backed-up stage creates
 fresh backup evidence before changing packages. If identity-count verification
@@ -96,8 +95,16 @@ Setup does not switch clients, copy a Docker database, or change which
 installation owns your data.
 
 If a package build cannot succeed, `unitares update --abort` safely restores the
-prior running/stopped state only while every managed package and the schema are
-still at their recorded pre-update versions. Once either changed, abort refuses
-and forward repair with `--resume` remains mandatory. Direct `brew services`
+prior running/stopped state while the four managed UNITARES packages and schema
+remain at their recorded pre-update versions. Dependency changes made by the
+failed Homebrew transaction are retained and recorded in the journal; inspect
+them before retrying. Once a managed package or the schema changed, abort
+refuses and forward repair with `--resume` remains mandatory. A resumed package
+attempt refreshes the tap and adopts a newer repaired formula revision.
+
+Kegs installed before the coordinated updater shipped cannot run these commands.
+For that one-time transition, follow the tap's
+[manual upgrade and recovery procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
+Direct `brew services`
 commands bypass these UNITARES journal checks; use the packaged lifecycle
 commands while an update is active.

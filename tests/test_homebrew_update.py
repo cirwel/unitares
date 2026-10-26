@@ -247,6 +247,31 @@ def test_brew_upgrade_is_logged_privately_without_cleanup(updater, monkeypatch):
     assert log.stat().st_mode & 0o777 == 0o600
 
 
+def test_reexec_flushes_console_output(updater, monkeypatch):
+    cli = updater.brew.prefix / "bin/unitares"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/bin/sh\n")
+    cli.chmod(0o700)
+    flushed = []
+    monkeypatch.setattr(
+        update.sys, "stdout", SimpleNamespace(flush=lambda: flushed.append("stdout"))
+    )
+    monkeypatch.setattr(
+        update.sys, "stderr", SimpleNamespace(flush=lambda: flushed.append("stderr"))
+    )
+
+    def execve(path, argv, env):
+        assert path == cli
+        assert argv == [str(cli), "update", "--resume", "--yes"]
+        assert "UNITARES_NATIVE_UPDATE_REEXEC" not in env
+        raise SystemExit
+
+    monkeypatch.setattr(update.os, "execve", execve)
+    with pytest.raises(SystemExit):
+        updater.reexec()
+    assert flushed == ["stdout", "stderr"]
+
+
 def test_quiescence_counts_only_client_backends(updater, monkeypatch):
     updater.brew.info = lambda: {
         name: {"running": False, "loaded": False, "registered": False}
@@ -361,6 +386,13 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
         "config_sha256": _config_hash(updater),
     }
     written = []
+    refreshed = []
+    monkeypatch.setattr(updater, "refresh_tap", lambda: refreshed.append(True))
+    monkeypatch.setattr(
+        updater,
+        "inventory",
+        lambda: _inventory(current="3.6.0", target="3.6.0"),
+    )
     monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
     monkeypatch.setattr(updater, "schema_version", lambda: 76)
     monkeypatch.setattr(updater, "agent_count", lambda: 4)
@@ -376,6 +408,7 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     updater.brew.check_schema = lambda: None
     updater.brew.start = lambda **kwargs: pytest.fail("stopped writers were started")
     assert updater.resume(state=state) == 0
+    assert refreshed == [True]
     assert written[0]["backup"] == "/private/refreshed.dump"
     assert written[0]["superseded_backups"] == ["/private/old.dump"]
     assert written[0]["agent_count_before"] == 4
@@ -458,7 +491,7 @@ def test_abort_refuses_after_any_managed_package_changed(updater, monkeypatch):
         updater.abort()
 
 
-def test_abort_refuses_after_any_homebrew_formula_changed(updater, monkeypatch):
+def test_abort_records_dependency_changes_and_restores_writers(updater, monkeypatch):
     state = {
         "journal_version": update.JOURNAL_VERSION,
         "stage": "backed_up",
@@ -473,13 +506,65 @@ def test_abort_refuses_after_any_homebrew_formula_changed(updater, monkeypatch):
     }
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
     monkeypatch.setattr(updater, "managed_pins", lambda action: None)
+    monkeypatch.setattr(updater, "inventory", lambda: _inventory())
     monkeypatch.setattr(
         updater,
         "formula_state",
         lambda: {"redis": {"linked_keg": "8.2.1", "installed": ["8.2.1"]}},
     )
-    with pytest.raises(update.Refusal, match="formula inventory changed"):
-        updater.abort()
+    monkeypatch.setattr(updater, "schema_version", lambda: 76)
+    written = []
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: written.append(dict(value))
+    )
+    started = []
+    updater.brew.start = lambda: started.append(True)
+    assert updater.abort() == 0
+    assert written[-1]["stage"] == "aborted"
+    assert written[-1]["formula_changes_at_abort"] == ["redis"]
+    assert started == [True]
+
+
+def test_resume_from_backed_up_adopts_repaired_tap_revision(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": False,
+        "agent_count_before": 3,
+        "schema_before": 75,
+        "backup": "/private/old.dump",
+        "target": _inventory(current="3.5.0_5", target="3.6.0"),
+        "config_sha256": _config_hash(updater),
+    }
+    repaired = _inventory(current="3.5.0_5", target="3.6.0_1")
+    written = []
+    monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "inventory", lambda: repaired)
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "schema_version", lambda: 75)
+    monkeypatch.setattr(updater, "agent_count", lambda: 3)
+    monkeypatch.setattr(
+        updater,
+        "backup_database",
+        lambda target, **kwargs: Path(f"/private/before-{target}.dump"),
+    )
+    monkeypatch.setattr(updater, "formula_state", lambda: {"redis": {}})
+    installed = []
+
+    def install(target):
+        installed.append(target)
+
+    monkeypatch.setattr(updater, "install_packages", install)
+    monkeypatch.setattr(updater, "reexec", lambda: (_ for _ in ()).throw(SystemExit))
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: written.append(dict(value))
+    )
+    with pytest.raises(SystemExit):
+        updater.resume(state=state)
+    assert installed[0]["unitares"]["target"] == "3.6.0_1"
+    assert state["superseded_targets"][0]["unitares"] == "3.6.0"
+    assert state["target"]["unitares"]["installed"] == "3.5.0_5"
+    assert written[-1]["stage"] == "packages_installed"
 
 
 def test_resume_from_planned_retries_stop_backup_and_finishes(
