@@ -122,18 +122,25 @@ def _isolated(root: str) -> bool:
                    for marker in PROJECT_MARKERS)
 
 
+def _signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass  # the group is already gone
+
+
 def _stop(proc: subprocess.Popen) -> None:
-    """Signal the CLI's whole process group, TERM then KILL."""
-    for sig, wait in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, KILL_GRACE_S)):
-        try:
-            os.killpg(proc.pid, sig)
-        except OSError:
-            return
-        try:
-            proc.wait(timeout=wait)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+    """TERM the CLI's whole process group, then KILL it.
+
+    The KILL goes to the group even when the CLI itself exited on the TERM:
+    a descendant that ignores TERM would otherwise outlive the execution.
+    """
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(proc.pid, signal.SIGKILL)
 
 
 def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.stderr) -> int:

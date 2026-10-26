@@ -10,6 +10,7 @@ import io
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,14 @@ SHIM = """
 import json, os, sys, time
 data = sys.stdin.read()
 # The environment is allowlisted, so the test steers the shim by its prompt.
+if data.startswith("orphan:"):
+    # A descendant that ignores TERM, then a leader that dies on it.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c",
+        "import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)",
+        data[len("orphan:"):]])
+    time.sleep(30)
 if data.startswith("sleep:"):
     time.sleep(float(data[len("sleep:"):]))
 print(json.dumps({"type": "result", "is_error": False, "result": data,
@@ -138,3 +147,19 @@ def test_bad_input_is_refused_before_anything_runs(shim, environ, message, expec
     code, out, err = _run({**_base(shim), **environ})
     assert (code, out) == (expected, "")
     assert message in err
+
+
+def test_deadline_kills_a_descendant_that_ignores_term(shim, tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "KILL_GRACE_S", 1)
+    pidfile = tmp_path / "descendant.pid"
+    code, _, _ = _run(_base(shim, HA_TIMEOUT_S="2", HA_PROMPT=f"orphan:{pidfile}"))
+    assert code == 124
+    pid = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail("the descendant outlived the deadline")

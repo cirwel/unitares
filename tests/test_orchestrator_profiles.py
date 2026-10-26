@@ -137,3 +137,21 @@ def test_never_reads_its_own_environment(tmp_path, monkeypatch):
     code, out, cli = _main(tmp_path)
     assert code == 0
     assert "/from/the/environment" not in out.read_text()
+
+
+def test_right_text_with_a_loose_mode_is_rewritten_private(tmp_path, capsys):
+    _, out, _ = _main(tmp_path)
+    out.chmod(0o666)
+    assert _main(tmp_path)[0] == 0
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    assert "written" in capsys.readouterr().out.splitlines()[-1]
+
+
+def test_a_symlink_in_place_of_the_file_is_replaced(tmp_path):
+    _, out, _ = _main(tmp_path)
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(out.read_text())
+    out.unlink()
+    out.symlink_to(elsewhere)
+    assert _main(tmp_path)[0] == 0
+    assert not out.is_symlink()

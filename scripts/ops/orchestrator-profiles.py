@@ -154,14 +154,26 @@ def _private_dir(directory: Path) -> None:
         raise SystemExit(f"{directory} is writable by group or others")
 
 
-def write_atomically(path: Path, text: str) -> bool:
-    """Write ``text`` to ``path`` (0600) unless it is already there."""
-    _private_dir(path.parent)
+def _private_file(path: Path) -> bool:
+    """A regular file (not a link) this user owns that nobody else can write:
+    what the orchestrator accepts (profiles.ex owned_and_private/3)."""
     try:
-        if path.read_text(encoding="utf-8") == text:
-            return False
+        info = path.lstat()
     except FileNotFoundError:
-        pass
+        return False
+    return (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+            and not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+
+
+def write_atomically(path: Path, text: str) -> bool:
+    """Write ``text`` to ``path`` (0600) unless it is already there, private.
+
+    A file with the right text but the wrong owner or mode is rewritten:
+    the orchestrator would refuse it.
+    """
+    _private_dir(path.parent)
+    if _private_file(path) and path.read_text(encoding="utf-8") == text:
+        return False
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
