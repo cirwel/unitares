@@ -341,7 +341,9 @@ def thesis_from_session(session_id: str, record: Any) -> tuple["Thesis", Optiona
     if record.get("phase") != "antithesis":
         raise SessionNotReviewable(
             f"the session is in phase {record.get('phase')!r}, not awaiting its reviewer")
-    paused = record.get("paused_agent")
+    # The fast read names it paused_agent; DialecticSession.to_dict, which
+    # get serves on its other paths, names it paused_agent_id.
+    paused = record.get("paused_agent_id") or record.get("paused_agent")
     if not isinstance(paused, str) or not paused or paused == "unknown":
         raise SessionNotReviewable("the session names no paused agent")
     transcript = record.get("transcript")
@@ -385,9 +387,17 @@ async def load_thesis_from_session(
         from unitares_sdk.client import GovernanceClient  # type: ignore
 
         client_factory = GovernanceClient
+    try:
+        from unitares_sdk.errors import GovernanceToolRefused  # type: ignore
+    except ImportError:  # pragma: no cover - the SDK ships with the reviewer
+        GovernanceToolRefused = ()  # type: ignore[assignment]
     link = _GovernanceLink(governance_url, client_factory)
     try:
         record = await link.call_tool("dialectic", {"action": "get", "session_id": session_id})
+    except GovernanceToolRefused as exc:
+        # An answer (an unknown session, say), not an outage: the SDK raises
+        # for success=false.
+        raise SessionNotReviewable(f"the server refused the read: {exc}") from exc
     finally:
         await link.close()
     return thesis_from_session(session_id, record)

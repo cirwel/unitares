@@ -167,3 +167,71 @@ def test_without_the_switch_the_spawn_payload_is_used(monkeypatch):
     monkeypatch.setattr(reviewer, "run", run)
     assert reviewer.main() == 0
     assert seen["root_cause"] == "from env"
+
+
+def test_reads_a_to_dict_record_which_names_the_agent_paused_agent_id():
+    """get serves DialecticSession.to_dict on its non-fast paths."""
+    from src.dialectic_protocol import DialecticMessage, DialecticPhase, DialecticSession
+
+    session = DialecticSession(
+        paused_agent_id=PAUSED,
+        reviewer_agent_id=None,
+        paused_agent_state=RECORD["paused_agent_state"],
+        topic="Paused on risk",
+    )
+    session.transcript.append(DialecticMessage(
+        phase="thesis", agent_id=PAUSED, timestamp="2026-10-26T00:00:00+00:00",
+        root_cause="load", proposed_conditions=["rerun"], reasoning="latest"))
+    session.phase = DialecticPhase.ANTITHESIS
+    record = session.to_dict()
+    assert "paused_agent" not in record
+    thesis, parent = thesis_from_session(record["session_id"], record)
+    assert parent == PAUSED
+    assert thesis.root_cause == "load"
+    assert thesis.paused_agent_state == RECORD["paused_agent_state"]
+
+
+def test_a_refused_read_is_not_reviewable_rather_than_a_crash():
+    from unitares_sdk.errors import GovernanceToolRefused
+
+    class RefusingClient:
+        def __init__(self, url):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+        async def call_tool(self, name, args, **kwargs):
+            raise GovernanceToolRefused("Session 's-1' not found")
+
+    with pytest.raises(SessionNotReviewable, match="refused the read"):
+        asyncio.run(load_thesis_from_session(SID, "http://gov", RefusingClient))
+
+
+def test_main_exits_not_reviewable_for_an_unknown_session(profile_env, monkeypatch):
+    from unitares_sdk.errors import GovernanceToolRefused
+
+    class RefusingClient:
+        def __init__(self, url):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+        async def call_tool(self, name, args, **kwargs):
+            raise GovernanceToolRefused("Session 's-1' not found")
+
+    real_load = reviewer.load_thesis_from_session
+
+    async def load(session_id, url, factory=None):
+        return await real_load(session_id, url, RefusingClient)
+
+    monkeypatch.setattr(reviewer, "load_thesis_from_session", load)
+    monkeypatch.setattr(reviewer, "run", lambda *a: pytest.fail("reviewed anyway"))
+    assert reviewer.main() == EXIT_NOT_REVIEWABLE
