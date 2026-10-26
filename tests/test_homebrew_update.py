@@ -240,8 +240,64 @@ def test_backup_cleanup_preserves_current_journal_reference(
     assert paths[2].exists()
 
 
-def test_backup_cleanup_resumes_after_unlink_before_receipt(
+def test_backup_cleanup_counts_only_existing_verified_backups_for_retention(
     updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    paths = []
+    for number in range(3):
+        path = backup_dir / f"unitares-existing-{number}.dump"
+        path.write_bytes(f"PGDMP {number}".encode())
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+        paths.append(path)
+    index = updater.read_backup_index()
+    for number, entry in enumerate(index["entries"]):
+        entry["verified_at"] = f"2025-01-0{number + 1}T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
+    paths[2].unlink()
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+
+    assert updater.cleanup_backups(retain=1, older_than_days=0, apply=True) == 0
+    assert not paths[0].exists()
+    assert paths[1].exists()
+    assert [entry["path"] for entry in updater.read_backup_index()["entries"]] == [
+        str(paths[1])
+    ]
+
+
+def test_backup_cleanup_dry_run_then_reconciles_stale_index_entry(
+    updater, monkeypatch, tmp_path, capsys
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    existing = backup_dir / "unitares-existing.dump"
+    missing = backup_dir / "unitares-missing.dump"
+    for path in (existing, missing):
+        path.write_bytes(b"PGDMP")
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+    missing.unlink()
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+
+    assert updater.cleanup_backups(retain=1, older_than_days=0) == 0
+    assert "Would remove stale index entry" in capsys.readouterr().out
+    assert updater.cleanup_backups(retain=1, older_than_days=0, apply=True) == 0
+    assert existing.exists()
+    assert [entry["path"] for entry in updater.read_backup_index()["entries"]] == [
+        str(existing)
+    ]
+
+
+def test_backup_cleanup_resumes_after_unlink_before_receipt(
+    updater, monkeypatch, tmp_path, capsys
 ):
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir(mode=0o700)
@@ -269,6 +325,10 @@ def test_backup_cleanup_resumes_after_unlink_before_receipt(
     monkeypatch.setattr(
         updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
     )
+    assert updater.cleanup_backups(retain=1, older_than_days=0) == 0
+    output = capsys.readouterr().out
+    assert "dry run shows its remaining work" in output
+    assert "Would remove stale index entry" in output
     assert updater.cleanup_backups(retain=1, older_than_days=0, apply=True) == 0
     assert updater.read_cleanup_journal()["stage"] == "complete"
     assert [entry["path"] for entry in updater.read_backup_index()["entries"]] == [
@@ -325,6 +385,26 @@ def test_retry_backup_failure_does_not_claim_packages_are_unchanged(
         update.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+    with pytest.raises(update.Refusal, match="existing update state was preserved"):
+        updater.backup_database("3.6.0", pristine=False)
+
+
+def test_retry_backup_index_failure_does_not_claim_packages_are_unchanged(
+    updater, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(tmp_path / "backups"))
+
+    def execute(args, **kwargs):
+        if "--format=custom" in args:
+            kwargs["stdout"].write(b"PGDMP fixture")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(update.subprocess, "run", execute)
+    monkeypatch.setattr(
+        updater,
+        "record_backup",
+        lambda *args: (_ for _ in ()).throw(update.Refusal("index failure")),
     )
     with pytest.raises(update.Refusal, match="existing update state was preserved"):
         updater.backup_database("3.6.0", pristine=False)

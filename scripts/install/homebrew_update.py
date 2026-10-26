@@ -422,22 +422,50 @@ class NativeUpdater:
             raise Refusal(f"{backup_dir} must be a private directory owned by you.")
 
         index = self.read_backup_index()
-        protected = self._protected_backup_paths(retain=retain, index=index)
+        entries = {entry["path"]: entry for entry in index["entries"]}
+        root = backup_dir.resolve(strict=True)
+        verified_entries = []
+        stale_names = set()
+        outside_names = set()
+        for entry in index["entries"]:
+            path = Path(entry["path"])
+            if not os.path.lexists(path):
+                stale_names.add(entry["path"])
+                continue
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError as exc:
+                raise Refusal(
+                    f"Indexed backup is inaccessible and cannot be classified safely: {path}"
+                ) from exc
+            if resolved.parent != root:
+                outside_names.add(entry["path"])
+                continue
+            self._verify_indexed_backup(entry, backup_dir)
+            verified_entries.append(entry)
+        verified_index = {"entries": verified_entries}
+        protected = self._protected_backup_paths(
+            retain=retain, index=verified_index
+        )
         cleanup = self.read_cleanup_journal()
         if cleanup and cleanup["stage"] != "complete":
             candidate_names = cleanup["candidates"]
             if not apply:
-                print("An interrupted backup-cleanup plan is waiting; re-run with --yes to resume it.")
+                print(
+                    "An interrupted backup-cleanup plan is waiting; this dry run shows its remaining work."
+                )
         else:
             cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
             candidate_names = [
                 entry["path"]
-                for entry in index["entries"]
+                for entry in verified_entries
                 if entry["path"] not in protected and self._entry_time(entry) <= cutoff
             ]
+            candidate_names.extend(
+                sorted(value for value in stale_names if value not in protected)
+            )
             cleanup = None
 
-        entries = {entry["path"]: entry for entry in index["entries"]}
         for value in candidate_names:
             if value not in entries:
                 if not cleanup or value not in cleanup.get("deleted", []):
@@ -447,22 +475,33 @@ class NativeUpdater:
                 continue
             if value in protected:
                 raise Refusal(f"Cleanup plan now names a protected backup: {value}")
-            if cleanup and apply and not Path(value).exists():
+            if not os.path.lexists(value):
                 # A hard interruption can land after unlink but before the
-                # deletion receipt is durably rewritten. Missing is the only
-                # admissible recovery state; changed files still fail closed.
+                # deletion receipt is durably rewritten. A fresh stale index
+                # record is also safe to reconcile. Existing changed files
+                # still fail closed through full verification above.
                 continue
-            self._verify_indexed_backup(entries[value], backup_dir)
+            if value in outside_names:
+                raise Refusal(
+                    f"Cleanup plan names a backup outside the configured directory: {value}"
+                )
 
         if not candidate_names:
             print(
-                f"No indexed backups are eligible; retaining the newest {retain} and anything newer than {older_than_days} day(s)."
+                f"No indexed backups are eligible; retaining {len(verified_entries)} verified backup(s), including the newest {retain} and anything newer than {older_than_days} day(s)."
             )
+            if outside_names:
+                print(
+                    f"Left {len(outside_names)} out-of-directory index record(s) untouched."
+                )
             print("Homebrew kegs are not modified; Homebrew remains their cleanup owner.")
             return 0
 
-        verb = "Remove" if apply else "Would remove"
         for value in candidate_names:
+            if value in stale_names or not os.path.lexists(value):
+                verb = "Remove stale index entry" if apply else "Would remove stale index entry"
+            else:
+                verb = "Remove" if apply else "Would remove"
             print(f"{verb}: {value}")
         if not apply:
             print("Dry run only. Re-run with --yes to delete exactly this eligible set.")
@@ -486,8 +525,10 @@ class NativeUpdater:
                 continue
             entry = entries.get(value)
             path = Path(value)
-            if entry is not None and path.exists():
-                if value in self._protected_backup_paths(retain=retain, index=index):
+            if entry is not None and os.path.lexists(path):
+                if value in self._protected_backup_paths(
+                    retain=retain, index=verified_index
+                ):
                     raise Refusal(f"Cleanup candidate became protected: {value}")
                 self._verify_indexed_backup(entry, backup_dir).unlink()
             deleted.add(value)
@@ -502,7 +543,14 @@ class NativeUpdater:
         cleanup["stage"] = "complete"
         cleanup["completed_at"] = _utc_now()
         self._write_private_json(self.cleanup_journal_path, cleanup)
-        print(f"Removed {len(deleted)} indexed backup(s); retained {len(index['entries'])}.")
+        retained_verified = sum(
+            entry["path"] not in deleted for entry in verified_entries
+        )
+        print(
+            f"Removed or reconciled {len(deleted)} indexed backup(s); retained {retained_verified} verified backup(s)."
+        )
+        if outside_names:
+            print(f"Left {len(outside_names)} out-of-directory index record(s) untouched.")
         print("Homebrew kegs were not modified; Homebrew remains their cleanup owner.")
         return 0
 
@@ -647,9 +695,14 @@ class NativeUpdater:
         try:
             self.record_backup(path, target)
         except (OSError, Refusal) as exc:
+            consequence = (
+                "No package or schema change was made"
+                if pristine
+                else "The existing update state was preserved and no retry was attempted"
+            )
             raise Refusal(
                 f"The database backup was verified at {path}, but its retention record could not be written. "
-                "No package or schema change was made; preserve the backup and repair the private runtime directory."
+                f"{consequence}; preserve the backup and repair the private runtime directory."
             ) from exc
         print(f"✓ Verified database backup: {path}")
         return path

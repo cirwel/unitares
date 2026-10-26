@@ -95,30 +95,46 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
+          branch=auto/homebrew-release-sync
+          remote_ref="refs/remotes/origin/$branch"
+          lease="--force-with-lease=refs/heads/$branch:"
+          if git show-ref --verify --quiet "$remote_ref"; then
+            expected_remote="$(git rev-parse "$remote_ref")"
+            if git log --format='%ae' "origin/main..$remote_ref" | \
+                grep -Fvx '342195540+unitares-agents[bot]@users.noreply.github.com' >/dev/null; then
+              echo "automation branch contains a non-bot commit; refusing to overwrite it" >&2
+              exit 1
+            fi
+            git checkout -B "$branch" "$remote_ref"
+            git reset --hard origin/main
+            lease="--force-with-lease=refs/heads/$branch:$expected_remote"
+          else
+            git checkout -B "$branch" origin/main
+          fi
           python3 scripts/release_sync.py \
             --source-root "$GITHUB_WORKSPACE" \
+            --release-repo "$GITHUB_WORKSPACE" \
             --version "$UNITARES_VERSION" --tag "$TAG" \
             --commit "$UNITARES_COMMIT" \
             --archive-url "$UNITARES_ARCHIVE_URL" \
             --archive-sha256 "$UNITARES_ARCHIVE_SHA256"
           python3 scripts/release_sync.py \
             --source-root "$GITHUB_WORKSPACE" \
+            --release-repo "$GITHUB_WORKSPACE" \
             --version "$UNITARES_VERSION" --tag "$TAG" \
             --commit "$UNITARES_COMMIT" \
             --archive-url "$UNITARES_ARCHIVE_URL" \
             --archive-sha256 "$UNITARES_ARCHIVE_SHA256" --check
           python3 scripts/test_release_sync.py
-          branch=auto/homebrew-release-sync
           git config user.name "unitares-agents[bot]"
           git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
-          git checkout -B "$branch"
           git add Formula/unitares.rb SOURCES.json
           if git diff --cached --quiet; then
             echo "Tap already matches $TAG." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           git commit -m "chore(release): sync UNITARES $TAG"
-          git push --force-with-lease origin "$branch"
+          git push "$lease" --force-if-includes origin "HEAD:refs/heads/$branch"
           body="$RUNNER_TEMP/homebrew-pr-body.md"
           printf '%s\n' \
             "This draft updates the tap to UNITARES $TAG at $UNITARES_COMMIT." \
