@@ -1,5 +1,5 @@
-from typing import Optional, Union
-from pydantic import Field, model_validator
+from typing import Any, Optional, Union
+from pydantic import Field, field_validator, model_validator
 from src.identity.onboard_provenance import OnboardOrigin
 from .mixins import AgentIdentityMixin
 from .core import BootstrapStateParams
@@ -63,7 +63,8 @@ class OnboardParams(AgentIdentityMixin):
     - Advanced / adapter-only: `name` (cosmetic), `model_type`, `client_hint`,
       `resume`, `orchestrated`, `thread_id`, `trajectory_signature`,
       `process_fingerprint`, `initial_state`, `response_mode`,
-      `onboard_origin`. Ordinary interactive callers should not need these.
+      `onboard_origin`, `host_session`. Ordinary interactive callers should
+      not need these.
 
     See docs/ontology/identity.md ("Strict Identity, Simple Contract" + the
     identifier reference table) for which identifier to pass when.
@@ -167,6 +168,23 @@ class OnboardParams(AgentIdentityMixin):
             "to resolve or recover identity."
         )
     )
+    host_session: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional adapter-reported vendor session {harness, session_id, "
+            "workspace?}, stored once on a fresh identity. Descriptive only; "
+            "a malformed value is ignored."
+        ),
+        json_schema_extra={"brief": "Adapter-only: {harness, session_id, workspace?}."},
+    )
+
+    @field_validator("host_session", mode="before")
+    @classmethod
+    def _drop_non_object_host_session(cls, value: Any) -> Any:
+        # Ignored, never refused: a non-object becomes "nothing declared" here,
+        # and the handler drops a malformed object the same way.
+        return value if isinstance(value, dict) else None
+
     initial_state: Optional[BootstrapStateParams] = Field(
         default=None,
         description=(

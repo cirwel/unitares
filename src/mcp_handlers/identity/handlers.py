@@ -2999,6 +2999,12 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception as e:
             logger.debug(f"[ONBOARD] default-stamp failed (non-fatal): {e}")
 
+    # HOST SESSION: an adapter may declare which vendor session this identity
+    # was minted in. Recorded once, on a fresh identity only (a resume keeps
+    # whatever its mint recorded), and never allowed to fail the onboard.
+    if is_new and arguments.get("host_session") is not None:
+        await _record_host_session(agent_uuid, arguments.get("host_session"))
+
     # CONCURRENT IDENTITY BINDING (#123): if the client declared a process
     # fingerprint, record the binding and run audit-only collision detection.
     # Fire-and-forget — declaration-only, never resolves or recovers identity.
@@ -3502,6 +3508,31 @@ async def _create_spawned_edge_bg(
         logger.info(f"[SPAWNED] Created edge {parent_id[:8]}... -> {child_id[:8]}...")
     except Exception as e:
         logger.warning(f"SPAWNED edge creation failed (non-fatal): {e}")
+
+
+async def _record_host_session(agent_uuid: str, declared: Any) -> bool:
+    """Store a declared vendor session on a fresh identity; never raise.
+
+    See ``src.identity.host_session``: descriptive context only. A malformed
+    declaration or a failed write is logged and dropped, because an onboard
+    must not fail over optional context.
+    """
+    from src.identity.host_session import normalize_host_session
+
+    try:
+        record = normalize_host_session(declared)
+    except ValueError as exc:
+        logger.warning(f"[ONBOARD] host_session ignored for {agent_uuid[:8]}...: {exc}")
+        return False
+    if record is None:
+        return False
+    try:
+        return await get_db().update_identity_metadata(
+            agent_uuid, {"host_session": record}, merge=True
+        )
+    except Exception as exc:
+        logger.warning(f"[ONBOARD] host_session not recorded for {agent_uuid[:8]}...: {exc}")
+        return False
 
 
 async def _stamp_default_tags_on_onboard(
