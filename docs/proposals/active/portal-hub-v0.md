@@ -16,7 +16,12 @@ A single-vendor user stays in that vendor's app, and nothing in the core require
 
 **Where it differs from what exists.** Cross-vendor launchers and GUIs already exist. CloudCLI, for example, is an open-source web UI over Claude Code, Codex, Cursor CLI and Gemini CLI. A launcher alone is therefore not this project's contribution. The hub's value is the record underneath it: one identity per session across vendors, declared lineage when a session is resumed, cross-family review, the timeline, and outcomes. A hub without UNITARES behind it would be one more launcher. The hub therefore requires UNITARES and does not try to stand alone.
 
-**Earlier attempt.** Discord dispatch, through the BEAM Discord bridge, carried multi-turn conversations to `claude -p` children of the agent-orchestrator. It supplies the turn model in §3.4. Why it did not become the daily surface is an open question for the operator (§7.1). The answer should shape the first milestone.
+**Earlier attempt.** Discord dispatch, through the BEAM Discord bridge, carried multi-turn conversations to `claude -p` children of the agent-orchestrator. It supplies the turn model in §3.4. The operator's account of why it did not become the daily surface (2026-10-26):
+- It was mostly one-way.
+- It was a little buggy.
+- It was hard to make compete with the vendors' own apps.
+
+Those apps resume sessions well, Claude's especially, so he keeps sessions in the vendor apps and toggles between them. Codex is the gap: a terminal session cannot be resumed from its phone app, only a cloud session. The hub therefore has to be two-way and reliable from its first build. It competes only where no vendor app can: across vendors, and on the record.
 
 ## 2. What exists
 
@@ -48,7 +53,18 @@ The hub ships with these from its first build, not as a later hardening step:
 - an explicit Host allowlist plug and explicit `check_origin`;
 - one guarded `live_session` that fails closed without an authenticated session.
 
-**Login.** Login is a one-time launch token, printed by the start script or opened through a local command, which is exchanged for an `HttpOnly`, `SameSite=Strict` session cookie. A passkey is the stronger later option. Without the cookie, a page on the operator's machine, or a process that can reach the port, can see nothing and do nothing.
+**Login: the dashboard's passkey, reused** (operator choice, 2026-10-26). The governance server already runs passkey (WebAuthn) sign-in with opaque, server-side dashboard sessions (`src/dashboard_auth.py`). That module tracks three things for a session: whether it is signed in, whether it may write, and whether it is fresh. The hub uses that sign-in instead of building a second one:
+- the hub sends the operator through the server's passkey ceremony;
+- the hub asks the server to validate the resulting session on every connect and every write;
+- a write needs a fresh session, so each start or resume asks for the operator's fingerprint or face again.
+
+The hub never stores a credential of its own for the browser. Without a valid session, a page on the operator's machine, or a process that can reach the port, can see nothing and do nothing.
+
+H2 must settle two details:
+- whether the deployment's passkey relying-party id (`UNITARES_DASHBOARD_RP_ID`) covers the hub's origin;
+- how the hub validates a session without reading the server's database. The likely answer is a small read-only session-check route, which is itself an auth-path change.
+
+A one-time launch token exchanged for an `HttpOnly`, `SameSite=Strict` cookie remains the fallback for an install with passkeys off.
 
 **Credentials.** The hub calls the orchestrator through named launch profiles only, never with caller-chosen `cmd` or `env`. It holds its own operator-class credential, issued per client as `identity/operator.py` advises. It never holds the whole secrets file.
 
@@ -89,7 +105,7 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 - **H0: the record learns the vendor session id.** The plugin's hooks report the vendor and its session id on onboard, and `/v1/timeline` returns them per agent. This is read-only data. It lets the existing timeline label each row resumable or not. It needs a check that the field carries no secret and stays bounded.
 - **H1: launch profiles.** Build `inference-hosts-config-v0` step 4 (§2.5) in the orchestrator: named profiles for resume and start per vendor, with no caller-chosen `cmd` or `env`. This is a prerequisite for any hub spawn, and useful on its own because it closes the bearer-holder hole.
 - **H2: the hub shell.** `elixir/portal` with the §3.2 boundary and login, the timeline moved in as the home screen (read-only), and boundary tests for a foreign Host, a foreign Origin, no cookie and an expired token. It is shipped by `cirwel update` and registered like the other BEAM apps.
-- **H3: resume.** §3.3 and §3.4 for one vendor first, with the stale-state and one-driver tests and dual attribution.
+- **H3: resume.** §3.3 and §3.4, Claude first (operator, 2026-10-26: "ideally all, but you have to start somewhere"), with the stale-state and one-driver tests and dual attribution. Codex follows, because its terminal sessions are the ones its own phone app cannot resume.
 - **H4: start a new session.** §3.5, then further vendors as their CLIs and hooks allow.
 
 ## 6. Risks and limits
@@ -99,14 +115,16 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 - **Spend.** Starting and resuming sessions spends subscriptions. The hub shows which vendor and profile each spawn uses, and starts nothing on its own.
 - **Runway.** H0 and H1 are useful without the hub. If the hub stops after them, nothing is wasted.
 - **Vendor drift.** CLI resume flags and hook payloads change. Profiles isolate that to one file per vendor.
+- **Competing with the vendors' apps.** Discord dispatch lost partly on polish against apps the operator already used (§1). The hub will not out-polish a vendor's chat. It earns its place only if it is reliable for the cross-vendor jobs: seeing everything at once, resuming where a vendor app cannot, and the record.
+- **The phone.** Much of the toggling happens on the phone, and v0 is loopback-only. Reaching the hub from a phone means exposure beyond loopback: a tunnel plus passkey sign-in, which works on phones. That is a later, separately reserved step, not part of v0 (§4).
 
-## 7. Open decisions for the operator
+## 7. Operator answers (2026-10-26)
 
-1. **Discord dispatch.** What made it not stick? The answer decides whether H3's conversation view needs anything Discord lacked.
-2. **Placement and name.** Is it `elixir/portal` in this repository, as recommended, or something else?
-3. **First vendor for resume** (H3): Claude or Codex.
-4. **Login form for H2.** A one-time launch token plus cookie, as recommended, or a passkey from the start.
-5. **`dialectic_live` after the move.** Keep it for the dialectic pane, or fold that pane into the hub as well.
+1. **Discord dispatch.** "its ok sometimes", but mostly one-way, a little buggy and hard to make compete with the vendors' apps. Vendor apps resume well, Claude's especially. Codex terminal sessions cannot be resumed from its phone app, only cloud sessions, so the operator keeps sessions in the apps and toggles. This is folded into §1 and §6.
+2. **Placement and name.** Yes: `elixir/portal` in this repository.
+3. **First vendor for resume.** Claude ("ideally all, but you have to start somewhere"). This is folded into H3.
+4. **Login.** The dashboard's biometric (passkey) login. This is folded into §3.2.
+5. **`dialectic_live` after the move.** Undecided ("it still looks like prototype phase"). It stays as it is, and the question returns when H2 moves the timeline.
 
 ## 8. Authorization
 
