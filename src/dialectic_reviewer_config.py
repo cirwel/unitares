@@ -267,6 +267,9 @@ REVIEWER_PROFILE_SETTINGS = (
 
 #: The reviewer's MCP credential, when the server's /mcp gate is configured.
 MCP_BEARER_ENV = "UNITARES_MCP_BEARER_TOKEN"
+#: The external host's key variable when UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV
+#: names none (agents/dialectic_reviewer/host_backends._DEFAULT_KEY_ENV).
+DEFAULT_EXTERNAL_KEY_ENV = "UNITARES_DIALECTIC_EXTERNAL_API_KEY"
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 
@@ -284,10 +287,13 @@ def reviewer_profile_env(environ: Mapping[str, str] | None = None) -> tuple[Dict
     unset, which is what the server used.
 
     Secrets, as child variable -> orchestrator variable, both the same name:
-    the MCP bearer when the server has one, and the external host's key
-    variable when an external host is configured. Only the names come from
-    ``environ``; the orchestrator resolves each value at spawn, and a profile
-    whose secret is unset there refuses to start.
+    the MCP bearer when the server has one, and, when an external host is
+    configured, the key variable UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV names
+    or else, when the server has it, DEFAULT_EXTERNAL_KEY_ENV. An external
+    endpoint that needs no key binds none (the reviewer then sends a
+    placeholder). Only the names come from ``environ``; the orchestrator
+    resolves each value at spawn, and a profile whose secret is unset there
+    refuses to start.
     """
     fixed = {name: value for name in REVIEWER_PROFILE_SETTINGS
              if (value := (os.environ if environ is None else environ).get(name))}
@@ -303,6 +309,8 @@ def reviewer_profile_env(environ: Mapping[str, str] | None = None) -> tuple[Dict
     if (os.environ if environ is None else environ).get(MCP_BEARER_ENV):
         secrets[MCP_BEARER_ENV] = MCP_BEARER_ENV
     key_env = ((os.environ if environ is None else environ).get("UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV") or "").strip()
+    if not key_env and (os.environ if environ is None else environ).get(DEFAULT_EXTERNAL_KEY_ENV):
+        key_env = DEFAULT_EXTERNAL_KEY_ENV
     if key_env and fixed.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL"):
         if not _ENV_NAME.fullmatch(key_env) or key_env in fixed:
             raise ValueError(

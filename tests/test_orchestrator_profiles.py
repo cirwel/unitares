@@ -331,3 +331,27 @@ def test_the_profile_starts_the_reviewer_in_an_empty_environment(tmp_path):
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "could not read session 0123456789abcdef" in proc.stdout
+
+
+
+def test_the_default_external_key_variable_is_the_reviewers():
+    from agents.dialectic_reviewer import host_backends
+    assert rc.DEFAULT_EXTERNAL_KEY_ENV == host_backends._DEFAULT_KEY_ENV
+
+
+def test_the_default_external_key_is_bound_when_the_server_has_it():
+    external = {"UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://e.invalid/v1"}
+    _, secrets = rc.reviewer_profile_env({**external, rc.DEFAULT_EXTERNAL_KEY_ENV: "1"})
+    assert secrets == {rc.DEFAULT_EXTERNAL_KEY_ENV: rc.DEFAULT_EXTERNAL_KEY_ENV}
+    # A keyless endpoint binds nothing, so the profile is not left unconfigured.
+    assert rc.reviewer_profile_env(external)[1] == {}
+
+
+def test_the_generator_keeps_the_default_key_only_as_presence(tmp_path):
+    settings = gen.server_settings(
+        [{rc.DEFAULT_EXTERNAL_KEY_ENV: "sk-live-value", "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://e.invalid/v1"}],
+        rc.REVIEWER_PROFILE_SETTINGS, (rc.MCP_BEARER_ENV, rc.DEFAULT_EXTERNAL_KEY_ENV))
+    assert settings[rc.DEFAULT_EXTERNAL_KEY_ENV] == "1"
+    fixed, secrets = rc.reviewer_profile_env(settings)
+    assert "sk-live-value" not in json.dumps([fixed, secrets])
+    assert rc.DEFAULT_EXTERNAL_KEY_ENV in secrets

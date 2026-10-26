@@ -383,7 +383,8 @@ def main(argv: list[str] | None = None) -> int:
              "UNITARES_CODEX_APP_SERVER_INSTRUMENTATION", "UNITARES_GOVERNANCE_URL",
              "GOVERNANCE_URL", "UNITARES_INFERENCE_HOSTS_FILE",
              *reviewer_config.REVIEWER_PROFILE_SETTINGS)
-    settings = server_settings(sources, names, (reviewer_config.MCP_BEARER_ENV,))
+    settings = server_settings(sources, names, (reviewer_config.MCP_BEARER_ENV,
+                                                reviewer_config.DEFAULT_EXTERNAL_KEY_ENV))
     found: dict[str, str | None] = {}
     for host, (name, override) in CLIS.items():
         found[host] = find_cli(name, settings.get(override, "").strip(), account.pw_dir)
