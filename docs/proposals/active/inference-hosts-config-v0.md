@@ -496,8 +496,28 @@ sets nothing.
      evidence of the server's schema. Chosen in a design consult (Codex and
      Antigravity, 2026-10-26) over serving it to bound callers only or
      trusting declared lineage, neither of which bounds a bearer holder.
-     Next: the reviewer resolving its own host list, its profile, the
-     council profiles, moving the callers, and the doctor's digest check.
+     *Reviewer, second half (2026-10-26):* the server's reviewer host
+     selection and lifetime cap moved to `src/dialectic_reviewer_config.py`,
+     which takes a settings map; the server calls it with its environment,
+     unchanged. The generator writes `dialectic.reviewer`: one variable
+     (`DIALECTIC_SESSION_ID`), the from-session switch, the server's
+     non-secret reviewer settings, the host list as the server resolves it
+     (the inference hosts file included), the CLIs it found, the lifetime
+     the server computes, and, bound by name only, the MCP bearer and the
+     external host's key variable. The host list is resolved when the file
+     is generated, not by the reviewer at spawn as §2.5 first said: a
+     reviewer under `agents/` may not import `src`
+     (`scripts/dev/check_component_boundaries.py`, B1), so after editing the
+     inference hosts file the profiles file is regenerated (start.sh does so
+     at boot; the orchestrator reloads it without a restart), and the
+     doctor's digest check will report a stale one. It reads the server's
+     settings from `--env-file` or `--launchd-plist` (this deployment keeps
+     them in the server's LaunchAgent), keeping only the names it uses and
+     a credential only as present or absent. Rollout note: the orchestrator's
+     own environment must hold every bound secret, or the profile is
+     `unconfigured` and refuses. Next: the council profiles
+     (cirwel/dispatch_beam), moving the callers, and the doctor's digest
+     check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is

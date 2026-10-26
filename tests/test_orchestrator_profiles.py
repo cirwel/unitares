@@ -25,12 +25,26 @@ gen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gen)
 
 
+def placeholder_document():
+    """The fixture: the generator's output for placeholder paths and a server
+    with an MCP bearer and no other reviewer settings."""
+    from src import dialectic_reviewer_config as rc
+
+    settings = {rc.MCP_BEARER_ENV: "1"}
+    fixed, secrets = rc.reviewer_profile_env(settings)
+    clis = {"UNITARES_CLAUDE_CLI": "/usr/local/bin/claude",
+            "UNITARES_CODEX_CLI": "/usr/local/bin/codex",
+            "UNITARES_ANTIGRAVITY_CLI": "/usr/local/bin/agy"}
+    return gen.build_profiles(
+        repo_root="/srv/unitares", python="/usr/bin/python3", user="operator",
+        claude_cli="/usr/local/bin/claude", codex_cli="/usr/local/bin/codex",
+        antigravity_cli="/usr/local/bin/agy",
+        reviewer={"fixed": fixed, "secrets": secrets, "clis": clis,
+                  "max_runtime_ms": rc.reviewer_max_runtime_ms(settings)})
+
+
 def test_fixture_is_the_generator_output_for_placeholder_paths():
-    document = gen.build_profiles(repo_root="/srv/unitares", python="/usr/bin/python3",
-                                  user="operator", claude_cli="/usr/local/bin/claude",
-                                  codex_cli="/usr/local/bin/codex",
-                                  antigravity_cli="/usr/local/bin/agy")
-    assert FIXTURE.read_text(encoding="utf-8") == gen.render(document)
+    assert FIXTURE.read_text(encoding="utf-8") == gen.render(placeholder_document())
 
 
 def test_model_pattern_matches_the_client():
@@ -85,6 +99,7 @@ def test_app_server_switch_reads_like_the_host_adapter(value, expected):
 def test_no_host_profile_binds_a_secret_or_inherits_an_api_key():
     document = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
                                   codex_cli="/b", antigravity_cli="/c")
+    assert all(name.startswith("host.") for name in document["profiles"])
     for profile in document["profiles"].values():
         assert "secrets" not in profile["env"]
         assert not any("KEY" in name or "TOKEN" in name for name in profile["env"]["inherit"])
@@ -197,3 +212,155 @@ def test_a_symlink_in_place_of_the_file_is_replaced(tmp_path):
     out.symlink_to(elsewhere)
     assert _main(tmp_path)[0] == 0
     assert not out.is_symlink()
+
+
+
+# --- the dialectic.reviewer profile ------------------------------------------
+
+from src import dialectic_reviewer_config as rc  # noqa: E402
+
+
+def test_settings_keep_only_used_names_and_credentials_only_as_presence():
+    sources = [{"UNITARES_DIALECTIC_REVIEWER_HOST": "codex", "AGENT_ORCHESTRATOR_BEARER_TOKEN": "t0ken-abc",
+                rc.MCP_BEARER_ENV: "s3cret-bearer", "UNRELATED": "x"},
+               {"UNITARES_DIALECTIC_REVIEWER_HOST": "claude"}]
+    settings = gen.server_settings(sources, rc.REVIEWER_PROFILE_SETTINGS, (rc.MCP_BEARER_ENV,))
+    assert settings == {"UNITARES_DIALECTIC_REVIEWER_HOST": "claude", rc.MCP_BEARER_ENV: "1"}
+
+
+def test_reviewer_profile_env_binds_credentials_by_name_only():
+    fixed, secrets = rc.reviewer_profile_env({
+        rc.MCP_BEARER_ENV: "1",
+        "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://example.invalid/v1",
+        "UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV": "EXAMPLE_API_KEY",
+        "UNITARES_DIALECTIC_CODEX_TIMEOUT_S": "inf",
+        "UNITARES_GOVERNANCE_URL": "http://127.0.0.1:8767",
+    })
+    assert secrets == {rc.MCP_BEARER_ENV: rc.MCP_BEARER_ENV, "EXAMPLE_API_KEY": "EXAMPLE_API_KEY"}
+    assert rc.MCP_BEARER_ENV not in fixed
+    assert fixed["UNITARES_DIALECTIC_CODEX_TIMEOUT_S"] == "420"  # unusable -> default
+    assert fixed["UNITARES_GOVERNANCE_URL"] == "http://127.0.0.1:8767/mcp/"
+
+
+def test_no_external_key_is_bound_without_an_external_host():
+    _, secrets = rc.reviewer_profile_env({"UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV": "EXAMPLE_API_KEY"})
+    assert secrets == {}
+
+
+@pytest.mark.parametrize("name", ["not a name", "UNITARES_DIALECTIC_REVIEWER_HOST"])
+def test_a_bad_external_key_name_is_refused(name):
+    with pytest.raises(ValueError, match="must name an environment variable"):
+        rc.reviewer_profile_env({"UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://e.invalid/v1",
+                                 "UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV": name,
+                                 "UNITARES_DIALECTIC_REVIEWER_HOST": "codex"})
+
+
+def test_reviewer_profile_takes_only_a_session_id():
+    profile = placeholder_document()["profiles"]["dialectic.reviewer"]
+    assert list(profile["vars"]) == ["DIALECTIC_SESSION_ID"]
+    assert profile["vars"]["DIALECTIC_SESSION_ID"]["required"] is True
+    fixed = profile["env"]["set"]
+    assert fixed["DIALECTIC_REVIEWER_FROM_SESSION"] == "1"
+    assert "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR" in fixed
+    assert not any(name.startswith("DIALECTIC_THESIS") for name in fixed)
+    assert profile["lineage"] == "none"
+    assert "lease" not in profile  # best-effort presence, as the raw spawn
+    assert profile["args"] == ["-s", "-m", "agents.dialectic_reviewer"]
+
+
+def test_reviewer_lifetime_matches_the_server(monkeypatch):
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    for wait in (None, "120", "-5", "inf"):
+        if wait is None:
+            monkeypatch.delenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", raising=False)
+        else:
+            monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", wait)
+        monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,external")
+        monkeypatch.delenv("UNITARES_INFERENCE_HOSTS_FILE", raising=False)
+        settings = {k: v for k, v in os.environ.items() if k in rc.REVIEWER_PROFILE_SETTINGS}
+        assert rc.reviewer_max_runtime_ms(settings) == od._reviewer_max_runtime_ms()
+
+
+_JOB_FILE = ("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n"
+             "jobs:\n  dialectic_reviewer: { prefer: [claude:host-adapter, "
+             "antigravity:host-adapter, codex:host-adapter] }\n")
+
+
+@pytest.mark.parametrize("hosts, host, hosts_file", [
+    ("codex,antigravity", "", None), ("", "claude", None), ("", "", None),
+    ("claude", "", _JOB_FILE),                       # the job wins over the setting
+    ("claude", "", "version: 1\nhosts: {bad\n"),   # a file that does not load
+])
+def test_the_profile_fixes_the_hosts_the_server_would_send(monkeypatch, tmp_path, hosts, host,
+                                                           hosts_file):
+    from src import inference_config
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    if hosts_file is None:
+        monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    else:
+        path = tmp_path / "inference.yaml"
+        path.write_text(hosts_file)
+        path.chmod(0o600)
+        monkeypatch.setenv(inference_config.HOSTS_FILE_ENV, str(path))
+    inference_config._cache.update(key=None, result=None)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", hosts)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", host)
+    keys = ("UNITARES_DIALECTIC_REVIEWER_HOSTS", "UNITARES_DIALECTIC_REVIEWER_HOST",
+            rc.REVIEWER_HOSTS_ERROR_ENV)
+    sent = {k: od._build_spec("s", {"root_cause": "r"}, None)["env"][k] for k in keys}
+
+    fixed, _ = rc.reviewer_profile_env(dict(os.environ))
+    assert {k: fixed[k] for k in keys} == sent
+    inference_config._cache.update(key=None, result=None)
+
+
+def test_the_profile_starts_the_reviewer_in_an_empty_environment(tmp_path):
+    """cmd, args, cd and PYTHONPATH import the reviewer with nothing inherited
+    but the profile's list. Governance is unreachable here, so it must reach
+    its session read and fail that loudly (exit 1), not fail to import."""
+    import subprocess
+
+    fixed, _ = rc.reviewer_profile_env({"UNITARES_GOVERNANCE_URL": "http://127.0.0.1:9/mcp/"})
+    profile = gen.reviewer_profile(repo_root=str(REPO_ROOT), python=sys.executable, user="u",
+                                   fixed=fixed, secrets={}, max_runtime_ms=1, clis={})
+    env = {k: os.environ[k] for k in profile["env"]["inherit"] if k in os.environ}
+    env.update(profile["env"]["set"], DIALECTIC_SESSION_ID="0123456789abcdef")
+    proc = subprocess.run([profile["cmd"], *profile["args"]], cwd=profile["cd"], env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "could not read session 0123456789abcdef" in proc.stdout
+
+
+
+def test_the_default_external_key_variable_is_the_reviewers():
+    from agents.dialectic_reviewer import host_backends
+    assert rc.DEFAULT_EXTERNAL_KEY_ENV == host_backends._DEFAULT_KEY_ENV
+
+
+def test_the_default_external_key_is_bound_when_the_server_has_it():
+    external = {"UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://e.invalid/v1"}
+    _, secrets = rc.reviewer_profile_env({**external, rc.DEFAULT_EXTERNAL_KEY_ENV: "1"})
+    assert secrets == {rc.DEFAULT_EXTERNAL_KEY_ENV: rc.DEFAULT_EXTERNAL_KEY_ENV}
+    # A keyless endpoint binds nothing, so the profile is not left unconfigured.
+    assert rc.reviewer_profile_env(external)[1] == {}
+
+
+def test_the_generator_keeps_the_default_key_only_as_presence(tmp_path):
+    settings = gen.server_settings(
+        [{rc.DEFAULT_EXTERNAL_KEY_ENV: "sk-live-value", "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://e.invalid/v1"}],
+        rc.REVIEWER_PROFILE_SETTINGS, (rc.MCP_BEARER_ENV, rc.DEFAULT_EXTERNAL_KEY_ENV))
+    assert settings[rc.DEFAULT_EXTERNAL_KEY_ENV] == "1"
+    fixed, secrets = rc.reviewer_profile_env(settings)
+    assert "sk-live-value" not in json.dumps([fixed, secrets])
+    assert rc.DEFAULT_EXTERNAL_KEY_ENV in secrets
+
+
+
+def test_the_reviewer_inherits_what_its_cli_allowlist_passes():
+    from agents.dialectic_reviewer import host_backends
+    assert set(gen.REVIEWER_INHERIT) == set(host_backends._CLI_ENV_ALLOWLIST) - {"USER"}
+    profile = placeholder_document()["profiles"]["dialectic.reviewer"]
+    assert profile["env"]["inherit"] == list(gen.REVIEWER_INHERIT)
+    assert profile["env"]["set"]["USER"] == "operator"

@@ -54,6 +54,11 @@ if [[ "${AGENT_ORCHESTRATOR_PROFILES_GENERATE:-}" == "1" && -n "${AGENT_ORCHESTR
     if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_ENV_FILE:-}" ]]; then
         profile_args+=(--env-file "$AGENT_ORCHESTRATOR_PROFILES_ENV_FILE")
     fi
+    # The governance server's LaunchAgent, where its settings live on macOS;
+    # the generator takes only the reviewer's non-secret settings from it.
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_SERVER_PLIST:-}" ]]; then
+        profile_args+=(--launchd-plist "$AGENT_ORCHESTRATOR_PROFILES_SERVER_PLIST")
+    fi
     if [[ -z "$PROFILES_PYTHON" ]] || ! env -i PATH="$PATH" "$PROFILES_PYTHON" -I \
             "$REPO_ROOT/scripts/ops/orchestrator-profiles.py" "${profile_args[@]}" >&2; then
         echo "[agent-orchestrator] warning: launch profiles not regenerated; the last good file, if any, stays in force" >&2

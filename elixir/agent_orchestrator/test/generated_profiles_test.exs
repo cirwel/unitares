@@ -104,12 +104,67 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
 
   test "the generated file loads, and no host profile binds a secret" do
     assert {:ok, profiles} = @fixture |> File.read!() |> Profiles.parse()
-    assert Map.keys(profiles) |> Enum.sort() == Map.keys(@clients) |> Enum.sort()
 
-    for {_, profile} <- profiles do
+    assert Map.keys(profiles) |> Enum.sort() ==
+             Enum.sort(["dialectic.reviewer" | Map.keys(@clients)])
+
+    for {name, profile} <- profiles, String.starts_with?(name, "host.") do
       assert profile.lineage == "none"
       assert profile.lease == false
       assert profile.env.secrets == %{}
+    end
+  end
+
+  describe "dialectic.reviewer" do
+    setup %{tmp_dir: dir} do
+      doc = Jason.decode!(File.read!(@fixture))
+      %{dir: dir, doc: doc}
+    end
+
+    test "binds its MCP bearer by name and refuses without it", %{dir: dir, doc: doc} do
+      name = start_profiles(doc, dir, %{"PATH" => "/bin"})
+      assert "dialectic.reviewer" in Profiles.status(name).unconfigured
+
+      {:ok, prepared} =
+        Profiles.prepare(name, %{
+          "profile" => "dialectic.reviewer",
+          "vars" => %{"DIALECTIC_SESSION_ID" => "0123456789abcdef"}
+        })
+
+      assert {:error, :profile_unconfigured, _} =
+               Profiles.admit(name, "dialectic.reviewer", prepared.revision, "ex-1")
+    end
+
+    test "takes only a session id", %{dir: dir, doc: doc} do
+      name = start_profiles(doc, dir, %{"PATH" => "/bin"})
+
+      for {var, value} <- [
+            {"DIALECTIC_THESIS_ROOT_CAUSE", "invented"},
+            {"DIALECTIC_PAUSED_AGENT_STATE", "{}"},
+            {"UNITARES_DIALECTIC_REVIEWER_HOSTS", "claude"},
+            {"DIALECTIC_REVIEWER_FROM_SESSION", "0"}
+          ] do
+        assert {:error, :schema_invalid, reason} =
+                 Profiles.prepare(name, %{
+                   "profile" => "dialectic.reviewer",
+                   "vars" => %{"DIALECTIC_SESSION_ID" => "0123456789abcdef", var => value}
+                 })
+
+        assert reason =~ var
+      end
+
+      assert {:error, :schema_invalid, _} =
+               Profiles.prepare(name, %{
+                 "profile" => "dialectic.reviewer",
+                 "vars" => %{"DIALECTIC_SESSION_ID" => "--help"}
+               })
+
+      assert {:error, :schema_invalid, _} =
+               Profiles.prepare(name, %{
+                 "profile" => "dialectic.reviewer",
+                 "lineage" => %{"parent_agent_uuid" => "11111111-1111-4111-8111-111111111111"},
+                 "vars" => %{"DIALECTIC_SESSION_ID" => "0123456789abcdef"}
+               })
     end
   end
 

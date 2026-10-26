@@ -32,9 +32,24 @@ standard error when its CLI is not found:
   used a shell template, and runs its own administrator-configuration and
   sandbox-probe checks before either.
 * ``host.antigravity``: ``antigravity_cli_client.py``.
+* ``dialectic.reviewer``: the orchestrated dialectic reviewer
+  (``python -s -m agents.dialectic_reviewer``). It takes only the session id
+  and reads its thesis and evidence from the session
+  (``DIALECTIC_REVIEWER_FROM_SESSION``), and runs with the server's reviewer
+  settings fixed (``src/dialectic_reviewer_config.reviewer_profile_env``):
+  its host list as the server resolves it, the inference hosts file
+  included, so regenerate after editing that file; the CLIs found here; and
+  its lifetime cap sized from those settings.
 
-All three are subscription lanes: no profile binds a secret, and no API key
-is inherited.
+The host lanes are subscription lanes: none binds a secret, and no API key
+is inherited. The reviewer binds, by name only, the MCP bearer when the
+server has one and the external reviewer host's key variable when one is
+configured; the orchestrator resolves them from its own environment.
+
+The server's settings come from ``--env-file`` and ``--launchd-plist`` (the
+server's LaunchAgent, whose ``EnvironmentVariables`` it reads). Only the
+names this script uses are taken from either, and a credential only as
+present or absent: a secrets file named by mistake contributes nothing else.
 
 The output is deterministic (sorted keys), written atomically with mode 0600
 into a directory this user owns and nobody else can write, and left untouched
@@ -80,6 +95,26 @@ CODEX_CLIENT = "src/mcp_handlers/support/codex_app_server_client.py"
 AGY_CLIENT = "src/mcp_handlers/support/antigravity_cli_client.py"
 CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT)
 
+REVIEWER_MODULE = "agents/dialectic_reviewer/reviewer.py"
+REVIEWER_SDK = "agents/sdk/src"
+#: What the reviewer's host CLIs may see, as the reviewer allowlists it
+#: (agents/dialectic_reviewer/host_backends._CLI_ENV_ALLOWLIST, which a test
+#: holds this equal to): the home and login locations, locale, proxies and CA
+#: bundles. USER is not inherited but fixed, since a service manager may not
+#: pass it.
+REVIEWER_INHERIT = (
+    "PATH", "HOME", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS",
+)
+
+#: Dialectic session ids are 16 hex characters (DialecticSession); the
+#: pattern leaves room without admitting anything but an id, and never a
+#: leading "-".
+SESSION_ID_PATTERN = "[A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+
 #: host id -> (CLI name, its override in the server's environment file).
 CLIS = {
     "claude": ("claude", "UNITARES_CLAUDE_CLI"),
@@ -110,6 +145,35 @@ def read_env_files(paths: list[str]) -> dict[str, str]:
                 value = value[1:-1]
             values[key.strip()] = value
     return values
+
+
+def read_plist_env(path: str) -> dict[str, str]:
+    """A LaunchAgent's ``EnvironmentVariables``."""
+    import plistlib
+
+    try:
+        with open(path, "rb") as handle:
+            document = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+        raise SystemExit(f"cannot read launchd plist {path}: {type(exc).__name__}") from None
+    env = document.get("EnvironmentVariables") if isinstance(document, dict) else None
+    return {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+
+
+def server_settings(sources: list[dict[str, str]], names: tuple[str, ...],
+                    presence_only: tuple[str, ...]) -> dict[str, str]:
+    """The settings this script uses, later sources winning. A name in
+    ``presence_only`` keeps only whether it is set ("1"), never its value;
+    every other name is dropped."""
+    settings: dict[str, str] = {}
+    for source in sources:
+        for name in names:
+            if name in source:
+                settings[name] = source[name]
+        for name in presence_only:
+            if name in source:
+                settings[name] = "1" if source[name] else ""
+    return settings
 
 
 def _executable(path: Path) -> bool:
@@ -186,11 +250,54 @@ def antigravity_profile(*, repo_root: str, python: str, cli: str, user: str) -> 
         prompt_max=AGY_PROMPT_MAX_BYTES, timeout_var=True)
 
 
+def reviewer_profile(*, repo_root: str, python: str, user: str, fixed: dict[str, str],
+                     secrets: dict[str, str], max_runtime_ms: int,
+                     clis: dict[str, str]) -> dict[str, Any]:
+    """The dialectic reviewer: a session id in, everything else fixed.
+
+    ``fixed`` and ``secrets`` come from reviewer_profile_env; ``clis`` pins the
+    CLI each host backend runs, by its override variable."""
+    env_set = {
+        **fixed,
+        **clis,
+        "DIALECTIC_REVIEWER_FROM_SESSION": "1",
+        "PYTHONPATH": os.pathsep.join([repo_root, os.path.join(repo_root, REVIEWER_SDK)]),
+        "USER": user,
+    }
+    profile: dict[str, Any] = {
+        # -s: no user site-packages (.pth files). Not -I: the reviewer imports
+        # this checkout and its SDK through PYTHONPATH, which the profile fixes.
+        "cmd": python,
+        "args": ["-s", "-m", "agents.dialectic_reviewer"],
+        "cd": repo_root,
+        "env": {"inherit": list(REVIEWER_INHERIT), "set": env_set},
+        "vars": {
+            "DIALECTIC_SESSION_ID": {"max_bytes": 64, "pattern": SESSION_ID_PATTERN,
+                                     "required": True},
+        },
+        # The reviewer onboards with the session's paused agent as its parent,
+        # read from the session record, never from the caller.
+        "lineage": "none",
+        "max_runtime_ms": max_runtime_ms,
+        "max_output_lines": 2000,
+        "max_concurrent": 3,
+        "max_per_hour": 20,
+    }
+    if secrets:
+        profile["env"]["secrets"] = secrets
+    return profile
+
+
 def build_profiles(*, repo_root: str, python: str, user: str, claude_cli: str | None,
                    codex_cli: str | None = None, antigravity_cli: str | None = None,
-                   codex_app_server: bool = True) -> dict[str, Any]:
+                   codex_app_server: bool = True,
+                   reviewer: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``reviewer``: keyword arguments for reviewer_profile beyond the common
+    ones, or None to omit it."""
     common = {"repo_root": repo_root, "python": python, "user": user}
     profiles: dict[str, Any] = {}
+    if reviewer is not None:
+        profiles["dialectic.reviewer"] = reviewer_profile(**common, **reviewer)
     if claude_cli:
         profiles["host.claude"] = claude_profile(cli=claude_cli, **common)
     if codex_cli:
@@ -261,20 +368,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--env-file", action="append", default=[])
+    parser.add_argument("--launchd-plist", action="append", default=[],
+                        help="the server's LaunchAgent plist, for its EnvironmentVariables")
     parser.add_argument("--check", action="store_true",
                         help="exit 1 if the file differs from a fresh generation; write nothing")
     args = parser.parse_args(argv)
 
     repo_root = os.path.abspath(args.repo_root)
-    for client in CLIENTS:
+    for client in (*CLIENTS, REVIEWER_MODULE):
         if not os.path.isfile(os.path.join(repo_root, client)):
             raise SystemExit(f"{repo_root} is not a UNITARES checkout (no {client})")
+    # The deployment tree's own resolution, so the profile matches the server
+    # that runs from it. Light: it imports only src.inference_config.
+    sys.path.insert(0, repo_root)
+    from src import dialectic_reviewer_config as reviewer_config
     python = os.path.abspath(args.python)
     if not _executable(Path(python)):
         raise SystemExit(f"{python} is not an executable interpreter")
 
     account = pwd.getpwuid(os.getuid())
-    settings = read_env_files(args.env_file)
+    sources = [read_env_files([path]) for path in args.env_file]
+    sources += [read_plist_env(path) for path in args.launchd_plist]
+    names = (*(override for _, override in CLIS.values()),
+             "UNITARES_CODEX_APP_SERVER_INSTRUMENTATION", "UNITARES_GOVERNANCE_URL",
+             "GOVERNANCE_URL", "UNITARES_INFERENCE_HOSTS_FILE",
+             *reviewer_config.REVIEWER_PROFILE_SETTINGS)
+    settings = server_settings(sources, names, (reviewer_config.MCP_BEARER_ENV,
+                                                reviewer_config.DEFAULT_EXTERNAL_KEY_ENV))
     found: dict[str, str | None] = {}
     for host, (name, override) in CLIS.items():
         found[host] = find_cli(name, settings.get(override, "").strip(), account.pw_dir)
@@ -282,11 +402,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"orchestrator-profiles: no {name} CLI found; host.{host} omitted",
                   file=sys.stderr)
 
+    try:
+        fixed, secrets = reviewer_config.reviewer_profile_env(settings)
+    except ValueError as exc:
+        raise SystemExit(f"orchestrator-profiles: {exc}") from None
+    reviewer = {
+        "fixed": fixed,
+        "secrets": secrets,
+        "max_runtime_ms": reviewer_config.reviewer_max_runtime_ms(settings),
+        "clis": {override: found[host] for host, (_, override) in CLIS.items() if found[host]},
+    }
+
     text = render(build_profiles(
         repo_root=repo_root, python=python, user=account.pw_name,
         claude_cli=found["claude"], codex_cli=found["codex"],
         antigravity_cli=found["antigravity"],
-        codex_app_server=flag_on(settings.get("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION"))))
+        codex_app_server=flag_on(settings.get("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION")),
+        reviewer=reviewer))
     out = Path(os.path.abspath(args.out))
     if args.check:
         try:
