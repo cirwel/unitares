@@ -175,21 +175,81 @@ def test_package_transaction_disables_cleanup_and_repins_all_components(
     assert calls[-1] == ("pin",)
 
 
+def test_package_failure_preserves_original_error_when_repin_also_fails(
+    updater, monkeypatch
+):
+    actions = []
+
+    def pins(action):
+        actions.append(action)
+        if action == "pin":
+            raise update.Refusal("pin failure")
+
+    monkeypatch.setattr(updater, "managed_pins", pins)
+    monkeypatch.setattr(
+        updater,
+        "_upgrade_packages",
+        lambda: (_ for _ in ()).throw(update.Refusal("upgrade failure")),
+    )
+    with pytest.raises(update.Refusal, match="upgrade failure.*pin failure"):
+        updater.install_packages(_inventory())
+    assert actions == ["unpin", "pin"]
+
+
+def test_dependency_closure_is_temporarily_pinned_and_restored(updater, monkeypatch):
+    state = {"stage": "backed_up"}
+    journal = []
+    commands = []
+
+    def brew_process(*args, **kwargs):
+        if args[:2] == ("list", "--pinned"):
+            return SimpleNamespace(stdout="python@3.14\n")
+        assert args[0] == "deps"
+        return SimpleNamespace(
+            stdout="homebrew/core/python@3.14\nhomebrew/core/redis\n"
+            "cirwel/unitares/unitares-lease-plane\n"
+        )
+
+    monkeypatch.setattr(updater, "_brew_process", brew_process)
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: journal.append(dict(value))
+    )
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: commands.append(args) or SimpleNamespace(returncode=0),
+    )
+    updater.pin_dependency_closure(state)
+    assert state["temporary_dependency_pins"] == ["homebrew/core/redis"]
+    assert commands == [["brew", "pin", "homebrew/core/redis"]]
+    updater.release_dependency_pins(state)
+    assert commands[-1] == ["brew", "unpin", "homebrew/core/redis"]
+    assert "temporary_dependency_pins" not in state
+    assert len(journal) == 2
+
+
 def test_brew_upgrade_is_logged_privately_without_cleanup(updater, monkeypatch):
     calls = []
 
-    def execute(args, **kwargs):
+    class Process:
+        pid = 123
+
+        def wait(self, timeout=None):
+            return 0
+
+    def launch(args, **kwargs):
         calls.append((args, kwargs))
         kwargs["stdout"].write("fixture build output\n")
-        return SimpleNamespace(returncode=0)
+        return Process()
 
-    monkeypatch.setattr(update.subprocess, "run", execute)
+    monkeypatch.setattr(update.subprocess, "Popen", launch)
     updater._upgrade_packages()
     command, options = calls[0]
     assert command[:3] == ["brew", "upgrade", "--formula"]
     assert set(command[3:]) == set(update.QUALIFIED_FORMULAE)
     assert options["env"]["HOMEBREW_NO_INSTALL_CLEANUP"] == "1"
     assert options["env"]["HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK"] == "1"
+    assert options["start_new_session"] is True
     log = updater.state_dir / "native-update-homebrew.log"
     assert log.read_text() == "fixture build output\n"
     assert log.stat().st_mode & 0o777 == 0o600
