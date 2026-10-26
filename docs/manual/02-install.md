@@ -74,8 +74,9 @@ Each verified native backup is recorded in a private checksum index. Run
 `--yes` to apply it. By default, the newest three, journal-referenced backups,
 and backups newer than 30 days are retained. `--retain-backups N` and
 `--older-than-days N` can raise or lower those explicit floors, but at least one
-indexed backup is always retained. Unindexed backups and Homebrew kegs are never
-removed by UNITARES.
+existing, reverified backup is always retained. Missing files do not count;
+their stale index records appear in the dry run and are reconciled only with
+`--yes`. Unindexed backups and Homebrew kegs are never removed by UNITARES.
 
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew

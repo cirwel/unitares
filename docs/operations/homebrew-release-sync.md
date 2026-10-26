@@ -28,7 +28,10 @@ The renderer accepts only the release-owned
 SHA-256. It refuses downgrades or missing tracked sources. The v3.5.0 embedded
 DATA patch is removed only after the release tree contains the native updater,
 service controller, setup/launch entry points and CLI update route. This makes
-the removal depend on release contents rather than merely a new tag.
+the removal depend on release contents rather than merely a new tag. The tap's
+source manifest also names one reviewed backport-floor commit; that commit must
+be an ancestor of the release commit, so file presence alone cannot retire the
+temporary patch.
 
 The automation never marks the tap PR ready, applies a merge label, merges it,
 or publishes bottles. The draft remains blocked on review and the tap's exact

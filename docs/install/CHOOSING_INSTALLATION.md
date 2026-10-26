@@ -151,8 +151,9 @@ requires renewed confirmation before the retry adopts it.
 If the installed keg predates this updater, first use the tap's
 [manual transition procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 The updater indexes verified backups; `unitares update --cleanup-backups`
-dry-runs its fail-closed retention policy, and `--yes` applies it. UNITARES does
-not delete old Homebrew kegs.
+dry-runs its fail-closed retention policy, counting only backups that still
+exist and reverify; `--yes` applies it and reconciles stale missing-file index
+records. UNITARES does not delete old Homebrew kegs.
 Docker model configuration still requires the owning Docker checkout.
 
 Before switching the primary installation, identify its database and connected

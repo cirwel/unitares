@@ -10,8 +10,10 @@
   block `unitares start`; a safe pre-change `--abort` and a reviewed
   identity-count-mismatch acknowledgement provide explicit recovery paths.
   Verified backups are checksum-indexed, and `--cleanup-backups` provides a
-  dry-run-by-default, journaled retention path that preserves the newest set and
-  every update-journal reference. UNITARES never deletes Homebrew kegs.
+  dry-run-by-default, journaled retention path that counts only existing,
+  reverified dumps, preserves the newest set and every update-journal reference,
+  and explicitly reconciles stale missing-file records. UNITARES never deletes
+  Homebrew kegs.
   Direct `brew services` commands bypass the journal guard. Formula hooks still
   never migrate a database. Homebrew is recommended for supported Apple Silicon
   desktop Macs; Docker remains the cross-platform/server/CI path. Stable
