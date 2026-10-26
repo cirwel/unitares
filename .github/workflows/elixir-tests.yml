@@ -42,8 +42,10 @@ name: Elixir Tests
 #   dialectic_live suite reads), docker-compose.yml, docker-compose.admin.yml,
 #   Dockerfile, .dockerignore, .github/workflows/elixir-tests.yml,
 #   scripts/ci/elixir_paths_changed.py, scripts/ci/elixir_gate.py,
-#   src/mcp_handlers/support/claude_cli_client.py (the launch-profile client
-#   the agent_orchestrator suite runs)
+#   src/mcp_handlers/support/claude_cli_client.py,
+#   src/mcp_handlers/support/codex_app_server_client.py,
+#   src/mcp_handlers/support/antigravity_cli_client.py (the launch-profile
+#   clients the agent_orchestrator suite runs)
 #
 # Break-glass: master has enforce_admins on, so a required elixir-gate that is
 # red on every branch (the 2026-08-01 audit-partition shape) is cleared by a
