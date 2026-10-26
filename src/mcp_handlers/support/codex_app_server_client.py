@@ -617,7 +617,80 @@ def _spawn(cli: str, cwd: str) -> subprocess.Popen[str]:
     )
 
 
+def _refusal(cli: str, sandbox: str) -> str | None:
+    """Why this lane must not run at all, or None."""
+    if sandbox != "read-only":
+        # The permission profile implements read-only only. Refuse rather than
+        # widen; the exec fallback refuses the same value.
+        return f"Codex host lane supports only the read-only sandbox, not {sandbox!r}"
+    conflict = admin_config_conflict()
+    if conflict:
+        return (f"Codex lane refused: {conflict} is administrator codex configuration "
+                "that can override the lane's permission profile")
+    if not confinement_verified(cli):
+        return ("Codex lane refused: this codex does not enforce the lane's permission "
+                "profile (codex sandbox probe)")
+    return None
+
+
+def exec_command(cli: str, model: str | None) -> list[str]:
+    """``codex exec`` with the lane's overrides, reading the prompt from
+    standard input (``-``), so a prompt cannot be parsed as an option.
+    ``--ignore-user-config`` means no configured MCP server loads."""
+    args = [cli, "exec", "--ignore-user-config", "--ephemeral", "--json"]
+    for override in lane_config_overrides(cli):
+        args.extend(["-c", override])
+    args.append("--skip-git-repo-check")
+    if model:
+        args.extend(["-m", model])
+    args.append("-")
+    return args
+
+
+def exec_fallback() -> int:
+    """Run the prompt through ``codex exec`` in a fresh lane directory, its
+    JSONL passed straight through: the raw adapter's shell fallback, for a
+    launch profile, which runs no shell."""
+    cli = os.environ.get("HA_CLI", "").strip()
+    prompt = os.environ.get("HA_PROMPT", "")
+    model = os.environ.get("HA_MODEL", "").strip() or None
+    if not cli or not prompt:
+        print("Codex exec fallback missing HA_CLI or HA_PROMPT", file=sys.stderr)
+        return 1
+    refusal = _refusal(cli, os.environ.get("HA_SANDBOX", "read-only").strip() or "read-only")
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
+    workdir = lane_workdir()
+    try:
+        sys.stdout.flush()
+        return subprocess.run(exec_command(cli, model), cwd=workdir, input=prompt,
+                              text=True, encoding="utf-8").returncode
+    except OSError as exc:
+        print(f"Codex exec unavailable: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+#: Set by the host.codex launch profile (scripts/ops/orchestrator-profiles.py):
+#: a fallback-safe app-server failure is retried through ``exec_fallback``
+#: here rather than by the raw adapter's shell template. HA_CODEX_APP_SERVER=0
+#: then skips the app-server and goes straight to exec.
+EXEC_FALLBACK_ENV = "HA_CODEX_EXEC_FALLBACK"
+
+
 def main() -> int:
+    if os.environ.get(EXEC_FALLBACK_ENV) != "1":
+        return app_server_main()
+    if os.environ.get("HA_CODEX_APP_SERVER", "1") != "0":
+        code = app_server_main()
+        if code != FALLBACK_SAFE_EXIT:
+            return code
+    return exec_fallback()
+
+
+def app_server_main() -> int:
     cli = os.environ.get("HA_CLI", "").strip()
     prompt = os.environ.get("HA_PROMPT", "")
     model = os.environ.get("HA_MODEL", "").strip() or None
@@ -625,22 +698,9 @@ def main() -> int:
     if not cli or not prompt:
         print("Codex app-server client missing HA_CLI or HA_PROMPT", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
-    if sandbox != "read-only":
-        # The permission profile implements read-only only. Refuse rather than
-        # widen; the exec fallback refuses the same value.
-        print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
-        return 1
-    conflict = admin_config_conflict()
-    if conflict:
-        print(
-            f"Codex lane refused: {conflict} is administrator codex configuration "
-            "that can override the lane's permission profile",
-            file=sys.stderr,
-        )
-        return 1
-    if not confinement_verified(cli):
-        print("Codex lane refused: this codex does not enforce the lane's permission "
-              "profile (codex sandbox probe)", file=sys.stderr)
+    refusal = _refusal(cli, sandbox)
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 1
 
     process: subprocess.Popen[str] | None = None

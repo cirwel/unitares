@@ -27,15 +27,10 @@ _spec.loader.exec_module(gen)
 
 def test_fixture_is_the_generator_output_for_placeholder_paths():
     document = gen.build_profiles(repo_root="/srv/unitares", python="/usr/bin/python3",
-                                  user="operator", claude_cli="/usr/local/bin/claude")
+                                  user="operator", claude_cli="/usr/local/bin/claude",
+                                  codex_cli="/usr/local/bin/codex",
+                                  antigravity_cli="/usr/local/bin/agy")
     assert FIXTURE.read_text(encoding="utf-8") == gen.render(document)
-
-
-def test_client_path_in_the_profile_exists_in_this_checkout():
-    profile = gen.claude_profile(repo_root=str(REPO_ROOT), python=sys.executable,
-                                 cli="/usr/local/bin/claude", user="operator")
-    assert profile["args"][0] == "-I"
-    assert Path(profile["args"][1]).is_file()
 
 
 def test_model_pattern_matches_the_client():
@@ -46,6 +41,53 @@ def test_model_pattern_matches_the_client():
 def test_no_cli_means_no_profile():
     assert gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli=None)[
         "profiles"] == {}
+    only_codex = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli=None,
+                                    codex_cli="/c")["profiles"]
+    assert list(only_codex) == ["host.codex"]
+
+
+def test_every_client_the_profiles_name_exists_in_this_checkout():
+    document = gen.build_profiles(repo_root=str(REPO_ROOT), python=sys.executable, user="u",
+                                  claude_cli="/a", codex_cli="/b", antigravity_cli="/c")
+    for profile in document["profiles"].values():
+        assert profile["args"][0] == "-I"
+        assert Path(profile["args"][1]).is_file()
+
+
+def test_agy_prompt_cap_matches_its_client():
+    from src.mcp_handlers.support import antigravity_cli_client as agy
+    overhead = len(agy.guard_prompt("").encode()) + len(agy.TEXT_ONLY.encode())
+    assert gen.AGY_PROMPT_MAX_BYTES == agy.PROMPT_BYTES_LIMIT - overhead
+
+
+def test_every_prompt_cap_fits_linux_env_string_limit():
+    document = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
+                                  codex_cli="/b", antigravity_cli="/c")
+    for profile in document["profiles"].values():
+        assert len("HA_PROMPT=") + profile["vars"]["HA_PROMPT"]["max_bytes"] + 1 <= 131_072
+
+
+def test_codex_profile_runs_the_exec_fallback_in_client():
+    profile = gen.codex_profile(repo_root="/r", python="/p", cli="/c", user="u",
+                                app_server=True)
+    fixed = profile["env"]["set"]
+    assert fixed["HA_CODEX_EXEC_FALLBACK"] == "1"
+    assert fixed["HA_SANDBOX"] == "read-only"
+    assert fixed["HA_CODEX_APP_SERVER"] == "1"
+
+
+@pytest.mark.parametrize("value, expected", [(None, True), ("1", True), ("off", False),
+                                             ("0", False), ("False", False)])
+def test_app_server_switch_reads_like_the_host_adapter(value, expected):
+    assert gen.flag_on(value) is expected
+
+
+def test_no_host_profile_binds_a_secret_or_inherits_an_api_key():
+    document = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
+                                  codex_cli="/b", antigravity_cli="/c")
+    for profile in document["profiles"].values():
+        assert "secrets" not in profile["env"]
+        assert not any("KEY" in name or "TOKEN" in name for name in profile["env"]["inherit"])
 
 
 def test_env_file_override_pins_the_symlink_not_its_target(tmp_path):

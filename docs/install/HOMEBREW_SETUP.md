@@ -77,6 +77,66 @@ For commands that accept a database URL, pass its password through libpq's
 `PGPASSWORD` environment instead of including it in process arguments. Setup's
 own probes do this automatically and suppress raw database error output.
 
-Native upgrades use the tap's separate backed-up
-[upgrade and recovery procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery). Setup does not switch
-clients, copy a Docker database, or change which installation owns your data.
+Native upgrades use `unitares update --check` and `unitares update`. The latter
+refreshes the tap and explicitly performs the stop, verified backup, package
+upgrade, migration and prior-state restoration. A restarted installation must
+pass deep health; one that was already stopped remains stopped after a schema
+check. Homebrew may update dependencies required by the managed formulae; the
+journal records the complete installed-formula inventory before and after the
+transaction. Formula install hooks and `unitares start` never apply migrations. An
+unfinished journal blocks `unitares start`. If an interruption occurs after the
+backup, run `unitares update --resume`; a retry from the backed-up stage creates
+fresh backup evidence before changing packages. If the tap target changed, the
+retry asks for confirmation (or requires `--yes`) before adopting it. If
+`unitares` disappeared from `PATH` during an interrupted Homebrew link step, run
+`$(brew --prefix)/opt/unitares/bin/unitares update --resume`. If identity-count verification
+fails, inspect the database and backup first, then explicitly acknowledge the
+reviewed result with
+`unitares update --resume --accept-identity-change`. Journal and backup paths are
+under the Homebrew runtime directory and `~/.unitares/backups` respectively.
+Setup does not switch clients, copy a Docker database, or change which
+installation owns your data.
+
+If a package build cannot succeed, `unitares update --abort` safely restores the
+prior running/stopped state while the four managed UNITARES packages and schema
+remain at their recorded pre-update versions. Dependency changes made by the
+failed Homebrew transaction are retained and recorded in the journal; inspect
+them before retrying. Once a managed package or the schema changed, abort
+refuses and forward repair with `--resume` remains mandatory. A resumed package
+attempt refreshes the tap and adopts a newer repaired formula revision.
+
+Kegs installed before the coordinated updater shipped cannot run these commands.
+For that one-time transition, follow the tap's
+[manual upgrade and recovery procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
+Direct `brew services`
+commands bypass these UNITARES journal checks; use the packaged lifecycle
+commands while an update is active.
+
+Verified updater backups are indexed with their checksum and size. Inspect the
+retention plan without deleting anything:
+
+```sh
+unitares update --cleanup-backups
+```
+
+The default keeps at least the newest three existing, reverified backups, every backup named
+by the current update journal, and anything newer than 30 days. Apply that exact
+eligible set with `--yes`; adjust the two floors with `--retain-backups N` and
+`--older-than-days N`. Cleanup revalidates ownership, mode, size, checksum and
+`pg_restore --list`, journals each deletion, and refuses while an update is
+unfinished. Missing files do not count toward the retention floor; their stale
+index records appear in the dry run and are reconciled only with `--yes`.
+The dry run records its candidates and policy in the private cleanup journal;
+`--yes` applies that recorded set, including an empty set, even if time changed, while rechecking
+update-journal protections immediately before deletion. Repeat the same policy
+options with `--yes`; a different policy is refused, and a later dry run always
+replaces an older pending plan. An interrupted deletion must resume with the
+recorded policy printed by the command.
+Unindexed backups are never deleted. Old kegs remain Homebrew's
+responsibility; keep the predecessor until the new installation and backup have
+been validated, then use Homebrew's own cleanup procedure when appropriate.
+
+Maintainers hand stable releases to the tap through the protected deterministic
+[Homebrew release sync](../operations/homebrew-release-sync.md). It opens a
+draft tap PR and cannot merge it; bottle construction and publication remain
+separate operator-gated actions.
