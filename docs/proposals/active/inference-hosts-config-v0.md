@@ -446,6 +446,10 @@ sets nothing.
      spawn, output redaction, ceilings and `max_concurrent`, the profile
      request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` whenever a
      profiles file is configured, valid or not; `allow` only without one). No profiles file ships yet, so nothing changes.
+     *Built 2026-10-26* (`elixir/agent_orchestrator/lib/agent_orchestrator/profiles.ex`,
+     portal hub H1). The concurrency and per-hour limits run inside the
+     idempotent spawn after a started key has replayed, so a retry is never
+     refused as over a limit; a refusal releases the reservation.
    - **4b. The clients, the generator and the callers.** Depends on the
      codex confinement (#2827, cirwel/dispatch_beam#87) having merged. The claude and
      council clients (the codex and antigravity clients exist); the

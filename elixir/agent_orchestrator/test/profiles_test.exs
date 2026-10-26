@@ -1,0 +1,478 @@
+defmodule AgentOrchestrator.ProfilesTest do
+  @moduledoc """
+  Named launch profiles (inference-hosts-config-v0 §2.5): loading, the closed
+  request schema, the child environment, secret redaction, rate limits, and
+  the raw-spawn switch, in-process and over the HTTP surface.
+  """
+  use ExUnit.Case, async: false
+
+  import Plug.Test
+  import Plug.Conn
+
+  alias AgentOrchestrator.HTTPRouter
+  alias AgentOrchestrator.MemoryIdempotencyLedger
+  alias AgentOrchestrator.Profiles
+
+  @moduletag :tmp_dir
+  @token "test-bearer-token"
+  @secret "s3cret-value-for-redaction"
+
+  defp profile(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "cmd" => "/bin/sh",
+        "args" => ["-c", "echo \"$GREETING|$CHILD_KEY|${LEAKY:-unset}|$FIXED\""],
+        "env" => %{
+          "inherit" => ["PATH"],
+          "set" => %{"FIXED" => "fixed-value"},
+          "secrets" => %{"CHILD_KEY" => "ORCH_SECRET"}
+        },
+        "vars" => %{
+          "GREETING" => %{"max_bytes" => 32, "pattern" => "[a-z ]+", "required" => true}
+        },
+        "lease" => false,
+        "max_runtime_ms" => 10_000,
+        "max_output_lines" => 50,
+        "max_concurrent" => 1,
+        "max_per_hour" => 3
+      },
+      overrides
+    )
+  end
+
+  defp write_file(dir, profiles) do
+    path = Path.join(dir, "profiles.json")
+
+    File.write!(
+      path,
+      Jason.encode!(%{"schema" => "unitares.orchestrator_profiles.v1", "profiles" => profiles})
+    )
+
+    File.chmod!(path, 0o600)
+    File.chmod!(dir, 0o700)
+    path
+  end
+
+  defp env_fun(map), do: fn name -> Map.get(map, name) end
+
+  defp start_profiles(path, extra \\ []) do
+    name = :"profiles_#{System.unique_integer([:positive])}"
+
+    opts =
+      [
+        name: name,
+        file: path,
+        raw_spawn: Keyword.get(extra, :raw_spawn),
+        reload_ms: Keyword.get(extra, :reload_ms, 60_000),
+        getenv: env_fun(Keyword.get(extra, :env, %{"ORCH_SECRET" => @secret})),
+        environ: fn -> Keyword.get(extra, :environ, %{"PATH" => "/bin", "LEAKY" => "leaked"}) end
+      ] ++ Keyword.drop(extra, [:raw_spawn, :reload_ms, :env, :environ])
+
+    start_supervised!({Profiles, opts}, id: name)
+    name
+  end
+
+  describe "parse/1" do
+    test "accepts a valid file and refuses unknown keys by name" do
+      ok =
+        Jason.encode!(%{
+          "schema" => "unitares.orchestrator_profiles.v1",
+          "profiles" => %{"p" => profile()}
+        })
+
+      assert {:ok, %{"p" => %{cmd: "/bin/sh", max_concurrent: 1}}} = Profiles.parse(ok)
+
+      bad =
+        Jason.encode!(%{
+          "schema" => "unitares.orchestrator_profiles.v1",
+          "profiles" => %{"p" => profile(%{"stdin" => "pipe"})}
+        })
+
+      assert {:error, "profile p: unknown profile key(s): stdin"} = Profiles.parse(bad)
+    end
+
+    test "refuses a caller variable that shadows a fixed, inherited or provisioned name" do
+      for shadow <- ["PATH", "FIXED", "CHILD_KEY", "UNITARES_SERVER_URL"] do
+        p = profile(%{"vars" => %{shadow => %{"max_bytes" => 8}}})
+
+        json =
+          Jason.encode!(%{
+            "schema" => "unitares.orchestrator_profiles.v1",
+            "profiles" => %{"p" => p}
+          })
+
+        assert {:error, reason} = Profiles.parse(json)
+        assert reason =~ shadow
+      end
+    end
+
+    test "refuses relative paths, a bad schema and missing limits" do
+      base = %{"schema" => "unitares.orchestrator_profiles.v1"}
+
+      assert {:error, _} =
+               Profiles.parse(
+                 Jason.encode!(Map.put(base, "profiles", %{"p" => profile(%{"cmd" => "sh"})}))
+               )
+
+      assert {:error, _} =
+               Profiles.parse(Jason.encode!(%{"schema" => "v0", "profiles" => %{}}))
+
+      no_limit = Map.delete(profile(), "max_per_hour")
+
+      assert {:error, reason} =
+               Profiles.parse(Jason.encode!(Map.put(base, "profiles", %{"p" => no_limit})))
+
+      assert reason =~ "max_per_hour"
+    end
+  end
+
+  describe "loading" do
+    test "no file configured: profiles off, raw spawns allowed" do
+      name = start_profiles(nil)
+      assert %{state: "off", raw_spawn: "allow"} = Profiles.status(name)
+      assert {:error, :profiles_unavailable, _} = Profiles.prepare(name, %{"profile" => "p"})
+    end
+
+    test "a configured file defaults raw spawns to deny, even when broken", %{tmp_dir: dir} do
+      path = Path.join(dir, "missing.json")
+      name = start_profiles(path)
+      assert %{state: "invalid", raw_spawn: "deny", error: error} = Profiles.status(name)
+      assert error =~ "cannot stat"
+    end
+
+    test "an explicit allow is honoured beside a profiles file", %{tmp_dir: dir} do
+      name = start_profiles(write_file(dir, %{"p" => profile()}), raw_spawn: "allow")
+      assert %{state: "ok", raw_spawn: "allow", profiles: ["p"]} = Profiles.status(name)
+    end
+
+    test "a group-writable file is refused", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      File.chmod!(path, 0o620)
+      name = start_profiles(path)
+      assert %{state: "invalid", error: error} = Profiles.status(name)
+      assert error =~ "writable by group or others"
+    end
+
+    test "a bad replacement keeps the last good set; a fixed one reloads", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path)
+      %{digest: first} = Profiles.status(name)
+
+      File.write!(path, "{not json")
+      send(name, :reload)
+      assert %{state: "stale", profiles: ["p"], digest: ^first} = Profiles.status(name)
+
+      write_file(dir, %{"q" => profile()})
+      send(name, :reload)
+      assert %{state: "ok", profiles: ["q"], error: nil} = Profiles.status(name)
+    end
+
+    test "a missing secret marks only that profile unconfigured", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile(), "plain" => profile(%{"env" => %{}})})
+      name = start_profiles(path, env: %{})
+      assert %{unconfigured: ["p"]} = Profiles.status(name)
+
+      assert {:error, :profile_unconfigured, detail} =
+               Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
+
+      assert detail =~ "ORCH_SECRET"
+    end
+  end
+
+  describe "prepare/2" do
+    setup %{tmp_dir: dir} do
+      %{name: start_profiles(write_file(dir, %{"p" => profile()}))}
+    end
+
+    test "builds the env in order and never inherits what the profile omits", %{name: name} do
+      assert {:ok, %{spec: spec}} =
+               Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hello"}})
+
+      assert {"LEAKY", false} in spec.env
+      refute Enum.any?(spec.env, &match?({"PATH", _}, &1))
+      assert {"FIXED", "fixed-value"} in spec.env
+      assert {"CHILD_KEY", @secret} in spec.env
+      assert {"GREETING", "hello"} in spec.env
+      assert spec.redact == [@secret]
+      assert spec.cmd == "/bin/sh" and spec.stdin == "close" and spec.lease == false
+      assert spec.max_runtime_ms == 10_000
+    end
+
+    test "the closed schema refuses fields and variables by name, never by value", %{name: name} do
+      assert {:error, :schema_invalid, d1} =
+               Profiles.prepare(name, %{
+                 "profile" => "p",
+                 "cmd" => "/bin/rm",
+                 "vars" => %{"GREETING" => "hi"}
+               })
+
+      assert d1 == "unknown field(s): cmd"
+
+      assert {:error, :schema_invalid, d2} =
+               Profiles.prepare(name, %{
+                 "profile" => "p",
+                 "vars" => %{"GREETING" => "hi", "HOME" => "/x"}
+               })
+
+      assert d2 == "unknown variable(s): HOME"
+
+      assert {:error, :schema_invalid, "missing required variable(s): GREETING"} =
+               Profiles.prepare(name, %{"profile" => "p"})
+
+      assert {:error, :schema_invalid, d3} =
+               Profiles.prepare(name, %{
+                 "profile" => "p",
+                 "vars" => %{"GREETING" => "BAD-VALUE-123"}
+               })
+
+      refute d3 =~ "BAD-VALUE"
+      assert d3 == "vars.GREETING does not match its pattern"
+
+      assert {:error, :schema_invalid, "vars.GREETING is over its 32-byte limit"} =
+               Profiles.prepare(name, %{
+                 "profile" => "p",
+                 "vars" => %{"GREETING" => String.duplicate("a", 33)}
+               })
+    end
+
+    test "every raw-spawn field is refused by name on a profile request", %{name: name} do
+      for {field, value} <- [
+            {"cmd", "/bin/rm"},
+            {"args", ["-rf", "/"]},
+            {"env", %{"HOME" => "/tmp"}},
+            {"cd", "/tmp"},
+            {"stdin", "pipe"},
+            {"lease", %{"required" => false}},
+            {"server_url", "http://elsewhere"},
+            {"client_session_id", "agent:/x"}
+          ] do
+        body = %{"profile" => "p", "vars" => %{"GREETING" => "hi"}, field => value}
+        assert {:error, :schema_invalid, detail} = Profiles.prepare(name, body)
+        assert detail == "unknown field(s): #{field}"
+      end
+    end
+
+    test "ceilings may be lowered, never raised; lineage only where accepted", %{name: name} do
+      base = %{"profile" => "p", "vars" => %{"GREETING" => "hi"}}
+
+      assert {:ok, %{spec: %{max_runtime_ms: 500}}} =
+               Profiles.prepare(name, Map.put(base, "max_runtime_ms", 500))
+
+      assert {:error, :schema_invalid, _} =
+               Profiles.prepare(name, Map.put(base, "max_runtime_ms", 10_001))
+
+      assert {:error, :schema_invalid, "lineage is not accepted by this profile"} =
+               Profiles.prepare(name, Map.put(base, "lineage", %{"parent_agent_uuid" => "x"}))
+    end
+
+    test "unknown profile names are not echoed unless they look like names", %{name: name} do
+      assert {:error, :unknown_profile, "unknown profile other"} =
+               Profiles.prepare(name, %{"profile" => "other"})
+
+      assert {:error, :unknown_profile, "unknown profile (invalid name)"} =
+               Profiles.prepare(name, %{"profile" => "$(rm -rf /)"})
+    end
+
+    test "the digest ignores a rotated secret and covers the variables", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      a = start_profiles(path, env: %{"ORCH_SECRET" => "first-secret"})
+      b = start_profiles(path, env: %{"ORCH_SECRET" => "rotated-secret"})
+      body = %{"profile" => "p", "vars" => %{"GREETING" => "hi"}}
+      {:ok, %{digest: da}} = Profiles.prepare(a, body)
+      {:ok, %{digest: db}} = Profiles.prepare(b, body)
+      {:ok, %{digest: dc}} = Profiles.prepare(a, put_in(body, ["vars", "GREETING"], "yo"))
+      assert da == db
+      refute da == dc
+    end
+  end
+
+  describe "admit/2" do
+    test "enforces max_concurrent and max_per_hour, and refunds a failed start", %{tmp_dir: dir} do
+      live = :ets.new(:live, [:public])
+      path = write_file(dir, %{"p" => profile(%{"max_concurrent" => 1, "max_per_hour" => 2})})
+
+      name =
+        start_profiles(path,
+          live_ids: fn -> :ets.tab2list(live) |> Enum.map(&elem(&1, 0)) end
+        )
+
+      assert {:ok, t1} = Profiles.admit(name, "p")
+      assert {:error, :rate_limited, d} = Profiles.admit(name, "p")
+      assert d =~ "max_concurrent"
+
+      # A refused start refunds both the slot and the hourly count.
+      Profiles.finish(name, t1, :refund)
+      assert {:ok, t2} = Profiles.admit(name, "p")
+      :ets.insert(live, {"exec-2"})
+      Profiles.finish(name, t2, {:ok, "exec-2"})
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p")
+
+      # Once the execution is gone the slot frees; the hour still counts it.
+      :ets.delete(live, "exec-2")
+      assert {:ok, t3} = Profiles.admit(name, "p")
+      Profiles.finish(name, t3, {:ok, "exec-3"})
+      :ets.delete_all_objects(live)
+      assert {:error, :rate_limited, d2} = Profiles.admit(name, "p")
+      assert d2 =~ "max_per_hour"
+    end
+  end
+
+  describe "HTTP surface" do
+    setup %{tmp_dir: dir} do
+      MemoryIdempotencyLedger.clear()
+      Application.put_env(:agent_orchestrator, :bearer_token, @token)
+      Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
+
+      name =
+        start_profiles(
+          write_file(dir, %{
+            "p" => profile(),
+            "slow" =>
+              profile(%{
+                "args" => ["-c", "sleep 5"],
+                "vars" => %{},
+                "env" => %{"inherit" => ["PATH"]}
+              })
+          }),
+          live_ids: &AgentOrchestrator.list/0,
+          # The real environment, so the strip is proven on a real child.
+          environ: System.get_env() |> Map.put("LEAKY", "leaked")
+        )
+
+      System.put_env("LEAKY", "leaked")
+      Application.put_env(:agent_orchestrator, :profiles_server, name)
+
+      on_exit(fn ->
+        System.delete_env("LEAKY")
+        Application.delete_env(:agent_orchestrator, :profiles_server)
+        Enum.each(AgentOrchestrator.list(), &AgentOrchestrator.stop(&1, :test_cleanup))
+      end)
+
+      %{name: name}
+    end
+
+    defp post(body, key \\ nil) do
+      conn =
+        conn(:post, "/v1/agents", Jason.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+
+      conn = if key, do: put_req_header(conn, "idempotency-key", key), else: conn
+      HTTPRouter.call(conn, HTTPRouter.init([]))
+    end
+
+    defp await(id) do
+      conn =
+        conn(:post, "/v1/executions/#{id}/await", Jason.encode!(%{timeout_ms: 5_000}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+
+      HTTPRouter.call(conn, HTTPRouter.init([])) |> Map.get(:resp_body) |> Jason.decode!()
+    end
+
+    test "a profile spawn runs the fixed command, strips the env and redacts the secret" do
+      conn = post(%{"profile" => "p", "vars" => %{"GREETING" => "hello"}})
+      assert conn.status == 201
+      body = Jason.decode!(conn.resp_body)
+      assert body["profile"] == "p"
+
+      result = await(body["execution_id"])["result"]
+      assert result["exit_status"] == 0
+      assert result["output"] == ["hello|[redacted]|unset|fixed-value"]
+      refute Enum.any?(result["output"], &String.contains?(&1, @secret))
+    end
+
+    test "raw spawns are refused while profiles are configured" do
+      conn = post(%{"cmd" => "echo", "args" => ["x"]})
+      assert conn.status == 403
+      assert Jason.decode!(conn.resp_body)["reason"] =~ "raw spawns are disabled"
+    end
+
+    test "over max_concurrent is 429, but a keyed retry replays instead" do
+      first = post(%{"profile" => "slow"}, "key-1")
+      assert first.status == 201
+      id = Jason.decode!(first.resp_body)["execution_id"]
+
+      # The retry of a started key replays without taking a slot.
+      replay = post(%{"profile" => "slow"}, "key-1")
+      assert replay.status == 200
+      assert Jason.decode!(replay.resp_body)["execution_id"] == id
+
+      # A new attempt, keyed or not, is over the limit, and the refused key is
+      # left free for a later retry.
+      assert post(%{"profile" => "slow"}, "key-2").status == 429
+      assert post(%{"profile" => "slow"}).status == 429
+
+      AgentOrchestrator.stop(id, :test_cleanup)
+      Process.sleep(50)
+      assert post(%{"profile" => "slow"}, "key-2").status == 201
+    end
+
+    test "with raw spawns denied, /bin/sh is refused like any other cmd" do
+      for cmd <- ["/bin/sh", "sh", "echo"] do
+        conn = post(%{"cmd" => cmd, "args" => ["-c", "true"]})
+        assert conn.status == 403
+      end
+    end
+
+    test "the resolved secret reaches no log line" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post(%{"profile" => "p", "vars" => %{"GREETING" => "hello"}})
+          await(Jason.decode!(conn.resp_body)["execution_id"])
+        end)
+
+      refute log =~ @secret
+    end
+
+    test "a keyed retry that differs only in lineage conflicts", %{tmp_dir: dir} do
+      lineage_profile =
+        profile(%{
+          "args" => ["-c", "sleep 5"],
+          "vars" => %{},
+          "lineage" => "caller",
+          "env" => %{}
+        })
+
+      name =
+        start_profiles(
+          write_file(Path.join(dir, "l") |> tap(&File.mkdir_p!/1), %{"l" => lineage_profile}),
+          live_ids: &AgentOrchestrator.list/0
+        )
+
+      Application.put_env(:agent_orchestrator, :profiles_server, name)
+      parent = "11111111-2222-4333-8444-555555555555"
+      other = "66666666-7777-4888-9999-000000000000"
+
+      first = post(%{"profile" => "l", "lineage" => %{"parent_agent_uuid" => parent}}, "lin-1")
+      assert first.status == 201
+
+      conflict = post(%{"profile" => "l", "lineage" => %{"parent_agent_uuid" => other}}, "lin-1")
+      assert conflict.status == 409
+      assert Jason.decode!(conflict.resp_body)["error"] == "idempotency_conflict"
+    end
+
+    test "health reports the profile state" do
+      conn =
+        conn(:get, "/v1/health")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+
+      assert %{
+               "profiles" => %{
+                 "state" => "ok",
+                 "raw_spawn" => "deny",
+                 "profiles" => ["p", "slow"]
+               }
+             } =
+               Jason.decode!(conn.resp_body)
+    end
+
+    test "refusals carry typed errors" do
+      assert post(%{"profile" => "nope"}).status == 422
+
+      assert Jason.decode!(post(%{"profile" => "p", "env" => %{}}).resp_body)["error"] ==
+               "schema_invalid"
+    end
+  end
+end

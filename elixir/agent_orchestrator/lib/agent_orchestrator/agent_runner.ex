@@ -31,7 +31,8 @@ defmodule AgentOrchestrator.AgentRunner do
         execution_id: String.t(),          # server-generated; caller values are ignored
         cmd: String.t(),                   # executable name or absolute path (required)
         args: [String.t()],                # argv (default [])
-        env: [{String.t(), String.t()}],   # extra env for the child (default [])
+        env: [{String.t(), String.t() | false}], # extra env for the child (default []);
+                                           # false unsets an inherited variable
         cd: String.t() | nil,              # working dir
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
         max_runtime_ms: pos_integer(),     # wall-clock lifetime cap; self-reaps on expiry
@@ -41,7 +42,8 @@ defmodule AgentOrchestrator.AgentRunner do
         lease_client: module(),            # injectable, default LeasePlaneClient
         lineage: nil | lineage_cfg,        # default nil = no lineage provisioning
         server_url: String.t() | nil,      # default nil = no server-URL provisioning
-        client_session_id: String.t() | nil # default nil = no session-anchor provisioning
+        client_session_id: String.t() | nil, # default nil = no session-anchor provisioning
+        redact: [String.t()]               # values replaced in captured output (default [])
       }
 
       lease_cfg :: %{
@@ -202,6 +204,9 @@ defmodule AgentOrchestrator.AgentRunner do
     output: [],
     output_count: 0,
     max_output_lines: @default_max_lines,
+    # Secret values a profile spawn resolved into the child env; each is
+    # replaced in captured output before it is stored or returned.
+    redact: [],
     partial: "",
     eof_received: false,
     waiters: []
@@ -348,7 +353,8 @@ defmodule AgentOrchestrator.AgentRunner do
                   lease_client: lease_client,
                   lease_cfg: lease_cfg,
                   lineage: if(lineage_cfg, do: :provisioned, else: :none),
-                  max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
+                  max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines),
+                  redact: redact_values(Map.get(spec, :redact))
                 }
 
                 init_with_lease(
@@ -741,7 +747,7 @@ defmodule AgentOrchestrator.AgentRunner do
             {:line, @line_max_bytes},
             {:args, exec_args}
           ]
-          |> maybe_opt(:env, encode_env(env ++ provisioned_env(candidates, env)))
+          |> maybe_opt(:env, encode_env(child_env(env, candidates)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
@@ -859,11 +865,21 @@ defmodule AgentOrchestrator.AgentRunner do
   defp provisioned_env([], _env), do: []
 
   defp provisioned_env(candidates, env) do
-    explicit = MapSet.new(env, fn {k, _v} -> k end)
+    explicit = for {k, v} <- env, is_binary(v), into: MapSet.new(), do: k
 
     # Explicit env wins: the caller setting the var directly has made the more
     # specific statement; silently overriding it would be the invasive version.
+    # An unset (`false`) is not a statement about the value, so provisioning
+    # still applies over it.
     Enum.reject(candidates, fn {k, _v} -> MapSet.member?(explicit, k) end)
+  end
+
+  # Child env: explicit entries, minus any unset a provisioned variable
+  # replaces, then the provisioned variables themselves.
+  defp child_env(env, candidates) do
+    provisioned = provisioned_env(candidates, env)
+    replaced = MapSet.new(provisioned, fn {k, _v} -> k end)
+    Enum.reject(env, fn {k, v} -> v == false and MapSet.member?(replaced, k) end) ++ provisioned
   end
 
   defp maybe_opt(opts, _key, nil), do: opts
@@ -895,13 +911,26 @@ defmodule AgentOrchestrator.AgentRunner do
   defp encode_env([]), do: []
 
   defp encode_env(env) do
-    Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+    Enum.map(env, fn
+      {k, false} -> {String.to_charlist(k), false}
+      {k, v} -> {String.to_charlist(k), String.to_charlist(v)}
+    end)
   end
+
+  # Values shorter than 4 bytes are not redacted: replacing them would mangle
+  # ordinary output while hiding almost nothing. Profiles refuse such secrets.
+  defp redact_values(values) when is_list(values),
+    do: values |> Enum.filter(&(is_binary(&1) and byte_size(&1) >= 4)) |> Enum.uniq()
+
+  defp redact_values(_), do: []
+
+  defp redact_line(line, []), do: line
+  defp redact_line(line, values), do: String.replace(line, values, "[redacted]")
 
   defp push_line(state, line) do
     # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)
     # prepend; reversed on read in result/1.
-    output = [line | state.output]
+    output = [redact_line(line, state.redact) | state.output]
 
     {output, count} =
       if state.output_count + 1 > state.max_output_lines do
