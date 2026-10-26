@@ -107,6 +107,7 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 - **H2: the hub shell.** `elixir/portal` with the §3.2 boundary and login, the timeline moved in as the home screen (read-only), and boundary tests for a foreign Host, a foreign Origin, no cookie and an expired token. It is shipped by `cirwel update` and registered like the other BEAM apps.
 - **H3: resume.** §3.3 and §3.4, Claude first (operator, 2026-10-26: "ideally all, but you have to start somewhere"), with the stale-state and one-driver tests and dual attribution. Codex follows, because its terminal sessions are the ones its own phone app cannot resume.
 - **H4: start a new session.** §3.5, then further vendors as their CLIs and hooks allow.
+- **H5: the phone** (operator, 2026-10-26). The hub becomes reachable from the operator's phone as a home-screen web app (Safari's "Add to Home Screen"), not a native iOS app. It uses the same LiveView code and the same passkey sign-in with Face ID, and web push for notifications. Reachability goes over the operator's private tailnet (Tailscale), so the hub never answers on the public internet. The Cloudflare tunnel is the fallback only if the tailnet cannot serve. This step widens the bind from loopback to the tailnet interface, so it reopens the §3.2 boundary: the Host/Origin allowlists gain the tailnet name, and passkeys need a relying-party id the phone can reach. Its own review covers that. A native app is considered only if the home-screen app hits a concrete limit, such as unreliable notifications.
 
 ## 6. Risks and limits
 
@@ -116,7 +117,7 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 - **Runway.** H0 and H1 are useful without the hub. If the hub stops after them, nothing is wasted.
 - **Vendor drift.** CLI resume flags and hook payloads change. Profiles isolate that to one file per vendor.
 - **Competing with the vendors' apps.** Discord dispatch lost partly on polish against apps the operator already used (§1). The hub will not out-polish a vendor's chat. It earns its place only if it is reliable for the cross-vendor jobs: seeing everything at once, resuming where a vendor app cannot, and the record.
-- **The phone.** Much of the toggling happens on the phone, and v0 is loopback-only. Reaching the hub from a phone means exposure beyond loopback: a tunnel plus passkey sign-in, which works on phones. That is a later, separately reserved step, not part of v0 (§4).
+- **The phone.** Much of the toggling happens on the phone, and v0 is loopback-only. Reaching the hub from a phone means exposure beyond loopback. H5 plans it over the private tailnet with passkey sign-in, as a separately reserved step after resume, not part of v0 (§4).
 
 ## 7. Operator answers (2026-10-26)
 
@@ -130,4 +131,4 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 
 Merging this document records the design and authorises **H0 only**: reporting and returning the vendor and vendor session id as read-only record data, with its own review.
 
-H1 changes the orchestrator's spawn boundary. H2 adds a new app with a login. H3 and H4 add actions that start or continue agent sessions. Each of these needs the operator's explicit approval on its own draft PR. Nothing here changes governance pauses, adds a governance tool or action, or touches the Wave 3 gated scope.
+H1 changes the orchestrator's spawn boundary. H2 adds a new app with a login. H3 and H4 add actions that start or continue agent sessions. H5 widens the hub beyond loopback. Each of these needs the operator's explicit approval on its own draft PR. Nothing here changes governance pauses, adds a governance tool or action, or touches the Wave 3 gated scope.
