@@ -31,7 +31,8 @@ defmodule AgentOrchestrator.AgentRunner do
         execution_id: String.t(),          # server-generated; caller values are ignored
         cmd: String.t(),                   # executable name or absolute path (required)
         args: [String.t()],                # argv (default [])
-        env: [{String.t(), String.t()}],   # extra env for the child (default [])
+        env: [{String.t(), String.t() | false}], # extra env for the child (default []);
+                                           # false unsets an inherited variable
         cd: String.t() | nil,              # working dir
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
         max_runtime_ms: pos_integer(),     # wall-clock lifetime cap; self-reaps on expiry
@@ -41,7 +42,11 @@ defmodule AgentOrchestrator.AgentRunner do
         lease_client: module(),            # injectable, default LeasePlaneClient
         lineage: nil | lineage_cfg,        # default nil = no lineage provisioning
         server_url: String.t() | nil,      # default nil = no server-URL provisioning
-        client_session_id: String.t() | nil # default nil = no session-anchor provisioning
+        client_session_id: String.t() | nil, # default nil = no session-anchor provisioning
+        redact: [String.t()],              # values replaced in captured output (default [])
+        secret_env: (-> [{String.t(), String.t()}]), # secret variables for the child,
+                                           # behind a closure so no report prints them
+        profile: String.t() | nil          # launch profile this execution belongs to
       }
 
       lease_cfg :: %{
@@ -199,9 +204,16 @@ defmodule AgentOrchestrator.AgentRunner do
     # Wall-clock timestamp for operator-facing execution inventory.
     :started_at,
     :cmd,
+    # The launch profile this execution was started from, if any; the
+    # profiles server recounts its limits from live executions.
+    :profile,
     output: [],
     output_count: 0,
     max_output_lines: @default_max_lines,
+    # Secret values a profile spawn resolved into the child env; each is
+    # replaced in captured output before it is stored or returned. Held behind
+    # a closure: crash reports and `:sys` dumps print a fun, never its values.
+    redact: nil,
     partial: "",
     eof_received: false,
     waiters: []
@@ -348,7 +360,9 @@ defmodule AgentOrchestrator.AgentRunner do
                   lease_client: lease_client,
                   lease_cfg: lease_cfg,
                   lineage: if(lineage_cfg, do: :provisioned, else: :none),
-                  max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
+                  max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines),
+                  redact: redact_closure(spec),
+                  profile: Map.get(spec, :profile)
                 }
 
                 init_with_lease(
@@ -444,7 +458,7 @@ defmodule AgentOrchestrator.AgentRunner do
     # @line_max_bytes with no newline would otherwise grow `partial` without
     # limit. Flush the oversized fragment as a synthetic line instead.
     if byte_size(partial) >= @line_max_bytes do
-      {:noreply, push_line(%{state | partial: ""}, partial)}
+      {:noreply, flush_oversized(state, partial)}
     else
       {:noreply, %{state | partial: partial}}
     end
@@ -741,7 +755,7 @@ defmodule AgentOrchestrator.AgentRunner do
             {:line, @line_max_bytes},
             {:args, exec_args}
           ]
-          |> maybe_opt(:env, encode_env(env ++ provisioned_env(candidates, env)))
+          |> maybe_opt(:env, encode_env(child_env(env ++ secret_env(spec), candidates)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
@@ -859,11 +873,21 @@ defmodule AgentOrchestrator.AgentRunner do
   defp provisioned_env([], _env), do: []
 
   defp provisioned_env(candidates, env) do
-    explicit = MapSet.new(env, fn {k, _v} -> k end)
+    explicit = for {k, v} <- env, is_binary(v), into: MapSet.new(), do: k
 
     # Explicit env wins: the caller setting the var directly has made the more
     # specific statement; silently overriding it would be the invasive version.
+    # An unset (`false`) is not a statement about the value, so provisioning
+    # still applies over it.
     Enum.reject(candidates, fn {k, _v} -> MapSet.member?(explicit, k) end)
+  end
+
+  # Child env: explicit entries, minus any unset a provisioned variable
+  # replaces, then the provisioned variables themselves.
+  defp child_env(env, candidates) do
+    provisioned = provisioned_env(candidates, env)
+    replaced = MapSet.new(provisioned, fn {k, _v} -> k end)
+    Enum.reject(env, fn {k, v} -> v == false and MapSet.member?(replaced, k) end) ++ provisioned
   end
 
   defp maybe_opt(opts, _key, nil), do: opts
@@ -895,13 +919,115 @@ defmodule AgentOrchestrator.AgentRunner do
   defp encode_env([]), do: []
 
   defp encode_env(env) do
-    Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+    Enum.map(env, fn
+      {k, false} -> {String.to_charlist(k), false}
+      {k, v} -> {String.to_charlist(k), String.to_charlist(v)}
+    end)
   end
+
+  # Values shorter than 4 bytes are not redacted: replacing them would mangle
+  # ordinary output while hiding almost nothing. Output is redacted line by
+  # line, so a value holding a line break could pass in pieces; profiles refuse
+  # both kinds of secret, and neither is accepted here.
+  defp redact_values(values) when is_list(values) do
+    values
+    |> Enum.filter(
+      &(is_binary(&1) and byte_size(&1) >= 4 and not String.contains?(&1, ["\n", "\r"]))
+    )
+    |> Enum.uniq()
+  end
+
+  defp redact_values(_), do: []
+
+  # Secrets arrive behind a closure (see the :secret_env spec field) so the
+  # spawn request, a GenServer call that times out, or a supervisor report
+  # never prints them.
+  defp secret_env(spec) do
+    case Map.get(spec, :secret_env) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> []
+    end
+  end
+
+  defp redact_closure(spec) do
+    values =
+      redact_values(
+        List.wrap(Map.get(spec, :redact)) ++ Enum.map(secret_env(spec), fn {_k, v} -> v end)
+      )
+
+    fn -> values end
+  end
+
+  defp redactions(%{redact: fun}) when is_function(fun, 0), do: fun.()
+  defp redactions(_state), do: []
+
+  defp redact_line(line, []), do: line
+  defp redact_line(line, values), do: String.replace(line, values, "[redacted]")
+
+  # An oversized fragment is published as a synthetic line. With secrets to
+  # redact, a secret may straddle the cut, so redact what is complete and hold
+  # back the last (longest secret - 1) bytes, which no complete secret can
+  # start in, as the start of the next fragment.
+  # Either way the cut moves back to a UTF-8 character boundary, so neither
+  # fragment holds half a character (Jason refuses invalid UTF-8).
+  defp flush_oversized(state, partial) do
+    {text, hold} =
+      case redactions(state) do
+        [] ->
+          {partial, 0}
+
+        values ->
+          {redact_line(partial, values), (values |> Enum.map(&byte_size/1) |> Enum.max()) - 1}
+      end
+
+    cut = char_boundary(text, max(byte_size(text) - hold, 0))
+    head = binary_part(text, 0, cut)
+    tail = binary_part(text, cut, byte_size(text) - cut)
+    %{push_line(%{state | partial: ""}, head) | partial: tail}
+  end
+
+  # A cut inside a character steps back over its continuation bytes
+  # (0b10xxxxxx); a cut at the end holds back a trailing character the chunk
+  # boundary left incomplete. Bytes that are not UTF-8 are cut as they are.
+  defp char_boundary(text, cut) do
+    cut = step_back(text, cut, 3)
+    if cut == byte_size(text), do: complete_end(text, cut), else: cut
+  end
+
+  defp step_back(_text, 0, _left), do: 0
+  defp step_back(_text, cut, 0), do: cut
+
+  defp step_back(text, cut, left) do
+    if cut < byte_size(text) and continuation?(:binary.at(text, cut)),
+      do: step_back(text, cut - 1, left - 1),
+      else: cut
+  end
+
+  defp complete_end(text, size) do
+    case Enum.find(max(size - 1, 0)..max(size - 4, 0)//-1, fn i ->
+           i < size and not continuation?(:binary.at(text, i))
+         end) do
+      nil ->
+        size
+
+      lead_at ->
+        need = sequence_length(:binary.at(text, lead_at))
+        if need > 1 and lead_at + need > size, do: lead_at, else: size
+    end
+  end
+
+  defp continuation?(byte), do: Bitwise.band(byte, 0xC0) == 0x80
+
+  defp sequence_length(byte) when byte < 0x80, do: 1
+  defp sequence_length(byte) when Bitwise.band(byte, 0xE0) == 0xC0, do: 2
+  defp sequence_length(byte) when Bitwise.band(byte, 0xF0) == 0xE0, do: 3
+  defp sequence_length(byte) when Bitwise.band(byte, 0xF8) == 0xF0, do: 4
+  defp sequence_length(_byte), do: 1
 
   defp push_line(state, line) do
     # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)
     # prepend; reversed on read in result/1.
-    output = [line | state.output]
+    output = [redact_line(line, redactions(state)) | state.output]
 
     {output, count} =
       if state.output_count + 1 > state.max_output_lines do
@@ -938,6 +1064,7 @@ defmodule AgentOrchestrator.AgentRunner do
       lease_id: state.lease_id,
       presence: state.presence,
       lineage: state.lineage,
+      profile: state.profile,
       exit_status: state.exit_status,
       running: state.exit_status == nil
     }
