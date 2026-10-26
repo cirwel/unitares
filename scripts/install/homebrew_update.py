@@ -794,6 +794,7 @@ class NativeUpdater:
                 self.write_journal(state)
                 self.reexec()
                 raise AssertionError("reexec returned")
+            self.managed_pins("pin")
             if "formula_state_before" in state:
                 state["formula_state_after"] = self.formula_state()
             state["stage"] = "packages_installed"

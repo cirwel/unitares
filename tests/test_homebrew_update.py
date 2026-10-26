@@ -453,6 +453,8 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     monkeypatch.setattr(
         updater, "write_journal", lambda value: written.append(dict(value))
     )
+    pins = []
+    monkeypatch.setattr(updater, "managed_pins", lambda action: pins.append(action))
     updater.brew.check_schema = lambda: None
     updater.brew.start = lambda **kwargs: pytest.fail("stopped writers were started")
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
@@ -461,6 +463,7 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     assert written[0]["backup"] == "/private/refreshed.dump"
     assert written[0]["superseded_backups"] == ["/private/old.dump"]
     assert written[0]["agent_count_before"] == 4
+    assert pins == ["pin"]
 
 
 def test_identity_verification_failure_requires_explicit_acceptance(
@@ -750,6 +753,7 @@ def test_resume_from_planned_retries_stop_backup_and_finishes(
         updater, "backup_database", lambda target: tmp_path / f"before-{target}.dump"
     )
     monkeypatch.setattr(updater, "apply_migrations", lambda: calls.append("migrate"))
+    monkeypatch.setattr(updater, "managed_pins", lambda action: calls.append(action))
     monkeypatch.setattr(updater, "refresh_tap", lambda: None)
     monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(
@@ -769,6 +773,7 @@ def test_resume_from_planned_retries_stop_backup_and_finishes(
         "quiesced",
         "backed_up",
         "quiesced",
+        "pin",
         "packages_installed",
         "quiesced",
         "migrate",
