@@ -469,6 +469,18 @@ sets nothing.
      (its council in its own pull request, with its direct fallback removed)
      move to profiles; (3) once every caller sends profiles, the operator
      removes the explicit `allow`, and raw spawns are denied.
+     *First part built 2026-10-26:* the claude client
+     (`src/mcp_handlers/support/claude_cli_client.py`, run with `python -I`;
+     the prompt goes on standard input, the flags are fixed, the environment
+     is allowlisted) and the generator (`scripts/ops/orchestrator-profiles.py`,
+     writing the `host.claude` profile), which the orchestrator's own
+     `elixir/agent_orchestrator/scripts/start.sh` runs before boot when
+     `AGENT_ORCHESTRATOR_PROFILES_FILE` is set and the operator hands the
+     file over with `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the generator
+     owns the whole file). That script is the
+     `start.sh` this section names. No caller sends profiles yet, so nothing
+     changes. Next: the codex, antigravity, reviewer and council profiles,
+     moving the callers, and the doctor's digest check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is
