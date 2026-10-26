@@ -447,9 +447,13 @@ sets nothing.
      request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` whenever a
      profiles file is configured, valid or not; `allow` only without one). No profiles file ships yet, so nothing changes.
      *Built 2026-10-26* (`elixir/agent_orchestrator/lib/agent_orchestrator/profiles.ex`,
-     portal hub H1). The concurrency and per-hour limits run inside the
-     idempotent spawn after a started key has replayed, so a retry is never
-     refused as over a limit; a refusal releases the reservation.
+     portal hub H1). Admission (the concurrency and per-hour limits, and
+     secret resolution) runs inside the idempotent spawn after a started key
+     has replayed, so a retry is never refused as over a limit or for a
+     missing secret; a refusal releases the reservation. A slot is tied to its
+     execution id and frees only on a definite start failure, when a started
+     execution is no longer live, or after a grace period for an id never
+     seen live; a dead caller frees nothing.
    - **4b. The clients, the generator and the callers.** Depends on the
      codex confinement (#2827, cirwel/dispatch_beam#87) having merged. The claude and
      council clients (the codex and antigravity clients exist); the

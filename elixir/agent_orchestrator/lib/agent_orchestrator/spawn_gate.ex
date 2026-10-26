@@ -54,14 +54,22 @@ defmodule AgentOrchestrator.SpawnGate do
   @doc """
   Start a keyed spawn once, replaying its durable execution id on retry.
 
-  `admit`, when given, runs only for a new reservation, never for a replay:
-  it returns `{:ok, finish}` to proceed (and `finish` is called with the start
-  result) or `{:error, reason}` to refuse, which releases the reservation so a
-  later retry is a fresh attempt. Profile rate limits use it, so a retry of an
-  already-started key replays instead of being refused as over a limit.
+  `admit`, when given, runs only for a new reservation, never for a replay.
+  It receives the reserved execution id and returns `{:ok, spec, on_outcome}`
+  to start `spec` (the admitted spec replaces the one given here), or
+  `{:error, reason}` to refuse, which releases the reservation so a later
+  retry is a fresh attempt. `on_outcome` is called with `:started` or, when
+  the start definitely failed, `:failed`; an ambiguous start
+  (`idempotency_outcome_unknown`) may be running, so it reports neither.
+  Profile limits and secrets use it, so a retry of an already-started key
+  replays without either.
   """
-  @spec start_agent(String.t(), String.t(), map(), (-> {:ok, function()} | {:error, term()}) | nil) ::
-          start_result()
+  @spec start_agent(
+          String.t(),
+          String.t(),
+          map(),
+          (String.t() -> {:ok, map(), (:started | :failed -> any())} | {:error, term()}) | nil
+        ) :: start_result()
   def start_agent(idempotency_key, digest, spec, admit \\ nil)
 
   def start_agent(idempotency_key, digest, spec, admit)
@@ -200,11 +208,17 @@ defmodule AgentOrchestrator.SpawnGate do
   defp admit_and_start(ledger, key_hash, digest, execution_id, spec, nil),
     do: start_reserved(ledger, key_hash, digest, execution_id, spec)
 
-  defp admit_and_start(ledger, key_hash, digest, execution_id, spec, admit) do
-    case admit.() do
-      {:ok, finish} ->
-        result = start_reserved(ledger, key_hash, digest, execution_id, spec)
-        finish.(result)
+  defp admit_and_start(ledger, key_hash, digest, execution_id, _spec, admit) do
+    case admit.(execution_id) do
+      {:ok, admitted_spec, on_outcome} ->
+        result = start_reserved(ledger, key_hash, digest, execution_id, admitted_spec)
+
+        case result do
+          {:error, {:idempotency_outcome_unknown, _}} -> :ok
+          {:error, _definite} -> on_outcome.(:failed)
+          {:ok, _, _, _} -> on_outcome.(:started)
+        end
+
         result
 
       {:error, reason} ->

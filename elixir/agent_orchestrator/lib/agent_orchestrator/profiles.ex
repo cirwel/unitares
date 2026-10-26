@@ -49,9 +49,12 @@ defmodule AgentOrchestrator.Profiles do
   A closed schema: `profile`, `vars`, `max_runtime_ms`, `max_output_lines`
   (each at most the profile's ceiling), and `lineage` only where the profile
   accepts it. A refusal names the field or variable, never a value. The
-  concurrency and per-hour limits are checked inside the idempotent spawn, after
-  a retry of an already-started key has replayed, so a lost response is never
-  turned into a refusal.
+  concurrency and per-hour limits, and the profile's secrets, are checked and
+  resolved at admission (`admit/3`), which runs inside the idempotent spawn
+  after a retry of an already-started key has replayed: a lost response is
+  never turned into a refusal, and a replay needs no secret. Resolved secrets
+  reach the runner only behind a closure, so no timeout message, crash report
+  or supervisor report can print them.
 
   ## Raw spawns
 
@@ -85,6 +88,8 @@ defmodule AgentOrchestrator.Profiles do
   @min_secret_bytes 4
   @hour_ms 3_600_000
   @default_reload_ms 5_000
+  # How long an admitted id may stay unseen before it counts as never started.
+  @start_grace_ms 60_000
 
   # ---------- public API ----------
 
@@ -103,34 +108,37 @@ defmodule AgentOrchestrator.Profiles do
 
   @doc """
   Validate a request body against the loaded profiles and build its runner
-  spec. Returns `{:ok, %{profile: name, spec: spec, digest: digest}}` or
-  `{:error, code, detail}`, where `code` is `:schema_invalid`,
-  `:unknown_profile`, `:profiles_unavailable` or `:profile_unconfigured`.
+  spec, without its secrets. Returns `{:ok, %{profile: name, spec: spec,
+  digest: digest}}` or `{:error, code, detail}`, where `code` is
+  `:schema_invalid`, `:unknown_profile` or `:profiles_unavailable`.
   """
   def prepare(server \\ server(), body), do: GenServer.call(server, {:prepare, body})
 
   @doc """
-  Take one concurrency and per-hour slot for `profile`. Returns
-  `{:ok, token}` or `{:error, :rate_limited, detail}`; `finish/3` attaches the
-  started execution or refunds the slot.
+  Admit one new start of `profile` as `execution_id`: check its concurrency
+  and per-hour limits and resolve its secrets. Called only once a start is
+  known to be new (after a keyed retry has replayed), so a replay needs
+  neither a free slot nor its secret. Returns `{:ok, secret_env}` or
+  `{:error, :rate_limited | :profile_unconfigured, detail}`.
+
+  The slot is tied to `execution_id` at once. `started/2` or `refund/2`
+  reports the start's outcome; a started execution holds its slot while it
+  is live, and a refunded one gives back its slot and its hourly charge. An
+  outcome that never arrives (the caller died mid-start, or the start was
+  ambiguous) proves nothing about the child, so the slot is held while the id
+  is live, and otherwise for a grace period before it counts as never
+  started.
   """
-  def admit(server \\ server(), profile), do: GenServer.call(server, {:admit, profile})
+  def admit(server \\ server(), profile, execution_id),
+    do: GenServer.call(server, {:admit, profile, execution_id})
 
-  def finish(server \\ server(), token, result),
-    do: GenServer.cast(server, {:finish, token, result})
+  @doc "Return the slot and hourly charge of a start that definitely failed."
+  def refund(server \\ server(), execution_id),
+    do: GenServer.cast(server, {:refund, execution_id})
 
-  @doc """
-  What a start result means for its admission slot: `{:ok, execution_id}`
-  keeps the slot against that execution, `:refund` returns it. A start whose
-  completion could not be recorded may be running, so it keeps its slot.
-  """
-  def admission_result({:ok, execution_id, _pid}), do: {:ok, execution_id}
-  def admission_result({:ok, execution_id, _pid, :new}), do: {:ok, execution_id}
-
-  def admission_result({:error, {:idempotency_outcome_unknown, execution_id}}),
-    do: {:ok, execution_id}
-
-  def admission_result(_other), do: :refund
+  @doc "Record that `execution_id` started: once it is no longer live, its slot frees."
+  def started(server \\ server(), execution_id),
+    do: GenServer.cast(server, {:started, execution_id})
 
   # ---------- pure parsing (exposed for tests) ----------
 
@@ -165,7 +173,8 @@ defmodule AgentOrchestrator.Profiles do
       reload_ms: Keyword.get(opts, :reload_ms, @default_reload_ms),
       getenv: Keyword.get(opts, :getenv, &System.get_env/1),
       environ: Keyword.get(opts, :environ, &System.get_env/0),
-      live_ids: Keyword.get(opts, :live_ids, &AgentOrchestrator.list/0),
+      live?: Keyword.get(opts, :live?, &live?/1),
+      start_grace_ms: Keyword.get(opts, :start_grace_ms, @start_grace_ms),
       uid: Keyword.get_lazy(opts, :uid, &current_uid/0),
       now: Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end),
       starts: %{},
@@ -186,15 +195,15 @@ defmodule AgentOrchestrator.Profiles do
     {:reply, do_prepare(body, state), state}
   end
 
-  def handle_call({:admit, name}, {caller, _tag}, state) do
+  def handle_call({:admit, name, execution_id}, _from, state) do
     case state.profiles && Map.get(state.profiles, name) do
       nil ->
-        {:reply, {:error, :rate_limited, "profile #{name} is not loaded"}, state}
+        {:reply, {:error, :rate_limited, "profile #{safe_name(name)} is not loaded"}, state}
 
       profile ->
         state = prune(state)
         now = state.now.()
-        running = Enum.count(state.slots, fn {_t, slot} -> slot.name == name end)
+        running = Enum.count(state.slots, fn {_id, slot} -> slot.name == name end)
         recent = Map.get(state.starts, name, [])
 
         cond do
@@ -205,39 +214,49 @@ defmodule AgentOrchestrator.Profiles do
             {:reply, {:error, :rate_limited, "profile #{name} is at max_per_hour"}, state}
 
           true ->
-            token = make_ref()
-            # A caller that dies before finish/3 must not hold its slot forever.
-            monitor = Process.monitor(caller)
-            slot = %{name: name, execution: :pending, monitor: monitor}
+            case resolve_secrets(profile, state.getenv) do
+              {:ok, secret_env} ->
+                slot = %{name: name, admitted_at: now, started: false}
 
-            state = %{
-              state
-              | slots: Map.put(state.slots, token, slot),
-                starts: Map.put(state.starts, name, [{now, token} | recent])
-            }
+                state = %{
+                  state
+                  | slots: Map.put(state.slots, execution_id, slot),
+                    starts: Map.put(state.starts, name, [{now, execution_id} | recent])
+                }
 
-            {:reply, {:ok, token}, state}
+                {:reply, {:ok, secret_env}, state}
+
+              {:error, code, detail} ->
+                {:reply, {:error, code, detail}, state}
+            end
         end
     end
   end
 
   @impl true
-  def handle_cast({:finish, token, result}, state) do
-    state =
-      case {Map.get(state.slots, token), result} do
-        {%{execution: :pending} = slot, {:ok, execution_id}} ->
-          Process.demonitor(slot.monitor, [:flush])
-          %{state | slots: Map.put(state.slots, token, %{slot | execution: execution_id})}
+  def handle_cast({:started, execution_id}, state) do
+    case Map.fetch(state.slots, execution_id) do
+      {:ok, slot} ->
+        {:noreply, %{state | slots: Map.put(state.slots, execution_id, %{slot | started: true})}}
 
-        {%{execution: :pending} = slot, _refused_or_replayed} ->
-          Process.demonitor(slot.monitor, [:flush])
-          refund(state, token, slot.name)
+      :error ->
+        {:noreply, state}
+    end
+  end
 
-        _ ->
-          state
-      end
+  def handle_cast({:refund, execution_id}, state) do
+    case Map.pop(state.slots, execution_id) do
+      {nil, _} ->
+        {:noreply, state}
 
-    {:noreply, state}
+      {%{name: name}, slots} ->
+        starts =
+          Map.update(state.starts, name, [], fn l ->
+            Enum.reject(l, &match?({_, ^execution_id}, &1))
+          end)
+
+        {:noreply, %{state | slots: slots, starts: starts}}
+    end
   end
 
   @impl true
@@ -246,24 +265,7 @@ defmodule AgentOrchestrator.Profiles do
     {:noreply, reload(state)}
   end
 
-  # The admitting caller died before finish/3: its start never completed here.
-  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
-    case Enum.find(state.slots, fn {_t, slot} -> slot.monitor == monitor end) do
-      {token, %{execution: :pending, name: name}} -> {:noreply, refund(state, token, name)}
-      _ -> {:noreply, state}
-    end
-  end
-
   def handle_info(_message, state), do: {:noreply, state}
-
-  defp refund(state, token, name) do
-    %{
-      state
-      | slots: Map.delete(state.slots, token),
-        starts:
-          Map.update(state.starts, name, [], fn l -> Enum.reject(l, &match?({_, ^token}, &1)) end)
-    }
-  end
 
   # ---------- loading ----------
 
@@ -471,14 +473,13 @@ defmodule AgentOrchestrator.Profiles do
          {:ok, profiles} <- loaded(state),
          {:ok, name} <- request_profile(body),
          {:ok, profile} <- find_profile(profiles, name),
-         {:ok, secret_env} <- resolve_secrets(profile, state.getenv),
          {:ok, vars} <- request_vars(body["vars"], profile.vars),
          {:ok, max_runtime} <-
            ceiling(body["max_runtime_ms"], profile.max_runtime_ms, "max_runtime_ms"),
          {:ok, max_lines} <-
            ceiling(body["max_output_lines"], profile.max_output_lines, "max_output_lines"),
          {:ok, lineage} <- request_lineage(body["lineage"], profile.lineage) do
-      env = child_env(profile, secret_env, vars, state.environ.())
+      env = child_env(profile, vars, state.environ.())
 
       spec =
         %{
@@ -487,10 +488,7 @@ defmodule AgentOrchestrator.Profiles do
           env: env,
           stdin: "close",
           max_runtime_ms: max_runtime,
-          max_output_lines: max_lines,
-          # Behind a closure, so no report or timeout message prints them;
-          # the runner adds them to the child env and redacts their values.
-          secret_env: fn -> secret_env end
+          max_output_lines: max_lines
         }
         |> put_opt(:cd, profile.cd)
         |> put_opt(:server_url, profile.server_url)
@@ -660,19 +658,19 @@ defmodule AgentOrchestrator.Profiles do
   defp optional_string_req(_v, f),
     do: {:error, :schema_invalid, "#{f} must be a non-empty string"}
 
-  # Unset everything not inherited (or written below), then fixed values and
-  # the caller's variables. The runner adds the secrets from the spec's closure
-  # and then its provisioned variables.
-  defp child_env(profile, secret_env, vars, environ) do
+  # Unset everything not inherited (or written here or as a secret), then
+  # fixed values and the caller's variables. Secrets are resolved at admission
+  # and reach the runner behind the spec's :secret_env closure; the runner
+  # then adds its provisioned variables.
+  defp child_env(profile, vars, environ) do
     keep = MapSet.new(profile.env.inherit)
 
     unset =
       for {name, _v} <- environ, not MapSet.member?(keep, name), do: {name, false}
 
     set = Enum.sort(profile.env.set)
-    written = MapSet.new(set ++ secret_env ++ vars, fn {k, _} -> k end)
+    written = MapSet.new(Map.keys(profile.env.secrets) ++ Enum.map(set ++ vars, &elem(&1, 0)))
 
-    # Secrets are not in this list: they travel behind the spec's closure.
     Enum.reject(unset, fn {k, _} -> MapSet.member?(written, k) end) ++
       set ++ Enum.sort(vars)
   end
@@ -680,16 +678,15 @@ defmodule AgentOrchestrator.Profiles do
   # ---------- rate state ----------
 
   defp prune(state) do
-    cutoff = state.now.() - @hour_ms
-    live = MapSet.new(state.live_ids.())
+    now = state.now.()
+    cutoff = now - @hour_ms
 
     slots =
-      state.slots
-      |> Enum.filter(fn
-        {_t, %{execution: :pending}} -> true
-        {_t, %{execution: id}} -> MapSet.member?(live, id)
-      end)
-      |> Map.new()
+      for {id, slot} <- state.slots,
+          slot = %{slot | started: slot.started or state.live?.(id)},
+          keep?(slot, state.live?.(id), now, state.start_grace_ms),
+          into: %{},
+          do: {id, slot}
 
     starts =
       state.starts
@@ -698,6 +695,14 @@ defmodule AgentOrchestrator.Profiles do
 
     %{state | slots: slots, starts: starts}
   end
+
+  # Live: held. Started and gone: finished, freed. Never seen live with no
+  # reported outcome: held for the start grace, then counted as never started.
+  defp keep?(_slot, true, _now, _grace), do: true
+  defp keep?(%{started: true}, false, _now, _grace), do: false
+  defp keep?(slot, false, now, grace), do: now - slot.admitted_at < grace
+
+  defp live?(execution_id), do: execution_id in AgentOrchestrator.list()
 
   # ---------- status ----------
 

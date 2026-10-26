@@ -1,3 +1,21 @@
+defmodule AgentOrchestrator.ProfilesTest.FlakyLedger do
+  @moduledoc false
+  # The memory ledger, with a switch that makes mark_started fail.
+  alias AgentOrchestrator.MemoryIdempotencyLedger, as: Memory
+
+  def fail_mark_started(on?), do: :persistent_term.put({__MODULE__, :fail}, on?)
+  defp failing?, do: :persistent_term.get({__MODULE__, :fail}, false)
+
+  def reserve(k, d, id, ms), do: Memory.reserve(k, d, id, ms)
+
+  def mark_started(k, d, id),
+    do: if(failing?(), do: {:error, :db_down}, else: Memory.mark_started(k, d, id))
+
+  def release_reservation(k, d, id), do: Memory.release_reservation(k, d, id)
+  def sweep, do: Memory.sweep()
+  def status, do: Memory.status()
+end
+
 defmodule AgentOrchestrator.ProfilesTest do
   @moduledoc """
   Named launch profiles (inference-hosts-config-v0 §2.5): loading, the closed
@@ -12,6 +30,7 @@ defmodule AgentOrchestrator.ProfilesTest do
   alias AgentOrchestrator.HTTPRouter
   alias AgentOrchestrator.MemoryIdempotencyLedger
   alias AgentOrchestrator.Profiles
+  alias AgentOrchestrator.ProfilesTest.FlakyLedger
 
   @moduletag :tmp_dir
   @token "test-bearer-token"
@@ -64,9 +83,12 @@ defmodule AgentOrchestrator.ProfilesTest do
         file: path,
         raw_spawn: Keyword.get(extra, :raw_spawn),
         reload_ms: Keyword.get(extra, :reload_ms, 60_000),
-        getenv: env_fun(Keyword.get(extra, :env, %{"ORCH_SECRET" => @secret})),
+        getenv:
+          Keyword.get_lazy(extra, :getenv, fn ->
+            env_fun(Keyword.get(extra, :env, %{"ORCH_SECRET" => @secret}))
+          end),
         environ: fn -> Keyword.get(extra, :environ, %{"PATH" => "/bin", "LEAKY" => "leaked"}) end
-      ] ++ Keyword.drop(extra, [:raw_spawn, :reload_ms, :env, :environ])
+      ] ++ Keyword.drop(extra, [:raw_spawn, :reload_ms, :env, :environ, :getenv])
 
     start_supervised!({Profiles, opts}, id: name)
     name
@@ -177,10 +199,14 @@ defmodule AgentOrchestrator.ProfilesTest do
       name = start_profiles(path, env: %{})
       assert %{unconfigured: ["p"]} = Profiles.status(name)
 
-      assert {:error, :profile_unconfigured, detail} =
+      # Secrets are resolved at admission, not at prepare: a keyed retry of a
+      # started request replays without needing its secret.
+      assert {:ok, _} =
                Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
 
+      assert {:error, :profile_unconfigured, detail} = Profiles.admit(name, "p", "ex-1")
       assert detail =~ "ORCH_SECRET"
+      assert {:ok, []} = Profiles.admit(name, "plain", "ex-2")
     end
   end
 
@@ -197,11 +223,13 @@ defmodule AgentOrchestrator.ProfilesTest do
       refute Enum.any?(spec.env, &match?({"PATH", _}, &1))
       assert {"FIXED", "fixed-value"} in spec.env
       assert {"GREETING", "hello"} in spec.env
-      # The secret is not in the spec's data, only behind its closure, so
-      # nothing that prints the spec (a timeout, a crash report) shows it.
+      # The secret is not in the prepared spec at all (it is resolved at
+      # admission and handed to the runner behind a closure), so nothing that
+      # prints the spec shows it, and the child still gets it unset-then-set.
       refute Enum.any?(spec.env, &match?({"CHILD_KEY", _}, &1))
-      assert spec.secret_env.() == [{"CHILD_KEY", @secret}]
+      refute Map.has_key?(spec, :secret_env)
       refute inspect(spec, limit: :infinity, printable_limit: :infinity) =~ @secret
+      assert {:ok, [{"CHILD_KEY", @secret}]} = Profiles.admit(name, "p", "ex-env")
       assert spec.cmd == "/bin/sh" and spec.stdin == "close" and spec.lease == false
       assert spec.max_runtime_ms == 10_000
     end
@@ -327,34 +355,64 @@ defmodule AgentOrchestrator.ProfilesTest do
     end
   end
 
-  describe "admit/2" do
-    test "enforces max_concurrent and max_per_hour, and refunds a failed start", %{tmp_dir: dir} do
-      live = :ets.new(:live, [:public])
+  describe "admit/3" do
+    defp live_table, do: :ets.new(:live, [:public])
+    defp live_fun(table), do: fn id -> :ets.member(table, id) end
+
+    test "limits count admitted ids until they finish; a definite failure refunds",
+         %{tmp_dir: dir} do
+      live = live_table()
       path = write_file(dir, %{"p" => profile(%{"max_concurrent" => 1, "max_per_hour" => 2})})
+      name = start_profiles(path, live?: live_fun(live))
+
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-1")
+      assert {:error, :rate_limited, d} = Profiles.admit(name, "p", "ex-2")
+      assert d =~ "max_concurrent"
+
+      # A start that definitely failed returns its slot and its hourly charge.
+      Profiles.refund(name, "ex-1")
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-2")
+      Profiles.started(name, "ex-2")
+      :ets.insert(live, {"ex-2"})
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-3")
+
+      # Once it is no longer live the slot frees; the hour still counts it.
+      :ets.delete(live, "ex-2")
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-3")
+      Profiles.started(name, "ex-3")
+      assert {:error, :rate_limited, d2} = Profiles.admit(name, "p", "ex-4")
+      assert d2 =~ "max_per_hour"
+    end
+
+    test "with no reported outcome a slot is held while live, then for the start grace",
+         %{tmp_dir: dir} do
+      live = live_table()
+      clock = :counters.new(1, [])
+      path = write_file(dir, %{"p" => profile(%{"max_concurrent" => 1})})
 
       name =
         start_profiles(path,
-          live_ids: fn -> :ets.tab2list(live) |> Enum.map(&elem(&1, 0)) end
+          live?: live_fun(live),
+          now: fn -> :counters.get(clock, 1) end,
+          start_grace_ms: 1_000
         )
 
-      assert {:ok, t1} = Profiles.admit(name, "p")
-      assert {:error, :rate_limited, d} = Profiles.admit(name, "p")
-      assert d =~ "max_concurrent"
+      # The admitting caller died mid-start, so no outcome was reported. That
+      # proves nothing about the child: the slot stays tied to its id.
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-1")
+      :counters.put(clock, 1, 999)
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-2")
 
-      # A refused start refunds both the slot and the hourly count.
-      Profiles.finish(name, t1, :refund)
-      assert {:ok, t2} = Profiles.admit(name, "p")
-      :ets.insert(live, {"exec-2"})
-      Profiles.finish(name, t2, {:ok, "exec-2"})
-      assert {:error, :rate_limited, _} = Profiles.admit(name, "p")
+      # Never seen live past the grace: it never started.
+      :counters.put(clock, 1, 1_001)
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-2")
 
-      # Once the execution is gone the slot frees; the hour still counts it.
-      :ets.delete(live, "exec-2")
-      assert {:ok, t3} = Profiles.admit(name, "p")
-      Profiles.finish(name, t3, {:ok, "exec-3"})
-      :ets.delete_all_objects(live)
-      assert {:error, :rate_limited, d2} = Profiles.admit(name, "p")
-      assert d2 =~ "max_per_hour"
+      # Seen live once, it counts as started; past the grace and gone, it frees.
+      :ets.insert(live, {"ex-2"})
+      :counters.put(clock, 1, 5_000)
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-3")
+      :ets.delete(live, "ex-2")
+      assert {:ok, _} = Profiles.admit(name, "p", "ex-3")
     end
   end
 
@@ -367,9 +425,7 @@ defmodule AgentOrchestrator.ProfilesTest do
 
       assert %{unconfigured: ["p"]} = Profiles.status(name)
 
-      assert {:error, :profile_unconfigured, detail} =
-               Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
-
+      assert {:error, :profile_unconfigured, detail} = Profiles.admit(name, "p", "ex-1")
       assert detail =~ "line break"
     end
 
@@ -419,31 +475,55 @@ defmodule AgentOrchestrator.ProfilesTest do
       end
     end
 
-    test "a caller that dies before finishing frees its slot", %{tmp_dir: dir} do
-      name = start_profiles(write_file(dir, %{"p" => profile(%{"max_concurrent" => 1})}))
+    test "SpawnGate admits only a new start, refunds a definite failure, keeps an ambiguous one" do
+      gate = :"gate_#{System.unique_integer([:positive])}"
+      start_supervised!({AgentOrchestrator.SpawnGate, name: gate, ledger: FlakyLedger}, id: gate)
       parent = self()
 
-      {pid, ref} =
-        spawn_monitor(fn ->
-          {:ok, _token} = Profiles.admit(name, "p")
-          send(parent, :admitted)
-        end)
+      admit = fn id ->
+        send(parent, {:admitted, id})
 
-      assert_receive :admitted
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}
-      # The death is processed before the next call reaches the server.
-      _ = Profiles.status(name)
-      assert {:ok, _} = Profiles.admit(name, "p")
-    end
+        # A malformed lineage parent makes the runner refuse in init: a
+        # definite, synchronous start failure.
+        {:ok, %{cmd: "true", lease: false, lineage: %{parent_agent_uuid: "bad"}},
+         fn outcome -> send(parent, {outcome, id}) end}
+      end
 
-    test "a start whose completion is unknown keeps its slot" do
-      assert Profiles.admission_result({:error, {:idempotency_outcome_unknown, "ex-1"}}) ==
-               {:ok, "ex-1"}
+      key = "gate-key-#{System.unique_integer([:positive])}"
+      assert {:error, _} = AgentOrchestrator.SpawnGate.start_agent(gate, key, "d1", %{}, admit)
+      assert_received {:admitted, id}
+      assert_received {:failed, ^id}
 
-      assert Profiles.admission_result({:ok, "ex-2", self(), :new}) == {:ok, "ex-2"}
-      assert Profiles.admission_result({:ok, "ex-3", self()}) == {:ok, "ex-3"}
-      assert Profiles.admission_result({:error, {:executable_not_found, "x"}}) == :refund
-      assert Profiles.admission_result({:error, {:rate_limited, "x"}}) == :refund
+      # The process starts but its start cannot be recorded: it may be running.
+      ok_admit = fn id ->
+        send(parent, {:admitted, id})
+        {:ok, %{cmd: "true", lease: false}, fn outcome -> send(parent, {outcome, id}) end}
+      end
+
+      FlakyLedger.fail_mark_started(true)
+      key2 = "gate-key-#{System.unique_integer([:positive])}"
+
+      assert {:error, {:idempotency_outcome_unknown, id2}} =
+               AgentOrchestrator.SpawnGate.start_agent(gate, key2, "d2", %{}, ok_admit)
+
+      assert_received {:admitted, ^id2}
+      refute_received {:failed, _}
+      refute_received {:started, _}
+      FlakyLedger.fail_mark_started(false)
+
+      # A replay of a started key never runs admission.
+      key3 = "gate-key-#{System.unique_integer([:positive])}"
+
+      assert {:ok, id3, _, :new} =
+               AgentOrchestrator.SpawnGate.start_agent(gate, key3, "d3", %{}, ok_admit)
+
+      assert_received {:admitted, ^id3}
+      assert_received {:started, ^id3}
+
+      assert {:ok, ^id3, _, :idempotent} =
+               AgentOrchestrator.SpawnGate.start_agent(gate, key3, "d3", %{}, ok_admit)
+
+      refute_received {:admitted, _}
     end
   end
 
@@ -464,7 +544,6 @@ defmodule AgentOrchestrator.ProfilesTest do
                 "env" => %{"inherit" => ["PATH"]}
               })
           }),
-          live_ids: &AgentOrchestrator.list/0,
           # The real environment, so the strip is proven on a real child.
           environ: System.get_env() |> Map.put("LEAKY", "leaked")
         )
@@ -538,6 +617,35 @@ defmodule AgentOrchestrator.ProfilesTest do
       assert post(%{"profile" => "slow"}, "key-2").status == 201
     end
 
+    test "a keyed retry replays even after its secret source is gone", %{tmp_dir: dir} do
+      secret = Agent.start_link(fn -> @secret end) |> elem(1)
+
+      name =
+        start_profiles(
+          write_file(Path.join(dir, "s") |> tap(&File.mkdir_p!/1), %{
+            "s" => profile(%{"args" => ["-c", "sleep 5"], "vars" => %{}})
+          }),
+          getenv: fn "ORCH_SECRET" -> Agent.get(secret, & &1) end,
+          live?: fn _ -> false end
+        )
+
+      Application.put_env(:agent_orchestrator, :profiles_server, name)
+      first = post(%{"profile" => "s"}, "sec-1")
+      assert first.status == 201
+      id = Jason.decode!(first.resp_body)["execution_id"]
+
+      Agent.update(secret, fn _ -> nil end)
+      replay = post(%{"profile" => "s"}, "sec-1")
+      assert replay.status == 200
+      assert Jason.decode!(replay.resp_body)["execution_id"] == id
+      AgentOrchestrator.stop(id, :test_cleanup)
+
+      # A new start does need it.
+      fresh = post(%{"profile" => "s"}, "sec-2")
+      assert fresh.status == 503
+      assert Jason.decode!(fresh.resp_body)["error"] == "profile_unconfigured"
+    end
+
     test "with raw spawns denied, /bin/sh is refused like any other cmd" do
       for cmd <- ["/bin/sh", "sh", "echo"] do
         conn = post(%{"cmd" => cmd, "args" => ["-c", "true"]})
@@ -566,8 +674,7 @@ defmodule AgentOrchestrator.ProfilesTest do
 
       name =
         start_profiles(
-          write_file(Path.join(dir, "l") |> tap(&File.mkdir_p!/1), %{"l" => lineage_profile}),
-          live_ids: &AgentOrchestrator.list/0
+          write_file(Path.join(dir, "l") |> tap(&File.mkdir_p!/1), %{"l" => lineage_profile})
         )
 
       Application.put_env(:agent_orchestrator, :profiles_server, name)

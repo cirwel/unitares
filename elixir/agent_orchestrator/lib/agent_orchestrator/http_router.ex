@@ -174,14 +174,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   defp profile_spawn(conn) do
     with {:ok, idempotency_key} <- fetch_idempotency_key(conn),
          {:ok, prepared} <- prepare_profile(conn.body_params) do
-      admit = fn ->
-        case Profiles.admit(prepared.profile) do
-          {:ok, token} -> {:ok, &Profiles.finish(token, Profiles.admission_result(&1))}
-          {:error, :rate_limited, detail} -> {:error, {:rate_limited, detail}}
-        end
-      end
-
-      case spawn_admitted(prepared, idempotency_key, admit) do
+      case spawn_admitted(prepared, idempotency_key) do
         {:ok, execution_id, disposition} ->
           status = if disposition == :idempotent, do: 200, else: 201
 
@@ -217,16 +210,41 @@ defmodule AgentOrchestrator.HTTPRouter do
   defp profile_error(:unknown_profile), do: {422, "unknown_profile"}
   defp profile_error(:profiles_unavailable), do: {503, "profiles_unavailable"}
   defp profile_error(:profile_unconfigured), do: {503, "profile_unconfigured"}
+  defp profile_error(:rate_limited), do: {429, "rate_limited"}
 
-  defp spawn_admitted(prepared, nil, admit) do
-    case admit.() do
-      {:ok, finish} ->
-        result = AgentOrchestrator.run(prepared.spec)
-        finish.(result)
+  # Admission runs once a start is known to be new: for a keyed request,
+  # inside SpawnGate after a started key has replayed. It ties a slot to the
+  # execution id and resolves the secrets, which reach the runner only behind
+  # a closure, so no timeout message or report can print them.
+  defp admit(prepared) do
+    fn execution_id ->
+      case Profiles.admit(prepared.profile, execution_id) do
+        {:ok, secret_env} ->
+          spec = Map.put(prepared.spec, :secret_env, fn -> secret_env end)
+          {:ok, spec, &admission_outcome(execution_id, &1)}
 
-        case result do
-          {:ok, execution_id, _pid} -> {:ok, execution_id, :new}
-          {:error, reason} -> {:error, reason}
+        {:error, code, detail} ->
+          {:error, {:profile, code, detail}}
+      end
+    end
+  end
+
+  defp admission_outcome(execution_id, :started), do: Profiles.started(execution_id)
+  defp admission_outcome(execution_id, :failed), do: Profiles.refund(execution_id)
+
+  defp spawn_admitted(prepared, nil) do
+    execution_id = AgentOrchestrator.AgentRunner.generate_execution_id()
+
+    case admit(prepared).(execution_id) do
+      {:ok, spec, on_outcome} ->
+        case AgentOrchestrator.AgentSupervisor.start_reserved_agent(spec, execution_id) do
+          {:ok, ^execution_id, _pid} ->
+            on_outcome.(:started)
+            {:ok, execution_id, :new}
+
+          {:error, reason} ->
+            on_outcome.(:failed)
+            {:error, reason}
         end
 
       {:error, reason} ->
@@ -234,18 +252,17 @@ defmodule AgentOrchestrator.HTTPRouter do
     end
   end
 
-  defp spawn_admitted(prepared, idempotency_key, admit) do
+  defp spawn_admitted(prepared, idempotency_key) do
     case AgentOrchestrator.SpawnGate.start_agent(
            idempotency_key,
            prepared.digest,
            prepared.spec,
-           admit
+           admit(prepared)
          ) do
       {:ok, execution_id, _pid, disposition} -> {:ok, execution_id, disposition}
       {:error, reason} -> {:error, reason}
     end
   end
-
 
   # ---------- raw spawn ----------
 
@@ -587,8 +604,10 @@ defmodule AgentOrchestrator.HTTPRouter do
         reason: "a durable reservation exists but process-start completion is unknown"
       })
 
-  defp spawn_error(conn, {:rate_limited, detail}),
-    do: json(conn, 429, %{ok: false, error: "rate_limited", detail: detail})
+  defp spawn_error(conn, {:profile, code, detail}) do
+    {status, error} = profile_error(code)
+    json(conn, status, %{ok: false, error: error, detail: detail})
+  end
 
   defp spawn_error(conn, :idempotency_unavailable),
     do:
