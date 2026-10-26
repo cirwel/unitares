@@ -270,6 +270,39 @@ defmodule AgentOrchestrator.ProfilesTest do
                Profiles.prepare(name, Map.put(base, "lineage", %{"parent_agent_uuid" => "x"}))
     end
 
+    test "a malformed lineage parent is a schema refusal that echoes nothing", %{tmp_dir: dir} do
+      path =
+        write_file(Path.join(dir, "lin") |> tap(&File.mkdir_p!/1), %{
+          "l" => profile(%{"lineage" => "caller"})
+        })
+
+      name = start_profiles(path)
+
+      body = %{
+        "profile" => "l",
+        "vars" => %{"GREETING" => "hi"},
+        "lineage" => %{"parent_agent_uuid" => "not-a-uuid-value"}
+      }
+
+      assert {:error, :schema_invalid, detail} = Profiles.prepare(name, body)
+      assert detail == "lineage.parent_agent_uuid must be a UUID"
+    end
+
+    test "a server_url without an http scheme is refused at load" do
+      json =
+        Jason.encode!(%{
+          "schema" => "unitares.orchestrator_profiles.v1",
+          "profiles" => %{"p" => profile(%{"server_url" => "localhost:8767"})}
+        })
+
+      assert {:error, reason} = Profiles.parse(json)
+      assert reason =~ "server_url"
+      ok = put_in(Jason.decode!(json), ["profiles", "p", "server_url"], "http://127.0.0.1:8767")
+
+      assert {:ok, %{"p" => %{server_url: "http://127.0.0.1:8767"}}} =
+               Profiles.parse(Jason.encode!(ok))
+    end
+
     test "unknown profile names are not echoed unless they look like names", %{name: name} do
       assert {:error, :unknown_profile, "unknown profile other"} =
                Profiles.prepare(name, %{"profile" => "other"})

@@ -78,6 +78,9 @@ defmodule AgentOrchestrator.Profiles do
   @request_keys ~w(profile vars max_runtime_ms max_output_lines lineage)
   @name_re ~r/\A[a-z0-9][a-z0-9_.-]{0,63}\z/
   @env_name_re ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
+  # The runner's lineage check (agent_runner.ex), applied before any
+  # reservation so a malformed parent is a schema refusal, never echoed.
+  @uuid_re ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
   @max_var_bytes 262_144
   @min_secret_bytes 4
   @hour_ms 3_600_000
@@ -337,7 +340,7 @@ defmodule AgentOrchestrator.Profiles do
          {:ok, vars} <- parse_vars(Map.get(raw, "vars", %{})),
          :ok <- disjoint_names(env, vars),
          {:ok, lineage} <- one_of(Map.get(raw, "lineage", "none"), ~w(none caller), "lineage"),
-         {:ok, server_url} <- optional_string(raw["server_url"], "server_url"),
+         {:ok, server_url} <- optional_http_url(raw["server_url"]),
          {:ok, lease} <- parse_lease(raw["lease"]),
          {:ok, max_runtime} <- positive(raw["max_runtime_ms"], "max_runtime_ms"),
          {:ok, max_lines} <- positive(Map.get(raw, "max_output_lines", 1000), "max_output_lines"),
@@ -614,7 +617,7 @@ defmodule AgentOrchestrator.Profiles do
 
   defp request_lineage(%{} = given, "caller") do
     with :ok <- known_lineage_keys(given),
-         {:ok, parent} <- required_string(given["parent_agent_uuid"], "lineage.parent_agent_uuid"),
+         {:ok, parent} <- uuid(given["parent_agent_uuid"], "lineage.parent_agent_uuid"),
          {:ok, reason} <- optional_string_req(given["spawn_reason"], "lineage.spawn_reason") do
       base = %{parent_agent_uuid: parent}
       {:ok, if(reason, do: Map.put(base, :spawn_reason, reason), else: base)}
@@ -631,8 +634,11 @@ defmodule AgentOrchestrator.Profiles do
     end
   end
 
-  defp required_string(v, _f) when is_binary(v) and v != "", do: {:ok, v}
-  defp required_string(_v, f), do: {:error, :schema_invalid, "#{f} must be a non-empty string"}
+  defp uuid(v, f) do
+    if is_binary(v) and Regex.match?(@uuid_re, v),
+      do: {:ok, v},
+      else: {:error, :schema_invalid, "#{f} must be a UUID"}
+  end
 
   defp optional_string_req(nil, _f), do: {:ok, nil}
   defp optional_string_req(v, _f) when is_binary(v) and v != "", do: {:ok, v}
@@ -789,9 +795,17 @@ defmodule AgentOrchestrator.Profiles do
       else: {:error, "#{field} must be one of #{Enum.join(allowed, ", ")}"}
   end
 
-  defp optional_string(nil, _field), do: {:ok, nil}
-  defp optional_string(v, _field) when is_binary(v) and v != "", do: {:ok, v}
-  defp optional_string(_v, field), do: {:error, "#{field} must be a non-empty string"}
+  # The runner accepts only http(s) server URLs; refusing others at load keeps
+  # a bad file from replacing the last good set.
+  defp optional_http_url(nil), do: {:ok, nil}
+
+  defp optional_http_url(v) when is_binary(v) do
+    if String.starts_with?(v, ["http://", "https://"]) and byte_size(v) > 8,
+      do: {:ok, v},
+      else: {:error, "server_url must be an http:// or https:// URL"}
+  end
+
+  defp optional_http_url(_v), do: {:error, "server_url must be an http:// or https:// URL"}
 
   defp positive(n, _field) when is_integer(n) and n > 0, do: {:ok, n}
   defp positive(_n, field), do: {:error, "#{field} must be a positive integer"}
