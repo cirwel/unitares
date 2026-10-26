@@ -159,6 +159,7 @@ def test_mirror_mode_renders_nudge_line():
     }
     result = _format_mirror(data, saved_trust_tier=None)
     assert any("request_review" in line for line in result["mirror"])
+    assert any("consult(brief='...', purpose='critique')" in line for line in result["mirror"])
 
 
 def test_mirror_mode_without_nudge_has_no_line():
@@ -179,6 +180,7 @@ def test_envelope_appends_nudge_to_next_action():
     }
     envelope = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert "request_review" in envelope["next_action"]
+    assert "consult(brief='...', purpose='critique')" in envelope["next_action"]
     assert "low confidence" in envelope["next_action"]
 
 

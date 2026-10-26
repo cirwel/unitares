@@ -249,7 +249,9 @@ prediction ids of their own, which the reply never advertises (before
 bound, meaning the row does not train calibration. When
 `UNITARES_REVIEW_NUDGE` is enabled, a warmed session can also receive a
 once-per-session `review_suggested` nudge for low confidence, high complexity,
-or a guide verdict. It is optional guidance, not a forced review.
+or a guide verdict, pointing to `request_review` (on-record review) or
+`consult(purpose="critique")` (advisory design critique). It is optional
+guidance, not a forced review.
 
 ### Your check-in is one evidence class among several
 
@@ -401,6 +403,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
+- `consult(brief=..., purpose="critique")` — Advisory model or council critique when choosing between plausible designs, before an irreversible schema/contract step, or when a key assumption is unverified (never an on-record verdict and never satisfies implementation review; use `request_review` after a diff exists). Advertised by default; requires a configured inference host (`list_inference_hosts`): `effort="standard"` queries a local host when configured, while `effort="thorough"` or `host_ids=[...]` (parallel 2–3 host council) requires `privacy="cloud_allowed"` and the deployment's opt-in CLI host-adapter extension. Cap at one consult per design decision
 - `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`, `reconcile_effect`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. `reconcile_effect` is operator-only recovery for a durable terminal effect: inspect first, apply only untouched pending work, and never replay an applying or unknown-partial effect automatically. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
 - `export()` — Export session history
 
