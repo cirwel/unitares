@@ -162,6 +162,17 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
         f"# Changelog\n\n---\n\n## [Unreleased]\n\n---\n\n## [{current_ver}] - 2026-01-01\n\n### Added\n- Initial (#1).\n",
         encoding="utf-8",
     )
+    dangling_link = repo / "scripts" / "ops" / "dangling_link.sh"
+    if dangling_link.is_symlink() or dangling_link.exists():
+        dangling_link.unlink()
+    dangling_link.symlink_to("missing_target")
+    linked_target = repo / "docs" / "linked_fragment_source.md"
+    linked_target.write_text("- **linked:** via symlink (#1).\n", encoding="utf-8")
+    linked_frag = repo / "docs" / "changelog.d" / "added-linked-frag.md"
+    linked_frag.parent.mkdir(parents=True, exist_ok=True)
+    if linked_frag.is_symlink() or linked_frag.exists():
+        linked_frag.unlink()
+    linked_frag.symlink_to("../linked_fragment_source.md")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "chore: seed (#1)")
     _git(repo, "tag", f"v{current_ver}")
@@ -195,8 +206,10 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
     pr_body = Path(summary["pr_body_file"]).read_text(encoding="utf-8")
     assert "NEEDS-QUICKSTART" in pr_body
     assert "1 uncited PR(s)" in pr_body
-    # Dry-run restores the working tree
+    # Dry-run restores the working tree without unlinking tracked symlinks
     assert (repo / "VERSION").read_text(encoding="utf-8").strip() == current_ver
+    assert dangling_link.is_symlink()
+    assert linked_frag.is_symlink()
 
     # Non-dry-run rolls back the working tree if skill freshness fails
     freshness_stub.write_text(
