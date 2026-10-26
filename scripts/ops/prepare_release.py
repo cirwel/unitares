@@ -383,8 +383,8 @@ def _snapshot_tree(repo_root: Path) -> dict[Path, bytes | None]:
     paths = {repo_root / rel for rel in tracked.split("\0") if rel}
     frag_dir = repo_root / "docs" / "changelog.d"
     if frag_dir.is_dir():
-        paths.update(p for p in frag_dir.rglob("*") if p.is_file())
-    return {p: (p.read_bytes() if p.exists() else None) for p in paths}
+        paths.update(p for p in frag_dir.rglob("*") if p.is_file() and not p.is_symlink())
+    return {p: (p.read_bytes() if p.exists() else None) for p in paths if not p.is_symlink()}
 
 
 def _restore_tree(snapshot: dict[Path, bytes | None]) -> None:

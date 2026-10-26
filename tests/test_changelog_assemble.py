@@ -272,3 +272,79 @@ def test_output_order_does_not_depend_on_the_order_fragments_are_given():
     backward = module.assemble_text(CHANGELOG, list(reversed(fragments)))
     assert forward == backward
     assert "### Added\n- **alpha:** (#1).\n- **beta:** (#1).\n- **gamma:** (#1).\n" in forward
+
+
+def test_git_history_attaches_uncited_pr_numbers_on_fold(tmp_path: Path):
+    """Fragments written before a PR number exists gain (#NNNN) from first-parent git history."""
+    root = _checkout(tmp_path, {})
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    git("init", "-q", "-b", "master")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    git("add", "-A")
+    git("commit", "-q", "-m", "chore: seed")
+
+    # 1. Reused filename from an older release must not leak the older PR number (#9):
+    reused = root / "docs" / "changelog.d" / "added-reused.md"
+    reused.write_text("- **old:** earlier release.\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "feat: old release (#9)")
+    reused.unlink()
+    git("add", "-A")
+    git("commit", "-q", "-m", "chore(release): fold old (#10)")
+
+    # 2. Squash commit adding a fragment without (#NNNN):
+    reused.write_text("- **squash:** added without PR ref.\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "feat: squash change (#42)")
+
+    # 3. Merge commit adding a fragment without trailing period:
+    git("checkout", "-q", "-b", "pr-43")
+    (root / "docs" / "changelog.d" / "fixed-merge.md").write_text(
+        "- **merge:** fixed without trailing period\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "fix: inner branch commit without PR ref")
+    git("checkout", "-q", "master")
+    git("merge", "--no-ff", "-q", "pr-43", "-m", "Merge pull request #43 from cirwel/pr-43")
+
+    # 4. Fragment added in #44 and updated in #45:
+    multi = root / "docs" / "changelog.d" / "changed-multi.md"
+    multi.write_text("- **multi:** initial text.\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "feat: initial (#44)")
+    multi.write_text("- **multi:** updated text.\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "fix: follow-up (#45)")
+
+    # 5. Fragment that already cites its own PR (#46) is not duplicated:
+    (root / "docs" / "changelog.d" / "removed-already.md").write_text(
+        "- **already:** cites its own PR (#46).\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "chore: remove (#46)")
+
+    # 6. Fragment that cites an issue (#100) still gains its introducing PR (#47):
+    (root / "docs" / "changelog.d" / "security-issue-ref.md").write_text(
+        "- **sec:** closes issue (#100).\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "fix: security fix (#47)")
+
+    result = _run(root)
+    assert result.returncode == 0, result.stderr
+    section = _unreleased(_changelog(root))
+    assert "- **squash:** added without PR ref (#42).\n" in section
+    assert "#9" not in section
+    assert "- **merge:** fixed without trailing period (#43)\n" in section
+    assert "- **multi:** updated text (#44, #45).\n" in section
+    assert "- **already:** cites its own PR (#46).\n" in section
+    assert "(#46) (#46)" not in section
+    assert "- **sec:** closes issue (#100) (#47).\n" in section
+

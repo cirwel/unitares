@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,9 @@ HEADING_LINE = re.compile(r"^#{1,6}\s")
 UNRELEASED = re.compile(r"^## \[Unreleased\][ \t]*$", re.MULTILINE)
 NEXT_RELEASE = re.compile(r"^## \[", re.MULTILINE)
 SUBSECTION = re.compile(r"^### (.+?)[ \t]*$")
+TRAILING_PR = re.compile(r"\(#(\d+)\)$")
+MERGE_PR = re.compile(r"^Merge pull request #(\d+)\b")
+PR_REF = re.compile(r"#(\d+)")
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,55 @@ class Fragment:
     path: Path
     section: str  # the heading, e.g. "Added"
     body: str     # stripped of surrounding blank lines
+
+
+def _fragment_prs(root: Path, rel: str) -> list[int]:
+    """PR numbers from first-parent commits that added or updated `rel`."""
+    if not (root / ".git").exists():
+        return []
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "log",
+            "--first-parent",
+            "--name-status",
+            "--format=COMMIT:%s",
+            "--",
+            rel,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return []
+    prs: list[int] = []
+    current_pr: int | None = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("COMMIT:"):
+            subject = line[len("COMMIT:"):]
+            match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
+            current_pr = int(match.group(1)) if match else None
+        elif line:
+            status = line.split("\t", 1)[0]
+            if current_pr is not None and current_pr not in prs:
+                prs.append(current_pr)
+            if status.startswith("A"):
+                break
+    return list(reversed(prs))
+
+
+def _attach_prs(body: str, prs: list[int]) -> str:
+    """Append uncited PR numbers to `body` when git history names them."""
+    cited = {int(n) for n in PR_REF.findall(body)}
+    missing = [f"#{n}" for n in prs if n not in cited]
+    if not missing:
+        return body
+    suffix = f" ({', '.join(missing)})"
+    if body.endswith("."):
+        return f"{body[:-1]}{suffix}."
+    return f"{body}{suffix}"
 
 
 def fragment_paths(root: Path) -> list[Path]:
@@ -124,6 +177,7 @@ def load(root: Path) -> tuple[list[Fragment], list[str]]:
                 f"{rel}: a fragment may not contain a heading ({headings[0]!r}); "
                 "the file name chooses the section")
             continue
+        body = _attach_prs(body, _fragment_prs(root, rel))
         fragments.append(Fragment(path, SECTIONS[section], body))
     return fragments, problems
 

@@ -334,6 +334,54 @@ def test_an_ordinary_build_change_still_needs_a_citation(repo: Repo):
     assert "0 dependency bump(s) excluded" in result.stdout
 
 
+def test_chore_deps_and_mix_and_attestation_bumps_are_classified(repo: Repo):
+    """Dependabot emits `chore(deps)` / `chore(deps-dev)` in this repository,
+    touches Elixir `mix.exs` / `mix.lock`, and triggers skill attestation re-stamps."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit(
+        "chore(deps): bump actions/upload-artifact from 4 to 7 (#12)",
+        {".github/workflows/ci.yml": "uses: actions/upload-artifact@v7\n"},
+    )
+    repo.commit(
+        "chore(deps-dev): bump eslint from 10.12.0 to 10.13.0 in /dashboard (#13)",
+        {
+            "dashboard/package.json": '{"devDependencies": {"eslint": "10.13.0"}}\n',
+            "dashboard/package-lock.json": "{}\n",
+            "skills/.attestations/unitares-dashboard/20261023T072940064162Z-eac46ee5.json": "{}\n",
+        },
+    )
+    repo.commit(
+        "chore(deps-dev): bump stream_data from 0.6.0 to 1.4.0 in /elixir/sentinel (#14)",
+        {
+            "elixir/sentinel/mix.exs": "{:stream_data, \"~> 1.4\", only: :test}\n",
+            "elixir/sentinel/mix.lock": "%{}\n",
+        },
+    )
+    repo.commit(
+        "chore(deps): bump phoenix from 1.7.0 to 1.8.0 in /elixir/dialectic_live (#15)",
+        {
+            "elixir/dialectic_live/mix.exs": "{:phoenix, \"~> 1.8\"}\n",
+            "elixir/dialectic_live/mix.lock": "%{}\n",
+        },
+    )
+    repo.commit(
+        "chore(deps): bump req from 0.5.0 to 1.0.0 in /elixir/dialectic_live (#16)",
+        {"elixir/dialectic_live/mix.exs": "{:req, \"~> 1.0\"}\n"},
+    )
+    _release(repo)
+    held_result = _run(repo.path, COVERAGE)
+    assert held_result.returncode == 1
+    assert "4 dependency bump(s) excluded" in held_result.stdout
+    assert "1 dependency bump(s) held" in held_result.stdout
+    assert "held: major move of a runtime pin (elixir/dialectic_live/mix.exs)" in held_result.stdout
+
+    # Citing the held major move clears the gate:
+    _release(repo, "- **things:** alpha (#10)\n- **deps:** req 1.0 (#16)")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout
+
+
+
 def test_list_mode_reports_the_same_gaps_without_failing(repo: Repo):
     repo.commit("feat: alpha (#10)")
     repo.commit("fix: beta (#11)")
@@ -783,6 +831,36 @@ def test_a_changed_skills_bundle_asks_for_a_plugin_re_cut(repo: Repo):
     assert result.returncode == 1
     assert "plugin skills bundle" in result.stdout
     assert "plugin-bundle-recut" in result.stdout
+
+
+def test_an_attestation_only_touch_does_not_block_the_skills_series(repo: Repo):
+    """skills/.attestations/*.json are local verification stamps, not mirrored into
+    unitares-governance-plugin by sync-plugin-skills.sh."""
+    repo.commit("docs(skills): seed", {"skills/x/SKILL.md": "seed\n"})
+    repo.tag("v1.0.1")
+    repo.commit(
+        "chore(skills): re-stamp attestation after server file move (#10)",
+        {"skills/.attestations/x/20261025T000000Z-deadbeef.json": "{}\n"},
+    )
+    repo.commit("chore(release): 1.1.0 (#99)", {"VERSION": "1.1.0\n"})
+    result = _run(repo.path, DRIFT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "level with its tag" in result.stdout
+
+    # A real SKILL.md edit alongside an attestation re-stamp still blocks:
+    repo._git("reset", "--hard", "HEAD~1")
+    repo.commit(
+        "docs(skills): update guidance (#11)",
+        {
+            "skills/x/SKILL.md": "updated guidance\n",
+            "skills/.attestations/x/20261025T000001Z-cafebabe.json": "{}\n",
+        },
+    )
+    repo.commit("chore(release): 1.1.0 (#99)", {"VERSION": "1.1.0\n"})
+    blocked = _run(repo.path, DRIFT)
+    assert blocked.returncode == 1
+    assert "plugin skills bundle" in blocked.stdout
+
 
 
 def test_post_release_sdk_or_skills_commit_before_tagging_does_not_block_drift(repo: Repo):

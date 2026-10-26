@@ -162,6 +162,10 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
         f"# Changelog\n\n---\n\n## [Unreleased]\n\n---\n\n## [{current_ver}] - 2026-01-01\n\n### Added\n- Initial (#1).\n",
         encoding="utf-8",
     )
+    dangling_link = repo / "scripts" / "ops" / "dangling_link.sh"
+    if dangling_link.is_symlink() or dangling_link.exists():
+        dangling_link.unlink()
+    dangling_link.symlink_to("missing_target")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "chore: seed (#1)")
     _git(repo, "tag", f"v{current_ver}")
@@ -195,8 +199,9 @@ def test_prepare_release_dry_run_in_temp_repo(tmp_path: Path):
     pr_body = Path(summary["pr_body_file"]).read_text(encoding="utf-8")
     assert "NEEDS-QUICKSTART" in pr_body
     assert "1 uncited PR(s)" in pr_body
-    # Dry-run restores the working tree
+    # Dry-run restores the working tree without unlinking tracked symlinks
     assert (repo / "VERSION").read_text(encoding="utf-8").strip() == current_ver
+    assert dangling_link.is_symlink()
 
     # Non-dry-run rolls back the working tree if skill freshness fails
     freshness_stub.write_text(
