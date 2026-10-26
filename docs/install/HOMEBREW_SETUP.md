@@ -126,6 +126,9 @@ eligible set with `--yes`; adjust the two floors with `--retain-backups N` and
 `pg_restore --list`, journals each deletion, and refuses while an update is
 unfinished. Missing files do not count toward the retention floor; their stale
 index records appear in the dry run and are reconciled only with `--yes`.
+The dry run records its candidates and policy in the private cleanup journal;
+`--yes` uses that recorded plan even if time or command defaults changed, while
+rechecking update-journal protections immediately before deletion.
 Unindexed backups are never deleted. Old kegs remain Homebrew's
 responsibility; keep the predecessor until the new installation and backup have
 been validated, then use Homebrew's own cleanup procedure when appropriate.

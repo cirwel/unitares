@@ -133,7 +133,9 @@ class NativeUpdater:
             raise Refusal(
                 "Homebrew did not return the complete managed UNITARES package set."
             )
-        for name, qualified in zip(FORMULAE, QUALIFIED_FORMULAE, strict=True):
+        if len(FORMULAE) != len(QUALIFIED_FORMULAE):
+            raise Refusal("The managed Homebrew formula configuration is inconsistent.")
+        for name, qualified in zip(FORMULAE, QUALIFIED_FORMULAE):
             formula = by_name[name]
             if formula.get("tap") != TAP:
                 raise Refusal(f"{name} is not owned by the {TAP} tap.")
@@ -337,6 +339,10 @@ class NativeUpdater:
             or not all(isinstance(value, str) for value in cleanup["candidates"])
             or not isinstance(cleanup.get("deleted", []), list)
             or not all(isinstance(value, str) for value in cleanup.get("deleted", []))
+            or not isinstance(cleanup.get("retain"), int)
+            or cleanup["retain"] < 1
+            or not isinstance(cleanup.get("older_than_days"), int)
+            or cleanup["older_than_days"] < 0
         ):
             raise Refusal("The native backup-cleanup journal has an invalid format.")
         return cleanup
@@ -443,19 +449,30 @@ class NativeUpdater:
                 continue
             self._verify_indexed_backup(entry, backup_dir)
             verified_entries.append(entry)
+        cleanup = self.read_cleanup_journal()
+        resume_plan = bool(
+            cleanup
+            and cleanup["stage"] != "complete"
+            and (apply or cleanup["stage"] == "deleting")
+        )
+        policy_retain = cleanup["retain"] if resume_plan else retain
+        policy_age = cleanup["older_than_days"] if resume_plan else older_than_days
         verified_index = {"entries": verified_entries}
         protected = self._protected_backup_paths(
-            retain=retain, index=verified_index
+            retain=policy_retain, index=verified_index
         )
-        cleanup = self.read_cleanup_journal()
-        if cleanup and cleanup["stage"] != "complete":
+        if resume_plan:
+            assert cleanup is not None
             candidate_names = cleanup["candidates"]
-            if not apply:
+            print(
+                f"Using recorded cleanup policy: retain {policy_retain}, older than {policy_age} day(s)."
+            )
+            if cleanup["stage"] == "deleting" and not apply:
                 print(
                     "An interrupted backup-cleanup plan is waiting; this dry run shows its remaining work."
                 )
         else:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=policy_age)
             candidate_names = [
                 entry["path"]
                 for entry in verified_entries
@@ -488,7 +505,7 @@ class NativeUpdater:
 
         if not candidate_names:
             print(
-                f"No indexed backups are eligible; retaining {len(verified_entries)} verified backup(s), including the newest {retain} and anything newer than {older_than_days} day(s)."
+                f"No indexed backups are eligible; retaining {len(verified_entries)} verified backup(s), including the newest {policy_retain} and anything newer than {policy_age} day(s)."
             )
             if outside_names:
                 print(
@@ -504,6 +521,17 @@ class NativeUpdater:
                 verb = "Remove" if apply else "Would remove"
             print(f"{verb}: {value}")
         if not apply:
+            if not resume_plan:
+                cleanup = {
+                    "journal_version": CLEANUP_JOURNAL_VERSION,
+                    "stage": "planned",
+                    "created_at": _utc_now(),
+                    "candidates": candidate_names,
+                    "deleted": [],
+                    "retain": policy_retain,
+                    "older_than_days": policy_age,
+                }
+                self._write_private_json(self.cleanup_journal_path, cleanup)
             print("Dry run only. Re-run with --yes to delete exactly this eligible set.")
             print("Homebrew kegs are not modified; Homebrew remains their cleanup owner.")
             return 0
@@ -515,6 +543,8 @@ class NativeUpdater:
                 "created_at": _utc_now(),
                 "candidates": candidate_names,
                 "deleted": [],
+                "retain": policy_retain,
+                "older_than_days": policy_age,
             }
             self._write_private_json(self.cleanup_journal_path, cleanup)
         cleanup["stage"] = "deleting"
@@ -527,7 +557,7 @@ class NativeUpdater:
             path = Path(value)
             if entry is not None and os.path.lexists(path):
                 if value in self._protected_backup_paths(
-                    retain=retain, index=verified_index
+                    retain=policy_retain, index=verified_index
                 ):
                     raise Refusal(f"Cleanup candidate became protected: {value}")
                 self._verify_indexed_backup(entry, backup_dir).unlink()

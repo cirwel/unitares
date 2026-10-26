@@ -76,7 +76,9 @@ and backups newer than 30 days are retained. `--retain-backups N` and
 `--older-than-days N` can raise or lower those explicit floors, but at least one
 existing, reverified backup is always retained. Missing files do not count;
 their stale index records appear in the dry run and are reconciled only with
-`--yes`. Unindexed backups and Homebrew kegs are never removed by UNITARES.
+`--yes`. The dry run records the exact candidates and policy privately, and
+`--yes` resumes that plan while rechecking newly protected backups. Unindexed
+backups and Homebrew kegs are never removed by UNITARES.
 
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew
