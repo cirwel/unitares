@@ -196,9 +196,12 @@ defmodule AgentOrchestrator.ProfilesTest do
       assert {"LEAKY", false} in spec.env
       refute Enum.any?(spec.env, &match?({"PATH", _}, &1))
       assert {"FIXED", "fixed-value"} in spec.env
-      assert {"CHILD_KEY", @secret} in spec.env
       assert {"GREETING", "hello"} in spec.env
-      assert spec.redact == [@secret]
+      # The secret is not in the spec's data, only behind its closure, so
+      # nothing that prints the spec (a timeout, a crash report) shows it.
+      refute Enum.any?(spec.env, &match?({"CHILD_KEY", _}, &1))
+      assert spec.secret_env.() == [{"CHILD_KEY", @secret}]
+      refute inspect(spec, limit: :infinity, printable_limit: :infinity) =~ @secret
       assert spec.cmd == "/bin/sh" and spec.stdin == "close" and spec.lease == false
       assert spec.max_runtime_ms == 10_000
     end
@@ -414,6 +417,23 @@ defmodule AgentOrchestrator.ProfilesTest do
         assert byte_size(Enum.join(result.output)) == 65_536 + prefix
         assert {:ok, _} = Jason.encode(result.output)
       end
+    end
+
+    test "a caller that dies before finishing frees its slot", %{tmp_dir: dir} do
+      name = start_profiles(write_file(dir, %{"p" => profile(%{"max_concurrent" => 1})}))
+      parent = self()
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          {:ok, _token} = Profiles.admit(name, "p")
+          send(parent, :admitted)
+        end)
+
+      assert_receive :admitted
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}
+      # The death is processed before the next call reaches the server.
+      _ = Profiles.status(name)
+      assert {:ok, _} = Profiles.admit(name, "p")
     end
 
     test "a start whose completion is unknown keeps its slot" do

@@ -186,7 +186,7 @@ defmodule AgentOrchestrator.Profiles do
     {:reply, do_prepare(body, state), state}
   end
 
-  def handle_call({:admit, name}, _from, state) do
+  def handle_call({:admit, name}, {caller, _tag}, state) do
     case state.profiles && Map.get(state.profiles, name) do
       nil ->
         {:reply, {:error, :rate_limited, "profile #{name} is not loaded"}, state}
@@ -194,7 +194,7 @@ defmodule AgentOrchestrator.Profiles do
       profile ->
         state = prune(state)
         now = state.now.()
-        running = Enum.count(state.slots, fn {_t, {n, _id}} -> n == name end)
+        running = Enum.count(state.slots, fn {_t, slot} -> slot.name == name end)
         recent = Map.get(state.starts, name, [])
 
         cond do
@@ -206,10 +206,13 @@ defmodule AgentOrchestrator.Profiles do
 
           true ->
             token = make_ref()
+            # A caller that dies before finish/3 must not hold its slot forever.
+            monitor = Process.monitor(caller)
+            slot = %{name: name, execution: :pending, monitor: monitor}
 
             state = %{
               state
-              | slots: Map.put(state.slots, token, {name, :pending}),
+              | slots: Map.put(state.slots, token, slot),
                 starts: Map.put(state.starts, name, [{now, token} | recent])
             }
 
@@ -222,21 +225,13 @@ defmodule AgentOrchestrator.Profiles do
   def handle_cast({:finish, token, result}, state) do
     state =
       case {Map.get(state.slots, token), result} do
-        {nil, _} ->
-          state
+        {%{execution: :pending} = slot, {:ok, execution_id}} ->
+          Process.demonitor(slot.monitor, [:flush])
+          %{state | slots: Map.put(state.slots, token, %{slot | execution: execution_id})}
 
-        {{name, :pending}, {:ok, execution_id}} ->
-          %{state | slots: Map.put(state.slots, token, {name, execution_id})}
-
-        {{name, :pending}, _refused_or_replayed} ->
-          %{
-            state
-            | slots: Map.delete(state.slots, token),
-              starts:
-                Map.update(state.starts, name, [], fn l ->
-                  Enum.reject(l, &match?({_, ^token}, &1))
-                end)
-          }
+        {%{execution: :pending} = slot, _refused_or_replayed} ->
+          Process.demonitor(slot.monitor, [:flush])
+          refund(state, token, slot.name)
 
         _ ->
           state
@@ -251,7 +246,24 @@ defmodule AgentOrchestrator.Profiles do
     {:noreply, reload(state)}
   end
 
+  # The admitting caller died before finish/3: its start never completed here.
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    case Enum.find(state.slots, fn {_t, slot} -> slot.monitor == monitor end) do
+      {token, %{execution: :pending, name: name}} -> {:noreply, refund(state, token, name)}
+      _ -> {:noreply, state}
+    end
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp refund(state, token, name) do
+    %{
+      state
+      | slots: Map.delete(state.slots, token),
+        starts:
+          Map.update(state.starts, name, [], fn l -> Enum.reject(l, &match?({_, ^token}, &1)) end)
+    }
+  end
 
   # ---------- loading ----------
 
@@ -476,7 +488,9 @@ defmodule AgentOrchestrator.Profiles do
           stdin: "close",
           max_runtime_ms: max_runtime,
           max_output_lines: max_lines,
-          redact: Enum.map(secret_env, fn {_k, v} -> v end)
+          # Behind a closure, so no report or timeout message prints them;
+          # the runner adds them to the child env and redacts their values.
+          secret_env: fn -> secret_env end
         }
         |> put_opt(:cd, profile.cd)
         |> put_opt(:server_url, profile.server_url)
@@ -646,8 +660,9 @@ defmodule AgentOrchestrator.Profiles do
   defp optional_string_req(_v, f),
     do: {:error, :schema_invalid, "#{f} must be a non-empty string"}
 
-  # Unset everything not inherited (or set below), then fixed values, secrets
-  # and the caller's variables. The runner appends its provisioned variables.
+  # Unset everything not inherited (or written below), then fixed values and
+  # the caller's variables. The runner adds the secrets from the spec's closure
+  # and then its provisioned variables.
   defp child_env(profile, secret_env, vars, environ) do
     keep = MapSet.new(profile.env.inherit)
 
@@ -657,8 +672,9 @@ defmodule AgentOrchestrator.Profiles do
     set = Enum.sort(profile.env.set)
     written = MapSet.new(set ++ secret_env ++ vars, fn {k, _} -> k end)
 
+    # Secrets are not in this list: they travel behind the spec's closure.
     Enum.reject(unset, fn {k, _} -> MapSet.member?(written, k) end) ++
-      set ++ Enum.sort(secret_env) ++ Enum.sort(vars)
+      set ++ Enum.sort(vars)
   end
 
   # ---------- rate state ----------
@@ -670,8 +686,8 @@ defmodule AgentOrchestrator.Profiles do
     slots =
       state.slots
       |> Enum.filter(fn
-        {_t, {_n, :pending}} -> true
-        {_t, {_n, id}} -> MapSet.member?(live, id)
+        {_t, %{execution: :pending}} -> true
+        {_t, %{execution: id}} -> MapSet.member?(live, id)
       end)
       |> Map.new()
 

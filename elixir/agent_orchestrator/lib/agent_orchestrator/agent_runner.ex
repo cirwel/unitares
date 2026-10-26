@@ -43,7 +43,9 @@ defmodule AgentOrchestrator.AgentRunner do
         lineage: nil | lineage_cfg,        # default nil = no lineage provisioning
         server_url: String.t() | nil,      # default nil = no server-URL provisioning
         client_session_id: String.t() | nil, # default nil = no session-anchor provisioning
-        redact: [String.t()]               # values replaced in captured output (default [])
+        redact: [String.t()],              # values replaced in captured output (default [])
+        secret_env: (-> [{String.t(), String.t()}]) # secret variables for the child,
+                                           # behind a closure so no report prints them
       }
 
       lease_cfg :: %{
@@ -205,8 +207,9 @@ defmodule AgentOrchestrator.AgentRunner do
     output_count: 0,
     max_output_lines: @default_max_lines,
     # Secret values a profile spawn resolved into the child env; each is
-    # replaced in captured output before it is stored or returned.
-    redact: [],
+    # replaced in captured output before it is stored or returned. Held behind
+    # a closure: crash reports and `:sys` dumps print a fun, never its values.
+    redact: nil,
     partial: "",
     eof_received: false,
     waiters: []
@@ -354,7 +357,7 @@ defmodule AgentOrchestrator.AgentRunner do
                   lease_cfg: lease_cfg,
                   lineage: if(lineage_cfg, do: :provisioned, else: :none),
                   max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines),
-                  redact: redact_values(Map.get(spec, :redact))
+                  redact: redact_closure(spec)
                 }
 
                 init_with_lease(
@@ -747,7 +750,7 @@ defmodule AgentOrchestrator.AgentRunner do
             {:line, @line_max_bytes},
             {:args, exec_args}
           ]
-          |> maybe_opt(:env, encode_env(child_env(env, candidates)))
+          |> maybe_opt(:env, encode_env(child_env(env ++ secret_env(spec), candidates)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
@@ -931,6 +934,28 @@ defmodule AgentOrchestrator.AgentRunner do
 
   defp redact_values(_), do: []
 
+  # Secrets arrive behind a closure (see the :secret_env spec field) so the
+  # spawn request, a GenServer call that times out, or a supervisor report
+  # never prints them.
+  defp secret_env(spec) do
+    case Map.get(spec, :secret_env) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> []
+    end
+  end
+
+  defp redact_closure(spec) do
+    values =
+      redact_values(
+        List.wrap(Map.get(spec, :redact)) ++ Enum.map(secret_env(spec), fn {_k, v} -> v end)
+      )
+
+    fn -> values end
+  end
+
+  defp redactions(%{redact: fun}) when is_function(fun, 0), do: fun.()
+  defp redactions(_state), do: []
+
   defp redact_line(line, []), do: line
   defp redact_line(line, values), do: String.replace(line, values, "[redacted]")
 
@@ -942,7 +967,7 @@ defmodule AgentOrchestrator.AgentRunner do
   # fragment holds half a character (Jason refuses invalid UTF-8).
   defp flush_oversized(state, partial) do
     {text, hold} =
-      case state.redact do
+      case redactions(state) do
         [] ->
           {partial, 0}
 
@@ -997,7 +1022,7 @@ defmodule AgentOrchestrator.AgentRunner do
   defp push_line(state, line) do
     # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)
     # prepend; reversed on read in result/1.
-    output = [redact_line(line, state.redact) | state.output]
+    output = [redact_line(line, redactions(state)) | state.output]
 
     {output, count} =
       if state.output_count + 1 > state.max_output_lines do
