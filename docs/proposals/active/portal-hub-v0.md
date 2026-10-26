@@ -56,7 +56,7 @@ The hub ships with these from its first build, not as a later hardening step:
 **Login: the dashboard's passkey, reused** (operator choice, 2026-10-26). The governance server already runs passkey (WebAuthn) sign-in with opaque, server-side dashboard sessions (`src/dashboard_auth.py`). That module tracks three things for a session: whether it is signed in, whether it may write, and whether it is fresh. The hub uses that sign-in instead of building a second one:
 - the hub sends the operator through the server's passkey ceremony;
 - the hub asks the server to validate the resulting session on every connect and every write;
-- a write needs a fresh session, so each start or resume asks for the operator's fingerprint or face again.
+- a write needs a fresh session. Under the server's current rule (`dashboard_session_is_fresh`), that means one signed in within the last ten minutes. An older session therefore asks for the operator's fingerprint or face again, but several starts or resumes inside one ten-minute window share a single sign-in. If each spawn should carry its own biometric check, that needs a new action-bound ceremony, not the existing freshness check. H2 chooses between the two.
 
 The hub never stores a credential of its own for the browser. Without a valid session, a page on the operator's machine, or a process that can reach the port, can see nothing and do nothing.
 
