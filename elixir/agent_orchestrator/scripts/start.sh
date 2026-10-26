@@ -37,6 +37,26 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 cd "$ORCHESTRATOR_DIR"
 
+# --- Launch profiles ---
+# With AGENT_ORCHESTRATOR_PROFILES_FILE set, regenerate it from this checkout
+# before boot (docs/proposals/active/inference-hosts-config-v0.md, step 4b).
+# The generator runs in an empty environment: the secrets file is sourced into
+# this shell, and a profile must not pick a value up from it. A failure is
+# reported, not fatal: the orchestrator then loads the last good file or none,
+# and with the variable set a missing file still denies raw spawns.
+if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_FILE:-}" ]]; then
+    PROFILES_PYTHON="${AGENT_ORCHESTRATOR_PROFILES_PYTHON:-$(command -v python3 || true)}"
+    profile_args=(--out "$AGENT_ORCHESTRATOR_PROFILES_FILE" --repo-root "$REPO_ROOT"
+                  --python "$PROFILES_PYTHON")
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_ENV_FILE:-}" ]]; then
+        profile_args+=(--env-file "$AGENT_ORCHESTRATOR_PROFILES_ENV_FILE")
+    fi
+    if [[ -z "$PROFILES_PYTHON" ]] || ! env -i PATH="$PATH" "$PROFILES_PYTHON" -I \
+            "$REPO_ROOT/scripts/ops/orchestrator-profiles.py" "${profile_args[@]}" >&2; then
+        echo "[agent-orchestrator] warning: launch profiles not regenerated; the last good file, if any, stays in force" >&2
+    fi
+fi
+
 # --- Distributed node, for live introspection ---
 # With AGENT_ORCHESTRATOR_NODE_COOKIE set (in secrets.env) the node starts
 # *named* + *cookied*, so an operator can attach a remote shell to the RUNNING
