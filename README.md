@@ -24,7 +24,7 @@ each run, but not the thread between them. Without that thread, the next agent
 can repeat a dead end, act on a claim that was already corrected, or lose the
 evidence behind an earlier decision.
 
-UNITARES is a server you run that keeps that thread. Any agent or model that speaks MCP or HTTP can connect (with ready integrations for Claude Code, Codex, Gemini / Antigravity, and Hermes Agent) and write its findings, reviews, and results to one operator-owned record. A later agent, or you, can read it back and see where each piece came from.
+UNITARES is a server you run that keeps that thread. Any agent or model that speaks MCP or HTTP can connect (with ready integrations for Claude Code, Codex, and Hermes Agent) and write its findings, reviews, and results to one operator-owned record. A later agent, or you, can read it back and see where each piece came from.
 
 ## What the record answers
 
@@ -77,10 +77,10 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 **Homebrew preview**, on an Apple Silicon Mac without Docker: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the same services natively. Installing the package does not provision the database: follow the tap's [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup), then run `unitares start`. Upgrades follow its [backup-and-migrate steps](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 
 - **Endpoints:** connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard at `http://localhost:8767/dashboard` ([Docker quickstart](docs/manual/02-install.md#21-docker-quickstart)).
-- **One stack per machine:** Docker and Homebrew keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). Container names are fixed, so run `docker compose down` (without `-v`) in an earlier checkout before starting another (`stop` is not enough, because stopped containers still hold their fixed `container_name` values, and `restart: unless-stopped` revives un-stopped containers when the Docker daemon restarts), or use the [managed launcher](docs/manual/02-install.md#managed-checkout-alternative) (`scripts/install/launch.sh`), which checks ownership and deep health first.
+- **One stack per machine:** Docker and Homebrew keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). Container names are fixed, so run `docker compose down` (without `-v`) in an earlier checkout before starting another (`stop` is not enough, because stopped containers still hold their fixed `container_name` values, and `restart: unless-stopped` revives un-stopped containers when the Docker daemon restarts), or use the [managed launcher](docs/manual/02-install.md#managed-checkout-alternative) (`scripts/install/launch.sh`), which checks ownership first.
 
 **Connect your agents and models** ([Integrating agents](docs/manual/04-integrating-agents.md)):
-- **Claude Code, Codex, and Gemini / Antigravity:** [`unitares-governance-plugin`](https://github.com/cirwel/unitares-governance-plugin) wires MCP, lifecycle hooks, skills, and edit leases.
+- **Claude Code and Codex:** [`unitares-governance-plugin`](https://github.com/cirwel/unitares-governance-plugin) wires MCP, lifecycle hooks, skills, and edit leases.
 - **Hermes Agent and OpenAI-compatible clients:** the [host adapter](https://github.com/cirwel/unitares-host-adapter).
 - **Any other agent or model:** [Streamable HTTP MCP](docs/integration/MCP_CLIENTS.md) (or `npx mcp-remote` for stdio-only clients), the [Python SDK](agents/sdk/README.md) (`pip install unitares-sdk`), or the [resident agent runtime](https://github.com/cirwel/unitares-resident).
 - **Optional server-side models ([choose a model](docs/manual/02-install.md#choose-a-model-optional)):** no model connection is configured by default; the core record runs model-free with no API keys. Run `./scripts/unitares model` to connect a local OpenAI-compatible server (**Ollama**, **vLLM**, **LM Studio**, **llama.cpp**) for `consult` and in-process review, or add the [agent orchestrator](docs/manual/02-install.md#24-quickstart-defaults-and-a-full-setup) for cross-family CLI review.
