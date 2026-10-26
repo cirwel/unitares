@@ -69,6 +69,14 @@ If an interrupted Homebrew link step removes `unitares` from `PATH`, resume via
 a newer tap target asks for confirmation before adopting it; use `--yes` only
 after reviewing the reported replacement target in non-interactive automation.
 
+Each verified native backup is recorded in a private checksum index. Run
+`unitares update --cleanup-backups` for a deletion-free retention plan; add
+`--yes` to apply it. By default, the newest three, journal-referenced backups,
+and backups newer than 30 days are retained. `--retain-backups N` and
+`--older-than-days N` can raise or lower those explicit floors, but at least one
+indexed backup is always retained. Unindexed backups and Homebrew kegs are never
+removed by UNITARES.
+
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew
 owner's logged-in macOS session. Intel macOS and Linux are outside its scope.

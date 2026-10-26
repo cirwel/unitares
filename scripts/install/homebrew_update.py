@@ -14,7 +14,7 @@ resumable by the newly installed keg.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -40,6 +40,8 @@ FORMULAE = (
 )
 QUALIFIED_FORMULAE = tuple(f"{TAP}/{name}" for name in FORMULAE)
 JOURNAL_VERSION = 1
+BACKUP_INDEX_VERSION = 1
+CLEANUP_JOURNAL_VERSION = 1
 FINAL_STAGES = frozenset({"complete", "aborted"})
 
 
@@ -60,6 +62,8 @@ class NativeUpdater:
         self.brew = brew
         self.state_dir = brew.prefix / "var/unitares"
         self.journal_path = self.state_dir / "native-update.json"
+        self.backup_index_path = self.state_dir / "native-update-backups.json"
+        self.cleanup_journal_path = self.state_dir / "native-update-cleanup.json"
 
     def _brew_process(self, *args: str, timeout: int = 1800, refresh: bool = False):
         env = dict(self.brew.env, HOMEBREW_NO_ANALYTICS="1")
@@ -164,23 +168,26 @@ class NativeUpdater:
             raise Refusal(f"{self.state_dir} must be a private directory owned by you.")
         return True
 
-    def write_journal(self, state: dict) -> None:
+    def _write_private_json(self, path: Path, value: dict) -> None:
         self._secure_state_dir(create=True)
-        state["updated_at"] = _utc_now()
         fd, temporary = tempfile.mkstemp(prefix=".native-update-", dir=self.state_dir)
         try:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w") as output:
-                json.dump(state, output, indent=2, sort_keys=True)
+                json.dump(value, output, indent=2, sort_keys=True)
                 output.write("\n")
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self.journal_path)
+            os.replace(temporary, path)
         finally:
             try:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    def write_journal(self, state: dict) -> None:
+        state["updated_at"] = _utc_now()
+        self._write_private_json(self.journal_path, state)
 
     def read_journal(self, *, required: bool = True) -> dict | None:
         if not self._secure_state_dir(create=False):
@@ -234,6 +241,270 @@ class NativeUpdater:
             ):
                 raise Refusal("The native update journal has an invalid package plan.")
         return state
+
+    def read_backup_index(self) -> dict:
+        if not self._secure_state_dir(create=False) or not os.path.lexists(
+            self.backup_index_path
+        ):
+            return {"index_version": BACKUP_INDEX_VERSION, "entries": []}
+        info = self.backup_index_path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
+            raise Refusal(
+                f"{self.backup_index_path} must be a regular private file owned by you."
+            )
+        try:
+            index = json.loads(self.backup_index_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise Refusal("The native backup index is unreadable; preserve and inspect it.") from exc
+        entries = index.get("entries") if isinstance(index, dict) else None
+        if (
+            not isinstance(index, dict)
+            or index.get("index_version") != BACKUP_INDEX_VERSION
+            or not isinstance(entries, list)
+        ):
+            raise Refusal("The native backup index has an unsupported format.")
+        required = {
+            "path": str,
+            "sha256": str,
+            "size": int,
+            "target": str,
+            "verified_at": str,
+        }
+        if any(
+            not isinstance(entry, dict)
+            or any(not isinstance(entry.get(key), kind) for key, kind in required.items())
+            or len(entry["sha256"]) != 64
+            for entry in entries
+        ):
+            raise Refusal("The native backup index contains an invalid entry.")
+        return index
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def record_backup(self, path: Path, target: str) -> None:
+        index = self.read_backup_index()
+        value = str(path)
+        index["entries"] = [
+            entry for entry in index["entries"] if entry["path"] != value
+        ]
+        index["entries"].append(
+            {
+                "path": value,
+                "sha256": self._file_sha256(path),
+                "size": path.stat().st_size,
+                "target": target,
+                "verified_at": _utc_now(),
+            }
+        )
+        index["updated_at"] = _utc_now()
+        self._write_private_json(self.backup_index_path, index)
+
+    def read_cleanup_journal(self) -> dict | None:
+        if not self._secure_state_dir(create=False) or not os.path.lexists(
+            self.cleanup_journal_path
+        ):
+            return None
+        info = self.cleanup_journal_path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
+            raise Refusal(
+                f"{self.cleanup_journal_path} must be a regular private file owned by you."
+            )
+        try:
+            cleanup = json.loads(self.cleanup_journal_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise Refusal(
+                "The native backup-cleanup journal is unreadable; preserve and inspect it."
+            ) from exc
+        if (
+            not isinstance(cleanup, dict)
+            or cleanup.get("journal_version") != CLEANUP_JOURNAL_VERSION
+            or cleanup.get("stage") not in {"planned", "deleting", "complete"}
+            or not isinstance(cleanup.get("candidates"), list)
+            or not all(isinstance(value, str) for value in cleanup["candidates"])
+            or not isinstance(cleanup.get("deleted", []), list)
+            or not all(isinstance(value, str) for value in cleanup.get("deleted", []))
+        ):
+            raise Refusal("The native backup-cleanup journal has an invalid format.")
+        return cleanup
+
+    @staticmethod
+    def _entry_time(entry: dict) -> datetime:
+        try:
+            value = datetime.fromisoformat(entry["verified_at"])
+        except ValueError as exc:
+            raise Refusal("The native backup index contains an invalid timestamp.") from exc
+        if value.tzinfo is None:
+            raise Refusal("The native backup index contains a timezone-free timestamp.")
+        return value
+
+    def _protected_backup_paths(self, *, retain: int, index: dict) -> set[str]:
+        ordered = sorted(index["entries"], key=self._entry_time, reverse=True)
+        protected = {entry["path"] for entry in ordered[:retain]}
+        journal = self.read_journal(required=False)
+        if journal:
+            backup = journal.get("backup")
+            if isinstance(backup, str):
+                protected.add(backup)
+            superseded = journal.get("superseded_backups", [])
+            if isinstance(superseded, list):
+                protected.update(value for value in superseded if isinstance(value, str))
+        return protected
+
+    def _verify_indexed_backup(self, entry: dict, backup_dir: Path) -> Path:
+        path = Path(entry["path"])
+        try:
+            root = backup_dir.resolve(strict=True)
+            resolved = path.resolve(strict=True)
+            info = path.lstat()
+        except OSError as exc:
+            raise Refusal(f"Indexed backup is missing or inaccessible: {path}") from exc
+        if resolved.parent != root:
+            raise Refusal(f"Indexed backup escapes the configured backup directory: {path}")
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+            or info.st_size != entry["size"]
+            or self._file_sha256(path) != entry["sha256"]
+        ):
+            raise Refusal(f"Indexed backup no longer matches its verified record: {path}")
+        pg_restore = self.brew.prefix / "opt/postgresql@17/bin/pg_restore"
+        result = subprocess.run(
+            [str(pg_restore), "--list", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+        )
+        if result.returncode:
+            raise Refusal(f"Indexed backup no longer passes pg_restore verification: {path}")
+        return path
+
+    def cleanup_backups(
+        self, *, retain: int = 3, older_than_days: int = 30, apply: bool = False
+    ) -> int:
+        if retain < 1:
+            raise Refusal("Backup cleanup must retain at least one verified backup.")
+        if older_than_days < 0:
+            raise Refusal("Backup cleanup age cannot be negative.")
+        update = self.read_journal(required=False)
+        if update and update["stage"] not in FINAL_STAGES:
+            raise Refusal(
+                "Backup cleanup is blocked while a native update is unfinished. Resume or safely abort it first."
+            )
+        backup_dir = Path(
+            os.environ.get(
+                "UNITARES_BACKUP_DIR", str(Path.home() / ".unitares/backups")
+            )
+        ).expanduser()
+        if not backup_dir.exists():
+            print(f"No native backup directory exists at {backup_dir}.")
+            return 0
+        directory_info = backup_dir.lstat()
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != os.getuid()
+            or directory_info.st_mode & 0o022
+        ):
+            raise Refusal(f"{backup_dir} must be a private directory owned by you.")
+
+        index = self.read_backup_index()
+        protected = self._protected_backup_paths(retain=retain, index=index)
+        cleanup = self.read_cleanup_journal()
+        if cleanup and cleanup["stage"] != "complete":
+            candidate_names = cleanup["candidates"]
+            if not apply:
+                print("An interrupted backup-cleanup plan is waiting; re-run with --yes to resume it.")
+        else:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+            candidate_names = [
+                entry["path"]
+                for entry in index["entries"]
+                if entry["path"] not in protected and self._entry_time(entry) <= cutoff
+            ]
+            cleanup = None
+
+        entries = {entry["path"]: entry for entry in index["entries"]}
+        for value in candidate_names:
+            if value not in entries:
+                if not cleanup or value not in cleanup.get("deleted", []):
+                    raise Refusal(
+                        f"Cleanup journal references an unindexed backup: {value}"
+                    )
+                continue
+            if value in protected:
+                raise Refusal(f"Cleanup plan now names a protected backup: {value}")
+            if cleanup and apply and not Path(value).exists():
+                # A hard interruption can land after unlink but before the
+                # deletion receipt is durably rewritten. Missing is the only
+                # admissible recovery state; changed files still fail closed.
+                continue
+            self._verify_indexed_backup(entries[value], backup_dir)
+
+        if not candidate_names:
+            print(
+                f"No indexed backups are eligible; retaining the newest {retain} and anything newer than {older_than_days} day(s)."
+            )
+            print("Homebrew kegs are not modified; Homebrew remains their cleanup owner.")
+            return 0
+
+        verb = "Remove" if apply else "Would remove"
+        for value in candidate_names:
+            print(f"{verb}: {value}")
+        if not apply:
+            print("Dry run only. Re-run with --yes to delete exactly this eligible set.")
+            print("Homebrew kegs are not modified; Homebrew remains their cleanup owner.")
+            return 0
+
+        if cleanup is None or cleanup["stage"] == "complete":
+            cleanup = {
+                "journal_version": CLEANUP_JOURNAL_VERSION,
+                "stage": "planned",
+                "created_at": _utc_now(),
+                "candidates": candidate_names,
+                "deleted": [],
+            }
+            self._write_private_json(self.cleanup_journal_path, cleanup)
+        cleanup["stage"] = "deleting"
+        self._write_private_json(self.cleanup_journal_path, cleanup)
+        deleted = set(cleanup.get("deleted", []))
+        for value in cleanup["candidates"]:
+            if value in deleted:
+                continue
+            entry = entries.get(value)
+            path = Path(value)
+            if entry is not None and path.exists():
+                if value in self._protected_backup_paths(retain=retain, index=index):
+                    raise Refusal(f"Cleanup candidate became protected: {value}")
+                self._verify_indexed_backup(entry, backup_dir).unlink()
+            deleted.add(value)
+            cleanup["deleted"] = sorted(deleted)
+            self._write_private_json(self.cleanup_journal_path, cleanup)
+
+        index["entries"] = [
+            entry for entry in index["entries"] if entry["path"] not in deleted
+        ]
+        index["updated_at"] = _utc_now()
+        self._write_private_json(self.backup_index_path, index)
+        cleanup["stage"] = "complete"
+        cleanup["completed_at"] = _utc_now()
+        self._write_private_json(self.cleanup_journal_path, cleanup)
+        print(f"Removed {len(deleted)} indexed backup(s); retained {len(index['entries'])}.")
+        print("Homebrew kegs were not modified; Homebrew remains their cleanup owner.")
+        return 0
 
     def _database_value(self, sql: str) -> str:
         public_url, env = self.brew.database_environment()
@@ -373,6 +644,13 @@ class NativeUpdater:
                 except OSError:
                     pass
             raise
+        try:
+            self.record_backup(path, target)
+        except (OSError, Refusal) as exc:
+            raise Refusal(
+                f"The database backup was verified at {path}, but its retention record could not be written. "
+                "No package or schema change was made; preserve the backup and repair the private runtime directory."
+            ) from exc
         print(f"✓ Verified database backup: {path}")
         return path
 
@@ -856,6 +1134,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="abandon only if no managed package or schema version changed",
     )
+    group.add_argument(
+        "--cleanup-backups",
+        action="store_true",
+        help="dry-run indexed backup retention; add --yes to delete eligible backups",
+    )
     parser.add_argument(
         "--yes",
         "-y",
@@ -867,9 +1150,27 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="after inspection, explicitly accept a recorded identity-count change",
     )
+    parser.add_argument(
+        "--retain-backups",
+        type=int,
+        default=3,
+        metavar="N",
+        help="with --cleanup-backups, always retain at least the newest N indexed backups (default: 3)",
+    )
+    parser.add_argument(
+        "--older-than-days",
+        type=int,
+        default=30,
+        metavar="N",
+        help="with --cleanup-backups, only consider indexed backups at least N days old (default: 30)",
+    )
     args = parser.parse_args(argv)
     if args.accept_identity_change and not args.resume:
         parser.error("--accept-identity-change requires --resume")
+    if not args.cleanup_backups and (
+        args.retain_backups != 3 or args.older_than_days != 30
+    ):
+        parser.error("--retain-backups and --older-than-days require --cleanup-backups")
     try:
         brew = Homebrew()
         updater = NativeUpdater(brew)
@@ -883,6 +1184,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.abort:
                 return updater.abort()
+            if args.cleanup_backups:
+                return updater.cleanup_backups(
+                    retain=args.retain_backups,
+                    older_than_days=args.older_than_days,
+                    apply=args.yes,
+                )
             return updater.begin(check=False, assume_yes=args.yes)
     except (Refusal, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

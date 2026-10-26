@@ -111,3 +111,19 @@ For that one-time transition, follow the tap's
 Direct `brew services`
 commands bypass these UNITARES journal checks; use the packaged lifecycle
 commands while an update is active.
+
+Verified updater backups are indexed with their checksum and size. Inspect the
+retention plan without deleting anything:
+
+```sh
+unitares update --cleanup-backups
+```
+
+The default keeps at least the newest three indexed backups, every backup named
+by the current update journal, and anything newer than 30 days. Apply that exact
+eligible set with `--yes`; adjust the two floors with `--retain-backups N` and
+`--older-than-days N`. Cleanup revalidates ownership, mode, size, checksum and
+`pg_restore --list`, journals each deletion, and refuses while an update is
+unfinished. Unindexed backups are never deleted. Old kegs remain Homebrew's
+responsibility; keep the predecessor until the new installation and backup have
+been validated, then use Homebrew's own cleanup procedure when appropriate.

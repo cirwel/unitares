@@ -161,6 +161,138 @@ def test_backup_keeps_password_out_of_argv_and_verifies_custom_dump(
     assert any("--list" in args for args, _ in calls)
     assert all("s3cr3t-value" not in " ".join(map(str, args)) for args, _ in calls)
     assert calls[0][1]["env"]["PGPASSWORD"] == "s3cr3t-value"
+    index = updater.read_backup_index()
+    assert index["entries"][0]["path"] == str(backup)
+    assert index["entries"][0]["sha256"] == hashlib.sha256(
+        b"PGDMP fixture"
+    ).hexdigest()
+    assert updater.backup_index_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_backup_cleanup_is_dry_run_then_deletes_only_unprotected_indexed_files(
+    updater, monkeypatch, tmp_path, capsys
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    paths = []
+    for number in range(4):
+        path = backup_dir / f"unitares-old-{number}.dump"
+        path.write_bytes(f"PGDMP {number}".encode())
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+        paths.append(path)
+    index = updater.read_backup_index()
+    for number, entry in enumerate(index["entries"]):
+        entry["verified_at"] = f"2025-01-0{number + 1}T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+
+    assert updater.cleanup_backups(retain=2, older_than_days=0) == 0
+    assert all(path.exists() for path in paths)
+    assert not updater.cleanup_journal_path.exists()
+    assert "Dry run only" in capsys.readouterr().out
+
+    assert updater.cleanup_backups(retain=2, older_than_days=0, apply=True) == 0
+    assert not paths[0].exists()
+    assert not paths[1].exists()
+    assert paths[2].exists()
+    assert paths[3].exists()
+    assert [entry["path"] for entry in updater.read_backup_index()["entries"]] == [
+        str(paths[2]),
+        str(paths[3]),
+    ]
+    assert updater.read_cleanup_journal()["stage"] == "complete"
+
+
+def test_backup_cleanup_preserves_current_journal_reference(
+    updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    paths = []
+    for number in range(3):
+        path = backup_dir / f"unitares-protected-{number}.dump"
+        path.write_bytes(f"PGDMP {number}".encode())
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+        paths.append(path)
+    index = updater.read_backup_index()
+    for number, entry in enumerate(index["entries"]):
+        entry["verified_at"] = f"2025-01-0{number + 1}T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
+    updater.write_journal(
+        {
+            "journal_version": update.JOURNAL_VERSION,
+            "stage": "complete",
+            "backup": str(paths[0]),
+        }
+    )
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+    assert updater.cleanup_backups(retain=1, older_than_days=0, apply=True) == 0
+    assert paths[0].exists()
+    assert not paths[1].exists()
+    assert paths[2].exists()
+
+
+def test_backup_cleanup_resumes_after_unlink_before_receipt(
+    updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    paths = []
+    for number in range(2):
+        path = backup_dir / f"unitares-resume-{number}.dump"
+        path.write_bytes(f"PGDMP {number}".encode())
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+        paths.append(path)
+    index = updater.read_backup_index()
+    index["entries"][0]["verified_at"] = "2025-01-01T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
+    updater._write_private_json(
+        updater.cleanup_journal_path,
+        {
+            "journal_version": update.CLEANUP_JOURNAL_VERSION,
+            "stage": "deleting",
+            "candidates": [str(paths[0])],
+            "deleted": [],
+        },
+    )
+    paths[0].unlink()
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+    assert updater.cleanup_backups(retain=1, older_than_days=0, apply=True) == 0
+    assert updater.read_cleanup_journal()["stage"] == "complete"
+    assert [entry["path"] for entry in updater.read_backup_index()["entries"]] == [
+        str(paths[1])
+    ]
+
+
+def test_backup_cleanup_blocks_while_update_is_unfinished(
+    updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    updater.write_journal(
+        {
+            "journal_version": update.JOURNAL_VERSION,
+            "stage": "planned",
+            "writers_were_running": False,
+            "config_sha256": _config_hash(updater),
+            "target": _inventory(),
+        }
+    )
+    with pytest.raises(update.Refusal, match="unfinished"):
+        updater.cleanup_backups()
 
 
 def test_backup_name_collision_never_deletes_existing_dump(

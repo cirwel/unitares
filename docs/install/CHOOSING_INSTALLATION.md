@@ -150,6 +150,9 @@ If an interrupted link step removes the CLI from `PATH`, run
 requires renewed confirmation before the retry adopts it.
 If the installed keg predates this updater, first use the tap's
 [manual transition procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
+The updater indexes verified backups; `unitares update --cleanup-backups`
+dry-runs its fail-closed retention policy, and `--yes` applies it. UNITARES does
+not delete old Homebrew kegs.
 Docker model configuration still requires the owning Docker checkout.
 
 Before switching the primary installation, identify its database and connected

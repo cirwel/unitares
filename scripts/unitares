@@ -1608,10 +1608,13 @@ Homebrew service control (automatic from a Homebrew package):
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
   logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
                                     Read native service logs
-  update --homebrew [--check|--resume|--abort] [--yes] [--accept-identity-change]
+  update --homebrew [--check|--resume|--abort|--cleanup-backups] [--yes]
+                    [--accept-identity-change] [--retain-backups N]
+                    [--older-than-days N]
                                     Refresh and upgrade the managed formulae,
-                                    back up, migrate, restart and verify. An
-                                    interrupted update resumes from its journal
+                                    back up, migrate, restart and verify, or
+                                    dry-run indexed backup retention cleanup.
+                                    An interrupted update resumes from its journal
   From a source checkout, --homebrew explicitly selects the installed native
   installation. Configuration/bootstrap must already be complete. No
   migrations run during start or as a Homebrew formula hook.
