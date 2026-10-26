@@ -258,7 +258,9 @@ defmodule AgentOrchestrator.Profiles do
       digest = sha256(body)
 
       if digest == state.digest do
-        state
+        # The loaded set is back on disk (say, after a bad replacement was
+        # reverted), so any stale error is over.
+        %{state | error: nil}
       else
         case parse(body) do
           {:ok, profiles} ->

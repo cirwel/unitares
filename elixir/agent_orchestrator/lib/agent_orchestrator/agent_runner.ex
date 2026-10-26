@@ -923,7 +923,9 @@ defmodule AgentOrchestrator.AgentRunner do
   # both kinds of secret, and neither is accepted here.
   defp redact_values(values) when is_list(values) do
     values
-    |> Enum.filter(&(is_binary(&1) and byte_size(&1) >= 4 and not String.contains?(&1, ["\n", "\r"])))
+    |> Enum.filter(
+      &(is_binary(&1) and byte_size(&1) >= 4 and not String.contains?(&1, ["\n", "\r"]))
+    )
     |> Enum.uniq()
   end
 
@@ -936,16 +938,34 @@ defmodule AgentOrchestrator.AgentRunner do
   # redact, a secret may straddle the cut, so redact what is complete and hold
   # back the last (longest secret - 1) bytes, which no complete secret can
   # start in, as the start of the next fragment.
-  defp flush_oversized(%{redact: []} = state, partial),
-    do: push_line(%{state | partial: ""}, partial)
-
+  # Either way the cut moves back to a UTF-8 character boundary, so neither
+  # fragment holds half a character (Jason refuses invalid UTF-8).
   defp flush_oversized(state, partial) do
-    redacted = redact_line(partial, state.redact)
-    hold = (state.redact |> Enum.map(&byte_size/1) |> Enum.max()) - 1
-    cut = max(byte_size(redacted) - hold, 0)
-    head = binary_part(redacted, 0, cut)
-    tail = binary_part(redacted, cut, byte_size(redacted) - cut)
+    {text, hold} =
+      case state.redact do
+        [] ->
+          {partial, 0}
+
+        values ->
+          {redact_line(partial, values), (values |> Enum.map(&byte_size/1) |> Enum.max()) - 1}
+      end
+
+    cut = char_boundary(text, max(byte_size(text) - hold, 0))
+    head = binary_part(text, 0, cut)
+    tail = binary_part(text, cut, byte_size(text) - cut)
     %{push_line(%{state | partial: ""}, head) | partial: tail}
+  end
+
+  # Step back over at most three UTF-8 continuation bytes (0b10xxxxxx).
+  defp char_boundary(text, cut), do: char_boundary(text, cut, 3)
+
+  defp char_boundary(_text, 0, _left), do: 0
+  defp char_boundary(_text, cut, 0), do: cut
+
+  defp char_boundary(text, cut, left) do
+    if cut < byte_size(text) and Bitwise.band(:binary.at(text, cut), 0xC0) == 0x80,
+      do: char_boundary(text, cut - 1, left - 1),
+      else: cut
   end
 
   defp push_line(state, line) do

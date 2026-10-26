@@ -162,6 +162,11 @@ defmodule AgentOrchestrator.ProfilesTest do
       send(name, :reload)
       assert %{state: "stale", profiles: ["p"], digest: ^first} = Profiles.status(name)
 
+      # Reverting to the loaded file clears the stale state.
+      write_file(dir, %{"p" => profile()})
+      send(name, :reload)
+      assert %{state: "ok", profiles: ["p"], error: nil, digest: ^first} = Profiles.status(name)
+
       write_file(dir, %{"q" => profile()})
       send(name, :reload)
       assert %{state: "ok", profiles: ["q"], error: nil} = Profiles.status(name)
@@ -349,6 +354,30 @@ defmodule AgentOrchestrator.ProfilesTest do
       joined = Enum.join(result.output)
       refute joined =~ @secret
       assert joined =~ "[redacted]tail"
+    end
+
+    test "the oversized-line cut never splits a UTF-8 character" do
+      Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
+
+      for redact <- [[], ["sixsix"]] do
+        {:ok, id, _pid} =
+          AgentOrchestrator.run(%{
+            cmd: "/bin/sh",
+            # 32,768 two-byte characters with no newline: 65,536 bytes.
+            args: [
+              "-c",
+              "i=0; s=é; while [ $i -lt 15 ]; do s=$s$s; i=$((i+1)); done; printf '%s' \"$s\"; echo"
+            ],
+            env: [{"LANG", "C.UTF-8"}],
+            lease: false,
+            redact: redact
+          })
+
+        {:ok, result} = AgentOrchestrator.await(id, 10_000)
+        assert Enum.all?(result.output, &String.valid?/1)
+        assert byte_size(Enum.join(result.output)) == 65_536
+        assert {:ok, _} = Jason.encode(result.output)
+      end
     end
 
     test "a start whose completion is unknown keeps its slot" do
