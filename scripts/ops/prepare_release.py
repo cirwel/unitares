@@ -372,8 +372,8 @@ def build_pr_body(
     )
 
 
-def _snapshot_tree(repo_root: Path) -> dict[Path, bytes | None]:
-    """Capture tracked files and `docs/changelog.d/` so `--dry-run` can restore them."""
+def _snapshot_tree(repo_root: Path) -> dict[Path, tuple[str, bytes | str | None]]:
+    """Capture tracked files, symlinks, and `docs/changelog.d/` so `--dry-run` can restore them."""
     tracked = subprocess.run(
         ["git", "ls-files", "-z"],
         cwd=repo_root,
@@ -383,17 +383,33 @@ def _snapshot_tree(repo_root: Path) -> dict[Path, bytes | None]:
     paths = {repo_root / rel for rel in tracked.split("\0") if rel}
     frag_dir = repo_root / "docs" / "changelog.d"
     if frag_dir.is_dir():
-        paths.update(p for p in frag_dir.rglob("*") if p.is_file() and not p.is_symlink())
-    return {p: (p.read_bytes() if p.exists() else None) for p in paths if not p.is_symlink()}
-
-
-def _restore_tree(snapshot: dict[Path, bytes | None]) -> None:
-    for path, content in snapshot.items():
-        if content is None:
-            path.unlink(missing_ok=True)
+        paths.update(p for p in frag_dir.rglob("*") if p.is_file() or p.is_symlink())
+    snapshot: dict[Path, tuple[str, bytes | str | None]] = {}
+    for p in paths:
+        if p.is_symlink():
+            snapshot[p] = ("symlink", os.readlink(p))
+        elif p.exists():
+            snapshot[p] = ("file", p.read_bytes())
         else:
+            snapshot[p] = ("missing", None)
+    return snapshot
+
+
+def _restore_tree(snapshot: dict[Path, tuple[str, bytes | str | None]]) -> None:
+    for path, (kind, payload) in snapshot.items():
+        if kind == "missing":
+            path.unlink(missing_ok=True)
+        elif kind == "symlink":
+            if path.is_symlink() or path.exists():
+                path.unlink()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            path.symlink_to(str(payload))
+        else:
+            if path.is_symlink():
+                path.unlink()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            assert isinstance(payload, bytes)
+            path.write_bytes(payload)
 
 
 def prepare_release(

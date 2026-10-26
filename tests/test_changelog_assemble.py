@@ -312,7 +312,8 @@ def test_git_history_attaches_uncited_pr_numbers_on_fold(tmp_path: Path):
     git("checkout", "-q", "master")
     git("merge", "--no-ff", "-q", "pr-43", "-m", "Merge pull request #43 from cirwel/pr-43")
 
-    # 4. Fragment added in #44 and updated in #45:
+    # 4. Fragment added in #44 and typo-fixed in #45 credits only the introducing PR (#44)
+    # so #45 cannot bypass changelog coverage without its own entry:
     multi = root / "docs" / "changelog.d" / "changed-multi.md"
     multi.write_text("- **multi:** initial text.\n", encoding="utf-8")
     git("add", "-A")
@@ -337,14 +338,24 @@ def test_git_history_attaches_uncited_pr_numbers_on_fold(tmp_path: Path):
     git("add", "-A")
     git("commit", "-q", "-m", "fix: security fix (#47)")
 
+    # 7. Fragment ending in a code fence or sub-bullet attaches (#NNNN) to the opening prose line:
+    (root / "docs" / "changelog.d" / "documentation-fence.md").write_text(
+        "- **cli:** run the new command:\n  ```bash\n  unitares setup\n  ```\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-q", "-m", "docs: add cli example (#48)")
+
     result = _run(root)
     assert result.returncode == 0, result.stderr
     section = _unreleased(_changelog(root))
     assert "- **squash:** added without PR ref (#42).\n" in section
     assert "#9" not in section
     assert "- **merge:** fixed without trailing period (#43)\n" in section
-    assert "- **multi:** updated text (#44, #45).\n" in section
+    assert "- **multi:** updated text (#44).\n" in section
+    assert "#45" not in section
     assert "- **already:** cites its own PR (#46).\n" in section
     assert "(#46) (#46)" not in section
     assert "- **sec:** closes issue (#100) (#47).\n" in section
+    assert "- **cli:** run the new command (#48):\n  ```bash\n  unitares setup\n  ```\n" in section
 

@@ -834,8 +834,8 @@ def test_a_changed_skills_bundle_asks_for_a_plugin_re_cut(repo: Repo):
 
 
 def test_an_attestation_only_touch_does_not_block_the_skills_series(repo: Repo):
-    """skills/.attestations/*.json are local verification stamps, not mirrored into
-    unitares-governance-plugin by sync-plugin-skills.sh."""
+    """skills/.attestations/*.json are omitted from the skills_manifest.py bundle
+    fingerprint so attestation-only re-stamps do not force a plugin recut."""
     repo.commit("docs(skills): seed", {"skills/x/SKILL.md": "seed\n"})
     repo.tag("v1.0.1")
     repo.commit(

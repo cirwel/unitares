@@ -70,9 +70,12 @@ SERIES = [
         # local and exact: the bundle this tree ships is not the bundle the
         # last server release shipped, so whatever the plugin mirrored then is
         # no longer current. Confirming the re-cut is the reader's job.
-        # skills/.attestations/ is excluded because scripts/dev/sync-plugin-skills.sh
-        # mirrors only skills/*/SKILL.md; re-stamping an attestation when a cited
-        # server file moves does not change the bundle shipped by the plugin.
+        # skills/.attestations/ is excluded here to match the bundle fingerprint
+        # in scripts/dev/skills_manifest.py (and the plugin parity check), which
+        # deliberately omits .attestations/ so re-stamping an attestation after
+        # a cited server file moves does not force a plugin release recut when no
+        # SKILL.md content changed (plugin consumers keep the prior attestation
+        # files until the next plugin release).
         "name": "plugin skills bundle",
         "paths": ["skills", ":(exclude)skills/.attestations"],
         "tag_pattern": r"v\d+\.\d+\.\d+",
