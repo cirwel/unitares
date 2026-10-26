@@ -10,7 +10,7 @@ on:
         default: ''
       postgres-image:
         type: string
-        default: ghcr.io/cirwel/unitares-postgres:v3.5.0
+        required: true
 
 permissions:
   contents: read

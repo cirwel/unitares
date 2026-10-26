@@ -137,10 +137,44 @@ def test_latest_moves_only_behind_the_approval_environment():
     assert JOBS["native-bootstrap"]["needs"] == "verify"
     assert JOBS["native-bootstrap"]["uses"] == "./.github/workflows/native-bootstrap.yml"
     assert JOBS["native-bootstrap"]["with"]["source-ref"] == "${{ needs.verify.outputs.source_sha }}"
+    assert JOBS["native-bootstrap"]["with"]["postgres-image"] == (
+        "${{ needs.verify.outputs.native_bootstrap_postgres_image }}"
+    )
     assert set(JOBS["pin"]["needs"]) == {"verify", "promote"}
     assert "environment" not in JOBS["verify"]
     for job in ("verify", "pin"):
         assert JOBS[job]["permissions"].get("packages") != "write"
+
+
+def test_native_bootstrap_image_prefers_verified_digest_with_published_fallback(tmp_path):
+    step = _step("verify", "Select the native-bootstrap PostgreSQL image")
+    assert JOBS["verify"]["outputs"]["native_bootstrap_postgres_image"] == (
+        "${{ steps.native_bootstrap_image.outputs.image }}"
+    )
+    (tmp_path / "PUBLISHED_VERSION").write_text("2.22.0\n", encoding="utf-8")
+
+    cases = (
+        (DIGEST_P, f"ghcr.io/cirwel/unitares-postgres@{DIGEST_P}"),
+        ("", "ghcr.io/cirwel/unitares-postgres:v2.22.0"),
+    )
+    for index, (digest, expected) in enumerate(cases):
+        output = tmp_path / f"output-{index}"
+        env = {
+            **os.environ,
+            "POSTGRES_DIGEST": digest,
+            "REGISTRY": "ghcr.io",
+            "POSTGRES_IMAGE_NAME": "cirwel/unitares-postgres",
+            "GITHUB_OUTPUT": str(output),
+        }
+        subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert output.read_text(encoding="utf-8") == f"image={expected}\n"
 
 
 def test_promotion_copies_the_verified_digest_and_never_rebuilds():
