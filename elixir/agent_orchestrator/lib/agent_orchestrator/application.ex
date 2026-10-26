@@ -56,7 +56,9 @@ defmodule AgentOrchestrator.Application do
       [
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
         AgentOrchestrator.ResultStore,
-        AgentOrchestrator.Metrics
+        AgentOrchestrator.Metrics,
+        # Before the HTTP surface: it reads the profile set and raw-spawn mode.
+        AgentOrchestrator.Profiles
       ] ++
         idempotency_children() ++
         [

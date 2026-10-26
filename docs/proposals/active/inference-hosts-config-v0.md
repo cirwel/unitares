@@ -446,6 +446,14 @@ sets nothing.
      spawn, output redaction, ceilings and `max_concurrent`, the profile
      request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` whenever a
      profiles file is configured, valid or not; `allow` only without one). No profiles file ships yet, so nothing changes.
+     *Built 2026-10-26* (`elixir/agent_orchestrator/lib/agent_orchestrator/profiles.ex`,
+     portal hub H1). Admission (the concurrency and per-hour limits, and
+     secret resolution) runs inside the idempotent spawn after a started key
+     has replayed, so a retry is never refused as over a limit or for a
+     missing secret; a refusal releases the reservation. A slot is tied to its
+     execution id and frees only on a definite start failure, when a started
+     execution is no longer live, or after a grace period for an id never
+     seen live; a dead caller frees nothing.
    - **4b. The clients, the generator and the callers.** Depends on the
      codex confinement (#2827, cirwel/dispatch_beam#87) having merged. The claude and
      council clients (the codex and antigravity clients exist); the
@@ -461,6 +469,18 @@ sets nothing.
      (its council in its own pull request, with its direct fallback removed)
      move to profiles; (3) once every caller sends profiles, the operator
      removes the explicit `allow`, and raw spawns are denied.
+     *First part built 2026-10-26:* the claude client
+     (`src/mcp_handlers/support/claude_cli_client.py`, run with `python -I`;
+     the prompt goes on standard input, the flags are fixed, the environment
+     is allowlisted) and the generator (`scripts/ops/orchestrator-profiles.py`,
+     writing the `host.claude` profile), which the orchestrator's own
+     `elixir/agent_orchestrator/scripts/start.sh` runs before boot when
+     `AGENT_ORCHESTRATOR_PROFILES_FILE` is set and the operator hands the
+     file over with `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the generator
+     owns the whole file). That script is the
+     `start.sh` this section names. No caller sends profiles yet, so nothing
+     changes. Next: the codex, antigravity, reviewer and council profiles,
+     moving the callers, and the doctor's digest check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is

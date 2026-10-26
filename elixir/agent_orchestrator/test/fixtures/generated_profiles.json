@@ -1,0 +1,44 @@
+{
+  "profiles": {
+    "host.claude": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/claude_cli_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR"
+        ],
+        "set": {
+          "HA_CLI": "/usr/local/bin/claude",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 1000,
+      "max_per_hour": 60,
+      "max_runtime_ms": 450000,
+      "vars": {
+        "HA_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "HA_PROMPT": {
+          "max_bytes": 131061,
+          "required": true
+        },
+        "HA_TIMEOUT_S": {
+          "max_bytes": 3,
+          "pattern": "[1-9][0-9]{0,2}"
+        }
+      }
+    }
+  },
+  "schema": "unitares.orchestrator_profiles.v1"
+}
