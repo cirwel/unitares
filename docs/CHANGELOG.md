@@ -19,6 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Secrets file:** public runtime helpers and the BEAM start scripts read a secrets file only when `UNITARES_SECRETS_ENV` names it, as an absolute path to a readable file. `~/.config/unitares/secrets.env` and the legacy `~/.config/cirwel/secrets.env` are no longer found by default. Credentials supplied directly through the service environment still work. Upgrade note: a service that relied on the default location starts without its credentials (the lease plane, for example, answers 503) until its job sets `UNITARES_SECRETS_ENV`. Set it before updating. A job that launches through a secrets wrapper must also name the wrapper in `UNITARES_SECRETS_WRAPPER`; `sentinel-plist.py render` refuses a wrapped Sentinel plist that does not, rather than writing the bearer into it. Parity tests cover explicit selection and the refusal to discover unselected files, and fleet-specific bridge deployment tooling now lives outside the public repository (#2925).
 - **http route packs:** the built-in `reference-residents` and `automation-census` pack names are gone. A pack now mounts only when `UNITARES_ROUTE_PACKS` selects it and the deployment-owned JSON manifest named by `UNITARES_ROUTE_PACKS_FILE` declares its paths, handlers and methods (`docs/operations/resident-roster.md`, "Route packs"). Upgrade note: a deployment that set `UNITARES_ROUTE_PACKS=reference-residents` or `=automation-census` mounts nothing after this change, and only a log line reports it. Write a manifest for the routes it uses before updating. `docs/operations/automation-census-setup.md` has the `/api/automations` entry. Extensions mount after every core route, and a pack whose path and method match a core route, or whose path falls under a core mount such as `/mcp`, is rejected whole and logged (#2925).
 - **exposed deployments:** a server configured to listen beyond loopback now refuses to start when an operator credential or continuity secret still has a published default value. Set deployment-owned secrets before updating; loopback-only development retains a warning instead of a refusal (#2957).
+- Interface contract 2.0.0 removes implicit vendor selection for omitted
+  `delegate_inference.host_id` and thorough `consult` calls. Select a host
+  explicitly, configure `jobs.consult.thorough.prefer` through
+  `UNITARES_INFERENCE_HOSTS_FILE`, or provide one unambiguous eligible host.
+  Ambiguous/unconfigured requests return actionable refusals; consultation
+  retains caller-permitted local degradation. Explicit pins and councils keep
+  their existing authorization and privacy rules. Updated SDKs omit an absent
+  host instead of sending the old default. The document schema remains v1;
+  `delegate_inference`’s input digest and the aggregate surface digest change (#2925).
+- `get_workspace_health` and `admin(action='workspace_health')` now report
+  installation diagnostics without desktop client discovery or assumed
+  checkout documents. Default client mappings and server lists are empty;
+  configured counts are zero and do not measure liveness. Unperformed
+  security, executable-permission, live-server and documentation checks return
+  `null`, with `not_assessed` or `not_requested` status where applicable.
+  Clients must accept these unknown/unrequested states instead of treating them
+  as failure or success. Explicit client and workspace-file checks remain
+  Python embedding hooks, not MCP file access; use `health_check` for running
+  server subsystem health. Tool inputs are unchanged for workspace diagnostics (#2925).
 
 ### Added
 - `dialectic(action='get')` now includes `paused_agent_state`, the pause evidence the server captured when the session opened, on its fast read as well (its other read path already did). With `DIALECTIC_REVIEWER_FROM_SESSION=1`, the orchestrated dialectic reviewer takes only `DIALECTIC_SESSION_ID` from its spawn and reads the thesis, the evidence, the situation and the paused agent from that record, exiting 4 without reviewing when the record does not support a review. Nothing sets the switch yet; it is for the reviewer's launch profile (inference-hosts-config-v0 step 4b) (#3096).
@@ -62,26 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interface contract 1.56.1: Automatic local model selection requires an explicitly configured endpoint; fresh installs stay model-free (#3043).
 - Interface contract 2.1.0: Knowledge details adds bounded response-chain depth, limit, and offset controls with deterministic pagination (#3058).
 - Interface contract 2.3.0: dialectic reads gain an opt-in compact projection, and duplicate-session conflicts return executable recovery guidance without exposing PostgreSQL message bodies (#3094).
-- Interface contract 2.0.0 removes implicit vendor selection for omitted
-  `delegate_inference.host_id` and thorough `consult` calls. Select a host
-  explicitly, configure `jobs.consult.thorough.prefer` through
-  `UNITARES_INFERENCE_HOSTS_FILE`, or provide one unambiguous eligible host.
-  Ambiguous/unconfigured requests return actionable refusals; consultation
-  retains caller-permitted local degradation. Explicit pins and councils keep
-  their existing authorization and privacy rules. Updated SDKs omit an absent
-  host instead of sending the old default. The document schema remains v1;
-  `delegate_inference`’s input digest and the aggregate surface digest change (#2925).
-- The same release changes `get_workspace_health` and
-  `admin(action='workspace_health')` to installation diagnostics without desktop
-  client discovery or assumed checkout documents. Default client mappings and
-  server lists are empty; configured counts are zero and do not measure
-  liveness. Unperformed security, executable-permission, live-server and
-  documentation checks return `null`, with `not_assessed` or `not_requested`
-  status where applicable. Clients must accept these unknown/unrequested
-  states instead of treating them as failure or success. Explicit client and
-  workspace-file checks remain Python embedding hooks, not MCP file access;
-  use `health_check` for running server subsystem health. Tool inputs are
-  unchanged for workspace diagnostics.
 - Interface contract 2.2.0: `onboard` accepts an optional `host_session` declaration (`{harness, session_id, workspace?}`), stored once on a fresh identity; `GET /v1/timeline` reports each agent's `host_session` as `{harness, session_id, resumable}` without the workspace path (portal hub H0) (#3089).
 - **The Docker quickstart runs the AGE knowledge backend.** `docker-compose.yml` and `.env.example` now set `UNITARES_KNOWLEDGE_BACKEND=age`, so a new install stores the graph over its findings (`AUTHORED`, `RELATED_TO`, `TAGGED`, `RESPONDS_TO`, `SUPERSEDES`) and search results carry a `superseded_by` pointer. An existing quickstart install that ran `postgres` rebuilds the graph from its rows on the first knowledge-graph access after the switch, including the related links the `postgres` backend kept only in each finding's `related_to` list; set `UNITARES_KNOWLEDGE_BACKEND=postgres` in `.env` to keep the old behaviour. A native install with the variable unset still resolves to `postgres`. New `docker-compose.full.yml` adds semantic search (`bge-m3`, CPU torch) and hybrid ranking in a locally built image; the reranker and related-finding expansion stay off. The quickstart CI job now proves that stored findings get their graph edges (#2961).
 - **release tooling:** simplify server releases with `scripts/ops/prepare_release.py` (`make release-prep PART=patch|minor|major`), `--after-merge` operator/agent command cards, and `--check-ghcr` anonymous GHCR visibility verification; anchor `changelog_coverage.py` and `release_series_drift.py` at the release commit with nearest-ancestor tag discovery (`git describe --tags --abbrev=0`) so post-release commits on `master` before tagging do not fail Release Seams; run `release-seams.yml` on `release/**` branches; include next-command remediation hints in `server_release_sync.py` and `sdk_release_sync.py`; and rewrite `docs/operations/RELEASE_PROCESS.md` as an actor-grouped checklist with release cadence guidance (#3080).

@@ -37,17 +37,17 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 - v3.6.0 moves the interface contract from 1.56.0 to 2.3.0 and adds no
   database migration. Existing clients keep their registered callable names,
-  but deployments and clients must account for five intentional changes before
-  updating: services no longer discover a secrets file unless
-  `UNITARES_SECRETS_ENV` names it; built-in HTTP route-pack names are replaced
-  by an explicit deployment manifest; and omitted inference hosts follow
+  but deployments and clients must account for several upgrade-relevant
+  changes. Services no longer discover a secrets file unless
+  `UNITARES_SECRETS_ENV` names it. Built-in HTTP route-pack names are replaced
+  by an explicit deployment manifest. Omitted inference hosts follow
   deployment policy or one unambiguous eligible host rather than selecting a
-  vendor default. The Docker quickstart now defaults the knowledge backend to
-  AGE and rebuilds an existing Postgres-backed graph on first access; set
-  `UNITARES_KNOWLEDGE_BACKEND=postgres` in `.env` before updating to retain the
-  old backend. Workspace-health clients must accept `null` results with
+  vendor default. Workspace-health clients must accept `null` results with
   `not_assessed` or `not_requested` status for checks the server did not
-  perform. A server configured beyond loopback also refuses published default
+  perform. The Docker quickstart now defaults the knowledge backend to AGE and
+  rebuilds an existing Postgres-backed graph on first access; set
+  `UNITARES_KNOWLEDGE_BACKEND=postgres` in `.env` before updating to retain the
+  old backend. A server configured beyond loopback refuses published default
   secrets. OAuth, HTTP session writes, and lease-plane mutations now require
   the bounded state or principal proof described in the release notes. The
   in-tree `unitares-sdk` 0.6.1 is a compatible patch over 0.6.0 and omits an
