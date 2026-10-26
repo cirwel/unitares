@@ -58,7 +58,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   Errors are typed (`schema_invalid` / `permission_denied` / `not_found` /
   `lease_denied` / `idempotency_conflict` / `idempotency_outcome_unknown` /
   `idempotency_unavailable` / `await_timeout` / `unknown_profile` /
-  `profiles_unavailable` / `profile_unconfigured` / `rate_limited` /
+  `profiles_unavailable` / `profile_unconfigured` / `profile_changed` / `rate_limited` /
   `service_unavailable`) rather than leaky
   HTML — same typed-absence discipline as the lease plane router.
   """
@@ -211,6 +211,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   defp profile_error(:profiles_unavailable), do: {503, "profiles_unavailable"}
   defp profile_error(:profile_unconfigured), do: {503, "profile_unconfigured"}
   defp profile_error(:rate_limited), do: {429, "rate_limited"}
+  defp profile_error(:profile_changed), do: {409, "profile_changed"}
 
   # Admission runs once a start is known to be new: for a keyed request,
   # inside SpawnGate after a started key has replayed. It ties a slot to the
@@ -218,7 +219,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   # a closure, so no timeout message or report can print them.
   defp admit(prepared) do
     fn execution_id ->
-      case Profiles.admit(prepared.profile, execution_id) do
+      case Profiles.admit(prepared.profile, prepared.revision, execution_id) do
         {:ok, secret_env} ->
           spec = Map.put(prepared.spec, :secret_env, fn -> secret_env end)
           {:ok, spec, &admission_outcome(execution_id, &1)}

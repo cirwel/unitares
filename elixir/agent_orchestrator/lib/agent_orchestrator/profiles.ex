@@ -109,17 +109,21 @@ defmodule AgentOrchestrator.Profiles do
   @doc """
   Validate a request body against the loaded profiles and build its runner
   spec, without its secrets. Returns `{:ok, %{profile: name, spec: spec,
-  digest: digest}}` or `{:error, code, detail}`, where `code` is
-  `:schema_invalid`, `:unknown_profile` or `:profiles_unavailable`.
+  digest: digest, revision: profile_digest}}` or `{:error, code, detail}`,
+  where `code` is `:schema_invalid`, `:unknown_profile` or
+  `:profiles_unavailable`. Admission must be given the same `revision`.
   """
   def prepare(server \\ server(), body), do: GenServer.call(server, {:prepare, body})
 
   @doc """
-  Admit one new start of `profile` as `execution_id`: check its concurrency
+  Admit one new start of `profile` as `execution_id`, for the profile
+  `revision` the request was prepared against: a reload in between is
+  refused (`:profile_changed`), so a secret is never attached to a command
+  from another revision. Then check its concurrency
   and per-hour limits and resolve its secrets. Called only once a start is
   known to be new (after a keyed retry has replayed), so a replay needs
   neither a free slot nor its secret. Returns `{:ok, secret_env}` or
-  `{:error, :rate_limited | :profile_unconfigured, detail}`.
+  `{:error, :profile_changed | :rate_limited | :profile_unconfigured, detail}`.
 
   The slot is tied to `execution_id` at once. `started/2` or `refund/2`
   reports the start's outcome; a started execution holds its slot while it
@@ -129,8 +133,8 @@ defmodule AgentOrchestrator.Profiles do
   is live, and otherwise for a grace period before it counts as never
   started.
   """
-  def admit(server \\ server(), profile, execution_id),
-    do: GenServer.call(server, {:admit, profile, execution_id})
+  def admit(server \\ server(), profile, revision, execution_id),
+    do: GenServer.call(server, {:admit, profile, revision, execution_id})
 
   @doc "Return the slot and hourly charge of a start that definitely failed."
   def refund(server \\ server(), execution_id),
@@ -195,40 +199,46 @@ defmodule AgentOrchestrator.Profiles do
     {:reply, do_prepare(body, state), state}
   end
 
-  def handle_call({:admit, name, execution_id}, _from, state) do
+  def handle_call({:admit, name, revision, execution_id}, _from, state) do
     case state.profiles && Map.get(state.profiles, name) do
-      nil ->
-        {:reply, {:error, :rate_limited, "profile #{safe_name(name)} is not loaded"}, state}
+      %{digest: ^revision} = profile ->
+        admit_profile(profile, name, execution_id, state)
 
-      profile ->
-        state = prune(state)
-        now = state.now.()
-        running = Enum.count(state.slots, fn {_id, slot} -> slot.name == name end)
-        recent = Map.get(state.starts, name, [])
+      _changed_or_gone ->
+        {:reply,
+         {:error, :profile_changed,
+          "profile #{safe_name(name)} changed while the request was waiting; retry"}, state}
+    end
+  end
 
-        cond do
-          running >= profile.max_concurrent ->
-            {:reply, {:error, :rate_limited, "profile #{name} is at max_concurrent"}, state}
+  defp admit_profile(profile, name, execution_id, state) do
+    state = prune(state)
+    now = state.now.()
+    running = Enum.count(state.slots, fn {_id, slot} -> slot.name == name end)
+    recent = Map.get(state.starts, name, [])
 
-          length(recent) >= profile.max_per_hour ->
-            {:reply, {:error, :rate_limited, "profile #{name} is at max_per_hour"}, state}
+    cond do
+      running >= profile.max_concurrent ->
+        {:reply, {:error, :rate_limited, "profile #{name} is at max_concurrent"}, state}
 
-          true ->
-            case resolve_secrets(profile, state.getenv) do
-              {:ok, secret_env} ->
-                slot = %{name: name, admitted_at: now, started: false}
+      length(recent) >= profile.max_per_hour ->
+        {:reply, {:error, :rate_limited, "profile #{name} is at max_per_hour"}, state}
 
-                state = %{
-                  state
-                  | slots: Map.put(state.slots, execution_id, slot),
-                    starts: Map.put(state.starts, name, [{now, execution_id} | recent])
-                }
+      true ->
+        case resolve_secrets(profile, state.getenv) do
+          {:ok, secret_env} ->
+            slot = %{name: name, admitted_at: now, started: false}
 
-                {:reply, {:ok, secret_env}, state}
+            state = %{
+              state
+              | slots: Map.put(state.slots, execution_id, slot),
+                starts: Map.put(state.starts, name, [{now, execution_id} | recent])
+            }
 
-              {:error, code, detail} ->
-                {:reply, {:error, code, detail}, state}
-            end
+            {:reply, {:ok, secret_env}, state}
+
+          {:error, code, detail} ->
+            {:reply, {:error, code, detail}, state}
         end
     end
   end
@@ -503,7 +513,7 @@ defmodule AgentOrchestrator.Profiles do
           )
         )
 
-      {:ok, %{profile: name, spec: spec, digest: digest}}
+      {:ok, %{profile: name, spec: spec, digest: digest, revision: profile.digest}}
     end
   end
 

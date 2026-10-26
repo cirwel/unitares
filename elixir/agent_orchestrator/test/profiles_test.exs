@@ -74,6 +74,11 @@ defmodule AgentOrchestrator.ProfilesTest do
 
   defp env_fun(map), do: fn name -> Map.get(map, name) end
 
+  # The revision a request prepared now would carry.
+  defp rev(server, profile) do
+    :sys.get_state(server).profiles |> Map.fetch!(profile) |> Map.fetch!(:digest)
+  end
+
   defp start_profiles(path, extra \\ []) do
     name = :"profiles_#{System.unique_integer([:positive])}"
 
@@ -204,9 +209,11 @@ defmodule AgentOrchestrator.ProfilesTest do
       assert {:ok, _} =
                Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
 
-      assert {:error, :profile_unconfigured, detail} = Profiles.admit(name, "p", "ex-1")
+      assert {:error, :profile_unconfigured, detail} =
+               Profiles.admit(name, "p", rev(name, "p"), "ex-1")
+
       assert detail =~ "ORCH_SECRET"
-      assert {:ok, []} = Profiles.admit(name, "plain", "ex-2")
+      assert {:ok, []} = Profiles.admit(name, "plain", rev(name, "plain"), "ex-2")
     end
   end
 
@@ -229,7 +236,7 @@ defmodule AgentOrchestrator.ProfilesTest do
       refute Enum.any?(spec.env, &match?({"CHILD_KEY", _}, &1))
       refute Map.has_key?(spec, :secret_env)
       refute inspect(spec, limit: :infinity, printable_limit: :infinity) =~ @secret
-      assert {:ok, [{"CHILD_KEY", @secret}]} = Profiles.admit(name, "p", "ex-env")
+      assert {:ok, [{"CHILD_KEY", @secret}]} = Profiles.admit(name, "p", rev(name, "p"), "ex-env")
       assert spec.cmd == "/bin/sh" and spec.stdin == "close" and spec.lease == false
       assert spec.max_runtime_ms == 10_000
     end
@@ -365,23 +372,40 @@ defmodule AgentOrchestrator.ProfilesTest do
       path = write_file(dir, %{"p" => profile(%{"max_concurrent" => 1, "max_per_hour" => 2})})
       name = start_profiles(path, live?: live_fun(live))
 
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-1")
-      assert {:error, :rate_limited, d} = Profiles.admit(name, "p", "ex-2")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-1")
+      assert {:error, :rate_limited, d} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
       assert d =~ "max_concurrent"
 
       # A start that definitely failed returns its slot and its hourly charge.
       Profiles.refund(name, "ex-1")
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-2")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
       Profiles.started(name, "ex-2")
       :ets.insert(live, {"ex-2"})
-      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-3")
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-3")
 
       # Once it is no longer live the slot frees; the hour still counts it.
       :ets.delete(live, "ex-2")
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-3")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-3")
       Profiles.started(name, "ex-3")
-      assert {:error, :rate_limited, d2} = Profiles.admit(name, "p", "ex-4")
+      assert {:error, :rate_limited, d2} = Profiles.admit(name, "p", rev(name, "p"), "ex-4")
       assert d2 =~ "max_per_hour"
+    end
+
+    test "a reload between prepare and admit is refused, never mixed", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path)
+
+      {:ok, prepared} =
+        Profiles.prepare(name, %{"profile" => "p", "vars" => %{"GREETING" => "hi"}})
+
+      write_file(dir, %{"p" => profile(%{"args" => ["-c", "echo replaced"]})})
+      send(name, :reload)
+
+      assert {:error, :profile_changed, detail} =
+               Profiles.admit(name, "p", prepared.revision, "ex-1")
+
+      assert detail =~ "retry"
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
     end
 
     test "with no reported outcome a slot is held while live, then for the start grace",
@@ -399,20 +423,20 @@ defmodule AgentOrchestrator.ProfilesTest do
 
       # The admitting caller died mid-start, so no outcome was reported. That
       # proves nothing about the child: the slot stays tied to its id.
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-1")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-1")
       :counters.put(clock, 1, 999)
-      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-2")
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
 
       # Never seen live past the grace: it never started.
       :counters.put(clock, 1, 1_001)
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-2")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-2")
 
       # Seen live once, it counts as started; past the grace and gone, it frees.
       :ets.insert(live, {"ex-2"})
       :counters.put(clock, 1, 5_000)
-      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", "ex-3")
+      assert {:error, :rate_limited, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-3")
       :ets.delete(live, "ex-2")
-      assert {:ok, _} = Profiles.admit(name, "p", "ex-3")
+      assert {:ok, _} = Profiles.admit(name, "p", rev(name, "p"), "ex-3")
     end
   end
 
@@ -425,7 +449,9 @@ defmodule AgentOrchestrator.ProfilesTest do
 
       assert %{unconfigured: ["p"]} = Profiles.status(name)
 
-      assert {:error, :profile_unconfigured, detail} = Profiles.admit(name, "p", "ex-1")
+      assert {:error, :profile_unconfigured, detail} =
+               Profiles.admit(name, "p", rev(name, "p"), "ex-1")
+
       assert detail =~ "line break"
     end
 
