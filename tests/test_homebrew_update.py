@@ -182,6 +182,27 @@ def test_brew_upgrade_is_logged_privately_without_cleanup(updater, monkeypatch):
     assert log.stat().st_mode & 0o777 == 0o600
 
 
+def test_quiescence_counts_only_client_backends(updater, monkeypatch):
+    updater.brew.info = lambda: {
+        name: {"running": False, "loaded": False, "registered": False}
+        for name in update.WRITERS
+    }
+    monkeypatch.setattr(
+        update.socket,
+        "create_connection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError()),
+    )
+    queries = []
+
+    def database_value(sql):
+        queries.append(sql)
+        return "0"
+
+    monkeypatch.setattr(updater, "_database_value", database_value)
+    updater.verify_quiesced()
+    assert "backend_type='client backend'" in queries[-1]
+
+
 def test_check_is_read_only_and_does_not_refresh_tap(updater, monkeypatch, capsys):
     monkeypatch.setattr(updater.brew, "configure", lambda: None)
     monkeypatch.setattr(
@@ -196,7 +217,7 @@ def test_check_is_read_only_and_does_not_refresh_tap(updater, monkeypatch, capsy
     assert updater.begin(check=True, assume_yes=False) == 0
     output = capsys.readouterr().out
     assert "locally cached" in output
-    assert "Already" not in output or "match" in output
+    assert "match the locally cached tap" in output
     assert not updater.state_dir.exists()
 
 
@@ -255,10 +276,71 @@ def test_successful_resume_preserves_identities_and_previous_stopped_state(
         updater, "write_journal", lambda value: written.append(dict(value))
     )
     updater.brew.check_schema = lambda: None
-    updater.brew.start = lambda: pytest.fail("previously stopped writers were started")
+    updater.brew.start = lambda **kwargs: pytest.fail(
+        "previously stopped writers were started"
+    )
     assert updater.resume(state=state) == 0
     assert written[-1]["stage"] == "complete"
     assert written[-1]["schema_after"] == 78
+
+
+def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": False,
+        "agent_count_before": 3,
+        "schema_before": 75,
+        "backup": "/private/old.dump",
+        "target": _inventory(current="3.6.0", target="3.6.0"),
+        "config_sha256": _config_hash(updater),
+    }
+    written = []
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "schema_version", lambda: 76)
+    monkeypatch.setattr(updater, "agent_count", lambda: 4)
+    monkeypatch.setattr(
+        updater, "backup_database", lambda target: Path("/private/refreshed.dump")
+    )
+    monkeypatch.setattr(updater, "apply_migrations", lambda: None)
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: written.append(dict(value))
+    )
+    updater.brew.check_schema = lambda: None
+    updater.brew.start = lambda **kwargs: pytest.fail("stopped writers were started")
+    assert updater.resume(state=state) == 0
+    assert written[0]["backup"] == "/private/refreshed.dump"
+    assert written[0]["superseded_backups"] == ["/private/old.dump"]
+    assert written[0]["agent_count_before"] == 4
+
+
+def test_identity_verification_failure_requires_explicit_acceptance(
+    updater, monkeypatch
+):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "verification_failed",
+        "writers_were_running": True,
+        "agent_count_before": 3,
+        "agent_count_after": 4,
+        "schema_before": 75,
+        "schema_after": 76,
+        "backup": "/private/backup.dump",
+        "target": _inventory(),
+        "config_sha256": _config_hash(updater),
+    }
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "agent_count", lambda: 4)
+    written = []
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: written.append(dict(value))
+    )
+    updater.brew.start = lambda **kwargs: None
+    with pytest.raises(update.Refusal, match="accept-identity-change"):
+        updater.resume(state=dict(state))
+    assert updater.resume(state=state, accept_identity_change=True) == 0
+    assert written[0]["stage"] == "migrated"
+    assert written[-1]["stage"] == "complete"
 
 
 def test_resume_from_planned_retries_stop_backup_and_finishes(

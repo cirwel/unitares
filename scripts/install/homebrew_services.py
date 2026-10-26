@@ -276,6 +276,28 @@ class Homebrew:
         finally:
             os.close(fd)
 
+    def check_update_barrier(self):
+        directory = self.prefix / 'var/unitares'
+        journal = directory / 'native-update.json'
+        if not os.path.lexists(journal):
+            return
+        directory_info = directory.lstat()
+        journal_info = journal.lstat()
+        if (not stat.S_ISDIR(directory_info.st_mode) or directory_info.st_uid != os.getuid()
+                or directory_info.st_mode & 0o022 or not stat.S_ISREG(journal_info.st_mode)
+                or journal_info.st_uid != os.getuid() or journal_info.st_mode & 0o077):
+            raise Refusal('The native update journal is not a private regular file owned by you.')
+        try:
+            state = json.loads(journal.read_text())
+            stage = state['stage']
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise Refusal('The native update journal is unreadable; inspect it before starting writers.') from exc
+        if stage not in ('complete', 'aborted'):
+            raise Refusal(
+                f'Native update stage {stage!r} is unfinished; keep writers stopped and run '
+                '`unitares update --resume`.'
+            )
+
     def check_ports(self, records):
         for name, port in self.ports.items():
             try:
@@ -314,7 +336,9 @@ class Homebrew:
         if result.returncode:
             raise Refusal('The installed schema check failed. Bootstrap a fresh database or use the documented backed-up native upgrade procedure before starting writers.')
 
-    def start(self, check=False, timeout=60):
+    def start(self, check=False, timeout=60, allow_update_stage=False):
+        if not allow_update_stage:
+            self.check_update_barrier()
         self.configure()
         records = self.info()
         self.check_commands(records)

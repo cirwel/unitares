@@ -79,9 +79,15 @@ own probes do this automatically and suppress raw database error output.
 
 Native upgrades use `unitares update --check` and `unitares update`. The latter
 refreshes the tap and explicitly performs the stop, verified backup, package
-upgrade, migration, restart and deep-health sequence. Formula install hooks and
-`unitares start` never apply migrations. If an interruption occurs after the
-backup, keep both writers stopped and run `unitares update --resume`; the journal
-and backup paths are under the Homebrew runtime directory and
-`~/.unitares/backups` respectively. Setup does not switch clients, copy a Docker
-database, or change which installation owns your data.
+upgrade, migration and prior-state restoration. A restarted installation must
+pass deep health; one that was already stopped remains stopped after a schema
+check. Formula install hooks and `unitares start` never apply migrations. An
+unfinished journal blocks `unitares start`. If an interruption occurs after the
+backup, run `unitares update --resume`; a retry from the backed-up stage creates
+fresh backup evidence before changing packages. If identity-count verification
+fails, inspect the database and backup first, then explicitly acknowledge the
+reviewed result with
+`unitares update --resume --accept-identity-change`. Journal and backup paths are
+under the Homebrew runtime directory and `~/.unitares/backups` respectively.
+Setup does not switch clients, copy a Docker database, or change which
+installation owns your data.

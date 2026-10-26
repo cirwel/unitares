@@ -88,8 +88,9 @@ the database: follow the tap's [install](https://github.com/cirwel/homebrew-unit
 and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup),
 then run `unitares start`. The packaged `unitares update` command coordinates
 the package upgrade with writer shutdown, a verified backup, migrations,
-restart and deep-health verification. The preview label remains while the tap
-builds from source and supports Apple Silicon macOS only.
+prior-state restoration, and deep-health verification when writers are restarted
+(or schema verification when they remain stopped). The preview label remains
+while the tap builds from source and supports Apple Silicon macOS only.
 
 Either way, connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard at `http://localhost:8767/dashboard`. Pick one path; they keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). One stack per machine: container names are fixed, so run `docker compose down` (without `-v`) in an earlier checkout before starting another (`stop` is not enough, because stopped containers still hold their fixed `container_name` values, and `restart: unless-stopped` revives un-stopped containers when the Docker daemon restarts), or use the [managed launcher](docs/manual/02-install.md#managed-checkout-alternative) (`scripts/install/launch.sh`), which checks ownership first. No model connection is configured by default. Ports, volumes, models, and Docker upgrades: [Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
 

@@ -154,6 +154,30 @@ def test_start_plan_is_read_only(manager):
     assert brew.config.read_bytes() == before
 
 
+def test_start_refuses_unfinished_native_update_journal(manager):
+    brew, _, calls = manager
+    directory = brew.prefix / 'var/unitares'
+    directory.mkdir(parents=True, mode=0o700)
+    journal = directory / 'native-update.json'
+    journal.write_text(json.dumps({'stage': 'backed_up'}))
+    journal.chmod(0o600)
+    with pytest.raises(native.Refusal, match='update --resume'):
+        brew.start()
+    assert calls == []
+
+
+@pytest.mark.parametrize('stage', ['complete', 'aborted'])
+def test_start_allows_final_native_update_journal(manager, stage):
+    brew, _, calls = manager
+    directory = brew.prefix / 'var/unitares'
+    directory.mkdir(parents=True, mode=0o700)
+    journal = directory / 'native-update.json'
+    journal.write_text(json.dumps({'stage': stage}))
+    journal.chmod(0o600)
+    brew.start()
+    assert ('services', 'start', 'unitares') in calls
+
+
 def test_start_reuses_running_services_without_restart(manager):
     brew, records, calls = manager
     for record in records.values():

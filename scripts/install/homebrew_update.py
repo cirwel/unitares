@@ -68,8 +68,8 @@ class NativeUpdater:
         result = run([self.brew.brew, *args], env=env, timeout=timeout)
         if result.returncode:
             raise Refusal(
-                f"Homebrew {' '.join(args)} failed. The database was not restored or changed by Homebrew; "
-                "inspect the Homebrew output and resume with `unitares update --resume`."
+                f"Homebrew {' '.join(args)} failed. Inspect the Homebrew output; "
+                "if an update journal was created, continue with `unitares update --resume`."
             )
         return result
 
@@ -255,7 +255,8 @@ class NativeUpdater:
                 pass
         clients = self._database_value(
             "SELECT count(*) FROM pg_stat_activity "
-            "WHERE datname=current_database() AND pid<>pg_backend_pid()"
+            "WHERE datname=current_database() AND pid<>pg_backend_pid() "
+            "AND backend_type='client backend'"
         )
         if clients != "0":
             raise Refusal(
@@ -528,9 +529,12 @@ class NativeUpdater:
         self.write_journal(state)
         return self.resume(state=state)
 
-    def resume(self, *, state: dict | None = None) -> int:
+    def resume(
+        self, *, state: dict | None = None, accept_identity_change: bool = False
+    ) -> int:
         state = state or self.read_journal(required=True)
         assert state is not None
+        initial_stage = state["stage"]
         if state["stage"] in FINAL_STAGES:
             print(f"Native update journal is already {state['stage']}.")
             return 0
@@ -542,6 +546,21 @@ class NativeUpdater:
                 "The private native configuration changed during the update. Writers remain stopped; "
                 "inspect the configuration and journal before resuming."
             )
+        if accept_identity_change and state["stage"] != "verification_failed":
+            raise Refusal(
+                "--accept-identity-change is only valid for a recorded identity verification failure."
+            )
+        if state["stage"] == "verification_failed":
+            self.verify_quiesced()
+            if not accept_identity_change:
+                raise Refusal(
+                    "Identity count changed during the quiesced update. Inspect the database and backup, "
+                    "then explicitly continue with `unitares update --resume --accept-identity-change`."
+                )
+            state["agent_count_accepted"] = self.agent_count()
+            state["identity_change_accepted_at"] = _utc_now()
+            state["stage"] = "migrated"
+            self.write_journal(state)
         if state["stage"] == "planned":
             self.brew.stop()
             self.brew.configure()
@@ -567,6 +586,20 @@ class NativeUpdater:
             self.write_journal(state)
         if state["stage"] == "backed_up":
             self.verify_quiesced()
+            if initial_stage == "backed_up":
+                # A prior package attempt may have been interrupted. Refresh
+                # the evidence immediately before retrying so even writes from
+                # an external client between attempts are included.
+                previous = state.get("backup")
+                state["schema_before"] = self.schema_version()
+                state["agent_count_before"] = self.agent_count()
+                backup = self.backup_database(
+                    str(state["target"]["unitares"]["target"])
+                )
+                if previous and previous != str(backup):
+                    state.setdefault("superseded_backups", []).append(previous)
+                state["backup"] = str(backup)
+                self.write_journal(state)
             if self.changes(state["target"]):
                 self.install_packages(state["target"])
                 state["stage"] = "packages_installed"
@@ -585,22 +618,20 @@ class NativeUpdater:
                 self.write_journal(state)
                 raise
             state["schema_after"] = self.schema_version()
-            if self.agent_count() != state["agent_count_before"]:
+            state["agent_count_after"] = self.agent_count()
+            if state["agent_count_after"] != state["agent_count_before"]:
                 state["stage"] = "verification_failed"
                 self.write_journal(state)
                 raise Refusal(
-                    "Identity count changed during the quiesced update. Writers remain stopped; inspect the database and backup."
+                    "Identity count changed during the quiesced update. Writers remain stopped; inspect the database and backup, "
+                    "then explicitly continue with `unitares update --resume --accept-identity-change`."
                 )
             state["stage"] = "migrated"
             self.write_journal(state)
-        if state["stage"] in {"migrated", "restart_failed", "verification_failed"}:
-            if state["stage"] == "verification_failed":
-                raise Refusal(
-                    "Resolve the recorded identity verification failure before restarting writers."
-                )
+        if state["stage"] in {"migrated", "restart_failed"}:
             if state["writers_were_running"]:
                 try:
-                    self.brew.start()
+                    self.brew.start(allow_update_stage=True)
                 except Refusal:
                     state["stage"] = "restart_failed"
                     self.write_journal(state)
@@ -635,7 +666,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="confirm the coordinated update non-interactively",
     )
+    parser.add_argument(
+        "--accept-identity-change",
+        action="store_true",
+        help="after inspection, explicitly accept a recorded identity-count change",
+    )
     args = parser.parse_args(argv)
+    if args.accept_identity_change and not args.resume:
+        parser.error("--accept-identity-change requires --resume")
     try:
         brew = Homebrew()
         updater = NativeUpdater(brew)
@@ -643,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             return updater.begin(check=True, assume_yes=args.yes)
         with brew.lock():
             return (
-                updater.resume()
+                updater.resume(accept_identity_change=args.accept_identity_change)
                 if args.resume
                 else updater.begin(check=False, assume_yes=args.yes)
             )

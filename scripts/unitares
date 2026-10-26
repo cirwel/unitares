@@ -1032,7 +1032,7 @@ _require_compose_install() {
     root="$(_repo_root)"
     if _is_homebrew_package; then
         echo "error: this CLI belongs to a Homebrew package; this operation requires a Docker checkout." >&2
-        echo "       Native upgrades still require stopping both writers, backup and explicit migration. See docs/install/CHOOSING_INSTALLATION.md." >&2
+        echo "       Use 'unitares update' for the coordinated native upgrade lifecycle. See docs/install/CHOOSING_INSTALLATION.md." >&2
         return 1
     fi
     if [ "$(uname -s)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.unitares.governance-mcp" >/dev/null 2>&1; then
@@ -1608,7 +1608,7 @@ Homebrew service control (automatic from a Homebrew package):
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
   logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
                                     Read native service logs
-  update --homebrew [--check|--resume] [--yes]
+  update --homebrew [--check|--resume] [--yes] [--accept-identity-change]
                                     Refresh and upgrade the managed formulae,
                                     back up, migrate, restart and verify. An
                                     interrupted update resumes from its journal

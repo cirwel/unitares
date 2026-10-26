@@ -45,10 +45,14 @@ The apply command refreshes tap metadata, temporarily unpins only the four
 managed UNITARES formulae, stops both writers, verifies a custom-format backup,
 installs the package set without cleaning old kegs, re-executes the new package's
 updater, applies pending migrations, restores the previous running/stopped state,
-repins the set and verifies deep health. The durable journal resumes with
-`unitares update --resume`. A failed migration leaves the new package installed
-and both writers stopped for forward repair; an old keg does not reverse schema.
-Homebrew formula hooks never migrate the database.
+repins the set and verifies deep health when writers are restarted (or schema
+state when they remain stopped). The durable journal resumes with
+`unitares update --resume`, and blocks a separate `unitares start` until final.
+A retry from the backed-up stage creates a fresh verified backup. A failed
+migration leaves the new package installed and both writers stopped for forward
+repair; after inspecting an identity-count mismatch, explicitly continue with
+`unitares update --resume --accept-identity-change`. An old keg does not reverse
+schema. Homebrew formula hooks never migrate the database.
 
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew

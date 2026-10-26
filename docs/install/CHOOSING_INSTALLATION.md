@@ -26,9 +26,10 @@ an operator step. `unitares update --check` reads the locally cached tap and
 database migration plan; `unitares update` refreshes the tap, stops both writers,
 writes and verifies a private database backup, upgrades the managed formulae,
 re-executes the new package's updater, applies migrations, restores the previous
-running/stopped state and verifies deep health. Formula hooks never migrate the
-database. The tap still builds from source and does not publish bottles, so it
-remains a preview. Choose the path whose operating procedure fits your host.
+running/stopped state, and verifies deep health when it restarts writers (or the
+schema when they were already stopped). Formula hooks never migrate the database.
+The tap still builds from source and does not publish bottles, so it remains a
+preview. Choose the path whose operating procedure fits your host.
 
 Installation method and optional capabilities are separate choices. Semantic
 search needs embeddings; model-assisted consultation needs a configured model.
