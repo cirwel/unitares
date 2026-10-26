@@ -956,17 +956,43 @@ defmodule AgentOrchestrator.AgentRunner do
     %{push_line(%{state | partial: ""}, head) | partial: tail}
   end
 
-  # Step back over at most three UTF-8 continuation bytes (0b10xxxxxx).
-  defp char_boundary(text, cut), do: char_boundary(text, cut, 3)
+  # A cut inside a character steps back over its continuation bytes
+  # (0b10xxxxxx); a cut at the end holds back a trailing character the chunk
+  # boundary left incomplete. Bytes that are not UTF-8 are cut as they are.
+  defp char_boundary(text, cut) do
+    cut = step_back(text, cut, 3)
+    if cut == byte_size(text), do: complete_end(text, cut), else: cut
+  end
 
-  defp char_boundary(_text, 0, _left), do: 0
-  defp char_boundary(_text, cut, 0), do: cut
+  defp step_back(_text, 0, _left), do: 0
+  defp step_back(_text, cut, 0), do: cut
 
-  defp char_boundary(text, cut, left) do
-    if cut < byte_size(text) and Bitwise.band(:binary.at(text, cut), 0xC0) == 0x80,
-      do: char_boundary(text, cut - 1, left - 1),
+  defp step_back(text, cut, left) do
+    if cut < byte_size(text) and continuation?(:binary.at(text, cut)),
+      do: step_back(text, cut - 1, left - 1),
       else: cut
   end
+
+  defp complete_end(text, size) do
+    case Enum.find(max(size - 1, 0)..max(size - 4, 0)//-1, fn i ->
+           i < size and not continuation?(:binary.at(text, i))
+         end) do
+      nil ->
+        size
+
+      lead_at ->
+        need = sequence_length(:binary.at(text, lead_at))
+        if need > 1 and lead_at + need > size, do: lead_at, else: size
+    end
+  end
+
+  defp continuation?(byte), do: Bitwise.band(byte, 0xC0) == 0x80
+
+  defp sequence_length(byte) when byte < 0x80, do: 1
+  defp sequence_length(byte) when Bitwise.band(byte, 0xE0) == 0xC0, do: 2
+  defp sequence_length(byte) when Bitwise.band(byte, 0xF0) == 0xE0, do: 3
+  defp sequence_length(byte) when Bitwise.band(byte, 0xF8) == 0xF0, do: 4
+  defp sequence_length(_byte), do: 1
 
   defp push_line(state, line) do
     # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)

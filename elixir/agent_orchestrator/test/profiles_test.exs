@@ -359,14 +359,17 @@ defmodule AgentOrchestrator.ProfilesTest do
     test "the oversized-line cut never splits a UTF-8 character" do
       Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
 
-      for redact <- [[], ["sixsix"]] do
+      for redact <- [[], ["sixsix"]], prefix <- [0, 1] do
         {:ok, id, _pid} =
           AgentOrchestrator.run(%{
             cmd: "/bin/sh",
-            # 32,768 two-byte characters with no newline: 65,536 bytes.
+            # 32,768 two-byte characters with no newline: 65,536 bytes. With
+            # one ASCII byte first, the port's 65,536-byte chunk ends after the
+            # first byte of a character.
             args: [
               "-c",
-              "i=0; s=é; while [ $i -lt 15 ]; do s=$s$s; i=$((i+1)); done; printf '%s' \"$s\"; echo"
+              "i=0; s=é; while [ $i -lt 15 ]; do s=$s$s; i=$((i+1)); done; " <>
+                "if [ #{prefix} = 1 ]; then printf a; fi; printf '%s' \"$s\"; echo"
             ],
             env: [{"LANG", "C.UTF-8"}],
             lease: false,
@@ -375,7 +378,7 @@ defmodule AgentOrchestrator.ProfilesTest do
 
         {:ok, result} = AgentOrchestrator.await(id, 10_000)
         assert Enum.all?(result.output, &String.valid?/1)
-        assert byte_size(Enum.join(result.output)) == 65_536
+        assert byte_size(Enum.join(result.output)) == 65_536 + prefix
         assert {:ok, _} = Jason.encode(result.output)
       end
     end
