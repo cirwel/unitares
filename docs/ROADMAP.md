@@ -108,7 +108,7 @@ than a freeze: a change lands once its PR records the instrument-change time
 
 - `unitares-sdk` 0.6.0 published to PyPI via trusted publisher, with strict-by-default identity (`client_session_id` + `continuity_token`) and Ed25519 lease-holder attestations.
 - Operator CLI (`./scripts/unitares update` with pre-migration database backups and deep-health verification, and `./scripts/unitares model` for OpenAI-compatible local model servers) plus the Apple Silicon Homebrew preview tap.
-- One-command `make prepare-release` workflow and automated release-seam gates (`scripts/ops/prepare_release.py`).
+- One-command `make release-prep` workflow and automated release-seam gates (`scripts/ops/prepare_release.py`).
 - Versioned multi-architecture container images with SBOM and build provenance,
   published from the release workflow.
 - Documentation lifecycle review: archive/split candidates adjudicated
