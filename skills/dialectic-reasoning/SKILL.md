@@ -19,6 +19,7 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/auth.py
   - unitares/src/mcp_handlers/dialectic/session.py
   - unitares/src/mcp_handlers/dialectic/responses.py
+  - unitares/src/mcp_handlers/dialectic/read_projection.py
   - unitares/src/mcp_handlers/dialectic/auto_resolve.py
   - unitares/src/mcp_handlers/dialectic/reviewer.py
   - unitares/src/mcp_handlers/dialectic/resolution.py
@@ -55,6 +56,24 @@ The gate checks that the submitted UUID equals the bound caller, so it is as
 strong as that binding and the deployment's strict-identity policy: a
 server-inferred weak binding stays weak. Read `identity_assurance` when that
 matters.
+
+## Read Progress Without Repeating the Transcript
+
+On interface contract 2.3.0 and later, use
+`dialectic(action="get", session_id="<id>", fields="compact")` to check progress.
+It preserves available turn-taking guidance, the complete resolution and its
+conditions, authorship, attestation, and effect status. It omits transcript and
+reconstruction state, previews long topic/reason text, and returns executable
+`full_session_retrieval` arguments. Read the full transcript before forming a
+judgment or responding to the other party. Omitted `fields` or `fields="full"`
+keeps the existing full read.
+
+For `action="list"`, `fields="compact"` is the smaller tally view, not the
+session progress view: it contains identifiers, phase/status, creation time,
+the requester's label and resolution-effect state when present. Use `get` for
+a particular session's verdict and next move. One active session per agent
+still applies; a `SESSION_EXISTS` refusal supplies a read call for the caller's
+sessions rather than authorizing a second review.
 
 ## Phase 1: Thesis
 
