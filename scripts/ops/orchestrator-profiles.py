@@ -97,6 +97,19 @@ CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT)
 
 REVIEWER_MODULE = "agents/dialectic_reviewer/reviewer.py"
 REVIEWER_SDK = "agents/sdk/src"
+#: What the reviewer's host CLIs may see, as the reviewer allowlists it
+#: (agents/dialectic_reviewer/host_backends._CLI_ENV_ALLOWLIST, which a test
+#: holds this equal to): the home and login locations, locale, proxies and CA
+#: bundles. USER is not inherited but fixed, since a service manager may not
+#: pass it.
+REVIEWER_INHERIT = (
+    "PATH", "HOME", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "CODEX_HOME", "CLAUDE_CONFIG_DIR", "NODE_EXTRA_CA_CERTS",
+)
+
 #: Dialectic session ids are 16 hex characters (DialecticSession); the
 #: pattern leaves room without admitting anything but an id, and never a
 #: leading "-".
@@ -257,10 +270,7 @@ def reviewer_profile(*, repo_root: str, python: str, user: str, fixed: dict[str,
         "cmd": python,
         "args": ["-s", "-m", "agents.dialectic_reviewer"],
         "cd": repo_root,
-        "env": {
-            "inherit": ["HOME", "PATH", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "CODEX_HOME"],
-            "set": env_set,
-        },
+        "env": {"inherit": list(REVIEWER_INHERIT), "set": env_set},
         "vars": {
             "DIALECTIC_SESSION_ID": {"max_bytes": 64, "pattern": SESSION_ID_PATTERN,
                                      "required": True},

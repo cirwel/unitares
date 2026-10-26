@@ -355,3 +355,12 @@ def test_the_generator_keeps_the_default_key_only_as_presence(tmp_path):
     fixed, secrets = rc.reviewer_profile_env(settings)
     assert "sk-live-value" not in json.dumps([fixed, secrets])
     assert rc.DEFAULT_EXTERNAL_KEY_ENV in secrets
+
+
+
+def test_the_reviewer_inherits_what_its_cli_allowlist_passes():
+    from agents.dialectic_reviewer import host_backends
+    assert set(gen.REVIEWER_INHERIT) == set(host_backends._CLI_ENV_ALLOWLIST) - {"USER"}
+    profile = placeholder_document()["profiles"]["dialectic.reviewer"]
+    assert profile["env"]["inherit"] == list(gen.REVIEWER_INHERIT)
+    assert profile["env"]["set"]["USER"] == "operator"
