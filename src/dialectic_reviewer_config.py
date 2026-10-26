@@ -309,7 +309,7 @@ def reviewer_profile_env(environ: Mapping[str, str] | None = None) -> tuple[Dict
     if (os.environ if environ is None else environ).get(MCP_BEARER_ENV):
         secrets[MCP_BEARER_ENV] = MCP_BEARER_ENV
     key_env = ((os.environ if environ is None else environ).get("UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV") or "").strip()
-    if not key_env and (os.environ if environ is None else environ).get(DEFAULT_EXTERNAL_KEY_ENV):
+    if not key_env and (os.environ if environ is None else environ).get(DEFAULT_EXTERNAL_KEY_ENV, ""):
         key_env = DEFAULT_EXTERNAL_KEY_ENV
     if key_env and fixed.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL"):
         if not _ENV_NAME.fullmatch(key_env) or key_env in fixed:
