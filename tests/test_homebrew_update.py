@@ -79,6 +79,53 @@ def test_formula_inventory_includes_revisions_and_managed_extension_set(
     assert inventory["apache-age"]["pinned"] is False
 
 
+def test_recovery_repairs_managed_formula_left_unlinked(updater, monkeypatch):
+    payload = {
+        "formulae": [
+            {
+                "name": name,
+                "tap": update.TAP,
+                "linked_keg": "" if name == "unitares" else "3.5.0_5",
+                "installed": [{"version": "3.5.0_5"}],
+            }
+            for name in update.FORMULAE
+        ]
+    }
+    calls = []
+
+    def brew_process(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout=json.dumps(payload))
+
+    monkeypatch.setattr(updater, "_brew_process", brew_process)
+    updater.repair_managed_links()
+    assert calls == [
+        ("info", "--json=v2", "--formula", *update.QUALIFIED_FORMULAE),
+        ("link", "--overwrite", "cirwel/unitares/unitares"),
+    ]
+
+
+def test_recovery_refuses_when_no_managed_keg_remains(updater, monkeypatch):
+    payload = {
+        "formulae": [
+            {
+                "name": name,
+                "tap": update.TAP,
+                "linked_keg": "" if name == "unitares" else "3.5.0_5",
+                "installed": [] if name == "unitares" else [{"version": "3.5.0_5"}],
+            }
+            for name in update.FORMULAE
+        ]
+    }
+    monkeypatch.setattr(
+        updater,
+        "_brew_process",
+        lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps(payload)),
+    )
+    with pytest.raises(update.Refusal, match="Reinstall that managed formula"):
+        updater.repair_managed_links()
+
+
 def test_update_journal_is_private_atomic_and_rejects_weak_mode(updater):
     state = {
         "journal_version": update.JOURNAL_VERSION,
@@ -388,6 +435,7 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     written = []
     refreshed = []
     monkeypatch.setattr(updater, "refresh_tap", lambda: refreshed.append(True))
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(
         updater,
         "inventory",
@@ -456,6 +504,7 @@ def test_abort_restores_prior_writer_state_only_before_package_change(
         "config_sha256": _config_hash(updater),
     }
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(updater, "inventory", lambda: _inventory())
     monkeypatch.setattr(updater, "schema_version", lambda: 76)
     written = []
@@ -485,6 +534,7 @@ def test_abort_refuses_after_any_managed_package_changed(updater, monkeypatch):
     live = _inventory()
     live["unitares"]["installed"] = "3.6.0"
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(updater, "managed_pins", lambda action: None)
     monkeypatch.setattr(updater, "inventory", lambda: live)
     with pytest.raises(update.Refusal, match="installed versions changed"):
@@ -505,6 +555,7 @@ def test_abort_records_dependency_changes_and_restores_writers(updater, monkeypa
         },
     }
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(updater, "managed_pins", lambda action: None)
     monkeypatch.setattr(updater, "inventory", lambda: _inventory())
     monkeypatch.setattr(
@@ -539,6 +590,7 @@ def test_resume_from_backed_up_adopts_repaired_tap_revision(updater, monkeypatch
     repaired = _inventory(current="3.5.0_5", target="3.6.0_1")
     written = []
     monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
     monkeypatch.setattr(updater, "inventory", lambda: repaired)
     monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
     monkeypatch.setattr(updater, "schema_version", lambda: 75)

@@ -110,6 +110,35 @@ class NativeUpdater:
             }
         return inventory
 
+    def repair_managed_links(self) -> None:
+        """Repair the narrow interruption window between Homebrew unlink/link."""
+        result = self._brew_process(
+            "info", "--json=v2", "--formula", *QUALIFIED_FORMULAE
+        )
+        try:
+            formulae = json.loads(result.stdout)["formulae"]
+            by_name = {item["name"]: item for item in formulae}
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise Refusal(
+                "Homebrew returned an unreadable UNITARES package inventory."
+            ) from exc
+        if set(by_name) != set(FORMULAE):
+            raise Refusal(
+                "Homebrew did not return the complete managed UNITARES package set."
+            )
+        for name, qualified in zip(FORMULAE, QUALIFIED_FORMULAE, strict=True):
+            formula = by_name[name]
+            if formula.get("tap") != TAP:
+                raise Refusal(f"{name} is not owned by the {TAP} tap.")
+            if not formula.get("installed"):
+                raise Refusal(
+                    f"The interrupted update left no installed {name} keg. Reinstall that managed formula, "
+                    "then run `unitares update --resume`."
+                )
+            if not formula.get("linked_keg"):
+                print(f"… Repairing interrupted Homebrew link for {name}")
+                self._brew_process("link", "--overwrite", qualified, timeout=300)
+
     @staticmethod
     def changes(inventory: dict[str, dict[str, object]]) -> dict[str, tuple[str, str]]:
         return {
@@ -592,6 +621,7 @@ class NativeUpdater:
             raise Refusal(
                 "Restore the configuration recorded for this update before abandoning it."
             )
+        self.repair_managed_links()
         self.managed_pins("pin")
         live = self.inventory()
         changed = [
@@ -699,6 +729,7 @@ class NativeUpdater:
                 # stopped, and even external writes between attempts must be
                 # included in the new backup.
                 self.refresh_tap()
+                self.repair_managed_links()
                 refreshed = self.inventory()
                 if any(
                     refreshed[name]["target"] != state["target"][name]["target"]
