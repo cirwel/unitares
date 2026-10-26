@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,10 @@ HEADING_LINE = re.compile(r"^#{1,6}\s")
 UNRELEASED = re.compile(r"^## \[Unreleased\][ \t]*$", re.MULTILINE)
 NEXT_RELEASE = re.compile(r"^## \[", re.MULTILINE)
 SUBSECTION = re.compile(r"^### (.+?)[ \t]*$")
+TRAILING_PR = re.compile(r"\(#(\d+)\)$")
+MERGE_PR = re.compile(r"^Merge pull request #(\d+)\b")
+PR_REF = re.compile(r"#(\d+)")
+NON_PROSE_CONTINUATION = re.compile(r"^\s*(?:```|~~~|[-*+]\s|\d+\.\s)")
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,58 @@ class Fragment:
     path: Path
     section: str  # the heading, e.g. "Added"
     body: str     # stripped of surrounding blank lines
+
+
+def _fragment_pr(root: Path, rel: str) -> int | None:
+    """PR number from the most recent first-parent commit that added `rel`."""
+    if not (root / ".git").exists():
+        return None
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "log",
+            "--first-parent",
+            "--follow",
+            "-n",
+            "1",
+            "--diff-filter=A",
+            "--format=%s",
+            "--",
+            rel,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    subject = proc.stdout.strip()
+    match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
+    return int(match.group(1)) if match else None
+
+
+def _attach_pr(body: str, pr: int | None) -> str:
+    """Append the introducing PR number to the first bullet's prose paragraph."""
+    if pr is None:
+        return body
+    cited = {int(n) for n in PR_REF.findall(body)}
+    if pr in cited:
+        return body
+    lines = body.splitlines()
+    idx = 0
+    while idx + 1 < len(lines):
+        nxt = lines[idx + 1]
+        if not nxt.strip() or nxt.startswith("- ") or NON_PROSE_CONTINUATION.match(nxt):
+            break
+        idx += 1
+    target = lines[idx]
+    suffix = f" (#{pr})"
+    if target.endswith((".", ":")):
+        lines[idx] = f"{target[:-1]}{suffix}{target[-1]}"
+    else:
+        lines[idx] = f"{target}{suffix}"
+    return "\n".join(lines)
 
 
 def fragment_paths(root: Path) -> list[Path]:
@@ -124,6 +181,7 @@ def load(root: Path) -> tuple[list[Fragment], list[str]]:
                 f"{rel}: a fragment may not contain a heading ({headings[0]!r}); "
                 "the file name chooses the section")
             continue
+        body = _attach_pr(body, _fragment_pr(root, rel))
         fragments.append(Fragment(path, SECTIONS[section], body))
     return fragments, problems
 
