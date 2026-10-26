@@ -46,9 +46,9 @@ managed UNITARES formulae, stops both writers, verifies a custom-format backup,
 installs the package set without cleaning old kegs, re-executes the new package's
 updater, applies pending migrations, restores the previous running/stopped state,
 repins the set and verifies deep health when writers are restarted (or schema
-state when they remain stopped). Installed dependencies are temporarily pinned
-during the package transaction and their prior pin state is restored afterward.
-The durable journal resumes with
+state when they remain stopped). Homebrew may update required dependencies; the
+journal records the complete installed-formula inventory before and after, and
+safe abort refuses if any formula changed. The durable journal resumes with
 `unitares update --resume`, and blocks a separate `unitares start` until final.
 A retry from the backed-up stage creates a fresh verified backup. A failed
 migration leaves the new package installed and both writers stopped for forward

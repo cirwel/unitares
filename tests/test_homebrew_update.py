@@ -196,60 +196,52 @@ def test_package_failure_preserves_original_error_when_repin_also_fails(
     assert actions == ["unpin", "pin"]
 
 
-def test_dependency_closure_is_temporarily_pinned_and_restored(updater, monkeypatch):
-    state = {"stage": "backed_up"}
-    journal = []
-    commands = []
-
-    def brew_process(*args, **kwargs):
-        if args[:2] == ("list", "--pinned"):
-            return SimpleNamespace(stdout="python@3.14\n")
-        assert args[0] == "deps"
-        return SimpleNamespace(
-            stdout="homebrew/core/python@3.14\nhomebrew/core/redis\n"
-            "cirwel/unitares/unitares-lease-plane\n"
-        )
-
-    monkeypatch.setattr(updater, "_brew_process", brew_process)
+def test_formula_state_records_every_installed_keg(updater, monkeypatch):
+    payload = {
+        "formulae": [
+            {
+                "name": "redis",
+                "full_name": "redis",
+                "linked_keg": "8.2.1",
+                "installed": [{"version": "8.2.0"}, {"version": "8.2.1"}],
+            },
+            {
+                "name": "unitares",
+                "full_name": "cirwel/unitares/unitares",
+                "linked_keg": "3.5.0_6",
+                "installed": [{"version": "3.5.0_6"}],
+            },
+        ]
+    }
     monkeypatch.setattr(
-        updater, "write_journal", lambda value: journal.append(dict(value))
+        updater,
+        "_brew_process",
+        lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps(payload)),
     )
-    monkeypatch.setattr(
-        update,
-        "run",
-        lambda args, **kwargs: commands.append(args) or SimpleNamespace(returncode=0),
-    )
-    updater.pin_dependency_closure(state)
-    assert state["temporary_dependency_pins"] == ["homebrew/core/redis"]
-    assert commands == [["brew", "pin", "homebrew/core/redis"]]
-    updater.release_dependency_pins(state)
-    assert commands[-1] == ["brew", "unpin", "homebrew/core/redis"]
-    assert "temporary_dependency_pins" not in state
-    assert len(journal) == 2
+    assert updater.formula_state() == {
+        "redis": {"linked_keg": "8.2.1", "installed": ["8.2.0", "8.2.1"]},
+        "cirwel/unitares/unitares": {
+            "linked_keg": "3.5.0_6",
+            "installed": ["3.5.0_6"],
+        },
+    }
 
 
 def test_brew_upgrade_is_logged_privately_without_cleanup(updater, monkeypatch):
     calls = []
 
-    class Process:
-        pid = 123
-
-        def wait(self, timeout=None):
-            return 0
-
-    def launch(args, **kwargs):
+    def execute(args, **kwargs):
         calls.append((args, kwargs))
         kwargs["stdout"].write("fixture build output\n")
-        return Process()
+        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(update.subprocess, "Popen", launch)
+    monkeypatch.setattr(update.subprocess, "run", execute)
     updater._upgrade_packages()
     command, options = calls[0]
     assert command[:3] == ["brew", "upgrade", "--formula"]
     assert set(command[3:]) == set(update.QUALIFIED_FORMULAE)
     assert options["env"]["HOMEBREW_NO_INSTALL_CLEANUP"] == "1"
-    assert options["env"]["HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK"] == "1"
-    assert options["start_new_session"] is True
+    assert "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK" not in options["env"]
     log = updater.state_dir / "native-update-homebrew.log"
     assert log.read_text() == "fixture build output\n"
     assert log.stat().st_mode & 0o777 == 0o600
@@ -460,8 +452,33 @@ def test_abort_refuses_after_any_managed_package_changed(updater, monkeypatch):
     live = _inventory()
     live["unitares"]["installed"] = "3.6.0"
     monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "managed_pins", lambda action: None)
     monkeypatch.setattr(updater, "inventory", lambda: live)
     with pytest.raises(update.Refusal, match="installed versions changed"):
+        updater.abort()
+
+
+def test_abort_refuses_after_any_homebrew_formula_changed(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": True,
+        "schema_before": 76,
+        "backup": "/private/backup.dump",
+        "target": _inventory(),
+        "config_sha256": _config_hash(updater),
+        "formula_state_before": {
+            "redis": {"linked_keg": "8.2.0", "installed": ["8.2.0"]}
+        },
+    }
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "managed_pins", lambda action: None)
+    monkeypatch.setattr(
+        updater,
+        "formula_state",
+        lambda: {"redis": {"linked_keg": "8.2.1", "installed": ["8.2.1"]}},
+    )
+    with pytest.raises(update.Refusal, match="formula inventory changed"):
         updater.abort()
 
 

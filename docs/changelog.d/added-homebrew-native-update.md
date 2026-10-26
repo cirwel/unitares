@@ -2,8 +2,8 @@
   the coordinated `unitares update` lifecycle already expected from the Docker
   path: a read-only cached-tap `--check`, explicit package refresh, both writers
   stopped and verified, a private custom-format backup verified by `pg_restore`,
-  four-formula pin management with the installed dependency closure held pinned,
-  re-execution into the new keg, migrations,
+  four-formula pin management, full installed-formula inventory evidence around
+  Homebrew dependency resolution, re-execution into the new keg, migrations,
   previous running/stopped-state restoration, identity-count verification,
   deep-health verification for restarted writers (schema verification when
   stopped), and a private journal resumed with `--resume`. Unfinished journals
