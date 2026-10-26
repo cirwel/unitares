@@ -266,9 +266,10 @@ def _provenance_for_message(provenance: dict[str, Any], *, degraded: bool) -> di
 
 @dataclass
 class Thesis:
-    """Review payload passed at spawn time, including clearly separated paused-
-    agent claims and the server-captured state snapshot. The child cannot read
-    ``get_dialectic_session`` because that tool is ``register=False``."""
+    """The review payload: the paused agent's claims, kept apart from the
+    server-captured state snapshot. Passed at spawn time (``from_env``) or,
+    under a launch profile, read from the session record
+    (``thesis_from_session``)."""
 
     session_id: str
     root_cause: str = ""
@@ -305,6 +306,91 @@ class Thesis:
             situation=env.get("DIALECTIC_THESIS_SITUATION", ""),
             paused_agent_state=paused_agent_state,
         )
+
+
+#: Set by the reviewer's launch profile (inference-hosts-config-v0 §2.5). The
+#: spawn then carries only DIALECTIC_SESSION_ID: the thesis, the
+#: server-captured pause evidence, the situation and the paused agent (this
+#: reviewer's parent) are read from the session with dialectic(action='get'),
+#: and any thesis variable in the environment is ignored, so whoever starts
+#: the reviewer cannot hand it evidence.
+FROM_SESSION_ENV = "DIALECTIC_REVIEWER_FROM_SESSION"
+
+#: The server's pause evidence schema (handlers._PAUSE_EVIDENCE_SCHEMA).
+PAUSE_EVIDENCE_SCHEMA = "dialectic.pause_evidence.v1"
+
+#: Exit status when the session cannot be reviewed from its record: distinct
+#: from 0 (reviewed), 1 (crashed), 2 (no session id) and 3 (abstained).
+EXIT_NOT_REVIEWABLE = 4
+
+
+class SessionNotReviewable(Exception):
+    """The session record does not support a review; the reason says why."""
+
+
+def thesis_from_session(session_id: str, record: Any) -> tuple["Thesis", Optional[str]]:
+    """The thesis and the paused agent's id, from a ``dialectic get`` result.
+
+    Refuses (SessionNotReviewable) rather than review on a partial record: a
+    record for another session, a session not awaiting its reviewer, no thesis
+    from the paused agent, or pause evidence missing or of another schema.
+    The reviewer slot itself is still enforced by the server when the
+    antithesis is filed."""
+    if not isinstance(record, dict) or record.get("session_id") != session_id:
+        raise SessionNotReviewable("the server returned no record for this session")
+    if record.get("phase") != "antithesis":
+        raise SessionNotReviewable(
+            f"the session is in phase {record.get('phase')!r}, not awaiting its reviewer")
+    paused = record.get("paused_agent")
+    if not isinstance(paused, str) or not paused or paused == "unknown":
+        raise SessionNotReviewable("the session names no paused agent")
+    transcript = record.get("transcript")
+    theses = [m for m in transcript if isinstance(m, dict) and m.get("phase") == "thesis"
+              and m.get("agent_id") == paused] if isinstance(transcript, list) else []
+    if not theses:
+        raise SessionNotReviewable("the transcript holds no thesis from the paused agent")
+    thesis_message = theses[-1]
+    evidence = record.get("paused_agent_state")
+    if not isinstance(evidence, dict) or evidence.get("schema") != PAUSE_EVIDENCE_SCHEMA:
+        raise SessionNotReviewable("the session carries no server-captured pause evidence")
+
+    conditions = thesis_message.get("proposed_conditions") or []
+    if not isinstance(conditions, list):
+        conditions = [str(conditions)]
+    # As the server builds it for a spawned reviewer (handle_submit_thesis).
+    situation = []
+    if record.get("topic"):
+        situation.append(f"Topic: {record['topic']}")
+    if record.get("reason"):
+        situation.append(f"Reason: {record['reason']}")
+    return (
+        Thesis(
+            session_id=session_id,
+            root_cause=str(thesis_message.get("root_cause") or ""),
+            proposed_conditions=[str(c) for c in conditions],
+            reasoning=str(thesis_message.get("reasoning") or ""),
+            situation="\n".join(situation),
+            paused_agent_state=evidence,
+        ),
+        paused,
+    )
+
+
+async def load_thesis_from_session(
+    session_id: str, governance_url: str, client_factory: Any = None
+) -> tuple["Thesis", Optional[str]]:
+    """Read the session with dialectic(action='get') before onboarding (the
+    read needs no identity) and build the thesis from it."""
+    if client_factory is None:
+        from unitares_sdk.client import GovernanceClient  # type: ignore
+
+        client_factory = GovernanceClient
+    link = _GovernanceLink(governance_url, client_factory)
+    try:
+        record = await link.call_tool("dialectic", {"action": "get", "session_id": session_id})
+    finally:
+        await link.close()
+    return thesis_from_session(session_id, record)
 
 
 @dataclass
@@ -1657,6 +1743,16 @@ def main() -> int:
         return 2
     governance_url = os.getenv("UNITARES_GOVERNANCE_URL") or os.getenv("GOVERNANCE_URL", "")
     parent = os.getenv("UNITARES_PARENT_AGENT_ID") or None
+    if os.getenv(FROM_SESSION_ENV) == "1":
+        try:
+            thesis, parent = asyncio.run(
+                load_thesis_from_session(thesis.session_id, governance_url))
+        except SessionNotReviewable as exc:
+            print(f"reviewer REFUSED: session {thesis.session_id}: {exc}", flush=True)
+            return EXIT_NOT_REVIEWABLE
+        except Exception as exc:  # noqa: BLE001 — a failed read must be loud, not silent
+            print(f"FATAL: could not read session {thesis.session_id}: {exc!r}", flush=True)
+            return 1
     try:
         verdict = asyncio.run(run(thesis, governance_url, parent))
     except Exception as exc:  # noqa: BLE001 — a reviewer crash must be loud, not silent
