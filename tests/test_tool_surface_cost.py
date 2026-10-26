@@ -145,7 +145,12 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # model, operator decision 2026-10-21) measured 41,535 B, 158 B over the
 # 41,377 B base. Without it an agent cannot choose among the models the
 # endpoint serves, short of the deprecated call_model.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 41_600
+# Raised 2026-10-26 to 41,800 B: onboard/start_session's adapter-only
+# host_session (portal hub H0) measured 41,703 B with a short brief, about
+# 170 B over master. It is how the record learns which vendor session an
+# identity lives in, which a hub needs to offer resume; no other path carries
+# the host's own session id to the server.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_800
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

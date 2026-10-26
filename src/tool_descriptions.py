@@ -181,8 +181,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "consult": (
-        "Ask a model for advice, no review record; effort='thorough' needs "
-        "cloud privacy and an operator extension; on-record: request_review.\n\n"
+        "Ask a model or council to critique a design or assumption (no review "
+        "record; thorough/council is opt-in; on-record: request_review).\n\n"
         "Send a brief, get back advisory model evidence, never a governed "
         "verdict. effort='thorough' asks a strong model (Claude, Codex or "
         "Antigravity) from a family other than the caller's, when detectable, "

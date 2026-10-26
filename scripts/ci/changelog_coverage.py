@@ -104,19 +104,20 @@ RELEASE_CHORE = re.compile(r"^(chore|docs)\(release\)")
 # between the release PR and the tag and turned this gate red on master twice,
 # each needing a hand-written exemption that said nothing a reader did not
 # already know. Every bump is counted and printed either way, held or not.
-DEPENDENCY_BUMP = re.compile(r"^build\(deps(-dev)?\)")
-DEV_BUMP = re.compile(r"^build\(deps-dev\)")
+DEPENDENCY_BUMP = re.compile(r"^(?:build|chore)\(deps(-dev)?\):")
+DEV_BUMP = re.compile(r"^(?:build|chore)\(deps-dev\):")
 BUMP_VERSIONS = re.compile(r"\bbump (\S+) from `?([^`\s]+)`? to `?([^`\s]+)`?")
 REQUIREMENT_MOVE = re.compile(r"\bupdate (\S+) requirement from (\S+) to (\S+)")
 
 # Paths a bump may touch and still be inert. Manifests carry the version test
 # above; the rest carry none.
 RUNTIME_MANIFEST = re.compile(
-    r"(^|/)(constraints\.txt|requirements[^/]*\.txt|pyproject\.toml|package\.json)$"
+    r"(^|/)(constraints\.txt|requirements[^/]*\.txt|pyproject\.toml|package\.json|mix\.exs)$"
 )
 INERT_PIN = re.compile(
-    r"(^|/)(Dockerfile[^/]*|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock)$"
+    r"(^|/)(Dockerfile[^/]*|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock|mix\.lock)$"
     r"|^\.github/workflows/[^/]+\.ya?ml$"
+    r"|^skills/\.attestations/[^/]+/[^/]+\.json$"
 )
 
 TRAILING_PR = re.compile(r"\(#(\d+)\)$")

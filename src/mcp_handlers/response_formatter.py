@@ -920,7 +920,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if response_data.get("review_suggested"):
         mirror_signals.append(
             "This turn reads as uncertain ground — a reviewer is one call away: "
-            "request_review(issue_description='...', reasoning='...')"
+            "request_review(issue_description='...', reasoning='...'), or "
+            "consult(brief='...', purpose='critique') for advisory design critique"
         )
 
     result = {

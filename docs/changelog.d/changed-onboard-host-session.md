@@ -1,0 +1,1 @@
+- Interface contract 2.2.0: `onboard` accepts an optional `host_session` declaration (`{harness, session_id, workspace?}`), stored once on a fresh identity; `GET /v1/timeline` reports each agent's `host_session` as `{harness, session_id, resumable}` without the workspace path (portal hub H0).

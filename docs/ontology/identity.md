@@ -77,6 +77,19 @@ bound on agent-authored onboarding, not verified authorship. During a staged
 upgrade, deploy marker-producing adapters before the server begins recording
 this default so stale backstop calls do not contaminate that cohort.
 
+### Host session is a declared pointer, not identity
+
+An adapter that knows its host's own session id may declare it at onboard as
+`host_session: {harness, session_id, workspace?}`. On a freshly minted identity
+the server stores it once as `metadata.host_session`, so a reader can tell
+which vendor session to resume and where. Like `onboard_origin`, it is
+caller-declared context. It never resolves, recovers, binds or deduplicates an
+identity, and nothing makes it unique: a resumed vendor session mints a fresh
+identity with declared lineage that names the same vendor session, and one
+orchestrated identity spans many headless processes. Readers choose among
+bindings by time and never treat the two ids as equivalent. Roster reads serve
+`{harness, session_id, resumable}` and leave the workspace path in the record.
+
 `metadata.source` remains a separate persistence-timing diagnostic:
 `identity_v2` means the normal resolver wrote the row immediately, while
 `lazy_creation` means a later write persisted an already-live identity on
