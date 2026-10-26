@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,13 +20,13 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "ef9a5f6a87b02914784504aedcf489fc8ebe27a54542c5cbe59701e6f97b21ff",
+  "surface_sha256": "baf065f54c7f03b23fd78ffe5cbc5ff65f219d2d625190d1713c12b4cefad806",
   "capabilities": [
     {
       "name": "start_session",
       "implementation": "onboard",
       "kind": "workflow_alias",
-      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
+      "input_schema_sha256": "8127f8617e384b6b400f3d637e7b47bebfccf5821122c44a8866f98d9eb73385",
       "transport_names": {
         "mcp_streamable_http": "start_session",
         "rest_v1_tools": "start_session",
@@ -367,7 +367,7 @@
       "name": "onboard",
       "implementation": "onboard",
       "kind": "canonical_tool",
-      "input_schema_sha256": "5cc66e8ce7c635ef372b0e1b29875d3144f5f538c8c5aab5b6ae2cd2b6e377a3",
+      "input_schema_sha256": "8127f8617e384b6b400f3d637e7b47bebfccf5821122c44a8866f98d9eb73385",
       "transport_names": {
         "mcp_streamable_http": "onboard",
         "rest_v1_tools": "onboard",

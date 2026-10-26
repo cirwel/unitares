@@ -1469,7 +1469,10 @@ async def fetch_timeline_identities(
                metadata->'trust_tier'->>'name' AS trust_tier,
                CASE WHEN jsonb_typeof(metadata->'tags') = 'array'
                     THEN ARRAY(SELECT jsonb_array_elements_text(metadata->'tags'))
-                    ELSE ARRAY[]::text[] END AS tags
+                    ELSE ARRAY[]::text[] END AS tags,
+               metadata->'host_session'->>'harness' AS host_harness,
+               metadata->'host_session'->>'session_id' AS host_session_id,
+               coalesce(metadata->'host_session'->>'workspace', '') <> '' AS host_resumable
         FROM core.identities
         WHERE identity_id = ANY($1::bigint[]) OR agent_id = ANY($2::text[])
         """,

@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 
 from src.http_routes import access
 from src.http_routes.telemetry import _LIFECYCLE_EVENT_TYPES
+from src.identity.host_session import host_session_summary
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -303,6 +304,9 @@ async def http_timeline(request):
                     "model_type": r["model_type"],
                     "trust_tier": r["trust_tier"],
                     "tags": list(r["tags"] or []),
+                    "host_session": host_session_summary(
+                        r["host_harness"], r["host_session_id"], r["host_resumable"],
+                    ),
                     "status": r["status"],
                     "parent_agent_id": r["parent_agent_id"],
                     "spawn_reason": r["spawn_reason"],

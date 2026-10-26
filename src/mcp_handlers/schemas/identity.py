@@ -63,7 +63,8 @@ class OnboardParams(AgentIdentityMixin):
     - Advanced / adapter-only: `name` (cosmetic), `model_type`, `client_hint`,
       `resume`, `orchestrated`, `thread_id`, `trajectory_signature`,
       `process_fingerprint`, `initial_state`, `response_mode`,
-      `onboard_origin`. Ordinary interactive callers should not need these.
+      `onboard_origin`, `host_session`. Ordinary interactive callers should
+      not need these.
 
     See docs/ontology/identity.md ("Strict Identity, Simple Contract" + the
     identifier reference table) for which identifier to pass when.
@@ -165,6 +166,16 @@ class OnboardParams(AgentIdentityMixin):
             "anchor_path_hash?}. Recorded server-side; used to detect "
             "concurrent identity bindings. Declaration-only — never used "
             "to resolve or recover identity."
+        )
+    )
+    host_session: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional adapter-reported vendor session: {harness, session_id, "
+            "workspace?}. Stored once on a newly minted identity so a reader "
+            "can tell which vendor session to resume. Declaration-only: never "
+            "used to resolve, recover or deduplicate identity; a malformed "
+            "value is ignored, never refused."
         )
     )
     initial_state: Optional[BootstrapStateParams] = Field(
