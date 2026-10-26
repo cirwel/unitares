@@ -1,0 +1,1 @@
+- **Release maintenance:** keep Homebrew install guidance current, require callers to select the native-bootstrap PostgreSQL image explicitly, and use the verified digest during promotion or `PUBLISHED_VERSION` in ordinary CI.

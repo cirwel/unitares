@@ -20,8 +20,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve-native-bootstrap-image:
+    runs-on: ubuntu-latest
+    outputs:
+      postgres-image: ${{ steps.resolve.outputs.postgres-image }}
+    steps:
+      - name: Check out the candidate publication pin
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Resolve the verified published PostgreSQL image
+        id: resolve
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < PUBLISHED_VERSION)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "PUBLISHED_VERSION is not a three-part release: $version" >&2
+            exit 1
+          }
+          echo "postgres-image=ghcr.io/cirwel/unitares-postgres:v$version" >> "$GITHUB_OUTPUT"
+
   native-bootstrap:
+    needs: resolve-native-bootstrap-image
     uses: ./.github/workflows/native-bootstrap.yml
+    with:
+      postgres-image: ${{ needs.resolve-native-bootstrap-image.outputs.postgres-image }}
 
   smoke:
     runs-on: ubuntu-latest

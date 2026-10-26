@@ -5,9 +5,11 @@ provides the server and native dependencies for Apple Silicon Macs. Install it
 with the tap's documented `brew update`, `brew tap`, `brew trust` and
 `brew install` steps. Its [first-time setup instructions](https://github.com/cirwel/homebrew-unitares#first-time-setup)
 cover deliberate role/database creation and the installed bootstrap; no Docker
-or model server is required. Public tap revision `3.5.0_5` includes the native
-setup and service-control backports; the server still reports upstream version
-`3.5.0`. Use `brew info cirwel/unitares/unitares` to inspect the package revision.
+or model server is required. The tap tracks verified releases after
+installed-package acceptance; use `brew info cirwel/unitares/unitares` to
+inspect the version it currently packages and the version installed locally.
+Older `3.5.0` revisions carried reviewed setup and service-control backports
+that current releases include upstream.
 From a source checkout, `--homebrew` selects the installed native package;
 a packaged CLI selects it automatically.
 

@@ -23,9 +23,11 @@ brew install cirwel/unitares/unitares
 brew pin unitares unitares-lease-plane apache-age unitares-pgvector
 ```
 
-The published tap revision `3.5.0_5` includes native CLI backports beyond the
-upstream v3.5.0 archive. The running server still reports `3.5.0`; inspect the
-package revision with `brew info cirwel/unitares/unitares`.
+The published tap tracks verified releases after installed-package acceptance.
+Inspect the version it currently packages and the version installed locally
+with `brew info cirwel/unitares/unitares`. Older `3.5.0` revisions carried
+reviewed native backports; current releases include that lifecycle support
+upstream.
 
 Continue with the tap's [first-time database and configuration steps](https://github.com/cirwel/homebrew-unitares#first-time-setup).
 Package installation does not create a role/database or apply bootstrap SQL.
