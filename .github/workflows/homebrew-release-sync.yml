@@ -93,6 +93,7 @@ jobs:
         working-directory: _tap
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          UPSTREAM_GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch=auto/homebrew-release-sync
@@ -111,20 +112,27 @@ jobs:
           else
             git checkout -B "$branch" origin/main
           fi
+          floor_pr="$(jq -r .release_floor_pr SOURCES.json)"
+          floor_commit="$(GH_TOKEN="$UPSTREAM_GH_TOKEN" gh pr view "$floor_pr" \
+            --repo cirwel/unitares --json state,mergeCommit \
+            --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
+          test -n "$floor_commit"
           python3 scripts/release_sync.py \
             --source-root "$GITHUB_WORKSPACE" \
             --release-repo "$GITHUB_WORKSPACE" \
             --version "$UNITARES_VERSION" --tag "$TAG" \
             --commit "$UNITARES_COMMIT" \
             --archive-url "$UNITARES_ARCHIVE_URL" \
-            --archive-sha256 "$UNITARES_ARCHIVE_SHA256"
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
+            --release-floor-commit "$floor_commit"
           python3 scripts/release_sync.py \
             --source-root "$GITHUB_WORKSPACE" \
             --release-repo "$GITHUB_WORKSPACE" \
             --version "$UNITARES_VERSION" --tag "$TAG" \
             --commit "$UNITARES_COMMIT" \
             --archive-url "$UNITARES_ARCHIVE_URL" \
-            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" --check
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" \
+            --release-floor-commit "$floor_commit" --check
           python3 scripts/test_release_sync.py
           git config user.name "unitares-agents[bot]"
           git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
