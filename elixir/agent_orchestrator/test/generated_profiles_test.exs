@@ -182,5 +182,34 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
       assert "USER" in echoed["env"]
       refute File.exists?(echoed["cwd"])
     end
+
+    test "a prompt at the profile's full size still starts the client" do
+      # The prompt travels in the client's environment, and Linux caps one
+      # environment string at 131072 bytes: past it the spawn fails E2BIG.
+      max =
+        get_in(Jason.decode!(File.read!(@fixture)), [
+          "profiles",
+          "host.claude",
+          "vars",
+          "HA_PROMPT",
+          "max_bytes"
+        ])
+
+      assert byte_size("HA_PROMPT=") + max + 1 <= 131_072
+      prompt = String.duplicate("a", max)
+
+      conn = call("/v1/agents", %{"profile" => "host.claude", "vars" => %{"HA_PROMPT" => prompt}})
+      assert conn.status == 201
+      id = Jason.decode!(conn.resp_body)["execution_id"]
+
+      result =
+        call("/v1/executions/#{id}/await", %{timeout_ms: 20_000})
+        |> Map.get(:resp_body)
+        |> Jason.decode!()
+        |> Map.fetch!("result")
+
+      assert result["exit_status"] == 0
+      assert (result["output"] |> Enum.join() |> Jason.decode!())["result"] == prompt
+    end
   end
 end

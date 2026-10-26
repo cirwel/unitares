@@ -30,7 +30,7 @@
           "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
         },
         "HA_PROMPT": {
-          "max_bytes": 262144,
+          "max_bytes": 131061,
           "required": true
         },
         "HA_TIMEOUT_S": {

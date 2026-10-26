@@ -475,7 +475,9 @@ sets nothing.
      is allowlisted) and the generator (`scripts/ops/orchestrator-profiles.py`,
      writing the `host.claude` profile), which the orchestrator's own
      `elixir/agent_orchestrator/scripts/start.sh` runs before boot when
-     `AGENT_ORCHESTRATOR_PROFILES_FILE` is set. That script is the
+     `AGENT_ORCHESTRATOR_PROFILES_FILE` is set and the operator hands the
+     file over with `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the generator
+     owns the whole file). That script is the
      `start.sh` this section names. No caller sends profiles yet, so nothing
      changes. Next: the codex, antigravity, reviewer and council profiles,
      moving the callers, and the doctor's digest check.

@@ -5,8 +5,10 @@ Design: ``docs/proposals/active/inference-hosts-config-v0.md`` §2.5 and step
 4b. The orchestrator (``elixir/agent_orchestrator/lib/agent_orchestrator/profiles.ex``)
 reads ``AGENT_ORCHESTRATOR_PROFILES_FILE``; this script writes it, and the
 orchestrator's ``scripts/start.sh`` runs it before boot when that variable is
-set. The orchestrator re-reads the file when its digest changes, so running
-this again needs no restart.
+set together with ``AGENT_ORCHESTRATOR_PROFILES_GENERATE=1``. The generator
+owns the whole file, so that switch is how an operator hands it over. The
+orchestrator re-reads the file when its digest changes, so running this again
+needs no restart.
 
 It reads files only, never its own process environment, because start.sh has
 sourced the secrets file into that environment and a profile must not pick a
@@ -48,8 +50,12 @@ SCHEMA = "unitares.orchestrator_profiles.v1"
 #: The proposal's model pattern; the orchestrator anchors it.
 MODEL_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}"
 
-#: The orchestrator's ceiling on one variable (profiles.ex @max_var_bytes).
-MAX_VAR_BYTES = 262_144
+#: The prompt travels to the client in its environment. Linux caps one
+#: environment string at MAX_ARG_STRLEN, 131072 bytes including the name,
+#: the "=" and the terminator, so a larger prompt would pass the profile and
+#: then fail process creation with E2BIG. Under the orchestrator's own
+#: per-variable ceiling (profiles.ex @max_var_bytes, 262144).
+PROMPT_MAX_BYTES = 131_072 - len("HA_PROMPT=") - 1
 
 #: delegate_inference accepts timeout_s up to 420, and the host adapter adds
 #: a 30 s backstop (host_adapter.ORCHESTRATOR_BACKSTOP_GRACE_S).
@@ -111,7 +117,7 @@ def claude_profile(*, repo_root: str, python: str, cli: str, user: str) -> dict[
             "set": {"HA_CLI": cli, "USER": user},
         },
         "vars": {
-            "HA_PROMPT": {"max_bytes": MAX_VAR_BYTES, "required": True},
+            "HA_PROMPT": {"max_bytes": PROMPT_MAX_BYTES, "required": True},
             "HA_MODEL": {"max_bytes": 128, "pattern": MODEL_PATTERN},
             "HA_TIMEOUT_S": {"max_bytes": 3, "pattern": "[1-9][0-9]{0,2}"},
         },

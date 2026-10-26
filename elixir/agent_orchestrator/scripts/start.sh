@@ -38,13 +38,16 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 cd "$ORCHESTRATOR_DIR"
 
 # --- Launch profiles ---
-# With AGENT_ORCHESTRATOR_PROFILES_FILE set, regenerate it from this checkout
-# before boot (docs/proposals/active/inference-hosts-config-v0.md, step 4b).
+# With AGENT_ORCHESTRATOR_PROFILES_GENERATE=1, regenerate the file
+# AGENT_ORCHESTRATOR_PROFILES_FILE names from this checkout before boot
+# (docs/proposals/active/inference-hosts-config-v0.md, step 4b). Opt-in,
+# because the generator owns the whole file: a hand-written one would be
+# replaced on every restart.
 # The generator runs in an empty environment: the secrets file is sourced into
 # this shell, and a profile must not pick a value up from it. A failure is
 # reported, not fatal: the orchestrator then loads the last good file or none,
 # and with the variable set a missing file still denies raw spawns.
-if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_FILE:-}" ]]; then
+if [[ "${AGENT_ORCHESTRATOR_PROFILES_GENERATE:-}" == "1" && -n "${AGENT_ORCHESTRATOR_PROFILES_FILE:-}" ]]; then
     PROFILES_PYTHON="${AGENT_ORCHESTRATOR_PROFILES_PYTHON:-$(command -v python3 || true)}"
     profile_args=(--out "$AGENT_ORCHESTRATOR_PROFILES_FILE" --repo-root "$REPO_ROOT"
                   --python "$PROFILES_PYTHON")
