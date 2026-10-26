@@ -138,6 +138,19 @@ def test_backup_name_collision_never_deletes_existing_dump(
     assert existing.read_bytes() == b"existing verified evidence"
 
 
+def test_retry_backup_failure_does_not_claim_packages_are_unchanged(
+    updater, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(
+        update.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+    with pytest.raises(update.Refusal, match="existing update state was preserved"):
+        updater.backup_database("3.6.0", pristine=False)
+
+
 def test_package_transaction_disables_cleanup_and_repins_all_components(
     updater, monkeypatch
 ):
@@ -300,7 +313,9 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     monkeypatch.setattr(updater, "schema_version", lambda: 76)
     monkeypatch.setattr(updater, "agent_count", lambda: 4)
     monkeypatch.setattr(
-        updater, "backup_database", lambda target: Path("/private/refreshed.dump")
+        updater,
+        "backup_database",
+        lambda target, **kwargs: Path("/private/refreshed.dump"),
     )
     monkeypatch.setattr(updater, "apply_migrations", lambda: None)
     monkeypatch.setattr(
@@ -341,6 +356,50 @@ def test_identity_verification_failure_requires_explicit_acceptance(
     assert updater.resume(state=state, accept_identity_change=True) == 0
     assert written[0]["stage"] == "migrated"
     assert written[-1]["stage"] == "complete"
+
+
+def test_abort_restores_prior_writer_state_only_before_package_change(
+    updater, monkeypatch
+):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": True,
+        "schema_before": 76,
+        "backup": "/private/backup.dump",
+        "target": _inventory(),
+        "config_sha256": _config_hash(updater),
+    }
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "inventory", lambda: _inventory())
+    monkeypatch.setattr(updater, "schema_version", lambda: 76)
+    written = []
+    monkeypatch.setattr(
+        updater, "write_journal", lambda value: written.append(dict(value))
+    )
+    starts = []
+    updater.brew.start = lambda: starts.append(True)
+    assert updater.abort() == 0
+    assert written[-1]["stage"] == "aborted"
+    assert starts == [True]
+
+
+def test_abort_refuses_after_any_managed_package_changed(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": True,
+        "schema_before": 76,
+        "backup": "/private/backup.dump",
+        "target": _inventory(),
+        "config_sha256": _config_hash(updater),
+    }
+    live = _inventory()
+    live["unitares"]["installed"] = "3.6.0"
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "inventory", lambda: live)
+    with pytest.raises(update.Refusal, match="installed versions changed"):
+        updater.abort()
 
 
 def test_resume_from_planned_retries_stop_backup_and_finishes(

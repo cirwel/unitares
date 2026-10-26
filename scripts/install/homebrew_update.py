@@ -264,7 +264,7 @@ class NativeUpdater:
                 "stop their writers before resuming."
             )
 
-    def backup_database(self, target: str) -> Path:
+    def backup_database(self, target: str, *, pristine: bool = True) -> Path:
         backup_dir = Path(
             os.environ.get(
                 "UNITARES_BACKUP_DIR", str(Path.home() / ".unitares/backups")
@@ -288,6 +288,16 @@ class NativeUpdater:
         public_url, env = self.brew.database_environment()
         pg_dump = self.brew.prefix / "opt/postgresql@17/bin/pg_dump"
         pg_restore = self.brew.prefix / "opt/postgresql@17/bin/pg_restore"
+        failure = (
+            "The database backup failed, so no package or schema change was made."
+            if pristine
+            else "The refreshed database backup failed. The existing update state was preserved and no retry was attempted."
+        )
+        verification_failure = (
+            "The database backup could not be verified, so no package or schema change was made."
+            if pristine
+            else "The refreshed database backup could not be verified. The existing update state was preserved and no retry was attempted."
+        )
         created = False
         try:
             fd = os.open(
@@ -305,9 +315,7 @@ class NativeUpdater:
             if result.returncode or not path.stat().st_size:
                 path.unlink()
                 created = False
-                raise Refusal(
-                    "The database backup failed, so no package or schema change was made."
-                )
+                raise Refusal(failure)
             check = subprocess.run(
                 [str(pg_restore), "--list", str(path)],
                 env=env,
@@ -318,18 +326,14 @@ class NativeUpdater:
             if check.returncode:
                 path.unlink()
                 created = False
-                raise Refusal(
-                    "The database backup could not be verified, so no package or schema change was made."
-                )
+                raise Refusal(verification_failure)
         except (OSError, subprocess.TimeoutExpired):
             if created:
                 try:
                     path.unlink()
                 except OSError:
                     pass
-            raise Refusal(
-                "The database backup failed, so no package or schema change was made."
-            )
+            raise Refusal(failure)
         print(f"✓ Verified database backup: {path}")
         return path
 
@@ -529,6 +533,52 @@ class NativeUpdater:
         self.write_journal(state)
         return self.resume(state=state)
 
+    def abort(self) -> int:
+        state = self.read_journal(required=True)
+        assert state is not None
+        if state["stage"] in FINAL_STAGES:
+            print(f"Native update journal is already {state['stage']}.")
+            return 0
+        if state["stage"] not in {"planned", "stopped", "backed_up"}:
+            raise Refusal(
+                "This update cannot be abandoned because packages or schema may have changed; repair forward with "
+                "`unitares update --resume`."
+            )
+        self.brew.configure()
+        if hashlib.sha256(self.brew.config.read_bytes()).hexdigest() != state.get(
+            "config_sha256"
+        ):
+            raise Refusal(
+                "Restore the configuration recorded for this update before abandoning it."
+            )
+        live = self.inventory()
+        changed = [
+            name
+            for name in FORMULAE
+            if live[name]["installed"] != state["target"][name]["installed"]
+        ]
+        if changed:
+            raise Refusal(
+                "This update cannot be abandoned because installed versions changed for: "
+                + ", ".join(changed)
+                + ". Repair forward with `unitares update --resume`."
+            )
+        if "schema_before" in state and self.schema_version() != state["schema_before"]:
+            raise Refusal(
+                "This update cannot be abandoned because the schema version changed; repair forward with "
+                "`unitares update --resume`."
+            )
+        state["stage"] = "aborted"
+        state["aborted_at"] = _utc_now()
+        state["abort_reason"] = "operator abandoned before package or schema change"
+        self.write_journal(state)
+        if state["writers_were_running"]:
+            self.brew.start()
+        else:
+            print("Writers were stopped before the update and remain stopped.")
+        print("Native update safely abandoned before any package or schema change.")
+        return 0
+
     def resume(
         self, *, state: dict | None = None, accept_identity_change: bool = False
     ) -> int:
@@ -594,7 +644,7 @@ class NativeUpdater:
                 state["schema_before"] = self.schema_version()
                 state["agent_count_before"] = self.agent_count()
                 backup = self.backup_database(
-                    str(state["target"]["unitares"]["target"])
+                    str(state["target"]["unitares"]["target"]), pristine=False
                 )
                 if previous and previous != str(backup):
                     state.setdefault("superseded_backups", []).append(previous)
@@ -660,6 +710,11 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--resume", action="store_true", help="resume the durable native update journal"
     )
+    group.add_argument(
+        "--abort",
+        action="store_true",
+        help="abandon only if no managed package or schema version changed",
+    )
     parser.add_argument(
         "--yes",
         "-y",
@@ -680,11 +735,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             return updater.begin(check=True, assume_yes=args.yes)
         with brew.lock():
-            return (
-                updater.resume(accept_identity_change=args.accept_identity_change)
-                if args.resume
-                else updater.begin(check=False, assume_yes=args.yes)
-            )
+            if args.resume:
+                return updater.resume(
+                    accept_identity_change=args.accept_identity_change
+                )
+            if args.abort:
+                return updater.abort()
+            return updater.begin(check=False, assume_yes=args.yes)
     except (Refusal, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -1608,7 +1608,7 @@ Homebrew service control (automatic from a Homebrew package):
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
   logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
                                     Read native service logs
-  update --homebrew [--check|--resume] [--yes] [--accept-identity-change]
+  update --homebrew [--check|--resume|--abort] [--yes] [--accept-identity-change]
                                     Refresh and upgrade the managed formulae,
                                     back up, migrate, restart and verify. An
                                     interrupted update resumes from its journal

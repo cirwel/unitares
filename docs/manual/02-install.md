@@ -52,7 +52,10 @@ A retry from the backed-up stage creates a fresh verified backup. A failed
 migration leaves the new package installed and both writers stopped for forward
 repair; after inspecting an identity-count mismatch, explicitly continue with
 `unitares update --resume --accept-identity-change`. An old keg does not reverse
-schema. Homebrew formula hooks never migrate the database.
+schema. Before any package or schema change, an unrecoverable package-build
+failure can be abandoned with `unitares update --abort`; the command refuses
+once either recorded version changed. Direct `brew services` commands bypass the
+journal barrier. Homebrew formula hooks never migrate the database.
 
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew

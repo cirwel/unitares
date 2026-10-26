@@ -91,3 +91,10 @@ reviewed result with
 under the Homebrew runtime directory and `~/.unitares/backups` respectively.
 Setup does not switch clients, copy a Docker database, or change which
 installation owns your data.
+
+If a package build cannot succeed, `unitares update --abort` safely restores the
+prior running/stopped state only while every managed package and the schema are
+still at their recorded pre-update versions. Once either changed, abort refuses
+and forward repair with `--resume` remains mandatory. Direct `brew services`
+commands bypass these UNITARES journal checks; use the packaged lifecycle
+commands while an update is active.
