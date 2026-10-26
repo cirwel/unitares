@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from pydantic import Field, model_validator
 from src.identity.onboard_provenance import OnboardOrigin
 from .mixins import AgentIdentityMixin
@@ -168,14 +168,16 @@ class OnboardParams(AgentIdentityMixin):
             "to resolve or recover identity."
         )
     )
-    host_session: Optional[dict] = Field(
+    # Typed Any on purpose: the handler validates and drops a malformed
+    # value, so schema validation must not refuse an onboard over it.
+    host_session: Optional[Any] = Field(
         default=None,
         description=(
-            "Optional adapter-reported vendor session: {harness, session_id, "
-            "workspace?}. Stored once on a newly minted identity so a reader "
-            "can tell which vendor session to resume. Declaration-only: never "
-            "used to resolve, recover or deduplicate identity; a malformed "
-            "value is ignored, never refused."
+            "Optional adapter-reported vendor session object: {harness, "
+            "session_id, workspace?}. Stored once on a newly minted identity "
+            "so a reader can tell which vendor session to resume. "
+            "Declaration-only: never used to resolve, recover or deduplicate "
+            "identity; a malformed value is ignored, never refused."
         )
     )
     initial_state: Optional[BootstrapStateParams] = Field(

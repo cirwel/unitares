@@ -83,3 +83,20 @@ async def test_record_helper_never_raises():
     stored = db.update_identity_metadata.await_args_list[0]
     assert stored.args[1]["host_session"]["session_id"] == "s1"
     assert stored.kwargs == {"merge": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared", ["claude-code:s1", ["s1"], 7, {"harness": "x y"}])
+async def test_schema_validation_never_refuses_a_malformed_declaration(declared):
+    """The middleware's Pydantic step must pass any shape through; only the
+    handler decides, and it drops what it cannot use."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.middleware.params_step import validate_params
+
+    result = await validate_params(
+        "onboard", {"force_new": True, "host_session": declared}, SimpleNamespace(),
+    )
+    assert isinstance(result, tuple), result
+    _name, arguments, _ctx = result
+    assert arguments["host_session"] == declared
