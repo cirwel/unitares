@@ -1,0 +1,140 @@
+name: Homebrew release sync
+
+# A published stable tag gets one deterministic, release-owned source archive
+# and one draft tap PR. The protected environment is the authority boundary:
+# this workflow never marks the PR ready, labels it for merge, or merges it.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag to sync (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homebrew-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: >-
+      github.repository == 'cirwel/unitares' &&
+      vars.UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease)
+    environment: homebrew-release-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Build or verify the deterministic release archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "tag must be vX.Y.Z" >&2
+            exit 1
+          }
+          version=${TAG#v}
+          test "$TAG" = "v$version"
+          commit="$(git rev-parse HEAD)"
+          test "$(git rev-list -n 1 "$TAG")" = "$commit"
+          archive="$RUNNER_TEMP/unitares-$version.tar.gz"
+          git archive --format=tar --prefix="unitares-$version/" "$commit" | gzip -n -9 > "$archive"
+          digest="$(sha256sum "$archive" | cut -d' ' -f1)"
+          existing="$RUNNER_TEMP/existing-unitares-$version.tar.gz"
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "unitares-$version.tar.gz" --output "$existing" 2>/dev/null; then
+            test "$(sha256sum "$existing" | cut -d' ' -f1)" = "$digest" || {
+              echo "existing release asset differs; refusing to overwrite it" >&2
+              exit 1
+            }
+          else
+            gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
+          fi
+          echo "UNITARES_VERSION=$version" >> "$GITHUB_ENV"
+          echo "UNITARES_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "UNITARES_ARCHIVE_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "UNITARES_ARCHIVE_URL=https://github.com/cirwel/unitares/releases/download/$TAG/unitares-$version.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Mint a tap-scoped App token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app
+        with:
+          client-id: ${{ vars.UNITARES_AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UNITARES_AGENT_APP_PRIVATE_KEY }}
+          owner: cirwel
+          repositories: homebrew-unitares
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: cirwel/homebrew-unitares
+          token: ${{ steps.app.outputs.token }}
+          path: _tap
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Render, verify and open the draft tap PR
+        working-directory: _tap
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_sync.py \
+            --source-root "$GITHUB_WORKSPACE" \
+            --version "$UNITARES_VERSION" --tag "$TAG" \
+            --commit "$UNITARES_COMMIT" \
+            --archive-url "$UNITARES_ARCHIVE_URL" \
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256"
+          python3 scripts/release_sync.py \
+            --source-root "$GITHUB_WORKSPACE" \
+            --version "$UNITARES_VERSION" --tag "$TAG" \
+            --commit "$UNITARES_COMMIT" \
+            --archive-url "$UNITARES_ARCHIVE_URL" \
+            --archive-sha256 "$UNITARES_ARCHIVE_SHA256" --check
+          python3 scripts/test_release_sync.py
+          branch=auto/homebrew-release-sync
+          git config user.name "unitares-agents[bot]"
+          git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add Formula/unitares.rb SOURCES.json
+          if git diff --cached --quiet; then
+            echo "Tap already matches $TAG." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "chore(release): sync UNITARES $TAG"
+          git push --force-with-lease origin "$branch"
+          body="$RUNNER_TEMP/homebrew-pr-body.md"
+          printf '%s\n' \
+            "This draft updates the tap to UNITARES $TAG at $UNITARES_COMMIT." \
+            "" \
+            "Evidence:" \
+            "- immutable release asset: $UNITARES_ARCHIVE_URL" \
+            "- SHA-256: $UNITARES_ARCHIVE_SHA256" \
+            "- the renderer removed the v3.5.0 DATA backport only after verifying the release contains the native updater and every tracked source" \
+            "" \
+            "Keep this draft until installed Apple Silicon acceptance passes. This workflow never publishes bottles or authorizes merge." \
+            > "$body"
+          existing="$(gh pr list --repo cirwel/homebrew-unitares --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo cirwel/homebrew-unitares \
+              --title "chore(release): sync UNITARES $TAG" --body-file "$body"
+          else
+            gh pr create --repo cirwel/homebrew-unitares --base main --head "$branch" \
+              --draft --title "chore(release): sync UNITARES $TAG" --body-file "$body"
+          fi

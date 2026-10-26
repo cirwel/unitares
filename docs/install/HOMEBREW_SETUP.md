@@ -127,3 +127,8 @@ eligible set with `--yes`; adjust the two floors with `--retain-backups N` and
 unfinished. Unindexed backups are never deleted. Old kegs remain Homebrew's
 responsibility; keep the predecessor until the new installation and backup have
 been validated, then use Homebrew's own cleanup procedure when appropriate.
+
+Maintainers hand stable releases to the tap through the protected deterministic
+[Homebrew release sync](../operations/homebrew-release-sync.md). It opens a
+draft tap PR and cannot merge it; bottle construction and publication remain
+separate operator-gated actions.

@@ -14,4 +14,6 @@
   every update-journal reference. UNITARES never deletes Homebrew kegs.
   Direct `brew services` commands bypass the journal guard. Formula hooks still
   never migrate a database. Homebrew is recommended for supported Apple Silicon
-  desktop Macs; Docker remains the cross-platform/server/CI path.
+  desktop Macs; Docker remains the cross-platform/server/CI path. Stable
+  releases now have a protected deterministic archive-to-draft-tap-PR handoff;
+  bottle build and publication remain separate operator-gated actions.
