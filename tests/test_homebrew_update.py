@@ -652,6 +652,82 @@ def test_resume_requires_confirmation_when_tap_target_changes(updater, monkeypat
     assert state["target"]["unitares"]["target"] == "3.6.0"
 
 
+@pytest.mark.parametrize("stage", ["planned", "stopped"])
+def test_earlier_resume_stages_also_require_changed_target_confirmation(
+    updater, monkeypatch, stage
+):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": stage,
+        "writers_were_running": False,
+        "target": _inventory(current="3.5.0_5", target="3.6.0"),
+        "config_sha256": _config_hash(updater),
+    }
+    updater.brew.stop = lambda: None
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "schema_version", lambda: 75)
+    monkeypatch.setattr(updater, "agent_count", lambda: 3)
+    monkeypatch.setattr(
+        updater, "backup_database", lambda *args, **kwargs: Path("/private/new.dump")
+    )
+    monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
+    monkeypatch.setattr(
+        updater,
+        "inventory",
+        lambda: _inventory(current="3.5.0_5", target="3.6.0_1"),
+    )
+    monkeypatch.setattr(updater, "_confirm", lambda *args, **kwargs: False)
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "write_journal", lambda value: None)
+    monkeypatch.setattr(
+        updater,
+        "install_packages",
+        lambda target: pytest.fail("packages changed without renewed consent"),
+    )
+    with pytest.raises(update.Refusal, match="update --abort"):
+        updater.resume()
+    assert state["target"]["unitares"]["target"] == "3.6.0"
+
+
+def test_resume_uses_live_versions_when_deciding_to_install(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": False,
+        "agent_count_before": 3,
+        "schema_before": 75,
+        "backup": "/private/old.dump",
+        "target": _inventory(current="3.5.0_5", target="3.6.0"),
+        "config_sha256": _config_hash(updater),
+    }
+    live = _inventory(current="3.5.0_5", target="3.5.0_5")
+    live["unitares-lease-plane"]["installed"] = "3.6.0"
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
+    monkeypatch.setattr(updater, "inventory", lambda: live)
+    monkeypatch.setattr(updater, "schema_version", lambda: 75)
+    monkeypatch.setattr(updater, "agent_count", lambda: 3)
+    monkeypatch.setattr(
+        updater, "backup_database", lambda *args, **kwargs: Path("/private/new.dump")
+    )
+    monkeypatch.setattr(updater, "formula_state", lambda: {"redis": {}})
+    attempted = []
+
+    def install(target):
+        attempted.append(target)
+        raise SystemExit
+
+    monkeypatch.setattr(updater, "install_packages", install)
+    monkeypatch.setattr(updater, "write_journal", lambda value: None)
+    with pytest.raises(SystemExit):
+        updater.resume(assume_yes=True)
+    assert attempted
+    assert state["target"]["unitares"]["target"] == "3.5.0_5"
+
+
 def test_resume_from_planned_retries_stop_backup_and_finishes(
     updater, monkeypatch, tmp_path
 ):
