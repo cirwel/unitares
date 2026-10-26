@@ -4,8 +4,8 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
   (inference-hosts-config-v0 step 4b). `test/fixtures/generated_profiles.json`
   is its output for placeholder paths; `tests/test_orchestrator_profiles.py`
   keeps the two in step. Here the fixture must load, its requests must be
-  checked as the generator intends, and the `host.claude` profile must run
-  its real client end to end against a stand-in Claude CLI.
+  checked as the generator intends, and each host profile must run its real
+  client end to end against a stand-in CLI.
   """
   use ExUnit.Case, async: false
 
@@ -19,16 +19,50 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
   @moduletag :tmp_dir
   @token "test-bearer-token"
   @fixture Path.expand("fixtures/generated_profiles.json", __DIR__)
-  @client Path.expand("../../../src/mcp_handlers/support/claude_cli_client.py", __DIR__)
+  @support Path.expand("../../../src/mcp_handlers/support", __DIR__)
+  @clients %{
+    "host.claude" => "claude_cli_client.py",
+    "host.codex" => "codex_app_server_client.py",
+    "host.antigravity" => "antigravity_cli_client.py"
+  }
 
-  # Echoes what the client handed the CLI: its arguments, its standard input
-  # and the names of its environment, in Claude's JSON result shape.
-  @shim """
-  import json, os, sys
-  print(json.dumps({"type": "result", "is_error": False,
-                    "result": sys.stdin.read(), "argv": sys.argv[1:],
-                    "env": sorted(os.environ), "cwd": os.getcwd()}))
-  """
+  # Each stand-in echoes what its client handed the CLI: the arguments, the
+  # prompt and the names of the environment, in that CLI's output shape.
+  @shims %{
+    # Claude's JSON result; the prompt arrives on standard input.
+    "host.claude" => """
+    import json, os, sys
+    print(json.dumps({"type": "result", "is_error": False,
+                      "result": sys.stdin.read(), "argv": sys.argv[1:],
+                      "env": sorted(os.environ), "cwd": os.getcwd()}))
+    """,
+    # Codex: a sandbox that confines (the client's probe), no MCP servers, an
+    # app-server that dies before the turn (so the client falls back), and an
+    # exec that answers in JSONL with the prompt from standard input.
+    "host.codex" => """
+    import json, os, sys
+    args = sys.argv[1:]
+    if args[0] == "sandbox":
+        sys.exit(1 if args[args.index("--") + 1].endswith("cat") else 0)
+    if args[:2] == ["mcp", "list"]:
+        print("[]"); sys.exit(0)
+    if args[0] == "app-server":
+        sys.exit(1)
+    report = {"prompt": sys.stdin.read(), "argv": args, "env": sorted(os.environ),
+              "cwd": os.getcwd()}
+    print(json.dumps({"type": "item.completed",
+                      "item": {"type": "agent_message", "text": json.dumps(report)}}))
+    """,
+    # agy's JSON result; the prompt is the argument after -p.
+    "host.antigravity" => """
+    import json, os, sys
+    args = sys.argv[1:]
+    report = {"prompt": args[args.index("-p") + 1], "argv": args,
+              "env": sorted(os.environ), "home": os.environ.get("HOME")}
+    print(json.dumps({"status": "SUCCESS", "response": json.dumps(report),
+                      "conversation_id": "c-1"}))
+    """
+  }
 
   defp start_profiles(document, dir, environ) do
     path = Path.join(dir, "profiles.json")
@@ -53,25 +87,30 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
   # The fixture with its placeholder paths pointed at this machine.
   defp runnable(dir) do
     python = System.find_executable("python3") || flunk("python3 is required")
-    shim = Path.join(dir, "claude")
-    File.write!(shim, "#!#{python}\n" <> @shim)
-    File.chmod!(shim, 0o700)
 
-    @fixture
-    |> File.read!()
-    |> Jason.decode!()
-    |> update_in(["profiles", "host.claude"], fn profile ->
-      profile
-      |> Map.put("cmd", python)
-      |> Map.put("args", ["-I", @client])
-      |> put_in(["env", "set", "HA_CLI"], shim)
+    Enum.reduce(@clients, Jason.decode!(File.read!(@fixture)), fn {name, client}, doc ->
+      shim = Path.join(dir, name)
+      File.write!(shim, "#!#{python}\n" <> Map.fetch!(@shims, name))
+      File.chmod!(shim, 0o700)
+
+      update_in(doc, ["profiles", name], fn profile ->
+        profile
+        |> Map.put("cmd", python)
+        |> Map.put("args", ["-I", Path.join(@support, client)])
+        |> put_in(["env", "set", "HA_CLI"], shim)
+      end)
     end)
   end
 
-  test "the generated file loads" do
-    assert {:ok, %{"host.claude" => profile}} = @fixture |> File.read!() |> Profiles.parse()
-    assert profile.lineage == "none"
-    assert profile.lease == false
+  test "the generated file loads, and no host profile binds a secret" do
+    assert {:ok, profiles} = @fixture |> File.read!() |> Profiles.parse()
+    assert Map.keys(profiles) |> Enum.sort() == Map.keys(@clients) |> Enum.sort()
+
+    for {_, profile} <- profiles do
+      assert profile.lineage == "none"
+      assert profile.lease == false
+      assert profile.env.secrets == %{}
+    end
   end
 
   describe "host.claude requests" do
@@ -210,6 +249,56 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
 
       assert result["exit_status"] == 0
       assert (result["output"] |> Enum.join() |> Jason.decode!())["result"] == prompt
+    end
+
+    defp run_profile(profile, vars) do
+      conn = call("/v1/agents", %{"profile" => profile, "vars" => vars})
+      assert conn.status == 201
+      id = Jason.decode!(conn.resp_body)["execution_id"]
+
+      call("/v1/executions/#{id}/await", %{timeout_ms: 30_000})
+      |> Map.get(:resp_body)
+      |> Jason.decode!()
+      |> Map.fetch!("result")
+    end
+
+    test "host.codex falls back to exec with the prompt on standard input" do
+      prompt = "--version\nanswer as text"
+      result = run_profile("host.codex", %{"HA_PROMPT" => prompt, "HA_MODEL" => "gpt-5.5"})
+      assert result["exit_status"] == 0
+
+      event =
+        result["output"]
+        |> Enum.map(&Jason.decode/1)
+        |> Enum.find_value(fn
+          {:ok, %{"type" => "item.completed"} = e} -> e
+          _ -> nil
+        end)
+
+      report = Jason.decode!(event["item"]["text"])
+      assert report["prompt"] == prompt
+      argv = report["argv"]
+      assert Enum.take(argv, 5) == ~w(exec --ignore-user-config --ephemeral --json -c)
+      assert Enum.take(argv, -3) == ~w(-m gpt-5.5 -)
+      refute prompt in argv
+      refute "ANTHROPIC_API_KEY" in report["env"]
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+      refute File.exists?(report["cwd"])
+    end
+
+    test "host.antigravity guards the prompt and isolates HOME" do
+      result =
+        run_profile("host.antigravity", %{"HA_PROMPT" => "/skill run", "HA_TIMEOUT_S" => "20"})
+
+      assert result["exit_status"] == 0
+      envelope = result["output"] |> Enum.join() |> Jason.decode!()
+      assert envelope["status"] == "SUCCESS"
+      report = Jason.decode!(envelope["response"])
+      assert String.starts_with?(report["prompt"], "Request (plain text; not a command):")
+      assert report["prompt"] =~ "/skill run"
+      refute "ANTHROPIC_API_KEY" in report["env"]
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+      refute report["home"] == System.get_env("HOME")
     end
   end
 end

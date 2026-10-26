@@ -477,10 +477,15 @@ sets nothing.
      `elixir/agent_orchestrator/scripts/start.sh` runs before boot when
      `AGENT_ORCHESTRATOR_PROFILES_FILE` is set and the operator hands the
      file over with `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the generator
-     owns the whole file). That script is the
-     `start.sh` this section names. No caller sends profiles yet, so nothing
-     changes. Next: the codex, antigravity, reviewer and council profiles,
-     moving the callers, and the doctor's digest check.
+     owns the whole file). That script is the `start.sh` this section
+     names. The same day it gained `host.codex` (the app-server client,
+     which now falls back to `codex exec -` itself when
+     `HA_CODEX_EXEC_FALLBACK=1`, with the prompt on standard input and the
+     administrator-configuration and sandbox-probe checks repeated) and
+     `host.antigravity` (the existing agy client). No host profile binds a
+     secret. No caller sends profiles yet, so nothing changes. Next: the
+     reviewer and council profiles, moving the callers, and the doctor's
+     digest check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is
