@@ -14,14 +14,17 @@ client ID and private key; the minted token is scoped only to
 `cirwel/homebrew-unitares`, with contents and pull-request writes.
 The job also fails closed unless the repository variable
 `UNITARES_HOMEBREW_RELEASE_SYNC_ENABLED` is exactly `true`; enabling it is an
-explicit operator rollout decision after the environment protection and App
-grant have been checked.
+explicit operator rollout decision after the environment protection, its
+environment-scoped `UNITARES_HOMEBREW_RELEASE_SYNC_ARMED=true` secret, and the
+App grant have been checked.
 
 The workflow checks out the exact tag, verifies its commit, creates
 `unitares-VERSION.tar.gz` with `git archive` and `gzip -n`, and uploads it only
 when the release has no asset by that name. An existing asset must be
 byte-identical and is never overwritten. It then runs the tap's offline release
 renderer and opens or updates the single `auto/homebrew-release-sync` draft PR.
+That transition advances both `Formula/unitares.rb` and the release-coupled
+`Formula/unitares-lease-plane.rb` from the same immutable asset.
 
 The renderer accepts only the release-owned
 `releases/download/TAG/unitares-VERSION.tar.gz` URL and a full commit plus

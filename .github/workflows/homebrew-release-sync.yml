@@ -32,6 +32,11 @@ jobs:
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      - name: Verify protected environment arming secret
+        env:
+          ARMED: ${{ secrets.UNITARES_HOMEBREW_RELEASE_SYNC_ARMED }}
+        run: test "$ARMED" = true
+
       - name: Check out the release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -140,7 +145,7 @@ jobs:
           python3 scripts/test_release_sync.py
           git config user.name "unitares-agents[bot]"
           git config user.email "342195540+unitares-agents[bot]@users.noreply.github.com"
-          git add Formula/unitares.rb SOURCES.json
+          git add Formula/unitares.rb Formula/unitares-lease-plane.rb SOURCES.json
           if git diff --cached --quiet; then
             echo "Tap already matches $TAG." >> "$GITHUB_STEP_SUMMARY"
             exit 0
