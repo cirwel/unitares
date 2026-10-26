@@ -299,7 +299,7 @@ def test_backup_cleanup_dry_run_then_reconciles_stale_index_entry(
     ]
 
 
-def test_backup_cleanup_apply_uses_the_recorded_dry_run_policy(
+def test_backup_cleanup_apply_refuses_policy_different_from_recorded_plan(
     updater, monkeypatch, tmp_path
 ):
     backup_dir = tmp_path / "backups"
@@ -323,10 +323,40 @@ def test_backup_cleanup_apply_uses_the_recorded_dry_run_policy(
     assert updater.cleanup_backups(retain=1, older_than_days=0) == 0
     planned = updater.read_cleanup_journal()
     assert planned["candidates"] == [str(paths[0]), str(paths[1])]
+    with pytest.raises(update.Refusal, match="policy differs"):
+        updater.cleanup_backups(retain=3, older_than_days=365, apply=True)
+    assert all(path.exists() for path in paths)
+
+
+def test_backup_cleanup_empty_dry_run_supersedes_old_plan(
+    updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    paths = []
+    for number in range(3):
+        path = backup_dir / f"unitares-superseded-{number}.dump"
+        path.write_bytes(f"PGDMP {number}".encode())
+        path.chmod(0o600)
+        updater.record_backup(path, "3.6.0")
+        paths.append(path)
+    index = updater.read_backup_index()
+    for number, entry in enumerate(index["entries"]):
+        entry["verified_at"] = f"2025-01-0{number + 1}T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
+    monkeypatch.setattr(
+        updater, "_verify_indexed_backup", lambda entry, root: Path(entry["path"])
+    )
+
+    assert updater.cleanup_backups(retain=1, older_than_days=0) == 0
+    assert updater.read_cleanup_journal()["stage"] == "planned"
+    assert updater.cleanup_backups(retain=3, older_than_days=365) == 0
+    superseded = updater.read_cleanup_journal()
+    assert superseded["stage"] == "complete"
+    assert superseded["superseded_by_empty_plan"] is True
     assert updater.cleanup_backups(retain=3, older_than_days=365, apply=True) == 0
-    assert not paths[0].exists()
-    assert not paths[1].exists()
-    assert paths[2].exists()
+    assert all(path.exists() for path in paths)
 
 
 def test_backup_cleanup_resumes_after_unlink_before_receipt(
