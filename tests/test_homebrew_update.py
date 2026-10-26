@@ -455,7 +455,8 @@ def test_resume_from_backed_up_refreshes_backup_and_baselines(updater, monkeypat
     )
     updater.brew.check_schema = lambda: None
     updater.brew.start = lambda **kwargs: pytest.fail("stopped writers were started")
-    assert updater.resume(state=state) == 0
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    assert updater.resume() == 0
     assert refreshed == [True]
     assert written[0]["backup"] == "/private/refreshed.dump"
     assert written[0]["superseded_backups"] == ["/private/old.dump"]
@@ -611,8 +612,9 @@ def test_resume_from_backed_up_adopts_repaired_tap_revision(updater, monkeypatch
     monkeypatch.setattr(
         updater, "write_journal", lambda value: written.append(dict(value))
     )
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
     with pytest.raises(SystemExit):
-        updater.resume(state=state, assume_yes=True)
+        updater.resume(assume_yes=True)
     assert installed[0]["unitares"]["target"] == "3.6.0_1"
     assert state["superseded_targets"][0]["unitares"] == "3.6.0"
     assert state["target"]["unitares"]["installed"] == "3.5.0_5"
@@ -644,7 +646,9 @@ def test_resume_requires_confirmation_when_tap_target_changes(updater, monkeypat
         "backup_database",
         lambda *args, **kwargs: pytest.fail("backup ran before target approval"),
     )
-    assert updater.resume(state=state) == 0
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
+    with pytest.raises(update.Refusal, match="update --abort"):
+        updater.resume()
     assert state["target"]["unitares"]["target"] == "3.6.0"
 
 
@@ -670,10 +674,18 @@ def test_resume_from_planned_retries_stop_backup_and_finishes(
         updater, "backup_database", lambda target: tmp_path / f"before-{target}.dump"
     )
     monkeypatch.setattr(updater, "apply_migrations", lambda: calls.append("migrate"))
+    monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
+    monkeypatch.setattr(
+        updater,
+        "inventory",
+        lambda: _inventory(current="3.6.0", target="3.6.0"),
+    )
+    monkeypatch.setattr(updater, "read_journal", lambda required=True: state)
     monkeypatch.setattr(
         updater, "write_journal", lambda value: calls.append(value["stage"])
     )
-    assert updater.resume(state=state) == 0
+    assert updater.resume() == 0
     assert calls == [
         "stop",
         "quiesced",

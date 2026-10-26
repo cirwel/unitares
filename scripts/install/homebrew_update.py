@@ -677,6 +677,7 @@ class NativeUpdater:
         accept_identity_change: bool = False,
         assume_yes: bool = False,
     ) -> int:
+        loaded_from_journal = state is None
         state = state or self.read_journal(required=True)
         assert state is not None
         initial_stage = state["stage"]
@@ -731,12 +732,10 @@ class NativeUpdater:
             self.write_journal(state)
         if state["stage"] == "backed_up":
             self.verify_quiesced()
-            if initial_stage == "backed_up":
-                # A prior package attempt may have been interrupted. Refresh
-                # the tap, target, and evidence immediately before retrying. A
-                # tap may publish a repaired revision while this journal is
-                # stopped, and even external writes between attempts must be
-                # included in the new backup.
+            if loaded_from_journal:
+                # Tap metadata can change between any interrupted journal stage
+                # and this recovery. Resolve it again before package changes and
+                # require renewed consent for a different target.
                 self.refresh_tap()
                 self.repair_managed_links()
                 refreshed = self.inventory()
@@ -749,8 +748,11 @@ class NativeUpdater:
                     "The tap target changed since this update began. Continue with the refreshed package set?",
                     assume_yes,
                 ):
-                    print("Target change was not accepted; writers remain stopped.")
-                    return 0
+                    raise Refusal(
+                        "Target change was not accepted; writers remain stopped. Review and run "
+                        "`unitares update --resume` to confirm it, or `unitares update --abort` "
+                        "to restore prior state while abort remains safe."
+                    )
                 if targets_changed:
                     state.setdefault("superseded_targets", []).append(
                         {
@@ -760,6 +762,10 @@ class NativeUpdater:
                     )
                 for name in FORMULAE:
                     state["target"][name]["target"] = refreshed[name]["target"]
+            if loaded_from_journal and initial_stage == "backed_up":
+                # A prior package attempt may have been interrupted. Refresh
+                # evidence immediately before retrying so even external writes
+                # between attempts are included in the new backup.
                 previous = state.get("backup")
                 state["schema_before"] = self.schema_version()
                 state["agent_count_before"] = self.agent_count()
