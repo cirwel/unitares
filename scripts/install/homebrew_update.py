@@ -389,12 +389,17 @@ class NativeUpdater:
         ):
             raise Refusal(f"Indexed backup no longer matches its verified record: {path}")
         pg_restore = self.brew.prefix / "opt/postgresql@17/bin/pg_restore"
-        result = subprocess.run(
-            [str(pg_restore), "--list", str(path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
+        try:
+            result = subprocess.run(
+                [str(pg_restore), "--list", str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise Refusal(
+                f"Indexed backup could not be checked with pg_restore: {path}"
+            ) from exc
         if result.returncode:
             raise Refusal(f"Indexed backup no longer passes pg_restore verification: {path}")
         return path
@@ -459,6 +464,12 @@ class NativeUpdater:
                 or older_than_days != cleanup["older_than_days"]
             )
         ):
+            if cleanup["stage"] == "deleting":
+                raise Refusal(
+                    "An interrupted backup cleanup must resume with its recorded "
+                    f"policy: --retain-backups {cleanup['retain']} "
+                    f"--older-than-days {cleanup['older_than_days']} --yes."
+                )
             raise Refusal(
                 "Backup-cleanup policy differs from the recorded plan; re-run the "
                 "dry run with these options, then repeat it with --yes."
@@ -516,10 +527,23 @@ class NativeUpdater:
                 )
 
         if not candidate_names:
-            if cleanup and cleanup["stage"] == "planned" and not resume_plan:
+            if not apply and not (
+                cleanup and cleanup["stage"] == "deleting"
+            ):
+                cleanup = {
+                    "journal_version": CLEANUP_JOURNAL_VERSION,
+                    "stage": "planned",
+                    "created_at": _utc_now(),
+                    "candidates": [],
+                    "deleted": [],
+                    "retain": policy_retain,
+                    "older_than_days": policy_age,
+                }
+                self._write_private_json(self.cleanup_journal_path, cleanup)
+            elif apply and resume_plan:
+                assert cleanup is not None
                 cleanup["stage"] = "complete"
                 cleanup["completed_at"] = _utc_now()
-                cleanup["superseded_by_empty_plan"] = True
                 self._write_private_json(self.cleanup_journal_path, cleanup)
             print(
                 f"No indexed backups are eligible; retaining {len(verified_entries)} verified backup(s), including the newest {policy_retain} and anything newer than {policy_age} day(s)."

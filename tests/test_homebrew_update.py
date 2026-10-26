@@ -328,7 +328,7 @@ def test_backup_cleanup_apply_refuses_policy_different_from_recorded_plan(
     assert all(path.exists() for path in paths)
 
 
-def test_backup_cleanup_empty_dry_run_supersedes_old_plan(
+def test_backup_cleanup_empty_dry_run_replaces_old_plan_and_applies_nothing(
     updater, monkeypatch, tmp_path
 ):
     backup_dir = tmp_path / "backups"
@@ -352,11 +352,59 @@ def test_backup_cleanup_empty_dry_run_supersedes_old_plan(
     assert updater.cleanup_backups(retain=1, older_than_days=0) == 0
     assert updater.read_cleanup_journal()["stage"] == "planned"
     assert updater.cleanup_backups(retain=3, older_than_days=365) == 0
-    superseded = updater.read_cleanup_journal()
-    assert superseded["stage"] == "complete"
-    assert superseded["superseded_by_empty_plan"] is True
+    replacement = updater.read_cleanup_journal()
+    assert replacement["stage"] == "planned"
+    assert replacement["candidates"] == []
+    index = updater.read_backup_index()
+    index["entries"][0]["verified_at"] = "2020-01-01T00:00:00+00:00"
+    updater._write_private_json(updater.backup_index_path, index)
     assert updater.cleanup_backups(retain=3, older_than_days=365, apply=True) == 0
     assert all(path.exists() for path in paths)
+    assert updater.read_cleanup_journal()["stage"] == "complete"
+
+
+def test_backup_cleanup_interrupted_policy_mismatch_names_recorded_options(
+    updater, monkeypatch, tmp_path
+):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("UNITARES_BACKUP_DIR", str(backup_dir))
+    updater._write_private_json(
+        updater.cleanup_journal_path,
+        {
+            "journal_version": update.CLEANUP_JOURNAL_VERSION,
+            "stage": "deleting",
+            "candidates": [],
+            "deleted": [],
+            "retain": 2,
+            "older_than_days": 45,
+        },
+    )
+    with pytest.raises(
+        update.Refusal,
+        match=r"--retain-backups 2 --older-than-days 45 --yes",
+    ):
+        updater.cleanup_backups(retain=1, older_than_days=30, apply=True)
+
+
+def test_backup_cleanup_pg_restore_timeout_is_refusal(updater, monkeypatch, tmp_path):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    path = backup_dir / "unitares-timeout.dump"
+    path.write_bytes(b"PGDMP")
+    path.chmod(0o600)
+    entry = {
+        "path": str(path),
+        "size": path.stat().st_size,
+        "sha256": updater._file_sha256(path),
+    }
+
+    def timeout(*args, **kwargs):
+        raise update.subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+
+    monkeypatch.setattr(update.subprocess, "run", timeout)
+    with pytest.raises(update.Refusal, match="could not be checked"):
+        updater._verify_indexed_backup(entry, backup_dir)
 
 
 def test_backup_cleanup_resumes_after_unlink_before_receipt(

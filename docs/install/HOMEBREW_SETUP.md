@@ -127,10 +127,11 @@ eligible set with `--yes`; adjust the two floors with `--retain-backups N` and
 unfinished. Missing files do not count toward the retention floor; their stale
 index records appear in the dry run and are reconciled only with `--yes`.
 The dry run records its candidates and policy in the private cleanup journal;
-`--yes` uses that recorded plan even if time changed, while rechecking
+`--yes` applies that recorded set, including an empty set, even if time changed, while rechecking
 update-journal protections immediately before deletion. Repeat the same policy
-options with `--yes`; a different policy is refused, and a later no-op dry run
-supersedes an older pending plan.
+options with `--yes`; a different policy is refused, and a later dry run always
+replaces an older pending plan. An interrupted deletion must resume with the
+recorded policy printed by the command.
 Unindexed backups are never deleted. Old kegs remain Homebrew's
 responsibility; keep the predecessor until the new installation and backup have
 been validated, then use Homebrew's own cleanup procedure when appropriate.
