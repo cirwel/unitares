@@ -595,9 +595,22 @@ class TestHandleRequestDialecticReview:
         data = parse_result(result)
         assert data["success"] is False
         assert data.get("error_code") == "SESSION_EXISTS"
-        assert data["recovery"]["action"] == (
-            "Use dialectic(action='get', session_id='...') to view the active session"
-        )
+        assert "..." not in data["recovery"]["action"]
+        from src.mcp_handlers.schemas.dialectic import DialecticParams
+        from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
+
+        recovery_args = DialecticParams.model_validate(
+            data["recovery"]["arguments"]
+        ).model_dump()
+        assert recovery_args["agent_id"] == "agent-paused"
+        assert recovery_args["fields"] == "compact"
+        with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(
+            return_value=[_make_session().to_dict()]
+        )), mock_context_agent:
+            recovered = parse_result(await handle_get_dialectic_session(recovery_args))
+        assert recovered["success"] is True
+        assert recovered["fields"] == "compact"
+        assert "transcript" not in recovered
         assert data["recovery"]["related_tools"] == ["dialectic"]
 
     @pytest.mark.asyncio
@@ -3378,6 +3391,100 @@ class TestHandleGetDialecticSession:
     """Tests for handle_get_dialectic_session handler."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fields", [None, "full", "compact"])
+    async def test_read_projection_fast_path(self, fields, mock_context_agent):
+        """The advertised compact view preserves the verdict and next move."""
+        from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
+        from src.mcp_handlers.schemas.dialectic import DialecticParams
+
+        topic = "Review this change. " * 500
+        fast_dict = {
+            "session_id": "projection-session",
+            "phase": "synthesis",
+            "paused_agent": "agent-paused",
+            "reviewer": "agent-reviewer",
+            "topic": topic,
+            "transcript": [{"reasoning": topic, "content": topic}] * 4,
+            "resolution": {"action": "resume", "conditions": ["Check the diff."]},
+            "resolution_effect_state": "pending",
+            "attestation": {"status": "unsigned"},
+        }
+        arguments = DialecticParams.model_validate({
+            "action": "get", "session_id": "projection-session", "fields": fields,
+        }).model_dump()
+        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=fast_dict)), \
+             mock_context_agent:
+            data = parse_result(await handle_get_dialectic_session(arguments))
+
+        assert data["resolution"] == fast_dict["resolution"]
+        assert data["resolution_effect_state"] == "pending"
+        assert data["attestation"] == fast_dict["attestation"]
+        assert "whose_move" in data
+        assert "next_call" in data
+        assert fast_dict["topic"] == topic
+        assert "transcript" in fast_dict
+        if fields == "compact":
+            assert "transcript" not in data
+            assert data["topic_truncated"] is True
+            assert data["topic_chars"] == len(topic)
+            assert data["message_count"] == 4
+            full_args = DialecticParams.model_validate(
+                data["full_session_retrieval"]["arguments"]
+            )
+            assert full_args.session_id == "projection-session"
+            assert full_args.fields == "full"
+            assert len(json.dumps(data)) < len(json.dumps(fast_dict)) / 4
+        else:
+            assert data["topic"] == topic
+            assert data["transcript"] == fast_dict["transcript"]
+            assert "omitted_fields" not in data
+
+    @pytest.mark.asyncio
+    async def test_compact_fallback_preserves_reconstruction_state(self, mock_context_agent):
+        from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
+
+        session = _make_session(phase=DialecticPhase.RESOLVED)
+        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             mock_context_agent:
+            data = parse_result(await handle_get_dialectic_session({
+                "session_id": session.session_id, "fields": "compact",
+            }))
+        assert data["phase"] == "resolved"
+        assert "paused_agent_state" in data["omitted_fields"]
+        assert "paused_agent_state" not in data
+        assert session.paused_agent_state
+
+    @pytest.mark.asyncio
+    async def test_compact_by_agent_projects_every_session(self, mock_context_agent):
+        from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
+
+        rows = [{**_make_session().to_dict(), "session_id": f"session-{i}"} for i in range(2)]
+        with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(return_value=rows)), \
+             mock_context_agent:
+            data = parse_result(await handle_get_dialectic_session({
+                "agent_id": "agent-paused", "fields": "compact",
+            }))
+        assert data["session_count"] == 2
+        assert all(row["fields"] == "compact" for row in data["sessions"])
+        assert all("transcript" not in row for row in data["sessions"])
+
+    @pytest.mark.asyncio
+    async def test_compact_not_found_keeps_error_and_recovery(self, mock_context_agent):
+        from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
+
+        with patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)), \
+             mock_context_agent:
+            data = parse_result(await handle_get_dialectic_session({
+                "session_id": "missing", "fields": "compact",
+            }))
+        assert data["success"] is False
+        assert "not found" in data["error"].lower()
+        assert "recovery" in data
+        assert "full_session_retrieval" not in data
+
+    @pytest.mark.asyncio
     async def test_happy_path_by_session_id_in_memory(self, mock_context_agent):
         """Returns session data when found in memory by session_id."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session, ACTIVE_SESSIONS
@@ -3492,8 +3599,9 @@ class TestHandleGetDialecticSession:
         assert "take_over_if_requested" in data["recommended_action"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fields", [None, "compact"])
     async def test_session_timed_out(
-        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound,
+        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound, fields,
     ):
         """Session that has timed out returns failure with recovery guidance."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session, ACTIVE_SESSIONS
@@ -3505,16 +3613,24 @@ class TestHandleGetDialecticSession:
         # Mock check_timeout to return a timeout reason
         with patch.object(session, "check_timeout",
                           return_value="Session timeout - total time exceeded 6 hours"), \
+             patch(f"{DIALECTIC}._commit_terminal_resolution", new=AsyncMock(
+                 return_value=SimpleNamespace(commit_unknown=False, terminal_committed=True)
+             )), \
              mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound:
             result = await handle_get_dialectic_session({
                 "session_id": session.session_id,
                 "check_timeout": True,
+                "fields": fields,
             })
 
         data = parse_result(result)
         assert data["success"] is False
         assert "timeout" in data["error"].lower()
         assert "recovery" in data
+        assert data["session"]["phase"] == "failed"
+        if fields == "compact":
+            assert data["session"]["fields"] == "compact"
+            assert "transcript" not in data["session"]
 
     @pytest.mark.asyncio
     async def test_timeout_identity_refusal_does_not_turn_read_into_failure(

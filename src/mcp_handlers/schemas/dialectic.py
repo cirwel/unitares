@@ -26,6 +26,10 @@ class GetDialecticSessionParams(AgentIdentityMixin):
         default=False,
         description="Check reviewer/session timeouts and auto-facilitation state"
     )
+    fields: Optional[Literal["compact", "full"]] = Field(
+        default=None,
+        description="Compact omits transcript/state and previews topic/reason; full is the default",
+    )
 
     @model_validator(mode='after')
     def coerce_types(self):
@@ -52,6 +56,10 @@ class ListDialecticSessionsParams(AgentIdentityMixin):
     include_transcript: Union[bool, str, None] = Field(
         default=False,
         description="Include full transcript"
+    )
+    fields: Optional[Literal["compact", "full"]] = Field(
+        default=None,
+        description="Compact returns tally fields only; full is the default",
     )
 
     @model_validator(mode='after')
@@ -179,10 +187,10 @@ class DialecticParams(AgentIdentityMixin):
     # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
     ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "get": (
-                "session_id", "check_timeout",
+                "session_id", "check_timeout", "fields",
         ),
         "list": (
-                "status", "limit", "include_transcript",
+                "status", "limit", "include_transcript", "fields",
         ),
         # quick triages issue_description (or reason) and reads the thesis
         # and antithesis fields as context; until 2026-09-26 this entry named
@@ -247,6 +255,14 @@ class DialecticParams(AgentIdentityMixin):
     limit: Optional[int] = Field(None, description="Max sessions to return (for action=list, default 50, min 1, values above 200 are capped)")
     include_transcript: Optional[bool] = Field(None, description="Include full transcript (for action=list, default false)")
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
+    fields: Optional[Literal["compact", "full"]] = Field(
+        None,
+        description=(
+            "Read projection for get/list (default full). Get compact omits "
+            "transcript/state and previews topic/reason, retaining verdict, "
+            "conditions and next action. List compact returns tally fields only."
+        ),
+    )
     # Write action fields
     issue_description: Optional[str] = Field(None, description="Issue description (action=request/quick)")
     reviewed_work_author_agent_ids: Optional[List[str]] = Field(

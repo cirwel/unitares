@@ -39,6 +39,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
+from .read_projection import compact_session_read
 from src.dialectic_session_writes import session_write_via
 from .events import (
     emit_participant_abstained,
@@ -2427,7 +2428,18 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             error_code="SESSION_EXISTS",
             error_category="validation_error",
             recovery={
-                "action": "Use dialectic(action='get', session_id='...') to view the active session",
+                "action": (
+                    f"Use dialectic(action='get', agent_id={agent_uuid!r}, "
+                    "fields='compact') to inspect your sessions before continuing "
+                    "the existing review."
+                ),
+                "tool": "dialectic",
+                "arguments": {
+                    "action": "get",
+                    "agent_id": agent_uuid,
+                    "fields": "compact",
+                    "check_timeout": False,
+                },
                 "related_tools": ["dialectic"],
             },
             arguments=arguments
@@ -2836,8 +2848,13 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
         agent_id: Agent ID to find sessions for (optional if session_id provided)
 
     Returns:
-        Session state including transcript and next-action guidance
+        Session state with next-action guidance; fields=compact omits reconstruction bodies
     """
+    def respond(payload: Dict[str, Any]) -> Sequence[TextContent]:
+        if arguments.get("fields") == "compact":
+            payload = compact_session_read(payload)
+        return success_response(payload)
+
     try:
         session_id = arguments.get('session_id')
         agent_id = arguments.get('agent_id')
@@ -2869,7 +2886,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                 if fast_result:
                     fast_result["success"] = True
                     fast_result.update(_build_dialectic_actionability(fast_result))
-                    return success_response(fast_result)
+                    return respond(fast_result)
 
             # PG-first, fallback to in-memory cache
             session = await load_session(session_id)
@@ -2938,7 +2955,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                                     reason="Previous reviewer did not respond within the antithesis timeout.",
                                 )
                                 result.update(_build_dialectic_actionability(result))
-                                return success_response(result)
+                                return respond(result)
 
                     # No replacement found — mark awaiting facilitation (not FAILED yet)
                     if not getattr(session, 'awaiting_facilitation', False):
@@ -3002,7 +3019,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                             "dialectic_facilitation_needed", session, reason="reviewer_stuck"
                         )
 
-                    return success_response({
+                    return respond({
                         "success": False,
                         "error": "Reviewer stuck - awaiting human facilitation",
                         "awaiting_facilitation": True,
@@ -3039,7 +3056,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                         attach_attestation(result)
                         await _attach_public_resolution_effect(result, session_id)
                         result.update(_build_dialectic_actionability(result))
-                        return success_response(result)
+                        return respond(result)
                     except Exception as e:
                         logger.error(
                             "Failed to persist timeout to PostgreSQL: %s",
@@ -3079,7 +3096,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                         )]
                     session.phase = DialecticPhase.FAILED
                     session.awaiting_facilitation = False
-                    return success_response({
+                    return respond({
                         "success": False,
                         "error": timeout_reason,
                         "session": attach_attestation(session.to_dict()),
@@ -3094,7 +3111,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             attach_attestation(result)
             await _attach_public_resolution_effect(result, session_id)
             result.update(_build_dialectic_actionability(result))
-            return success_response(result)
+            return respond(result)
         
         # If agent_id provided, find all sessions for this agent
         if agent_id:
@@ -3130,10 +3147,10 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                 result = matching_sessions[0]
                 result["success"] = True
                 attach_attestation(result)
-                return success_response(result)
+                return respond(result)
 
             # Multiple sessions - return list
-            return success_response({
+            return respond({
                 "success": True,
                 "agent_id": agent_id,
                 "session_count": len(matching_sessions),

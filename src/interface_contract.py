@@ -325,7 +325,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 2.0.0 (2026-10-23): Omitted inference hosts follow explicit deployment policy or an unambiguous eligible host; no vendor is selected by default.
 # 2.1.0 (2026-10-23): Knowledge details adds bounded response-chain depth, limit, and offset controls with deterministic pagination.
 # 2.2.0 (2026-10-26): onboard accepts an optional host_session declaration; GET /v1/timeline reports each agent's host_session without the workspace
-INTERFACE_CONTRACT_VERSION = "2.2.0"
+# 2.3.0 (2026-10-26): Expose opt-in compact dialectic reads and executable duplicate-session recovery.
+INTERFACE_CONTRACT_VERSION = "2.3.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
