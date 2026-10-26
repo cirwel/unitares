@@ -7,24 +7,28 @@ the first copy's data or switch its clients.
 
 ## Available paths
 
-- **Homebrew preview for Apple Silicon Macs:** the published
+- **Homebrew preview, recommended for Apple Silicon desktop Macs:** the published
   [cirwel/unitares tap](https://github.com/cirwel/homebrew-unitares) installs the
   native server, lease plane, PostgreSQL 17 with AGE/pgvector, and Redis. Docker
   is not required. Follow the tap's install and first-time database steps, then
   the [native setup guide](HOMEBREW_SETUP.md). Services run in the Homebrew
   owner's logged-in macOS account. Intel macOS and Linux are outside this preview.
-- **Docker Compose:** the supported container installation and automated update
-  path. It runs the services together and keeps data in Docker volumes. Follow
-  the [installation manual](../manual/02-install.md#21-docker-quickstart).
+- **Docker Compose:** the recommended cross-platform, server and CI path. It
+  runs the services together and keeps data in Docker volumes. Follow the
+  [installation manual](../manual/02-install.md#21-docker-quickstart).
 - **Native source checkout:** the advanced operator/developer path, maintained
   in the [source install playbook](PLAYBOOK.md). Its manual extension builds
   and Python environment are separate from the packaged Homebrew installation.
 
-Homebrew provides package installation, private configuration and native service
-control. Database creation/bootstrap and backed-up upgrades remain explicit
-operator steps; `unitares update` is still Compose-only. The tap builds from
-source and does not publish bottles. Docker remains supported for container
-and server deployments. Choose the path whose operating procedure fits your host.
+Homebrew provides package installation, private configuration, native service
+control and an explicit coordinated updater. Database creation/bootstrap stays
+an operator step. `unitares update --check` reads the locally cached tap and
+database migration plan; `unitares update` refreshes the tap, stops both writers,
+writes and verifies a private database backup, upgrades the managed formulae,
+re-executes the new package's updater, applies migrations, restores the previous
+running/stopped state and verifies deep health. Formula hooks never migrate the
+database. The tap still builds from source and does not publish bottles, so it
+remains a preview. Choose the path whose operating procedure fits your host.
 
 Installation method and optional capabilities are separate choices. Semantic
 search needs embeddings; model-assisted consultation needs a configured model.
@@ -127,10 +131,20 @@ expansion is refused. Custom Homebrew per-service environment files and custom
 writer commands require their existing service procedure. A shell-only
 `UNITARES_NATIVE_ENV` override cannot select a different launchd configuration.
 
-Native upgrades use the tap's documented
-[stop/backup/migrate/restart procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
-`unitares update` and Docker model configuration refuse a Homebrew package;
-invoke the CLI in the owning Docker checkout to manage that stack.
+Native upgrades use the packaged coordinated updater:
+
+```sh
+unitares update --check
+unitares update
+```
+
+The apply command refreshes tap metadata, manages the pin set, stops and verifies
+both writers, creates a verified custom-format backup, installs the package set,
+applies migrations and restores the previous running/stopped state. An
+interruption is recorded outside the keg and continues with `unitares update
+--resume`. A migration failure leaves the new package installed and both writers
+stopped for forward repair; reinstalling an old keg never reverses a migration.
+Docker model configuration still requires the owning Docker checkout.
 
 Before switching the primary installation, identify its database and connected
 clients, take and verify a backup, stop its writers, and validate the replacement

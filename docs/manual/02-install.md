@@ -4,11 +4,12 @@
 
 Choose one primary installation:
 
-- **Apple Silicon Mac: Homebrew preview.** The published native tap packages the
-  server, lease plane, PostgreSQL 17 with AGE/pgvector, and Redis. Database setup
-  and backed-up upgrades remain explicit; Docker is not required.
-- **Docker Compose:** the supported container path with automatic fresh database
-  initialization and a backed-up update command.
+- **Apple Silicon desktop Mac: Homebrew preview (recommended).** The published
+  native tap packages the server, lease plane, PostgreSQL 17 with AGE/pgvector,
+  and Redis. Database setup remains explicit; upgrades use the coordinated
+  backed-up updater. Docker is not required.
+- **Docker Compose:** the recommended cross-platform, server and CI path, with
+  automatic fresh database initialization and a backed-up update command.
 - **Source checkout:** the advanced macOS operator/developer path in the
   [source install playbook](../install/PLAYBOOK.md).
 
@@ -19,7 +20,7 @@ brew update
 brew tap cirwel/unitares
 brew trust cirwel/unitares
 brew install cirwel/unitares/unitares
-brew pin unitares unitares-lease-plane
+brew pin unitares unitares-lease-plane apache-age unitares-pgvector
 ```
 
 The published tap revision `3.5.0_5` includes native CLI backports beyond the
@@ -33,8 +34,22 @@ existing file. Only after the selected database is verified should you run
 `unitares start --check`, `unitares start`, and `unitares health`.
 
 The [Homebrew setup guide](../install/HOMEBREW_SETUP.md) explains readiness and
-recovery boundaries. The tap's [upgrade procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery)
-is stop/backup/migrate/restart; `unitares update` manages Docker Compose only.
+recovery boundaries. Check and apply a native update with:
+
+```sh
+unitares update --check
+unitares update
+```
+
+The apply command refreshes tap metadata, temporarily unpins only the four
+managed UNITARES formulae, stops both writers, verifies a custom-format backup,
+installs the package set without cleaning old kegs, re-executes the new package's
+updater, applies pending migrations, restores the previous running/stopped state,
+repins the set and verifies deep health. The durable journal resumes with
+`unitares update --resume`. A failed migration leaves the new package installed
+and both writers stopped for forward repair; an old keg does not reverse schema.
+Homebrew formula hooks never migrate the database.
+
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew
 owner's logged-in macOS session. Intel macOS and Linux are outside its scope.

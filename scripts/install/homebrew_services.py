@@ -263,6 +263,9 @@ class Homebrew:
     def lock(self):
         directory = self.prefix / 'var/unitares'
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise Refusal('The UNITARES runtime directory must be a private directory owned by you.')
         fd = os.open(directory / 'service-control.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             try:

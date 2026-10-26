@@ -77,6 +77,11 @@ For commands that accept a database URL, pass its password through libpq's
 `PGPASSWORD` environment instead of including it in process arguments. Setup's
 own probes do this automatically and suppress raw database error output.
 
-Native upgrades use the tap's separate backed-up
-[upgrade and recovery procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery). Setup does not switch
-clients, copy a Docker database, or change which installation owns your data.
+Native upgrades use `unitares update --check` and `unitares update`. The latter
+refreshes the tap and explicitly performs the stop, verified backup, package
+upgrade, migration, restart and deep-health sequence. Formula install hooks and
+`unitares start` never apply migrations. If an interruption occurs after the
+backup, keep both writers stopped and run `unitares update --resume`; the journal
+and backup paths are under the Homebrew runtime directory and
+`~/.unitares/backups` respectively. Setup does not switch clients, copy a Docker
+database, or change which installation owns your data.
