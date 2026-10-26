@@ -219,6 +219,16 @@ def test_stop_attempts_both_writers_even_when_first_fails(manager, monkeypatch):
     assert calls == [('services', 'stop', 'unitares'), ('services', 'stop', 'unitares-lease-plane')]
 
 
+def test_service_lock_refuses_insecure_runtime_directory(manager):
+    brew, _, _ = manager
+    directory = brew.prefix / 'var/unitares'
+    directory.mkdir(parents=True)
+    directory.chmod(0o777)
+    with pytest.raises(native.Refusal, match='private directory'):
+        with brew.lock():
+            pytest.fail('insecure lock acquired')
+
+
 def test_foreign_listener_is_refused_before_start(manager, monkeypatch):
     brew, records, calls = manager
     monkeypatch.setattr(brew, 'check_ports', native.Homebrew.check_ports.__get__(brew))
@@ -278,6 +288,31 @@ def test_cli_selects_homebrew_package_or_explicit_option(tmp_path, packaged, exp
     result = subprocess.run(args, capture_output=True, text=True, env=dict(os.environ, HOME=str(tmp_path)))
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [action, *options]
+
+
+@pytest.mark.parametrize('packaged,explicit', [(True, False), (False, True), (True, True)])
+def test_cli_routes_native_update_to_the_homebrew_updater(tmp_path, packaged, explicit):
+    root = tmp_path / ('keg/libexec/app' if packaged else 'source')
+    (root / 'scripts/install').mkdir(parents=True)
+    cli = root / 'scripts/unitares'
+    shutil.copy2(ROOT / 'scripts/unitares', cli)
+    (root / 'scripts/install/homebrew_update.py').write_text(
+        'import json,sys; print(json.dumps(sys.argv[1:]))\n'
+    )
+    if packaged:
+        wrapper = tmp_path / 'keg/bin/unitares-server'
+        wrapper.parent.mkdir()
+        wrapper.write_text('#!/bin/sh\n')
+        wrapper.chmod(0o755)
+    selector = ['--homebrew'] if explicit else []
+    result = subprocess.run(
+        [str(cli), 'update', *selector, '--check'],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, HOME=str(tmp_path)),
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ['--check']
 
 
 @pytest.mark.parametrize('settings,expected', [

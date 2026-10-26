@@ -994,6 +994,15 @@ _homebrew_service() {
     python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "${options[@]+"${options[@]}"}"
 }
 
+_homebrew_update() {
+    local arg
+    local -a options=()
+    for arg in "$@"; do
+        [ "$arg" = "--homebrew" ] || options+=("$arg")
+    done
+    python3 "$(_repo_root)/scripts/install/homebrew_update.py" "${options[@]+"${options[@]}"}"
+}
+
 _env_value() {
     # A Compose setting as Compose resolves it: a value exported in this shell
     # first, then the checkout's .env, then the given default. Only simple
@@ -1378,6 +1387,10 @@ _rollback_code() {
 
 cmd_update() {
     local check_only=0 target="" assume_yes=0 reexeced=0 from_label="" from_sha="" reexec_target_sha=""
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_update "$@"
+        return $?
+    fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --check) check_only=1 ;;
@@ -1595,9 +1608,13 @@ Homebrew service control (automatic from a Homebrew package):
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
   logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
                                     Read native service logs
+  update --homebrew [--check|--resume] [--yes]
+                                    Refresh and upgrade the managed formulae,
+                                    back up, migrate, restart and verify. An
+                                    interrupted update resumes from its journal
   From a source checkout, --homebrew explicitly selects the installed native
-  services. Configuration/bootstrap must already be complete. No migrations
-  run during start. Native update is still a separate backed-up procedure.
+  installation. Configuration/bootstrap must already be complete. No
+  migrations run during start or as a Homebrew formula hook.
 
 Commands:
   tui [--interval N] [--once [--json]]
