@@ -8,7 +8,7 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.5.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
+| UNITARES server | `v3.6.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.5.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 39898973063](https://github.com/cirwel/unitares/actions/runs/39898973063). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.5.0). |
 | `unitares-governance` plugin | `v0.4.22` | Carries the skills bundle for server `v3.5.0`, whose changelog entry names it as the bundle carrier (`plugin-bundle-recut: v0.4.22`). The plugin's [release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.22) record the mirrored commit and the file-by-file comparison. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
 | `unitares-sdk` | `0.6.0` | Published Python client for resident and custom integrations. `sdk-v0.6.0` is the newest SDK tag in server `v3.5.0`, and PyPI serves it. Install it with `pip install unitares-sdk==0.6.0`; use a server Git tag only when deliberately testing an unreleased SDK build. What changed: [changelog](CHANGELOG.md). |
@@ -35,6 +35,23 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.6.0 moves the interface contract from 1.56.0 to 2.3.0 and adds no
+  database migration. Existing clients keep their registered callable names,
+  but deployments and clients must account for several upgrade-relevant
+  changes. Services no longer discover a secrets file unless
+  `UNITARES_SECRETS_ENV` names it. Built-in HTTP route-pack names are replaced
+  by an explicit deployment manifest. Omitted inference hosts follow
+  deployment policy or one unambiguous eligible host rather than selecting a
+  vendor default. Workspace-health clients must accept `null` results with
+  `not_assessed` or `not_requested` status for checks the server did not
+  perform. The Docker quickstart now defaults the knowledge backend to AGE and
+  rebuilds an existing Postgres-backed graph on first access; set
+  `UNITARES_KNOWLEDGE_BACKEND=postgres` in `.env` before updating to retain the
+  old backend. A server configured beyond loopback refuses published default
+  secrets. OAuth, HTTP session writes, and lease-plane mutations now require
+  the bounded state or principal proof described in the release notes. The
+  in-tree `unitares-sdk` 0.6.1 is a compatible patch over 0.6.0 and omits an
+  absent inference host instead of sending the retired default.
 - v3.5.0 removes and renames no registered callable, action or input
   parameter, and adds no database migration; the interface contract moves
   from 1.50.0 to 1.56.0. Two changes can need an operator or client step.

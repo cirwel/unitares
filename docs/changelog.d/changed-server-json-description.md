@@ -1,1 +1,0 @@
-- **`server.json` description:** the MCP registry entry now reads "Accountability infrastructure for long-running AI agents. Shared memory is a provenance graph." It still opens with the product sentence verbatim; the second sentence describes what the AGE backend, now the quickstart default, stores: who wrote each finding, how findings relate, and what replaced what.

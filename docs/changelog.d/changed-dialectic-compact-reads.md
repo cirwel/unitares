@@ -1,1 +1,0 @@
-- Interface contract 2.3.0: Expose opt-in compact dialectic reads and executable duplicate-session recovery.
