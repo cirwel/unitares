@@ -1,1 +1,0 @@
-- Public surface inventory now includes the Homebrew preview and timestamped Markdown/JSON reports, with source and refresh paths, explicit unknown states for delegated checks, and opt-in deployment observations. The existing weekly Positioning Surfaces workflow retains the report and acceptance evidence.
