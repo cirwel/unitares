@@ -16,11 +16,13 @@ def compact_session_read(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     if result.get("session_id"):
         omitted = []
-        for field in ("transcript", "paused_agent_state"):
+        # The session-id/cache read uses transcript; raw PostgreSQL rows on
+        # the agent-id read use messages. Both contain the full message bodies.
+        for field in ("transcript", "messages", "paused_agent_state"):
             if field in result:
                 value = result.pop(field)
                 omitted.append(field)
-                if field == "transcript" and isinstance(value, list):
+                if field in ("transcript", "messages") and isinstance(value, list):
                     result.setdefault("message_count", len(value))
         for field in ("topic", "reason"):
             value = result.get(field)

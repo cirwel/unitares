@@ -605,12 +605,18 @@ class TestHandleRequestDialecticReview:
         assert recovery_args["agent_id"] == "agent-paused"
         assert recovery_args["fields"] == "compact"
         with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(
-            return_value=[_make_session().to_dict()]
+            return_value=[{
+                "session_id": "existing-pg-session", "phase": "synthesis",
+                "paused_agent_id": "agent-paused", "paused_agent_state": {},
+                "messages": [{"message_type": "thesis", "reasoning": "Original brief."}],
+            }]
         )), mock_context_agent:
             recovered = parse_result(await handle_get_dialectic_session(recovery_args))
         assert recovered["success"] is True
         assert recovered["fields"] == "compact"
         assert "transcript" not in recovered
+        assert "messages" not in recovered
+        assert recovered["message_count"] == 1
         assert data["recovery"]["related_tools"] == ["dialectic"]
 
     @pytest.mark.asyncio
@@ -3456,10 +3462,20 @@ class TestHandleGetDialecticSession:
         assert session.paused_agent_state
 
     @pytest.mark.asyncio
-    async def test_compact_by_agent_projects_every_session(self, mock_context_agent):
+    @pytest.mark.parametrize("storage_shape", ["postgres", "memory"])
+    async def test_compact_by_agent_projects_every_session(self, mock_context_agent, storage_shape):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
 
         rows = [{**_make_session().to_dict(), "session_id": f"session-{i}"} for i in range(2)]
+        if storage_shape == "postgres":
+            # DialecticDB.get_session returns raw message rows under messages;
+            # the object cache and session-id fast path instead use transcript.
+            for row in rows:
+                row.pop("transcript")
+                row["messages"] = [{
+                    "message_id": 7, "message_type": "thesis",
+                    "reasoning": "Large PostgreSQL-only message body. " * 500,
+                }]
         with patch(f"{DIALECTIC}.pg_get_all_sessions_by_agent", new=AsyncMock(return_value=rows)), \
              mock_context_agent:
             data = parse_result(await handle_get_dialectic_session({
@@ -3468,6 +3484,10 @@ class TestHandleGetDialecticSession:
         assert data["session_count"] == 2
         assert all(row["fields"] == "compact" for row in data["sessions"])
         assert all("transcript" not in row for row in data["sessions"])
+        assert all("messages" not in row for row in data["sessions"])
+        if storage_shape == "postgres":
+            assert all(row["message_count"] == 1 for row in data["sessions"])
+            assert all(row["omitted_fields"] == ["messages", "paused_agent_state"] for row in data["sessions"])
 
     @pytest.mark.asyncio
     async def test_compact_not_found_keeps_error_and_recovery(self, mock_context_agent):
