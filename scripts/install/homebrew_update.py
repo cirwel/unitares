@@ -67,8 +67,11 @@ class NativeUpdater:
             env.pop("HOMEBREW_NO_AUTO_UPDATE", None)
         result = run([self.brew.brew, *args], env=env, timeout=timeout)
         if result.returncode:
+            diagnostics = (result.stderr or result.stdout).strip()
+            if diagnostics:
+                print(f"Homebrew diagnostics:\n{diagnostics}", file=sys.stderr)
             raise Refusal(
-                f"Homebrew {' '.join(args)} failed. Inspect the Homebrew output; "
+                f"Homebrew {' '.join(args)} failed. Inspect the diagnostics above; "
                 "if an update journal was created, continue with `unitares update --resume`."
             )
         return result
@@ -137,7 +140,7 @@ class NativeUpdater:
                 )
             if not formula.get("linked_keg"):
                 print(f"… Repairing interrupted Homebrew link for {name}")
-                self._brew_process("link", "--overwrite", qualified, timeout=300)
+                self._brew_process("link", qualified, timeout=300)
 
     @staticmethod
     def changes(inventory: dict[str, dict[str, object]]) -> dict[str, tuple[str, str]]:
@@ -466,12 +469,14 @@ class NativeUpdater:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise Refusal(
                 f"The Homebrew package transaction did not finish; inspect {log_path}, "
-                "then run `unitares update --resume`."
+                "then run `unitares update --resume`. If the command is no longer on PATH, run "
+                "`$(brew --prefix)/opt/unitares/bin/unitares update --resume`."
             ) from exc
         if result.returncode:
             raise Refusal(
                 f"The Homebrew package transaction failed; inspect {log_path}. Both writers remain "
-                "stopped; then run `unitares update --resume`."
+                "stopped; then run `unitares update --resume`. If the command is no longer on PATH, run "
+                "`$(brew --prefix)/opt/unitares/bin/unitares update --resume`."
             )
 
     def install_packages(self, target: dict[str, dict[str, object]]) -> None:
@@ -666,7 +671,11 @@ class NativeUpdater:
         return 0
 
     def resume(
-        self, *, state: dict | None = None, accept_identity_change: bool = False
+        self,
+        *,
+        state: dict | None = None,
+        accept_identity_change: bool = False,
+        assume_yes: bool = False,
     ) -> int:
         state = state or self.read_journal(required=True)
         assert state is not None
@@ -731,10 +740,18 @@ class NativeUpdater:
                 self.refresh_tap()
                 self.repair_managed_links()
                 refreshed = self.inventory()
-                if any(
+                targets_changed = any(
                     refreshed[name]["target"] != state["target"][name]["target"]
                     for name in FORMULAE
+                )
+                self.report(refreshed, local_metadata=False)
+                if targets_changed and not self._confirm(
+                    "The tap target changed since this update began. Continue with the refreshed package set?",
+                    assume_yes,
                 ):
+                    print("Target change was not accepted; writers remain stopped.")
+                    return 0
+                if targets_changed:
                     state.setdefault("superseded_targets", []).append(
                         {
                             name: state["target"][name]["target"]
@@ -743,7 +760,6 @@ class NativeUpdater:
                     )
                 for name in FORMULAE:
                     state["target"][name]["target"] = refreshed[name]["target"]
-                self.report(refreshed, local_metadata=False)
                 previous = state.get("backup")
                 state["schema_before"] = self.schema_version()
                 state["agent_count_before"] = self.agent_count()
@@ -847,7 +863,8 @@ def main(argv: list[str] | None = None) -> int:
         with brew.lock():
             if args.resume:
                 return updater.resume(
-                    accept_identity_change=args.accept_identity_change
+                    accept_identity_change=args.accept_identity_change,
+                    assume_yes=args.yes,
                 )
             if args.abort:
                 return updater.abort()

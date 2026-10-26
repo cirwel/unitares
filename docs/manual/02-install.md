@@ -64,6 +64,11 @@ once a managed UNITARES formula or the schema changed, while retained dependency
 changes are recorded in the journal. Direct `brew services` commands bypass the
 journal barrier. Homebrew formula hooks never migrate the database.
 
+If an interrupted Homebrew link step removes `unitares` from `PATH`, resume via
+`$(brew --prefix)/opt/unitares/bin/unitares update --resume`. A retry that finds
+a newer tap target asks for confirmation before adopting it; use `--yes` only
+after reviewing the reported replacement target in non-interactive automation.
+
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew
 owner's logged-in macOS session. Intel macOS and Linux are outside its scope.

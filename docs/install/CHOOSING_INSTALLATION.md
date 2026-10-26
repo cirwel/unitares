@@ -145,6 +145,9 @@ applies migrations and restores the previous running/stopped state. An
 interruption is recorded outside the keg and continues with `unitares update
 --resume`. A migration failure leaves the new package installed and both writers
 stopped for forward repair; reinstalling an old keg never reverses a migration.
+If an interrupted link step removes the CLI from `PATH`, run
+`$(brew --prefix)/opt/unitares/bin/unitares update --resume`. A newer tap target
+requires renewed confirmation before the retry adopts it.
 If the installed keg predates this updater, first use the tap's
 [manual transition procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 Docker model configuration still requires the owning Docker checkout.

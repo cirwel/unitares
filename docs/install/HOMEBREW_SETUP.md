@@ -86,7 +86,10 @@ journal records the complete installed-formula inventory before and after the
 transaction. Formula install hooks and `unitares start` never apply migrations. An
 unfinished journal blocks `unitares start`. If an interruption occurs after the
 backup, run `unitares update --resume`; a retry from the backed-up stage creates
-fresh backup evidence before changing packages. If identity-count verification
+fresh backup evidence before changing packages. If the tap target changed, the
+retry asks for confirmation (or requires `--yes`) before adopting it. If
+`unitares` disappeared from `PATH` during an interrupted Homebrew link step, run
+`$(brew --prefix)/opt/unitares/bin/unitares update --resume`. If identity-count verification
 fails, inspect the database and backup first, then explicitly acknowledge the
 reviewed result with
 `unitares update --resume --accept-identity-change`. Journal and backup paths are

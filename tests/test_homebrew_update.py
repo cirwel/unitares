@@ -101,7 +101,7 @@ def test_recovery_repairs_managed_formula_left_unlinked(updater, monkeypatch):
     updater.repair_managed_links()
     assert calls == [
         ("info", "--json=v2", "--formula", *update.QUALIFIED_FORMULAE),
-        ("link", "--overwrite", "cirwel/unitares/unitares"),
+        ("link", "cirwel/unitares/unitares"),
     ]
 
 
@@ -591,8 +591,8 @@ def test_resume_from_backed_up_adopts_repaired_tap_revision(updater, monkeypatch
     written = []
     monkeypatch.setattr(updater, "refresh_tap", lambda: None)
     monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
-    monkeypatch.setattr(updater, "inventory", lambda: repaired)
     monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(updater, "inventory", lambda: repaired)
     monkeypatch.setattr(updater, "schema_version", lambda: 75)
     monkeypatch.setattr(updater, "agent_count", lambda: 3)
     monkeypatch.setattr(
@@ -612,11 +612,40 @@ def test_resume_from_backed_up_adopts_repaired_tap_revision(updater, monkeypatch
         updater, "write_journal", lambda value: written.append(dict(value))
     )
     with pytest.raises(SystemExit):
-        updater.resume(state=state)
+        updater.resume(state=state, assume_yes=True)
     assert installed[0]["unitares"]["target"] == "3.6.0_1"
     assert state["superseded_targets"][0]["unitares"] == "3.6.0"
     assert state["target"]["unitares"]["installed"] == "3.5.0_5"
     assert written[-1]["stage"] == "packages_installed"
+
+
+def test_resume_requires_confirmation_when_tap_target_changes(updater, monkeypatch):
+    state = {
+        "journal_version": update.JOURNAL_VERSION,
+        "stage": "backed_up",
+        "writers_were_running": False,
+        "agent_count_before": 3,
+        "schema_before": 75,
+        "backup": "/private/old.dump",
+        "target": _inventory(current="3.5.0_5", target="3.6.0"),
+        "config_sha256": _config_hash(updater),
+    }
+    monkeypatch.setattr(updater, "refresh_tap", lambda: None)
+    monkeypatch.setattr(updater, "repair_managed_links", lambda: None)
+    monkeypatch.setattr(updater, "verify_quiesced", lambda: None)
+    monkeypatch.setattr(
+        updater,
+        "inventory",
+        lambda: _inventory(current="3.5.0_5", target="3.6.0_1"),
+    )
+    monkeypatch.setattr(updater, "_confirm", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        updater,
+        "backup_database",
+        lambda *args, **kwargs: pytest.fail("backup ran before target approval"),
+    )
+    assert updater.resume(state=state) == 0
+    assert state["target"]["unitares"]["target"] == "3.6.0"
 
 
 def test_resume_from_planned_retries_stop_backup_and_finishes(
