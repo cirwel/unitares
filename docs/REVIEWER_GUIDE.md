@@ -2,7 +2,7 @@
 
 **Created:** May 23, 2026
 
-**Last Updated:** October 20, 2026
+**Last Updated:** October 26, 2026
 
 **Status:** Active
 
@@ -88,10 +88,11 @@ a proposal alone does not establish shipment.
 The [interface contract](INTERFACE_CONTRACT.md) maps workflow names to canonical
 tools. Discover names with `list_tools(lite=true)` and schemas with
 `describe_tool`; use `use_tool` for tools omitted from the initial progressive
-listing. Legacy aliases have transport-specific support. PostgreSQL full-text
-search is the default; AGE provides replacement-link and response-chain
-traversal. Neither a tool listing nor a successful review request proves a
-complete deployment.
+listing. Legacy aliases have transport-specific support. Full-text search is
+the default (semantic search requires `docker-compose.full.yml`); the `age`
+knowledge backend (on by default in Compose; `postgres` when unset on source or
+Glama installs) provides replacement-link and response-chain traversal. Neither
+a tool listing nor a successful review request proves a complete deployment.
 
 ## Fast path: three minutes
 
