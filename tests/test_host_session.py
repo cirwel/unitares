@@ -99,4 +99,6 @@ async def test_schema_validation_never_refuses_a_malformed_declaration(declared)
     )
     assert isinstance(result, tuple), result
     _name, arguments, _ctx = result
-    assert arguments["host_session"] == declared
+    # A non-object is "nothing declared"; an object reaches the handler,
+    # which validates it and drops it if malformed.
+    assert arguments["host_session"] == (declared if isinstance(declared, dict) else None)

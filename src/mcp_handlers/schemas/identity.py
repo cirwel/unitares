@@ -1,5 +1,5 @@
 from typing import Any, Optional, Union
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from src.identity.onboard_provenance import OnboardOrigin
 from .mixins import AgentIdentityMixin
 from .core import BootstrapStateParams
@@ -168,18 +168,23 @@ class OnboardParams(AgentIdentityMixin):
             "to resolve or recover identity."
         )
     )
-    # Typed Any on purpose: the handler validates and drops a malformed
-    # value, so schema validation must not refuse an onboard over it.
-    host_session: Optional[Any] = Field(
+    host_session: Optional[dict] = Field(
         default=None,
         description=(
-            "Optional adapter-reported vendor session object: {harness, "
-            "session_id, workspace?}. Stored once on a newly minted identity "
-            "so a reader can tell which vendor session to resume. "
-            "Declaration-only: never used to resolve, recover or deduplicate "
-            "identity; a malformed value is ignored, never refused."
-        )
+            "Optional adapter-reported vendor session {harness, session_id, "
+            "workspace?}, stored once on a fresh identity. Descriptive only; "
+            "a malformed value is ignored."
+        ),
+        json_schema_extra={"brief": "Adapter-only: {harness, session_id, workspace?}."},
     )
+
+    @field_validator("host_session", mode="before")
+    @classmethod
+    def _drop_non_object_host_session(cls, value: Any) -> Any:
+        # Ignored, never refused: a non-object becomes "nothing declared" here,
+        # and the handler drops a malformed object the same way.
+        return value if isinstance(value, dict) else None
+
     initial_state: Optional[BootstrapStateParams] = Field(
         default=None,
         description=(
