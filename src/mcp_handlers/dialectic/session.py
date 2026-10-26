@@ -575,6 +575,16 @@ async def load_session(session_id: str) -> Optional[DialecticSession]:
         logger.error(f"Failed to load session {session_id} from PostgreSQL: {e}", exc_info=True)
         return None
 
+def _paused_agent_state_dict(raw: Any) -> Dict[str, Any]:
+    """The stored pause evidence as an object; anything else reads as empty."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
+            return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
     """Load session data formatted for API response, skipping object reconstruction.
 
@@ -644,6 +654,13 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                     row.get("resolution_saga_revision") or 0
                 ),
                 "transcript": [],
+                # The server-captured pause evidence, as DialecticSession.to_dict
+                # serves it. A reviewer started with only the session id reads
+                # its evidence here (inference-hosts-config-v0 §2.5), so no
+                # launcher can hand it invented state.
+                "paused_agent_state": _paused_agent_state_dict(
+                    row.get("paused_agent_state_json")
+                ),
                 "reviewed_work_authorship": read_reviewed_work_authorship(
                     row.get("paused_agent_state_json"),
                     expected_declared_by_agent_id=row["paused_agent_id"],

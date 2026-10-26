@@ -483,9 +483,21 @@ sets nothing.
      `HA_CODEX_EXEC_FALLBACK=1`, with the prompt on standard input and the
      administrator-configuration and sandbox-probe checks repeated) and
      `host.antigravity` (the existing agy client). No host profile binds a
-     secret. No caller sends profiles yet, so nothing changes. Next: the
-     reviewer and council profiles, moving the callers, and the doctor's
-     digest check.
+     secret. No caller sends profiles yet, so nothing changes.
+     *Reviewer, first half (2026-10-26):* `dialectic(action='get')` read
+     only the transcript and the authorship declaration, not the pause
+     evidence the reviewer is given today, so the fast read now serves
+     `paused_agent_state` as `DialecticSession.to_dict` already did. With
+     `DIALECTIC_REVIEWER_FROM_SESSION=1` the reviewer reads the paused
+     agent's latest thesis, the evidence, the situation and its parent from
+     that record, ignores thesis variables in its environment, and exits 4
+     without reviewing when the record is for another session, not awaiting
+     its reviewer, has no thesis from the paused agent, or carries no
+     evidence of the server's schema. Chosen in a design consult (Codex and
+     Antigravity, 2026-10-26) over serving it to bound callers only or
+     trusting declared lineage, neither of which bounds a bearer holder.
+     Next: the reviewer resolving its own host list, its profile, the
+     council profiles, moving the callers, and the doctor's digest check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is

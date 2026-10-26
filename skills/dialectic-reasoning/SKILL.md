@@ -246,7 +246,8 @@ orchestrated reviewer takes it within about a minute of the request. `consult`
 If identity or session continuity looks suspect, verify with `identity(client_session_id=...)` before
 assuming the thesis belongs to the agent you think it does. An independent
 reviewer also receives server-captured pause evidence separately from the paused
-agent's narrative. Treat its measurement, policy, and enforcement provenance as
+agent's narrative; the full `dialectic(action="get")` read serves it as
+`paused_agent_state`. Treat its measurement, policy, and enforcement provenance as
 context; legacy `C(V)` is diagnostic controller feedback, not independent
 evidence that the thesis is right or wrong.
 
