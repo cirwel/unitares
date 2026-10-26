@@ -4,11 +4,12 @@
 
 Choose one primary installation:
 
-- **Apple Silicon Mac: Homebrew preview.** The published native tap packages the
-  server, lease plane, PostgreSQL 17 with AGE/pgvector, and Redis. Database setup
-  and backed-up upgrades remain explicit; Docker is not required.
-- **Docker Compose:** the supported container path with automatic fresh database
-  initialization and a backed-up update command.
+- **Apple Silicon desktop Mac: Homebrew preview (recommended).** The published
+  native tap packages the server, lease plane, PostgreSQL 17 with AGE/pgvector,
+  and Redis. Database setup remains explicit; upgrades use the coordinated
+  backed-up updater. Docker is not required.
+- **Docker Compose:** the recommended cross-platform, server and CI path, with
+  automatic fresh database initialization and a backed-up update command.
 - **Source checkout:** the advanced macOS operator/developer path in the
   [source install playbook](../install/PLAYBOOK.md).
 
@@ -19,7 +20,7 @@ brew update
 brew tap cirwel/unitares
 brew trust cirwel/unitares
 brew install cirwel/unitares/unitares
-brew pin unitares unitares-lease-plane
+brew pin unitares unitares-lease-plane apache-age unitares-pgvector
 ```
 
 The published tap revision `3.5.0_5` includes native CLI backports beyond the
@@ -33,8 +34,52 @@ existing file. Only after the selected database is verified should you run
 `unitares start --check`, `unitares start`, and `unitares health`.
 
 The [Homebrew setup guide](../install/HOMEBREW_SETUP.md) explains readiness and
-recovery boundaries. The tap's [upgrade procedure](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery)
-is stop/backup/migrate/restart; `unitares update` manages Docker Compose only.
+recovery boundaries. Check and apply a native update with:
+
+```sh
+unitares update --check
+unitares update
+```
+
+If the installed keg does not yet contain `unitares update`, use the tap's
+[one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery)
+to reach the first revision that includes it.
+
+The apply command refreshes tap metadata, temporarily unpins only the four
+managed UNITARES formulae, stops both writers, verifies a custom-format backup,
+installs the package set without cleaning old kegs, re-executes the new package's
+updater, applies pending migrations, restores the previous running/stopped state,
+repins the set and verifies deep health when writers are restarted (or schema
+state when they remain stopped). Homebrew may update required dependencies; the
+journal records the complete installed-formula inventory before and after. The
+durable journal resumes with
+`unitares update --resume`, and blocks a separate `unitares start` until final.
+A retry from the backed-up stage creates a fresh verified backup. A failed
+migration leaves the new package installed and both writers stopped for forward
+repair; after inspecting an identity-count mismatch, explicitly continue with
+`unitares update --resume --accept-identity-change`. An old keg does not reverse
+schema. Before any package or schema change, an unrecoverable package-build
+failure can be abandoned with `unitares update --abort`; the command refuses
+once a managed UNITARES formula or the schema changed, while retained dependency
+changes are recorded in the journal. Direct `brew services` commands bypass the
+journal barrier. Homebrew formula hooks never migrate the database.
+
+If an interrupted Homebrew link step removes `unitares` from `PATH`, resume via
+`$(brew --prefix)/opt/unitares/bin/unitares update --resume`. A retry that finds
+a newer tap target asks for confirmation before adopting it; use `--yes` only
+after reviewing the reported replacement target in non-interactive automation.
+
+Each verified native backup is recorded in a private checksum index. Run
+`unitares update --cleanup-backups` for a deletion-free retention plan; add
+`--yes` to apply it. By default, the newest three, journal-referenced backups,
+and backups newer than 30 days are retained. `--retain-backups N` and
+`--older-than-days N` can raise or lower those explicit floors, but at least one
+existing, reverified backup is always retained. Missing files do not count;
+their stale index records appear in the dry run and are reconciled only with
+`--yes`. The dry run records the exact candidates and policy privately, and
+`--yes` resumes that plan while rechecking newly protected backups. Unindexed
+backups and Homebrew kegs are never removed by UNITARES.
+
 No model connection, Ollama instance or resident roster is enabled by default.
 The preview builds from source, has no bottles, and requires the Homebrew
 owner's logged-in macOS session. Intel macOS and Linux are outside its scope.
