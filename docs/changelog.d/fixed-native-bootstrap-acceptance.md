@@ -1,1 +1,0 @@
-- Native installation now has real PostgreSQL acceptance coverage for fresh bootstrap, interruption after migration 62, migration recovery, checksum provenance and server readiness. The required CI test check and release promotion both depend on acceptance passing against the candidate archive.
