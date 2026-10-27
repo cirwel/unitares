@@ -319,12 +319,21 @@ def run_codex(environ: dict[str, str], prompt: str, err: TextIO) -> int:
     if not lane.confinement_verified(path):
         raise Refusal("this codex does not enforce the lane's permission profile "
                       "(codex sandbox probe)", EXIT_NOT_CONFINED)
+    # The lane denies the shared temporary directories outright, and a deny
+    # outranks every read (codex_app_server_client.temp_denials), so codex
+    # could read neither a directory there nor a working directory made there.
+    if lane.under_temp_root(directory):
+        raise Refusal("COUNCIL_DIR is under a shared temporary directory, which the codex "
+                      "lane cannot read")
     codex_home = environ.get("CODEX_HOME") or os.path.join(environ.get("HOME", ""), ".codex")
     env = _sibling("claude_cli_client").claude_env(environ)
     if environ.get("CODEX_HOME"):
         env["CODEX_HOME"] = environ["CODEX_HOME"]
     workdir = os.path.realpath(tempfile.mkdtemp(prefix="unitares-council-codex-"))
     try:
+        if lane.under_temp_root(workdir):
+            raise Refusal("TMPDIR is a shared temporary directory, which the codex lane "
+                          "cannot read; set it to a private directory", EXIT_NOT_CONFINED)
         if not _isolated(workdir, (".git", ".agents", "AGENTS.md")):
             raise Refusal("the temporary directory sits inside a project; set TMPDIR to a "
                           "plain directory", EXIT_NOT_CONFINED)
