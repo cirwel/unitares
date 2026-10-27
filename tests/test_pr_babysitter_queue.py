@@ -134,6 +134,7 @@ def _pr(
     head: str | None = None,
     review: str | None = "SUCCESS",
     fork: bool = False,
+    author: str = "alice",
 ) -> dict:
     rollup = list(checks) if checks is not None else [_check("test")]
     if review is not None:
@@ -153,6 +154,7 @@ def _pr(
         "body": body,
         "headRefOid": head or f"sha{number}",
         "isCrossRepository": fork,
+        "author": {"login": author},
     }
 
 
@@ -708,6 +710,64 @@ def test_an_approved_armed_pr_parked_for_approval_is_disarmed(tmp_path: Path) ->
         arms={3: 20},
     )
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+
+
+def test_a_stalled_dependabot_holder_emits_attention_and_releases_the_slot(tmp_path: Path) -> None:
+    calls, out = _run(
+        tmp_path,
+        [_pr(3, armed_min_ago=20, state="BLOCKED", author="dependabot[bot]"), _pr(4)],
+        arms={3: 20},
+        expect_rc=2,
+    )
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "without a visible failing, pending, or parked check" in out
+    events = [json.loads(line) for line in (tmp_path / "state" / "approvals.attention.jsonl").read_text().splitlines()]
+    assert events == [
+        {
+            "schema": "unitares.pr_queue_attention.v1",
+            "key": "opaque-blocked:3:sha3",
+            "observed_at": events[0]["observed_at"],
+            "repo": "o/r",
+            "base": "master",
+            "pr_number": 3,
+            "head_sha": "sha3",
+            "queue_phase": "blocked",
+            "blocker": "opaque_merge_block",
+            "merge_state": "BLOCKED",
+            "held_minutes": events[0]["held_minutes"],
+            "owner_role": "dependency-steward",
+            "next_action": "Reconcile the missing GitHub merge requirement or repair this exact head; completion is MERGED or CLOSED.",
+            "terminal_state": None,
+        }
+    ]
+    assert events[0]["held_minutes"] >= 19
+
+
+def test_an_attention_receipt_quarantines_the_same_opaque_head_without_duplicates(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        [_pr(3, armed_min_ago=20, state="BLOCKED", author="dependabot[bot]")],
+        arms={3: 20},
+        expect_rc=2,
+    )
+    calls, out = _run(
+        tmp_path,
+        [_pr(3, state="BLOCKED", author="dependabot[bot]")],
+        expect_rc=2,
+    )
+    assert calls == []
+    assert "attention receipt is active" in out
+    assert len((tmp_path / "state" / "approvals.attention.jsonl").read_text().splitlines()) == 1
+
+
+def test_a_non_bot_opaque_holder_uses_the_conservative_grace(tmp_path: Path) -> None:
+    calls, out = _run(
+        tmp_path,
+        [_pr(3, armed_min_ago=20, state="BLOCKED"), _pr(4)],
+        arms={3: 20},
+    )
+    assert calls == []
+    assert "opaque" not in out
 
 
 def test_a_zero_arming_time_is_not_a_decades_long_hold(tmp_path: Path) -> None:

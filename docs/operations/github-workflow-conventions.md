@@ -852,13 +852,22 @@ Draft PRs cannot be queued, so mark ready first.
   the queue armed is disarmed when it turns `CONFLICTING`, when its checks
   fail on its current head, when a check is parked for approval, when its
   content changes, or when its label is removed; its label stays except in
-  the last case. A hold longer than 90 minutes is logged.
+  the last case. An arm that remains opaquely `BLOCKED` with no visible
+  failing, pending, or approval-parked check is also disarmed after a bounded
+  grace (15 minutes for Dependabot, 90 minutes otherwise). The unchanged head
+  is quarantined rather than re-armed in a loop, the slot moves on, and the
+  run exits nonzero until GitHub's state becomes explainable or changes.
 - **Notices on the PR.** When the queue skips a labelled PR for a reason
   that will not clear by itself (a conflict, an approval gone stale, a
   required check that concluded without passing, a check parked for
   approval, failures that survived the one re-run), it posts one comment on
   the PR saying why and what fixes it (deduped per reason and head). Transient
-  waits post nothing.
+  waits post nothing. An opaque block additionally writes a deduplicated
+  `unitares.pr_queue_attention.v1` JSONL event next to the queue approval
+  state (override with `PR_QUEUE_ATTENTION_FILE`). That event names the exact
+  PR and head, stable `dependency-steward` role, blocker, next action, and a
+  null terminal state; the process UUID that happened to observe it is not
+  treated as the owner.
 - **Updates: never armed across an unchecked head.** When the head of the
   queue is `BEHIND`, the script updates it unarmed and holds its place; a
   later tick arms the updated head once its content still matches the
@@ -882,6 +891,41 @@ keep them in one PR.
 
 **Land or close drafts quickly.** An open draft accrues cascade debt: it needs
 a rebuild every time anything merges, whether or not anyone is working on it.
+
+### Dependency stewardship receipts
+
+`scripts/dev/dependabot_triage.py` remains report-only on GitHub: it never
+labels, pushes, reruns, readies, arms, or merges a PR. A recurring deployment
+can add `--receipt PATH --fail-on-actionable` to turn the report into a durable
+reconciliation input for a federated worker:
+
+```bash
+unitares-automation-run --id launchd:dependency-steward \
+  --name dependency-steward --source launchd --kind reconciler -- \
+  python3 scripts/dev/dependabot_triage.py \
+    --repos owner/repo \
+    --receipt "$HOME/.local/state/unitares/dependency-steward.json" \
+    --fail-on-actionable
+```
+
+The atomic `unitares.dependency_steward.v1` receipt records each PR's exact
+head, classification, queue phase, stable owner role, first-seen and transition
+times, next action, and terminal evidence. A PR disappearing from the open list
+does not complete the task: the reconciler reads that PR directly and records
+terminal completion only when GitHub returns `MERGED` or `CLOSED`. An unreadable
+terminal lookup becomes `unreachable` and stays nonterminal. Exit `2` means a
+steward action is due; exit `1` means repository coverage failed; waiting CI,
+approved, queued, and terminal phases remain observable without being reported
+as failures.
+
+The recurring host wrapper should run under repository-scoped App credentials
+and through `unitares-automation-run`, so start/ok/fail lifecycle receipts reach
+the automation census. Scheduler installation, repository selection, live
+paths, and accountable principals belong in the operator's deployment
+configuration, not this reusable repository. Granting `actions:write`, pushing
+to `dependabot/*`, or dispatching an autonomous repair agent is a separate
+authority expansion: add it only with an exact-head lease, path allowlist,
+bounded retry budget, and no branch-protection bypass or human-token fallback.
 
 ### Merge queue — the real fix, and what blocks it today
 
