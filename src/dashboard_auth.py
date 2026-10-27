@@ -905,7 +905,8 @@ async def http_auth_credential_revoke(request):
 # accepting socket is the only property of a request it cannot choose. They
 # also need UNITARES_HUB_TOKEN, a credential scoped to these three routes.
 # A hub session never extends its parent dashboard session; signing that
-# session out, or revoking its passkey, ends every hub session made from it.
+# session out, its expiry, or revoking its passkey ends every hub session
+# made from it (the parent is minutes old at approval, with 30 days to run).
 # Unconfigured (no valid UNITARES_HUB_CALLBACK_URL and UNITARES_HUB_TOKEN),
 # every hub route answers 404.
 # ---------------------------------------------------------------------------
@@ -1190,6 +1191,8 @@ async def http_hub_exchange(request):
                             ON c.credential_id = s.credential_id
                          WHERE s.session_hash = $1
                            AND s.revoked_at IS NULL
+                           AND s.expires_at > now()
+                           AND s.hard_expires_at > now()
                            AND c.revoked_at IS NULL
                     )
                     """,
@@ -1261,6 +1264,8 @@ async def http_hub_check(request):
                    AND h.revoked_at IS NULL
                    AND h.expires_at > now()
                    AND s.revoked_at IS NULL
+                   AND s.expires_at > now()
+                   AND s.hard_expires_at > now()
                    AND c.revoked_at IS NULL
                 """,
                 _sha256(handle),

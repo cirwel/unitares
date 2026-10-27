@@ -499,6 +499,26 @@ async def test_ending_the_parent_ends_the_hub_session(hub_db, ended):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("column", ["expires_at", "hard_expires_at"])
+async def test_an_expired_parent_ends_the_hub_session_and_its_codes(hub_db, column):
+    """The same parent rules as load_dashboard_session: revoked or expired."""
+    backend, session = hub_db
+    verifier, challenge = _verifier_and_challenge()
+    code = (await _approve(session, challenge))["code"]
+    handle = (await _internal("/v1/hub/exchange", {"code": code, "code_verifier": verifier})).json()["handle"]
+    pending_verifier, pending_challenge = _verifier_and_challenge()
+    pending = (await _approve(session, pending_challenge))["code"]
+    async with backend.acquire() as conn:
+        await conn.execute(
+            f"UPDATE core.dashboard_sessions SET {column} = now() - interval '1 second' WHERE session_hash = $1",
+            session["session_hash"],
+        )
+    assert (await _internal("/v1/hub/check", {"handle": handle})).status_code == 401
+    refused = await _internal("/v1/hub/exchange", {"code": pending, "code_verifier": pending_verifier})
+    assert refused.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_a_revoked_parent_cannot_exchange_a_code_it_approved(hub_db):
     backend, session = hub_db
     verifier, challenge = _verifier_and_challenge()
