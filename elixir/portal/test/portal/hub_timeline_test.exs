@@ -77,6 +77,38 @@ defmodule Portal.HubTimelineTest do
       assert_receive {:fake_ws_authorization, ["Bearer " <> @key]}, 2_000
     end
 
+    test "a server that accepts but never answers the upgrade is retried" do
+      {:ok, listener} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, port} = :inet.port(listener)
+      test = self()
+
+      # Accept every connection and say nothing, counting the attempts.
+      spawn_link(fn ->
+        Stream.repeatedly(fn -> :gen_tcp.accept(listener) end)
+        |> Enum.each(fn {:ok, _socket} -> send(test, :accepted) end)
+      end)
+
+      pubsub = :"hub_timeline_pubsub_#{System.unique_integer([:positive])}"
+      start_supervised!({Phoenix.PubSub, name: pubsub})
+      Phoenix.PubSub.subscribe(pubsub, Portal.Firehose.status_topic())
+
+      start_supervised!(
+        {Portal.Firehose,
+         url: "ws://127.0.0.1:#{port}/ws/eisv",
+         pubsub: pubsub,
+         upgrade_timeout_ms: 100,
+         reconnect_min_ms: 50,
+         reconnect_max_ms: 50,
+         name: :"hub_firehose_#{System.unique_integer([:positive])}"}
+      )
+
+      assert_receive :accepted, 1_000
+      assert_receive {:firehose_status, :unreachable}, 1_000
+      assert_receive :accepted, 1_000
+    end
+
     test "never shows the key when its state is inspected" do
       state = %Portal.Firehose{url: "ws://127.0.0.1:1/ws/eisv", read_token: @key}
       refute inspect(state) =~ @key
