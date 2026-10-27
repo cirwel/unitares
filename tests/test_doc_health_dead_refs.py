@@ -844,3 +844,36 @@ def test_link_to_compatibility_stub_flagged_except_from_index_or_dated_doc(
     assert "TROUBLESHOOTING.md:1: link to compatibility stub `START_HERE.md`" in warnings[0]
     assert "README.md:1: link to compatibility stub `docs/guides/START_HERE.md`" in warnings[1]
 
+
+def test_same_file_anchor_and_github_master_link_checks(
+    tmp_path, monkeypatch, doc_health
+):
+    """Same-file #anchor links and github.com/cirwel/unitares/blob|tree/master links are verified."""
+    d = tmp_path / "docs"
+    d.mkdir()
+    other = d / "other.md"
+    other.write_text("# Real Section\n")
+    doc = d / "a.md"
+    doc.write_text(
+        "# Local Heading\n\n"
+        "Good same-file: [ok](#local-heading)\n"
+        "Bad same-file: [bad](#missing-heading)\n"
+        "Good master: [m1](https://github.com/cirwel/unitares/blob/master/docs/other.md#real-section)\n"
+        "Bad master path: [m2](https://github.com/cirwel/unitares/blob/master/docs/gone.md)\n"
+        "Bad master anchor: [m3](https://github.com/cirwel/unitares/blob/master/docs/other.md#wrong)\n"
+        "```markdown\n"
+        "[ignored in fence](#nonexistent)\n"
+        "```\n"
+    )
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    rel_warnings = doc_health.check_relative_links([doc])
+    assert len(rel_warnings) == 1
+    assert "broken same-file anchor `#missing-heading`" in rel_warnings[0]
+
+    gh_warnings = doc_health.check_github_master_links([doc])
+    assert len(gh_warnings) == 2
+    assert "broken master link `https://github.com/cirwel/unitares/blob/master/docs/gone.md`" in gh_warnings[0]
+    assert "broken anchor `#wrong`" in gh_warnings[1]
+
+

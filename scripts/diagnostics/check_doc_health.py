@@ -192,6 +192,11 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
 # exist by design, so they stay exempt.
 
 _REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#([^)\s]*))?\)")
+_SAME_FILE_ANCHOR = re.compile(r"\]\(#([^)\s]+)\)")
+_GH_MASTER_LINK = re.compile(
+    r"https://github\.com/cirwel/unitares/(?:blob|tree)/master/"
+    r"([^)\s#\"`>]+)(?:#([^)\s\"`>]*))?"
+)
 _ABSOLUTE_URL = re.compile(r"^[a-z][a-z0-9+.\-]*://|^mailto:", re.IGNORECASE)
 _REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
@@ -280,7 +285,30 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
             continue
         if rel.name.endswith(_REVIEW_SUFFIXES):
             continue
+        in_fence = False
+        fence_char = ""
+        fence_len = 0
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
+            fence_match = _FENCE_RE.match(line)
+            if fence_match:
+                marker = fence_match.group(2)
+                if not in_fence:
+                    in_fence = True
+                    fence_char = marker[0]
+                    fence_len = len(marker)
+                elif marker[0] == fence_char and len(marker) >= fence_len:
+                    in_fence = False
+                continue
+            if in_fence:
+                continue
+
+            for sm in _SAME_FILE_ANCHOR.finditer(line):
+                frag = sm.group(1)
+                if frag and frag.lower() not in _get_anchors(fpath.resolve()):
+                    warnings.append(
+                        f"  {rel}:{i}: broken same-file anchor `#{frag}`"
+                    )
+
             for match in _REL_MD_LINK.finditer(line):
                 link = match.group(1)
                 fragment = match.group(2) or ""
@@ -338,6 +366,73 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
                     ):
                         warnings.append(
                             f"  {rel}:{i}: link to compatibility stub `{link}` (link to canonical target instead)"
+                        )
+    return warnings
+
+
+def check_github_master_links(md_files: list[Path]) -> list[str]:
+    """Verify github.com/cirwel/unitares/(blob|tree)/master/<path>[#anchor] links."""
+    warnings = []
+    anchors_cache: dict[Path, set[str]] = {}
+    stub_cache: dict[Path, bool] = {}
+
+    def _get_anchors(target: Path) -> set[str]:
+        if target not in anchors_cache:
+            anchors_cache[target] = _extract_markdown_anchors(target)
+        return anchors_cache[target]
+
+    def _get_is_stub(target: Path) -> bool:
+        if target not in stub_cache:
+            stub_cache[target] = _is_compatibility_stub(target)
+        return stub_cache[target]
+
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        if rel.as_posix() in _DEAD_REF_SKIP_FILES:
+            continue
+        if any(d in rel.parts for d in _REL_LINK_SKIP_DIRS):
+            continue
+        if rel.name.endswith(_REVIEW_SUFFIXES):
+            continue
+        in_fence = False
+        fence_char = ""
+        fence_len = 0
+        for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
+            fence_match = _FENCE_RE.match(line)
+            if fence_match:
+                marker = fence_match.group(2)
+                if not in_fence:
+                    in_fence = True
+                    fence_char = marker[0]
+                    fence_len = len(marker)
+                elif marker[0] == fence_char and len(marker) >= fence_len:
+                    in_fence = False
+                continue
+            if in_fence:
+                continue
+            for gm in _GH_MASTER_LINK.finditer(line):
+                gpath = gm.group(1)
+                gfrag = gm.group(2) or ""
+                if any(c in gpath for c in "*<>{}"):
+                    continue
+                gtarget = (REPO_ROOT / gpath).resolve()
+                if not gtarget.exists():
+                    warnings.append(
+                        f"  {rel}:{i}: broken master link `{gm.group(0)}`"
+                    )
+                    continue
+                if gtarget.is_file() and gtarget.suffix == ".md":
+                    if gfrag and gfrag.lower() not in _get_anchors(gtarget):
+                        warnings.append(
+                            f"  {rel}:{i}: broken anchor `#{gfrag}` in link `{gm.group(0)}`"
+                        )
+                    if (
+                        _get_is_stub(gtarget)
+                        and rel.as_posix() not in _STUB_LINK_EXEMPT_FILES
+                        and not re.search(r"\d{4}-\d{2}-\d{2}", rel.name)
+                    ):
+                        warnings.append(
+                            f"  {rel}:{i}: link to compatibility stub `{gm.group(0)}` (link to canonical target instead)"
                         )
     return warnings
 
@@ -1217,6 +1312,10 @@ def main():
     rel_links = check_relative_links(md_files)
     if rel_links:
         all_warnings.append(("Broken relative .md links", rel_links))
+
+    master_links = check_github_master_links(md_files)
+    if master_links:
+        all_warnings.append(("Broken GitHub master links", master_links))
 
     orphans = check_index_orphans(md_files)
     if orphans:
