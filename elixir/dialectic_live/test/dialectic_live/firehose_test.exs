@@ -90,6 +90,30 @@ defmodule DialecticLive.FirehoseTest do
     refute log =~ "config failed"
   end
 
+  test "a server that accepts but never answers the upgrade is retried" do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+    test = self()
+
+    # Accept every connection and say nothing, counting the attempts.
+    spawn_link(fn ->
+      Stream.repeatedly(fn -> :gen_tcp.accept(listener) end)
+      |> Enum.each(fn {:ok, _socket} -> send(test, :accepted) end)
+    end)
+
+    log =
+      capture_log(fn ->
+        start_firehose("ws://127.0.0.1:#{port}/ws/eisv", upgrade_timeout_ms: 100)
+        assert_receive :accepted, 1_000
+        assert_receive {:firehose_status, :unreachable}, 1_000
+        assert_receive :accepted, 1_000
+      end)
+
+    assert log =~ "no answer to the upgrade within 100 ms"
+  end
+
   test "a refused upgrade is labelled as refused credentials" do
     url = FakeGovernanceWS.start!(test: self(), mode: {:status, 403})
 
