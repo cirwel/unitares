@@ -255,18 +255,6 @@ def test_codex_refuses_a_directory_under_a_shared_temp_root(
     assert "shared temporary directory" in err
 
 
-def test_codex_refuses_a_working_directory_under_a_shared_temp_root(
-        shim, repos, tmp_path, capfd, confined, monkeypatch):
-    shared = tmp_path / "shared-tmp"
-    shared.mkdir()
-    monkeypatch.setattr(client.tempfile, "tempdir", str(shared))
-    monkeypatch.setattr(codex_client, "TEMP_ROOTS", (str(shared),))
-    code, seen, err = _run(_env("codex", shim, repos), capfd)
-    assert (code, seen) == (client.EXIT_NOT_CONFINED, None)
-    assert "TMPDIR" in err
-    assert list(shared.iterdir()) == []
-
-
 # --- agy -------------------------------------------------------------------
 
 def test_agy_guards_the_prompt_and_isolates_home(shim, repos, capfd, confined):
