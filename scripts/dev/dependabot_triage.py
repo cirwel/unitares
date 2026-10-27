@@ -338,8 +338,6 @@ def build_stewardship_receipt(
                 retained["observation_status"] = "coverage_unreachable_allowed"
             else:
                 retained.update({
-                    "phase": "unreachable",
-                    "last_transition_at": observed_at,
                     "next_action": "Restore GitHub read coverage; absence from the open list is not completion.",
                     "terminal_state": None,
                     "completed_at": None,
@@ -356,8 +354,6 @@ def build_stewardship_receipt(
             retained = dict(old)
             retained.update({
                 "key": key,
-                "phase": "unreachable",
-                "last_transition_at": observed_at,
                 "next_action": "Restore GitHub read coverage; absence from the open list is not completion.",
                 "terminal_state": None,
                 "completed_at": None,
@@ -385,6 +381,9 @@ def build_stewardship_receipt(
             retained = dict(old)
             retained.update({
                 "key": key,
+                "head_sha": live.get("headRefOid") or old.get("head_sha", ""),
+                "url": live.get("url") or old.get("url", ""),
+                "next_action": "Reconcile why this Dependabot PR is open but absent from the open-PR listing.",
                 "terminal_state": None,
                 "completed_at": None,
                 "observation_status": "open_absent_from_list",

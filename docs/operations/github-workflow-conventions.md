@@ -913,7 +913,8 @@ head, classification, queue phase, stable owner role, first-seen and transition
 times, next action, and terminal evidence. A PR disappearing from the open list
 does not complete the task: the reconciler reads that PR directly and records
 terminal completion only when GitHub returns `MERGED` or `CLOSED`. An unreadable
-terminal lookup becomes `unreachable` and stays nonterminal. Exit `2` means a
+terminal lookup records a reconciliation failure and stays nonterminal without
+replacing the last known workflow phase. Exit `2` means a
 steward action is due; exit `1` means repository coverage failed; waiting CI,
 approved, queued, and terminal phases remain observable without being reported
 as failures. A tracked item outside the current `--repos` selection is retained
