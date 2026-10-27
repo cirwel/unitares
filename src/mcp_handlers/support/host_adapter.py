@@ -21,6 +21,12 @@ Gated by ``UNITARES_HOST_ADAPTER_ENABLED`` (default OFF — deferred, opt-in).
 rest stay on (a suspended provider account still has a working CLI binary, so
 nothing local can detect it). Every failure mode degrades to a structured
 error; it never raises into a handler.
+
+With ``UNITARES_ORCHESTRATOR_PROFILES=1`` each call sends only the closed
+request ``{"profile": "host.<name>", "vars": {...}}`` for the orchestrator's
+launch profile (inference-hosts-config-v0.md §2.5), never a command or an
+environment. A refused profile spawn is the result: nothing is retried as a
+raw spawn.
 """
 
 from __future__ import annotations
@@ -127,6 +133,20 @@ _HOST_COMMANDS = {
         "google_antigravity",
     ),
 }
+
+#: host_id -> the launch profile scripts/ops/orchestrator-profiles.py writes.
+_HOST_PROFILES = {
+    "codex:host-adapter": "host.codex",
+    "claude:host-adapter": "host.claude",
+    "antigravity:host-adapter": "host.antigravity",
+}
+
+#: Profiles whose client takes the caller's deadline (HA_TIMEOUT_S). The
+#: codex profile has none: its max_runtime_ms is the backstop.
+_PROFILES_WITH_TIMEOUT = frozenset({"host.claude", "host.antigravity"})
+
+#: The profiles' HA_TIMEOUT_S pattern allows three digits.
+_PROFILE_TIMEOUT_MAX_S = 999
 
 _CLI_ENV_OVERRIDES = {
     "codex:host-adapter": "UNITARES_CODEX_CLI",
@@ -261,6 +281,17 @@ def _current_username() -> str:
 def host_adapter_enabled() -> bool:
     """Opt-in flag. Default OFF — the strong-het path is deferred/opt-in per the cost policy."""
     return os.environ.get("UNITARES_HOST_ADAPTER_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def orchestrator_profiles_enabled() -> bool:
+    """Whether spawns go out as the orchestrator's launch profiles. Default
+    OFF until the orchestrator serves the generated profiles file."""
+    return os.environ.get("UNITARES_ORCHESTRATOR_PROFILES", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -707,6 +738,114 @@ _SPAWN_REQUEST_TIMEOUT_S = 15.0
 _AWAIT_REQUEST_GRACE_S = 15.0
 
 
+def _profile_request(
+    host_id: str, prompt: str, *, timeout_s: int, model: Optional[str]
+) -> Dict[str, Any]:
+    """The closed launch-profile request: the profile's name and the variables
+    it declares (scripts/ops/orchestrator-profiles.py host_profile). The
+    profile fixes the client, the CLI, the environment and the runtime."""
+    profile = _HOST_PROFILES[host_id]
+    variables = {"HA_PROMPT": _terminal_answer_prompt(prompt)}
+    if model:
+        variables["HA_MODEL"] = model
+    if profile in _PROFILES_WITH_TIMEOUT:
+        variables["HA_TIMEOUT_S"] = str(
+            min(_client_deadline_s(timeout_s), _PROFILE_TIMEOUT_MAX_S)
+        )
+    return {"profile": profile, "vars": variables}
+
+
+def _raw_spawn_spec(
+    host_id: str,
+    shell_cmd: str,
+    cli_path: str,
+    prompt: str,
+    *,
+    timeout_s: int,
+    sandbox: str,
+    cd: Optional[str],
+    model: Optional[str],
+) -> Dict[str, Any]:
+    """The raw POST /v1/agents spec: a shell command and its environment."""
+    spec: Dict[str, Any] = {
+        "cmd": "/bin/sh",
+        "args": ["-c", shell_cmd],
+        # Prompt via env (not argv) = injection-safe; orchestrator merges with inherited
+        # env so the CLI keeps PATH/HOME and its subscription auth (~/.codex, ~/.claude).
+        #
+        # USER is passed explicitly because inheriting it cannot be relied on. A
+        # service manager may hand the orchestrator a minimal environment — this
+        # deployment's launchd job gets HOME, LANG, PATH, SSH_AUTH_SOCK and
+        # nothing else — and a CLI whose credential lookup keys on the username
+        # then finds nothing. `claude -p` fails that way, reporting the flatly
+        # misleading "Not logged in · Please run /login" while HOME is correct and
+        # the credentials are present; `codex exec` is unaffected because it
+        # resolves ~/.codex/auth.json from HOME alone. Reproduce the failure with
+        # `env -i HOME=$HOME PATH=/usr/bin:/bin <cli> ...` and watch adding USER
+        # alone fix it. getpass falls back to a uid lookup, so this stays correct
+        # when the variable is absent from our own environment too.
+        "env": {
+            "HA_CLI": cli_path,
+            "HA_PROMPT": _terminal_answer_prompt(prompt),
+            "HA_SANDBOX": sandbox,
+            "HA_MODEL": model or "",
+            "HA_CODEX_APP_SERVER": (
+                "1"
+                if host_id == "codex:host-adapter"
+                and codex_app_server_instrumentation_enabled()
+                else "0"
+            ),
+            "HA_CODEX_APP_SERVER_CLIENT": str(
+                Path(__file__).with_name("codex_app_server_client.py")
+            ),
+            "HA_ANTIGRAVITY_CLIENT": str(
+                Path(__file__).with_name("antigravity_cli_client.py")
+            ),
+            # Ahead of invoke_host_adapter's await window, so a hung or over-budget agy
+            # is reported by the client's own envelope rather than surfacing
+            # as an await timeout on a child that is still running.
+            "HA_TIMEOUT_S": str(_client_deadline_s(timeout_s)),
+            "HA_PYTHON": sys.executable,
+            "USER": _current_username(),
+            # Neutralise console-API credentials so this stays a SUBSCRIPTION
+            # lane by construction. The orchestrator merges this map over its
+            # own inherited environment, and that environment is whatever the
+            # shell that bootstrapped the launchd job happened to export --
+            # `.zshrc` exports ANTHROPIC_API_KEY here, so the job inherited it
+            # at bootstrap even though the plist never mentions it. That makes
+            # the leak invisible to `launchctl print`, whose `environment`
+            # block shows only plist-declared vars.
+            #
+            # The consequence was not a crash but a silent billing switch: the
+            # CLI preferred the key, spent metered API credit instead of the
+            # operator subscription, and once that balance ran out the lane
+            # started returning HTTP 400 "Credit balance is too low" as a bare
+            # exit 1. That reads exactly like the USER/"not logged in" bug this
+            # env map already fixes, which is how it stayed hidden behind it.
+            #
+            # Empty string rather than a true unset: the orchestrator's
+            # /v1/agents contract validates env as string => string, so `false`
+            # (the Erlang "remove this variable" form) is rejected before it
+            # reaches Port.open. Verified live -- blanking these two turns the
+            # lane's exit 1 into exit 0 with a subscription-billed result.
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": "",
+            "OPENAI_API_KEY": "",
+        },
+        "lease": False,  # read-only advisor lane, no presence/lineage
+        # Orchestrator backstop.
+        "max_runtime_ms": int((timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S) * 1000),
+    }
+    if host_id == "codex:host-adapter":
+        # The exec fallback's -c overrides; the app-server client computes the
+        # same list itself from HA_CLI.
+        for index, override in enumerate(codex_lane_config_overrides(cli_path), start=1):
+            spec["env"][f"HA_CODEX_C{index}"] = override
+    if cd:
+        spec["cd"] = cd
+    return spec
+
+
 async def invoke_host_adapter(
     host_id: str,
     prompt: str,
@@ -830,82 +969,21 @@ async def invoke_host_adapter(
             "error": "AGENT_ORCHESTRATOR_BEARER_TOKEN unset",
         }
 
-    spec: Dict[str, Any] = {
-        "cmd": "/bin/sh",
-        "args": ["-c", shell_cmd],
-        # Prompt via env (not argv) = injection-safe; orchestrator merges with inherited
-        # env so the CLI keeps PATH/HOME and its subscription auth (~/.codex, ~/.claude).
-        #
-        # USER is passed explicitly because inheriting it cannot be relied on. A
-        # service manager may hand the orchestrator a minimal environment — this
-        # deployment's launchd job gets HOME, LANG, PATH, SSH_AUTH_SOCK and
-        # nothing else — and a CLI whose credential lookup keys on the username
-        # then finds nothing. `claude -p` fails that way, reporting the flatly
-        # misleading "Not logged in · Please run /login" while HOME is correct and
-        # the credentials are present; `codex exec` is unaffected because it
-        # resolves ~/.codex/auth.json from HOME alone. Reproduce the failure with
-        # `env -i HOME=$HOME PATH=/usr/bin:/bin <cli> ...` and watch adding USER
-        # alone fix it. getpass falls back to a uid lookup, so this stays correct
-        # when the variable is absent from our own environment too.
-        "env": {
-            "HA_CLI": cli_path,
-            "HA_PROMPT": _terminal_answer_prompt(prompt),
-            "HA_SANDBOX": sandbox,
-            "HA_MODEL": model or "",
-            "HA_CODEX_APP_SERVER": (
-                "1"
-                if host_id == "codex:host-adapter"
-                and codex_app_server_instrumentation_enabled()
-                else "0"
-            ),
-            "HA_CODEX_APP_SERVER_CLIENT": str(
-                Path(__file__).with_name("codex_app_server_client.py")
-            ),
-            "HA_ANTIGRAVITY_CLIENT": str(
-                Path(__file__).with_name("antigravity_cli_client.py")
-            ),
-            # Ahead of the await window below, so a hung or over-budget agy
-            # is reported by the client's own envelope rather than surfacing
-            # as an await timeout on a child that is still running.
-            "HA_TIMEOUT_S": str(_client_deadline_s(timeout_s)),
-            "HA_PYTHON": sys.executable,
-            "USER": _current_username(),
-            # Neutralise console-API credentials so this stays a SUBSCRIPTION
-            # lane by construction. The orchestrator merges this map over its
-            # own inherited environment, and that environment is whatever the
-            # shell that bootstrapped the launchd job happened to export --
-            # `.zshrc` exports ANTHROPIC_API_KEY here, so the job inherited it
-            # at bootstrap even though the plist never mentions it. That makes
-            # the leak invisible to `launchctl print`, whose `environment`
-            # block shows only plist-declared vars.
-            #
-            # The consequence was not a crash but a silent billing switch: the
-            # CLI preferred the key, spent metered API credit instead of the
-            # operator subscription, and once that balance ran out the lane
-            # started returning HTTP 400 "Credit balance is too low" as a bare
-            # exit 1. That reads exactly like the USER/"not logged in" bug this
-            # env map already fixes, which is how it stayed hidden behind it.
-            #
-            # Empty string rather than a true unset: the orchestrator's
-            # /v1/agents contract validates env as string => string, so `false`
-            # (the Erlang "remove this variable" form) is rejected before it
-            # reaches Port.open. Verified live -- blanking these two turns the
-            # lane's exit 1 into exit 0 with a subscription-billed result.
-            "ANTHROPIC_API_KEY": "",
-            "ANTHROPIC_AUTH_TOKEN": "",
-            "OPENAI_API_KEY": "",
-        },
-        "lease": False,  # read-only advisor lane, no presence/lineage
-        # Orchestrator backstop.
-        "max_runtime_ms": int((timeout_s + ORCHESTRATOR_BACKSTOP_GRACE_S) * 1000),
-    }
-    if host_id == "codex:host-adapter":
-        # The exec fallback's -c overrides; the app-server client computes the
-        # same list itself from HA_CLI.
-        for index, override in enumerate(codex_lane_config_overrides(cli_path), start=1):
-            spec["env"][f"HA_CODEX_C{index}"] = override
-    if cd:
-        spec["cd"] = cd
+    profiles = orchestrator_profiles_enabled()
+    if profiles and cd:
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": "a launch profile fixes its working directory; cd is not accepted",
+        }
+    if profiles:
+        spec = _profile_request(host_id, prompt, timeout_s=timeout_s, model=model)
+    else:
+        spec = _raw_spawn_spec(
+            host_id, shell_cmd, cli_path, prompt,
+            timeout_s=timeout_s, sandbox=sandbox, cd=cd, model=model,
+        )
 
     base = _orchestrator_url()
     headers = {"Authorization": f"Bearer {bearer}"}
@@ -915,6 +993,7 @@ async def invoke_host_adapter(
         "model_family": family,
         "cost_class": "subscription_backed",
         "via": "agent_orchestrator",
+        "launch_profile": spec.get("profile"),
         "model_requested": model,
         "model_selection_source": "caller" if model else "cli_default",
     }

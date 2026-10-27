@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -224,8 +225,11 @@ class _FakeResp:
 
 @pytest.fixture(autouse=True)
 def _codex_confinement_verified(monkeypatch):
-    """The real probe runs `codex sandbox`; tests use fake CLI paths."""
+    """The real probe runs `codex sandbox`; tests use fake CLI paths. An
+    operator shell with launch profiles on must not change the raw-path
+    tests; the profile tests set the switch themselves."""
     monkeypatch.setattr(ha, "codex_confinement_verified", lambda cli: True)
+    monkeypatch.delenv("UNITARES_ORCHESTRATOR_PROFILES", raising=False)
 
 
 def _patch_httpx(monkeypatch, responses):
@@ -1062,3 +1066,131 @@ def test_stalled_codex_probe_is_clipped_to_the_call_deadline(monkeypatch):
     assert result["ok"] is False and result["dispatch_phase"] == "preflight"
     assert "sandbox probe" in result["error"]
     assert state["calls"] == []
+
+
+def _claude_answer_output():
+    return [json.dumps({
+        "subtype": "success",
+        "result": json.dumps({
+            "schema": "unitares.terminal_answer.v1",
+            "status": "complete",
+            "answer": "ANSWER",
+        }),
+    })]
+
+
+def test_profiles_send_only_the_profile_and_its_variables(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-p"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": _claude_answer_output()}}),
+    ])
+
+    r = _run(ha.invoke_host_adapter(
+        "claude:host-adapter", "review this", timeout_s=240, model="claude-sonnet-4-5"))
+
+    body = state["calls"][0][1]["json"]
+    assert set(body) == {"profile", "vars"}
+    assert body["profile"] == "host.claude"
+    assert set(body["vars"]) == {"HA_PROMPT", "HA_MODEL", "HA_TIMEOUT_S"}
+    assert body["vars"]["HA_PROMPT"].startswith("review this\n\n")
+    assert "unitares.terminal_answer.v1" in body["vars"]["HA_PROMPT"]
+    assert body["vars"]["HA_MODEL"] == "claude-sonnet-4-5"
+    assert body["vars"]["HA_TIMEOUT_S"] == str(ha._client_deadline_s(240))
+    assert r["ok"] is True and r["text"] == "ANSWER"
+    assert r["provenance"]["launch_profile"] == "host.claude"
+
+
+@pytest.mark.parametrize("host_id, profile, timed", [
+    ("codex:host-adapter", "host.codex", False),
+    ("antigravity:host-adapter", "host.antigravity", True),
+])
+def test_each_host_names_its_profile(monkeypatch, host_id, profile, timed):
+    _enable(monkeypatch)
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    state = _patch_httpx(monkeypatch, [_FakeResp(409, {"error": "stop here"})])
+
+    _run(ha.invoke_host_adapter(host_id, "hi", timeout_s=60))
+
+    body = state["calls"][0][1]["json"]
+    assert body["profile"] == profile
+    # No model chosen: the variable is left out rather than sent empty, which
+    # the profile's pattern would refuse.
+    assert "HA_MODEL" not in body["vars"]
+    assert ("HA_TIMEOUT_S" in body["vars"]) is timed
+
+
+def test_a_profile_timeout_stays_within_its_pattern(monkeypatch):
+    request = ha._profile_request("claude:host-adapter", "hi", timeout_s=5000, model=None)
+    assert request["vars"]["HA_TIMEOUT_S"] == "999"
+
+
+def test_a_refused_profile_spawn_is_the_result(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(422, {"error": "profile host.claude is unconfigured"}),
+    ])
+
+    r = _run(ha.invoke_host_adapter("claude:host-adapter", "hi", timeout_s=60))
+
+    assert r["ok"] is False
+    assert r["dispatch_phase"] == "spawn_rejected"
+    assert "unconfigured" in r["error"]
+    # One request: nothing is retried as a raw spawn.
+    assert len(state["calls"]) == 1
+    assert r["provenance"]["launch_profile"] == "host.claude"
+
+
+def test_profiles_refuse_a_working_directory(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    state = _patch_httpx(monkeypatch, [])
+
+    r = _run(ha.invoke_host_adapter("claude:host-adapter", "hi", timeout_s=60, cd="/srv"))
+
+    assert r["ok"] is False and r["dispatch_phase"] == "preflight"
+    assert "working directory" in r["error"]
+    assert state["calls"] == []
+
+
+def test_without_the_switch_the_raw_spec_is_sent(monkeypatch):
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-r"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": _claude_answer_output()}}),
+    ])
+
+    r = _run(ha.invoke_host_adapter("claude:host-adapter", "hi", timeout_s=60))
+
+    body = state["calls"][0][1]["json"]
+    assert body["cmd"] == "/bin/sh" and "profile" not in body
+    assert r["provenance"]["launch_profile"] is None
+
+
+def test_host_profiles_match_the_generator():
+    """Each adapter names a profile the generator writes, and sends only the
+    variables that profile declares."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "ops" / "orchestrator-profiles.py"
+    spec = importlib.util.spec_from_file_location("orchestrator_profiles", path)
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    document = generator.build_profiles(
+        repo_root="/opt/unitares", python="/usr/bin/python3", user="op",
+        claude_cli="/usr/bin/claude", codex_cli="/usr/bin/codex",
+        antigravity_cli="/usr/bin/agy")
+
+    for host_id, name in ha._HOST_PROFILES.items():
+        declared = document["profiles"][name]["vars"]
+        request = ha._profile_request(host_id, "hi", timeout_s=60, model="some-model")
+        assert set(request["vars"]) <= set(declared), host_id
+        for variable, value in request["vars"].items():
+            rule = declared[variable]
+            assert len(value.encode()) <= rule["max_bytes"], variable
+            if "pattern" in rule:
+                assert re.fullmatch(rule["pattern"], value), variable
+        assert {v for v, rule in declared.items() if rule.get("required")} <= set(request["vars"])

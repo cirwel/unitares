@@ -68,15 +68,15 @@ session start points it there. A simpler handoff, call by call: the
 
 ## Install
 
-**Docker Compose**, on any platform: with Git, curl, and Docker Compose installed, one command starts the latest published release of the local stack (the server, PostgreSQL with AGE and pgvector, Redis, and the coordination plane; the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) runs only the first two):
+**Homebrew preview**, recommended for an Apple Silicon desktop Mac: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the services natively; follow its [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
+The packaged `unitares update` coordinates writer shutdown, verified backup, migrations, prior-state restoration, and deep health when writers restart (schema verification when they remain stopped); kegs that predate it use the tap's [one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
+The preview label remains while the tap builds from source and supports Apple Silicon macOS only.
+
+**Docker Compose**, on any platform: with Git, curl, and Docker Compose installed, one command starts the latest published release of the local stack (the server, PostgreSQL with AGE and pgvector, Redis, and the coordination plane; add [`docker-compose.full.yml`](docs/manual/02-install.md#24-quickstart-defaults-and-a-full-setup) for local semantic search and hybrid ranking, or use the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) to run only the first two):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
-
-**Homebrew preview**, recommended for an Apple Silicon desktop Mac: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the services natively; follow its [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
-The packaged `unitares update` coordinates writer shutdown, verified backup, migrations, prior-state restoration, and deep health when writers restart (schema verification when they remain stopped); kegs that predate it use the tap's [one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
-The preview label remains while the tap builds from source and supports Apple Silicon macOS only.
 
 - **Endpoints and updates:** connect MCP clients at `http://localhost:8767/mcp/`, or open the dashboard at `http://localhost:8767/dashboard` ([Docker quickstart](docs/manual/02-install.md#21-docker-quickstart)). On Docker, `./scripts/unitares update` backs up the database, applies migrations, and verifies deep health ([updating](docs/manual/02-install.md#updating)).
 - **One stack per machine:** Docker and Homebrew keep separate data ([installation choices](docs/install/CHOOSING_INSTALLATION.md)). Container names are fixed, so run `docker compose down` (without `-v`) in an earlier checkout before starting another (`stop` is not enough, because stopped containers still hold their fixed `container_name` values, and `restart: unless-stopped` revives un-stopped containers when the Docker daemon restarts), or use the [managed launcher](docs/manual/02-install.md#managed-checkout-alternative) (`scripts/install/launch.sh`), which checks ownership first.
