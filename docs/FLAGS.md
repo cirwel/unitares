@@ -200,6 +200,7 @@ additions merge cleanly. -->
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
 | `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_tasks.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
+| `UNITARES_READ_ONLY_TOKENS` | `''` | Read the read-only keys: comma-separated, each at least 32 characters; shorter entries are ignored. | src/http_routes/access.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
 | `UNITARES_RESIDENTS` | `None (no reader fallback)` | Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |

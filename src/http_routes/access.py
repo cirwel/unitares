@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import ipaddress as _ipaddress
+import os
 import secrets
 
 from starlette.responses import JSONResponse
@@ -451,6 +453,55 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     # Fail closed when UNITARES_HTTP_API_TOKEN is unset. Removing the token is
     # a deliberate lockout of non-session, non-trusted clients—not cleanup.
     return False
+
+
+# ---------------------------------------------------------------------------
+# Read-only keys (operator decision 2026-10-27, KG 2026-10-27T19:26:49.785412)
+# ---------------------------------------------------------------------------
+# A client that only reads, such as the operator hub's timeline, holds a key
+# from UNITARES_READ_ONLY_TOKENS instead of a credential that can write. Only
+# the routes that call _check_read_auth / _check_ws_read_auth accept one:
+# GET /v1/timeline and the /ws/eisv stream. Every other route, through
+# _check_http_auth or _check_ws_auth, refuses it as it would any unknown
+# token. Unset (the default), nothing changes.
+
+READ_ONLY_TOKENS_ENV = "UNITARES_READ_ONLY_TOKENS"
+READ_ONLY_TOKEN_MIN_LENGTH = 32
+
+
+def read_only_tokens() -> list[str]:
+    """Read the read-only keys: comma-separated, each at least 32 characters; shorter entries are ignored."""
+    raw = os.getenv(READ_ONLY_TOKENS_ENV, "")
+    return [t for t in (part.strip() for part in raw.split(",")) if len(t) >= READ_ONLY_TOKEN_MIN_LENGTH]
+
+
+def _read_only_token_valid(token: str | None) -> bool:
+    if not token:
+        return False
+    presented = hashlib.sha256(token.encode("utf-8")).digest()
+    matched = False
+    for known in read_only_tokens():
+        # Compare every entry, so timing does not say which one matched.
+        matched |= secrets.compare_digest(presented, hashlib.sha256(known.encode("utf-8")).digest())
+    return matched
+
+
+def _check_read_auth(request, *, http_api_token: str | None) -> bool:
+    """Auth for a read-only REST route: whatever _check_http_auth accepts, or a read-only key."""
+    if _check_http_auth(request, http_api_token=http_api_token):
+        return True
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    return _read_only_token_valid(_bearer_from_header(auth))
+
+
+def _check_ws_read_auth(websocket, *, http_api_token: str | None) -> bool:
+    """Auth for a read-only WebSocket: whatever _check_ws_auth accepts, or a read-only key."""
+    if _check_ws_auth(websocket, http_api_token=http_api_token):
+        return True
+    token = _bearer_from_header(
+        websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    ) or _bearer_from_subprotocols(websocket)
+    return _read_only_token_valid(token)
 
 
 async def _extract_client_session_id(request) -> tuple[str, bool]:

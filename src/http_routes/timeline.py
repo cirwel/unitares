@@ -108,7 +108,7 @@ async def http_timeline(request):
     Unknown parameters and kinds are a 400, never a silently wider read.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
+    if not access._check_read_auth(request, http_api_token=http_api_token):
         return access._http_unauthorized()
 
     params = request.query_params

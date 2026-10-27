@@ -543,7 +543,7 @@ async def http_lifecycle_recent(request):
 
 async def websocket_eisv_stream(websocket):
     """WebSocket endpoint for live EISV streaming to dashboard."""
-    if not access._check_ws_auth(websocket, http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN")):
+    if not access._check_ws_read_auth(websocket, http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN")):
         # Close before accept — uvicorn turns this into a 403 on the handshake,
         # so an unauthorized caller never reaches the broadcaster at all.
         await websocket.close(code=1008)
