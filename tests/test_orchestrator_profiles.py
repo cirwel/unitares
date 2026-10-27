@@ -176,6 +176,54 @@ def test_check_reports_stale_without_writing(tmp_path):
     assert out.read_text() == "{}\n"
 
 
+def test_a_write_records_its_inputs_and_a_replay_uses_them(tmp_path, capsys):
+    code, out, cli = _main(tmp_path)
+    assert code == 0
+    inputs_path = Path(f"{out}{gen.INPUTS_SUFFIX}")
+    assert stat.S_IMODE(inputs_path.stat().st_mode) == 0o600
+    inputs = json.loads(inputs_path.read_text())
+    assert inputs["schema"] == gen.INPUTS_SCHEMA
+    assert inputs["out"] == str(out)
+    assert inputs["repo_root"] == str(REPO_ROOT)
+    assert inputs["env_file"] == [str(tmp_path / "server.env")]
+    capsys.readouterr()
+
+    # A replay needs nothing but the record, and finds the file current.
+    assert gen.main(["--replay", str(inputs_path), "--check"]) == 0
+    assert "is current" in capsys.readouterr().out
+
+    # An input changes (the CLI override moves): the loaded file is stale,
+    # and --check says so without writing.
+    moved = tmp_path / "bin" / "claude-moved"
+    moved.write_text("#!/bin/sh\n")
+    moved.chmod(0o700)
+    (tmp_path / "server.env").write_text(f"UNITARES_CLAUDE_CLI={moved}\n")
+    before = out.read_text()
+    assert gen.main(["--replay", str(inputs_path), "--check"]) == 1
+    assert "is stale" in capsys.readouterr().out
+    assert out.read_text() == before
+
+    # A replay without --check regenerates it.
+    assert gen.main(["--replay", str(inputs_path)]) == 0
+    assert json.loads(out.read_text())["profiles"]["host.claude"]["env"]["set"]["HA_CLI"] == str(moved)
+
+
+def test_a_replay_refuses_a_record_it_cannot_read(tmp_path):
+    bad = tmp_path / "p.json.inputs.json"
+    bad.write_text(json.dumps({"schema": "something.else"}))
+    with pytest.raises(SystemExit, match="is not"):
+        gen.main(["--replay", str(bad), "--check"])
+    bad.write_text(json.dumps({"schema": gen.INPUTS_SCHEMA, "out": "", "repo_root": "/r",
+                               "python": "/p"}))
+    with pytest.raises(SystemExit, match="out must be"):
+        gen.main(["--replay", str(bad), "--check"])
+
+
+def test_out_is_required_without_a_replay():
+    with pytest.raises(SystemExit):
+        gen.main(["--repo-root", str(REPO_ROOT)])
+
+
 def test_refuses_a_directory_others_can_write(tmp_path):
     shared = tmp_path / "state"
     shared.mkdir()

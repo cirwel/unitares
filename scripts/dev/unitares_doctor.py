@@ -38,6 +38,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -3912,6 +3913,202 @@ def _local_inference_env(repo_root: Path):
         return None
 
 
+#: The agent orchestrator's control surface (elixir/agent_orchestrator).
+ORCHESTRATOR_URL_ENV = "AGENT_ORCHESTRATOR_URL"
+ORCHESTRATOR_TOKEN_ENV = "AGENT_ORCHESTRATOR_BEARER_TOKEN"
+DEFAULT_ORCHESTRATOR_URL = "http://127.0.0.1:8789"
+#: What scripts/ops/orchestrator-profiles.py records beside each file it
+#: writes (INPUTS_SUFFIX there).
+PROFILES_INPUTS_SUFFIX = ".inputs.json"
+#: A file written just before the check is loaded within the orchestrator's
+#: reload interval (profiles.ex @default_reload_ms, 5 s); wait that once.
+PROFILES_RELOAD_WAIT_S = 6.0
+
+
+def _orchestrator_bearer() -> str | None:
+    """The orchestrator's bearer from this process, else from the explicitly
+    selected secrets file, read as KEY=VALUE lines (never sourced), the last
+    assignment winning as it would in the shell that sources it."""
+    token = os.environ.get(ORCHESTRATOR_TOKEN_ENV, "").strip()
+    if token:
+        return token
+    secrets = resolve_secrets_file()
+    if secrets is None:
+        return None
+    try:
+        text = secrets.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    found = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() != ORCHESTRATOR_TOKEN_ENV:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        found = value or None
+    return found
+
+
+def _orchestrator_health(url: str, token: str) -> dict:
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _run_replay(argv: list[str]) -> subprocess.CompletedProcess:
+    # An empty environment but PATH, as start.sh runs the generator.
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=60)
+
+
+def _file_sha256(path: str) -> str | None:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _profiles_freshness(file: str, digest: str, *, run) -> tuple[Status, str]:
+    """Whether the loaded profiles are the file on disk, and the file is what
+    its recorded inputs generate today."""
+    on_disk = _file_sha256(file)
+    if on_disk is None:
+        return Status.FAIL, f"the loaded profiles file {file} cannot be read"
+    if on_disk != digest:
+        return Status.FAIL, (
+            f"{file} is not what the orchestrator loaded (sha256 {on_disk[:12]} on disk, "
+            f"{digest[:12]} loaded)"
+        )
+    inputs_path = f"{file}{PROFILES_INPUTS_SUFFIX}"
+    try:
+        inputs = json.loads(Path(inputs_path).read_text(encoding="utf-8"))
+        generator = Path(inputs["repo_root"]) / "scripts" / "ops" / "orchestrator-profiles.py"
+        python = inputs["python"]
+    except FileNotFoundError:
+        return Status.WARN, (
+            f"no {Path(inputs_path).name} beside the file, so its freshness cannot be "
+            "checked: it was written by hand or by a generator that records no inputs. "
+            "Regenerate it through start.sh (AGENT_ORCHESTRATOR_PROFILES_GENERATE=1)"
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return Status.WARN, f"cannot read {inputs_path} ({type(exc).__name__})"
+    recorded_out = inputs.get("out")
+    if not (isinstance(recorded_out, str)
+            and os.path.realpath(recorded_out) == os.path.realpath(file)):
+        # A replay checks the file the record names, so a record copied
+        # beside another file would vouch for the wrong one.
+        return Status.WARN, (
+            f"{Path(inputs_path).name} records {recorded_out!r}, not the loaded file {file}, "
+            "so freshness cannot be checked; regenerate the file where it is loaded"
+        )
+    replay = [python, "-I", str(generator), "--replay", inputs_path]
+    try:
+        result = run([*replay, "--check"])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return Status.WARN, f"cannot run the generator ({type(exc).__name__})"
+    if "is current" in result.stdout:
+        return Status.PASS, "the loaded profiles match a fresh generation"
+    if "is stale" in result.stdout:
+        return Status.FAIL, (
+            "the loaded profiles differ from a fresh generation from their recorded "
+            "inputs (an input changed: the inference hosts file, the server's settings, "
+            "a CLI, or the generator); regenerate with: " + shlex.join(replay)
+        )
+    tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
+    return Status.WARN, f"the generator could not check the file: {tail[0][:200]}"
+
+
+def _profiles_unsettled(profiles: dict) -> bool:
+    """A reading the next reload may change: an error, or a file on disk that
+    is not the loaded one (written just now, or put back)."""
+    file, digest = profiles.get("file"), profiles.get("digest")
+    if profiles.get("error"):
+        return True
+    return isinstance(file, str) and bool(file) and _file_sha256(file) != digest
+
+
+def check_orchestrator_profiles(*, fetch=_orchestrator_health, run=_run_replay,
+                                sleep=time.sleep) -> CheckResult:
+    """Are the orchestrator's launch profiles loaded, current and enforced?
+
+    inference-hosts-config-v0 step 4b. A stale profile is a stale egress
+    policy, so the loaded set (its digest on the authenticated /v1/health) is
+    compared with the file on disk and the file with a fresh generation from
+    the inputs recorded beside it. It also warns while an explicit
+    AGENT_ORCHESTRATOR_RAW_SPAWN=allow stands beside a profiles file, and on
+    profiles whose bound secret is unset. A reading the next reload may
+    change is taken again once, a reload interval later, before it counts."""
+    name, mode = "orchestrator_profiles", "operator"
+    token = _orchestrator_bearer()
+    if not token:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{ORCHESTRATOR_TOKEN_ENV} not visible; the orchestrator "
+                           "extension is not configured for this shell")
+    base = (os.environ.get(ORCHESTRATOR_URL_ENV) or DEFAULT_ORCHESTRATOR_URL).rstrip("/")
+
+    def read_profiles():
+        health = fetch(f"{base}/v1/health", token)
+        return health.get("profiles") if isinstance(health, dict) else None
+
+    try:
+        profiles = read_profiles()
+        if isinstance(profiles, dict) and profiles.get("state") != "off" \
+                and _profiles_unsettled(profiles):
+            sleep(PROFILES_RELOAD_WAIT_S)
+            profiles = read_profiles()
+    except urllib.error.HTTPError as e:
+        return CheckResult(name, mode, Status.WARN,
+                           f"the orchestrator at {base} answered {e.code}; is the bearer current?")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"the orchestrator at {base} is not reachable ({type(e).__name__})")
+    if not isinstance(profiles, dict):
+        return CheckResult(name, mode, Status.WARN,
+                           "this orchestrator reports no launch-profile state; it predates profiles")
+    state = profiles.get("state")
+    if state == "off":
+        return CheckResult(name, mode, Status.SKIP,
+                           "no launch profiles file (AGENT_ORCHESTRATOR_PROFILES_FILE unset)")
+
+    findings: list[tuple[Status, str]] = []
+    if state == "invalid":
+        findings.append((Status.FAIL, "no profiles are loaded, so every profile spawn is "
+                                      f"refused: {profiles.get('error')}"))
+    elif profiles.get("error"):
+        findings.append((Status.FAIL, "a replacement file does not validate and the last good "
+                                      f"set stays in force: {profiles.get('error')}"))
+    if profiles.get("raw_spawn") == "allow":
+        findings.append((Status.WARN, "AGENT_ORCHESTRATOR_RAW_SPAWN=allow stands beside the "
+                                      "profiles file; remove it once every caller sends profiles"))
+    unconfigured = profiles.get("unconfigured") or []
+    if unconfigured:
+        findings.append((Status.WARN, "unconfigured, so refusing their spawns (a bound secret "
+                                      f"is unset in the orchestrator): {', '.join(unconfigured)}"))
+    file, digest = profiles.get("file"), profiles.get("digest")
+    if state != "invalid" and isinstance(digest, str):
+        if isinstance(file, str) and file:
+            findings.append(_profiles_freshness(file, digest, run=run))
+        else:
+            findings.append((Status.WARN, "this orchestrator does not report its profiles "
+                                          "file, so freshness is not checked; upgrade it"))
+
+    worst = next((level for level in (Status.FAIL, Status.WARN)
+                  if any(status is level for status, _ in findings)), Status.PASS)
+    loaded = ", ".join(profiles.get("profiles") or []) or "none"
+    detail = "\n".join([f"loaded: {loaded}", f"file: {file}", f"digest: {digest}",
+                        f"raw spawns: {profiles.get('raw_spawn')}"])
+    if worst is Status.PASS:
+        message = f"{len(profiles.get('profiles') or [])} launch profiles loaded and current"
+    else:
+        message = "; ".join(text for status, text in findings if status is worst)
+    return CheckResult(name, mode, worst, message, detail)
+
+
 def check_inference_hosts_file(repo_root: Path) -> CheckResult:
     """Does the operator's inference hosts file load, and what would it configure?
 
@@ -4094,6 +4291,7 @@ def build_checks(
         Check("http_health", "operator", check_http_health),
         Check("background_task_failures", "operator", check_background_task_failures),
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
+        Check("orchestrator_profiles", "operator", check_orchestrator_profiles),
         Check("pid_file", "operator",
               lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded(),
                                      launchd_host=_governance_under_launchd(loaded()))),
