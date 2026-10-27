@@ -14,6 +14,13 @@ OWN identity, claims the still-open reviewer slot via the multi-agent path
 alive for a bounded response/reconsideration window under that same identity,
 then exits — so on successful dispatch the handler must NOT also run the
 in-process review.
+
+With ``UNITARES_ORCHESTRATOR_PROFILES=1`` the spawn is the orchestrator's
+``dialectic.reviewer`` launch profile: the request carries only the session id,
+and the reviewer reads the thesis, the evidence and its parent from the session
+record. A refused profile spawn is then the result (inference-hosts-config-v0
+§2.5): the handler leaves the session awaiting facilitation instead of running
+the in-process review (handlers._reviewer_profile_block).
 """
 from __future__ import annotations
 
@@ -275,6 +282,37 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     }
 
 
+#: The launch profile scripts/ops/orchestrator-profiles.py writes for the reviewer.
+REVIEWER_PROFILE = "dialectic.reviewer"
+
+
+def reviewer_profiles_enabled() -> bool:
+    """Whether the reviewer is spawned only as its launch profile."""
+    from src.mcp_handlers.support.host_adapter import orchestrator_profiles_enabled
+
+    return orchestrator_profiles_enabled()
+
+
+def _build_profile_request(session_id: str) -> Dict[str, Any]:
+    """The closed launch-profile request: the session id and nothing else."""
+    return {"profile": REVIEWER_PROFILE, "vars": {"DIALECTIC_SESSION_ID": session_id}}
+
+
+def thesis_context_sha256(thesis: Dict[str, Any], parent_agent_id: Optional[str]) -> str:
+    """A digest of what this dispatch reviews. A profile request carries only
+    the session id, so without it a later thesis in the same session would
+    replay the first one's spawn under an unchanged idempotency key; the raw
+    spec carried the thesis in its environment and changed with it."""
+    canonical = json.dumps(
+        {"thesis": thesis, "parent_agent_id": parent_agent_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _direct_idempotency_key(session_id: str, spec: Dict[str, Any]) -> str:
     """Stable key for response-loss retries of one material reviewer spawn."""
     canonical = json.dumps(
@@ -306,7 +344,17 @@ async def dispatch_orchestrated_review(
         )
         return None
 
-    spec = _build_spec(session_id, thesis, parent_agent_id)
+    if reviewer_profiles_enabled():
+        spec = _build_profile_request(session_id)
+        # Keyed on the thesis too (thesis_context_sha256); the governed
+        # payload carries the same digest, so the plane's record names it.
+        key_material = {
+            **spec,
+            "context_sha256": thesis_context_sha256(thesis, parent_agent_id),
+        }
+    else:
+        spec = _build_spec(session_id, thesis, parent_agent_id)
+        key_material = spec
 
     # Governed-first routing (opt-in): try the lease plane's governed-effect
     # surface before the direct orchestrator POST. The outcome buckets are
@@ -321,7 +369,7 @@ async def dispatch_orchestrated_review(
     )
 
     if governed_spawn_enabled():
-        governed = await governed_dispatch(session_id, spec)
+        governed = await governed_dispatch(session_id, key_material)
         if governed.outcome is GovernedOutcome.COMMITTED:
             execution_id = governed.execution_id or governed.agent_id
             logger.info(
@@ -349,7 +397,7 @@ async def dispatch_orchestrated_review(
         )
 
     url = f"{_orchestrator_url()}/v1/agents"
-    idempotency_key = _direct_idempotency_key(session_id, spec)
+    idempotency_key = _direct_idempotency_key(session_id, key_material)
     try:
         import httpx
 
