@@ -536,6 +536,41 @@ sets nothing.
      reads no directory. Each lane was checked live against its real CLI
      with a probe file outside the roots. Next: dispatch_beam sending these
      profiles, the other callers, and the doctor's digest check.
+     *Callers (2026-10-27):*
+     - dispatch_beam's council sends these profiles behind
+       `DISPATCH_COUNCIL_PROFILES=1` (cirwel/dispatch_beam#102).
+     - The server sends them behind `UNITARES_ORCHESTRATOR_PROFILES=1`:
+       - the host adapters, with `host.*` (#3104);
+       - the reviewer dispatch and the lease plane's governed path, with
+         `dialectic.reviewer` (#3105).
+     - A refused spawn is the result. A reviewer session waits for
+       facilitation rather than falling back to the in-process reviewer.
+     - The governed payload is a closed `{profile, vars, context_sha256}`.
+       The lease plane provisions no lineage for it.
+
+     *Doctor check (2026-10-27):* the generator now records each write's
+     inputs in `<file>.inputs.json`, and `--replay` runs again from them.
+     The orchestrator reports the file it loaded on `/v1/health`. The
+     doctor's `orchestrator_profiles` check:
+     - compares the loaded digest with the file on disk, and that file with a
+       replayed generation (`--check`);
+     - takes an unsettled reading again after one reload interval;
+     - fails on a stale or unloaded file, or on a replacement that does not
+       validate;
+     - warns while the explicit `AGENT_ORCHESTRATOR_RAW_SPAWN=allow` stands,
+       and on unconfigured profiles.
+
+     The record replaces recovering the inputs from the profiles
+     themselves, which would let a stale file vouch for itself (design
+     consult, codex, antigravity and claude, 2026-10-27).
+
+     The same consult recommended placing the refusal this section gives the
+     server in the orchestrator instead. The orchestrator would regenerate
+     on a timer, report `stale` on `/v1/health` and refuse profile spawns
+     while stale. That moves no input into the server's configuration and
+     keeps dispatch independent of the doctor's schedule. Where the refusal
+     lives is a spawn-boundary choice, left to the operator. Until it is
+     made, staleness is reported, not enforced.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is

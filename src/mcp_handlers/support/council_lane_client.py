@@ -319,6 +319,14 @@ def run_codex(environ: dict[str, str], prompt: str, err: TextIO) -> int:
     if not lane.confinement_verified(path):
         raise Refusal("this codex does not enforce the lane's permission profile "
                       "(codex sandbox probe)", EXIT_NOT_CONFINED)
+    # The lane denies the shared temporary directories outright, and a deny
+    # outranks every read (codex_app_server_client.temp_denials), so codex
+    # could not read a directory there. Its own working directory may sit
+    # there (TMPDIR is /tmp on most Linux hosts): it is empty, and nothing in
+    # it needs reading.
+    if lane.under_temp_root(directory):
+        raise Refusal("COUNCIL_DIR is under a shared temporary directory, which the codex "
+                      "lane cannot read")
     codex_home = environ.get("CODEX_HOME") or os.path.join(environ.get("HOME", ""), ".codex")
     env = _sibling("claude_cli_client").claude_env(environ)
     if environ.get("CODEX_HOME"):
