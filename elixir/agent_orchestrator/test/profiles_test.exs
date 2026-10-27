@@ -99,6 +99,162 @@ defmodule AgentOrchestrator.ProfilesTest do
     name
   end
 
+  # Run one regeneration now and wait for its result.
+  defp regenerate_now(name) do
+    send(name, :regenerate)
+    wait_until(fn -> not Profiles.status(name).generation.running end)
+  end
+
+  defp wait_until(fun, tries \\ 200) do
+    cond do
+      fun.() -> :ok
+      tries == 0 -> flunk("condition never held")
+      true -> Process.sleep(10) && wait_until(fun, tries - 1)
+    end
+  end
+
+  defp write_record(dir, record) do
+    path = Path.join(dir, "profiles.json.inputs.json")
+    File.write!(path, Jason.encode!(record))
+    File.chmod!(path, 0o600)
+    path
+  end
+
+  describe "freshness when the generator owns the file" do
+    @hi %{"profile" => "p", "vars" => %{"GREETING" => "hi"}}
+
+    test "a failed regeneration refuses profile spawns until one succeeds", %{tmp_dir: dir} do
+      {:ok, result} = Agent.start_link(fn -> :ok end)
+      path = write_file(dir, %{"p" => profile()})
+
+      name =
+        start_profiles(path,
+          generate: "1",
+          regenerate_ms: 60_000,
+          regenerate: fn _file -> Agent.get(result, & &1) end
+        )
+
+      regenerate_now(name)
+      assert {:ok, _} = Profiles.prepare(name, @hi)
+      assert %{state: "ok", generation: %{managed: true, enforced: false}} = Profiles.status(name)
+
+      Agent.update(result, fn _ -> {:error, "cannot read env file /x"} end)
+      regenerate_now(name)
+      assert {:error, :profiles_unavailable, detail} = Profiles.prepare(name, @hi)
+      assert detail =~ "profiles are stale: cannot read env file /x"
+
+      assert %{state: "stale", generation: %{enforced: true, error: "cannot read env file /x"}} =
+               Profiles.status(name)
+
+      Agent.update(result, fn _ -> :ok end)
+      regenerate_now(name)
+      assert {:ok, _} = Profiles.prepare(name, @hi)
+    end
+
+    test "a restarted server refuses spawns until its first run succeeds", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path, generate: "1", regenerate: fn _ -> Process.sleep(:infinity) end)
+
+      assert {:error, :profiles_unavailable, detail} = Profiles.prepare(name, @hi)
+      assert detail =~ "not yet regenerated since this server started"
+      assert %{state: "stale", generation: %{enforced: true}} = Profiles.status(name)
+    end
+
+    test "admission refuses a request prepared before the profiles went stale",
+         %{tmp_dir: dir} do
+      {:ok, result} = Agent.start_link(fn -> :ok end)
+      path = write_file(dir, %{"p" => profile()})
+
+      name =
+        start_profiles(path,
+          generate: "1",
+          regenerate_ms: 60_000,
+          regenerate: fn _ -> Agent.get(result, & &1) end
+        )
+
+      regenerate_now(name)
+      assert {:ok, prepared} = Profiles.prepare(name, @hi)
+
+      Agent.update(result, fn _ -> {:error, "boom"} end)
+      regenerate_now(name)
+
+      assert {:error, :profiles_unavailable, "profiles are stale: boom"} =
+               Profiles.admit(name, prepared.profile, prepared.revision, "ex-late")
+    end
+
+    test "a replacement that does not load refuses spawns", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path, generate: "1", regenerate: fn _ -> :ok end)
+
+      File.write!(path, "{not json")
+      send(name, :reload)
+      assert {:error, :profiles_unavailable, detail} = Profiles.prepare(name, @hi)
+      assert detail =~ "the profiles file does not load"
+    end
+
+    test "a hand-maintained file keeps serving its last good set", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path)
+
+      File.write!(path, "{not json")
+      send(name, :reload)
+      assert {:ok, _} = Profiles.prepare(name, @hi)
+      assert %{state: "stale", generation: nil} = Profiles.status(name)
+    end
+
+    test "a run that outlasts its interval is reported and refuses spawns", %{tmp_dir: dir} do
+      {:ok, clock} = Agent.start_link(fn -> 0 end)
+      path = write_file(dir, %{"p" => profile()})
+
+      name =
+        start_profiles(path,
+          generate: "1",
+          regenerate_ms: 60_000,
+          now: fn -> Agent.get(clock, & &1) end,
+          regenerate: fn _ -> Process.sleep(:infinity) end
+        )
+
+      send(name, :regenerate)
+      # A call is answered after the tick, so the run has started at time 0.
+      assert %{generation: %{running: true}} = Profiles.status(name)
+      Agent.update(clock, &(&1 + 61_000))
+      send(name, :regenerate)
+
+      assert {:error, :profiles_unavailable, detail} = Profiles.prepare(name, @hi)
+      assert detail =~ "regeneration has been running for 61 s"
+    end
+
+    test "the generator runs from the record beside the file", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path, generate: "1", regenerate_ms: 60_000)
+
+      # No record: refused, and named.
+      regenerate_now(name)
+      assert %{generation: %{error: error}} = Profiles.status(name)
+      assert error =~ "input record"
+
+      # A record for another file never vouches for this one.
+      write_record(dir, %{
+        "out" => "/elsewhere/profiles.json",
+        "python" => "/usr/bin/true",
+        "repo_root" => dir
+      })
+
+      regenerate_now(name)
+      assert %{generation: %{error: error}} = Profiles.status(name)
+      assert error =~ "names /elsewhere/profiles.json"
+
+      # The named interpreter runs: a failing one is reported with its status.
+      write_record(dir, %{"out" => path, "python" => "/usr/bin/false", "repo_root" => dir})
+      regenerate_now(name)
+      assert %{generation: %{error: "the generator exited 1" <> _}} = Profiles.status(name)
+
+      write_record(dir, %{"out" => path, "python" => "/usr/bin/true", "repo_root" => dir})
+      regenerate_now(name)
+      assert %{generation: %{error: nil, enforced: false}} = Profiles.status(name)
+    end
+  end
+
   describe "parse/1" do
     test "accepts a valid file and refuses unknown keys by name" do
       ok =
