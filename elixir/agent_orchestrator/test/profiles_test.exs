@@ -178,12 +178,13 @@ defmodule AgentOrchestrator.ProfilesTest do
     test "the reported file is absolute when the setting is relative", %{tmp_dir: dir} do
       path = write_file(dir, %{"p" => profile()})
 
-      name =
-        File.cd!(dir, fn -> start_profiles(Path.basename(path)) end)
+      {name, loaded} =
+        File.cd!(dir, fn ->
+          {start_profiles(Path.basename(path)), Path.join(File.cwd!(), Path.basename(path))}
+        end)
 
-      assert %{file: file} = Profiles.status(name)
-      assert Path.type(file) == :absolute
-      assert Path.basename(file) == Path.basename(path)
+      # Back in another directory: the path was resolved when it was loaded.
+      assert %{state: "ok", file: ^loaded} = Profiles.status(name)
     end
 
     test "a group-writable file is refused", %{tmp_dir: dir} do

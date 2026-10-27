@@ -168,7 +168,14 @@ defmodule AgentOrchestrator.Profiles do
 
   @impl true
   def init(opts) do
-    file = blank_to_nil(setting(opts, :file, :profiles_file, "AGENT_ORCHESTRATOR_PROFILES_FILE"))
+    # Resolved once, so every reload reads the same file and health names it
+    # absolutely, whatever the working directory later becomes.
+    file =
+      case blank_to_nil(setting(opts, :file, :profiles_file, "AGENT_ORCHESTRATOR_PROFILES_FILE")) do
+        nil -> nil
+        path -> Path.expand(path)
+      end
+
     raw = setting(opts, :raw_spawn, :raw_spawn, "AGENT_ORCHESTRATOR_RAW_SPAWN")
 
     state = %{
@@ -776,11 +783,10 @@ defmodule AgentOrchestrator.Profiles do
           true -> "ok"
         end,
       raw_spawn: Atom.to_string(state.raw_spawn),
-      # The file the digest is of, so the doctor can compare it with a fresh
-      # generation from the inputs recorded beside it. Absolute, as this VM
-      # resolves it: a relative setting would name another file to a doctor
-      # running elsewhere.
-      file: state.file && Path.expand(state.file),
+      # The file the digest is of, absolute (resolved in init/1), so the
+      # doctor can compare it with a fresh generation from the inputs
+      # recorded beside it.
+      file: state.file,
       digest: state.digest,
       profiles: profiles |> Map.keys() |> Enum.sort(),
       unconfigured: unconfigured,
