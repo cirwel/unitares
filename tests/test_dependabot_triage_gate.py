@@ -9,6 +9,7 @@ with an explicit caveat in the markdown) — anything else exits 1.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -146,7 +147,8 @@ class TestGitHubExecutable:
             ["/private tools/reader", "repo", "view", "example/server", "--json", "name"],
             ["/private tools/reader", "pr", "list", "--repo", "example/server", "--author",
              "app/dependabot", "--state", "open", "--limit", "50", "--json",
-             "number,title,mergeable,statusCheckRollup"],
+             "number,title,mergeable,mergeStateStatus,statusCheckRollup,"
+             "headRefOid,state,isDraft,labels,autoMergeRequest,url"],
         ]
 
     @pytest.mark.parametrize("missing", [False, True])
@@ -168,3 +170,130 @@ class TestGitHubExecutable:
         assert calls[0][0] == "configured-reader"
         assert report.repos_scanned == []
         assert report.unreachable[0]["repo"] == "example/server"
+
+
+class TestStewardshipReceipt:
+    def _verdict(self, triage, **overrides):
+        values = {
+            "repo": "example/server",
+            "number": 17,
+            "title": "chore(deps): bump pydantic from 2.1.0 to 2.1.1",
+            "verdict": triage.MERGE,
+            "reason": "patch bump",
+            "checks": "SUCCESS:2",
+            "mergeable": "MERGEABLE",
+            "check_gate": "pass",
+            "head_sha": "abc123",
+            "merge_state": "CLEAN",
+            "github_state": "OPEN",
+            "approved": False,
+            "armed": False,
+            "url": "https://github.com/example/server/pull/17",
+        }
+        values.update(overrides)
+        return triage.Verdict(**values)
+
+    def test_receipt_claims_a_stable_role_and_not_a_process_identity(self, triage):
+        report = triage.Report(
+            verdicts=[self._verdict(triage)],
+            repos_scanned=["example/server"],
+        )
+        receipt = triage.build_stewardship_receipt(
+            report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        item = receipt["items"][0]
+        assert receipt["schema"] == "unitares.dependency_steward.v1"
+        assert receipt["owner_role"] == item["owner_role"] == "dependency-steward"
+        assert item["phase"] == "ready"
+        assert item["terminal_state"] is None
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_only_github_merged_or_closed_completes_a_tracked_pr(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="BLOCKED")],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        calls = []
+
+        def merged(args, *, executable="gh"):
+            calls.append((args, executable))
+            return {
+                "state": "MERGED",
+                "mergedAt": "2026-10-27T12:15:00Z",
+                "closedAt": "2026-10-27T12:15:00Z",
+                "headRefOid": "abc123",
+                "url": "https://github.com/example/server/pull/17",
+            }
+
+        monkeypatch.setattr(triage, "gh_json", merged)
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            gh_executable="scoped-reader",
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "terminal"
+        assert item["terminal_state"] == "MERGED"
+        assert item["completed_at"] == "2026-10-27T12:15:00Z"
+        assert calls == [
+            (["pr", "view", "17", "--repo", "example/server", "--json",
+              "state,mergedAt,closedAt,headRefOid,url"], "scoped-reader")
+        ]
+
+    def test_missing_open_pr_is_not_completion_when_terminal_read_fails(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True)],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+
+        def refused(*args, **kwargs):
+            raise RuntimeError("reader refused")
+
+        monkeypatch.setattr(triage, "gh_json", refused)
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "unreachable"
+        assert item["terminal_state"] is None
+        assert receipt["reconciliation_errors"] == [
+            {"key": "example/server#17", "error": "reader refused"}
+        ]
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_armed_blocked_pr_with_passing_checks_is_explicit_attention(self, triage):
+        report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="BLOCKED")],
+            repos_scanned=["example/server"],
+        )
+        receipt = triage.build_stewardship_receipt(
+            report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        assert receipt["items"][0]["phase"] == "opaque_blocked"
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_receipt_write_is_valid_json(self, triage, tmp_path):
+        path = tmp_path / "state" / "receipt.json"
+        payload = {"schema": "unitares.dependency_steward.v1", "items": []}
+        triage.write_receipt(path, payload)
+        assert json.loads(path.read_text()) == payload
+        assert list(path.parent.glob(".*.tmp.*")) == []
