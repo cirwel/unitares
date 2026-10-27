@@ -190,26 +190,35 @@ def test_outside_a_git_checkout_every_boot_builds(tmp_path: Path) -> None:
     assert not _stamp(app).exists()
 
 
-def test_start_refuses_without_a_secret_key_base(tmp_path: Path) -> None:
+# An unconfigured hub exits 0, which the plist does not restart: a restart
+# cannot fix configuration, and a non-zero exit would loop under KeepAlive.
+def test_start_without_a_secret_key_base_stops_cleanly(tmp_path: Path) -> None:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PORTAL_", "UNITARES_SECRETS"))}
     proc = subprocess.run(["bash", str(START)], env=env, capture_output=True, text=True, check=False)
-    assert proc.returncode == 1
+    assert proc.returncode == 0
     assert "PORTAL_SECRET_KEY_BASE is unset" in proc.stderr
+    assert "will not restart it" in proc.stderr
 
 
-def test_start_refuses_a_relative_secrets_path() -> None:
-    env = {**os.environ, "UNITARES_SECRETS_ENV": "relative/secrets.env"}
+def test_start_with_a_relative_settings_path_stops_cleanly() -> None:
+    env = {**os.environ, "UNITARES_SECRETS_ENV": "relative/file.env"}
     proc = subprocess.run(["bash", str(START)], env=env, capture_output=True, text=True, check=False)
-    assert proc.returncode == 1
+    assert proc.returncode == 0
     assert "UNITARES_SECRETS_ENV must name an absolute" in proc.stderr
 
 
-def test_the_plist_never_starts_itself_and_binds_the_hub_port() -> None:
-    text = TEMPLATE.read_text()
-    body = text.split("<plist", 1)[1]
-    assert "<key>RunAtLoad</key>" not in body
-    assert "<key>PORTAL_PORT</key>\n        <string>8791</string>" in body
-    assert "__UNITARES_ROOT__/elixir/portal/scripts/start.sh" in body
+def test_the_plist_restarts_only_after_a_failing_exit() -> None:
+    import plistlib
+
+    rendered = TEMPLATE.read_text().replace("__UNITARES_ROOT__", "/r").replace("__HOME__", "/h")
+    plist = plistlib.loads(rendered.encode())
+    # Any KeepAlive implies RunAtLoad (launchd.plist(5)); the conditional form
+    # keeps a clean exit (unconfigured) from becoming a restart loop.
+    assert plist["KeepAlive"] == {"SuccessfulExit": False}
+    assert "RunAtLoad" not in plist
+    assert plist["EnvironmentVariables"]["PORTAL_PORT"] == "8791"
+    assert plist["ProgramArguments"] == ["/bin/bash", "/r/elixir/portal/scripts/start.sh"]
+    assert "Loading this plist starts the hub" in TEMPLATE.read_text()
 
 
 def test_the_deploy_checks_the_hubs_exact_origin() -> None:

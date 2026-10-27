@@ -7,8 +7,11 @@
   setting here widens that. It signs in through the governance dashboard's
   passkey and reads the timeline with its own read-only key.
 
-  Like the dialectic-live template, this ships in-tree but is NOT started by
-  default: there is intentionally NO `RunAtLoad`. The operator promotes it.
+  Loading this plist starts the hub: any KeepAlive implies RunAtLoad
+  (launchd.plist(5)). So load it only once the settings below are in place.
+  If they are missing, start.sh logs why and exits 0, and KeepAlive restarts
+  the hub only after a failing exit, so a premature load sits idle instead
+  of looping. A crash (a non-zero exit) is restarted.
 
   Prereq: set UNITARES_SECRETS_ENV to an absolute private file (mode 600) and
   persist that value in this job's EnvironmentVariables, or provision the
@@ -52,14 +55,13 @@
     <key>WorkingDirectory</key>
     <string>__UNITARES_ROOT__/elixir/portal</string>
 
-    <!--
-      RunAtLoad is intentionally absent (mirrors dialectic-live). The plist is
-      configuration; the operator promotes it to running. Do NOT add this key
-      without an explicit operator decision.
-    -->
-
+    <!-- Restart only after a failing exit: start.sh exits 0 when the hub is
+         not configured, which must not become a restart loop. -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <key>ThrottleInterval</key>
     <integer>10</integer>

@@ -10,10 +10,18 @@ cd "$APP_DIR"
 # Credentials come from the service environment, or an explicitly selected
 # file (mode 600): PORTAL_SECRET_KEY_BASE, and for sign-in and the timeline
 # PORTAL_HUB_TOKEN and PORTAL_READ_TOKEN. They are never printed.
+#
+# A missing or unusable configuration exits 0, not 1: the plist restarts the
+# hub only after a failing exit, so a configuration problem (which a restart
+# cannot fix) leaves it stopped with the reason in the log, not looping.
+not_configured() {
+  echo "FATAL: $1 The hub is not starting; launchd will not restart it." >&2
+  exit 0
+}
+
 SECRETS="${UNITARES_SECRETS_ENV:-}"
 if [[ -n "$SECRETS" && ( "$SECRETS" != /* || ! -f "$SECRETS" || ! -r "$SECRETS" ) ]]; then
-    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
-    exit 1
+  not_configured "UNITARES_SECRETS_ENV must name an absolute, readable regular file."
 fi
 if [ -f "$SECRETS" ]; then
   set -a
@@ -26,9 +34,7 @@ export MIX_ENV="${MIX_ENV:-prod}"
 export PHX_SERVER=true
 
 if [ -z "${PORTAL_SECRET_KEY_BASE:-}" ]; then
-  echo "FATAL: PORTAL_SECRET_KEY_BASE is unset." >&2
-  echo "Generate one with 'mix phx.gen.secret' and add it to the selected secrets file." >&2
-  exit 1
+  not_configured "PORTAL_SECRET_KEY_BASE is unset. Generate one with 'mix phx.gen.secret' and add it to the selected file."
 fi
 
 # Self-heal deps and assets on restart (a cheap no-op when already current).
