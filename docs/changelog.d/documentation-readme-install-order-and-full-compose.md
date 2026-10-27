@@ -1,0 +1,1 @@
+- **Install documentation (`README.md`)**: Lead `## Install` with the Homebrew preview before Docker Compose (matching `docs/manual/02-install.md` and `docs/install/CHOOSING_INSTALLATION.md`), and surface the `docker-compose.full.yml` override for local semantic search and hybrid ranking alongside the `docker-compose.core.yml` profile.
