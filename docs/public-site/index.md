@@ -71,6 +71,7 @@ brew update
 brew tap cirwel/unitares
 brew trust cirwel/unitares
 brew install cirwel/unitares/unitares
+brew pin unitares unitares-lease-plane apache-age unitares-pgvector
 ```
 
 Or run the **Docker Compose** stack on macOS or Linux and execute the

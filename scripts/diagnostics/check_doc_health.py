@@ -195,7 +195,7 @@ _REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#([^)\s]*))?\)")
 _SAME_FILE_ANCHOR = re.compile(r"\]\(#([^)\s]+)\)")
 _GH_MASTER_LINK = re.compile(
     r"https://github\.com/cirwel/unitares/(?:blob|tree)/master/"
-    r"([^)\s#\"`>]+)(?:#([^)\s\"`>]*))?"
+    r"([^)\]\s?#\"`>]+)(?:\?[^)\]\s#\"`>]*)?(?:#([^)\]\s\"`>]*))?"
 )
 _ABSOLUTE_URL = re.compile(r"^[a-z][a-z0-9+.\-]*://|^mailto:", re.IGNORECASE)
 _REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
@@ -413,6 +413,10 @@ def check_github_master_links(md_files: list[Path]) -> list[str]:
             for gm in _GH_MASTER_LINK.finditer(line):
                 gpath = gm.group(1)
                 gfrag = gm.group(2) or ""
+                if not gfrag:
+                    gpath = gpath.rstrip(".,;:!?'")
+                else:
+                    gfrag = gfrag.rstrip(".,;:!?'")
                 if any(c in gpath for c in "*<>{}"):
                     continue
                 gtarget = (REPO_ROOT / gpath).resolve()

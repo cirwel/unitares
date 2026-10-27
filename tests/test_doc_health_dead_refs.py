@@ -859,6 +859,7 @@ def test_same_file_anchor_and_github_master_link_checks(
         "Good same-file: [ok](#local-heading)\n"
         "Bad same-file: [bad](#missing-heading)\n"
         "Good master: [m1](https://github.com/cirwel/unitares/blob/master/docs/other.md#real-section)\n"
+        "Good bare master with punctuation/query: https://github.com/cirwel/unitares/blob/master/docs/other.md?plain=1.\n"
         "Bad master path: [m2](https://github.com/cirwel/unitares/blob/master/docs/gone.md)\n"
         "Bad master anchor: [m3](https://github.com/cirwel/unitares/blob/master/docs/other.md#wrong)\n"
         "```markdown\n"
