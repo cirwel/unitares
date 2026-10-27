@@ -377,3 +377,50 @@ async def test_dispatch_flag_off_is_byte_identical(monkeypatch):
         "agent_id": "ag-direct",
     }
     assert called == []
+
+
+def test_a_profile_request_becomes_the_planes_closed_profile_payload(monkeypatch):
+    """The plane refuses any other key in a profile payload, and the thesis
+    digest keeps a later thesis from replaying the first spawn's key."""
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret")
+
+    def profile_spec(digest):
+        return {
+            "profile": "dialectic.reviewer",
+            "vars": {"DIALECTIC_SESSION_ID": SESSION},
+            "context_sha256": digest,
+        }
+
+    first = build_envelope(SESSION, profile_spec("a" * 64), DISPATCHER)
+    assert first["payload"] == profile_spec("a" * 64)
+    assert first["effect_type"] == "agent_spawn"
+    assert first["proposer"]["effect_grant"].startswith("gnt.v1.")
+
+    later = build_envelope(SESSION, profile_spec("b" * 64), DISPATCHER)
+    assert later["idempotency_key"] != first["idempotency_key"]
+
+
+@pytest.mark.asyncio
+async def test_profile_mode_routes_the_profile_request_through_the_plane(monkeypatch):
+    from src.mcp_handlers.dialectic import governed_spawn
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "bearer")
+    monkeypatch.setenv("UNITARES_DIALECTIC_GOVERNED_SPAWN", "1")
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    seen = {}
+
+    async def fake(session_id, spec, *, timeout=5.0):
+        seen["spec"] = spec
+        return GovernedSpawnResult(GovernedOutcome.COMMITTED, execution_id="ex-g")
+
+    monkeypatch.setattr(governed_spawn, "governed_dispatch", fake)
+    thesis = {"root_cause": "x"}
+    out = await od.dispatch_orchestrated_review(SESSION, thesis, None)
+
+    assert out["governed"] is True
+    assert seen["spec"] == {
+        "profile": "dialectic.reviewer",
+        "vars": {"DIALECTIC_SESSION_ID": SESSION},
+        "context_sha256": od.thesis_context_sha256(thesis, None),
+    }

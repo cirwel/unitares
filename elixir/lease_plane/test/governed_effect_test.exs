@@ -217,6 +217,47 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     test "non-object body → error" do
       assert {:error, _} = GovernedEffect.handle("nope")
     end
+
+    test "an agent_spawn profile payload is closed" do
+      spawn = fn payload ->
+        GovernedEffect.handle(
+          base(%{"effect_type" => "agent_spawn", "surface" => "agent:x", "payload" => payload})
+        )
+      end
+
+      profile = %{"profile" => "dialectic.reviewer", "vars" => %{"DIALECTIC_SESSION_ID" => "s1"}}
+
+      for extra <- ["cmd", "env", "lineage", "cd"] do
+        assert {:error, detail} = spawn.(Map.put(profile, extra, "x"))
+        assert detail =~ "unexpected: #{extra}"
+      end
+
+      assert {:error, detail} = spawn.(%{profile | "profile" => ""})
+      assert detail =~ "payload.profile"
+
+      assert {:error, detail} = spawn.(%{profile | "vars" => %{"N" => 1}})
+      assert detail =~ "payload.vars"
+
+      assert {:error, detail} = spawn.(Map.put(profile, "context_sha256", "ABC"))
+      assert detail =~ "context_sha256"
+    end
+
+    test "a well-formed profile payload passes validation" do
+      payload = %{
+        "profile" => "dialectic.reviewer",
+        "vars" => %{"DIALECTIC_SESSION_ID" => "s1"},
+        "context_sha256" => String.duplicate("a", 64)
+      }
+
+      assert {:ok, _} =
+               GovernedEffect.handle(
+                 tracked_base(%{
+                   "effect_type" => "agent_spawn",
+                   "surface" => "agent:x",
+                   "payload" => payload
+                 })
+               )
+    end
   end
 
   describe "Invariant 7 — credential scrub" do
@@ -1471,6 +1512,22 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
         })
 
       refute Map.has_key?(invalid_runtime, "max_runtime_ms")
+    end
+
+    test "orchestrator_spec sends a profile payload as the closed request, without lineage" do
+      env = %{
+        payload: %{
+          "profile" => "dialectic.reviewer",
+          "vars" => %{"DIALECTIC_SESSION_ID" => "s1"},
+          "context_sha256" => String.duplicate("a", 64)
+        },
+        proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa"
+      }
+
+      assert GovernedEffect.orchestrator_spec(env) == %{
+               "profile" => "dialectic.reviewer",
+               "vars" => %{"DIALECTIC_SESSION_ID" => "s1"}
+             }
     end
   end
 

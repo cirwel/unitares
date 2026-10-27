@@ -59,6 +59,20 @@ defmodule AgentOrchestrator.Profiles do
   reach the runner only behind a closure, so no timeout message, crash report
   or supervisor report can print them.
 
+  ## Freshness, when the generator owns the file
+
+  With `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the operator handing the
+  file to `scripts/ops/orchestrator-profiles.py`, which `scripts/start.sh` runs
+  at boot), this server reruns the generator when it starts and every minute
+  after, from the inputs recorded beside the file (`<file>.inputs.json`,
+  `--replay`), and reloads what it writes. A stale profile is a stale egress
+  policy, so profile spawns are refused, at preparation and again at
+  admission, until the first run here succeeds, while the last run failed or
+  ran too long, or while the file on disk does not load (operator decision 2026-10-27, KG
+  `2026-10-27T08:11:41.632304+00:00`). `status/0` reports the generation
+  state. A file the operator maintains by hand is not regenerated, and a bad
+  replacement of it leaves the last good set in force, as above.
+
   ## Raw spawns
 
   `AGENT_ORCHESTRATOR_RAW_SPAWN` is `allow` or `deny`. It defaults to `deny`
@@ -91,6 +105,8 @@ defmodule AgentOrchestrator.Profiles do
   @min_secret_bytes 4
   @hour_ms 3_600_000
   @default_reload_ms 5_000
+  @default_regenerate_ms 60_000
+  @inputs_suffix ".inputs.json"
   # How long an admitted id may stay unseen before it counts as never started.
   @start_grace_ms 60_000
 
@@ -178,6 +194,13 @@ defmodule AgentOrchestrator.Profiles do
 
     raw = setting(opts, :raw_spawn, :raw_spawn, "AGENT_ORCHESTRATOR_RAW_SPAWN")
 
+    generate? =
+      not is_nil(file) and
+        setting(opts, :generate, :profiles_generate, "AGENT_ORCHESTRATOR_PROFILES_GENERATE") in [
+          "1",
+          true
+        ]
+
     state = %{
       file: file,
       raw_spawn: raw_mode(raw, file),
@@ -185,6 +208,18 @@ defmodule AgentOrchestrator.Profiles do
       digest: nil,
       error: nil,
       reload_ms: Keyword.get(opts, :reload_ms, @default_reload_ms),
+      generate?: generate?,
+      regenerate_ms: Keyword.get(opts, :regenerate_ms, @default_regenerate_ms),
+      regenerate: Keyword.get(opts, :regenerate, &regenerate_from_record/1),
+      # Unverified until the first run here succeeds: the file a restart
+      # finds may be one start.sh failed to regenerate, and a restart must
+      # not clear a refusal the last run had earned.
+      generation: %{
+        error: if(generate?, do: "not yet regenerated since this server started"),
+        task: nil,
+        started_at: nil,
+        last_ok_at: nil
+      },
       getenv: Keyword.get(opts, :getenv, &System.get_env/1),
       environ: Keyword.get(opts, :environ, &System.get_env/0),
       live?: Keyword.get(opts, :live?, &live?/1),
@@ -198,6 +233,8 @@ defmodule AgentOrchestrator.Profiles do
 
     state = if file, do: reload(state), else: state
     if file, do: schedule_reload(state.reload_ms)
+    # The first run now, then every interval.
+    if generate?, do: send(self(), :regenerate)
     {:ok, recount_hour(state)}
   end
 
@@ -211,6 +248,18 @@ defmodule AgentOrchestrator.Profiles do
   end
 
   def handle_call({:admit, name, revision, execution_id}, _from, state) do
+    # Checked again here: a request prepared while fresh may reach admission
+    # (after a keyed reservation, say) once the profiles are not.
+    case stale_reason(state) do
+      nil ->
+        admit_current(name, revision, execution_id, state)
+
+      reason ->
+        {:reply, {:error, :profiles_unavailable, "profiles are stale: #{reason}"}, state}
+    end
+  end
+
+  defp admit_current(name, revision, execution_id, state) do
     case state.profiles && Map.get(state.profiles, name) do
       %{digest: ^revision} = profile ->
         admit_profile(profile, name, execution_id, state)
@@ -294,7 +343,134 @@ defmodule AgentOrchestrator.Profiles do
     {:noreply, reload(state)}
   end
 
+  def handle_info(:regenerate, state) do
+    schedule_regenerate(state.regenerate_ms)
+    {:noreply, start_regeneration(state)}
+  end
+
+  def handle_info({ref, result}, %{generation: %{task: %Task{ref: ref}}} = state) do
+    Process.demonitor(ref, [:flush])
+    now = state.now.()
+
+    generation =
+      case result do
+        :ok ->
+          %{state.generation | error: nil, task: nil, started_at: nil, last_ok_at: now}
+
+        {:error, reason} ->
+          if reason != state.generation.error,
+            do: Logger.error("orchestrator profiles not regenerated: #{reason}")
+
+          %{state.generation | error: reason, task: nil, started_at: nil}
+      end
+
+    # Load what the generator wrote now, not at the next reload tick.
+    {:noreply, reload(%{state | generation: generation})}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{generation: %{task: %Task{ref: ref}}} = state
+      ) do
+    error = "the regeneration task exited (#{inspect(reason)})"
+    Logger.error("orchestrator profiles not regenerated: #{error}")
+    {:noreply, %{state | generation: %{state.generation | error: error, task: nil}}}
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
+
+  # ---------- regeneration ----------
+
+  # One run at a time. A run still going when the next is due has taken a
+  # whole interval, and is reported (and refuses spawns) until it ends.
+  defp start_regeneration(%{generation: %{task: %Task{}}} = state) do
+    elapsed = state.now.() - state.generation.started_at
+
+    if elapsed >= state.regenerate_ms do
+      error = "regeneration has been running for #{div(elapsed, 1000)} s"
+      %{state | generation: %{state.generation | error: error}}
+    else
+      state
+    end
+  end
+
+  defp start_regeneration(state) do
+    file = state.file
+    regenerate = state.regenerate
+    # The task is linked, so nothing it raises may escape it: a failed run
+    # is a result, never a crash of this server.
+    task =
+      Task.async(fn ->
+        try do
+          regenerate.(file)
+        rescue
+          e -> {:error, "the generator could not run: #{Exception.message(e)}"}
+        catch
+          kind, reason -> {:error, "the generator could not run: #{inspect({kind, reason})}"}
+        end
+      end)
+
+    %{state | generation: %{state.generation | task: task, started_at: state.now.()}}
+  end
+
+  # The generator, run from the inputs its last write recorded, in an empty
+  # environment but PATH, as start.sh runs it. The record is held to the same
+  # ownership rule as the file it describes, and must name that file.
+  defp regenerate_from_record(file) do
+    inputs = file <> @inputs_suffix
+
+    with :ok <- owned_and_private(inputs, current_uid(), "input record"),
+         {:ok, body} <- read(inputs),
+         {:ok, record} <- decode_record(body, inputs),
+         :ok <- record_names(record, file, inputs) do
+      generator = Path.join([record["repo_root"], "scripts", "ops", "orchestrator-profiles.py"])
+      path = System.get_env("PATH") || "/usr/bin:/bin"
+
+      case System.cmd(
+             "/usr/bin/env",
+             ["-i", "PATH=" <> path, record["python"], "-I", generator, "--replay", inputs],
+             stderr_to_stdout: true
+           ) do
+        {_out, 0} ->
+          :ok
+
+        {out, status} ->
+          last = out |> String.split("\n", trim: true) |> List.last() || "no output"
+          {:error, "the generator exited #{status}: #{String.slice(last, 0, 300)}"}
+      end
+    end
+  end
+
+  defp decode_record(body, inputs) do
+    case Jason.decode(body) do
+      {:ok, %{"python" => python, "repo_root" => root} = record}
+      when is_binary(python) and is_binary(root) ->
+        {:ok, record}
+
+      _ ->
+        {:error, "#{inputs} is not a generator input record"}
+    end
+  end
+
+  defp record_names(%{"out" => out}, file, _inputs) when is_binary(out) do
+    if Path.expand(out) == file,
+      do: :ok,
+      else: {:error, "the input record names #{out}, not #{file}"}
+  end
+
+  defp record_names(_record, _file, inputs), do: {:error, "#{inputs} names no output file"}
+
+  defp schedule_regenerate(ms), do: Process.send_after(self(), :regenerate, ms)
+
+  # Why profile spawns are refused as stale, or nil. Only a file the generator
+  # owns is held to it.
+  defp stale_reason(%{generate?: false}), do: nil
+  defp stale_reason(%{generation: %{error: error}}) when is_binary(error), do: error
+
+  defp stale_reason(%{error: error}) when is_binary(error),
+    do: "the profiles file does not load: #{error}"
+
+  defp stale_reason(_state), do: nil
 
   # ---------- loading ----------
 
@@ -552,7 +728,12 @@ defmodule AgentOrchestrator.Profiles do
   defp loaded(%{profiles: nil, error: error}),
     do: {:error, :profiles_unavailable, "profiles file not loaded: #{error}"}
 
-  defp loaded(%{profiles: profiles}), do: {:ok, profiles}
+  defp loaded(%{profiles: profiles} = state) do
+    case stale_reason(state) do
+      nil -> {:ok, profiles}
+      reason -> {:error, :profiles_unavailable, "profiles are stale: #{reason}"}
+    end
+  end
 
   defp request_profile(body) do
     case body["profile"] do
@@ -779,8 +960,19 @@ defmodule AgentOrchestrator.Profiles do
         cond do
           is_nil(state.file) -> "off"
           is_nil(state.profiles) -> "invalid"
-          state.error -> "stale"
+          state.error || stale_reason(state) -> "stale"
           true -> "ok"
+        end,
+      # Present only when the generator owns the file: whether profile spawns
+      # are refused as stale, and why.
+      generation:
+        if state.generate? do
+          %{
+            managed: true,
+            enforced: not is_nil(stale_reason(state)),
+            error: state.generation.error,
+            running: not is_nil(state.generation.task)
+          }
         end,
       raw_spawn: Atom.to_string(state.raw_spawn),
       # The file the digest is of, absolute (resolved in init/1), so the
