@@ -8,8 +8,7 @@ defmodule Portal.Application do
   @impl true
   def start(_type, _args) do
     # Refuse to boot on anything but loopback (portal-hub-v0 §3.2).
-    endpoint = Application.get_env(:portal, PortalWeb.Endpoint, [])
-    Portal.Boundary.check_bind!(get_in(endpoint, [:http, :ip]) || {127, 0, 0, 1})
+    Portal.Boundary.check_endpoint!(Application.get_env(:portal, PortalWeb.Endpoint, []))
 
     # No clustering: the hub is a lone, undistributed node.
     children = [

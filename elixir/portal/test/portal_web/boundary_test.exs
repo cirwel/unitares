@@ -120,6 +120,29 @@ defmodule PortalWeb.BoundaryTest do
       end
     end
 
+    test "every listener is checked: https refused, http needs an explicit loopback ip" do
+      ok = [http: [ip: {127, 0, 0, 1}, port: 8791]]
+      assert Portal.Boundary.check_endpoint!(ok) == :ok
+
+      # The configuration this suite booted with passed the same check.
+      assert Portal.Boundary.check_endpoint!(Application.get_env(:portal, PortalWeb.Endpoint)) ==
+               :ok
+
+      refused = [
+        ok ++ [https: [ip: {0, 0, 0, 0}, port: 8443]],
+        ok ++ [https: [ip: {127, 0, 0, 1}, port: 8443]],
+        # No ip: the HTTP adapter would listen on every interface.
+        [http: [port: 8791]],
+        [http: [ip: {0, 0, 0, 0}, port: 8791]],
+        [http: false],
+        []
+      ]
+
+      for config <- refused do
+        assert_raise ArgumentError, fn -> Portal.Boundary.check_endpoint!(config) end
+      end
+    end
+
     test "prod runtime config binds loopback with an exact origin and has no widening setting" do
       vars = ~w(PORTAL_SECRET_KEY_BASE PORTAL_HOST PORTAL_PORT)
       saved = Map.new(vars, &{&1, System.get_env(&1)})

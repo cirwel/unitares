@@ -22,6 +22,30 @@ defmodule Portal.Boundary do
     "http://#{host}:#{port}"
   end
 
+  @doc """
+  Raise unless the endpoint configuration listens on loopback only: an
+  `:http` listener with an explicit loopback `:ip` (a missing one means every
+  interface to the HTTP adapter), and no `:https` listener at all, since the
+  hub serves plain http on loopback.
+  """
+  def check_endpoint!(config) do
+    if Keyword.get(config, :https) do
+      raise ArgumentError,
+            "the portal serves plain http on loopback and refuses an :https listener"
+    end
+
+    case Keyword.get(config, :http) do
+      http when is_list(http) ->
+        case Keyword.fetch(http, :ip) do
+          {:ok, ip} -> check_bind!(ip)
+          :error -> raise ArgumentError, "the portal needs an explicit loopback :ip for :http"
+        end
+
+      other ->
+        raise ArgumentError, "the portal needs an :http listener, got #{inspect(other)}"
+    end
+  end
+
   @doc "Raise unless `ip` is a loopback address."
   def check_bind!(ip) do
     if loopback?(ip) do
