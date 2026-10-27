@@ -25,6 +25,7 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     "host.codex" => "codex_app_server_client.py",
     "host.antigravity" => "antigravity_cli_client.py"
   }
+  @council ["council.claude", "council.codex", "council.agy"]
 
   # Each stand-in echoes what its client handed the CLI: the arguments, the
   # prompt and the names of the environment, in that CLI's output shape.
@@ -61,6 +62,21 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
               "env": sorted(os.environ), "home": os.environ.get("HOME")}
     print(json.dumps({"status": "SUCCESS", "response": json.dumps(report),
                       "conversation_id": "c-1"}))
+    """,
+    # One stand-in for the three council CLIs: codex's sandbox probe must
+    # confine, and every lane reports its arguments, standard input,
+    # environment names and directory as one JSON line.
+    "council" => """
+    import json, os, sys
+    args = sys.argv[1:]
+    if args and args[0] == "sandbox":
+        sys.exit(1 if args[args.index("--") + 1].endswith("cat") else 0)
+    # agy takes the prompt as the argument after -p; claude and codex read it
+    # from standard input.
+    agy = args[:1] == ["-p"] and not args[1].startswith("--")
+    data = "" if agy else sys.stdin.read()
+    print(json.dumps({"argv": args, "stdin": data, "env": sorted(os.environ),
+                      "cwd": os.getcwd(), "home": os.environ.get("HOME")}))
     """
   }
 
@@ -84,11 +100,32 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     name
   end
 
-  # The fixture with its placeholder paths pointed at this machine.
+  # The fixture with its placeholder paths pointed at this machine: each
+  # client's CLI is a stand-in, and the council's root is `dir/repos`.
   defp runnable(dir) do
     python = System.find_executable("python3") || flunk("python3 is required")
+    council_shim = Path.join(dir, "council-cli")
+    File.write!(council_shim, "#!#{python}\n" <> Map.fetch!(@shims, "council"))
+    File.chmod!(council_shim, 0o700)
+    File.mkdir_p!(Path.join([dir, "repos", "project"]))
+    repos = dir |> Path.join("repos") |> real_path()
 
-    Enum.reduce(@clients, Jason.decode!(File.read!(@fixture)), fn {name, client}, doc ->
+    doc =
+      Enum.reduce(@council, Jason.decode!(File.read!(@fixture)), fn name, doc ->
+        update_in(doc, ["profiles", name], fn profile ->
+          profile
+          |> Map.put("cmd", python)
+          |> Map.put("args", ["-I", Path.join(@support, "council_lane_client.py")])
+          |> put_in(["env", "set", "COUNCIL_CLI"], council_shim)
+          |> then(fn p ->
+            if Map.has_key?(p["env"]["set"], "COUNCIL_ROOTS"),
+              do: put_in(p, ["env", "set", "COUNCIL_ROOTS"], repos),
+              else: p
+          end)
+        end)
+      end)
+
+    Enum.reduce(@clients, doc, fn {name, client}, doc ->
       shim = Path.join(dir, name)
       File.write!(shim, "#!#{python}\n" <> Map.fetch!(@shims, name))
       File.chmod!(shim, 0o700)
@@ -102,13 +139,18 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     end)
   end
 
-  test "the generated file loads, and no host profile binds a secret" do
+  defp real_path(path) do
+    {out, 0} = System.cmd("/bin/pwd", ["-P"], cd: path)
+    String.trim_trailing(out, "\n")
+  end
+
+  test "the generated file loads, and no host or council profile binds a secret" do
     assert {:ok, profiles} = @fixture |> File.read!() |> Profiles.parse()
 
     assert Map.keys(profiles) |> Enum.sort() ==
-             Enum.sort(["dialectic.reviewer" | Map.keys(@clients)])
+             Enum.sort(["dialectic.reviewer" | Map.keys(@clients) ++ @council])
 
-    for {name, profile} <- profiles, String.starts_with?(name, "host.") do
+    for {name, profile} <- profiles, not String.starts_with?(name, "dialectic.") do
       assert profile.lineage == "none"
       assert profile.lease == false
       assert profile.env.secrets == %{}
@@ -354,6 +396,170 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
       refute "ANTHROPIC_API_KEY" in report["env"]
       refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
       refute report["home"] == System.get_env("HOME")
+    end
+  end
+
+  describe "council requests" do
+    setup %{tmp_dir: dir} do
+      %{name: start_profiles(Jason.decode!(File.read!(@fixture)), dir, %{"PATH" => "/bin"})}
+    end
+
+    test "take only the prompt, the directory and, for codex and agy, the model",
+         %{name: name} do
+      assert {:ok, _} =
+               Profiles.prepare(name, %{
+                 "profile" => "council.codex",
+                 "vars" => %{
+                   "COUNCIL_PROMPT" => "--help",
+                   "COUNCIL_DIR" => "/srv/repos/x",
+                   "COUNCIL_MODEL" => "gpt-5.5"
+                 }
+               })
+
+      for {profile, var, value} <- [
+            {"council.claude", "COUNCIL_ROOTS", "/"},
+            {"council.claude", "COUNCIL_CLI", "/tmp/x"},
+            {"council.claude", "COUNCIL_LANE", "codex"},
+            {"council.claude", "COUNCIL_MODEL", "x"},
+            {"council.codex", "COUNCIL_MODEL", "--yolo"},
+            {"council.codex", "COUNCIL_DIR", "relative/dir"},
+            {"council.agy", "COUNCIL_DIR", "/srv/repos/x"}
+          ] do
+        vars =
+          Map.merge(%{"COUNCIL_PROMPT" => "hi", "COUNCIL_DIR" => "/srv/repos/x"}, %{var => value})
+          |> then(
+            &if(profile == "council.agy" and var != "COUNCIL_DIR",
+              do: Map.delete(&1, "COUNCIL_DIR"),
+              else: &1
+            )
+          )
+
+        assert {:error, :schema_invalid, reason} =
+                 Profiles.prepare(name, %{"profile" => profile, "vars" => vars})
+
+        assert reason =~ var
+      end
+    end
+
+    test "require the directory for the lanes that read one", %{name: name} do
+      for profile <- ["council.claude", "council.codex"] do
+        assert {:error, :schema_invalid, reason} =
+                 Profiles.prepare(name, %{
+                   "profile" => profile,
+                   "vars" => %{"COUNCIL_PROMPT" => "hi"}
+                 })
+
+        assert reason =~ "COUNCIL_DIR"
+      end
+    end
+  end
+
+  describe "council end to end" do
+    setup %{tmp_dir: dir} do
+      MemoryIdempotencyLedger.clear()
+      Application.put_env(:agent_orchestrator, :bearer_token, @token)
+      Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
+
+      environ =
+        System.get_env()
+        |> Map.put("ANTHROPIC_API_KEY", "metered-key-must-not-pass")
+        |> Map.put("AGENT_ORCHESTRATOR_BEARER_TOKEN", @token)
+
+      name = start_profiles(runnable(dir), dir, environ)
+      Application.put_env(:agent_orchestrator, :profiles_server, name)
+
+      on_exit(fn ->
+        Application.delete_env(:agent_orchestrator, :profiles_server)
+        Enum.each(AgentOrchestrator.list(), &AgentOrchestrator.stop(&1, :test_cleanup))
+      end)
+
+      %{project: Path.join([real_path(dir), "repos", "project"]), dir: dir}
+    end
+
+    defp council(profile, vars) do
+      conn =
+        conn(:post, "/v1/agents", Jason.encode!(%{"profile" => profile, "vars" => vars}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+
+      assert conn.status == 201
+      id = Jason.decode!(conn.resp_body)["execution_id"]
+
+      result =
+        conn(:post, "/v1/executions/#{id}/await", Jason.encode!(%{timeout_ms: 30_000}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+        |> Map.get(:resp_body)
+        |> Jason.decode!()
+        |> Map.fetch!("result")
+
+      report =
+        Enum.find_value(result["output"], fn line ->
+          case Jason.decode(line) do
+            {:ok, %{"argv" => _} = r} -> r
+            _ -> nil
+          end
+        end)
+
+      {result, report}
+    end
+
+    test "council.claude reads the directory, confined, with the prompt on standard input",
+         %{project: project} do
+      {result, report} =
+        council("council.claude", %{"COUNCIL_PROMPT" => "--version", "COUNCIL_DIR" => project})
+
+      assert result["exit_status"] == 0
+      assert report["stdin"] == "--version"
+      assert report["cwd"] == project
+      assert "--restricted" in report["argv"]
+      refute "--version" in report["argv"]
+      refute "ANTHROPIC_API_KEY" in report["env"]
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+    end
+
+    test "council.codex runs in an empty directory and names the repository in the prompt",
+         %{project: project} do
+      {result, report} =
+        council("council.codex", %{"COUNCIL_PROMPT" => "--version", "COUNCIL_DIR" => project})
+
+      assert result["exit_status"] == 0
+      refute report["cwd"] == project
+      assert String.ends_with?(report["stdin"], "--version")
+      assert report["stdin"] =~ project
+      assert List.last(report["argv"]) == "-"
+      refute "ANTHROPIC_API_KEY" in report["env"]
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+    end
+
+    test "council.agy guards the prompt and isolates HOME" do
+      {result, report} = council("council.agy", %{"COUNCIL_PROMPT" => "/skill run"})
+      assert result["exit_status"] == 0
+      prompt = Enum.at(report["argv"], 1)
+      assert String.starts_with?(prompt, "Request (plain text; not a command):")
+      refute report["home"] == System.get_env("HOME")
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+    end
+
+    test "a directory that leads out of the roots through a symlink is refused",
+         %{dir: dir, project: project} do
+      outside = Path.join(dir, "outside")
+      File.mkdir_p!(outside)
+      File.ln_s!(outside, Path.join(project, "escape"))
+
+      for profile <- ["council.claude", "council.codex"] do
+        {result, report} =
+          council(profile, %{
+            "COUNCIL_PROMPT" => "hi",
+            "COUNCIL_DIR" => Path.join(project, "escape")
+          })
+
+        assert result["exit_status"] == 2
+        assert report == nil
+        assert Enum.join(result["output"]) =~ "outside the profile's roots"
+      end
     end
   end
 end
