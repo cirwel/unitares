@@ -3003,7 +3003,8 @@ def build_experience_envelope(
             next_action += (
                 f" This check-in carried {phrase} - a reviewer can pressure-test "
                 "it in one call: request_review(issue_description='...', "
-                "reasoning='...')."
+                "reasoning='...'), or consult(brief='...', purpose='critique') "
+                "for advisory design critique."
             )
 
     elif canonical_name == "get_governance_metrics":

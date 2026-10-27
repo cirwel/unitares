@@ -128,9 +128,11 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 
 ### Search and retrieval flags
 
-Shared-memory search is full-text on the `postgres` backend and semantic on
-`age` (pass `search_mode="fts"` to force full-text). Hybrid fusion, reranking and
-related-finding expansion are opt-in.
+Shared-memory search is full-text on the `postgres` backend and on the default
+Compose `age` image (which omits `sentence-transformers`), and semantic on
+`age` once embeddings are installed via `docker-compose.full.yml` or
+`pip install -e ".[embeddings]"` (pass `search_mode="fts"` to force full-text).
+Hybrid fusion, reranking and related-finding expansion are opt-in.
 
 | Variable | Effect |
 |---|---|

@@ -1,0 +1,184 @@
+{
+  "profiles": {
+    "dialectic.reviewer": {
+      "args": [
+        "-s",
+        "-m",
+        "agents.dialectic_reviewer"
+      ],
+      "cd": "/srv/unitares",
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "PATH",
+          "HOME",
+          "LOGNAME",
+          "SHELL",
+          "TMPDIR",
+          "TERM",
+          "LANG",
+          "LC_ALL",
+          "LC_CTYPE",
+          "XDG_RUNTIME_DIR",
+          "HTTPS_PROXY",
+          "HTTP_PROXY",
+          "NO_PROXY",
+          "https_proxy",
+          "http_proxy",
+          "no_proxy",
+          "SSL_CERT_FILE",
+          "SSL_CERT_DIR",
+          "CODEX_HOME",
+          "CLAUDE_CONFIG_DIR",
+          "NODE_EXTRA_CA_CERTS"
+        ],
+        "secrets": {
+          "UNITARES_MCP_BEARER_TOKEN": "UNITARES_MCP_BEARER_TOKEN"
+        },
+        "set": {
+          "DIALECTIC_REVIEWER_FROM_SESSION": "1",
+          "PYTHONPATH": "/srv/unitares:/srv/unitares/agents/sdk/src",
+          "UNITARES_ANTIGRAVITY_CLI": "/usr/local/bin/agy",
+          "UNITARES_CLAUDE_CLI": "/usr/local/bin/claude",
+          "UNITARES_CODEX_CLI": "/usr/local/bin/codex",
+          "UNITARES_DIALECTIC_REVIEWER_HOST": "",
+          "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
+          "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR": "",
+          "UNITARES_GOVERNANCE_URL": "http://127.0.0.1:8767/mcp/",
+          "USER": "operator"
+        }
+      },
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 2000,
+      "max_per_hour": 20,
+      "max_runtime_ms": 11700000,
+      "vars": {
+        "DIALECTIC_SESSION_ID": {
+          "max_bytes": 64,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9_-]{0,63}",
+          "required": true
+        }
+      }
+    },
+    "host.antigravity": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/antigravity_cli_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR",
+          "XDG_RUNTIME_DIR"
+        ],
+        "set": {
+          "HA_CLI": "/usr/local/bin/agy",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 1000,
+      "max_per_hour": 60,
+      "max_runtime_ms": 450000,
+      "vars": {
+        "HA_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "HA_PROMPT": {
+          "max_bytes": 119817,
+          "required": true
+        },
+        "HA_TIMEOUT_S": {
+          "max_bytes": 3,
+          "pattern": "[1-9][0-9]{0,2}"
+        }
+      }
+    },
+    "host.claude": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/claude_cli_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR"
+        ],
+        "set": {
+          "HA_CLI": "/usr/local/bin/claude",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 1000,
+      "max_per_hour": 60,
+      "max_runtime_ms": 450000,
+      "vars": {
+        "HA_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "HA_PROMPT": {
+          "max_bytes": 131061,
+          "required": true
+        },
+        "HA_TIMEOUT_S": {
+          "max_bytes": 3,
+          "pattern": "[1-9][0-9]{0,2}"
+        }
+      }
+    },
+    "host.codex": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/codex_app_server_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR",
+          "CODEX_HOME"
+        ],
+        "set": {
+          "HA_CLI": "/usr/local/bin/codex",
+          "HA_CODEX_APP_SERVER": "1",
+          "HA_CODEX_EXEC_FALLBACK": "1",
+          "HA_SANDBOX": "read-only",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 1000,
+      "max_per_hour": 60,
+      "max_runtime_ms": 450000,
+      "vars": {
+        "HA_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "HA_PROMPT": {
+          "max_bytes": 131061,
+          "required": true
+        }
+      }
+    }
+  },
+  "schema": "unitares.orchestrator_profiles.v1"
+}

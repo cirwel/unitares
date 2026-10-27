@@ -137,7 +137,13 @@ def check_file_versions(filepath: Path, patterns: List[Tuple[str, str]], expecte
     issues = []
 
     if not filepath.exists():
-        return issues
+        return [{
+            'file': str(filepath),
+            'line': 0,
+            'found': '<configured file missing>',
+            'expected': expected_version,
+            'text': str(filepath),
+        }]
 
     with open(filepath) as f:
         content = f.read()

@@ -48,7 +48,7 @@ UNITARES has run in production since November 2025 on a **single-operator fleet*
 
 - All services bind `127.0.0.1` by default; public exposure is an env-var-gated operator decision ([§3.5](03-running-the-server.md#35-exposing-beyond-loopback)).
 - The lease plane **fails closed** if `LEASE_PLANE_BEARER_TOKEN` is unset. The Docker stack supplies a fixed, well-known default token; set your own before exposing port 8788.
-- Agent identity is bearer-token-based (symmetric stack retained intentionally).
+- Agent identity uses keyed session bindings (`client_session_id`) and HMAC-signed `continuity_token` proofs (symmetric stack retained intentionally; lease-plane mutations use Ed25519 attestations), separate from transport bearer auth (`UNITARES_MCP_BEARER_TOKENS`).
 - The dashboard is served by the governance server at `/dashboard` and reads through its REST API, not PostgreSQL directly; browsers authenticate with the REST token or passkey sign-in ([§3.4](03-running-the-server.md)).
 
 **Multi-tenant or public-facing deployment needs a harder auth posture than the defaults.** Set bearer/OAuth gates and host allowlists before exposing anything. Vulnerability reports: [`../../SECURITY.md`](../../.github/SECURITY.md). Full scope and threat model: [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).

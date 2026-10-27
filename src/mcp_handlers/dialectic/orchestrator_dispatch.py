@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import sys
 from pathlib import Path
@@ -31,7 +30,7 @@ from src.local_inference_env import (
     default_local_model,
     model_base_url,
 )
-from src import inference_config
+from src import dialectic_reviewer_config as _reviewer_config
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -53,112 +52,28 @@ _HOST_SELECTION_SETTINGS = (
     "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
 )
 
-# The reviewer reads this as an invalid host list: no host is called and the
-# local floor answers without approval authority. The server sets it when the
-# operator's inference hosts file does not load, or when the dialectic_reviewer
-# job leaves no host the reviewer can call (inference-hosts-config-v0 step 3).
-# Never left empty-by-accident: an empty list reads as "no list", which
-# restores the local reviewer's approval.
-REVIEWER_HOSTS_ERROR_ENV = "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"
-
-# Builtin host ids the reviewer can call, and the names it accepts for them.
-_REVIEWER_BUILTINS = {
-    "codex:host-adapter": "codex:host-adapter",
-    "claude:host-adapter": "claude:host-adapter",
-    "antigravity:host-adapter": "antigravity:host-adapter",
-}
-# Reviewer-list names that correspond to a builtin, for the file's switch-off.
-_REVIEWER_NAME_TO_HOST = {
-    "codex": "codex:host-adapter", "codex:host-adapter": "codex:host-adapter",
-    "claude": "claude:host-adapter", "claude:host-adapter": "claude:host-adapter",
-    "antigravity": "antigravity:host-adapter", "agy": "antigravity:host-adapter",
-    "antigravity:host-adapter": "antigravity:host-adapter",
-}
+# The reviewer's host list and lifetime are resolved by the light module the
+# reviewer and the profiles generator share (src/dialectic_reviewer_config.py);
+# this server resolves them from its own environment.
+REVIEWER_HOSTS_ERROR_ENV = _reviewer_config.REVIEWER_HOSTS_ERROR_ENV
+_REVIEWER_BUILTINS = _reviewer_config.REVIEWER_BUILTINS
+_REVIEWER_NAME_TO_HOST = _reviewer_config.REVIEWER_NAME_TO_HOST
 
 
 def _reviewer_host_selection() -> Dict[str, str]:
-    """The host-selection env the reviewer child gets, resolved by this server.
-
-    With a ``dialectic_reviewer`` job in the operator's inference hosts file,
-    the list is that job's order with hosts the reviewer cannot call (declared
-    hosts until the reviewer design's step 4, the local and HF lanes) or that
-    the file switches off removed. Without a job, the operator's
-    UNITARES_DIALECTIC_REVIEWER_HOSTS / _HOST apply as before, minus hosts the
-    file switches off. A file that does not load, or a selection that leaves no
-    host, becomes an explicit error so the reviewer fails closed.
-    """
-    loaded = inference_config.load()
-    if loaded.state == "error" or loaded.config is None:
-        return {
-            "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
-            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
-            REVIEWER_HOSTS_ERROR_ENV: f"the inference hosts file does not load ({loaded.error})",
-        }
-    config = loaded.config
-
-    def switched_off(host_id: str) -> bool:
-        entry = config.hosts.get(host_id)
-        return entry is not None and not entry.enabled
-
-    job = config.jobs.get("dialectic_reviewer")
-    if job is not None:
-        hosts = [h for h in job.prefer if h in _REVIEWER_BUILTINS and not switched_off(h)]
-        if not hosts:
-            return {
-                "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
-                "UNITARES_DIALECTIC_REVIEWER_HOST": "",
-                REVIEWER_HOSTS_ERROR_ENV: (
-                    "no host in the dialectic_reviewer job can review ("
-                    + ", ".join(job.prefer) + ")"
-                ),
-            }
-        return {
-            "UNITARES_DIALECTIC_REVIEWER_HOSTS": ",".join(_REVIEWER_BUILTINS[h] for h in hosts),
-            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
-            REVIEWER_HOSTS_ERROR_ENV: "",
-        }
-    hosts_raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
-    host_raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOST", "")
-    selection = {
-        "UNITARES_DIALECTIC_REVIEWER_HOSTS": hosts_raw,
-        "UNITARES_DIALECTIC_REVIEWER_HOST": host_raw,
-        REVIEWER_HOSTS_ERROR_ENV: "",
-    }
-    if hosts_raw.strip():
-        key = "UNITARES_DIALECTIC_REVIEWER_HOSTS"
-        names = [part.strip() for part in hosts_raw.split(",") if part.strip()]
-    else:
-        # The single-host setting names one host. Never split it: filtering a
-        # malformed "codex,local" down to "local" would turn a value the
-        # reviewer rejects into the floor with approval authority.
-        key = "UNITARES_DIALECTIC_REVIEWER_HOST"
-        names = [host_raw.strip()] if host_raw.strip() else []
-    kept = [n for n in names if not switched_off(_REVIEWER_NAME_TO_HOST.get(n.lower(), ""))]
-    if names and not kept:
-        selection.update({
-            "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
-            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
-            REVIEWER_HOSTS_ERROR_ENV: "every listed reviewer host is switched off in the inference hosts file",
-        })
-    elif kept != names:
-        selection[key] = ",".join(kept)
-    return selection
+    """The host-selection env the reviewer child gets, resolved by this server
+    (src/dialectic_reviewer_config.reviewer_host_selection)."""
+    return _reviewer_config.reviewer_host_selection(os.environ)
 
 
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Must match agents.dialectic_reviewer.reviewer.DEFAULT_CONTINUATION_WAIT_S.
-# A contract test pins the two values together without importing the runner into
-# the governance server. The extra grace covers the initial model call (host
-# backends allow up to seven minutes), onboarding, and protocol writes before
-# the continuation clock starts.
-DEFAULT_CONTINUATION_WAIT_S = 3600.0
-# Must match agents.dialectic_reviewer.reviewer.CONTINUATION_TOTAL_WAIT_FACTOR:
-# the reviewer restarts its wait after each filed synthesis, so its lifetime is
-# up to this many waits and the reaper cap must outlast it.
-CONTINUATION_TOTAL_WAIT_FACTOR = 3
-REVIEWER_RUNTIME_GRACE_S = 900.0
+# Defined in src/dialectic_reviewer_config.py; contract tests pin them to the
+# reviewer runner's values.
+DEFAULT_CONTINUATION_WAIT_S = _reviewer_config.DEFAULT_CONTINUATION_WAIT_S
+CONTINUATION_TOTAL_WAIT_FACTOR = _reviewer_config.CONTINUATION_TOTAL_WAIT_FACTOR
+REVIEWER_RUNTIME_GRACE_S = _reviewer_config.REVIEWER_RUNTIME_GRACE_S
 
 
 def orchestrated_review_enabled() -> bool:
@@ -177,110 +92,39 @@ def _orchestrator_url() -> str:
 
 
 def _governance_url() -> str:
-    # The reviewer passes this straight to GovernanceClient(mcp_url=...), whose
-    # streamable-http transport needs the /mcp/ path — a bare base URL makes
-    # session.initialize() hang then cancel (live-found 2026-06-23). Normalize a
-    # pathless URL so either form (base or full mcp_url) works.
-    raw = (
-        os.environ.get("UNITARES_GOVERNANCE_URL")
-        or os.environ.get("GOVERNANCE_URL")
-        or "http://127.0.0.1:8767/mcp/"
-    )
-    from urllib.parse import urlparse
-
-    if urlparse(raw).path in ("", "/"):
-        raw = raw.rstrip("/") + "/mcp/"
-    return raw
+    """The reviewer's governance MCP URL (src/dialectic_reviewer_config.governance_url)."""
+    return _reviewer_config.governance_url(os.environ)
 
 
 def _reviewer_max_runtime_ms() -> int:
-    """Lifetime cap for one spawned reviewer.
-
-    The agent-orchestrator defaults to thirty minutes, which is shorter than
-    the dialectic protocol's one-hour synthesis window. Size this spawn's cap
-    from the same operator override the reviewer consumes, plus bounded setup
-    and model-call grace. Invalid/negative overrides fail back to the default
-    window rather than disabling the orchestrator's reaper.
-    """
-    raw = os.environ.get(
-        "UNITARES_DIALECTIC_CONTINUATION_WAIT_S",
-        "3600",
-    )
-    wait_s = _seconds(raw, DEFAULT_CONTINUATION_WAIT_S)
-    if wait_s < 0:
-        wait_s = DEFAULT_CONTINUATION_WAIT_S
-    total_s = wait_s * CONTINUATION_TOTAL_WAIT_FACTOR
-    return max(1, int((total_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
+    """Lifetime cap for one spawned reviewer
+    (src/dialectic_reviewer_config.reviewer_max_runtime_ms)."""
+    return _reviewer_config.reviewer_max_runtime_ms(os.environ)
 
 
-# The largest seconds override honoured; anything above it counts as unset.
-# Seven days is far past any real reviewer timeout or continuation window, and
-# keeps the summed cap (three hosts plus the wait, in milliseconds) finite.
-MAX_SECONDS_OVERRIDE = 7 * 24 * 3600.0
+MAX_SECONDS_OVERRIDE = _reviewer_config.MAX_SECONDS_OVERRIDE
 
 
 def _seconds(raw: Any, default: float) -> float:
-    """A seconds override, or ``default`` when it is not a usable number.
-
-    ``float()`` accepts ``inf``, ``nan`` and ``1e309`` (which overflows to
-    infinity), and a finite ``1e308`` still overflows once the cap is summed
-    and scaled to milliseconds; ``int()`` of that cap raises. That raise
-    happens in ``_build_spec``, before the dispatcher's exception handler, so
-    it would escape instead of degrading to the in-process reviewer.
-    """
-    return float(raw) if _is_usable_seconds(raw) else default
+    """A seconds override, or ``default`` when it is not usable
+    (src/dialectic_reviewer_config.seconds)."""
+    return _reviewer_config.seconds(raw, default)
 
 
 def _is_usable_seconds(raw: Any) -> bool:
-    """Finite and no larger than MAX_SECONDS_OVERRIDE (negatives pass: each
-    reader gives a negative its own meaning)."""
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return False
-    return math.isfinite(value) and value <= MAX_SECONDS_OVERRIDE
+    """Finite and within MAX_SECONDS_OVERRIDE
+    (src/dialectic_reviewer_config.is_usable_seconds)."""
+    return _reviewer_config.is_usable_seconds(raw)
 
 
-# Per-call timeout settings and defaults of the hosts a reviewer list may name,
-# by every name the list accepts. Must match agents.dialectic_reviewer.host_list
-# (HOSTS and its aliases); a contract test pins the two together without
-# importing the runner into the governance server.
-_HOST_TIMEOUTS = {
-    "codex": ("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", 420.0),
-    "claude": ("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", 420.0),
-    "antigravity": ("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", 420.0),
-    "external": ("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", 180.0),
-}
-_HOST_TIMEOUT_ALIASES = {
-    "codex:host-adapter": "codex",
-    "claude:host-adapter": "claude",
-    "agy": "antigravity",
-    "antigravity:host-adapter": "antigravity",
-    "openai_compat": "external",
-    "openai-compatible": "external",
-    "gemini": "external",
-}
+_HOST_TIMEOUTS = _reviewer_config.HOST_TIMEOUTS
+_HOST_TIMEOUT_ALIASES = _reviewer_config.HOST_TIMEOUT_ALIASES
 
 
 def _extra_host_budget_s() -> float:
-    """Time for the listed hosts after the first.
-
-    REVIEWER_RUNTIME_GRACE_S covers one model call. When the first listed host
-    fails, each later one may take its full timeout before the verdict, so the
-    lifetime cap grows by those timeouts (design: docs/proposals/active/
-    dialectic-reviewer-hosts-v0.md 2.7). Unknown names add nothing: the
-    reviewer refuses such a list and calls no host.
-    """
-    raw = _reviewer_host_selection()["UNITARES_DIALECTIC_REVIEWER_HOSTS"]
-    names = [part.strip().lower() for part in raw.split(",") if part.strip()]
-    extra = 0.0
-    for name in names[1:3]:
-        key = _HOST_TIMEOUT_ALIASES.get(name, name)
-        if key not in _HOST_TIMEOUTS:
-            continue
-        env_name, default = _HOST_TIMEOUTS[key]
-        extra += max(0.0, _seconds(os.environ.get(env_name, default), default))
-    return extra
+    """Time for the listed hosts after the first
+    (src/dialectic_reviewer_config.extra_host_budget_s)."""
+    return _reviewer_config.extra_host_budget_s(os.environ)
 
 
 def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Optional[str]) -> Dict[str, Any]:

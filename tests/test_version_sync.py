@@ -36,6 +36,21 @@ def test_missing_configured_pattern_is_a_mismatch(tmp_path):
     assert mismatches[0]["found"] == "<configured pattern did not match>"
 
 
+def test_missing_configured_file_is_a_mismatch(tmp_path):
+    """Renaming a guarded release surface must not silently disable the check."""
+    missing = tmp_path / "missing-release-surface.yml"
+
+    mismatches = check_file_versions(
+        missing,
+        [(r"server v([\d.]+)", r"server v{version}")],
+        "2.18.0",
+    )
+
+    assert len(mismatches) == 1
+    assert mismatches[0]["line"] == 0
+    assert mismatches[0]["found"] == "<configured file missing>"
+
+
 def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkeypatch):
     """Exercise the release workflow: bump/update, then separately verify/publish."""
     import scripts.ops.version_manager as manager

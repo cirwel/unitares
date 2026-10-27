@@ -225,11 +225,18 @@ components. Their meaning and maturity stages are in
 ## 4.5 Connect a client or resident
 
 - MCP client, hosted connector, authentication, and remote transport matrix:
-  [`MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md).
+  [`MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md) (Streamable HTTP `/mcp/`,
+  `npx mcp-remote` stdio bridge, and Bearer or OAuth 2.1 on a dedicated
+  `UNITARES_OAUTH_PUBLIC_PORT` listener for hosted connectors like Claude.ai,
+  ChatGPT, and Perplexity).
 - Long-running or scheduled agents: use the
   [`unitares-sdk`](../../agents/sdk/README.md) and its `GovernanceAgent` pattern.
 - Codex and Claude Code lifecycle hooks: use the
-  [governance plugin](https://github.com/cirwel/unitares-governance-plugin).
+  [governance plugin](https://github.com/cirwel/unitares-governance-plugin) for
+  MCP, lifecycle hooks, skills, and per-file edit leases via the lease plane
+  ([§2.1](02-install.md#21-docker-quickstart)); see
+  [`CODEX_START.md`](../guides/CODEX_START.md) for the Codex and ChatGPT
+  workflow.
 - Hermes Agent: install the reviewed `unitares` plugin from the Hermes plugin
   catalog with `hermes plugins install unitares`
   (`hermes plugins install cirwel/unitares-host-adapter` installs the

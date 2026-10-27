@@ -87,6 +87,9 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "needs: [test_shard, macos-platform, native-bootstrap]" in workflow
     assert "needs.native-bootstrap.result != 'success'" in workflow
     assert "uses: ./.github/workflows/native-bootstrap.yml" in workflow
+    assert "needs: resolve-native-bootstrap-image" in workflow
+    assert "version=\"$(tr -d '[:space:]' < PUBLISHED_VERSION)\"" in workflow
+    assert "postgres-image: ${{ needs.resolve-native-bootstrap-image.outputs.postgres-image }}" in workflow
     assert "needs.test_shard.result != 'success'" in workflow
     assert "needs.macos-platform.result != 'success'" in workflow
     assert "python -m coverage combine coverage-data" in workflow

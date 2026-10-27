@@ -75,6 +75,11 @@ RELEVANT_FILES: tuple[str, ...] = (
     ".github/workflows/elixir-tests.yml",
     "scripts/ci/elixir_paths_changed.py",
     "scripts/ci/elixir_gate.py",
+    # The agent_orchestrator suite runs each host launch profile's client
+    # end to end (generated_profiles_test.exs).
+    "src/mcp_handlers/support/claude_cli_client.py",
+    "src/mcp_handlers/support/codex_app_server_client.py",
+    "src/mcp_handlers/support/antigravity_cli_client.py",
 )
 
 ZERO_SHA_PREFIX = "0000000"

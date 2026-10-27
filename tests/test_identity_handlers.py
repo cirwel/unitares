@@ -2004,6 +2004,69 @@ class TestHandleOnboardV2:
         assert "workflow" not in data
         assert "what_this_does" not in data
 
+    @staticmethod
+    def _fresh_mint_db(mock_db, mock_redis):
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident", metadata={}),
+            SimpleNamespace(identity_id="new-ident", metadata={}),
+        ]
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_onboard_records_declared_host_session_on_fresh_identity(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "onboard-host-session",
+            "onboard_origin": "harness_backstop",
+            "host_session": {
+                "harness": "claude-code",
+                "session_id": "36fb66eb-7f82-41e8-a965-b91dbf03039f",
+                "workspace": "/srv/work/project",
+            },
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        writes = [
+            call.args[1]["host_session"]
+            for call in mock_db.update_identity_metadata.await_args_list
+            if "host_session" in call.args[1]
+        ]
+        assert len(writes) == 1
+        assert writes[0]["harness"] == "claude-code"
+        assert writes[0]["session_id"] == "36fb66eb-7f82-41e8-a965-b91dbf03039f"
+        assert writes[0]["workspace"] == "/srv/work/project"
+        assert writes[0]["source"] == "caller_declared"
+
+    @pytest.mark.legacy_identity_defaults
+    @pytest.mark.asyncio
+    async def test_onboard_ignores_malformed_host_session(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        self._fresh_mint_db(mock_db, mock_redis)
+        result = await handle_onboard_v2({
+            "client_session_id": "onboard-bad-host-session",
+            "host_session": {"harness": "claude-code", "session_id": "x; rm -rf /"},
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True and data["is_new"] is True
+        assert not any(
+            "host_session" in call.args[1]
+            for call in mock_db.update_identity_metadata.await_args_list
+        )
+
     @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_stable_bind_passes_the_ownership_check(self, patch_onboard_deps, mock_db, mock_redis):
