@@ -52,6 +52,14 @@ is inherited. The reviewer binds, by name only, the MCP bearer when the
 server has one and the external reviewer host's key variable when one is
 configured; the orchestrator resolves them from its own environment.
 
+Each write also records its inputs beside the file, in ``<file>.inputs.json``
+(``INPUTS_SCHEMA``). ``--replay <file>.inputs.json`` runs again with exactly
+those inputs; with ``--check`` it reports, without writing, whether the
+profiles file still matches a fresh generation. That is the doctor's
+``orchestrator_profiles`` check: the file names no inputs of its own (the
+orchestrator accepts only ``schema`` and ``profiles``), and recovering them
+from the profiles would let a stale file vouch for itself.
+
 The server's settings come from ``--env-file`` and ``--launchd-plist`` (the
 server's LaunchAgent, whose ``EnvironmentVariables`` it reads). Only the
 names this script uses are taken from either, and a credential only as
@@ -76,6 +84,8 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "unitares.orchestrator_profiles.v1"
+INPUTS_SCHEMA = "unitares.orchestrator_profiles_inputs.v1"
+INPUTS_SUFFIX = ".inputs.json"
 
 #: The proposal's model pattern; the orchestrator anchors it.
 MODEL_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}"
@@ -443,9 +453,56 @@ def write_atomically(path: Path, text: str) -> bool:
     return True
 
 
+def recorded_inputs(*, out: str, repo_root: str, python: str, env_files: list[str],
+                    launchd_plists: list[str], council_roots: list[str]) -> dict[str, Any]:
+    """What a write was generated from, with every path made absolute, so a
+    replay from another working directory reads the same files."""
+    def absolute(paths: list[str]) -> list[str]:
+        return [os.path.abspath(os.path.expanduser(path)) for path in paths]
+
+    return {
+        "schema": INPUTS_SCHEMA,
+        "out": out,
+        "repo_root": repo_root,
+        "python": python,
+        "env_file": absolute(env_files),
+        "launchd_plist": absolute(launchd_plists),
+        "council_root": absolute(council_roots),
+    }
+
+
+def read_inputs(path: str) -> dict[str, Any]:
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"cannot read recorded inputs {path}: {exc}") from None
+    if not isinstance(document, dict) or document.get("schema") != INPUTS_SCHEMA:
+        raise SystemExit(f"{path} is not {INPUTS_SCHEMA}")
+    for key in ("out", "repo_root", "python"):
+        if not isinstance(document.get(key), str) or not document[key]:
+            raise SystemExit(f"{path}: {key} must be a non-empty string")
+    for key in ("env_file", "launchd_plist", "council_root"):
+        value = document.get(key, [])
+        if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+            raise SystemExit(f"{path}: {key} must be a list of paths")
+    return document
+
+
+def replay_inputs(args: argparse.Namespace, inputs: dict[str, Any]) -> None:
+    """Set ``args`` to the recorded inputs; any given alongside are ignored."""
+    args.out = inputs["out"]
+    args.repo_root = inputs["repo_root"]
+    args.python = inputs["python"]
+    args.env_file = list(inputs.get("env_file", []))
+    args.launchd_plist = list(inputs.get("launchd_plist", []))
+    args.council_root = list(inputs.get("council_root", []))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--out", required=True, help="the profiles file to write")
+    parser.add_argument("--out", help="the profiles file to write")
+    parser.add_argument("--replay", metavar="INPUTS",
+                        help=f"run with the inputs a write recorded (<file>{INPUTS_SUFFIX})")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--env-file", action="append", default=[])
@@ -456,6 +513,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="exit 1 if the file differs from a fresh generation; write nothing")
     args = parser.parse_args(argv)
+    if args.replay:
+        replay_inputs(args, read_inputs(args.replay))
+    elif not args.out:
+        parser.error("--out is required unless --replay names recorded inputs")
 
     repo_root = os.path.abspath(args.repo_root)
     for client in (*CLIENTS, REVIEWER_MODULE):
@@ -516,6 +577,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"orchestrator-profiles: {out} is {'current' if same else 'stale'}")
         return 0 if same else 1
     changed = write_atomically(out, text)
+    write_atomically(Path(f"{out}{INPUTS_SUFFIX}"), render(recorded_inputs(
+        out=str(out), repo_root=repo_root, python=python, env_files=args.env_file,
+        launchd_plists=args.launchd_plist, council_roots=args.council_root)))
     print(f"orchestrator-profiles: {out} {'written' if changed else 'unchanged'}")
     return 0
 
