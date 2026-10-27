@@ -68,7 +68,7 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 
 ## Install (macOS, launchd)
 
-`scripts/ops/com.unitares.portal.plist.template` runs `scripts/start.sh`
+`scripts/ops/com.unitares.portal.plist.template` runs `elixir/portal/scripts/start.sh`
 under launchd as `com.unitares.portal`. Loading it starts the hub, so load it
 once the credentials are in the file named by `UNITARES_SECRETS_ENV` (mode
 600). If they are missing, `start.sh` logs why and exits 0, and launchd
@@ -76,7 +76,7 @@ restarts the hub only after a failing exit, so a premature load leaves it
 stopped rather than looping. Render it against the deploy worktree and load it
 as its header says. Then `cirwel update` deploys it
 through `scripts/ops/deploy-portal.sh`. That script compiles, builds
-`hub.css` (`scripts/build-assets.sh --strict`), restarts, and checks `/health`
+`hub.css` (`elixir/portal/scripts/build-assets.sh --strict`), restarts, and checks `/health`
 and that the LiveView socket answers `101` for the hub's Origin and `403` for
 any other. It rolls the shared worktree back if the hub does not come up.
 
