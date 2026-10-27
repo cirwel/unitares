@@ -635,7 +635,7 @@ while read -r pr; do
         next_action="Reconcile the missing GitHub merge requirement or repair this exact head; completion is MERGED or CLOSED."
         record_attention "$n" "$head" "$(jq -r .mergeStateStatus <<<"$pr")" "$opaque_stall" "$next_action" \
           || log "#$n attention event could not be recorded ($ATTENTION_FILE)"
-        notify "$n" opaque-blocked "$head" "disarmed after ${opaque_stall} minutes in an opaque BLOCKED state with no visible failing, pending, or approval-parked check. The queue has moved on. Reconcile the missing GitHub merge requirement or repair this exact head; completion is GitHub `MERGED` or `CLOSED`."
+        notify "$n" opaque-blocked "$head" "disarmed after ${opaque_stall} minutes in an opaque BLOCKED state with no visible failing, pending, or approval-parked check. The queue has moved on. Reconcile the missing GitHub merge requirement or repair this exact head; completion is GitHub \`MERGED\` or \`CLOSED\`."
         ATTENTION_RC=2
       fi
     else

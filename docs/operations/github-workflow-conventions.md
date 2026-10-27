@@ -916,7 +916,11 @@ terminal completion only when GitHub returns `MERGED` or `CLOSED`. An unreadable
 terminal lookup becomes `unreachable` and stays nonterminal. Exit `2` means a
 steward action is due; exit `1` means repository coverage failed; waiting CI,
 approved, queued, and terminal phases remain observable without being reported
-as failures.
+as failures. A tracked item outside the current `--repos` selection is retained
+without driving that run, and an allowlisted unreachable repository retains its
+last known state as partial-by-policy. If the list and direct PR read disagree,
+the receipt preserves the last phase and records a reconciliation error instead
+of inventing a transition.
 
 The recurring host wrapper should run under repository-scoped App credentials
 and through `unitares-automation-run`, so start/ok/fail lifecycle receipts reach

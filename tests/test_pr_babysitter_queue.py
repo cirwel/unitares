@@ -760,6 +760,18 @@ def test_an_attention_receipt_quarantines_the_same_opaque_head_without_duplicate
     assert len((tmp_path / "state" / "approvals.attention.jsonl").read_text().splitlines()) == 1
 
 
+def test_opaque_block_notice_preserves_literal_terminal_states(tmp_path: Path) -> None:
+    calls, _ = _run(
+        tmp_path,
+        [_pr(3, armed_min_ago=20, state="BLOCKED", author="dependabot[bot]")],
+        arms={3: 20},
+        PR_QUEUE_NOTIFY="1",
+        expect_rc=2,
+    )
+    notice = next(call for call in calls if call.startswith("pr comment 3 "))
+    assert "completion is GitHub `MERGED` or `CLOSED`" in notice
+
+
 def test_a_non_bot_opaque_holder_uses_the_conservative_grace(tmp_path: Path) -> None:
     calls, out = _run(
         tmp_path,

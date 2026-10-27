@@ -181,7 +181,7 @@ def triage_repo(repo: str, report: Report, *, gh_executable: str = "gh") -> None
     try:
         prs = gh_json([
             "pr", "list", "--repo", repo, "--author", "app/dependabot",
-            "--state", "open", "--limit", "50",
+            "--state", "open", "--limit", "500",
             "--json", "number,title,mergeable,mergeStateStatus,statusCheckRollup,"
             "headRefOid,state,isDraft,labels,autoMergeRequest,url",
         ], executable=gh_executable)
@@ -257,6 +257,11 @@ def _load_receipt(path: Path) -> dict[str, Any]:
     return payload if payload.get("schema") == "unitares.dependency_steward.v1" else {}
 
 
+def receipt_key(repo: str, number: int | str) -> str:
+    """GitHub repository names are case-insensitive; receipt identity is too."""
+    return f"{repo.casefold()}#{number}"
+
+
 def build_stewardship_receipt(
     report: Report,
     *,
@@ -265,17 +270,23 @@ def build_stewardship_receipt(
     gh_executable: str = "gh",
     observed_at: str | None = None,
     owner_role: str = "dependency-steward",
+    allowed_unreachable: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build durable role-owned state; only GitHub MERGED/CLOSED is terminal."""
     observed_at = observed_at or utc_now()
     previous = previous or {}
-    old_items = {item["key"]: item for item in previous.get("items", []) if item.get("key")}
+    allowed_folded = {repo.casefold() for repo in (allowed_unreachable or set())}
+    unreachable_folded = {item["repo"].casefold() for item in report.unreachable}
+    old_items: dict[str, dict[str, Any]] = {}
+    for item in previous.get("items", []):
+        if item.get("repo") and item.get("pr_number") is not None:
+            old_items[receipt_key(str(item["repo"]), item["pr_number"])] = item
     items: list[dict[str, Any]] = []
     current_keys: set[str] = set()
     errors: list[dict[str, str]] = []
 
     for verdict in report.verdicts:
-        key = f"{verdict.repo}#{verdict.number}"
+        key = receipt_key(verdict.repo, verdict.number)
         current_keys.add(key)
         old = old_items.get(key, {})
         phase, next_action = stewardship_phase(verdict)
@@ -301,16 +312,41 @@ def build_stewardship_receipt(
             "next_action": next_action,
             "terminal_state": None,
             "completed_at": None,
+            "observation_status": "observed",
         })
 
     selected = {repo.casefold() for repo in repos}
     for key, old in old_items.items():
-        if key in current_keys or str(old.get("repo", "")).casefold() not in selected:
+        if key in current_keys:
+            continue
+        repo = str(old.get("repo", ""))
+        raw_number = str(old.get("pr_number", ""))
+        if repo.casefold() not in selected:
+            retained = dict(old)
+            retained.update({"key": key, "observation_status": "out_of_scope"})
+            items.append(retained)
             continue
         if old.get("terminal_state") in {"MERGED", "CLOSED"}:
-            items.append(old)
+            retained = dict(old)
+            retained.update({"key": key, "observation_status": "terminal_retained"})
+            items.append(retained)
             continue
-        repo, raw_number = key.rsplit("#", 1)
+        if repo.casefold() in unreachable_folded:
+            retained = dict(old)
+            retained["key"] = key
+            if repo.casefold() in allowed_folded:
+                retained["observation_status"] = "coverage_unreachable_allowed"
+            else:
+                retained.update({
+                    "phase": "unreachable",
+                    "last_transition_at": observed_at,
+                    "next_action": "Restore GitHub read coverage; absence from the open list is not completion.",
+                    "terminal_state": None,
+                    "completed_at": None,
+                    "observation_status": "coverage_unreachable",
+                })
+            items.append(retained)
+            continue
         try:
             live = gh_json(
                 ["pr", "view", raw_number, "--repo", repo, "--json", "state,mergedAt,closedAt,headRefOid,url"],
@@ -319,11 +355,13 @@ def build_stewardship_receipt(
         except RuntimeError as exc:
             retained = dict(old)
             retained.update({
+                "key": key,
                 "phase": "unreachable",
                 "last_transition_at": observed_at,
                 "next_action": "Restore GitHub read coverage; absence from the open list is not completion.",
                 "terminal_state": None,
                 "completed_at": None,
+                "observation_status": "terminal_lookup_failed",
             })
             items.append(retained)
             errors.append({"key": key, "error": str(exc)})
@@ -332,6 +370,7 @@ def build_stewardship_receipt(
         if state in {"MERGED", "CLOSED"}:
             terminal = dict(old)
             terminal.update({
+                "key": key,
                 "head_sha": live.get("headRefOid") or old.get("head_sha", ""),
                 "url": live.get("url") or old.get("url", ""),
                 "phase": "terminal",
@@ -339,18 +378,19 @@ def build_stewardship_receipt(
                 "next_action": "None; GitHub reported a terminal state.",
                 "terminal_state": state,
                 "completed_at": live.get("mergedAt") or live.get("closedAt") or observed_at,
+                "observation_status": "terminal_confirmed",
             })
             items.append(terminal)
         else:
             retained = dict(old)
             retained.update({
-                "phase": "unclassified",
-                "last_transition_at": observed_at,
-                "next_action": "Reconcile why this Dependabot PR is open but absent from the open-PR query.",
+                "key": key,
                 "terminal_state": None,
                 "completed_at": None,
+                "observation_status": "open_absent_from_list",
             })
             items.append(retained)
+            errors.append({"key": key, "error": "PR is open but absent from the Dependabot open-PR listing"})
 
     return {
         "schema": "unitares.dependency_steward.v1",
@@ -360,6 +400,7 @@ def build_stewardship_receipt(
         "repos_requested": repos,
         "repos_scanned": report.repos_scanned,
         "unreachable": report.unreachable,
+        "allowed_unreachable": sorted(allowed_unreachable or set(), key=str.casefold),
         "reconciliation_errors": errors,
         "items": sorted(items, key=lambda item: (item.get("repo", "").casefold(), item.get("pr_number", 0))),
     }
@@ -374,8 +415,14 @@ def write_receipt(path: Path, payload: dict[str, Any]) -> None:
 
 def receipt_needs_attention(payload: dict[str, Any]) -> bool:
     actionable = {"ready", "review_needed", "repair_needed", "opaque_blocked", "unclassified", "unreachable"}
-    return bool(payload.get("unreachable") or payload.get("reconciliation_errors")) or any(
-        item.get("phase") in actionable for item in payload.get("items", [])
+    allowed = {repo.casefold() for repo in payload.get("allowed_unreachable", [])}
+    unexpected_unreachable = any(
+        item.get("repo", "").casefold() not in allowed for item in payload.get("unreachable", [])
+    )
+    ignored_observations = {"out_of_scope", "coverage_unreachable_allowed"}
+    return unexpected_unreachable or bool(payload.get("reconciliation_errors")) or any(
+        item.get("phase") in actionable and item.get("observation_status") not in ignored_observations
+        for item in payload.get("items", [])
     )
 
 
@@ -503,6 +550,7 @@ def main() -> int:
             previous=_load_receipt(args.receipt),
             gh_executable=args.gh_executable,
             owner_role=args.owner_role,
+            allowed_unreachable=allow,
         )
         write_receipt(args.receipt, receipt)
 
