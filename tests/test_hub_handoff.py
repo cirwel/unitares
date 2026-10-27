@@ -222,12 +222,37 @@ async def test_minting_a_code_needs_csrf_and_the_dashboard_origin(monkeypatch, h
 
 
 @pytest.mark.asyncio
-async def test_the_static_route_never_serves_the_approval_page():
+@pytest.mark.parametrize("rel", [
+    "auth/hub-authorize.html",
+    "auth//hub-authorize.html",
+    "auth/./hub-authorize.html",
+    "./auth/hub-authorize.html",
+])
+async def test_the_static_route_never_serves_the_approval_page(rel):
     class _Request:
-        path_params = {"file": "auth/hub-authorize.html"}
+        path_params = {"file": rel}
 
     response = await http_dashboard_redesign(_Request())
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_case_alias_of_the_approval_page_is_refused_where_it_resolves():
+    alias = "auth/HUB-authorize.html"
+    if not (ROOT / "dashboard" / "redesign" / alias).exists():
+        pytest.skip("case-sensitive filesystem: the alias names no file")
+
+    class _Request:
+        path_params = {"file": alias}
+
+    response = await http_dashboard_redesign(_Request())
+    assert response.status_code == 404
+
+
+def test_approval_page_refuses_to_run_inside_a_frame():
+    source = (ROOT / "dashboard" / "redesign" / "auth" / "hub-authorize.html").read_text()
+    guard = source.index("window.top !== window.self")
+    assert guard < source.index('allowBtn.addEventListener("click"')
 
 
 def test_signin_returns_only_to_the_hub_approval_path():
@@ -468,15 +493,37 @@ async def test_a_revoked_parent_cannot_exchange_a_code_it_approved(hub_db):
 
 
 @pytest.mark.asyncio
-async def test_an_old_hub_session_is_live_but_not_fresh(hub_db):
+async def test_freshness_runs_from_the_passkey_sign_in_not_the_exchange(hub_db):
+    """A hub approved late in the window is fresh only for what is left of it."""
     backend, session = hub_db
     verifier, challenge = _verifier_and_challenge()
     code = (await _approve(session, challenge))["code"]
     handle = (await _internal("/v1/hub/exchange", {"code": code, "code_verifier": verifier})).json()["handle"]
+    first = (await _internal("/v1/hub/check", {"handle": handle})).json()
+    assert first["fresh"] is True
+    assert first["authenticated_at"] == session["created_at"].isoformat()
+
+    # The passkey sign-in behind the parent is now eleven minutes old, while
+    # the hub session itself was created moments ago.
     async with backend.acquire() as conn:
         await conn.execute(
-            "UPDATE core.hub_sessions SET created_at = now() - interval '11 minutes' WHERE handle_hash = $1",
-            hashlib.sha256(handle.encode()).digest(),
+            "UPDATE core.dashboard_sessions SET created_at = now() - interval '11 minutes' WHERE session_hash = $1",
+            session["session_hash"],
         )
-    checked = await _internal("/v1/hub/check", {"handle": handle})
-    assert checked.json()["ok"] is True and checked.json()["fresh"] is False
+    checked = (await _internal("/v1/hub/check", {"handle": handle})).json()
+    assert checked["ok"] is True and checked["fresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_new_hub_session_is_not_fresh_once_the_sign_in_is_old(hub_db):
+    backend, session = hub_db
+    verifier, challenge = _verifier_and_challenge()
+    code = (await _approve(session, challenge))["code"]
+    async with backend.acquire() as conn:
+        await conn.execute(
+            "UPDATE core.dashboard_sessions SET created_at = now() - interval '11 minutes' WHERE session_hash = $1",
+            session["session_hash"],
+        )
+    handle = (await _internal("/v1/hub/exchange", {"code": code, "code_verifier": verifier})).json()["handle"]
+    checked = (await _internal("/v1/hub/check", {"handle": handle})).json()
+    assert checked["ok"] is True and checked["fresh"] is False

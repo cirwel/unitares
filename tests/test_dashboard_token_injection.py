@@ -105,6 +105,31 @@ def test_snapshot_bundle_is_not_public():
     assert "SNAPSHOT" not in r.text
 
 
+@pytest.mark.parametrize("rel", ["./snapshot.js", "auth//../snapshot.js", "Snapshot.js"])
+@pytest.mark.asyncio
+async def test_snapshot_gate_holds_for_every_name_of_the_file(rel):
+    """The gate compares the resolved file, not the requested string. Before
+    2026-10-27 `./snapshot.js`, and on a case-insensitive filesystem
+    `Snapshot.js`, were served to an untrusted caller. The handler is called
+    directly, because an HTTP client would normalise the path first."""
+    from pathlib import Path
+
+    from starlette.requests import Request
+
+    base = Path(dashboard_routes.__file__).resolve().parents[2] / "dashboard" / "redesign"
+    if not (base / rel).exists():
+        pytest.skip("case-sensitive filesystem: the alias names no file")
+    request = Request({
+        "type": "http", "method": "GET", "path": "/dashboard/redesign/" + rel,
+        "headers": [], "query_string": b"", "client": ("203.0.113.7", 44444),
+        "path_params": {"file": rel},
+    })
+    response = await http_dashboard_redesign(request)
+    # ".." is refused outright (400); every other alias reaches the gate (401).
+    assert response.status_code in (400, 401)
+    assert b"SNAPSHOT" not in response.body
+
+
 def test_gate_covers_every_reference_artifact_under_the_shell():
     """A filename set is only as good as its next reader. This pins the whole
     set, so a file added beside these fails here rather than shipping

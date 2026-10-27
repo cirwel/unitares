@@ -31,6 +31,18 @@ logger = get_logger(__name__)
 # app.html's snapshot <script> loads this file, so gating takes no rendering
 # path with it.
 _AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
+_AUTH_HANDLER_PAGES = {"auth/signin.html", "auth/enroll.html", "auth/hub-authorize.html"}
+
+
+def _same_file_as_any(target: Path, base: Path, names) -> bool:
+    """Whether ``target`` is one of the named files under ``base``, by inode."""
+    for name in names:
+        try:
+            if os.path.samefile(target, base / name):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 # Dashboard endpoint
@@ -119,30 +131,32 @@ async def http_dashboard_redesign(request):
     rel = request.path_params.get("file", "") or "app.html"
     if ".." in rel or rel.startswith("/"):
         return JSONResponse({"error": "Invalid file path"}, status_code=400)
-    # Auth HTML is served only through the gated /auth handlers. Shared CSS/JS
-    # remains available here so those standalone pages stay buildless. The hub
-    # approval page in particular must never be served without the handler's
-    # anti-framing headers, or another page could frame its Allow button.
-    if rel in {"auth/signin.html", "auth/enroll.html", "auth/hub-authorize.html"}:
-        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
     if not rel.endswith((".html", ".css", ".js", ".md")):
         return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
-    # Not every file under the shell is shell. snapshot.js is a bundled capture
-    # of real governance state — resident ids and names, EISV vectors,
-    # coherence, risk, verdicts, a multi-day trajectory — i.e. the same data
-    # class the /v1/eisv/* routes are gated for, in a file the "static assets
-    # are public" rule would wave straight through. app.html loads it with a
-    # same-origin <script src>, which carries the session cookie, so a
-    # signed-in operator and a loopback caller still get it; nobody else does.
-    if rel in _AUTHENTICATED_ONLY_FILES:
-        http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-        if not access._check_http_auth(request, http_api_token=http_api_token):
-            return access._http_unauthorized()
 
     base = (Path(__file__).resolve().parents[2] / "dashboard" / "redesign").resolve()
     target = (base / rel).resolve()
     if not str(target).startswith(str(base) + os.sep) or not target.is_file():
         return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+    # The two rules below compare the resolved FILE, not the requested name:
+    # `auth//x.html`, `./x.html` and, on a case-insensitive filesystem,
+    # `X.html` all name the same file under a different string.
+    #
+    # Auth HTML is served only through the gated /auth handlers. Shared CSS/JS
+    # remains available here so those standalone pages stay buildless. The hub
+    # approval page in particular must never be served without the handler's
+    # anti-framing headers, or another page could frame its Allow button.
+    if _same_file_as_any(target, base, _AUTH_HANDLER_PAGES):
+        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+    # Not every file under the shell is shell. snapshot.js once bundled a
+    # capture of real governance state (it is a synthetic fixture now), the
+    # same data class the /v1/eisv/* routes are gated for. app.html loads it
+    # with a same-origin <script src>, which carries the session cookie, so a
+    # signed-in operator and a loopback caller still get it; nobody else does.
+    if _same_file_as_any(target, base, _AUTHENTICATED_ONLY_FILES):
+        http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+        if not access._check_http_auth(request, http_api_token=http_api_token):
+            return access._http_unauthorized()
 
     media = {
         ".html": "text/html", ".css": "text/css",

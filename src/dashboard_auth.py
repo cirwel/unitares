@@ -897,6 +897,8 @@ async def http_auth_credential_revoke(request):
 #   3. The hub exchanges code + verifier at POST /v1/hub/exchange for a hub
 #      session handle, then asks POST /v1/hub/check on every connect and
 #      write, and POST /v1/hub/revoke on sign-out.
+#      A check is fresh while the passkey sign-in behind the parent session
+#      is under STEP_UP_TTL_SECONDS old.
 #
 # The /v1/hub routes answer only over the owner-only UDS listener, never
 # over TCP: the public tunnel arrives at a TCP listener from loopback, so the
@@ -1211,7 +1213,12 @@ async def http_hub_exchange(request):
 
 
 async def http_hub_check(request):
-    """Report whether a hub session is live. Read-only: nothing slides."""
+    """Report whether a hub session is live. Read-only: nothing slides.
+
+    ``fresh`` is measured from the passkey sign-in that created the parent
+    dashboard session (``authenticated_at``), not from the exchange: a hub
+    approved nine minutes after that sign-in is fresh for one more minute.
+    """
     body, denied = await _hub_internal_request(request)
     if denied:
         return denied
@@ -1224,7 +1231,8 @@ async def http_hub_check(request):
             row = await conn.fetchrow(
                 """
                 SELECT h.operator_label, h.created_at, h.expires_at,
-                       now() - h.created_at <= make_interval(secs => $2) AS fresh
+                       s.created_at AS authenticated_at,
+                       now() - s.created_at <= make_interval(secs => $2) AS fresh
                   FROM core.hub_sessions h
                   JOIN core.dashboard_sessions s
                     ON s.session_hash = h.parent_session_hash
@@ -1250,6 +1258,7 @@ async def http_hub_check(request):
             "operator_label": row["operator_label"],
             "created_at": row["created_at"].isoformat(),
             "expires_at": row["expires_at"].isoformat(),
+            "authenticated_at": row["authenticated_at"].isoformat(),
             "fresh": bool(row["fresh"]),
         },
         headers={"Cache-Control": "no-store"},
