@@ -38,7 +38,7 @@ def placeholder_document():
     return gen.build_profiles(
         repo_root="/srv/unitares", python="/usr/bin/python3", user="operator",
         claude_cli="/usr/local/bin/claude", codex_cli="/usr/local/bin/codex",
-        antigravity_cli="/usr/local/bin/agy",
+        antigravity_cli="/usr/local/bin/agy", council_roots=["/srv/repos"],
         reviewer={"fixed": fixed, "secrets": secrets, "clis": clis,
                   "max_runtime_ms": rc.reviewer_max_runtime_ms(settings)})
 
@@ -78,7 +78,8 @@ def test_every_prompt_cap_fits_linux_env_string_limit():
     document = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
                                   codex_cli="/b", antigravity_cli="/c")
     for profile in document["profiles"].values():
-        assert len("HA_PROMPT=") + profile["vars"]["HA_PROMPT"]["max_bytes"] + 1 <= 131_072
+        name = "HA_PROMPT" if "HA_PROMPT" in profile["vars"] else "COUNCIL_PROMPT"
+        assert len(name) + 1 + profile["vars"][name]["max_bytes"] + 1 <= 131_072
 
 
 def test_codex_profile_runs_the_exec_fallback_in_client():
@@ -99,7 +100,7 @@ def test_app_server_switch_reads_like_the_host_adapter(value, expected):
 def test_no_host_profile_binds_a_secret_or_inherits_an_api_key():
     document = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
                                   codex_cli="/b", antigravity_cli="/c")
-    assert all(name.startswith("host.") for name in document["profiles"])
+    assert all(name.startswith(("host.", "council.")) for name in document["profiles"])
     for profile in document["profiles"].values():
         assert "secrets" not in profile["env"]
         assert not any("KEY" in name or "TOKEN" in name for name in profile["env"]["inherit"])
@@ -364,3 +365,85 @@ def test_the_reviewer_inherits_what_its_cli_allowlist_passes():
     profile = placeholder_document()["profiles"]["dialectic.reviewer"]
     assert profile["env"]["inherit"] == list(gen.REVIEWER_INHERIT)
     assert profile["env"]["set"]["USER"] == "operator"
+
+
+# --- council lanes ---------------------------------------------------------
+
+def _council(roots=("/srv/repos",)):
+    return gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
+                              codex_cli="/b", antigravity_cli="/c",
+                              council_roots=list(roots))["profiles"]
+
+
+def test_council_lanes_need_a_root_except_agy():
+    without = gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
+                                 codex_cli="/b", antigravity_cli="/c")["profiles"]
+    assert [n for n in without if n.startswith("council.")] == ["council.agy"]
+    assert {"council.claude", "council.codex", "council.agy"} <= set(_council())
+
+
+def test_council_lanes_fix_the_lane_cli_and_roots():
+    profiles = _council(["/srv/a", "/srv/b"])
+    for lane, cli in (("claude", "/a"), ("codex", "/b"), ("agy", "/c")):
+        profile = profiles[f"council.{lane}"]
+        assert profile["args"] == ["-I", os.path.join("/r", gen.COUNCIL_CLIENT)]
+        assert profile["env"]["set"]["COUNCIL_LANE"] == lane
+        assert profile["env"]["set"]["COUNCIL_CLI"] == cli
+        assert profile["lineage"] == "none" and profile["lease"] is False
+        assert "cd" not in profile and "secrets" not in profile["env"]
+    assert profiles["council.claude"]["env"]["set"]["COUNCIL_ROOTS"] == os.pathsep.join(
+        ["/srv/a", "/srv/b"])
+    assert "COUNCIL_ROOTS" not in profiles["council.agy"]["env"]["set"]
+
+
+def test_council_variables_are_the_prompt_dir_and_model_only():
+    profiles = _council()
+    assert set(profiles["council.claude"]["vars"]) == {"COUNCIL_PROMPT", "COUNCIL_DIR"}
+    assert set(profiles["council.codex"]["vars"]) == {"COUNCIL_PROMPT", "COUNCIL_DIR",
+                                                      "COUNCIL_MODEL"}
+    assert set(profiles["council.agy"]["vars"]) == {"COUNCIL_PROMPT", "COUNCIL_MODEL"}
+    assert profiles["council.codex"]["vars"]["COUNCIL_DIR"]["required"] is True
+
+
+def test_council_agy_prompt_cap_matches_its_client():
+    from src.mcp_handlers.support import antigravity_cli_client as agy
+    from src.mcp_handlers.support import council_lane_client as council
+    overhead = len(agy.guard_prompt("").encode()) + len(council.AGY_TEXT_ONLY.encode())
+    assert gen.COUNCIL_AGY_PROMPT_MAX_BYTES == council.AGY_ARG_LIMIT - overhead
+    assert council.AGY_ARG_LIMIT == agy.PROMPT_BYTES_LIMIT
+
+
+def test_council_model_pattern_matches_the_client():
+    from src.mcp_handlers.support import council_lane_client as council
+    assert gen.MODEL_PATTERN == council.MODEL_PATTERN.pattern
+
+
+@pytest.mark.parametrize("root", ["/", "~", "HOME_PARENT"])
+def test_a_council_root_holding_the_home_directory_is_refused(tmp_path, root):
+    home = tmp_path / "home" / "op"
+    home.mkdir(parents=True)
+    entry = {"~": str(home), "HOME_PARENT": str(home.parent)}.get(root, root)
+    with pytest.raises(SystemExit, match="contains the home directory"):
+        gen.council_roots([entry], str(home))
+
+
+def test_council_roots_resolve_symlinks_and_refuse_relative_or_missing(tmp_path):
+    real = tmp_path / "repos"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    home = str(tmp_path / "home")
+    assert gen.council_roots([str(link), str(real)], home) == [os.path.realpath(real)]
+    with pytest.raises(SystemExit, match="absolute"):
+        gen.council_roots(["repos"], home)
+    with pytest.raises(SystemExit, match="not a directory"):
+        gen.council_roots([str(tmp_path / "missing")], home)
+
+
+def test_main_writes_council_lanes_for_a_root(tmp_path):
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    code, out, _ = _main(tmp_path, "--council-root", str(repos))
+    assert code == 0
+    profiles = json.loads(out.read_text())["profiles"]
+    assert profiles["council.claude"]["env"]["set"]["COUNCIL_ROOTS"] == os.path.realpath(repos)
