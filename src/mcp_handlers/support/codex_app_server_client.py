@@ -81,6 +81,29 @@ def codex_readable_roots(cli: str) -> list[str]:
     return roots
 
 
+#: Shared temporary directories codex's ``:minimal`` set makes readable. On
+#: macOS a lane read canaries in ``/tmp``, ``/private/tmp`` and
+#: ``/private/var/tmp`` (not the per-user ``$TMPDIR`` under ``/var/folders``),
+#: where every user and session leaves scratch (probed 2026-10-26).
+TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp")
+
+
+def temp_denials(readable: Sequence[str]) -> list[str]:
+    """The temporary roots a lane denies: each of ``TEMP_ROOTS`` except one
+    holding a path the lane must read. In codex's profile a deny outranks
+    every read, whatever its order or depth (probed 2026-10-26), so denying
+    the root of a workspace that sits under it would leave the lane blind.
+    Paths compare after ``realpath``, so ``/tmp`` and ``/private/tmp`` count
+    as one directory where one links to the other."""
+    real = [os.path.realpath(path) for path in readable]
+    denied = []
+    for root in TEMP_ROOTS:
+        base = os.path.realpath(root)
+        if not any(path == base or path.startswith(base.rstrip(os.sep) + os.sep) for path in real):
+            denied.append(root)
+    return denied
+
+
 def admin_config_paths() -> list[str]:
     """Codex configuration that loads whatever a lane passes: managed layers
     take precedence over ``-c`` overrides, a legacy ``sandbox_mode`` in the
@@ -143,12 +166,13 @@ def lane_config_overrides(
     allow-list, which would otherwise drop it."""
     profile = profile or new_profile_name()
     entries = {":root": "deny", ":minimal": "read"}
-    for root in codex_readable_roots(cli):
-        entries[root] = "read"
-    for path in extra_read:
+    readable = [*codex_readable_roots(cli), *extra_read]
+    for path in readable:
         entries[path] = "read"
     for pattern in extra_deny:
         entries[pattern] = "deny"
+    for root in temp_denials(readable):
+        entries[root] = "deny"
     table = ", ".join(f"{json.dumps(k)}={json.dumps(v)}" for k, v in entries.items())
     env = dict(set_env or {})
     return [

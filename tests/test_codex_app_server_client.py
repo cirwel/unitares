@@ -217,6 +217,44 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     assert not any("sandbox_mode" in o or o.endswith("={}") for o in overrides)
 
 
+def test_lane_overrides_deny_the_shared_temporary_directories():
+    """``:minimal`` grants ``/tmp`` and ``/var/tmp``: a council codex lane
+    returned a canary from ``/private/tmp`` in its answer (2026-10-26)."""
+    table = client.lane_config_overrides("/opt/x/codex", "unitares_lane_test")[1]
+    for root in client.TEMP_ROOTS:
+        assert f'"{root}"="deny"' in table
+    # Denials come after every read entry, so none is mistaken for a grant.
+    assert table.index('"/opt/x"="read"') < table.index('"/tmp"="deny"')
+
+
+def test_a_temporary_root_holding_a_readable_path_stays_readable(tmp_path, monkeypatch):
+    """A deny outranks every read in codex's profile, so a workspace under
+    ``/tmp`` would be unreadable if ``/tmp`` were denied; that root is left to
+    ``:minimal`` instead, and the other roots are still denied."""
+    shared = tmp_path / "private" / "tmp"
+    shared.mkdir(parents=True)
+    workspace = shared / "repo"
+    workspace.mkdir()
+    link = tmp_path / "tmp"
+    link.symlink_to(shared)
+    monkeypatch.setattr(client, "TEMP_ROOTS", (str(link), str(shared), str(tmp_path / "var" / "tmp")))
+
+    denied = client.temp_denials(["/opt/x", str(link / "repo")])
+    # The link and its target are one directory, so both stay readable.
+    assert denied == [str(tmp_path / "var" / "tmp")]
+    assert client.temp_denials([str(workspace)]) == denied
+    # A sibling whose name merely begins like the root is not under it.
+    assert client.temp_denials([str(shared) + "-other"]) == list(client.TEMP_ROOTS)
+
+
+def test_temp_denials_keep_the_override_count(tmp_path):
+    """The denials live inside the filesystem table, not in new overrides."""
+    assert (
+        len(client.lane_config_overrides("codex", extra_read=[str(tmp_path)]))
+        == client.LANE_CONFIG_OVERRIDE_COUNT
+    )
+
+
 def test_each_launch_takes_a_fresh_profile_name():
     """A fixed name could be pre-populated by the operator's config with grants
     of its own, which -c's deep merge would keep alongside the denials."""
