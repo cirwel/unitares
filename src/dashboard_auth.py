@@ -12,12 +12,14 @@ import hashlib
 import html
 import json
 import os
+import re
 import secrets
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -877,3 +879,405 @@ async def http_auth_credential_revoke(request):
     except Exception as exc:
         logger.warning("credential revocation failed: %s", exc)
         return JSONResponse({"error": "authentication storage unavailable"}, status_code=503)
+
+
+# ---------------------------------------------------------------------------
+# Hub sign-in handoff (portal-hub-v0 H2b).
+#
+# The operator hub runs on loopback, where neither this deployment's passkeys
+# (bound to UNITARES_DASHBOARD_RP_ID) nor its __Host- session cookie can reach
+# it. So the hub borrows a sign-in instead:
+#
+#   1. The hub sends the browser to GET /auth/hub/authorize with a PKCE S256
+#      challenge and its own state. A freshly signed-in dashboard session
+#      sees a confirming page; anything older goes through the passkey first.
+#   2. The page's POST (session, CSRF header, same Origin) mints a one-time
+#      code, valid for HUB_CODE_TTL_SECONDS, and sends the browser to the one
+#      configured callback with the code and the hub's state.
+#   3. The hub exchanges code + verifier at POST /v1/hub/exchange for a hub
+#      session handle, then asks POST /v1/hub/check on every connect and
+#      write, and POST /v1/hub/revoke on sign-out.
+#
+# The /v1/hub routes answer only over the owner-only UDS listener, never
+# over TCP: the public tunnel arrives at a TCP listener from loopback, so the
+# accepting socket is the only property of a request it cannot choose. They
+# also need UNITARES_HUB_TOKEN, a credential scoped to these three routes.
+# A hub session never extends its parent dashboard session; signing that
+# session out, or revoking its passkey, ends every hub session made from it.
+# Unconfigured (no valid UNITARES_HUB_CALLBACK_URL and UNITARES_HUB_TOKEN),
+# every hub route answers 404.
+# ---------------------------------------------------------------------------
+
+HUB_CALLBACK_ENV = "UNITARES_HUB_CALLBACK_URL"
+HUB_TOKEN_ENV = "UNITARES_HUB_TOKEN"
+HUB_CODE_TTL_SECONDS = 60
+HUB_SESSION_SECONDS = 24 * 60 * 60
+HUB_TOKEN_MIN_LENGTH = 32
+HUB_LOOPBACK_HOSTS = ("127.0.0.1", "::1")
+
+_HUB_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+_HUB_VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+_HUB_STATE_RE = re.compile(r"[A-Za-z0-9._~-]{16,128}")
+_HUB_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
+def hub_config() -> tuple[dict[str, str] | None, str | None]:
+    """Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404.
+
+    Returns ``(config, problem)``. ``config`` is ``None`` when the handoff is off, and ``problem`` then
+    names why, without echoing a secret. The callback must be a plain
+    ``http`` URL on a numeric loopback address with an explicit port and
+    path, so a code can only ever be handed to a process on this machine.
+    """
+    callback = os.getenv(HUB_CALLBACK_ENV, "").strip()
+    token = os.getenv(HUB_TOKEN_ENV, "").strip()
+    if not callback:
+        return None, f"{HUB_CALLBACK_ENV} is not set"
+    try:
+        parts = urlsplit(callback)
+        port = parts.port
+    except ValueError:
+        return None, f"{HUB_CALLBACK_ENV} is not a valid URL"
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in HUB_LOOPBACK_HOSTS
+        or port is None
+        or parts.username is not None
+        or parts.password is not None
+        or not parts.path.startswith("/")
+        or parts.query
+        or parts.fragment
+    ):
+        return None, (
+            f"{HUB_CALLBACK_ENV} must be http://127.0.0.1:<port>/<path> "
+            "(or [::1]) with no query, fragment or user info"
+        )
+    if len(token) < HUB_TOKEN_MIN_LENGTH:
+        return None, f"{HUB_TOKEN_ENV} is not set or shorter than {HUB_TOKEN_MIN_LENGTH} characters"
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return {
+        "callback": callback,
+        "origin": f"http://{host}:{port}",
+        "token": token,
+    }, None
+
+
+def _hub_unconfigured(config: dict[str, str] | None, problem: str | None) -> JSONResponse | None:
+    if config is not None:
+        return None
+    return JSONResponse(
+        {"error": "hub sign-in is not configured", "detail": problem},
+        status_code=404,
+    )
+
+
+def _hub_authorize_params(source) -> tuple[dict[str, str] | None, str | None]:
+    challenge = str(source.get("code_challenge") or "")
+    method = str(source.get("code_challenge_method") or "")
+    state = str(source.get("state") or "")
+    if method != "S256":
+        return None, "code_challenge_method must be S256"
+    if not _HUB_CHALLENGE_RE.fullmatch(challenge):
+        return None, "code_challenge must be a base64url SHA-256 digest (43 characters)"
+    if not _HUB_STATE_RE.fullmatch(state):
+        return None, "state must be 16 to 128 unreserved characters"
+    return {"code_challenge": challenge, "state": state}, None
+
+
+def _hub_signin_gate(request) -> Response | None:
+    """Send a missing or stale dashboard session through the passkey first.
+
+    Approving the hub creates a new credential holder, so it takes a session
+    signed in within STEP_UP_TTL_SECONDS, as revoking the last passkey does.
+    The sign-in page returns here afterwards (its ``next`` is restricted to
+    this path).
+    """
+    if dashboard_session_is_fresh(request):
+        return None
+    target = request.url.path + ("?" + request.url.query if request.url.query else "")
+    return RedirectResponse(
+        "/auth/signin?stepup=1&next=" + quote(target, safe=""),
+        status_code=303,
+    )
+
+
+_HUB_PAGE_HEADERS = {
+    "Cache-Control": "no-store",
+    # The Allow button grants a sign-in, so no other page may frame it.
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+async def http_hub_authorize(request):
+    """GET: the confirming page. POST: mint a one-time code for the hub."""
+    config, problem = hub_config()
+    if unconfigured := _hub_unconfigured(config, problem):
+        return unconfigured
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
+
+    if request.method == "GET":
+        _, invalid = _hub_authorize_params(request.query_params)
+        if invalid:
+            return JSONResponse({"error": invalid}, status_code=400)
+        if redirect := _hub_signin_gate(request):
+            return redirect
+        base = Path(__file__).parent.parent / "dashboard" / "redesign" / "auth"
+        target = base / "hub-authorize.html"
+        if not target.is_file():
+            return HTMLResponse("Dashboard authentication UI is not installed.", status_code=503)
+        content = target.read_text().replace("{{HUB_ORIGIN}}", html.escape(config["origin"]))
+        return HTMLResponse(content, headers=_HUB_PAGE_HEADERS)
+
+    denied = _session_gate(request)
+    if denied:
+        return denied
+    if request.headers.get("origin", "") != DASHBOARD_EXPECTED_ORIGIN:
+        return JSONResponse({"error": "cross-origin hub approval refused"}, status_code=403)
+    if not dashboard_session_is_fresh(request):
+        return JSONResponse(
+            {"error": "a passkey sign-in within the last ten minutes is required"},
+            status_code=403,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "JSON object body required"}, status_code=400)
+    params, invalid = _hub_authorize_params(body)
+    if invalid:
+        return JSONResponse({"error": invalid}, status_code=400)
+
+    session = _session_state(request)
+    code = secrets.token_urlsafe(32)
+    try:
+        db = get_db()
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM core.hub_auth_codes WHERE expires_at <= now()")
+                await conn.execute(
+                    """
+                    INSERT INTO core.hub_auth_codes
+                        (code_hash, code_challenge, parent_session_hash,
+                         credential_id, operator_label, created_at, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, now(),
+                            now() + make_interval(secs => $6))
+                    """,
+                    _sha256(code),
+                    params["code_challenge"],
+                    session["session_hash"],
+                    session["credential_id"],
+                    session["operator_label"],
+                    HUB_CODE_TTL_SECONDS,
+                )
+    except Exception as exc:
+        logger.warning("hub code mint failed: %s", exc)
+        return JSONResponse({"error": "authentication storage unavailable"}, status_code=503)
+    await _emit_auth_event(
+        "hub_signin_approved",
+        session["operator_label"],
+        credential_id=_b64url(bytes(session["credential_id"])),
+        hub_origin=config["origin"],
+    )
+    redirect = (
+        f"{config['callback']}?code={quote(code, safe='')}"
+        f"&state={quote(params['state'], safe='')}"
+    )
+    return JSONResponse({"redirect": redirect}, headers={"Cache-Control": "no-store"})
+
+
+def _hub_internal_gate(request, config: dict[str, str]) -> JSONResponse | None:
+    """The /v1/hub routes: owner-only socket plus the hub credential."""
+    scope = getattr(request, "scope", None) or {}
+    peer_pid = scope.get("unitares_peer_pid")
+    over_uds = isinstance(peer_pid, int) and not isinstance(peer_pid, bool) and peer_pid > 0
+    if not over_uds or scope.get("unitares_public_listener"):
+        return JSONResponse(
+            {"error": "hub routes answer only on the server's local socket (UNITARES_UDS_SOCKET)"},
+            status_code=403,
+        )
+    authorization = request.headers.get("authorization", "")
+    scheme, _, presented = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(
+        _sha256(presented.strip()), _sha256(config["token"])
+    ):
+        return JSONResponse({"error": "hub credential required"}, status_code=401)
+    return None
+
+
+async def _hub_internal_request(request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    config, problem = hub_config()
+    if unconfigured := _hub_unconfigured(config, problem):
+        return None, unconfigured
+    if denied := _hub_internal_gate(request, config):
+        return None, denied
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return None, JSONResponse({"error": "JSON object body required"}, status_code=400)
+    return body, None
+
+
+def _hub_handle(body: dict[str, Any]) -> str | None:
+    handle = body.get("handle")
+    return handle if isinstance(handle, str) and _HUB_SECRET_RE.fullmatch(handle) else None
+
+
+async def http_hub_exchange(request):
+    """Exchange a one-time code and its PKCE verifier for a hub session."""
+    body, denied = await _hub_internal_request(request)
+    if denied:
+        return denied
+    code = body.get("code")
+    verifier = body.get("code_verifier")
+    if not (isinstance(code, str) and _HUB_SECRET_RE.fullmatch(code)):
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+    if not (isinstance(verifier, str) and _HUB_VERIFIER_RE.fullmatch(verifier)):
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+    handle = secrets.token_urlsafe(32)
+    try:
+        db = get_db()
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                # Burn the code before checking the verifier: a code is
+                # single-use even when the exchange is refused.
+                row = await conn.fetchrow(
+                    """
+                    UPDATE core.hub_auth_codes
+                       SET used_at = now()
+                     WHERE code_hash = $1 AND used_at IS NULL
+                     RETURNING code_challenge, parent_session_hash, credential_id,
+                               operator_label, expires_at > now() AS live
+                    """,
+                    _sha256(code),
+                )
+                if not row or not row["live"]:
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
+                computed = _b64url(_sha256(verifier))
+                if not secrets.compare_digest(computed, row["code_challenge"]):
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
+                parent_live = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM core.dashboard_sessions s
+                          JOIN core.webauthn_credentials c
+                            ON c.credential_id = s.credential_id
+                         WHERE s.session_hash = $1
+                           AND s.revoked_at IS NULL
+                           AND c.revoked_at IS NULL
+                    )
+                    """,
+                    bytes(row["parent_session_hash"]),
+                )
+                if not parent_live:
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
+                await conn.execute("DELETE FROM core.hub_sessions WHERE expires_at <= now()")
+                created = await conn.fetchrow(
+                    """
+                    INSERT INTO core.hub_sessions
+                        (handle_hash, parent_session_hash, credential_id,
+                         operator_label, created_at, expires_at)
+                    VALUES ($1, $2, $3, $4, now(), now() + make_interval(secs => $5))
+                    RETURNING created_at, expires_at
+                    """,
+                    _sha256(handle),
+                    bytes(row["parent_session_hash"]),
+                    bytes(row["credential_id"]),
+                    row["operator_label"],
+                    HUB_SESSION_SECONDS,
+                )
+    except Exception as exc:
+        logger.warning("hub code exchange failed: %s", exc)
+        return JSONResponse({"error": "authentication storage unavailable"}, status_code=503)
+    await _emit_auth_event(
+        "hub_signin",
+        row["operator_label"],
+        credential_id=_b64url(bytes(row["credential_id"])),
+    )
+    return JSONResponse(
+        {
+            "handle": handle,
+            "operator_label": row["operator_label"],
+            "created_at": created["created_at"].isoformat(),
+            "expires_at": created["expires_at"].isoformat(),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def http_hub_check(request):
+    """Report whether a hub session is live. Read-only: nothing slides."""
+    body, denied = await _hub_internal_request(request)
+    if denied:
+        return denied
+    handle = _hub_handle(body)
+    if handle is None:
+        return JSONResponse({"ok": False}, status_code=401)
+    try:
+        db = get_db()
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT h.operator_label, h.created_at, h.expires_at,
+                       now() - h.created_at <= make_interval(secs => $2) AS fresh
+                  FROM core.hub_sessions h
+                  JOIN core.dashboard_sessions s
+                    ON s.session_hash = h.parent_session_hash
+                  JOIN core.webauthn_credentials c
+                    ON c.credential_id = h.credential_id
+                 WHERE h.handle_hash = $1
+                   AND h.revoked_at IS NULL
+                   AND h.expires_at > now()
+                   AND s.revoked_at IS NULL
+                   AND c.revoked_at IS NULL
+                """,
+                _sha256(handle),
+                STEP_UP_TTL_SECONDS,
+            )
+    except Exception as exc:  # storage unavailable => deny, never fail open
+        logger.debug("hub session check failed closed: %s", exc)
+        return JSONResponse({"ok": False, "error": "authentication storage unavailable"}, status_code=503)
+    if not row:
+        return JSONResponse({"ok": False}, status_code=401)
+    return JSONResponse(
+        {
+            "ok": True,
+            "operator_label": row["operator_label"],
+            "created_at": row["created_at"].isoformat(),
+            "expires_at": row["expires_at"].isoformat(),
+            "fresh": bool(row["fresh"]),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def http_hub_revoke(request):
+    """End a hub session (the hub's sign-out)."""
+    body, denied = await _hub_internal_request(request)
+    if denied:
+        return denied
+    handle = _hub_handle(body)
+    if handle is None:
+        return JSONResponse({"error": "invalid handle"}, status_code=400)
+    try:
+        db = get_db()
+        async with db.acquire() as conn:
+            label = await conn.fetchval(
+                """
+                UPDATE core.hub_sessions SET revoked_at = now()
+                 WHERE handle_hash = $1 AND revoked_at IS NULL
+                 RETURNING operator_label
+                """,
+                _sha256(handle),
+            )
+    except Exception as exc:
+        logger.warning("hub session revoke failed: %s", exc)
+        return JSONResponse({"error": "authentication storage unavailable"}, status_code=503)
+    if label is not None:
+        await _emit_auth_event("hub_session_revoked", label)
+    return JSONResponse({"success": True, "revoked": label is not None})
