@@ -64,6 +64,16 @@ H2 must settle two details:
 - whether the deployment's passkey relying-party id (`UNITARES_DASHBOARD_RP_ID`) covers the hub's origin;
 - how the hub validates a session without reading the server's database. The likely answer is a small read-only session-check route, which is itself an auth-path change.
 
+*Settled in H2b, 2026-10-27.* The relying-party id does not cover the hub: passkeys here are bound to `gov.cirwel.org`, and the hub is `http://127.0.0.1:8791`. The hub borrows a dashboard sign-in through an authorization-code handoff with PKCE instead (`src/dashboard_auth.py`, migration 079), and validates its session through a check route, without reading the server's database:
+- `GET /auth/hub/authorize` takes the hub's S256 challenge and state. It needs a dashboard session signed in within the last ten minutes, and sends any other through the passkey first. It then shows a confirming page that no other page may frame.
+- That page's `POST` (session, CSRF header and the dashboard's own Origin) mints a code valid for 60 seconds. Only its digest is stored. The browser is sent to the one configured callback, `UNITARES_HUB_CALLBACK_URL`, which must be plain `http` on a numeric loopback address.
+- `POST /v1/hub/exchange`, `/v1/hub/check` and `/v1/hub/revoke` answer only on the owner-only UDS listener (`UNITARES_UDS_SOCKET`), and only with `UNITARES_HUB_TOKEN`, a credential scoped to these three routes. The public tunnel reaches a TCP listener from loopback, so the accepting socket is the one property of a request it cannot choose (the lesson of the OAuth public listener, #2429). An exchange burns the code before it checks the verifier.
+- A hub session lasts 24 hours and never slides. `check` reports `fresh` while the passkey sign-in behind the parent dashboard session (`authenticated_at`) is under ten minutes old, so a hub approved nine minutes after that sign-in is fresh for one more minute. A later write gate reads `fresh`. A check never extends the parent dashboard session. Signing that session out, or revoking its passkey, ends the hub session at once.
+- The owner-only socket attests its peers on macOS only, so on any other platform the handoff reports itself unconfigured and names that reason.
+- Until both settings are valid, every hub route answers 404.
+
+The hub's half (the callback, the state cookie and calling these routes over the socket) is H2c.
+
 A one-time launch token exchanged for an `HttpOnly`, `SameSite=Strict` cookie remains the fallback for an install with passkeys off.
 
 **Credentials.** The hub calls the orchestrator through named launch profiles only, never with caller-chosen `cmd` or `env`. It holds its own operator-class credential, issued per client as `identity/operator.py` advises. It never holds the whole secrets file.
