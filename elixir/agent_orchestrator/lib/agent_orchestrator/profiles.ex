@@ -63,11 +63,12 @@ defmodule AgentOrchestrator.Profiles do
 
   With `AGENT_ORCHESTRATOR_PROFILES_GENERATE=1` (the operator handing the
   file to `scripts/ops/orchestrator-profiles.py`, which `scripts/start.sh` runs
-  at boot), this server reruns the generator every minute from the inputs
-  recorded beside the file (`<file>.inputs.json`, `--replay`), and reloads
-  what it writes. A stale profile is a stale egress policy, so profile spawns
-  are refused while the last regeneration failed or ran too long, or while
-  the file on disk does not load (operator decision 2026-10-27, KG
+  at boot), this server reruns the generator when it starts and every minute
+  after, from the inputs recorded beside the file (`<file>.inputs.json`,
+  `--replay`), and reloads what it writes. A stale profile is a stale egress
+  policy, so profile spawns are refused, at preparation and again at
+  admission, until the first run here succeeds, while the last run failed or
+  ran too long, or while the file on disk does not load (operator decision 2026-10-27, KG
   `2026-10-27T08:11:41.632304+00:00`). `status/0` reports the generation
   state. A file the operator maintains by hand is not regenerated, and a bad
   replacement of it leaves the last good set in force, as above.
@@ -210,7 +211,15 @@ defmodule AgentOrchestrator.Profiles do
       generate?: generate?,
       regenerate_ms: Keyword.get(opts, :regenerate_ms, @default_regenerate_ms),
       regenerate: Keyword.get(opts, :regenerate, &regenerate_from_record/1),
-      generation: %{error: nil, task: nil, started_at: nil, last_ok_at: nil},
+      # Unverified until the first run here succeeds: the file a restart
+      # finds may be one start.sh failed to regenerate, and a restart must
+      # not clear a refusal the last run had earned.
+      generation: %{
+        error: if(generate?, do: "not yet regenerated since this server started"),
+        task: nil,
+        started_at: nil,
+        last_ok_at: nil
+      },
       getenv: Keyword.get(opts, :getenv, &System.get_env/1),
       environ: Keyword.get(opts, :environ, &System.get_env/0),
       live?: Keyword.get(opts, :live?, &live?/1),
@@ -224,7 +233,8 @@ defmodule AgentOrchestrator.Profiles do
 
     state = if file, do: reload(state), else: state
     if file, do: schedule_reload(state.reload_ms)
-    if generate?, do: schedule_regenerate(state.regenerate_ms)
+    # The first run now, then every interval.
+    if generate?, do: send(self(), :regenerate)
     {:ok, recount_hour(state)}
   end
 
@@ -238,6 +248,18 @@ defmodule AgentOrchestrator.Profiles do
   end
 
   def handle_call({:admit, name, revision, execution_id}, _from, state) do
+    # Checked again here: a request prepared while fresh may reach admission
+    # (after a keyed reservation, say) once the profiles are not.
+    case stale_reason(state) do
+      nil ->
+        admit_current(name, revision, execution_id, state)
+
+      reason ->
+        {:reply, {:error, :profiles_unavailable, "profiles are stale: #{reason}"}, state}
+    end
+  end
+
+  defp admit_current(name, revision, execution_id, state) do
     case state.profiles && Map.get(state.profiles, name) do
       %{digest: ^revision} = profile ->
         admit_profile(profile, name, execution_id, state)

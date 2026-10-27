@@ -577,11 +577,13 @@ sets nothing.
      live, the operator answered "proceed best", which was read as the
      consult's recommendation. When the generator owns the file
      (`AGENT_ORCHESTRATOR_PROFILES_GENERATE=1`), the orchestrator:
-     - reruns it every minute from the recorded inputs, in an empty
-       environment but `PATH`, as `start.sh` does, and reloads what it writes;
+     - reruns it when it starts and every minute after, from the recorded
+       inputs, in an empty environment but `PATH`, as `start.sh` does, and
+       reloads what it writes;
      - refuses profile spawns (`profiles_unavailable`, "profiles are stale:
-       …") while the last run failed, ran past its interval, or left a file
-       that does not load;
+       …"), when a request is prepared and again at admission. It refuses
+       until its first run succeeds, and while the last run failed, ran past
+       its interval, or left a file that does not load;
      - reports this as `generation` on `/v1/health`.
 
      The input record is held to the profiles file's ownership rule and must

@@ -151,6 +151,37 @@ defmodule AgentOrchestrator.ProfilesTest do
       assert {:ok, _} = Profiles.prepare(name, @hi)
     end
 
+    test "a restarted server refuses spawns until its first run succeeds", %{tmp_dir: dir} do
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path, generate: "1", regenerate: fn _ -> Process.sleep(:infinity) end)
+
+      assert {:error, :profiles_unavailable, detail} = Profiles.prepare(name, @hi)
+      assert detail =~ "not yet regenerated since this server started"
+      assert %{state: "stale", generation: %{enforced: true}} = Profiles.status(name)
+    end
+
+    test "admission refuses a request prepared before the profiles went stale",
+         %{tmp_dir: dir} do
+      {:ok, result} = Agent.start_link(fn -> :ok end)
+      path = write_file(dir, %{"p" => profile()})
+
+      name =
+        start_profiles(path,
+          generate: "1",
+          regenerate_ms: 60_000,
+          regenerate: fn _ -> Agent.get(result, & &1) end
+        )
+
+      regenerate_now(name)
+      assert {:ok, prepared} = Profiles.prepare(name, @hi)
+
+      Agent.update(result, fn _ -> {:error, "boom"} end)
+      regenerate_now(name)
+
+      assert {:error, :profiles_unavailable, "profiles are stale: boom"} =
+               Profiles.admit(name, prepared.profile, prepared.revision, "ex-late")
+    end
+
     test "a replacement that does not load refuses spawns", %{tmp_dir: dir} do
       path = write_file(dir, %{"p" => profile()})
       name = start_profiles(path, generate: "1", regenerate: fn _ -> :ok end)
