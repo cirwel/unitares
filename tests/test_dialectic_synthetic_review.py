@@ -1274,6 +1274,65 @@ async def test_orchestrated_dispatch_failure_falls_back_to_in_process(server_pat
     assert data["resolved"] is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatched, crashed, reason", [
+    (None, False, "reviewer_profile_refused"),
+    ({"ok": True, "agent_id": "ag-crash"}, True, "reviewer_profile_exited"),
+])
+async def test_a_failed_reviewer_profile_spawn_is_the_result(
+    server_patch, monkeypatch, dispatched, crashed, reason
+):
+    """With launch profiles on, the reviewer runs only as its profile. A
+    refused spawn or a fast crash leaves the session awaiting facilitation
+    with the reason, and the in-process reviewer never stands in
+    (inference-hosts-config-v0 §2.5)."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        approve_anti = AsyncMock(return_value=_antithesis("refine"))
+        approve_syn = AsyncMock(return_value=_synthesis("RESUME"))
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=approve_anti))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=approve_syn))
+        stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review",
+                                  new=AsyncMock(return_value=dispatched)))
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast",
+                                  new=AsyncMock(return_value=crashed)))
+        mark = stack.enter_context(
+            patch(f"{DIALECTIC}._set_awaiting_facilitation", new=AsyncMock()))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r",
+        })
+
+    data = parse_result(result)
+    assert "synthetic_review" not in data
+    assert data.get("resolved") is not True
+    assert data["awaiting_facilitation"] is True
+    assert data["reviewer_profile"] == "dialectic.reviewer"
+    assert mark.await_args.kwargs["reason"] == reason
+    approve_anti.assert_not_called()
+    approve_syn.assert_not_called()
+
+
+def test_without_orchestrated_review_profiles_do_not_block_the_local_reviewer(monkeypatch):
+    """Profiles bound the orchestrated reviewer only; a server that does not
+    dispatch one keeps its in-process reviewer."""
+    from src.mcp_handlers.dialectic.handlers import _reviewer_profile_block
+
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    monkeypatch.delenv("UNITARES_DIALECTIC_ORCHESTRATED_REVIEW", raising=False)
+    assert _reviewer_profile_block("no_automated_reviewer") == ("", "")
+
+
 async def _append_refusing_the_synthetic_antithesis(*args, **kwargs):
     """The thesis append commits; the in-process antithesis append loses the
     open-slot CAS because the spawned reviewer's antithesis landed first."""

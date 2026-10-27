@@ -161,6 +161,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     payload = Map.get(body, "payload", %{})
     promotion = Map.get(body, "promotion")
     promotion_error = promotion_shape_error(promotion, mode)
+    profile_error = profile_payload_error(type, payload)
 
     # Attribution only — non-secret fields. The proposer's `client_session_id`
     # is a credential (Invariant 7) and is deliberately NOT extracted or stored.
@@ -212,6 +213,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
       credential_shaped?(payload) ->
         {:error, "payload must not contain credential-shaped keys (Invariant 7)"}
+
+      is_binary(profile_error) ->
+        {:error, profile_error}
 
       true ->
         {:ok,
@@ -294,6 +298,45 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       value
     )
   end
+
+  # An agent_spawn payload naming a launch profile is the orchestrator's closed
+  # request (inference-hosts-config-v0 §2.5): the profile, its variables, and
+  # optionally `context_sha256`, a digest of what the spawn acts on, which the
+  # effect's digest covers and the orchestrator never sees. Anything else in it
+  # is refused rather than dropped, so what was approved is what runs.
+  @profile_payload_keys ~w(profile vars context_sha256)
+
+  defp profile_payload_error("agent_spawn", %{"profile" => _} = payload) do
+    extra = payload |> Map.keys() |> Enum.reject(&(&1 in @profile_payload_keys))
+
+    cond do
+      extra != [] ->
+        "a profile payload takes only #{Enum.join(@profile_payload_keys, ", ")}; " <>
+          "unexpected: #{extra |> Enum.sort() |> Enum.join(", ")}"
+
+      not (is_binary(payload["profile"]) and byte_size(payload["profile"]) > 0) ->
+        "payload.profile must be a non-empty string"
+
+      not string_map?(Map.get(payload, "vars", %{})) ->
+        "payload.vars must be an object of string values"
+
+      not (is_nil(payload["context_sha256"]) or sha256_hex?(payload["context_sha256"])) ->
+        "payload.context_sha256 must be 64 lowercase hex characters"
+
+      true ->
+        nil
+    end
+  end
+
+  defp profile_payload_error(_type, _payload), do: nil
+
+  defp string_map?(%{} = map),
+    do: Enum.all?(map, fn {k, v} -> is_binary(k) and is_binary(v) end)
+
+  defp string_map?(_), do: false
+
+  defp sha256_hex?(value) when is_binary(value), do: Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
+  defp sha256_hex?(_), do: false
 
   defp normalize_promotion(nil), do: nil
 
@@ -1268,6 +1311,15 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # consumes proof, the child mints its own identity under provisioned lineage).
   # Public for tests only (same precedent as FileWriteExecutor.resolved_payload/1).
   @doc false
+  def orchestrator_spec(%{payload: %{"profile" => profile} = p}) do
+    # A launch profile fixes the command, the environment, the working
+    # directory and the lineage mode, so only its name and variables go on.
+    # No lineage is provisioned: the profile decides it (the reviewer reads
+    # its parent from the session record), and a lineage:none profile refuses
+    # a request that names one.
+    %{"profile" => profile, "vars" => Map.get(p, "vars", %{})}
+  end
+
   def orchestrator_spec(env) do
     p = env.payload || %{}
 

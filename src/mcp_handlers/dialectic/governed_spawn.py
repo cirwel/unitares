@@ -43,6 +43,12 @@ Failure routing (load-bearing — each bucket chosen deliberately):
   missing bearer/secret). Logged loudly; callers behave as if the governed
   flag were off (direct path), because a typo must not silently degrade every
   dialectic to synthetic review.
+
+With launch profiles on (``UNITARES_ORCHESTRATOR_PROFILES=1``) the payload is
+the plane's closed profile form (``profile``, ``vars``, ``context_sha256``),
+the direct path sends the profile request, and where this list says
+"in-process synthetic reviewer" the session instead awaits facilitation
+(handlers._reviewer_profile_block).
 """
 from __future__ import annotations
 
@@ -147,20 +153,29 @@ def build_envelope(
         canonical_payload_sha256,
     )
 
-    payload: Dict[str, Any] = {
-        "cmd": spec.get("cmd"),
-        "args": spec.get("args") or [],
-        "env": sanitize_spec_env(spec.get("env") or {}),
-    }
-    if spec.get("cd"):
-        payload["cd"] = spec["cd"]
-    # Preserve the reviewer's lifecycle cap through the governed-effect hop.
-    # Without this, the direct spawn honored the one-hour continuation window
-    # while the live governed path silently fell back to the orchestrator's
-    # thirty-minute default.
-    max_runtime_ms = spec.get("max_runtime_ms")
-    if isinstance(max_runtime_ms, int) and max_runtime_ms > 0:
-        payload["max_runtime_ms"] = max_runtime_ms
+    payload: Dict[str, Any]
+    if "profile" in spec:
+        # A launch-profile request goes on as the plane's closed profile
+        # payload; context_sha256 (the thesis digest) is covered by the
+        # effect's digest and never reaches the orchestrator.
+        payload = {
+            key: spec[key] for key in ("profile", "vars", "context_sha256") if key in spec
+        }
+    else:
+        payload = {
+            "cmd": spec.get("cmd"),
+            "args": spec.get("args") or [],
+            "env": sanitize_spec_env(spec.get("env") or {}),
+        }
+        if spec.get("cd"):
+            payload["cd"] = spec["cd"]
+        # Preserve the reviewer's lifecycle cap through the governed-effect hop.
+        # Without this, the direct spawn honored the one-hour continuation window
+        # while the live governed path silently fell back to the orchestrator's
+        # thirty-minute default.
+        max_runtime_ms = spec.get("max_runtime_ms")
+        if isinstance(max_runtime_ms, int) and max_runtime_ms > 0:
+            payload["max_runtime_ms"] = max_runtime_ms
 
     try:
         psha = canonical_payload_sha256(payload)
