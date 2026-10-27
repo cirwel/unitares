@@ -66,6 +66,23 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 
 `/health` answers `{"ok": true}` and nothing else.
 
+## Install (macOS, launchd)
+
+`scripts/ops/com.unitares.portal.plist.template` runs `scripts/start.sh`
+under launchd as `com.unitares.portal`. It ships without `RunAtLoad`, so
+loading it starts nothing until the operator does. Render it against the
+deploy worktree and load it as its header says; credentials come from the file
+named by `UNITARES_SECRETS_ENV` (mode 600). Then `cirwel update` deploys it
+through `scripts/ops/deploy-portal.sh`. That script compiles, builds
+`hub.css` (`scripts/build-assets.sh --strict`), restarts, and checks `/health`
+and that the LiveView socket answers `101` for the hub's Origin and `403` for
+any other. It rolls the shared worktree back if the hub does not come up.
+
+`start.sh` refuses to boot without `PORTAL_SECRET_KEY_BASE`. On every boot
+it rebuilds the stylesheet only when the one on disk is not this checkout's,
+and it serves the previous build rather than exit if a rebuild fails, so a
+killed Tailwind CLI cannot become a restart loop.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -96,6 +113,5 @@ printf 'sha256:%s\n' "$(printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1)"
 
 ## What comes next
 
-- **H2d-3:** registration with `cirwel update`, including the asset build.
 - After routine use: remove `dialectic_live`'s copy of the timeline.
 - **H3 onward:** resume and start sessions through the orchestrator's launch profiles.

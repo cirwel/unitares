@@ -98,6 +98,14 @@ PORTS = [
         "health": {"path": "/health", "expect": [200], "scope": "governance"},
     },
     {
+        "port": 8791,
+        "service": "Operator hub (elixir/portal, Phoenix/LiveView, BEAM; loopback only)",
+        "host": "governance host",
+        "source": "`scripts/ops/com.unitares.portal.plist.template`",
+        "verify": "scripts/ops/com.unitares.portal.plist.template",
+        "health": {"path": "/health", "expect": [200], "scope": "governance"},
+    },
+    {
         "port": 8770,
         "service": "Wave 3A handlers (BEAM)",
         "host": "governance host",

@@ -18,6 +18,7 @@ this table cannot silently disagree with the code.
 | `8788` | Surface lease plane + governed-effect plane (BEAM) | governance host | `LEASE_PLANE_BASE_URL` default — `src/services/runtime_queries.py` |
 | `8789` | Agent orchestrator (BEAM) | governance host | `AGENT_ORCHESTRATOR_URL` default — `src/mcp_handlers/dialectic/orchestrator_dispatch.py` |
 | `8790` | Dialectic-live (Phoenix/LiveView, BEAM) | governance host | `scripts/ops/com.unitares.dialectic-live.plist.template` |
+| `8791` | Operator hub (elixir/portal, Phoenix/LiveView, BEAM; loopback only) | governance host | `scripts/ops/com.unitares.portal.plist.template` |
 
 Default bind is `127.0.0.1` for the governance-host services; LAN/tunnel exposure
 is opt-in per service (e.g. `UNITARES_BIND_ALL_INTERFACES`, `DIALECTIC_LIVE_BIND_ALL`).

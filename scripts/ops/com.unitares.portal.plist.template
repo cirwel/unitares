@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the operator hub (elixir/portal, Phoenix LiveView,
+  127.0.0.1:8791; portal-hub-v0 H2d-3).
+
+  The hub binds loopback only and refuses to boot on any other address; no
+  setting here widens that. It signs in through the governance dashboard's
+  passkey and reads the timeline with its own read-only key.
+
+  Like the dialectic-live template, this ships in-tree but is NOT started by
+  default: there is intentionally NO `RunAtLoad`. The operator promotes it.
+
+  Prereq: set UNITARES_SECRETS_ENV to an absolute private file (mode 600) and
+  persist that value in this job's EnvironmentVariables, or provision the
+  variables directly through your service manager. start.sh sources it and
+  never prints it. By name:
+    PORTAL_SECRET_KEY_BASE   generate once: cd elixir/portal && mix phx.gen.secret
+  for sign-in (all three, or the hub refuses everyone):
+    PORTAL_GOV_ORIGIN        the dashboard's origin, for example https://gov.example.org
+    PORTAL_GOV_SOCKET        the server's UNITARES_UDS_SOCKET path
+    PORTAL_HUB_TOKEN         the same value as the server's UNITARES_HUB_TOKEN
+  for the timeline (without it the timeline does not start):
+    PORTAL_READ_TOKEN        one of the server's UNITARES_READ_ONLY_TOKENS
+
+  Install (render __VARS__ then load):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.portal.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.portal.plist
+    launchctl load ~/Library/LaunchAgents/com.unitares.portal.plist
+
+  Verify:
+    launchctl list | grep com.unitares.portal
+    tail -f ~/Library/Logs/unitares-portal.log
+    curl -s http://127.0.0.1:8791/health
+
+  Unload (rollback):
+    launchctl unload ~/Library/LaunchAgents/com.unitares.portal.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.portal</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/portal/scripts/start.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__/elixir/portal</string>
+
+    <!--
+      RunAtLoad is intentionally absent (mirrors dialectic-live). The plist is
+      configuration; the operator promotes it to running. Do NOT add this key
+      without an explicit operator decision.
+    -->
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-portal.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-portal.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>MIX_ENV</key>
+        <string>prod</string>
+        <key>PORTAL_PORT</key>
+        <string>8791</string>
+    </dict>
+</dict>
+</plist>
