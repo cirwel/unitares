@@ -777,8 +777,10 @@ defmodule AgentOrchestrator.Profiles do
         end,
       raw_spawn: Atom.to_string(state.raw_spawn),
       # The file the digest is of, so the doctor can compare it with a fresh
-      # generation from the inputs recorded beside it.
-      file: state.file,
+      # generation from the inputs recorded beside it. Absolute, as this VM
+      # resolves it: a relative setting would name another file to a doctor
+      # running elsewhere.
+      file: state.file && Path.expand(state.file),
       digest: state.digest,
       profiles: profiles |> Map.keys() |> Enum.sort(),
       unconfigured: unconfigured,

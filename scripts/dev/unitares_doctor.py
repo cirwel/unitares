@@ -3997,6 +3997,15 @@ def _profiles_freshness(file: str, digest: str, *, run) -> tuple[Status, str]:
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return Status.WARN, f"cannot read {inputs_path} ({type(exc).__name__})"
+    recorded_out = inputs.get("out")
+    if not (isinstance(recorded_out, str)
+            and os.path.realpath(recorded_out) == os.path.realpath(file)):
+        # A replay checks the file the record names, so a record copied
+        # beside another file would vouch for the wrong one.
+        return Status.WARN, (
+            f"{Path(inputs_path).name} records {recorded_out!r}, not the loaded file {file}, "
+            "so freshness cannot be checked; regenerate the file where it is loaded"
+        )
     replay = [python, "-I", str(generator), "--replay", inputs_path]
     try:
         result = run([*replay, "--check"])

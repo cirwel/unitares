@@ -157,6 +157,22 @@ def test_a_file_without_recorded_inputs_is_a_warning(tmp_path):
     assert "cannot be checked" in result.message
 
 
+def test_a_record_naming_another_file_does_not_vouch_for_this_one(tmp_path):
+    """A copied file and record: the replay would check the original, so a
+    stale copy could pass. The record must name the loaded file."""
+    original = _generate(tmp_path)
+    copy_dir = tmp_path / "elsewhere"
+    copy_dir.mkdir(mode=0o700)
+    copy = copy_dir / "profiles.json"
+    copy.write_bytes(original.read_bytes())
+    Path(f"{copy}{doctor.PROFILES_INPUTS_SUFFIX}").write_bytes(
+        Path(f"{original}{doctor.PROFILES_INPUTS_SUFFIX}").read_bytes())
+
+    result = _check(_health(copy))
+    assert result.status is Status.WARN
+    assert "not the loaded file" in result.message
+
+
 def test_a_generator_error_is_a_warning_not_stale(tmp_path):
     out = _generate(tmp_path)
 
