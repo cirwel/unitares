@@ -515,9 +515,27 @@ sets nothing.
      them in the server's LaunchAgent), keeping only the names it uses and
      a credential only as present or absent. Rollout note: the orchestrator's
      own environment must hold every bound secret, or the profile is
-     `unconfigured` and refuses. Next: the council profiles
-     (cirwel/dispatch_beam), moving the callers, and the doctor's digest
-     check.
+     `unconfigured` and refuses.
+     *Council (2026-10-26):* `council.claude`, `council.codex` and
+     `council.agy` run `src/mcp_handlers/support/council_lane_client.py`.
+     The caller sends `COUNCIL_PROMPT`, `COUNCIL_DIR` (claude, codex) and
+     `COUNCIL_MODEL` (codex, agy); the lane, the CLI and the roots are fixed.
+     The directory is resolved with `realpath` and accepted only at or under
+     a root the generator was given (`--council-root`, from start.sh's
+     `AGENT_ORCHESTRATOR_PROFILES_COUNCIL_ROOTS`), never `/`, the home
+     directory or a parent of it; without a root the two directory lanes
+     are omitted. claude runs in the directory with `--safe-mode
+     --restricted` and `dontAsk`, read tools only, `.env` and `.unitares`
+     denied: a probe on 2026-10-26 showed the council's current
+     `--allowedTools Read` without `--restricted` reads any file on disk,
+     through an absolute path or a symlink in the repository, and
+     `--restricted` confines it. codex runs in an empty directory, as
+     review_gate's reviewer does (the repository's `AGENTS.md` and skills
+     would otherwise steer it), with the directory and its git directories
+     readable through the lane's permission profile and `.env` denied. agy
+     reads no directory. Each lane was checked live against its real CLI
+     with a probe file outside the roots. Next: dispatch_beam sending these
+     profiles, the other callers, and the doctor's digest check.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is
