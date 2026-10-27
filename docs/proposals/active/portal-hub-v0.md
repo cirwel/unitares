@@ -140,8 +140,12 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
     loopback bind.
   - **H2b, the server's handoff routes.** Two-family review, inert until
     configured.
-  - **H2c, the hub's sign-in.** It also moves the timeline in, and registers
-    the hub with `cirwel update`.
+  - **H2c, the hub's sign-in.** The hub's half of the handoff: the PKCE
+    start, the callback and its state check, the exchange over the
+    server's socket, a check on every request, and sign-out.
+  - **H2d, the timeline and install.** The timeline moves in as the home
+    screen, and `cirwel update` registers the hub. Split from H2c
+    (2026-10-27) so the sign-in is reviewed on its own.
 
   Numeric `127.0.0.1:8791` is the default name: macOS resolves `*.localhost`
   to `::1` first.

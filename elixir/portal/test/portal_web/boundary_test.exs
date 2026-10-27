@@ -53,7 +53,7 @@ defmodule PortalWeb.BoundaryTest do
     test "without a session every page is refused", %{conn: conn} do
       refused = get(conn, "/")
       assert refused.status == 401
-      assert refused.resp_body =~ "Sign-in required"
+      assert refused.resp_body =~ "Sign-in is not set up"
     end
 
     test "the default backend refuses even a session that carries a token", %{conn: conn} do
