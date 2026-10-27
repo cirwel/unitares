@@ -254,7 +254,24 @@ async def _execute_http_tool_in_context(
 
             # An agent token authorizes its own agent's calls only. The caller
             # is resolved the normal way first; the token never binds it.
-            if get_context_resolved_agent_id() != agent_scope:
+            resolved = get_context_resolved_agent_id()
+            if resolved is None:
+                # The session's binding is gone from every store (an outage
+                # longer than the session TTL). No client call can recreate
+                # it, so say what can, instead of a bare scope refusal.
+                raise HttpToolRequestError(
+                    {
+                        "success": False,
+                        "error": "No live session binding for this client_session_id",
+                        "error_type": "AgentTokenUnbound",
+                        "recovery": (
+                            "operator: scripts/ops/rebind-resident-session.sh "
+                            "<agent_uuid> <client_session_id>"
+                        ),
+                    },
+                    status_code=403,
+                )
+            if resolved != agent_scope:
                 raise HttpToolRequestError(
                     {
                         "success": False,
