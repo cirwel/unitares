@@ -571,6 +571,25 @@ sets nothing.
      keeps dispatch independent of the doctor's schedule. Where the refusal
      lives is a spawn-boundary choice, left to the operator. Until it is
      made, staleness is reported, not enforced.
+
+     *Enforcement (operator decision 2026-10-27, KG
+     `2026-10-27T08:11:41.632304+00:00`).* Asked where the refusal should
+     live, the operator answered "proceed best", which was read as the
+     consult's recommendation. When the generator owns the file
+     (`AGENT_ORCHESTRATOR_PROFILES_GENERATE=1`), the orchestrator:
+     - reruns it every minute from the recorded inputs, in an empty
+       environment but `PATH`, as `start.sh` does, and reloads what it writes;
+     - refuses profile spawns (`profiles_unavailable`, "profiles are stale:
+       …") while the last run failed, ran past its interval, or left a file
+       that does not load;
+     - reports this as `generation` on `/v1/health`.
+
+     The input record is held to the profiles file's ownership rule and must
+     name that file. A hand-maintained file is not regenerated, and a bad
+     replacement of it still leaves the last good set in force. The server
+     only surfaces the refusal: its callers never fall back, so the temporary
+     raw `allow` is no bypass for them. The doctor fails while the
+     orchestrator cannot regenerate.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is

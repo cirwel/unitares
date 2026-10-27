@@ -194,6 +194,9 @@ def test_the_doctor_and_the_generator_agree_on_the_inputs_suffix():
     ({"raw_spawn": "allow"}, Status.WARN, "RAW_SPAWN=allow"),
     ({"unconfigured": ["dialectic.reviewer"]}, Status.WARN, "dialectic.reviewer"),
     ({"file": None}, Status.WARN, "does not report its profiles file"),
+    ({"state": "stale", "generation": {"managed": True, "enforced": True, "running": False,
+                                        "error": "the generator exited 1: boom"}},
+     Status.FAIL, "refuses profile spawns: the generator exited 1"),
 ])
 def test_health_states(tmp_path, overrides, status, words):
     out = _generate(tmp_path)
