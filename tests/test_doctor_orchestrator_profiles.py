@@ -184,6 +184,21 @@ def test_a_generator_error_is_a_warning_not_stale(tmp_path):
     assert "could not check" in result.message
 
 
+def test_a_path_that_says_is_current_does_not_pass_a_stale_file(tmp_path):
+    """The verdict is the exit status and the line's end, not a substring a
+    directory name can supply."""
+    out = _generate(tmp_path)
+
+    def stale(argv):
+        return subprocess.CompletedProcess(
+            argv, 1, stdout="orchestrator-profiles: /op/is current/profiles.json is stale\n",
+            stderr="")
+
+    result = _check(_health(out), run=stale)
+    assert result.status is Status.FAIL
+    assert "differ from a fresh generation" in result.message
+
+
 def test_the_doctor_and_the_generator_agree_on_the_inputs_suffix():
     assert doctor.PROFILES_INPUTS_SUFFIX == gen.INPUTS_SUFFIX
 

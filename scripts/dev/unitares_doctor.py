@@ -4011,9 +4011,13 @@ def _profiles_freshness(file: str, digest: str, *, run) -> tuple[Status, str]:
         result = run([*replay, "--check"])
     except (OSError, subprocess.SubprocessError) as exc:
         return Status.WARN, f"cannot run the generator ({type(exc).__name__})"
-    if "is current" in result.stdout:
+    # The generator's verdict is its exit status and the end of its last
+    # line; the path before it is the operator's and may say anything.
+    lines = result.stdout.strip().splitlines()
+    verdict = lines[-1] if lines else ""
+    if result.returncode == 0 and verdict.endswith(" is current"):
         return Status.PASS, "the loaded profiles match a fresh generation"
-    if "is stale" in result.stdout:
+    if result.returncode == 1 and verdict.endswith(" is stale"):
         return Status.FAIL, (
             "the loaded profiles differ from a fresh generation from their recorded "
             "inputs (an input changed: the inference hosts file, the server's settings, "
