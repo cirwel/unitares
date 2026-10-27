@@ -30,6 +30,7 @@ from src.interface_contract import (
 )
 from src.tool_annotations import annotation_payload
 
+from src import http_agent_tokens
 from src.http_routes import access
 
 logger = get_logger(__name__)
@@ -227,6 +228,7 @@ async def _execute_http_tool_in_context(
     tool_name: str,
     arguments: dict,
     client_session_id: str | None,
+    agent_scope: str | None = None,
 ):
     from src.mcp_handlers.context import (
         reset_session_context,
@@ -247,6 +249,20 @@ async def _execute_http_tool_in_context(
     )
     try:
         await access._resolve_http_bound_agent(tool_name, arguments, signals)
+        if agent_scope is not None:
+            from src.mcp_handlers.context import get_context_resolved_agent_id
+
+            # An agent token authorizes its own agent's calls only. The caller
+            # is resolved the normal way first; the token never binds it.
+            if get_context_resolved_agent_id() != agent_scope:
+                raise HttpToolRequestError(
+                    {
+                        "success": False,
+                        "error": "This agent token does not belong to the resolved caller",
+                        "error_type": "AgentTokenScope",
+                    },
+                    status_code=403,
+                )
         return await execute_http_tool(tool_name, arguments)
     finally:
         reset_session_context(context_token)
@@ -310,17 +326,40 @@ async def http_call_tool(request):
     """Execute one canonical MCP tool through the REST transport boundary."""
     body = None
     try:
+        # A per-agent token is the fallback when no other credential admits
+        # the request (src/http_agent_tokens.py). It admits only its agent's
+        # check-ins, checked below and again once the caller is resolved.
+        agent_scope = None
         if not access._check_http_auth(
             request,
             http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN"),
         ):
-            return access._http_unauthorized()
+            agent_scope = http_agent_tokens.agent_for_bearer(
+                access._bearer_from_header(request.headers.get("authorization"))
+            )
+            if agent_scope is None:
+                return access._http_unauthorized()
 
         body = await read_bounded_json_body(request)
         parsed = parse_http_tool_request(
             body,
             mcp_server_name=request.state._http_api_mcp_server_name,
         )
+        if agent_scope is not None:
+            refusal = http_agent_tokens.call_refusal(
+                parsed.tool_name,
+                parsed.arguments,
+                operator_header=request.headers.get("x-unitares-operator"),
+            )
+            if refusal:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": refusal,
+                        "error_type": "AgentTokenScope",
+                    },
+                    status_code=403,
+                )
         # Before client enrichment, session injection and prebind read the
         # arguments: only dispatch middleware may write these keys.
         remove_reserved_dispatch_keys(parsed.arguments)
@@ -349,6 +388,7 @@ async def http_call_tool(request):
             parsed.tool_name,
             parsed.arguments,
             client_session_id,
+            agent_scope,
         )
         return JSONResponse(
             _build_http_tool_response(parsed.tool_name, result)

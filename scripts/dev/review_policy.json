@@ -3,6 +3,7 @@
   "second_family_paths": [
     "src/oauth_provider.py",
     "src/http_routes/access.py",
+    "src/http_agent_tokens.py",
     "src/http_routes/packs.py",
     "src/services/mcp_transport_service.py",
     "src/mcp_listen_config.py",

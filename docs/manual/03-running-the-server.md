@@ -123,6 +123,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `REDIS_URL` | Redis URL (default `redis://localhost:6379/0`) |
 | `UNITARES_TOOL_ADVERTISEMENT` | `progressive` (default, small initial `tools/list`) or `full` |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
+| `UNITARES_HTTP_AGENT_TOKENS` | Per-agent check-in tokens for a client on another machine: `<agent_uuid>:sha256:<hex digest>` entries, comma-separated. A token admits only `process_agent_update` on `/v1/tools/call`, and only when the call resolves to its own agent through `client_session_id`. The server stores digests, never tokens; a malformed entry disables all of them ([`src/http_agent_tokens.py`](../../src/http_agent_tokens.py)) |
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
 | `UNITARES_MODEL_BASE_URL` / `UNITARES_MODEL_ID` | OpenAI-compatible base URL (`/v1` included) and model id for `consult` and the local reviewer; the older `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` were removed in v3.3.0 and are ignored, so rename them ([Choose a model](02-install.md#choose-a-model-optional)) |
 
