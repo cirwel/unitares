@@ -82,6 +82,8 @@ RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 RERUN_TRIES="${PR_QUEUE_RERUN_TRIES:-3}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
+OPAQUE_BLOCK_GRACE_MIN="${PR_QUEUE_OPAQUE_BLOCK_GRACE_MIN:-90}"
+DEPENDABOT_OPAQUE_BLOCK_GRACE_MIN="${PR_QUEUE_DEPENDABOT_OPAQUE_BLOCK_GRACE_MIN:-15}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 # Extra checks (space-separated names) that must have passed on the head before
 # it is armed, beyond the ones branch protection requires. Empty by default:
@@ -116,6 +118,19 @@ operator_only() {  # <pr-json> -> why only the operator may merge it, if so
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queues/${REPO}/approvals}"
+ATTENTION_FILE="${PR_QUEUE_ATTENTION_FILE:-$STATE_FILE.attention.jsonl}"
+ATTENTION_RC=0
+
+# Attention is a distinct automation outcome, not a successful tick with a log
+# line somebody must happen to notice. Preserve real command failures, but turn
+# an otherwise-successful tick red after recording a durable attention event.
+finish() {
+  local rc=$?
+  trap - EXIT
+  if [ "$rc" -eq 0 ] && [ "$ATTENTION_RC" -ne 0 ]; then rc="$ATTENTION_RC"; fi
+  exit "$rc"
+}
+trap finish EXIT
 
 log() { echo "$(date -u +%FT%TZ) $*"; }
 
@@ -142,6 +157,43 @@ notify() {  # <pr> <reason-key> <head-sha> <message>
 **Merge queue:** $4" >/dev/null || log "#$1 notice could not be posted"
 }
 
+record_attention() {  # <pr> <head> <merge-state> <held-minutes> <next-action>
+  local key="opaque-blocked:$1:$2" dir tmp
+  [ "$DRY_RUN" = "1" ] && return 0
+  if [ -f "$ATTENTION_FILE" ] \
+     && jq -e --arg key "$key" 'select(.key == $key)' "$ATTENTION_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+  dir=$(dirname "$ATTENTION_FILE")
+  mkdir -p "$dir" || return 1
+  tmp="$ATTENTION_FILE.tmp.$$"
+  { [ ! -f "$ATTENTION_FILE" ] || cat "$ATTENTION_FILE"; \
+    jq -nc --arg key "$key" --arg observed_at "$(date -u +%FT%TZ)" \
+      --arg repo "$REPO" --arg base "$BASE" --argjson pr "$1" \
+      --arg head "$2" --arg merge_state "$3" --argjson held_minutes "$4" \
+      --arg next_action "$5" \
+      '{schema:"unitares.pr_queue_attention.v1",key:$key,observed_at:$observed_at,
+        repo:$repo,base:$base,pr_number:$pr,head_sha:$head,
+        queue_phase:"blocked",blocker:"opaque_merge_block",
+        merge_state:$merge_state,held_minutes:$held_minutes,
+        owner_role:"dependency-steward",next_action:$next_action,
+        terminal_state:null}'; } >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$ATTENTION_FILE"
+}
+
+has_opaque_attention() {  # <pr> <head>
+  local key="opaque-blocked:$1:$2"
+  [ -f "$ATTENTION_FILE" ] \
+    && jq -e --arg key "$key" 'select(.key == $key)' "$ATTENTION_FILE" >/dev/null 2>&1
+}
+
+opaque_blocked() {  # <pr-json>
+  [ "$(jq -r .mergeStateStatus <<<"$1")" = "BLOCKED" ] \
+    && [ "$(q 'failed | length' <<<"$1")" -eq 0 ] \
+    && [ "$(q 'pending | length' <<<"$1")" -eq 0 ] \
+    && [ "$(q 'parked | length' <<<"$1")" -eq 0 ]
+}
+
 minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | floor'; }
 
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
@@ -152,7 +204,7 @@ tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tic
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,title,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
+  --json number,title,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository,author) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # gh pr list caps statusCheckRollup at 100 entries per PR (no GraphQL pagination
@@ -509,6 +561,7 @@ while read -r pr; do
   n=$(jq -r .number <<<"$pr")
   reason=""
   hand_notice=""
+  opaque_stall=""
   # The queue owns arming. An arm it did not make is disarmed, whoever made
   # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
   # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
@@ -559,12 +612,32 @@ while read -r pr; do
        && [ "$(q 'failed | length' <<<"$pr")" -gt 0 ] \
        && [ "$(q 'pending | length' <<<"$pr")" -eq 0 ]; then
     reason="checks failed on its current head"
+  elif opaque_blocked "$pr"; then
+    armed_at=$(jq -r '.autoMergeRequest.enabledAt // empty | select(startswith("0001-") | not)' <<<"$pr")
+    if [ -n "$armed_at" ]; then
+      held=$(minutes_since "$armed_at")
+      grace="$OPAQUE_BLOCK_GRACE_MIN"
+      [ "$(jq -r '.author.login // ""' <<<"$pr")" = "dependabot[bot]" ] \
+        && grace="$DEPENDABOT_OPAQUE_BLOCK_GRACE_MIN"
+      if [ "$held" -ge "$grace" ]; then
+        reason="GitHub still reports BLOCKED after ${held}m without a visible failing, pending, or parked check"
+        opaque_stall="$held"
+      fi
+    fi
   fi
   if [ -n "$reason" ]; then
     log "#$n armed but $reason; disarming so it stops holding the queue"
     if act gh pr merge "$n" -R "$REPO" --disable-auto; then
       disarmed="$disarmed$n "
       [ -n "$hand_notice" ] && notify "$n" hand-armed "$(jq -r .headRefOid <<<"$pr")" "$hand_notice"
+      if [ -n "$opaque_stall" ]; then
+        head=$(jq -r .headRefOid <<<"$pr")
+        next_action="Reconcile the missing GitHub merge requirement or repair this exact head; completion is MERGED or CLOSED."
+        record_attention "$n" "$head" "$(jq -r .mergeStateStatus <<<"$pr")" "$opaque_stall" "$next_action" \
+          || log "#$n attention event could not be recorded ($ATTENTION_FILE)"
+        notify "$n" opaque-blocked "$head" "disarmed after ${opaque_stall} minutes in an opaque BLOCKED state with no visible failing, pending, or approval-parked check. The queue has moved on. Reconcile the missing GitHub merge requirement or repair this exact head; completion is GitHub `MERGED` or `CLOSED`."
+        ATTENTION_RC=2
+      fi
     else
       log "#$n disarm failed; nothing else done this tick"
       exit 0
@@ -734,6 +807,15 @@ while read -r _ n head; do
 
   if dep=$(dependency_open "$pr"); then
     log "#$n waits on $dep (merge after); skipped"
+    continue
+  fi
+
+  # A previously stalled opaque head stays out of the queue until GitHub's
+  # state becomes explainable or changes. Re-arming the same unchanged head
+  # would recreate the invisible hours-long stall on every other tick.
+  if opaque_blocked "$pr" && has_opaque_attention "$n" "$head"; then
+    log "#$n remains opaquely BLOCKED on ${head:0:8}; attention receipt is active; skipped"
+    ATTENTION_RC=2
     continue
   fi
 
