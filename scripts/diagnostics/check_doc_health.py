@@ -205,6 +205,8 @@ _COMPAT_STUB_RE = re.compile(
 _STUB_LINK_EXEMPT_FILES = {
     "docs/README.md",
     "docs/dev/CANONICAL_SOURCES.md",
+    # SHA-256-pinned pre-registered protocol (pilot-manifest-v1.example.json).
+    "docs/proposals/eisv-incremental-value-ablation-v1.md",
 }
 
 
