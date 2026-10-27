@@ -132,6 +132,8 @@ additions merge cleanly. -->
 | `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+18 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
+| `UNITARES_HUB_CALLBACK_URL` | `''` | Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404 | src/dashboard_auth.py |
+| `UNITARES_HUB_TOKEN` | `''` | Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404 | src/dashboard_auth.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_STRICT` | varies: `'strict'` (config/governance_config.py:1660); `IDENTITY_STRICT_MODE` (config/governance_config.py:1669) | Runtime accessor — respects env changes set after module load | config/governance_config.py |

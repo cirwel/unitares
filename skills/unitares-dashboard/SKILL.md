@@ -53,7 +53,7 @@ data class, not the extension. `snapshot.js` has been a synthetic fixture since
 2026-09-27 and stays gated anyway. `preview.html` (a literal fleet capture) and
 `PLAN.md` (a design plan describing the operator's fleet) were deleted. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
 new offline data goes into the synthetic generator in `snapshot.js`. `auth/*.html` is 404 on this
-route (those pages are served via `/auth/*`). Files are read per request, so a restart is
+route (those pages are served via `/auth/*`, the hub approval page with anti-framing headers). Both gates compare the resolved file, not the requested name, so `./`, `//` and case aliases cannot slip past them. Files are read per request, so a restart is
 not needed for static edits. Entry HTML is `no-store`; relative assets receive
 an mtime version query to prevent stale browser bundles.
 

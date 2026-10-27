@@ -24,6 +24,10 @@ from src.dashboard_auth import (
     http_auth_logout,
     http_auth_sessions,
     http_auth_signin,
+    http_hub_authorize,
+    http_hub_check,
+    http_hub_exchange,
+    http_hub_revoke,
     http_webauthn_options,
     http_webauthn_register_options,
     http_webauthn_register_verify,
@@ -270,6 +274,12 @@ def register_http_routes(
         http_auth_credential_revoke,
         methods=["POST"],
     ))
+    # Hub sign-in handoff (src/dashboard_auth.py). 404 until configured; the
+    # /v1/hub routes answer only on the owner-only UDS listener.
+    app.routes.append(Route("/auth/hub/authorize", http_hub_authorize, methods=["GET", "POST"]))
+    app.routes.append(Route("/v1/hub/exchange", http_hub_exchange, methods=["POST"]))
+    app.routes.append(Route("/v1/hub/check", http_hub_check, methods=["POST"]))
+    app.routes.append(Route("/v1/hub/revoke", http_hub_revoke, methods=["POST"]))
 
     # Redesign preview routes — must come BEFORE /dashboard/{file} so that
     # /dashboard/redesign resolves to the redesign handler, not the flat

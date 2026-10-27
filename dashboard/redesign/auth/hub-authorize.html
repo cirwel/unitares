@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Sign in the hub · UNITARES</title>
+<link rel="stylesheet" href="/dashboard/redesign/tokens.css" />
+<link rel="stylesheet" href="/dashboard/redesign/kit.css" />
+<link rel="stylesheet" href="/dashboard/redesign/auth/auth.css" />
+</head>
+<body class="auth-body">
+<main class="auth-shell">
+  <div class="auth-brand">
+    <span class="brand">UNITARES<span class="dot">.</span></span>
+    <span class="brand-sub">Governance</span>
+  </div>
+  <section class="auth-card">
+    <h1>Sign in the hub?</h1>
+    <p>The operator hub at <strong>{{HUB_ORIGIN}}</strong> asked to sign in as you.
+      Allow it only if you just opened the hub on this computer.</p>
+    <button class="auth-primary" id="allowBtn" type="button">Allow</button>
+    <div class="auth-status" id="status" role="status" aria-live="polite"></div>
+  </section>
+  <p class="auth-foot"><a href="/">Cancel and return to the dashboard</a></p>
+</main>
+<script>
+(function () {
+  "use strict";
+  const status = document.getElementById("status");
+  const allowBtn = document.getElementById("allowBtn");
+  const params = new URLSearchParams(location.search);
+
+  function message(text, kind) {
+    status.textContent = text || "";
+    status.className = "auth-status" + (kind ? " " + kind : "");
+  }
+
+  // The server forbids framing this page; refuse here too, so a copy served
+  // by any other path still cannot be framed into a click.
+  if (window.top !== window.self) {
+    allowBtn.disabled = true;
+    message("This page cannot be used inside another page.", "error");
+    return;
+  }
+
+  allowBtn.addEventListener("click", async () => {
+    allowBtn.disabled = true;
+    message("Signing the hub in…");
+    try {
+      const response = await fetch("/auth/hub/authorize", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-Unitares-Csrf": "1" },
+        body: JSON.stringify({
+          code_challenge: params.get("code_challenge"),
+          code_challenge_method: params.get("code_challenge_method"),
+          state: params.get("state"),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.redirect) {
+        throw new Error(body.error || "The hub could not be signed in.");
+      }
+      location.assign(body.redirect);
+    } catch (error) {
+      message(error.message, "error");
+      allowBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
