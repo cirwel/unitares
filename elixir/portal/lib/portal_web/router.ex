@@ -42,7 +42,7 @@ defmodule PortalWeb.Router do
     pipe_through [:browser, :operator]
 
     live_session :operator, on_mount: PortalWeb.Live.RequireOperator do
-      live "/", HomeLive
+      live "/", TimelineLive
     end
   end
 end

@@ -43,4 +43,15 @@ config :phoenix, :json_library, Jason
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+# The hub's stylesheet, built by `mix assets.deploy` (the version is required).
+config :tailwind,
+  version: "4.3.0",
+  portal: [
+    args: ~w(
+      --input=assets/css/hub.css
+      --output=priv/static/assets/css/hub.css
+    ),
+    cd: Path.expand("..", __DIR__)
+  ]
+
 import_config "#{config_env()}.exs"

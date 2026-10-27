@@ -25,3 +25,6 @@ config :phoenix,
 
 # Tests reach the endpoint as 127.0.0.1:4002.
 config :portal, :boundary, host: "127.0.0.1", port: 4002
+
+# No long-lived governance clients in tests: they start their own instances.
+config :portal, :timeline, start_timeline_feed: false, start_firehose: false

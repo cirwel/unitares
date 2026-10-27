@@ -62,3 +62,33 @@ if config_env() == :prod do
 
   config :portal, PortalWeb.Endpoint, secret_key_base: secret_key_base
 end
+
+# The timeline (portal-hub-v0 H2d-2b) reads with the hub's own read-only key
+# (operator decision 2026-10-27): the server's UNITARES_READ_ONLY_TOKENS,
+# accepted on /v1/timeline and /ws/eisv only. Without it the timeline does
+# not start, rather than lean on the server trusting loopback.
+read_token = System.get_env("PORTAL_READ_TOKEN", "")
+
+int_env = fn name, default ->
+  case Integer.parse(System.get_env(name, "")) do
+    {value, ""} when value > 0 -> value
+    _ -> default
+  end
+end
+
+config :portal, :governance,
+  ws_url: System.get_env("PORTAL_GOV_WS_URL", "ws://127.0.0.1:8767/ws/eisv"),
+  timeline_url: System.get_env("PORTAL_GOV_TIMELINE_URL", "http://127.0.0.1:8767/v1/timeline"),
+  read_token: read_token
+
+config :portal, :timeline,
+  default_window_hours: int_env.("PORTAL_TIMELINE_WINDOW_HOURS", 1),
+  reread_ms: int_env.("PORTAL_TIMELINE_REREAD_MS", 60_000)
+
+# Which long-lived clients start. config/test.exs turns both off, and
+# runtime.exs loads after it, so this is guarded: tests start their own.
+if config_env() != :test do
+  config :portal, :timeline,
+    start_timeline_feed: read_token != "",
+    start_firehose: read_token != ""
+end
