@@ -202,6 +202,10 @@ _COMPAT_STUB_RE = re.compile(
     r"|— compatibility stub\b|> \*\*Compatibility locator\.)",
     re.IGNORECASE,
 )
+_STUB_LINK_EXEMPT_FILES = {
+    "docs/README.md",
+    "docs/dev/CANONICAL_SOURCES.md",
+}
 
 
 def _github_heading_slug(heading_text: str) -> str:
@@ -327,7 +331,7 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
                         )
                     if (
                         _get_is_stub(target)
-                        and rel.name not in {"README.md", "CANONICAL_SOURCES.md"}
+                        and rel.as_posix() not in _STUB_LINK_EXEMPT_FILES
                         and not re.search(r"\d{4}-\d{2}-\d{2}", rel.name)
                     ):
                         warnings.append(

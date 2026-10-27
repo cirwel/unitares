@@ -831,13 +831,16 @@ def test_link_to_compatibility_stub_flagged_except_from_index_or_dated_doc(
     )
     active = guides / "TROUBLESHOOTING.md"
     active.write_text("See [Start Here](START_HERE.md).\n")
+    root_readme = tmp_path / "README.md"
+    root_readme.write_text("See [Start Here](docs/guides/START_HERE.md).\n")
     index = tmp_path / "docs" / "README.md"
     index.write_text("Stubs: [START_HERE.md](guides/START_HERE.md).\n")
     dated = guides / "audit-2026-09-12.md"
     dated.write_text("Historical link: [Start Here](START_HERE.md).\n")
 
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
-    warnings = doc_health.check_relative_links([active, index, dated])
-    assert len(warnings) == 1
+    warnings = doc_health.check_relative_links([active, root_readme, index, dated])
+    assert len(warnings) == 2
     assert "TROUBLESHOOTING.md:1: link to compatibility stub `START_HERE.md`" in warnings[0]
+    assert "README.md:1: link to compatibility stub `docs/guides/START_HERE.md`" in warnings[1]
 

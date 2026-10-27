@@ -141,10 +141,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 
 
 _REL_MD_LINK_RE = re.compile(r"\]\((?!https?://|mailto:|#)([^)\s#]+\.md)(#[^)\s]*)?\)")
+_FENCE_LINE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 
 
 def rewrite_repo_relative_links(md_text: str, source_dir: Path) -> str:
-    """Rewrite relative .md links to GitHub blob URLs so Pages renders valid links."""
+    """Rewrite relative .md links outside code fences to GitHub blob URLs."""
     root = PROJECT_ROOT.resolve()
 
     def _replace(match: re.Match[str]) -> str:
@@ -156,7 +157,24 @@ def rewrite_repo_relative_links(md_text: str, source_dir: Path) -> str:
             return match.group(0)
         return f"]({REPO_URL}/blob/master/{repo_rel}{fragment})"
 
-    return _REL_MD_LINK_RE.sub(_replace, md_text)
+    out_lines: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    for line in md_text.splitlines(keepends=True):
+        fence_match = _FENCE_LINE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(2)
+            if not in_fence:
+                in_fence = True
+                fence_char = marker[0]
+                fence_len = len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_len:
+                in_fence = False
+            out_lines.append(line)
+            continue
+        out_lines.append(line if in_fence else _REL_MD_LINK_RE.sub(_replace, line))
+    return "".join(out_lines)
 
 
 def render(md_text: str, source_dir: Path | None = None) -> str:
