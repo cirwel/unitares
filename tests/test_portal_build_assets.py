@@ -221,8 +221,18 @@ def test_the_plist_restarts_only_after_a_failing_exit() -> None:
     assert "Loading this plist starts the hub" in TEMPLATE.read_text()
 
 
-def test_the_deploy_checks_the_hubs_exact_origin() -> None:
+def test_the_deploy_checks_the_hubs_exact_origin_and_fails_on_either_answer() -> None:
     text = DEPLOY.read_text()
     assert 'socket_status "http://127.0.0.1:$PORT"' in text
     assert 'socket_status "http://evil.example"' in text
     assert 'LABEL="com.unitares.portal"' in text
+    # A wrong socket answer rolls back; it is not a warning.
+    check = text.index('if [ "$own" != "101" ] || [ "$foreign" != "403" ]; then')
+    assert text.index("roll_back", check) < text.index("fi", check)
+    assert "WARNING — the LiveView socket" not in text
+
+
+def test_the_deploy_reloads_a_changed_plist() -> None:
+    text = DEPLOY.read_text()
+    assert 'deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"' in text
+    assert "launchctl kickstart" not in text
