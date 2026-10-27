@@ -153,6 +153,29 @@ def test_a_directory_with_glob_characters_is_refused(shim, repos, capfd, confine
     assert code == client.EXIT_BAD_INPUT and "glob" in err
 
 
+@pytest.mark.parametrize("lane", ["claude", "codex"])
+@pytest.mark.parametrize("protected", [".unitares", ".unitares/sub", ".env", ".envs/x",
+                                       "prod.env"])
+def test_a_protected_directory_cannot_be_the_directory(shim, repos, capfd, confined, lane,
+                                                       protected):
+    """The lanes deny these beneath the directory; naming one, or a path
+    inside one, as the directory would grant all of it (#3102 review)."""
+    target = repos / "project" / protected
+    target.mkdir(parents=True)
+    code, seen, err = _run(_env(lane, shim, repos, COUNCIL_DIR=str(target)), capfd)
+    assert (code, seen) == (client.EXIT_BAD_INPUT, None)
+    assert ".unitares" in err
+
+
+def test_a_symlink_into_a_protected_directory_is_refused(shim, repos, capfd, confined):
+    cache = repos / "project" / ".unitares"
+    cache.mkdir()
+    (repos / "project" / "cache-link").symlink_to(cache)
+    code, _, err = _run(_env("claude", shim, repos,
+                             COUNCIL_DIR=str(repos / "project" / "cache-link")), capfd)
+    assert code == client.EXIT_BAD_INPUT and ".unitares" in err
+
+
 def test_a_lane_without_roots_refuses(shim, repos, capfd, confined):
     code, _, err = _run(_env("claude", shim, repos, COUNCIL_ROOTS=""), capfd)
     assert code == client.EXIT_BAD_INPUT and "COUNCIL_ROOTS" in err

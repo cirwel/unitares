@@ -171,7 +171,17 @@ def resolve_dir(raw: str, allowed: list[str]) -> str:
         raise Refusal("COUNCIL_DIR is outside the profile's roots")
     if _glob_unsafe(real):
         raise Refusal("COUNCIL_DIR contains glob characters")
+    if any(_protected(part) for part in Path(real).parts):
+        # The lanes deny these paths beneath the directory; naming one as
+        # the directory itself would make all of it readable.
+        raise Refusal("COUNCIL_DIR is, or is inside, a .env or .unitares path")
     return real
+
+
+def _protected(component: str) -> bool:
+    """A path component the lanes deny: ``.env*``, ``*.env`` or ``.unitares``."""
+    return (component == ".unitares" or component.startswith(".env")
+            or component.endswith(".env"))
 
 
 def cli(environ: dict[str, str]) -> str:
