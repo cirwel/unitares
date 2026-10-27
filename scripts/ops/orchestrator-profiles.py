@@ -40,8 +40,14 @@ standard error when its CLI is not found:
   its host list as the server resolves it, the inference hosts file
   included, so regenerate after editing that file; the CLIs found here; and
   its lifetime cap sized from those settings.
+* ``council.claude``, ``council.codex``, ``council.agy``: read-only council
+  advisor lanes (``council_lane_client.py``). The claude and codex lanes read
+  a caller-named directory, accepted only at or under a ``--council-root``
+  (repeatable; the orchestrator's ``AGENT_ORCHESTRATOR_PROFILES_COUNCIL_ROOTS``
+  in start.sh), and are omitted without one. A root may not be ``/``, the
+  home directory or one of its parents. The agy lane reads no directory.
 
-The host lanes are subscription lanes: none binds a secret, and no API key
+The host and council lanes are subscription lanes: none binds a secret, and no API key
 is inherited. The reviewer binds, by name only, the MCP bearer when the
 server has one and the external reviewer host's key variable when one is
 configured; the orchestrator resolves them from its own environment.
@@ -93,7 +99,21 @@ AGY_PROMPT_MAX_BYTES = 120_000 - 38 - 145
 CLAUDE_CLIENT = "src/mcp_handlers/support/claude_cli_client.py"
 CODEX_CLIENT = "src/mcp_handlers/support/codex_app_server_client.py"
 AGY_CLIENT = "src/mcp_handlers/support/antigravity_cli_client.py"
-CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT)
+COUNCIL_CLIENT = "src/mcp_handlers/support/council_lane_client.py"
+CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT, COUNCIL_CLIENT)
+
+#: A council lane's prompt also travels in the environment.
+COUNCIL_PROMPT_MAX_BYTES = 131_072 - len("COUNCIL_PROMPT=") - 1
+#: agy's one argument (council_lane_client.AGY_ARG_LIMIT) holds the prompt
+#: behind a 38-byte guard line and before a 194-byte text-only note.
+COUNCIL_AGY_PROMPT_MAX_BYTES = 120_000 - 38 - 194
+#: A council lane's own deadline is the caller's (dispatch_beam's default is
+#: 600 s, and it stops a lane that overruns); this is the backstop, with room
+#: for the caller's own reap.
+COUNCIL_MAX_RUNTIME_MS = 630_000
+#: An absolute path with no line breaks; the client resolves it and checks
+#: it against the roots.
+COUNCIL_DIR_PATTERN = "/[^\\n\\r]{0,4095}"
 
 REVIEWER_MODULE = "agents/dialectic_reviewer/reviewer.py"
 REVIEWER_SDK = "agents/sdk/src"
@@ -288,14 +308,75 @@ def reviewer_profile(*, repo_root: str, python: str, user: str, fixed: dict[str,
     return profile
 
 
+def council_profile(*, repo_root: str, python: str, cli: str, user: str, lane: str,
+                    roots: list[str]) -> dict[str, Any]:
+    """A read-only council advisor: the caller chooses the prompt, the
+    directory under review (claude, codex) and the model (codex, agy)."""
+    inherit = ["HOME", "PATH", "LANG", "TMPDIR"]
+    env_set = {"COUNCIL_LANE": lane, "COUNCIL_CLI": cli, "USER": user}
+    variables: dict[str, Any] = {
+        "COUNCIL_PROMPT": {"max_bytes": COUNCIL_AGY_PROMPT_MAX_BYTES if lane == "agy"
+                           else COUNCIL_PROMPT_MAX_BYTES, "required": True},
+    }
+    if lane in ("claude", "codex"):
+        env_set["COUNCIL_ROOTS"] = os.pathsep.join(roots)
+        variables["COUNCIL_DIR"] = {"max_bytes": 4096, "pattern": COUNCIL_DIR_PATTERN,
+                                    "required": True}
+    if lane in ("codex", "agy"):
+        variables["COUNCIL_MODEL"] = {"max_bytes": 128, "pattern": MODEL_PATTERN}
+    if lane == "codex":
+        inherit.append("CODEX_HOME")
+    if lane == "agy":
+        inherit.append("XDG_RUNTIME_DIR")
+    return {
+        "cmd": python,
+        "args": ["-I", os.path.join(repo_root, COUNCIL_CLIENT)],
+        "env": {"inherit": inherit, "set": env_set},
+        "vars": variables,
+        "lineage": "none",
+        "lease": False,
+        "max_runtime_ms": COUNCIL_MAX_RUNTIME_MS,
+        "max_output_lines": 20_000,
+        "max_concurrent": 3,
+        "max_per_hour": 30,
+    }
+
+
+def council_roots(raw: list[str], home: str) -> list[str]:
+    """The roots a council lane may read under, resolved. Refuses ``/``,
+    the home directory and its parents, each of which would put the
+    operator's credentials in reach."""
+    resolved: list[str] = []
+    real_home = os.path.realpath(home)
+    for entry in raw:
+        path = os.path.expanduser(entry)
+        if not os.path.isabs(path):
+            raise SystemExit(f"a council root must be an absolute path: {entry}")
+        real = os.path.realpath(path)
+        if not os.path.isdir(real):
+            raise SystemExit(f"council root {entry} is not a directory")
+        if os.path.commonpath([real, real_home]) == real:
+            raise SystemExit(f"council root {entry} is / or contains the home directory")
+        if real not in resolved:
+            resolved.append(real)
+    return sorted(resolved)
+
+
 def build_profiles(*, repo_root: str, python: str, user: str, claude_cli: str | None,
                    codex_cli: str | None = None, antigravity_cli: str | None = None,
                    codex_app_server: bool = True,
-                   reviewer: dict[str, Any] | None = None) -> dict[str, Any]:
+                   reviewer: dict[str, Any] | None = None,
+                   council_roots: list[str] | None = None) -> dict[str, Any]:
     """``reviewer``: keyword arguments for reviewer_profile beyond the common
-    ones, or None to omit it."""
+    ones, or None to omit it. ``council_roots``: resolved roots for the claude
+    and codex council lanes, which are omitted without any."""
     common = {"repo_root": repo_root, "python": python, "user": user}
+    roots = council_roots or []
     profiles: dict[str, Any] = {}
+    for lane, path in (("claude", claude_cli), ("codex", codex_cli), ("agy", antigravity_cli)):
+        if path and (roots or lane == "agy"):
+            profiles[f"council.{lane}"] = council_profile(cli=path, lane=lane, roots=roots,
+                                                          **common)
     if reviewer is not None:
         profiles["dialectic.reviewer"] = reviewer_profile(**common, **reviewer)
     if claude_cli:
@@ -370,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-file", action="append", default=[])
     parser.add_argument("--launchd-plist", action="append", default=[],
                         help="the server's LaunchAgent plist, for its EnvironmentVariables")
+    parser.add_argument("--council-root", action="append", default=[],
+                        help="a directory the claude and codex council lanes may read under")
     parser.add_argument("--check", action="store_true",
                         help="exit 1 if the file differs from a fresh generation; write nothing")
     args = parser.parse_args(argv)
@@ -402,6 +485,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"orchestrator-profiles: no {name} CLI found; host.{host} omitted",
                   file=sys.stderr)
 
+    roots = council_roots(args.council_root, account.pw_dir)
+    if not roots:
+        print("orchestrator-profiles: no --council-root; council.claude and council.codex "
+              "omitted", file=sys.stderr)
+
     try:
         fixed, secrets = reviewer_config.reviewer_profile_env(settings)
     except ValueError as exc:
@@ -418,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         claude_cli=found["claude"], codex_cli=found["codex"],
         antigravity_cli=found["antigravity"],
         codex_app_server=flag_on(settings.get("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION")),
-        reviewer=reviewer))
+        reviewer=reviewer, council_roots=roots))
     out = Path(os.path.abspath(args.out))
     if args.check:
         try:

@@ -79,6 +79,7 @@ SUITES = (
         (["src/mcp_handlers/support/claude_cli_client.py"], True),
         (["src/mcp_handlers/support/codex_app_server_client.py"], True),
         (["src/mcp_handlers/support/antigravity_cli_client.py"], True),
+        (["src/mcp_handlers/support/council_lane_client.py"], True),
         (["src/mcp_handlers/support/host_adapter.py"], False),
         # Prefix discipline: a sibling that merely shares a prefix string, or a
         # same-named file elsewhere, is not a suite input.

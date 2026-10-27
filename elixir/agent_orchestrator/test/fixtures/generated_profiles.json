@@ -1,5 +1,123 @@
 {
   "profiles": {
+    "council.agy": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/council_lane_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR",
+          "XDG_RUNTIME_DIR"
+        ],
+        "set": {
+          "COUNCIL_CLI": "/usr/local/bin/agy",
+          "COUNCIL_LANE": "agy",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 20000,
+      "max_per_hour": 30,
+      "max_runtime_ms": 630000,
+      "vars": {
+        "COUNCIL_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "COUNCIL_PROMPT": {
+          "max_bytes": 119768,
+          "required": true
+        }
+      }
+    },
+    "council.claude": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/council_lane_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR"
+        ],
+        "set": {
+          "COUNCIL_CLI": "/usr/local/bin/claude",
+          "COUNCIL_LANE": "claude",
+          "COUNCIL_ROOTS": "/srv/repos",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 20000,
+      "max_per_hour": 30,
+      "max_runtime_ms": 630000,
+      "vars": {
+        "COUNCIL_DIR": {
+          "max_bytes": 4096,
+          "pattern": "/[^\\n\\r]{0,4095}",
+          "required": true
+        },
+        "COUNCIL_PROMPT": {
+          "max_bytes": 131056,
+          "required": true
+        }
+      }
+    },
+    "council.codex": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/council_lane_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR",
+          "CODEX_HOME"
+        ],
+        "set": {
+          "COUNCIL_CLI": "/usr/local/bin/codex",
+          "COUNCIL_LANE": "codex",
+          "COUNCIL_ROOTS": "/srv/repos",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "none",
+      "max_concurrent": 3,
+      "max_output_lines": 20000,
+      "max_per_hour": 30,
+      "max_runtime_ms": 630000,
+      "vars": {
+        "COUNCIL_DIR": {
+          "max_bytes": 4096,
+          "pattern": "/[^\\n\\r]{0,4095}",
+          "required": true
+        },
+        "COUNCIL_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        },
+        "COUNCIL_PROMPT": {
+          "max_bytes": 131056,
+          "required": true
+        }
+      }
+    },
     "dialectic.reviewer": {
       "args": [
         "-s",
