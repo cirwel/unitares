@@ -69,9 +69,11 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 ## Install (macOS, launchd)
 
 `scripts/ops/com.unitares.portal.plist.template` runs `elixir/portal/scripts/start.sh`
-under launchd as `com.unitares.portal`. Loading it starts the hub, so load it
-once the credentials are in the file named by `UNITARES_SECRETS_ENV` (mode
-600). If they are missing, `start.sh` logs why and exits 0, and launchd
+under launchd as `com.unitares.portal`. Loading it starts the hub. `start.sh`
+reads its credentials only from its environment and never sources a secrets
+file, so the browser-facing hub holds exactly its own keys; supply them
+through the service manager, for example with a wrapper that exports only the
+named keys. If they are missing, `start.sh` logs why and exits 0, and launchd
 restarts the hub only after a failing exit, so a premature load leaves it
 stopped rather than looping. Render it against the deploy worktree and load it
 as its header says. Then `cirwel update` deploys it

@@ -200,11 +200,18 @@ def test_start_without_a_secret_key_base_stops_cleanly(tmp_path: Path) -> None:
     assert "will not restart it" in proc.stderr
 
 
-def test_start_with_a_relative_settings_path_stops_cleanly() -> None:
-    env = {**os.environ, "UNITARES_SECRETS_ENV": "relative/file.env"}
+def test_start_never_sources_a_secrets_file(tmp_path: Path) -> None:
+    # A shared secrets file would hand the browser-facing hub every credential
+    # in it; the hub takes exactly its keys from the environment instead.
+    secrets = tmp_path / "shared.env"
+    secrets.write_text("PORTAL_SECRET_KEY_BASE=from-the-file\nOTHER_SECRET=x\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PORTAL_")}
+    env["UNITARES_SECRETS_ENV"] = str(secrets)
     proc = subprocess.run(["bash", str(START)], env=env, capture_output=True, text=True, check=False)
     assert proc.returncode == 0
-    assert "UNITARES_SECRETS_ENV must name an absolute" in proc.stderr
+    assert "PORTAL_SECRET_KEY_BASE is unset" in proc.stderr
+    text = START.read_text()
+    assert "source " not in text and "\n. " not in text
 
 
 def test_the_plist_restarts_only_after_a_failing_exit() -> None:

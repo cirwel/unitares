@@ -13,17 +13,17 @@
   the hub only after a failing exit, so a premature load sits idle instead
   of looping. A crash (a non-zero exit) is restarted.
 
-  Prereq: set UNITARES_SECRETS_ENV to an absolute private file (mode 600) and
-  persist that value in this job's EnvironmentVariables, or provision the
-  variables directly through your service manager. start.sh sources it and
-  never prints it. By name:
+  Credentials: start.sh reads them only from its environment and never sources
+  a secrets file, so the hub (a browser-facing process) holds exactly these and
+  nothing else. Supply them through your service manager, for example with a
+  wrapper in ProgramArguments that exports only the named keys. By name:
     PORTAL_SECRET_KEY_BASE   generate once: cd elixir/portal && mix phx.gen.secret
   for sign-in (all three, or the hub refuses everyone):
     PORTAL_GOV_ORIGIN        the dashboard's origin, for example https://gov.example.org
     PORTAL_GOV_SOCKET        the server's UNITARES_UDS_SOCKET path
-    PORTAL_HUB_TOKEN         the same value as the server's UNITARES_HUB_TOKEN
+    PORTAL_HUB_TOKEN         the hub's key; the server holds UNITARES_HUB_TOKEN=sha256:<its digest>
   for the timeline (without it the timeline does not start):
-    PORTAL_READ_TOKEN        one of the server's UNITARES_READ_ONLY_TOKENS
+    PORTAL_READ_TOKEN        a read-only key; the server lists sha256:<its digest> in UNITARES_READ_ONLY_TOKENS
 
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
