@@ -80,6 +80,7 @@ RELEVANT_FILES: tuple[str, ...] = (
     "src/mcp_handlers/support/claude_cli_client.py",
     "src/mcp_handlers/support/codex_app_server_client.py",
     "src/mcp_handlers/support/antigravity_cli_client.py",
+    "src/mcp_handlers/support/council_lane_client.py",
 )
 
 ZERO_SHA_PREFIX = "0000000"
