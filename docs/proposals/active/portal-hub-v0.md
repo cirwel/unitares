@@ -145,7 +145,17 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
     server's socket, a check on every request, and sign-out.
   - **H2d, the timeline and install.** The timeline moves in as the home
     screen, and `cirwel update` registers the hub. Split from H2c
-    (2026-10-27) so the sign-in is reviewed on its own.
+    (2026-10-27) so the sign-in is reviewed on its own. A design consult the
+    same day (codex, claude, antigravity) split it again:
+    - **H2d-1, the live socket.** The LiveView client and a guard that asks
+      again on a timer for an open page, ending it once the session is gone.
+    - **H2d-2, the timeline.** It is copied into the hub (codex and
+      antigravity; claude preferred a shared library). `dialectic_live`'s
+      copy is removed only once the deployed hub has carried routine use,
+      so the operator never loses a working timeline. The consult asked that
+      the hub hold its own read-only credential for the timeline's data, kept
+      out of page data and logs.
+    - **H2d-3, install.** A deploy script and plist for `cirwel update`.
 
   Numeric `127.0.0.1:8791` is the default name: macOS resolves `*.localhost`
   to `::1` first.

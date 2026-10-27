@@ -36,6 +36,21 @@ defmodule PortalWeb.Endpoint do
     only: PortalWeb.static_paths(),
     raise_on_missing_only: code_reloading?
 
+  # The LiveView client, served straight from the pinned dependencies: no
+  # bundler, nothing fetched at deploy time, and the versions follow mix.lock.
+  # Exactly these two files; nothing else under those packages is served.
+  plug Plug.Static,
+    at: "/assets/vendor",
+    from: {:phoenix, "priv/static"},
+    gzip: false,
+    only: ~w(phoenix.min.js)
+
+  plug Plug.Static,
+    at: "/assets/vendor",
+    from: {:phoenix_live_view, "priv/static"},
+    gzip: false,
+    only: ~w(phoenix_live_view.min.js)
+
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do

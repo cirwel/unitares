@@ -1,0 +1,1 @@
+- **Hub live socket:** the operator hub (`elixir/portal`) now connects its LiveView socket, with the client served straight from the pinned `phoenix` and `phoenix_live_view` packages (no JavaScript build). A page left open is asked again every 30 seconds whether its sign-in is still live, and ends, sending the browser to sign in, the moment it is not (portal-hub-v0 H2d-1).
