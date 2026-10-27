@@ -103,7 +103,7 @@ defmodule AgentOrchestrator.Profiles do
   @doc "The server the HTTP surface uses (overridable for tests)."
   def server, do: Application.get_env(:agent_orchestrator, :profiles_server, __MODULE__)
 
-  @doc "Operator-facing state: mode, digest, profile names, unconfigured, last error."
+  @doc "Operator-facing state: mode, file, digest, profile names, unconfigured, last error."
   def status(server \\ server()), do: GenServer.call(server, :status)
 
   @doc "`:allow` or `:deny`."
@@ -776,6 +776,9 @@ defmodule AgentOrchestrator.Profiles do
           true -> "ok"
         end,
       raw_spawn: Atom.to_string(state.raw_spawn),
+      # The file the digest is of, so the doctor can compare it with a fresh
+      # generation from the inputs recorded beside it.
+      file: state.file,
       digest: state.digest,
       profiles: profiles |> Map.keys() |> Enum.sort(),
       unconfigured: unconfigured,

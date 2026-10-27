@@ -168,8 +168,11 @@ defmodule AgentOrchestrator.ProfilesTest do
     end
 
     test "an explicit allow is honoured beside a profiles file", %{tmp_dir: dir} do
-      name = start_profiles(write_file(dir, %{"p" => profile()}), raw_spawn: "allow")
-      assert %{state: "ok", raw_spawn: "allow", profiles: ["p"]} = Profiles.status(name)
+      path = write_file(dir, %{"p" => profile()})
+      name = start_profiles(path, raw_spawn: "allow")
+
+      assert %{state: "ok", raw_spawn: "allow", profiles: ["p"], file: ^path} =
+               Profiles.status(name)
     end
 
     test "a group-writable file is refused", %{tmp_dir: dir} do
