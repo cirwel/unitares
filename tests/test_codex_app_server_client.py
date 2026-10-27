@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 
 import pytest
 
@@ -215,6 +216,56 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     for feature in ("computer_use", "browser_use", "plugins", "apps", "hooks"):
         assert f"features.{feature}=false" in overrides
     assert not any("sandbox_mode" in o or o.endswith("={}") for o in overrides)
+
+
+def test_lane_overrides_deny_the_shared_temporary_directories():
+    """``:minimal`` grants ``/tmp`` and ``/var/tmp``: a council codex lane
+    returned a canary from ``/private/tmp`` in its answer (2026-10-26)."""
+    table = client.lane_config_overrides("/opt/x/codex", "unitares_lane_test")[1]
+    for root in client.TEMP_ROOTS:
+        assert (f'"{root}"="deny"' in table) == os.path.isdir(root)
+    assert '"/tmp"="deny"' in table
+    # Denials come after every read entry, so none is mistaken for a grant.
+    assert table.index('"/opt/x"="read"') < table.index('"/tmp"="deny"')
+
+
+def test_a_path_given_under_a_temporary_root_does_not_lift_its_denial(tmp_path, monkeypatch):
+    """A deny outranks every read in codex's profile, so a workspace under
+    ``/tmp`` cannot be granted without granting all of ``/tmp``. The root stays
+    denied (Codex review of #3103: an exception reopened the whole root)."""
+    shared = tmp_path / "private" / "tmp"
+    (shared / "repo").mkdir(parents=True)
+    monkeypatch.setattr(client, "TEMP_ROOTS", (str(shared), str(tmp_path / "absent")))
+
+    table = client.lane_config_overrides(
+        "/opt/x/codex", "unitares_lane_test", extra_read=[str(shared / "repo")]
+    )[1]
+    assert f'"{shared}"="deny"' in table
+    # A root that does not exist here (``/private/...`` off macOS) is left out.
+    assert "absent" not in table
+
+
+def test_under_temp_root_resolves_links_and_respects_name_boundaries(tmp_path, monkeypatch):
+    shared = tmp_path / "private" / "tmp"
+    (shared / "repo").mkdir(parents=True)
+    link = tmp_path / "tmp"
+    link.symlink_to(shared)
+    monkeypatch.setattr(client, "TEMP_ROOTS", (str(link),))
+
+    assert client.under_temp_root(str(link / "repo"))
+    # Through the link's target, as macOS's /private/tmp is /tmp's.
+    assert client.under_temp_root(str(shared / "repo"))
+    assert client.under_temp_root(str(shared))
+    # A sibling whose name merely begins like the root is not under it.
+    assert not client.under_temp_root(str(shared) + "-other")
+
+
+def test_temp_denials_keep_the_override_count(tmp_path):
+    """The denials live inside the filesystem table, not in new overrides."""
+    assert (
+        len(client.lane_config_overrides("codex", extra_read=[str(tmp_path)]))
+        == client.LANE_CONFIG_OVERRIDE_COUNT
+    )
 
 
 def test_each_launch_takes_a_fresh_profile_name():
