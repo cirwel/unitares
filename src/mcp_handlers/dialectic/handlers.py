@@ -3713,6 +3713,29 @@ def _reviewer_fallback_block() -> tuple[str, str]:
     return "", ""
 
 
+def _reviewer_profile_block(review_path_failure_reason: str) -> tuple[str, str]:
+    """Why the in-process reviewer may not stand in for the reviewer's launch
+    profile, as (reason, profile name), or ("", "") when it may.
+
+    With orchestrated review and UNITARES_ORCHESTRATOR_PROFILES=1, the
+    reviewer runs only as the dialectic.reviewer profile, and a refused spawn
+    is the result (inference-hosts-config-v0 §2.5): the in-process reviewer
+    could approve through a model the profile would not, and anyone able to
+    make the spawn fail (its hourly limit, say) could steer reviews to it.
+    Reached only when no orchestrated reviewer took the slot."""
+    from .orchestrator_dispatch import (
+        REVIEWER_PROFILE,
+        orchestrated_review_enabled,
+        reviewer_profiles_enabled,
+    )
+
+    if not (orchestrated_review_enabled() and reviewer_profiles_enabled()):
+        return "", ""
+    if review_path_failure_reason == "reviewer_crashed_fast":
+        return "reviewer_profile_exited", REVIEWER_PROFILE
+    return "reviewer_profile_refused", REVIEWER_PROFILE
+
+
 def _synthetic_reviewer_enabled() -> bool:
     """Whether submit_thesis auto-completes a no-live-reviewer session via the
     local synthetic reviewer instead of leaving it to hang at awaiting_facilitation.
@@ -4625,10 +4648,15 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # that, and the in-process fallback must too, or a dispatch failure
             # would hand approval to the local reviewer.
             fallback_block, fallback_detail = _reviewer_fallback_block()
+            profile_block, profile_name = _reviewer_profile_block(review_path_failure_reason)
+            if profile_block:
+                fallback_block, fallback_detail = profile_block, profile_name
             if session.reviewer_agent_id is None and fallback_block:
                 review_path_failure_reason = fallback_block
                 if fallback_block == "reviewer_hosts_unresolved":
                     result["reviewer_hosts_error"] = fallback_detail
+                elif profile_block:
+                    result["reviewer_profile"] = fallback_detail
                 else:
                     result["reviewer_hosts"] = fallback_detail
             if (

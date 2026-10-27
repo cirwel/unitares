@@ -517,3 +517,51 @@ def test_runtime_cap_follows_the_resolved_list(monkeypatch, _hosts_file):
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
     monkeypatch.delenv("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", raising=False)
     assert od._extra_host_budget_s() == 420.0
+
+
+# --------------------------- launch profiles --------------------------- #
+
+@pytest.mark.asyncio
+async def test_profiles_send_only_the_session_id(monkeypatch):
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    monkeypatch.delenv("UNITARES_DIALECTIC_GOVERNED_SPAWN", raising=False)
+    client = _FakeClient(_FakeResp(201, {"execution_id": "ex-p"}))
+    _patch_httpx(monkeypatch, client)
+
+    out = await od.dispatch_orchestrated_review("sess-9", {"root_cause": "rc"}, "parent")
+
+    assert out["execution_id"] == "ex-p"
+    assert client.posted["json"] == {
+        "profile": "dialectic.reviewer",
+        "vars": {"DIALECTIC_SESSION_ID": "sess-9"},
+    }
+    assert client.posted["headers"]["Idempotency-Key"].startswith("dialectic-reviewer:")
+
+
+@pytest.mark.asyncio
+async def test_a_profile_dispatch_is_keyed_on_its_thesis(monkeypatch):
+    """The request is the same for every thesis in a session, so the key
+    carries the thesis: a later round must not replay the first spawn."""
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    monkeypatch.delenv("UNITARES_DIALECTIC_GOVERNED_SPAWN", raising=False)
+    keys = []
+    for root_cause in ("first", "first", "second"):
+        client = _FakeClient(_FakeResp(201, {"execution_id": "ex"}))
+        _patch_httpx(monkeypatch, client)
+        await od.dispatch_orchestrated_review("sess-9", {"root_cause": root_cause}, None)
+        keys.append(client.posted["headers"]["Idempotency-Key"])
+    assert keys[0] == keys[1] != keys[2]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_profile_spawn_returns_none(monkeypatch):
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    monkeypatch.setenv("UNITARES_ORCHESTRATOR_PROFILES", "1")
+    monkeypatch.delenv("UNITARES_DIALECTIC_GOVERNED_SPAWN", raising=False)
+    client = _FakeClient(_FakeResp(422, {"error": "profile dialectic.reviewer is unconfigured"}))
+    _patch_httpx(monkeypatch, client)
+
+    assert await od.dispatch_orchestrated_review("s", {"root_cause": "x"}, None) is None
+    assert "profile" in client.posted["json"]
