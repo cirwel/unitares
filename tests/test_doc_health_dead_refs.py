@@ -789,3 +789,58 @@ def test_repo_root_link_outside_skipped_dir_still_delegates(doc_health, tmp_path
     doc.write_text("A [missing](docs/definitely-missing.md) link.\n")
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
     assert doc_health.check_relative_links([doc]) == []
+
+
+def test_broken_anchor_in_relative_link_flagged(tmp_path, monkeypatch, doc_health):
+    """Links to an existing .md file with a nonexistent #anchor are flagged."""
+    d = tmp_path / "docs"
+    d.mkdir()
+    target = d / "target.md"
+    target.write_text(
+        "# Top Heading\n\n"
+        "## `code_span` & [Link](other.md) — Section\n\n"
+        "## Duplicate\n\n"
+        "## Duplicate\n\n"
+        '<a id="explicit-anchor"></a>\n'
+    )
+    caller = d / "caller.md"
+    caller.write_text(
+        "Valid: [a](target.md#top-heading), "
+        "[b](target.md#code_span--link--section), "
+        "[c](target.md#duplicate-1), "
+        "[d](target.md#explicit-anchor).\n"
+        "Broken: [bad](target.md#renamed-section).\n"
+    )
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_relative_links([caller])
+    assert len(warnings) == 1
+    assert "broken anchor `#renamed-section`" in warnings[0]
+
+
+def test_link_to_compatibility_stub_flagged_except_from_index_or_dated_doc(
+    tmp_path, monkeypatch, doc_health
+):
+    """Active docs linking to a compatibility redirect stub are flagged; indexes and dated records are exempt."""
+    guides = tmp_path / "docs" / "guides"
+    guides.mkdir(parents=True)
+    stub = guides / "START_HERE.md"
+    stub.write_text(
+        "# Start Here\n\n"
+        "**Status:** Compatibility redirect. This file intentionally owns no claims.\n"
+    )
+    active = guides / "TROUBLESHOOTING.md"
+    active.write_text("See [Start Here](START_HERE.md).\n")
+    root_readme = tmp_path / "README.md"
+    root_readme.write_text("See [Start Here](docs/guides/START_HERE.md).\n")
+    index = tmp_path / "docs" / "README.md"
+    index.write_text("Stubs: [START_HERE.md](guides/START_HERE.md).\n")
+    dated = guides / "audit-2026-09-12.md"
+    dated.write_text("Historical link: [Start Here](START_HERE.md).\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_relative_links([active, root_readme, index, dated])
+    assert len(warnings) == 2
+    assert "TROUBLESHOOTING.md:1: link to compatibility stub `START_HERE.md`" in warnings[0]
+    assert "README.md:1: link to compatibility stub `docs/guides/START_HERE.md`" in warnings[1]
+

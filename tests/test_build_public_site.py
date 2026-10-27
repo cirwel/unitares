@@ -176,3 +176,31 @@ def test_build_writes_normalized_cname(tmp_path):
     assert (tmp_path / "CNAME").read_text(encoding="utf-8") == (
         "docs.example.org\n"
     )
+
+
+def test_build_rewrites_relative_markdown_links_to_github_blobs(tmp_path):
+    import re
+
+    from scripts.dev.build_public_site import ONTOLOGY, rewrite_repo_relative_links
+
+    build(tmp_path, None)
+
+    glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
+    assert (
+        'href="https://github.com/cirwel/unitares/blob/master/'
+        'docs/ontology/eisv-proprioception-contract.md#canonical-operational-doctrine"'
+    ) in glossary
+
+    for html_page in sorted(tmp_path.glob("*.html")):
+        content = html_page.read_text(encoding="utf-8")
+        relative_md_hrefs = re.findall(
+            r'href="(?!https?://|mailto:|#)([^"#]+\.md(?:#[^"]*)?)"',
+            content,
+        )
+        assert relative_md_hrefs == [], f"{html_page.name} has unresolved .md hrefs: {relative_md_hrefs}"
+
+    sample = "Prose [link](glossary.md)\n```markdown\n[code](glossary.md)\n```\n"
+    rewritten = rewrite_repo_relative_links(sample, ONTOLOGY)
+    assert "https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary.md" in rewritten
+    assert "[code](glossary.md)" in rewritten
+

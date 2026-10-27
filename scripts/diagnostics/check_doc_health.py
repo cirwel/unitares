@@ -42,6 +42,7 @@ SKIP_DIRS = {
     "plans",
     "superpowers",
     ".worktrees",
+    ".review-cache",
     "deps",
     "_build",
 }
@@ -190,13 +191,87 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
 # proposals/specs/handoffs/plans and plan.md reference paths that don't (yet)
 # exist by design, so they stay exempt.
 
-_REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#[^)]*)?\)")
+_REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#([^)\s]*))?\)")
 _ABSOLUTE_URL = re.compile(r"^[a-z][a-z0-9+.\-]*://|^mailto:", re.IGNORECASE)
 _REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})")
+_HTML_ID_RE = re.compile(r'\b(?:id|name)\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+_COMPAT_STUB_RE = re.compile(
+    r"(?:\*\*Status:\*\*\s*(?:Compatibility (?:redirect|locator)|Superseded pointer)"
+    r"|— compatibility stub\b|> \*\*Compatibility locator\.)",
+    re.IGNORECASE,
+)
+_STUB_LINK_EXEMPT_FILES = {
+    "docs/README.md",
+    "docs/dev/CANONICAL_SOURCES.md",
+    # SHA-256-pinned pre-registered protocol (pilot-manifest-v1.example.json).
+    "docs/proposals/eisv-incremental-value-ablation-v1.md",
+}
+
+
+def _github_heading_slug(heading_text: str) -> str:
+    s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", heading_text)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = re.sub(r"[*~]+", "", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = s.strip().lower()
+    s = re.sub(r"[^\w\s-]", "", s)
+    return s.replace(" ", "-")
+
+
+def _extract_markdown_anchors(md_path: Path) -> set[str]:
+    anchors: set[str] = set()
+    counts: dict[str, int] = {}
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    for line in md_path.read_text(errors="replace").splitlines():
+        fence_match = _FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(2)
+            if not in_fence:
+                in_fence = True
+                fence_char = marker[0]
+                fence_len = len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_len:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        for id_match in _HTML_ID_RE.finditer(line):
+            anchors.add(id_match.group(1).lower())
+        heading_match = _HEADING_RE.match(line)
+        if heading_match:
+            base = _github_heading_slug(heading_match.group(2))
+            if not base:
+                continue
+            seen = counts.get(base, 0)
+            counts[base] = seen + 1
+            anchors.add(base if seen == 0 else f"{base}-{seen}")
+    return anchors
+
+
+def _is_compatibility_stub(md_path: Path) -> bool:
+    text = md_path.read_text(errors="replace")
+    return len(text.splitlines()) <= 30 and bool(_COMPAT_STUB_RE.search(text))
 
 
 def check_relative_links(md_files: list[Path]) -> list[str]:
     warnings = []
+    anchors_cache: dict[Path, set[str]] = {}
+    stub_cache: dict[Path, bool] = {}
+
+    def _get_anchors(target: Path) -> set[str]:
+        if target not in anchors_cache:
+            anchors_cache[target] = _extract_markdown_anchors(target)
+        return anchors_cache[target]
+
+    def _get_is_stub(target: Path) -> bool:
+        if target not in stub_cache:
+            stub_cache[target] = _is_compatibility_stub(target)
+        return stub_cache[target]
+
     for fpath in md_files:
         rel = fpath.relative_to(REPO_ROOT)
         if rel.as_posix() in _DEAD_REF_SKIP_FILES:
@@ -208,6 +283,7 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
             for match in _REL_MD_LINK.finditer(line):
                 link = match.group(1)
+                fragment = match.group(2) or ""
                 # Absolute URLs are not filesystem paths. The pattern's
                 # `\.{0,2}/?` prefix is optional, so a bare
                 # `https://host/x.md` also matches; without this guard it
@@ -224,24 +300,45 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
                 # delegated it away and check_dead_refs skips proposals.
                 # So delegate only where the delegate is actually looking.
                 if link.startswith(_REPO_ROOT_PREFIXES):
+                    repo_target = REPO_ROOT / link
                     if not any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+                        if not repo_target.is_file():
+                            continue
+                        target = repo_target.resolve()
+                    else:
+                        # check_dead_refs will not see this file; resolve from the
+                        # repo root ourselves rather than lose the link.
+                        if not repo_target.exists():
+                            warnings.append(
+                                f"  {rel}:{i}: broken repo-root link `{link}`"
+                            )
+                            continue
+                        target = repo_target.resolve()
+                else:
+                    # Operator-local handoffs are gitignored; cited by name as
+                    # provenance (same exemption as the dead-ref check).
+                    if "handoffs/" in link:
                         continue
-                    # check_dead_refs will not see this file; resolve from the
-                    # repo root ourselves rather than lose the link.
-                    if not (REPO_ROOT / link).exists():
+                    if any(c in link for c in "*<>{}"):
+                        continue
+                    target = (fpath.parent / link).resolve()
+                    if not target.exists():
+                        warnings.append(f"  {rel}:{i}: broken relative link `{link}`")
+                        continue
+
+                if target.is_file():
+                    if fragment and fragment.lower() not in _get_anchors(target):
                         warnings.append(
-                            f"  {rel}:{i}: broken repo-root link `{link}`"
+                            f"  {rel}:{i}: broken anchor `#{fragment}` in link `{link}#{fragment}`"
                         )
-                    continue
-                # Operator-local handoffs are gitignored; cited by name as
-                # provenance (same exemption as the dead-ref check).
-                if "handoffs/" in link:
-                    continue
-                if any(c in link for c in "*<>{}"):
-                    continue
-                target = (fpath.parent / link).resolve()
-                if not target.exists():
-                    warnings.append(f"  {rel}:{i}: broken relative link `{link}`")
+                    if (
+                        _get_is_stub(target)
+                        and rel.as_posix() not in _STUB_LINK_EXEMPT_FILES
+                        and not re.search(r"\d{4}-\d{2}-\d{2}", rel.name)
+                    ):
+                        warnings.append(
+                            f"  {rel}:{i}: link to compatibility stub `{link}` (link to canonical target instead)"
+                        )
     return warnings
 
 

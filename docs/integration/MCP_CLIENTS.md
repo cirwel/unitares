@@ -420,4 +420,4 @@ server-inferred (for example, the call passed `client_session_id`):
 `outcome_event` signs nothing for a server-inferred binding, so such an ack
 names no writer.
 
-See also: [Getting Started](../guides/START_HERE.md), [Operator Runbook](../operations/OPERATOR_RUNBOOK.md).
+See also: [Integrating agents](../manual/04-integrating-agents.md), [User Manual](../manual/README.md), [Operator Runbook](../operations/OPERATOR_RUNBOOK.md).
