@@ -43,13 +43,13 @@ surface and not the agent runtime itself.
 
 ### Two fast paths
 
-- **Operator, "just make it run":** [Install](../../README.md#install) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
+- **Operator, "just make it run":** [Install](../../README.md#install) (Homebrew preview on Apple Silicon Mac or Docker Compose) → [3 · Running the server](03-running-the-server.md). Full setup options, Compose profiles, and source playbook: [2 · Installation](02-install.md).
 - **Integrator, "I have a server, wire my agent":** [4 · Integrating agents](04-integrating-agents.md) → [5 · Reading the record](05-reading-the-signals.md).
 
 ## Chapters
 
 1. **[Overview & concepts](01-overview.md)** — what it is, where it fits, the record's vocabulary (identity, findings, review, outcomes), the policy action, and the EISV instrument.
-2. **[Installation](02-install.md)** — Docker quickstart and the bare-metal (Postgres + AGE + pgvector) playbook.
+2. **[Installation](02-install.md)** — Apple Silicon Homebrew preview, Docker quickstart (default, full, and core profiles), and the bare-metal (Postgres + AGE + pgvector) playbook.
 3. **[Running the server](03-running-the-server.md)** — entry point, ports, transports, the dashboard, environment configuration, and exposing beyond loopback.
 4. **[Integrating agents](04-integrating-agents.md)** — the check-in loop, identity rules, primary tools, policy-action handling, and links to the complete client references.
 5. **[Reading the record](05-reading-the-signals.md)** — findings and shared memory, outcomes and their trust boundary, the policy action and recovery, then the EISV instrument and how *not* to trust its numbers blindly.

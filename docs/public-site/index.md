@@ -61,13 +61,37 @@ module within UNITARES.
 
 ## Try the released surfaces
 
-Run the documented stack and a six-check-in wiring demo:
+On an **Apple Silicon Mac**, install the native preview with Homebrew (server,
+coordination lease plane, PostgreSQL 17 with AGE/pgvector, and Redis — no Docker
+required), then follow the
+[Homebrew setup guide](https://github.com/cirwel/unitares/blob/master/docs/install/HOMEBREW_SETUP.md):
+
+```bash
+brew update
+brew tap cirwel/unitares
+brew trust cirwel/unitares
+brew install cirwel/unitares/unitares
+brew pin unitares unitares-lease-plane apache-age unitares-pgvector
+```
+
+Or run the **Docker Compose** stack on macOS or Linux and execute the
+six-check-in telemetry demo and coordination lease proof:
 
 ```bash
 git clone --branch v3.6.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
+make coordination-demo
+```
+
+To include in-container `sentence-transformers` (`BAAI/bge-m3`) for semantic and
+hybrid knowledge-graph search, layer `docker-compose.full.yml` (or use
+`docker-compose.core.yml` for the minimal server + PostgreSQL profile; see the
+[installation manual](https://github.com/cirwel/unitares/blob/master/docs/manual/02-install.md#24-quickstart-defaults-and-a-full-setup)):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.full.yml up -d --wait --build
 ```
 
 Install the resident-agent SDK from PyPI:
@@ -89,6 +113,8 @@ returns a state estimate and a policy response with its reason.
 
 | Question | Evidence path |
 |---|---|
+| How do I install, configure, and run the server? | [User Manual](https://github.com/cirwel/unitares/blob/master/docs/manual/README.md) · [Installation guide](https://github.com/cirwel/unitares/blob/master/docs/manual/02-install.md) |
+| How do I connect my MCP client or agent harness? | [Integrating agents](https://github.com/cirwel/unitares/blob/master/docs/manual/04-integrating-agents.md) · [MCP client matrix](https://github.com/cirwel/unitares/blob/master/docs/integration/MCP_CLIENTS.md) |
 | What is live, proposed, or falsifiable? | [Reviewer Guide](https://github.com/cirwel/unitares/blob/master/docs/REVIEWER_GUIDE.md) |
 | What does the runtime compute? | [Computation reference](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md) |
 | What are the threat model and blind spots? | [Scope and threat model](https://github.com/cirwel/unitares/blob/master/docs/SCOPE_AND_THREAT_MODEL.md) |
