@@ -923,6 +923,17 @@ _HUB_STATE_RE = re.compile(r"[A-Za-z0-9._~-]{16,128}")
 _HUB_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
+def _hub_socket_supported() -> bool:
+    """Whether this platform's owner-only socket listener attests its peers."""
+    from src.substrate import peer_attestation
+
+    try:
+        peer_attestation._require_supported_platform()
+    except NotImplementedError:
+        return False
+    return True
+
+
 def hub_config() -> tuple[dict[str, str] | None, str | None]:
     """Read the hub sign-in handoff settings; unset or invalid means every hub route answers 404.
 
@@ -956,6 +967,14 @@ def hub_config() -> tuple[dict[str, str] | None, str | None]:
         )
     if len(token) < HUB_TOKEN_MIN_LENGTH:
         return None, f"{HUB_TOKEN_ENV} is not set or shorter than {HUB_TOKEN_MIN_LENGTH} characters"
+    if not _hub_socket_supported():
+        # The exchange, check and revoke routes answer only on the owner-only
+        # socket, whose peer attestation runs on macOS alone. Approving a code
+        # that can never be exchanged would be a half-working sign-in.
+        return None, (
+            "the hub routes need the owner-only socket listener "
+            "(UNITARES_UDS_SOCKET), which supports macOS only"
+        )
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
     return {
         "callback": callback,

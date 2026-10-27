@@ -34,6 +34,7 @@ ROOT = Path(__file__).parent.parent
 CALLBACK = "http://127.0.0.1:8791/auth/callback"
 TOKEN = "t" * 40
 ORIGIN = "https://gov.example.org"
+_REAL_SOCKET_SUPPORTED = dashboard_auth._hub_socket_supported
 
 
 def _verifier_and_challenge() -> tuple[str, str]:
@@ -55,6 +56,9 @@ def _session(**overrides):
 
 @pytest.fixture(autouse=True)
 def _hub_env(monkeypatch):
+    # The handoff is macOS-only (the socket's peer attestation); pin support so
+    # the route tests run on CI's Linux too. Its own tests unpin it.
+    monkeypatch.setattr(dashboard_auth, "_hub_socket_supported", lambda: True)
     monkeypatch.setenv(dashboard_auth.HUB_CALLBACK_ENV, CALLBACK)
     monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, TOKEN)
     monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "gov.example.org")
@@ -129,6 +133,22 @@ def test_short_hub_token_turns_the_handoff_off(monkeypatch):
     config, problem = dashboard_auth.hub_config()
     assert config is None
     assert "tooSmall" not in problem  # the problem names the setting, never the value
+
+
+def test_handoff_is_off_where_the_socket_cannot_attest_its_peer(monkeypatch):
+    """A code that can never be exchanged must not be minted (Linux today)."""
+    monkeypatch.setattr(dashboard_auth, "_hub_socket_supported", lambda: False)
+    config, problem = dashboard_auth.hub_config()
+    assert config is None and "macOS only" in problem
+
+
+def test_socket_support_follows_peer_attestation(monkeypatch):
+    from src.substrate import peer_attestation
+
+    monkeypatch.setattr(peer_attestation.sys, "platform", "linux")
+    assert _REAL_SOCKET_SUPPORTED() is False
+    monkeypatch.setattr(peer_attestation.sys, "platform", "darwin")
+    assert _REAL_SOCKET_SUPPORTED() is True
 
 
 @pytest.mark.asyncio
