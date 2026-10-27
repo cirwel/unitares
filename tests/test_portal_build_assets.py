@@ -236,3 +236,15 @@ def test_the_deploy_reloads_a_changed_plist() -> None:
     text = DEPLOY.read_text()
     assert 'deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"' in text
     assert "launchctl kickstart" not in text
+
+
+def test_a_failed_build_rolls_the_shared_tree_back() -> None:
+    text = DEPLOY.read_text()
+    # The rollback exists before the build, and the build runs in a conditional.
+    assert text.index("roll_back() {") < text.index('echo "[deploy] compiling the hub')
+    build = text.index('if ! (\n  cd "$DEPLOY/elixir/portal" &&')
+    assert text.index("roll_back", build) < text.index('echo "[deploy] restarting $LABEL"')
+    # set -e is off inside a condition, so every step must be chained.
+    block = text[build:text.index("); then", build)]
+    assert block.count("&&") == 4
+

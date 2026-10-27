@@ -35,18 +35,6 @@ deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-portal.sh" "$DEPLOY"
 
-# scripts/start.sh runs deps.get and the stylesheet build on every boot. Doing
-# both HERE turns a failure into a deploy-time error in front of you, before
-# anything restarts, and writes the stamp that lets the restart skip the build.
-echo "[deploy] compiling the hub + stylesheet (MIX_ENV=prod; surfaces errors before restart)"
-(
-  cd "$DEPLOY/elixir/portal"
-  export MIX_ENV=prod
-  mix deps.get --only prod
-  mix compile
-  scripts/build-assets.sh --strict
-)
-
 # Roll the shared worktree back and restart the previous build. The hub shares
 # the deploy worktree with the other services, so leaving the tree at a
 # known-bad commit hands the next deploy a broken baseline.
@@ -67,6 +55,25 @@ roll_back() {
   echo "[deploy]   tail -80 \$HOME/Library/Logs/unitares-portal.log" >&2
   exit 1
 }
+
+# scripts/start.sh runs deps.get and the stylesheet build on every boot. Doing
+# both HERE turns a failure into a deploy-time error in front of you, before
+# anything restarts, and writes the stamp that lets the restart skip the build.
+#
+# In a conditional, so a failed fetch, compile or build rolls the tree back
+# instead of `set -e` exiting with the shared worktree at the failed revision.
+# A condition switches `set -e` off, even inside this subshell, so the steps
+# are chained with && and the first failure is the subshell's status.
+echo "[deploy] compiling the hub + stylesheet (MIX_ENV=prod; surfaces errors before restart)"
+if ! (
+  cd "$DEPLOY/elixir/portal" &&
+    export MIX_ENV=prod &&
+    mix deps.get --only prod &&
+    mix compile &&
+    scripts/build-assets.sh --strict
+); then
+  roll_back "the dependency fetch, compile or stylesheet build failed (see above)."
+fi
 
 # deploy_lib_restart_service reloads the job (bootout + bootstrap) when its
 # plist changed since the last deploy-driven restart: a plain kickstart reuses
