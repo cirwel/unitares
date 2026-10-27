@@ -136,10 +136,15 @@ defmodule PortalWeb.SigninTest do
       {started, _uri, query} = start_signin(conn)
       done = callback(conn, started, %{"code" => "c", "state" => query["state"]})
 
-      assert redirected_to(done) == "/"
+      # A page of the hub's own, which then navigates home: a redirect would
+      # still belong to the dashboard's navigation, and the browser may
+      # withhold the SameSite=Strict session cookie from it.
+      assert html_response(done, 200) =~ ~s(<meta http-equiv="refresh" content="0;url=/">)
+      assert get_resp_header(done, "location") == []
       assert get_session(done) == %{"hub_handle" => "the-handle"}
       assert done.resp_cookies["_portal_handoff"].max_age == 0
       assert get_resp_header(done, "referrer-policy") == ["no-referrer"]
+      assert get_resp_header(done, "cache-control") == ["no-store"]
 
       home = done |> recycle() |> Map.merge(%{host: conn.host, port: conn.port}) |> get(~p"/")
       assert html_response(home, 200) =~ "Signed in as operator"
@@ -235,6 +240,31 @@ defmodule PortalWeb.SigninTest do
       assert redirected_to(done) == "/signin"
       assert [{"/v1/hub/revoke", %{"handle" => "h"}, _}] = calls(calls)
       assert done.private[:plug_session_info] == :drop
+    end
+
+    test "a sign-out the server cannot complete keeps the session and offers a retry",
+         %{conn: conn, calls: calls} do
+      stub_gov(calls, %{
+        "/v1/hub/revoke" => {503, %{"error" => "authentication storage unavailable"}}
+      })
+
+      page = conn |> Plug.Test.init_test_session(%{"hub_handle" => "h"}) |> get(~p"/signout")
+
+      [token] =
+        Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body, capture: :all_but_first)
+
+      done =
+        page
+        |> recycle()
+        |> Map.merge(%{host: conn.host, port: conn.port})
+        |> put_private(:plug_skip_csrf_protection, false)
+        |> post(~p"/signout", %{"_csrf_token" => token})
+
+      assert done.status == 503
+      assert done.resp_body =~ "Sign-out did not complete"
+      assert done.resp_body =~ ~s(name="_csrf_token")
+      refute done.private[:plug_session_info] == :drop
+      assert get_session(done, "hub_handle") == "h"
     end
 
     test "a sign-out without the CSRF token is refused", %{conn: conn, calls: calls} do

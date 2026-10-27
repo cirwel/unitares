@@ -56,16 +56,21 @@ defmodule PortalWeb.SigninController do
       conn
       |> delete_resp_cookie(@handoff_cookie, path: ~p"/auth/callback")
       |> put_resp_header("referrer-policy", "no-referrer")
+      |> put_resp_header("cache-control", "no-store")
 
     with %{"verifier" => verifier, "state" => expected} <- handoff,
          %{"code" => code, "state" => state} when is_binary(code) and is_binary(state) <- params,
          true <- Plug.Crypto.secure_compare(state, expected),
          {:ok, %{"handle" => handle}} <- Portal.Gov.exchange(code, verifier) do
+      # Answer with a page of the hub's own, not a redirect: the browser is
+      # still on a navigation the dashboard started, and it may withhold the
+      # SameSite=Strict session cookie from any redirect in that chain. The
+      # page's own navigation home is same-site, so the cookie goes with it.
       conn
       |> clear_session()
       |> configure_session(renew: true)
       |> put_session("hub_handle", handle)
-      |> redirect(to: ~p"/")
+      |> page(200, PortalWeb.SigninHTML.signed_in())
     else
       _refused -> page(conn, 401, PortalWeb.SigninHTML.failed())
     end
@@ -76,14 +81,23 @@ defmodule PortalWeb.SigninController do
   end
 
   def signout(conn, _params) do
-    case get_session(conn, "hub_handle") do
-      handle when is_binary(handle) -> Portal.Gov.revoke(handle)
-      _none -> :ok
-    end
+    revoked =
+      case get_session(conn, "hub_handle") do
+        handle when is_binary(handle) -> Portal.Gov.revoke(handle)
+        _none -> :ok
+      end
 
-    conn
-    |> configure_session(drop: true)
-    |> redirect(to: ~p"/signin")
+    case revoked do
+      :ok ->
+        conn
+        |> configure_session(drop: true)
+        |> redirect(to: ~p"/signin")
+
+      # The handle is still live on the server, so keep it: dropping only
+      # the cookie would leave a session any copy of that cookie could use.
+      {:error, _reason} ->
+        page(conn, 503, PortalWeb.SigninHTML.signout_failed(get_csrf_token()))
+    end
   end
 
   defp page(conn, status, body) do

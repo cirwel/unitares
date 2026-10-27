@@ -34,18 +34,50 @@ defmodule PortalWeb.SigninHTML do
     """)
   end
 
+  @doc """
+  The landing page after a sign-in. It moves on to the home screen itself, so
+  that navigation starts on the hub's own page and carries its session cookie.
+  """
+  def signed_in do
+    """
+    <!doctype html>
+    <html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+    <meta http-equiv="refresh" content="0;url=/"><title>Signed in · UNITARES hub</title></head>
+    <body><main>
+    <h1>Signed in</h1>
+    <p><a href="/">Continue to the hub</a></p>
+    </main></body></html>
+    """
+  end
+
   @doc "The sign-out confirmation, a form carrying the CSRF token."
   def signout(csrf_token) do
-    token = csrf_token |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
-
     document("""
     <h1>Sign out of the hub?</h1>
-    <form method="post" action="/signout">
-    <input type="hidden" name="_csrf_token" value="#{token}">
-    <button type="submit">Sign out</button>
-    </form>
+    #{signout_form(csrf_token, "Sign out")}
     <p><a href="/">Cancel</a></p>
     """)
+  end
+
+  @doc "Shown when the server could not end the session: it is still live."
+  def signout_failed(csrf_token) do
+    document("""
+    <h1>Sign-out did not complete</h1>
+    <p>The governance server could not be reached to end this session, so it is
+    still signed in. Try again once the server is back.</p>
+    #{signout_form(csrf_token, "Try again")}
+    """)
+  end
+
+  defp signout_form(csrf_token, label) do
+    token = csrf_token |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
+    """
+    <form method="post" action="/signout">
+    <input type="hidden" name="_csrf_token" value="#{token}">
+    <button type="submit">#{label}</button>
+    </form>
+    """
   end
 
   defp document(body) do
