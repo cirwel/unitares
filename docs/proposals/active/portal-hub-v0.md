@@ -105,6 +105,36 @@ Each milestone is a separate draft PR. **H0** is agent-column work (record data)
 - **H0: the record learns the vendor session id.** The plugin's hooks report the vendor and its session id on onboard, and `/v1/timeline` returns them per agent. This is read-only data. It lets the existing timeline label each row resumable or not. It needs a check that the field carries no secret and stays bounded.
 - **H1: launch profiles.** Build `inference-hosts-config-v0` step 4 (§2.5) in the orchestrator: named profiles for resume and start per vendor, with no caller-chosen `cmd` or `env`. This is a prerequisite for any hub spawn, and useful on its own because it closes the bearer-holder hole. Step 4a, the orchestrator side, was built 2026-10-26, and the first part of 4b (the Claude client and the profiles generator) the same day. The other clients and moving the callers follow, and the hub's resume and start profiles are written then.
 - **H2: the hub shell.** `elixir/portal` with the §3.2 boundary and login, the timeline moved in as the home screen (read-only), and boundary tests for a foreign Host, a foreign Origin, no cookie and an expired token. It is shipped by `cirwel update` and registered like the other BEAM apps.
+  *H2, 2026-10-27.* This deployment's passkeys are bound to the relying party
+  `gov.cirwel.org`, and the dashboard's session cookie is
+  `__Host-unitares_session` (Secure, host-only). A hub on
+  `http://127.0.0.1` can therefore neither run that ceremony nor receive that
+  cookie. The sign-in is an authorization-code handoff instead: the hub sends
+  the operator to the dashboard, which returns a one-time code to the hub's
+  one configured loopback callback, and the hub exchanges it for a handle the
+  server checks on every connect and write.
+
+  A design consult (codex and claude; antigravity's run failed, 2026-10-27)
+  endorsed this shape and asked for:
+  - PKCE;
+  - a dedicated hub credential scoped to the handoff routes;
+  - those routes on a listener the Cloudflare tunnel never reaches, since the
+    tunnel arrives from loopback;
+  - a confirming step before a code is issued;
+  - checks that never extend the dashboard session.
+
+  On the consult's advice, H2 ships in three pull requests:
+  - **H2a, the shell.** `elixir/portal` with the boundary and a guard that
+    refuses every page and socket. Its tests cover a foreign Host (sockets
+    included), a foreign Origin, no session, an expired session and the
+    loopback bind.
+  - **H2b, the server's handoff routes.** Two-family review, inert until
+    configured.
+  - **H2c, the hub's sign-in.** It also moves the timeline in, and registers
+    the hub with `cirwel update`.
+
+  Numeric `127.0.0.1:8791` is the default name: macOS resolves `*.localhost`
+  to `::1` first.
 - **H3: resume.** §3.3 and §3.4, Claude first (operator, 2026-10-26: "ideally all, but you have to start somewhere"), with the stale-state and one-driver tests and dual attribution. Codex follows, because its terminal sessions are the ones its own phone app cannot resume.
 - **H4: start a new session.** §3.5, then further vendors as their CLIs and hooks allow.
 - **H5: the phone** (operator, 2026-10-26). The hub becomes reachable from the operator's phone as a home-screen web app (Safari's "Add to Home Screen"), not a native iOS app. It uses the same LiveView code and the same passkey sign-in with Face ID, and web push for notifications. Reachability goes over the operator's private tailnet (Tailscale), so the hub never answers on the public internet. The Cloudflare tunnel is the fallback only if the tailnet cannot serve. This step widens the bind from loopback to the tailnet interface, so it reopens the §3.2 boundary: the Host/Origin allowlists gain the tailnet name, and passkeys need a relying-party id the phone can reach. Its own review covers that. A native app is considered only if the home-screen app hits a concrete limit, such as unreliable notifications.

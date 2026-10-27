@@ -39,6 +39,7 @@ SUITES = (
     "unitares_sdk",
     "agent_orchestrator",
     "dialectic_live",
+    "portal",
     "sentinel",
     "wave3a_handlers",
     "lease_plane",
@@ -57,6 +58,7 @@ SUITES = (
         (["elixir/unitares_sdk/mix.exs"], True),
         (["elixir/agent_orchestrator/README.md"], True),
         (["elixir/dialectic_live/lib/x.ex"], True),
+        (["elixir/portal/lib/portal_web/router.ex"], True),
         (["elixir/wave3a_handlers/lib/router.ex"], True),
         (["db/postgres/migrations/099_x.sql"], True),
         # Cross-runtime fixtures the lease_plane suite reads by relative path.
