@@ -59,6 +59,14 @@ if [[ "${AGENT_ORCHESTRATOR_PROFILES_GENERATE:-}" == "1" && -n "${AGENT_ORCHESTR
     if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_SERVER_PLIST:-}" ]]; then
         profile_args+=(--launchd-plist "$AGENT_ORCHESTRATOR_PROFILES_SERVER_PLIST")
     fi
+    # Directories the claude and codex council lanes may read under, separated
+    # by ":"; without one, those two profiles are omitted.
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_COUNCIL_ROOTS:-}" ]]; then
+        IFS=: read -r -a council_roots <<< "$AGENT_ORCHESTRATOR_PROFILES_COUNCIL_ROOTS"
+        for root in "${council_roots[@]}"; do
+            [[ -n "$root" ]] && profile_args+=(--council-root "$root")
+        done
+    fi
     if [[ -z "$PROFILES_PYTHON" ]] || ! env -i PATH="$PATH" "$PROFILES_PYTHON" -I \
             "$REPO_ROOT/scripts/ops/orchestrator-profiles.py" "${profile_args[@]}" >&2; then
         echo "[agent-orchestrator] warning: launch profiles not regenerated; the last good file, if any, stays in force" >&2
