@@ -285,23 +285,7 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
             continue
         if rel.name.endswith(_REVIEW_SUFFIXES):
             continue
-        in_fence = False
-        fence_char = ""
-        fence_len = 0
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
-            fence_match = _FENCE_RE.match(line)
-            if fence_match:
-                marker = fence_match.group(2)
-                if not in_fence:
-                    in_fence = True
-                    fence_char = marker[0]
-                    fence_len = len(marker)
-                elif marker[0] == fence_char and len(marker) >= fence_len:
-                    in_fence = False
-                continue
-            if in_fence:
-                continue
-
             for sm in _SAME_FILE_ANCHOR.finditer(line):
                 frag = sm.group(1)
                 if frag and frag.lower() not in _get_anchors(fpath.resolve()):
@@ -394,22 +378,7 @@ def check_github_master_links(md_files: list[Path]) -> list[str]:
             continue
         if rel.name.endswith(_REVIEW_SUFFIXES):
             continue
-        in_fence = False
-        fence_char = ""
-        fence_len = 0
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
-            fence_match = _FENCE_RE.match(line)
-            if fence_match:
-                marker = fence_match.group(2)
-                if not in_fence:
-                    in_fence = True
-                    fence_char = marker[0]
-                    fence_len = len(marker)
-                elif marker[0] == fence_char and len(marker) >= fence_len:
-                    in_fence = False
-                continue
-            if in_fence:
-                continue
             for gm in _GH_MASTER_LINK.finditer(line):
                 gpath = gm.group(1)
                 gfrag = gm.group(2) or ""

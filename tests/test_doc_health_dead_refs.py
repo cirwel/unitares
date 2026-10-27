@@ -862,9 +862,6 @@ def test_same_file_anchor_and_github_master_link_checks(
         "Good bare master with punctuation/query: https://github.com/cirwel/unitares/blob/master/docs/other.md?plain=1.\n"
         "Bad master path: [m2](https://github.com/cirwel/unitares/blob/master/docs/gone.md)\n"
         "Bad master anchor: [m3](https://github.com/cirwel/unitares/blob/master/docs/other.md#wrong)\n"
-        "```markdown\n"
-        "[ignored in fence](#nonexistent)\n"
-        "```\n"
     )
 
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
