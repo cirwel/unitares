@@ -9,6 +9,7 @@ refuses it as an unknown token. Unset, nothing changes.
 from __future__ import annotations
 
 import base64
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,12 +25,16 @@ READ_KEY = "r" * 40
 API_TOKEN = "a" * 40
 
 
+def _digest(key: str) -> str:
+    return "sha256:" + hashlib.sha256(key.encode()).hexdigest()
+
+
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     for name in ("UNITARES_MCP_BEARER_TOKENS", "UNITARES_REST_STRICT", "UNITARES_TRUSTED_NETWORKS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", API_TOKEN)
-    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, READ_KEY)
+    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, _digest(READ_KEY))
 
 
 def _request(token=None, ip="8.8.8.8"):
@@ -83,12 +88,30 @@ def test_unset_means_no_read_only_keys(monkeypatch):
     assert access._check_ws_read_auth(_websocket(READ_KEY), http_api_token=API_TOKEN) is False
 
 
-def test_short_entries_are_ignored_and_several_keys_work(monkeypatch):
+def test_several_digests_work(monkeypatch):
     other = "o" * 32
-    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, f"short, {READ_KEY} ,{other}")
-    assert access.read_only_tokens() == [READ_KEY, other]
-    assert access._check_read_auth(_request("short"), http_api_token=API_TOKEN) is False
+    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, f" {_digest(READ_KEY)} ,{_digest(other)}")
+    assert len(access.read_only_token_digests()) == 2
     assert access._check_read_auth(_request(other), http_api_token=API_TOKEN) is True
+
+
+@pytest.mark.parametrize("entry", [
+    READ_KEY,                                  # a raw key: the server must hold no secret
+    "sha256:" + "A" * 64,                      # upper-case hex
+    "sha256:" + "a" * 63,                      # short digest
+    "md5:" + "a" * 32,
+])
+def test_a_malformed_entry_disables_every_read_only_key(monkeypatch, entry, caplog):
+    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, f"{_digest(READ_KEY)},{entry}")
+    assert access.read_only_token_digests() == []
+    assert access._check_read_auth(_request(READ_KEY), http_api_token=API_TOKEN) is False
+    assert "every read-only key is disabled" in caplog.text
+
+
+def test_a_short_presented_key_is_refused_even_if_its_digest_is_listed(monkeypatch):
+    short = "s" * 31
+    monkeypatch.setenv(access.READ_ONLY_TOKENS_ENV, _digest(short))
+    assert access._check_read_auth(_request(short), http_api_token=API_TOKEN) is False
 
 
 @pytest.mark.parametrize("token", [None, "r" * 39, "x" * 40])

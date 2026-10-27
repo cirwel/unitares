@@ -14,6 +14,7 @@ import binascii
 import hashlib
 import ipaddress as _ipaddress
 import os
+import re
 import secrets
 
 from starlette.responses import JSONResponse
@@ -459,30 +460,48 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
 # Read-only keys (operator decision 2026-10-27, KG 2026-10-27T19:26:49.785412)
 # ---------------------------------------------------------------------------
 # A client that only reads, such as the operator hub's timeline, holds a key
-# from UNITARES_READ_ONLY_TOKENS instead of a credential that can write. Only
-# the routes that call _check_read_auth / _check_ws_read_auth accept one:
+# that cannot write. The server keeps only its digest: UNITARES_READ_ONLY_TOKENS
+# lists ``sha256:<64 hex>`` entries, comma-separated, so the service
+# environment carries no secret (the pattern of src/http_agent_tokens.py).
+# Generate a key with ``openssl rand -hex 32`` and list ``sha256(key)``.
+# Only the routes that call _check_read_auth / _check_ws_read_auth accept one:
 # GET /v1/timeline and the /ws/eisv stream. Every other route, through
 # _check_http_auth or _check_ws_auth, refuses it as it would any unknown
-# token. Unset (the default), nothing changes.
+# token. A malformed entry disables every read-only key (fail closed) and logs
+# an error. Unset (the default), nothing changes.
 
 READ_ONLY_TOKENS_ENV = "UNITARES_READ_ONLY_TOKENS"
 READ_ONLY_TOKEN_MIN_LENGTH = 32
+_READ_ONLY_DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
 
 
-def read_only_tokens() -> list[str]:
-    """Read the read-only keys: comma-separated, each at least 32 characters; shorter entries are ignored."""
+def read_only_token_digests() -> list[bytes]:
+    """Read the read-only key digests (``sha256:<64 hex>``, comma-separated); a malformed entry disables them all."""
     raw = os.getenv(READ_ONLY_TOKENS_ENV, "")
-    return [t for t in (part.strip() for part in raw.split(",")) if len(t) >= READ_ONLY_TOKEN_MIN_LENGTH]
+    digests = []
+    for position, entry in enumerate((part.strip() for part in raw.split(",")), start=1):
+        if not entry:
+            continue
+        match = _READ_ONLY_DIGEST_RE.fullmatch(entry)
+        if not match:
+            logger.error(
+                "%s entry %d is not sha256:<64 lowercase hex>; every read-only key is disabled",
+                READ_ONLY_TOKENS_ENV,
+                position,
+            )
+            return []
+        digests.append(bytes.fromhex(match.group(1)))
+    return digests
 
 
 def _read_only_token_valid(token: str | None) -> bool:
-    if not token:
+    if not token or len(token) < READ_ONLY_TOKEN_MIN_LENGTH:
         return False
     presented = hashlib.sha256(token.encode("utf-8")).digest()
     matched = False
-    for known in read_only_tokens():
+    for known in read_only_token_digests():
         # Compare every entry, so timing does not say which one matched.
-        matched |= secrets.compare_digest(presented, hashlib.sha256(known.encode("utf-8")).digest())
+        matched |= secrets.compare_digest(presented, known)
     return matched
 
 
