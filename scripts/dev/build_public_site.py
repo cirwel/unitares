@@ -140,7 +140,28 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def render(md_text: str) -> str:
+_REL_MD_LINK_RE = re.compile(r"\]\((?!https?://|mailto:|#)([^)\s#]+\.md)(#[^)\s]*)?\)")
+
+
+def rewrite_repo_relative_links(md_text: str, source_dir: Path) -> str:
+    """Rewrite relative .md links to GitHub blob URLs so Pages renders valid links."""
+    root = PROJECT_ROOT.resolve()
+
+    def _replace(match: re.Match[str]) -> str:
+        rel_path, fragment = match.group(1), match.group(2) or ""
+        target = (source_dir / rel_path).resolve()
+        try:
+            repo_rel = target.relative_to(root).as_posix()
+        except ValueError:
+            return match.group(0)
+        return f"]({REPO_URL}/blob/master/{repo_rel}{fragment})"
+
+    return _REL_MD_LINK_RE.sub(_replace, md_text)
+
+
+def render(md_text: str, source_dir: Path | None = None) -> str:
+    if source_dir is not None:
+        md_text = rewrite_repo_relative_links(md_text, source_dir)
     md = markdown.Markdown(
         extensions=["tables", "fenced_code", "toc", "attr_list", "sane_lists", "admonition"],
         output_format="html5",
@@ -221,7 +242,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             repo=REPO_URL,
             source_path="docs/public-site/index.md",
             blob=LANDING_BLOB,
-            body=render(landing_md),
+            body=render(landing_md, source_dir=SITE),
         ),
         encoding="utf-8",
     )
@@ -241,7 +262,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             repo=REPO_URL,
             source_path="docs/public-site/demo.md",
             blob=DEMO_BLOB,
-            body=render(demo_md),
+            body=render(demo_md, source_dir=SITE),
         ),
         encoding="utf-8",
     )
@@ -257,7 +278,7 @@ def build(out_dir: Path, cname: str | None) -> None:
             repo=REPO_URL,
             source_path="docs/ontology/glossary.md",
             blob=GLOSSARY_BLOB,
-            body=render(INTRO_MD + glossary_md),
+            body=render(INTRO_MD + glossary_md, source_dir=ONTOLOGY),
         ),
         encoding="utf-8",
     )
@@ -288,7 +309,7 @@ def build(out_dir: Path, cname: str | None) -> None:
                 repo=REPO_URL,
                 source_path=f"docs/ontology/{audit.name}",
                 blob=f"{REPO_URL}/blob/master/docs/ontology/{audit.name}",
-                body=render(audit.read_text(encoding="utf-8")),
+                body=render(audit.read_text(encoding="utf-8"), source_dir=ONTOLOGY),
             ),
             encoding="utf-8",
         )

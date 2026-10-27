@@ -431,7 +431,7 @@ launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 
 ### Documentation
 
-1. [START_HERE.md](START_HERE.md) — Thin default workflow and doc map
+1. [User Manual](../manual/README.md) — Setup, agent integration, and operator reference
 2. [database_architecture.md](../operations/database_architecture.md) — Database details
 
 ### Health Monitoring

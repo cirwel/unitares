@@ -156,7 +156,7 @@ subfolders are:
 - [`relational-calibration-instrument-supply/`](evaluations/relational-calibration-instrument-supply/) — registered instrument-supply read
 - [`review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md) — the 20-PR review retrospective listed above
 
-[`evaluation/dialectic-reviewer-labels.md`](evaluations/dialectic-reviewer/dialectic-reviewer-labels.md)
+[`evaluations/dialectic-reviewer/dialectic-reviewer-labels.md`](evaluations/dialectic-reviewer/dialectic-reviewer-labels.md)
 labels what dialectic reviewer antithesis messages actually do.
 
 ### `analysis/` — dated audits and one-off reads
