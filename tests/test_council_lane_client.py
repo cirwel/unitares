@@ -50,8 +50,11 @@ def repos(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def confined(monkeypatch):
-    """The codex lane's admin-config and sandbox-probe checks pass."""
+    """The codex lane's admin-config and sandbox-probe checks pass, and no
+    directory counts as a shared temp root: pytest's own temporary
+    directories sit under /tmp on Linux. The temp-root tests set their own."""
     monkeypatch.setattr(codex_client, "admin_config_conflict", lambda paths=None: None)
+    monkeypatch.setattr(codex_client, "TEMP_ROOTS", ())
     monkeypatch.setattr(codex_client, "confinement_verified", lambda cli: True)
     modules = {"codex_app_server_client": codex_client,
                "claude_cli_client": claude_client,
