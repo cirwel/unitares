@@ -183,6 +183,7 @@ additions merge cleanly. -->
 | `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
+| `UNITARES_ORCHESTRATOR_PROFILES` | `''` | Whether spawns go out as the orchestrator's launch profiles | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |
 | `UNITARES_OUTCOME_PROVENANCE_FILTER` | `'off'` | Fetch recent outcome events for an agent | src/db/mixins/tool_usage.py |
 | `UNITARES_PARAMS_JSON` | `None (no reader fallback)` | Returns the active dynamics parameters | governance_core/parameters.py |
