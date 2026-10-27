@@ -422,3 +422,86 @@ def test_the_probe_runs_in_an_empty_directory(tmp_path, monkeypatch):
     lines = seen.read_text().splitlines()
     assert lines and all(l.endswith("/work") for l in lines if l.startswith("/"))
     assert not [l for l in lines if not l.startswith("/")]  # nothing listed: empty
+
+
+# --- the host.codex launch profile's in-client exec fallback ----------------
+
+def _profile_env(monkeypatch, **extra):
+    monkeypatch.setenv("HA_CLI", "/opt/x/codex")
+    monkeypatch.setenv("HA_PROMPT", "--version")
+    monkeypatch.setenv(client.EXEC_FALLBACK_ENV, "1")
+    monkeypatch.delenv("HA_MODEL", raising=False)
+    monkeypatch.delenv("HA_CODEX_APP_SERVER", raising=False)
+    for key, value in extra.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(client, "confinement_verified", lambda cli: True)
+    monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: None)
+
+
+def _record_exec(monkeypatch, returncode=0):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return client.subprocess.CompletedProcess(args, returncode)
+
+    monkeypatch.setattr(client.subprocess, "run", fake_run)
+    return calls
+
+
+def test_exec_command_reads_the_prompt_from_stdin():
+    args = client.exec_command("/opt/x/codex", "gpt-5.5")
+    assert args[:5] == ["/opt/x/codex", "exec", "--ignore-user-config", "--ephemeral", "--json"]
+    assert args[-3:] == ["-m", "gpt-5.5", "-"]
+    assert args.count("-c") == client.LANE_CONFIG_OVERRIDE_COUNT
+
+
+def test_profile_mode_retries_a_fallback_safe_failure_through_exec(monkeypatch):
+    _profile_env(monkeypatch)
+    monkeypatch.setattr(client, "app_server_main", lambda: client.FALLBACK_SAFE_EXIT)
+    calls = _record_exec(monkeypatch, returncode=0)
+    assert client.main() == 0
+    (args, kwargs), = calls
+    assert kwargs["input"] == "--version"
+    assert "--version" not in args
+    assert "unitares-codex-lane-" in kwargs["cwd"]
+
+
+def test_profile_mode_never_retries_after_a_turn_was_sent(monkeypatch):
+    _profile_env(monkeypatch)
+    monkeypatch.setattr(client, "app_server_main", lambda: 1)
+    calls = _record_exec(monkeypatch)
+    assert client.main() == 1
+    assert calls == []
+
+
+def test_app_server_off_goes_straight_to_exec(monkeypatch):
+    _profile_env(monkeypatch, HA_CODEX_APP_SERVER="0")
+    monkeypatch.setattr(client, "app_server_main",
+                        lambda: (_ for _ in ()).throw(AssertionError("app-server ran")))
+    calls = _record_exec(monkeypatch, returncode=3)
+    assert client.main() == 3
+    assert len(calls) == 1
+
+
+def test_without_the_profile_switch_exit_75_is_left_to_the_shell(monkeypatch):
+    _profile_env(monkeypatch)
+    monkeypatch.delenv(client.EXEC_FALLBACK_ENV)
+    monkeypatch.setattr(client, "app_server_main", lambda: client.FALLBACK_SAFE_EXIT)
+    calls = _record_exec(monkeypatch)
+    assert client.main() == client.FALLBACK_SAFE_EXIT
+    assert calls == []
+
+
+@pytest.mark.parametrize("refusal", ["admin", "probe", "sandbox"])
+def test_the_exec_fallback_runs_the_lane_checks_itself(monkeypatch, refusal):
+    _profile_env(monkeypatch, HA_CODEX_APP_SERVER="0")
+    if refusal == "admin":
+        monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: "/etc/codex/config.toml")
+    elif refusal == "probe":
+        monkeypatch.setattr(client, "confinement_verified", lambda cli: False)
+    else:
+        monkeypatch.setenv("HA_SANDBOX", "workspace-write")
+    calls = _record_exec(monkeypatch)
+    assert client.main() == 1
+    assert calls == []

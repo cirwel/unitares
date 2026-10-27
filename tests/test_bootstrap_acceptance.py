@@ -78,9 +78,13 @@ def test_psql_wrapper_disables_startup_files_without_injecting_failure(tmp_path)
 
 def test_native_workflow_runs_both_scenarios_on_candidate_artifact():
     workflow = yaml.safe_load((ROOT / ".github/workflows/native-bootstrap.yml").read_text())
+    events = workflow.get("on", workflow.get(True))
+    postgres_input = events["workflow_call"]["inputs"]["postgres-image"]
+    assert postgres_input == {"type": "string", "required": True}
     job = workflow["jobs"]["acceptance"]
     assert "postgres" in job["services"]
     assert "redis" in job["services"]
+    assert job["services"]["postgres"]["image"] == "${{ inputs.postgres-image }}"
     checkout = next(step for step in job["steps"] if step.get("name") == "Check out the exact candidate source")
     assert checkout["with"]["ref"] == "${{ inputs.source-ref || github.sha }}"
     run = next(step["run"] for step in job["steps"] if step.get("name") == "Exercise fresh installation and interrupted recovery")

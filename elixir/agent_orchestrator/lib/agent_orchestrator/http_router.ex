@@ -42,12 +42,23 @@ defmodule AgentOrchestrator.HTTPRouter do
   (config, default `nil` = parity with the in-VM API) restricts which
   executables a caller may spawn.
 
+  ## Profile spawns
+
+  A body carrying `profile` names one of the operator's launch profiles
+  (`AgentOrchestrator.Profiles`) and may set only `vars`, `max_runtime_ms`,
+  `max_output_lines` and, where the profile accepts it, `lineage`. Everything
+  that decides what runs is fixed by the profile. Raw spawns (`cmd`, `args`,
+  `env`, `cd`, ...) stay available while `AGENT_ORCHESTRATOR_RAW_SPAWN` is
+  `allow`, which is the default only when no profiles file is configured.
+  `/v1/health` reports the profile state and the raw-spawn mode.
+
   ## Envelope
 
   Every response is `{ok: boolean, ...}` JSON with a `protocol_version` field.
   Errors are typed (`schema_invalid` / `permission_denied` / `not_found` /
   `lease_denied` / `idempotency_conflict` / `idempotency_outcome_unknown` /
-  `idempotency_unavailable` / `await_timeout` /
+  `idempotency_unavailable` / `await_timeout` / `unknown_profile` /
+  `profiles_unavailable` / `profile_unconfigured` / `profile_changed` / `rate_limited` /
   `service_unavailable`) rather than leaky
   HTML — same typed-absence discipline as the lease plane router.
   """
@@ -56,6 +67,8 @@ defmodule AgentOrchestrator.HTTPRouter do
   use Plug.ErrorHandler
 
   require Logger
+
+  alias AgentOrchestrator.Profiles
 
   @protocol_version "v0.2"
 
@@ -93,7 +106,8 @@ defmodule AgentOrchestrator.HTTPRouter do
       ok: true,
       status: "ok",
       active_agents: AgentOrchestrator.count(),
-      idempotency: AgentOrchestrator.SpawnGate.status()
+      idempotency: AgentOrchestrator.SpawnGate.status(),
+      profiles: Profiles.status()
     })
   end
 
@@ -105,36 +119,9 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   post "/v1/agents" do
-    with {:ok, spec} <- build_spec(conn.body_params),
-         {:ok, idempotency_key} <- fetch_idempotency_key(conn),
-         :ok <- check_allowed(spec.cmd) do
-      case spawn(spec, idempotency_key) do
-        {:ok, execution_id, disposition} ->
-          status = if disposition == :idempotent, do: 200, else: 201
-
-          json(conn, status, %{
-            ok: true,
-            execution_id: execution_id,
-            idempotent: disposition == :idempotent,
-            # Compatibility alias for v0.1 clients. HTTP callers cannot set a
-            # logical agent_id, so this is exactly the execution handle.
-            agent_id: execution_id
-          })
-
-        {:error, reason} ->
-          spawn_error(conn, reason)
-      end
-    else
-      {:error, :cmd_not_allowed, cmd} ->
-        json(conn, 403, %{
-          ok: false,
-          error: "permission_denied",
-          reason: "cmd not in allowlist: #{cmd}"
-        })
-
-      {:error, detail} ->
-        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
-    end
+    if is_map(conn.body_params) and Map.has_key?(conn.body_params, "profile"),
+      do: profile_spawn(conn),
+      else: raw_spawn(conn)
   end
 
   get "/v1/agents" do
@@ -180,6 +167,149 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   match _ do
     json(conn, 404, %{ok: false, error: "not_found"})
+  end
+
+  # ---------- profile spawn ----------
+
+  defp profile_spawn(conn) do
+    with {:ok, idempotency_key} <- fetch_idempotency_key(conn),
+         {:ok, prepared} <- prepare_profile(conn.body_params) do
+      case spawn_admitted(prepared, idempotency_key) do
+        {:ok, execution_id, disposition} ->
+          status = if disposition == :idempotent, do: 200, else: 201
+
+          json(conn, status, %{
+            ok: true,
+            execution_id: execution_id,
+            idempotent: disposition == :idempotent,
+            profile: prepared.profile,
+            agent_id: execution_id
+          })
+
+        {:error, reason} ->
+          spawn_error(conn, reason)
+      end
+    else
+      {:error, {:profile, code, detail}} ->
+        {status, error} = profile_error(code)
+        json(conn, status, %{ok: false, error: error, detail: detail})
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  defp prepare_profile(body) do
+    case Profiles.prepare(body) do
+      {:ok, prepared} -> {:ok, prepared}
+      {:error, code, detail} -> {:error, {:profile, code, detail}}
+    end
+  end
+
+  defp profile_error(:schema_invalid), do: {422, "schema_invalid"}
+  defp profile_error(:unknown_profile), do: {422, "unknown_profile"}
+  defp profile_error(:profiles_unavailable), do: {503, "profiles_unavailable"}
+  defp profile_error(:profile_unconfigured), do: {503, "profile_unconfigured"}
+  defp profile_error(:rate_limited), do: {429, "rate_limited"}
+  defp profile_error(:profile_changed), do: {409, "profile_changed"}
+
+  # Admission runs once a start is known to be new: for a keyed request,
+  # inside SpawnGate after a started key has replayed. It ties a slot to the
+  # execution id and resolves the secrets, which reach the runner only behind
+  # a closure, so no timeout message or report can print them.
+  defp admit(prepared) do
+    fn execution_id ->
+      case Profiles.admit(prepared.profile, prepared.revision, execution_id) do
+        {:ok, secret_env} ->
+          spec = Map.put(prepared.spec, :secret_env, fn -> secret_env end)
+          {:ok, spec, &admission_outcome(execution_id, &1)}
+
+        {:error, code, detail} ->
+          {:error, {:profile, code, detail}}
+      end
+    end
+  end
+
+  defp admission_outcome(execution_id, :started), do: Profiles.started(execution_id)
+  defp admission_outcome(execution_id, :failed), do: Profiles.refund(execution_id)
+
+  defp spawn_admitted(prepared, nil) do
+    execution_id = AgentOrchestrator.AgentRunner.generate_execution_id()
+
+    case admit(prepared).(execution_id) do
+      {:ok, spec, on_outcome} ->
+        case AgentOrchestrator.AgentSupervisor.start_reserved_agent(spec, execution_id) do
+          {:ok, ^execution_id, _pid} ->
+            on_outcome.(:started)
+            {:ok, execution_id, :new}
+
+          {:error, reason} ->
+            on_outcome.(:failed)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp spawn_admitted(prepared, idempotency_key) do
+    case AgentOrchestrator.SpawnGate.start_agent(
+           idempotency_key,
+           prepared.digest,
+           prepared.spec,
+           admit(prepared)
+         ) do
+      {:ok, execution_id, _pid, disposition} -> {:ok, execution_id, disposition}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # ---------- raw spawn ----------
+
+  defp raw_spawn(conn) do
+    with :ok <- raw_allowed(),
+         {:ok, spec} <- build_spec(conn.body_params),
+         {:ok, idempotency_key} <- fetch_idempotency_key(conn),
+         :ok <- check_allowed(spec.cmd) do
+      case spawn(spec, idempotency_key) do
+        {:ok, execution_id, disposition} ->
+          status = if disposition == :idempotent, do: 200, else: 201
+
+          json(conn, status, %{
+            ok: true,
+            execution_id: execution_id,
+            idempotent: disposition == :idempotent,
+            # Compatibility alias for v0.1 clients. HTTP callers cannot set a
+            # logical agent_id, so this is exactly the execution handle.
+            agent_id: execution_id
+          })
+
+        {:error, reason} ->
+          spawn_error(conn, reason)
+      end
+    else
+      {:error, :cmd_not_allowed, cmd} ->
+        json(conn, 403, %{
+          ok: false,
+          error: "permission_denied",
+          reason: "cmd not in allowlist: #{cmd}"
+        })
+
+      {:error, :raw_spawn_denied} ->
+        json(conn, 403, %{
+          ok: false,
+          error: "permission_denied",
+          reason: "raw spawns are disabled (AGENT_ORCHESTRATOR_RAW_SPAWN=deny); name a profile"
+        })
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  defp raw_allowed do
+    if Profiles.raw_spawn_mode() == :allow, do: :ok, else: {:error, :raw_spawn_denied}
   end
 
   # ---------- spec translation (JSON body -> AgentRunner spec) ----------
@@ -475,6 +605,11 @@ defmodule AgentOrchestrator.HTTPRouter do
         reason: "a durable reservation exists but process-start completion is unknown"
       })
 
+  defp spawn_error(conn, {:profile, code, detail}) do
+    {status, error} = profile_error(code)
+    json(conn, status, %{ok: false, error: error, detail: detail})
+  end
+
   defp spawn_error(conn, :idempotency_unavailable),
     do:
       json(conn, 503, %{
@@ -577,6 +712,7 @@ defmodule AgentOrchestrator.HTTPRouter do
       lease_id: details.lease_id,
       presence: details.presence,
       lineage: details.lineage,
+      profile: Map.get(details, :profile),
       exit_status: encode_status(details.exit_status),
       running: details.running
     }

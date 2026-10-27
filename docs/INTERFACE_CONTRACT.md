@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.1.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.3.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1238,3 +1238,51 @@ with deterministic pagination.
   `truncated`. Clients should advance `response_chain_offset` while `has_more`
   is true, using pages no larger than 200. `truncated=true` means additional
   rows exist beyond the maximum permitted starting offset.
+
+## 2.2.0 (2026-10-26)
+
+Onboard accepts an optional declaration of the vendor session an identity is
+minted in, and the timeline roster reports it without the workspace path.
+
+- **What changed:** `onboard` (and its `start_session` alias) advertises an
+  optional `host_session` object, `{harness, session_id, workspace?}`. On a
+  freshly minted identity the server validates it and stores it once as
+  `metadata.host_session` (`unitares.host_session.v1`, `source:
+  caller_declared`). `GET /v1/timeline` agents gain `host_session`:
+  `{harness, session_id, resumable}` or `null`. `resumable` means a workspace
+  was recorded; the path itself is not served.
+- **Compatibility:** the field is optional and descriptive. It never resolves,
+  recovers, binds or deduplicates identity, a resume does not overwrite it, and
+  a malformed value is logged and ignored, never refused. Existing onboard
+  calls and timeline readers are unchanged apart from the new key.
+- **Schema digests:** `onboard` and `start_session` move, and with them the
+  complete-catalog surface digest, because their input schema gains one
+  optional field.
+- **Client action:** none required. Harness adapters that know the vendor's
+  own session id may send it at onboard
+  (`docs/proposals/active/portal-hub-v0.md`, milestone H0).
+
+## 2.3.0 (2026-10-26)
+
+Expose opt-in compact dialectic reads and executable duplicate-session recovery.
+
+`dialectic` advertises the optional `fields="compact"|"full"` selector for
+`get` and `list`. The default and explicit full views retain their existing
+shape. Get's compact view omits transcript and reconstruction state, previews
+long topic/reason text with character counts, and returns exact full-read
+arguments. Available actionability, complete resolution conditions,
+authorship, attestation, and resolution-effect status remain intact. Timeout
+and facilitation error envelopes preserve their errors and recovery guidance
+while projecting the nested post-transition session. Resolution size remains
+unbounded by this projection; compact is not an absolute byte ceiling.
+
+List's compact view exposes the existing tally projection. It retains
+`session_id`, phase/status, creation time, requester label and effect status
+when present, and takes precedence over `include_transcript`. The
+`SESSION_EXISTS` refusal keeps the one-active-session rule and supplies
+validated read arguments using the caller's UUID instead of a placeholder.
+
+Only the `dialectic` input schema digest and aggregate surface digest change.
+No tool, action, identity rule, authority check or default output is removed.
+Clients may opt into compact progress reads after negotiating 2.3.0 and use
+the supplied full-read arguments before reviewing the transcript.

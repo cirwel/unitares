@@ -55,10 +55,13 @@ not target authorization.
 | Client connected to an existing server | MCP/HTTP access to the operator's deployment | Server provisioning, available integrations, access policy, and lifecycle hooks are the operator's responsibility. |
 | Bare process / incomplete dependencies | May initialize MCP and advertise tools | Unsupported for durable use: storage-backed calls need PostgreSQL and Redis. |
 
-PostgreSQL full-text knowledge search is the default in Compose and the Glama
-bundle. It marks an older finding superseded but cannot retain the successor
-edge. AGE enables graph-specific behavior, including replacement-link and
-response-chain traversal. That backend choice is distinct from discovery tiers.
+Full-text knowledge search is the default in Compose and the Glama bundle
+(semantic search requires `docker-compose.full.yml`). Compose sets
+`UNITARES_KNOWLEDGE_BACKEND=age`: AGE enables graph-specific behavior,
+including replacement-link and response-chain traversal. The Glama bundle and
+unset source installs (`auto`) use the `postgres` backend, which marks an older
+finding superseded but cannot retain the successor edge. That backend choice is
+distinct from discovery tiers.
 Redis carries live session bindings; without it the server runs in a degraded
 local-only mode.
 

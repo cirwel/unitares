@@ -60,6 +60,7 @@ jobs:
       lease_plane_digest: ${{ steps.lease_plane.outputs.digest }}
       # Empty when the tagged Compose file does not pull a database image.
       postgres_digest: ${{ steps.postgres.outputs.digest }}
+      native_bootstrap_postgres_image: ${{ steps.native_bootstrap_image.outputs.image }}
     steps:
       - name: Validate the requested tag
         id: tag
@@ -240,6 +241,23 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
 
+      - name: Select the native-bootstrap PostgreSQL image
+        id: native_bootstrap_image
+        env:
+          POSTGRES_DIGEST: ${{ steps.postgres.outputs.digest }}
+        run: |
+          if [ -n "$POSTGRES_DIGEST" ]; then
+            image="$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST"
+          else
+            published="$(tr -d '[:space:]' < PUBLISHED_VERSION)"
+            [[ "$published" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "PUBLISHED_VERSION is not a three-part release: $published" >&2
+              exit 1
+            }
+            image="$REGISTRY/$POSTGRES_IMAGE_NAME:v$published"
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
       - name: Verify build provenance from the release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,7 +347,7 @@ jobs:
     uses: ./.github/workflows/native-bootstrap.yml
     with:
       source-ref: ${{ needs.verify.outputs.source_sha }}
-      postgres-image: ${{ needs.verify.outputs.postgres_digest && format('ghcr.io/{0}-postgres@{1}', github.repository, needs.verify.outputs.postgres_digest) || 'ghcr.io/cirwel/unitares-postgres:v3.5.0' }}
+      postgres-image: ${{ needs.verify.outputs.native_bootstrap_postgres_image }}
 
   promote:
     needs: [verify, native-bootstrap]
@@ -404,7 +422,7 @@ jobs:
           fi
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

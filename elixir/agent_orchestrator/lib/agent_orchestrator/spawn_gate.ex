@@ -51,17 +51,42 @@ defmodule AgentOrchestrator.SpawnGate do
     end
   end
 
-  @doc "Start a keyed spawn once, replaying its durable execution id on retry."
-  @spec start_agent(String.t(), String.t(), map()) :: start_result()
-  def start_agent(idempotency_key, digest, spec) do
-    start_agent(__MODULE__, idempotency_key, digest, spec)
+  @doc """
+  Start a keyed spawn once, replaying its durable execution id on retry.
+
+  `admit`, when given, runs only for a new reservation, never for a replay.
+  It receives the reserved execution id and returns `{:ok, spec, on_outcome}`
+  to start `spec` (the admitted spec replaces the one given here), or
+  `{:error, reason}` to refuse, which releases the reservation so a later
+  retry is a fresh attempt. `on_outcome` is called with `:started` or, when
+  the start definitely failed, `:failed`; an ambiguous start
+  (`idempotency_outcome_unknown`) may be running, so it reports neither.
+  Profile limits and secrets use it, so a retry of an already-started key
+  replays without either.
+  """
+  @spec start_agent(
+          String.t(),
+          String.t(),
+          map(),
+          (String.t() -> {:ok, map(), (:started | :failed -> any())} | {:error, term()}) | nil
+        ) :: start_result()
+  def start_agent(idempotency_key, digest, spec, admit \\ nil)
+
+  def start_agent(idempotency_key, digest, spec, admit)
+      when is_binary(idempotency_key) and is_binary(digest) and is_map(spec) do
+    start_agent(__MODULE__, idempotency_key, digest, spec, admit)
+  end
+
+  # start_agent(server, key, digest, spec): the explicit-server form.
+  def start_agent(server, idempotency_key, digest, spec)
+      when is_binary(idempotency_key) and is_binary(digest) and is_map(spec) do
+    start_agent(server, idempotency_key, digest, spec, nil)
   end
 
   @doc false
-  @spec start_agent(GenServer.server(), String.t(), String.t(), map()) :: start_result()
-  def start_agent(server, idempotency_key, digest, spec)
+  def start_agent(server, idempotency_key, digest, spec, admit)
       when is_binary(idempotency_key) and is_binary(digest) and is_map(spec) do
-    GenServer.call(server, {:start_agent, idempotency_key, digest, spec}, 30_000)
+    GenServer.call(server, {:start_agent, idempotency_key, digest, spec, admit}, 30_000)
   end
 
   @doc "Report whether keyed-spawn durability is configured and reachable."
@@ -99,7 +124,10 @@ defmodule AgentOrchestrator.SpawnGate do
   end
 
   @impl true
-  def handle_call({:start_agent, key, digest, spec}, _from, state) do
+  def handle_call({:start_agent, key, digest, spec}, from, state),
+    do: handle_call({:start_agent, key, digest, spec, nil}, from, state)
+
+  def handle_call({:start_agent, key, digest, spec, admit}, _from, state) do
     key_hash = hash_key(key)
     execution_id = AgentRunner.generate_execution_id()
     retention_ms = retention_for(spec, state)
@@ -112,7 +140,7 @@ defmodule AgentOrchestrator.SpawnGate do
              retention_ms
            ]) do
         {:ok, :reserved} ->
-          start_reserved(state.ledger, key_hash, digest, execution_id, spec)
+          admit_and_start(state.ledger, key_hash, digest, execution_id, spec, admit)
 
         {:ok, {:replay, stored_id, :started}} ->
           {:ok, stored_id, nil, :idempotent}
@@ -174,6 +202,30 @@ defmodule AgentOrchestrator.SpawnGate do
       max(state.retention_ms, runtime_ms + state.result_retention_ms)
     else
       state.retention_ms
+    end
+  end
+
+  defp admit_and_start(ledger, key_hash, digest, execution_id, spec, nil),
+    do: start_reserved(ledger, key_hash, digest, execution_id, spec)
+
+  defp admit_and_start(ledger, key_hash, digest, execution_id, _spec, admit) do
+    case admit.(execution_id) do
+      {:ok, admitted_spec, on_outcome} ->
+        result = start_reserved(ledger, key_hash, digest, execution_id, admitted_spec)
+
+        case result do
+          {:error, {:idempotency_outcome_unknown, _}} -> :ok
+          {:error, _definite} -> on_outcome.(:failed)
+          {:ok, _, _, _} -> on_outcome.(:started)
+        end
+
+        result
+
+      {:error, reason} ->
+        case ledger_call(ledger, :release_reservation, [key_hash, digest, execution_id]) do
+          :ok -> {:error, reason}
+          {:error, _ledger_reason} -> {:error, :idempotency_unavailable}
+        end
     end
   end
 

@@ -994,6 +994,15 @@ _homebrew_service() {
     python3 "$(_repo_root)/scripts/install/homebrew_services.py" "$action" "${options[@]+"${options[@]}"}"
 }
 
+_homebrew_update() {
+    local arg
+    local -a options=()
+    for arg in "$@"; do
+        [ "$arg" = "--homebrew" ] || options+=("$arg")
+    done
+    python3 "$(_repo_root)/scripts/install/homebrew_update.py" "${options[@]+"${options[@]}"}"
+}
+
 _env_value() {
     # A Compose setting as Compose resolves it: a value exported in this shell
     # first, then the checkout's .env, then the given default. Only simple
@@ -1023,7 +1032,7 @@ _require_compose_install() {
     root="$(_repo_root)"
     if _is_homebrew_package; then
         echo "error: this CLI belongs to a Homebrew package; this operation requires a Docker checkout." >&2
-        echo "       Native upgrades still require stopping both writers, backup and explicit migration. See docs/install/CHOOSING_INSTALLATION.md." >&2
+        echo "       Use 'unitares update' for the coordinated native upgrade lifecycle. See docs/install/CHOOSING_INSTALLATION.md." >&2
         return 1
     fi
     if [ "$(uname -s)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.unitares.governance-mcp" >/dev/null 2>&1; then
@@ -1378,6 +1387,10 @@ _rollback_code() {
 
 cmd_update() {
     local check_only=0 target="" assume_yes=0 reexeced=0 from_label="" from_sha="" reexec_target_sha=""
+    if _has_homebrew_option "$@" || _is_homebrew_package; then
+        _homebrew_update "$@"
+        return $?
+    fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --check) check_only=1 ;;
@@ -1595,9 +1608,16 @@ Homebrew service control (automatic from a Homebrew package):
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis
   logs --homebrew [server|lease-plane] [--no-follow] [--tail N]
                                     Read native service logs
+  update --homebrew [--check|--resume|--abort|--cleanup-backups] [--yes]
+                    [--accept-identity-change] [--retain-backups N]
+                    [--older-than-days N]
+                                    Refresh and upgrade the managed formulae,
+                                    back up, migrate, restart and verify, or
+                                    dry-run indexed backup retention cleanup.
+                                    An interrupted update resumes from its journal
   From a source checkout, --homebrew explicitly selects the installed native
-  services. Configuration/bootstrap must already be complete. No migrations
-  run during start. Native update is still a separate backed-up procedure.
+  installation. Configuration/bootstrap must already be complete. No
+  migrations run during start or as a Homebrew formula hook.
 
 Commands:
   tui [--interval N] [--once [--json]]

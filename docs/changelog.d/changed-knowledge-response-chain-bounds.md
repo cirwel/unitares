@@ -1,1 +1,0 @@
-- Interface contract 2.1.0: Knowledge details adds bounded response-chain depth, limit, and offset controls with deterministic pagination.
