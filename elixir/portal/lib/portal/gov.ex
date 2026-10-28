@@ -10,8 +10,9 @@ defmodule Portal.Gov do
 
   Configured by `config :portal, :gov` with `:origin` (the dashboard, where
   passkeys live), `:socket` (the server's `UNITARES_UDS_SOCKET`) and
-  `:token` (the server's `UNITARES_HUB_TOKEN`). Without all three the hub
-  stays signed out.
+  `:token` (the raw hub key, at least 32 characters; the server's
+  `UNITARES_HUB_TOKEN` holds only its `sha256:` digest). Without all three the
+  hub stays signed out.
   """
 
   @timeout_ms 5_000

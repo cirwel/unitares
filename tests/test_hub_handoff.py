@@ -33,6 +33,7 @@ from src.http_routes.dashboard import http_dashboard_redesign
 ROOT = Path(__file__).parent.parent
 CALLBACK = "http://127.0.0.1:8791/auth/callback"
 TOKEN = "t" * 40
+TOKEN_DIGEST = "sha256:" + hashlib.sha256(TOKEN.encode()).hexdigest()
 ORIGIN = "https://gov.example.org"
 _REAL_SOCKET_SUPPORTED = dashboard_auth._hub_socket_supported
 
@@ -60,7 +61,7 @@ def _hub_env(monkeypatch):
     # the route tests run on CI's Linux too. Its own tests unpin it.
     monkeypatch.setattr(dashboard_auth, "_hub_socket_supported", lambda: True)
     monkeypatch.setenv(dashboard_auth.HUB_CALLBACK_ENV, CALLBACK)
-    monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, TOKEN_DIGEST)
     monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "gov.example.org")
     monkeypatch.setattr(dashboard_auth, "DASHBOARD_EXPECTED_ORIGIN", ORIGIN)
     monkeypatch.setattr(dashboard_auth, "_emit_auth_event", AsyncMock())
@@ -128,11 +129,28 @@ def test_ipv6_loopback_callback_is_accepted(monkeypatch):
     assert config["origin"] == "http://[::1]:8791"
 
 
-def test_short_hub_token_turns_the_handoff_off(monkeypatch):
-    monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, "tooSmall")
+@pytest.mark.parametrize("value", [
+    TOKEN,                               # the key itself: the server must hold no secret
+    "sha256:" + "A" * 64,                # upper-case hex
+    "sha256:" + "a" * 63,                # short digest
+    "",
+])
+def test_the_hub_token_must_be_a_digest(monkeypatch, value):
+    monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, value)
     config, problem = dashboard_auth.hub_config()
     assert config is None
-    assert "tooSmall" not in problem  # the problem names the setting, never the value
+    assert "sha256:<64 lowercase hex>" in problem
+    assert TOKEN not in problem  # the problem names the setting, never the value
+
+
+@pytest.mark.asyncio
+async def test_a_short_key_is_refused_even_if_its_digest_is_configured(monkeypatch):
+    short = "s" * 31
+    monkeypatch.setenv(dashboard_auth.HUB_TOKEN_ENV, "sha256:" + hashlib.sha256(short.encode()).hexdigest())
+    monkeypatch.setattr(dashboard_auth, "get_db", lambda: pytest.fail("reached storage"))
+    async with _client(_app(peer_pid=os.getpid())) as client:
+        response = await client.post("/v1/hub/check", headers=_hub_headers(short), json={"handle": "h" * 43})
+    assert response.status_code == 401
 
 
 def test_handoff_is_off_where_the_socket_cannot_attest_its_peer(monkeypatch):

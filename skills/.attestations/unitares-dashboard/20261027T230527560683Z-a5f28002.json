@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-10-27T23:05:27Z",
+  "verified_date": "2026-10-27",
+  "verifier": "claude-opus-5-5 (UNITARES 73c88218): re-read the skill's dashboard_auth.py claims (passkey ceremonies, session ops, step-up rule, auth pages) against PR #3125, which changes only how UNITARES_HUB_TOKEN is configured (a sha256 digest) inside the hub handoff; the skill makes no claim about the hub token, and every claim holds unchanged",
+  "source_digests": {
+    "unitares/dashboard/EXTENSIONS.md": "156dd54f50c65a5b",
+    "unitares/dashboard/package.json": "b5c89d6bf716ece9",
+    "unitares/dashboard/redesign/app.html": "d458acb22799055a",
+    "unitares/dashboard/redesign/data.js": "c3587ce0e325777c",
+    "unitares/dashboard/redesign/sections/discoveries.js": "2adb8b060e6d6744",
+    "unitares/dashboard/redesign/sections/eisv.js": "ba80ff7087d22e98",
+    "unitares/dashboard/redesign/sections/knowledge-flow.js": "c8f60496ac6b245f",
+    "unitares/dashboard/redesign/sections/landing.js": "3248181369d783aa",
+    "unitares/dashboard/redesign/sections/risk.js": "21a582a7b27757fe",
+    "unitares/dashboard/redesign/sections/security.js": "770574b870eef481",
+    "unitares/dashboard/redesign/snapshot.js": "663fcf8dede3b3db",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "5cf2d3484b008032",
+    "unitares/dashboard/tests/app-extensions.test.js": "81987796faecb7b5",
+    "unitares/dashboard/tests/landing-agent-first.test.js": "0c4b061aed6f6550",
+    "unitares/dashboard/tests/risk-history.test.js": "29a3974763326e8b",
+    "unitares/src/dashboard_auth.py": "9c3675e9770ddc11",
+    "unitares/src/governance_trend.py": "6b01c226fe69acf2",
+    "unitares/src/http_api.py": "d25b162393c6f291",
+    "unitares/src/http_routes/dashboard.py": "0c00830ee2f2a569",
+    "unitares/src/http_routes/packs.py": "7765fc5a56fbdd03",
+    "unitares/src/http_routes/telemetry.py": "67d6c37cc3241a1b"
+  },
+  "skill_digest": "ad9d23e2f1018ca1",
+  "superseded_digests": {
+    "unitares/src/dashboard_auth.py": [
+      "0b343d67ab5a2301"
+    ]
+  }
+}
