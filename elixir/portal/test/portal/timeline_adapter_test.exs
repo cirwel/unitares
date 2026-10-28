@@ -261,6 +261,38 @@ defmodule Portal.TimelineAdapterTest do
       assert matched == MapSet.new([TimelineAdapter.key(pause_row)])
     end
 
+    test "a check-in that arrived after the re-read started waits for the next one" do
+      t0 = DateTime.utc_now()
+      at = fn ms -> t0 |> DateTime.add(ms, :millisecond) |> DateTime.to_iso8601() end
+
+      mark = %{
+        "kind" => "checkin",
+        "agent_id" => @agent,
+        "ts" => at.(1_000),
+        "provisional" => true,
+        "assessment" => %{"source" => "eisv", "verdict" => "cirs_block"}
+      }
+
+      # An earlier pause row whose frame this page never saw, then the mark's own.
+      earlier = %{
+        "kind" => "checkin",
+        "agent_id" => @agent,
+        "ts" => at.(0),
+        "action" => "risk_pause"
+      }
+
+      own = %{earlier | "ts" => at.(920), "action" => "cirs_block"}
+
+      # The re-read started (2) before the mark arrived (3): it holds only the
+      # earlier row, and the mark is neither paired nor counted as missed.
+      {[{^mark, 3, 0}] = kept, matched} = TimelineFeed.merge([{mark, 3, 0}], [earlier], 2, 1)
+      assert matched == MapSet.new()
+
+      # The next re-read started after it arrived: it takes its own row.
+      {[], matched} = TimelineFeed.merge(kept, [earlier, own], 4, 1)
+      assert matched == MapSet.new([TimelineAdapter.key(own)])
+    end
+
     test "a mark older than the window is dropped" do
       mark = %{"kind" => "checkin", "agent_id" => @agent, "ts" => now_iso(-3_700_000)}
       {[], _} = TimelineFeed.merge([{mark, 100, 0}], [], 50, 1)

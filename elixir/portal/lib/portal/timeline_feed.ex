@@ -657,7 +657,7 @@ defmodule Portal.TimelineFeed do
                                                  {kept, matched, pairs} ->
         taken = MapSet.union(claimed, matched)
 
-        case best_row(mark, history, taken) do
+        case pairable_row(mark, received, fetch_started, history, taken) do
           nil ->
             misses = if received < fetch_started, do: misses + 1, else: misses
             ts = TimelineAdapter.ts_us(mark["ts"])
@@ -677,6 +677,20 @@ defmodule Portal.TimelineFeed do
     # `kept` was built oldest first, prepending: it is newest first again.
     {kept, matched, pairs}
   end
+
+  # A check-in that arrived after this re-read started is not paired with it.
+  # Its row is written before its frame, so the re-read may hold it, but a row
+  # in its window may as well be the agent's previous check-in, which a
+  # verdict cannot tell apart from its own (two pauses look alike). The next
+  # re-read started after it arrived and so holds its row, which, as the
+  # latest unclaimed row in its window, it then takes. Until then it shows
+  # twice, as on arrival: better than dropping a real check-in.
+  defp pairable_row(%{"kind" => "checkin"}, received, fetch_started, _history, _taken)
+       when received >= fetch_started,
+       do: nil
+
+  defp pairable_row(mark, _received, _fetch_started, history, taken),
+    do: best_row(mark, history, taken)
 
   defp best_row(%{"kind" => "checkin"} = mark, history, taken) do
     history
