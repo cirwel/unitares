@@ -419,10 +419,11 @@ async def test_a_lineage_spawn_reason_without_a_parent_does_not_claim_recorded_l
     assert env["state_summary"]["lineage_state"] == "no_lineage_declared"
     assert env["state_summary"]["predecessor_uuid"] == _EARLIER
     assert "already recorded" not in env["next_action"]
-    assert "spawn_reason was given without parent_agent_id" in env["next_action"]
+    assert "spawn_reason alone records no lineage" in env["next_action"]
+    assert "A predecessor exists" not in payload.get("welcome", "")
     honest = payload["thread_context"]["honest_message"]
     assert "declared parent" not in honest
-    assert "declares no lineage edge" in honest
+    assert "describes no lineage edge" in honest
 
 
 @pytest.mark.asyncio

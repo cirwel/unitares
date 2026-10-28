@@ -368,11 +368,40 @@ def test_onboard_envelope_does_not_claim_lineage_a_spawn_reason_alone_implies():
         },
     }
 
-    env = build_experience_envelope("start_session", "onboard", payload)
+    env = build_experience_envelope(
+        "start_session", "onboard", payload,
+        {"force_new": True, "spawn_reason": "subagent"},
+    )
 
     assert env["state_summary"]["lineage_state"] == "no_lineage_declared"
     assert "already recorded" not in env["next_action"]
-    assert "spawn_reason was given without parent_agent_id" in env["next_action"]
+    assert "spawn_reason alone records no lineage" in env["next_action"]
+    # Advice must not send a minted identity off to mint again.
+    assert "Keep this identity" in env["next_action"]
+    assert "pass parent_agent_id to start_session" not in env["next_action"]
+
+
+@pytest.mark.parametrize("state", ["archived", None])
+def test_onboard_envelope_names_unrecorded_lineage_without_blaming_the_caller(state):
+    # archive_lineage keeps parent_agent_id, and a resume carries no
+    # spawn_reason argument: neither may read as "no parent was given".
+    payload = {
+        "success": True,
+        "uuid": "u-resumed",
+        "thread_context": {
+            "predecessor": {"uuid": "u-parent"},
+            "episode_fork_kind": "identity_lineage",
+            "identity_lineage_fork": True,
+        },
+    }
+    if state is not None:
+        payload["lineage_state"] = state
+
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert "already recorded" not in env["next_action"]
+    assert "spawn_reason alone" not in env["next_action"]
+    assert f"lineage_state={state or 'missing'}" in env["next_action"]
 
 
 @pytest.mark.parametrize("state", ["rejected_cross_role", "rejected_coincidental"])

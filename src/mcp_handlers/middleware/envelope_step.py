@@ -208,9 +208,11 @@ _ONBOARD_LIFT_KEYS = (
 # carries the whole onboard record, because those facts exist only in the
 # mint's own response (identity() re-reads the binding, not how it was made).
 _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
-# lineage_state values that mean a parent edge is on the record
-# (src/identity/lineage_lifecycle.derive_lineage_state, plus onboard's
-# "provisional"). Rejected, demoted and archived edges are not live.
+# lineage_state values that mean a live parent edge is on the record: onboard's
+# "provisional", derive_lineage_state's "confirmed"
+# (src/identity/lineage_lifecycle.py), and "declared" as the lifecycle query
+# reports it (src/mcp_handlers/lifecycle/query.py). Rejected, demoted and
+# archived edges are not live.
 _RECORDED_LINEAGE_STATES = frozenset({"declared", "provisional", "confirmed"})
 # Compact identity_assurance for a mint that went as asked. The operator guide
 # tells agents to confirm the binding from tier and session_source here.
@@ -2889,15 +2891,13 @@ def build_experience_envelope(
             state_summary["predecessor_uuid"] = predecessor["uuid"]
             lineage_fork = thread_context.get("identity_lineage_fork")
             lineage_state = payload.get("lineage_state")
+            call_args = arguments or {}
             # The fork flag alone is not a recorded edge: a lineage
             # spawn_reason with no parent_agent_id also sets it, and then the
             # predecessor is only the previous thread node. Only lineage_state
             # says whether an edge was recorded.
-            if (
-                fork_kind == "identity_lineage"
-                and lineage_fork is True
-                and lineage_state in _RECORDED_LINEAGE_STATES
-            ):
+            is_lineage_fork = fork_kind == "identity_lineage" and lineage_fork is True
+            if is_lineage_fork and lineage_state in _RECORDED_LINEAGE_STATES:
                 next_action += (
                     " Declared lineage for this fork is already recorded; do not "
                     "redeclare it on the current session."
@@ -2907,12 +2907,27 @@ def build_experience_envelope(
                     f" The declared parent was not recorded as lineage "
                     f"(lineage_state={lineage_state}); the full record says why."
                 )
-            elif fork_kind == "identity_lineage" and lineage_fork is True:
+            elif (
+                is_lineage_fork
+                and lineage_state == "no_lineage_declared"
+                and call_args.get("spawn_reason")
+                and not call_args.get("parent_agent_id")
+            ):
+                # Not "pass parent_agent_id now": on a minted identity that
+                # means a second mint, and a running process keeps its uuid.
                 next_action += (
-                    " spawn_reason was given without parent_agent_id, so no "
-                    "lineage was recorded and the earlier thread node is not "
-                    "your parent. To declare a parent, pass parent_agent_id "
-                    "to start_session."
+                    " spawn_reason alone records no lineage: none was recorded "
+                    "for this identity, and the earlier thread node is not "
+                    "your parent. Keep this identity; a parent is declared "
+                    "with parent_agent_id when a session starts."
+                )
+            elif is_lineage_fork:
+                # Archived, demoted or unread lineage keeps or lost its parent
+                # for reasons the record holds; name the state, claim nothing.
+                next_action += (
+                    f" This fork's lineage is lineage_state="
+                    f"{lineage_state or 'missing'}; read it from the record "
+                    "rather than redeclaring."
                 )
             else:
                 next_action += (

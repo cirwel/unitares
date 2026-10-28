@@ -537,11 +537,13 @@ def build_onboard_response_data(
         else:
             pred = thread_context.get("predecessor")
             pred_desc = f" (position {pred['position']})" if pred and pred.get("position") else ""
-            # Only a lineage fork has a predecessor; an earlier node that
-            # merely shares the thread is a co-located sibling.
+            # Only a lineage fork with a parent has a predecessor; an earlier
+            # node that merely shares the thread is a co-located sibling. A
+            # lineage spawn_reason with no parent (or a rejected one) still
+            # sets identity_lineage_fork, so the flag alone is not enough.
             pred_sentence = (
                 f"A predecessor exists{pred_desc}."
-                if thread_context.get("identity_lineage_fork")
+                if thread_context.get("identity_lineage_fork") and parent_agent_id
                 else f"An earlier node exists in this thread{pred_desc}; "
                 "sharing a thread does not make it your predecessor."
             )

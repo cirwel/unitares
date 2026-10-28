@@ -385,7 +385,7 @@ class TestBuildForkContext:
         assert ctx["episode_fork_kind"] == "identity_lineage"
         assert "declared parent" not in ctx["honest_message"]
         assert "Lineage was declared" not in ctx["honest_message"]
-        assert "declares no lineage edge" in ctx["honest_message"]
+        assert "describes no lineage edge" in ctx["honest_message"]
         assert "spawn_reason subagent" in ctx["honest_message"]
 
     def test_subagent_spawn_reason_in_message(self):

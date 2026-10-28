@@ -833,14 +833,18 @@ def test_onboard_full_mode_is_unchanged_default():
 
 
 @pytest.mark.parametrize(
-    ("lineage_fork", "expected", "absent"),
+    ("lineage_fork", "parent", "expected", "absent"),
     [
-        (True, "A predecessor exists (position 7).", "does not make it your predecessor"),
-        (False, "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        (True, "other", "A predecessor exists (position 7).", "does not make it your predecessor"),
+        (False, None, "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        # A lineage spawn_reason with no parent (or a rejected one) still sets
+        # the fork flag; with no parent the earlier node is only a neighbour.
+        (True, None, "sharing a thread does not make it your predecessor", "A predecessor exists"),
     ],
+    ids=["lineage-with-parent", "sibling", "lineage-flag-without-parent"],
 )
 def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
-    lineage_fork, expected, absent
+    lineage_fork, parent, expected, absent
 ):
     # A co-located earlier node is a sibling, not a predecessor: the welcome
     # line must not assert lineage the fork classification did not find.
@@ -853,7 +857,9 @@ def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
         "honest_message": "msg",
     }
     payload = build_onboard_response_data(
-        **_onboard_kwargs(thread_context=thread_context, response_mode="minimal")
+        **_onboard_kwargs(
+            thread_context=thread_context, response_mode="minimal", parent_agent_id=parent
+        )
     )
     assert expected in payload["welcome"]
     assert absent not in payload["welcome"]
