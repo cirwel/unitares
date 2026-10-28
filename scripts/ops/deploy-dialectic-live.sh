@@ -45,23 +45,53 @@ deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-dialectic-live.sh" "$DEPLOY"
 
+# Roll the shared worktree back and restart the previous build. The app shares
+# the deploy worktree with five other services, so leaving the tree parked at
+# a known-bad commit hands the next deploy a broken baseline.
+roll_back() {
+  echo "[deploy] FAILED — $1" >&2
+  echo "[deploy] Rolling the worktree back to ${PREV:0:8} and restarting." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  # PREV may predate build-assets.sh; fall back to the plain alias there.
+  ( cd "$DEPLOY/elixir/dialectic_live" && export MIX_ENV=prod && mix compile \
+      && if [ -x scripts/build-assets.sh ]; then scripts/build-assets.sh --strict; else mix assets.deploy; fi ) || \
+    echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
+  deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
+  deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST" || \
+    echo "[deploy] WARNING: the rollback restart failed too." >&2
+  echo "[deploy] rolled back. Investigate:" >&2
+  echo "[deploy]   launchctl list | grep $LABEL" >&2
+  echo "[deploy]   tail -80 \$HOME/Library/Logs/unitares-dialectic-live.log" >&2
+  exit 1
+}
+
 # scripts/start.sh runs deps.get on every boot, and builds assets when the
 # build on disk is not this checkout's. A failure there surfaces only in the
 # service log. Doing both HERE turns that into a deploy-time error with the
 # output in front of you, before anything is restarted, and writes the stamp
-# that lets the restart below skip the asset build.
+# that lets the restart below skip the asset build. It runs in a conditional,
+# so a failure rolls the tree back instead of `set -e` exiting with the shared
+# worktree at the failed revision; a condition switches `set -e` off, even in
+# the subshell, so the steps are chained with &&.
 echo "[deploy] compiling dialectic_live + assets (MIX_ENV=prod; surfaces errors before restart)"
-(
-  cd "$DEPLOY/elixir/dialectic_live"
-  export MIX_ENV=prod
-  mix deps.get --only prod
-  mix compile
-  scripts/build-assets.sh --strict
-)
+if ! (
+  cd "$DEPLOY/elixir/dialectic_live" &&
+    export MIX_ENV=prod &&
+    mix deps.get --only prod &&
+    mix compile &&
+    scripts/build-assets.sh --strict
+); then
+  roll_back "the dependency fetch, compile or asset build failed (see above)."
+fi
 
+# deploy_lib_restart_service reloads the job (bootout + bootstrap) when its
+# plist changed since the last deploy-driven restart: a bare kickstart reuses
+# launchd's cached definition, so changed EnvironmentVariables never loaded.
 echo "[deploy] restarting $LABEL"
 deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
-launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+if ! deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"; then
+  roll_back "the restart did not complete (see above)."
+fi
 
 # Probes /health — the route added alongside this script — NOT the LiveView
 # root. `/` mounts the live view, which synchronously calls the governance
@@ -107,23 +137,5 @@ if deploy_lib_poll 15 3 check_dialectic_live_health; then
     echo "[deploy] the Timeline pane at http://localhost:$PORT/timeline will not go live. Check check_origin / PHX_HOST." >&2
   fi
 else
-  echo "[deploy] FAILED — /health on :$PORT did not respond within timeout." >&2
-  echo "[deploy] Phoenix prod needs SECRET_KEY_BASE (DIALECTIC_LIVE_SECRET_KEY_BASE in secrets.env);" >&2
-  echo "[deploy] a missing one makes start.sh exit 1 and launchd restart it forever." >&2
-  # Rolling back matters MORE here than for the single-service scripts: this app
-  # shares the unitares-deploy worktree with five other services, so leaving the
-  # tree parked at a known-bad commit hands the next deploy a broken baseline.
-  # Without this the app just crash-loops under KeepAlive with no recovery.
-  echo "[deploy] Rolling the worktree back to ${PREV:0:8} and restarting." >&2
-  git -C "$DEPLOY" reset --hard "$PREV"
-  # PREV may predate build-assets.sh; fall back to the plain alias there.
-  ( cd "$DEPLOY/elixir/dialectic_live" && export MIX_ENV=prod && mix compile \
-      && if [ -x scripts/build-assets.sh ]; then scripts/build-assets.sh --strict; else mix assets.deploy; fi ) || \
-    echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
-  deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
-  launchctl kickstart -k "gui/$UID_NUM/$LABEL"
-  echo "[deploy] rolled back. Investigate:" >&2
-  echo "[deploy]   launchctl list | grep $LABEL" >&2
-  echo "[deploy]   tail -80 \$HOME/Library/Logs/unitares-dialectic-live.log" >&2
-  exit 1
+  roll_back "/health on :$PORT did not respond within timeout. Phoenix prod needs SECRET_KEY_BASE (DIALECTIC_LIVE_SECRET_KEY_BASE in the selected file); without it start.sh stops (exit 0)."
 fi
