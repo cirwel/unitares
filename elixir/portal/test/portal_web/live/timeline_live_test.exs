@@ -704,42 +704,79 @@ defmodule PortalWeb.TimelineLiveTest do
     assert has_element?(view, "#agent-#{@b} .tl-band.pause")
   end
 
-  test "a re-read keeps a pause that left the window while the agent stays paused",
+  test "a re-read keeps a recorded pause that left the window while the agent stays paused",
        %{conn: conn} do
-    ctx = feed_with([])
-    view = mount_live(conn, ctx)
+    c = "00000000-0000-4000-8000-0000000000c3"
 
-    delta = fn agent, type, ms ->
-      send(
-        view.pid,
-        {:timeline_delta, "1h",
-         %{
-           "kind" => "lifecycle",
-           "ts" => iso(ms),
-           "agent_id" => agent,
-           "event_type" => type,
-           "provisional" => true
-         }}
-      )
+    lifecycle = fn agent, type, ms, id ->
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(ms),
+        "agent_id" => agent,
+        "event_type" => type,
+        "event_id" => id
+      }
     end
 
-    # @a paused and resumed; @b paused and never resumed. Both age out.
-    delta.(@a, "lifecycle_paused", -3_599_900)
-    delta.(@a, "lifecycle_resumed", -3_599_850)
-    delta.(@b, "lifecycle_paused", -3_599_900)
+    # Recorded: @a paused and resumed; @b paused and never resumed.
+    ctx =
+      feed_with([
+        lifecycle.(@a, "lifecycle_paused", -3_599_900, "p1"),
+        lifecycle.(@a, "lifecycle_resumed", -3_599_850, "r1"),
+        lifecycle.(@b, "lifecycle_paused", -3_599_900, "p2")
+      ])
+
+    view = mount_live(conn, ctx)
+
+    # Live only: @c paused, and the feed never confirms it.
+    send(
+      view.pid,
+      {:timeline_delta, "1h",
+       %{
+         "kind" => "lifecycle",
+         "ts" => iso(-3_599_900),
+         "agent_id" => c,
+         "event_type" => "lifecycle_paused",
+         "provisional" => true
+       }}
+    )
+
+    assert has_element?(view, "#agent-#{@b} .tl-band.pause")
+    assert has_element?(view, "#agent-#{c} .tl-band.pause")
     Process.sleep(200)
 
-    # A successful re-read whose window no longer holds either pause.
+    # A successful re-read whose window no longer holds any of them.
     serve(ctx.stub, fn conn -> Req.Test.json(conn, window_body([])) end)
     broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
 
     assert eventually(fn ->
-             :sys.get_state(view.pid).socket.assigns.last_reread_at != nil and
-               not has_element?(view, "#agent-#{@a} .tl-band.pause")
+             not has_element?(view, "#agent-#{@a} .tl-band.pause") and
+               not has_element?(view, "#agent-#{c} .tl-band.pause")
            end)
 
     assert has_element?(view, "#agent-#{@b} .tl-band.pause")
     assert has_element?(view, "#attention-#{@b}", "paused since")
+    refute has_element?(view, "#attention-#{c}")
+  end
+
+  test "a hard stop recorded as its sub-action is a pause verdict", %{conn: conn} do
+    checkin = fn agent, action ->
+      %{
+        "kind" => "checkin",
+        "ts" => iso(-5_000),
+        "agent_id" => agent,
+        "authored_by" => "agent",
+        "action" => action
+      }
+    end
+
+    ctx = feed_with([checkin.(@a, "risk_pause"), checkin.(@b, "approve")])
+    view = mount_live(conn, ctx)
+
+    assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.pause")
+    assert has_element?(view, "#attention-#{@a}", "pause verdict")
+    assert has_element?(view, "#agent-#{@b} .tl-mk.checkin.proceed")
+    refute has_element?(view, "#attention-#{@b}")
   end
 
   test "live marks are capped at the feed's provisional cap", %{conn: conn} do

@@ -213,7 +213,7 @@ defmodule PortalWeb.TimelineLive do
             else: socket.assigns.resumed_at
 
         resumed = Enum.reduce(all, resumed_seed, &note_resume(&2, &1))
-        marks = Map.merge(held_pauses(socket, read, resumed), read)
+        marks = Map.merge(held_pauses(socket, resumed), read)
 
         socket
         |> assign(
@@ -256,25 +256,25 @@ defmodule PortalWeb.TimelineLive do
     end
   end
 
-  # A pause older than the window is not in a re-read, but while no later
-  # resume is known the agent is still paused: its band runs to now and it
-  # still needs attention, as `prune/1` keeps it between re-reads. Carry it
-  # across the re-read unless the re-read holds that same pause. A resume the
-  # page already knew of still counts, even when it too has left the window.
-  defp held_pauses(socket, read, resumed) do
+  # A recorded pause older than the window is not in a re-read, but while no
+  # later resume is known the agent is still paused: its band runs to now and
+  # it still needs attention, as `prune/1` keeps it between re-reads. Carry it
+  # across the re-read. Only a history row is carried, and only once it is
+  # older than the window: a live mark the feed has expired, or a row the
+  # window still covers, is the re-read's to keep or drop. A resume the page
+  # already knew of still counts, even when it too has left the window.
+  defp held_pauses(socket, resumed) do
     %{marks: marks, resumed_at: known, substrate: substrate} = socket.assigns
 
-    in_read =
-      for {_, %{"event_type" => "lifecycle_paused"} = m} <- read,
-          into: MapSet.new(),
-          do: {m["agent_id"], TimelineAdapter.ts_us(m["ts"])}
+    start =
+      DateTime.to_unix(DateTime.utc_now(), :microsecond) - hours(socket.assigns) * 3_600_000_000
 
     Map.filter(marks, fn {_id, m} ->
       us = TimelineAdapter.ts_us(m["ts"])
       agent = m["agent_id"]
 
-      m["event_type"] == "lifecycle_paused" and is_binary(agent) and is_integer(us) and
-        not MapSet.member?(in_read, {agent, us}) and
+      m["event_type"] == "lifecycle_paused" and m["provisional"] != true and is_binary(agent) and
+        is_integer(us) and us < start and
         us >= max(Map.get(known, agent, -1), Map.get(resumed, agent, -1)) and
         visible?(m, substrate)
     end)
@@ -827,11 +827,16 @@ defmodule PortalWeb.TimelineLive do
   defp live_verdict(%{"assessment" => %{"verdict" => v}}) when is_binary(v), do: v
   defp live_verdict(_m), do: nil
 
+  # The server's `verdict_bucket` (src/broadcaster.py): history stores the
+  # decision's sub_action, so a hard stop arrives as `risk_pause`,
+  # `cirs_block`, `basin_pause` and the like. Any action that is not a
+  # proceed or a guide is a pause, so a new one folds in rather than reading
+  # as a proceed.
   defp action_class(action) do
     case action |> to_string() |> String.downcase() do
       "guide" -> "guide"
-      v when v in ["pause", "reject"] -> "pause"
-      _ -> "proceed"
+      v when v in ["", "proceed", "approve", "continue"] -> "proceed"
+      _ -> "pause"
     end
   end
 
