@@ -833,18 +833,26 @@ def test_onboard_full_mode_is_unchanged_default():
 
 
 @pytest.mark.parametrize(
-    ("lineage_fork", "parent", "expected", "absent"),
+    ("lineage_fork", "parent", "lineage_state", "expected", "absent"),
     [
-        (True, "other", "A predecessor exists (position 7).", "does not make it your predecessor"),
-        (False, None, "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        (True, "other", "provisional", "A predecessor exists (position 7).", "does not make it your predecessor"),
+        (False, None, "no_lineage_declared", "sharing a thread does not make it your predecessor", "A predecessor exists"),
         # A lineage spawn_reason with no parent (or a rejected one) still sets
-        # the fork flag; with no parent the earlier node is only a neighbour.
-        (True, None, "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        # the fork flag; with no edge the earlier node is only a neighbour.
+        (True, None, "no_lineage_declared", "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        (True, None, "rejected_cross_role", "sharing a thread does not make it your predecessor", "A predecessor exists"),
+        # A resume passes the request's parent (None) while thread_context was
+        # built from the stored parent; the recorded state keeps the parent.
+        (True, None, "confirmed", "A predecessor exists (position 7).", "does not make it your predecessor"),
+        (True, None, None, "A predecessor exists (position 7).", "does not make it your predecessor"),
     ],
-    ids=["lineage-with-parent", "sibling", "lineage-flag-without-parent"],
+    ids=[
+        "lineage-with-parent", "sibling", "lineage-flag-without-parent",
+        "rejected-parent", "resume-confirmed", "resume-state-unread",
+    ],
 )
 def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
-    lineage_fork, parent, expected, absent
+    lineage_fork, parent, lineage_state, expected, absent
 ):
     # A co-located earlier node is a sibling, not a predecessor: the welcome
     # line must not assert lineage the fork classification did not find.
@@ -858,7 +866,10 @@ def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
     }
     payload = build_onboard_response_data(
         **_onboard_kwargs(
-            thread_context=thread_context, response_mode="minimal", parent_agent_id=parent
+            thread_context=thread_context,
+            response_mode="minimal",
+            parent_agent_id=parent,
+            lineage_state=lineage_state,
         )
     )
     assert expected in payload["welcome"]

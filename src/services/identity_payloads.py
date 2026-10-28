@@ -537,13 +537,20 @@ def build_onboard_response_data(
         else:
             pred = thread_context.get("predecessor")
             pred_desc = f" (position {pred['position']})" if pred and pred.get("position") else ""
-            # Only a lineage fork with a parent has a predecessor; an earlier
-            # node that merely shares the thread is a co-located sibling. A
-            # lineage spawn_reason with no parent (or a rejected one) still
-            # sets identity_lineage_fork, so the flag alone is not enough.
+            # Only a lineage fork has a predecessor; an earlier node that
+            # merely shares the thread is a co-located sibling. A lineage
+            # spawn_reason with no parent (or a rejected one) still sets
+            # identity_lineage_fork, so the flag is overruled only by positive
+            # evidence of no edge. Not by a missing parent_agent_id: a resume
+            # passes the request's parent (None) while thread_context was
+            # built from the stored one.
+            no_edge = parent_agent_id is None and (
+                lineage_state == "no_lineage_declared"
+                or (isinstance(lineage_state, str) and lineage_state.startswith("rejected"))
+            )
             pred_sentence = (
                 f"A predecessor exists{pred_desc}."
-                if thread_context.get("identity_lineage_fork") and parent_agent_id
+                if thread_context.get("identity_lineage_fork") and not no_edge
                 else f"An earlier node exists in this thread{pred_desc}; "
                 "sharing a thread does not make it your predecessor."
             )
