@@ -44,7 +44,9 @@ supervisor of their own, so a governance outage stays there.
 Its styles come from Tailwind and daisyUI, built into
 `priv/static/assets/css/hub.css` by `mix assets.deploy`. That file is not
 committed. On macOS 27 the downloaded Tailwind CLI must be re-signed ad hoc
-before it runs (see `dialectic_live/scripts/prepare-asset-binaries.sh`).
+before it runs: `elixir/portal/scripts/build-assets.sh` does that through
+`elixir/portal/scripts/prepare-asset-binaries.sh`, so it builds where a bare
+`mix setup` would be killed.
 
 The LiveView client is served straight from the pinned dependencies
 (`/assets/vendor/phoenix.min.js`, `/assets/vendor/phoenix_live_view.min.js`),
