@@ -22,6 +22,34 @@ if config_env() != :test do
     url: [host: host, port: port, scheme: "http"],
     http: [ip: {127, 0, 0, 1}, port: port],
     check_origin: ["http://#{host}:#{port}"]
+
+  # Sign-in borrows the dashboard's passkey (portal-hub-v0 H2c). All three are
+  # needed; without them the hub refuses everyone (Portal.Auth.Unconfigured).
+  #   PORTAL_GOV_ORIGIN  the dashboard's origin, where the passkeys live
+  #   PORTAL_GOV_SOCKET  the server's owner-only socket (UNITARES_UDS_SOCKET)
+  #   PORTAL_HUB_TOKEN   the hub credential (the server's UNITARES_HUB_TOKEN)
+  gov_origin = System.get_env("PORTAL_GOV_ORIGIN", "")
+  gov_socket = System.get_env("PORTAL_GOV_SOCKET", "")
+  hub_token = System.get_env("PORTAL_HUB_TOKEN", "")
+
+  if gov_origin != "" do
+    uri = URI.parse(gov_origin)
+
+    loopback_http? =
+      uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"]
+
+    unless (uri.scheme == "https" or loopback_http?) and uri.host not in [nil, ""] and
+             uri.path in [nil, ""] and is_nil(uri.query) and is_nil(uri.fragment) and
+             is_nil(uri.userinfo) do
+      raise "PORTAL_GOV_ORIGIN must be an origin such as https://gov.example.org (http only on loopback)"
+    end
+  end
+
+  config :portal, :gov, origin: gov_origin, socket: gov_socket, token: hub_token
+
+  if gov_origin != "" and gov_socket != "" and hub_token != "" do
+    config :portal, :auth, Portal.Auth.Hub
+  end
 end
 
 if config_env() == :prod do
