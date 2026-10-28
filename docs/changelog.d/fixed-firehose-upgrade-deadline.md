@@ -1,0 +1,1 @@
+- **dialectic_live timeline:** the firehose client now retries a WebSocket upgrade the governance server accepts but never answers. Its connect timeout bounded only TCP, so such a server held the client, and the timeline's live marks, until the connection closed. `upgrade_timeout_ms` (default 5 s) now closes the connection and backs off. The same fix is in the hub's copy (#3122).

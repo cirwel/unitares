@@ -350,7 +350,7 @@ that specific state before applying more SQL. This procedure is not a general
 repair for an incomplete base schema.
 
 Release maintainers must also run the [native bootstrap and installed-package
-acceptance gates](../operations/RELEASE_PROCESS.md#server-release). These
+acceptance gates](../operations/RELEASE_PROCESS.md#server-release-checklist). These
 exercise fresh initialization and interruption recovery on disposable databases;
 they are not commands to run against an operator's existing database.
 

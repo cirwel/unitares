@@ -9,6 +9,7 @@ with an explicit caveat in the markdown) — anything else exits 1.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -145,8 +146,9 @@ class TestGitHubExecutable:
         assert calls == [
             ["/private tools/reader", "repo", "view", "example/server", "--json", "name"],
             ["/private tools/reader", "pr", "list", "--repo", "example/server", "--author",
-             "app/dependabot", "--state", "open", "--limit", "50", "--json",
-             "number,title,mergeable,statusCheckRollup"],
+             "app/dependabot", "--state", "open", "--limit", "500", "--json",
+             "number,title,mergeable,mergeStateStatus,statusCheckRollup,"
+             "headRefOid,state,isDraft,labels,autoMergeRequest,url"],
         ]
 
     @pytest.mark.parametrize("missing", [False, True])
@@ -168,3 +170,292 @@ class TestGitHubExecutable:
         assert calls[0][0] == "configured-reader"
         assert report.repos_scanned == []
         assert report.unreachable[0]["repo"] == "example/server"
+
+
+class TestStewardshipReceipt:
+    def _verdict(self, triage, **overrides):
+        values = {
+            "repo": "example/server",
+            "number": 17,
+            "title": "chore(deps): bump pydantic from 2.1.0 to 2.1.1",
+            "verdict": triage.MERGE,
+            "reason": "patch bump",
+            "checks": "SUCCESS:2",
+            "mergeable": "MERGEABLE",
+            "check_gate": "pass",
+            "head_sha": "abc123",
+            "merge_state": "CLEAN",
+            "github_state": "OPEN",
+            "approved": False,
+            "armed": False,
+            "url": "https://github.com/example/server/pull/17",
+        }
+        values.update(overrides)
+        return triage.Verdict(**values)
+
+    def test_receipt_claims_a_stable_role_and_not_a_process_identity(self, triage):
+        report = triage.Report(
+            verdicts=[self._verdict(triage)],
+            repos_scanned=["example/server"],
+        )
+        receipt = triage.build_stewardship_receipt(
+            report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        item = receipt["items"][0]
+        assert receipt["schema"] == "unitares.dependency_steward.v1"
+        assert receipt["owner_role"] == item["owner_role"] == "dependency-steward"
+        assert item["phase"] == "ready"
+        assert item["terminal_state"] is None
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_only_github_merged_or_closed_completes_a_tracked_pr(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="BLOCKED")],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        calls = []
+
+        def merged(args, *, executable="gh"):
+            calls.append((args, executable))
+            return {
+                "state": "MERGED",
+                "mergedAt": "2026-10-27T12:15:00Z",
+                "closedAt": "2026-10-27T12:15:00Z",
+                "headRefOid": "abc123",
+                "url": "https://github.com/example/server/pull/17",
+            }
+
+        monkeypatch.setattr(triage, "gh_json", merged)
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            gh_executable="scoped-reader",
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "terminal"
+        assert item["terminal_state"] == "MERGED"
+        assert item["completed_at"] == "2026-10-27T12:15:00Z"
+        assert calls == [
+            (["pr", "view", "17", "--repo", "example/server", "--json",
+              "state,mergedAt,closedAt,headRefOid,url"], "scoped-reader")
+        ]
+
+    def test_missing_open_pr_is_not_completion_when_terminal_read_fails(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True)],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+
+        def refused(*args, **kwargs):
+            raise RuntimeError("reader refused")
+
+        monkeypatch.setattr(triage, "gh_json", refused)
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "queued"
+        assert item["terminal_state"] is None
+        assert item["observation_status"] == "terminal_lookup_failed"
+        assert item["next_action"].startswith("Restore GitHub read coverage")
+        assert receipt["reconciliation_errors"] == [
+            {"key": "example/server#17", "error": "reader refused"}
+        ]
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_armed_blocked_pr_with_passing_checks_is_explicit_attention(self, triage):
+        report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="BLOCKED")],
+            repos_scanned=["example/server"],
+        )
+        receipt = triage.build_stewardship_receipt(
+            report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        assert receipt["items"][0]["phase"] == "opaque_blocked"
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_receipt_write_is_valid_json(self, triage, tmp_path):
+        path = tmp_path / "state" / "receipt.json"
+        payload = {"schema": "unitares.dependency_steward.v1", "items": []}
+        triage.write_receipt(path, payload)
+        assert json.loads(path.read_text()) == payload
+        assert list(path.parent.glob(".*.tmp.*")) == []
+
+    def test_allowlisted_unreachable_repo_retains_state_without_attention(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="CLEAN")],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        monkeypatch.setattr(triage, "gh_json", lambda *args, **kwargs: pytest.fail("unexpected PR read"))
+        report = triage.Report(unreachable=[{"repo": "EXAMPLE/server", "error": "policy"}])
+        receipt = triage.build_stewardship_receipt(
+            report,
+            repos=["example/server"],
+            previous=prior,
+            allowed_unreachable={"example/server"},
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "queued"
+        assert item["last_transition_at"] == "2026-10-27T12:00:00Z"
+        assert item["observation_status"] == "coverage_unreachable_allowed"
+        assert receipt["reconciliation_errors"] == []
+        assert not triage.receipt_needs_attention(receipt)
+
+    def test_out_of_scope_items_are_preserved_without_driving_this_run(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage)],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        monkeypatch.setattr(triage, "gh_json", lambda *args, **kwargs: pytest.fail("unexpected PR read"))
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["other/repo"]),
+            repos=["other/repo"],
+            previous=prior,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        assert len(receipt["items"]) == 1
+        assert receipt["items"][0]["phase"] == "ready"
+        assert receipt["items"][0]["observation_status"] == "out_of_scope"
+        assert not triage.receipt_needs_attention(receipt)
+
+    def test_open_pr_absent_from_listing_keeps_last_known_phase(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="CLEAN")],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        monkeypatch.setattr(
+            triage,
+            "gh_json",
+            lambda *args, **kwargs: {
+                "state": "OPEN",
+                "mergedAt": None,
+                "closedAt": None,
+                "headRefOid": "new456",
+                "url": "https://github.com/example/server/pull/17?fresh=1",
+            },
+        )
+        receipt = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = receipt["items"][0]
+        assert item["phase"] == "queued"
+        assert item["last_transition_at"] == "2026-10-27T12:00:00Z"
+        assert item["observation_status"] == "open_absent_from_list"
+        assert item["head_sha"] == "new456"
+        assert item["url"].endswith("?fresh=1")
+        assert item["next_action"].startswith("Reconcile why this Dependabot PR is open")
+        assert receipt["reconciliation_errors"] == [
+            {"key": "example/server#17", "error": "PR is open but absent from the Dependabot open-PR listing"}
+        ]
+        assert triage.receipt_needs_attention(receipt)
+
+    def test_lookup_recovery_replaces_the_observation_action_and_refreshes_head(self, triage, monkeypatch):
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, armed=True, merge_state="CLEAN")],
+            repos_scanned=["example/server"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["example/server"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        monkeypatch.setattr(
+            triage,
+            "gh_json",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("reader refused")),
+        )
+        failed = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=prior,
+            observed_at="2026-10-27T12:10:00Z",
+        )
+        assert failed["items"][0]["phase"] == "queued"
+        assert failed["items"][0]["next_action"].startswith("Restore GitHub read coverage")
+
+        monkeypatch.setattr(
+            triage,
+            "gh_json",
+            lambda *args, **kwargs: {
+                "state": "OPEN",
+                "mergedAt": None,
+                "closedAt": None,
+                "headRefOid": "new456",
+                "url": "https://github.com/example/server/pull/17?fresh=1",
+            },
+        )
+        recovered = triage.build_stewardship_receipt(
+            triage.Report(repos_scanned=["example/server"]),
+            repos=["example/server"],
+            previous=failed,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        item = recovered["items"][0]
+        assert item["phase"] == "queued"
+        assert item["last_transition_at"] == "2026-10-27T12:00:00Z"
+        assert item["head_sha"] == "new456"
+        assert item["url"].endswith("?fresh=1")
+        assert item["next_action"].startswith("Reconcile why this Dependabot PR is open")
+
+    def test_repository_case_change_reconciles_one_existing_item(self, triage, monkeypatch):
+        monkeypatch.setattr(triage, "gh_json", lambda *args, **kwargs: pytest.fail("unexpected PR read"))
+        prior_report = triage.Report(
+            verdicts=[self._verdict(triage, repo="Owner/Repo")],
+            repos_scanned=["Owner/Repo"],
+        )
+        prior = triage.build_stewardship_receipt(
+            prior_report,
+            repos=["Owner/Repo"],
+            observed_at="2026-10-27T12:00:00Z",
+        )
+        current_report = triage.Report(
+            verdicts=[self._verdict(triage, repo="owner/repo")],
+            repos_scanned=["owner/repo"],
+        )
+        receipt = triage.build_stewardship_receipt(
+            current_report,
+            repos=["owner/repo"],
+            previous=prior,
+            observed_at="2026-10-27T12:20:00Z",
+        )
+        assert len(receipt["items"]) == 1
+        assert receipt["items"][0]["key"] == "owner/repo#17"
+        assert receipt["items"][0]["first_seen_at"] == "2026-10-27T12:00:00Z"

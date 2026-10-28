@@ -1,0 +1,4 @@
+- **dialectic_live install:** three gaps fixed (KG `2026-10-27T22:16:58.919702+00:00`).
+  - `scripts/start.sh` takes only the app's own names from the selected secrets file: its two credentials, `SECRET_KEY_BASE`, `PORT`, and `DIALECTIC_LIVE_*`, `GOVERNANCE_*`, `TIMELINE_*` and `PHX_*`. It no longer sources the whole file, which handed the app every credential in it. A missing configuration now exits 0.
+  - The plist template says loading starts the app (any `KeepAlive` implies `RunAtLoad`), and its `KeepAlive` is now `{SuccessfulExit: false}`, so an unconfigured app stops instead of looping.
+  - `deploy-dialectic-live.sh` rolls the shared worktree back when the fetch, compile or asset build fails. It also restarts through `deploy_lib_restart_service`, so a changed plist is reloaded instead of the cached definition being kickstarted.

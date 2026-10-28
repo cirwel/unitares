@@ -82,6 +82,7 @@ GATE_CALLS = (
     "_session_gate",      # dashboard session routes: validated session
     "_auth_or_response",  # Wave 3a probe: WAVE_3A_PROBE_TOKEN, fail-closed
     "_is_operator",       # Wave 3a admin: operator credential
+    "_hub_signin_gate",   # hub approval page: a fresh passkey session, else sign-in
 )
 
 # Modules that register GET routes on the production app. http_api.py is the
@@ -168,7 +169,10 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # for the Discoveries panel). Gated.
 # 49 -> 50: /v1/timeline (every agent's check-ins, outcomes, lifecycle,
 # knowledge, lineage and dialectic events in one window). Gated.
-EXPECTED_GET_ROUTES = 50
+# 50 -> 51: /auth/hub/authorize (the hub sign-in approval page). Its GET
+# needs a fresh dashboard session (_hub_signin_gate) and answers 404 until the
+# hub handoff is configured.
+EXPECTED_GET_ROUTES = 51
 
 
 def test_route_registry_is_readable():

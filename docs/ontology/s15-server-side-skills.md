@@ -27,7 +27,7 @@ This produces three structural failures:
 
 ### 1a. Skill bundles (content)
 
-**`unitares/skills/`** (server repo, 6 skills):
+**`unitares/skills/`** (server repo, 6 skills at the 2026-04-25 snapshot; `discord-bridge/SKILL.md` was later retired in `#2518`):
 - `dialectic-reasoning/SKILL.md`
 - `discord-bridge/SKILL.md`
 - `governance-fundamentals/SKILL.md`
