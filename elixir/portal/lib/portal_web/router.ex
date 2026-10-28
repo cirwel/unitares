@@ -29,6 +29,11 @@ defmodule PortalWeb.Router do
     pipe_through :browser
 
     get "/signin", SigninController, :show
+    get "/signin/start", SigninController, :start
+    # Must match the server's UNITARES_HUB_CALLBACK_URL exactly.
+    get "/auth/callback", SigninController, :callback
+    get "/signout", SigninController, :confirm_signout
+    post "/signout", SigninController, :signout
   end
 
   # The one live_session. Its on_mount guard runs on the page render and

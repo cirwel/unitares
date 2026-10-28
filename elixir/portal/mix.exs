@@ -50,7 +50,9 @@ defmodule Portal.MixProject do
       {:jason, "~> 1.2"},
       # The socket-Origin boundary test drives a real WebSocket upgrade.
       {:mint_web_socket, "~> 1.0", only: :test},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      # Calls the governance server over its owner-only Unix socket (H2c).
+      {:req, "~> 0.7"}
     ]
   end
 
