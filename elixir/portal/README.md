@@ -44,7 +44,9 @@ supervisor of their own, so a governance outage stays there.
 Its styles come from Tailwind and daisyUI, built into
 `priv/static/assets/css/hub.css` by `mix assets.deploy`. That file is not
 committed. On macOS 27 the downloaded Tailwind CLI must be re-signed ad hoc
-before it runs (see `dialectic_live/scripts/prepare-asset-binaries.sh`).
+before it runs: `elixir/portal/scripts/build-assets.sh` does that through
+`elixir/portal/scripts/prepare-asset-binaries.sh`, so it builds where a bare
+`mix setup` would be killed.
 
 The LiveView client is served straight from the pinned dependencies
 (`/assets/vendor/phoenix.min.js`, `/assets/vendor/phoenix_live_view.min.js`),
@@ -65,6 +67,27 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 ```
 
 `/health` answers `{"ok": true}` and nothing else.
+
+## Install (macOS, launchd)
+
+`scripts/ops/com.unitares.portal.plist.template` runs `elixir/portal/scripts/start.sh`
+under launchd as `com.unitares.portal`. Loading it starts the hub. `start.sh`
+reads its credentials only from its environment and never sources a secrets
+file, so the browser-facing hub holds exactly its own keys; supply them
+through the service manager, for example with a wrapper that exports only the
+named keys. If they are missing, `start.sh` logs why and exits 0, and launchd
+restarts the hub only after a failing exit, so a premature load leaves it
+stopped rather than looping. Render it against the deploy worktree and load it
+as its header says. Then `cirwel update` deploys it
+through `scripts/ops/deploy-portal.sh`. That script compiles, builds
+`hub.css` (`elixir/portal/scripts/build-assets.sh --strict`), restarts, and checks `/health`
+and that the LiveView socket answers `101` for the hub's Origin and `403` for
+any other. It rolls the shared worktree back if the hub does not come up.
+
+`start.sh` will not boot without `PORTAL_SECRET_KEY_BASE`. On every boot
+it rebuilds the stylesheet only when the one on disk is not this checkout's,
+and it serves the previous build rather than exit if a rebuild fails, so a
+killed Tailwind CLI cannot become a restart loop.
 
 ## Configuration
 
@@ -96,6 +119,5 @@ printf 'sha256:%s\n' "$(printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1)"
 
 ## What comes next
 
-- **H2d-3:** registration with `cirwel update`, including the asset build.
 - After routine use: remove `dialectic_live`'s copy of the timeline.
 - **H3 onward:** resume and start sessions through the orchestrator's launch profiles.
