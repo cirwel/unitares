@@ -11,7 +11,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import ipaddress as _ipaddress
+import os
+import re
 import secrets
 
 from starlette.responses import JSONResponse
@@ -451,6 +454,73 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     # Fail closed when UNITARES_HTTP_API_TOKEN is unset. Removing the token is
     # a deliberate lockout of non-session, non-trusted clients—not cleanup.
     return False
+
+
+# ---------------------------------------------------------------------------
+# Read-only keys (operator decision 2026-10-27, KG 2026-10-27T19:26:49.785412)
+# ---------------------------------------------------------------------------
+# A client that only reads, such as the operator hub's timeline, holds a key
+# that cannot write. The server keeps only its digest: UNITARES_READ_ONLY_TOKENS
+# lists ``sha256:<64 hex>`` entries, comma-separated, so the service
+# environment carries no secret (the pattern of src/http_agent_tokens.py).
+# Generate a key with ``openssl rand -hex 32`` and list ``sha256(key)``.
+# Only the routes that call _check_read_auth / _check_ws_read_auth accept one:
+# GET /v1/timeline and the /ws/eisv stream. Every other route, through
+# _check_http_auth or _check_ws_auth, refuses it as it would any unknown
+# token. A malformed entry disables every read-only key (fail closed) and logs
+# an error. Unset (the default), nothing changes.
+
+READ_ONLY_TOKENS_ENV = "UNITARES_READ_ONLY_TOKENS"
+READ_ONLY_TOKEN_MIN_LENGTH = 32
+_READ_ONLY_DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
+
+
+def read_only_token_digests() -> list[bytes]:
+    """Read the read-only key digests (``sha256:<64 hex>``, comma-separated); a malformed entry disables them all."""
+    raw = os.getenv(READ_ONLY_TOKENS_ENV, "")
+    digests = []
+    for position, entry in enumerate((part.strip() for part in raw.split(",")), start=1):
+        if not entry:
+            continue
+        match = _READ_ONLY_DIGEST_RE.fullmatch(entry)
+        if not match:
+            logger.error(
+                "%s entry %d is not sha256:<64 lowercase hex>; every read-only key is disabled",
+                READ_ONLY_TOKENS_ENV,
+                position,
+            )
+            return []
+        digests.append(bytes.fromhex(match.group(1)))
+    return digests
+
+
+def _read_only_token_valid(token: str | None) -> bool:
+    if not token or len(token) < READ_ONLY_TOKEN_MIN_LENGTH:
+        return False
+    presented = hashlib.sha256(token.encode("utf-8")).digest()
+    matched = False
+    for known in read_only_token_digests():
+        # Compare every entry, so timing does not say which one matched.
+        matched |= secrets.compare_digest(presented, known)
+    return matched
+
+
+def _check_read_auth(request, *, http_api_token: str | None) -> bool:
+    """Auth for a read-only REST route: whatever _check_http_auth accepts, or a read-only key."""
+    if _check_http_auth(request, http_api_token=http_api_token):
+        return True
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    return _read_only_token_valid(_bearer_from_header(auth))
+
+
+def _check_ws_read_auth(websocket, *, http_api_token: str | None) -> bool:
+    """Auth for a read-only WebSocket: whatever _check_ws_auth accepts, or a read-only key."""
+    if _check_ws_auth(websocket, http_api_token=http_api_token):
+        return True
+    token = _bearer_from_header(
+        websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    ) or _bearer_from_subprotocols(websocket)
+    return _read_only_token_valid(token)
 
 
 async def _extract_client_session_id(request) -> tuple[str, bool]:

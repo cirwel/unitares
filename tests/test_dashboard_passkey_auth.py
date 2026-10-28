@@ -626,7 +626,8 @@ async def test_last_credential_requires_fresh_step_up(monkeypatch):
 
 def test_websocket_gate_precedes_accept():
     source = inspect.getsource(http_api.websocket_eisv_stream)
-    assert source.index("_check_ws_auth") < source.index("broadcaster_instance.connect")
+    # The read-only variant runs _check_ws_auth first (test_read_only_tokens.py).
+    assert source.index("_check_ws_read_auth") < source.index("broadcaster_instance.connect")
 
 
 def test_cors_does_not_allow_credentials():

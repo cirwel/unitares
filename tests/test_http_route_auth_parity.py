@@ -79,6 +79,7 @@ PUBLIC_BY_DESIGN = {
 # below are what pin behavior for the routes this change closed.
 GATE_CALLS = (
     "_check_http_auth",   # REST data routes: bearer or trusted network
+    "_check_read_auth",   # read-only REST routes: _check_http_auth, or a read-only key
     "_session_gate",      # dashboard session routes: validated session
     "_auth_or_response",  # Wave 3a probe: WAVE_3A_PROBE_TOKEN, fail-closed
     "_is_operator",       # Wave 3a admin: operator credential
