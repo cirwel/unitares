@@ -132,8 +132,23 @@ def fork_honest_message(
         )
 
     if episode_fork_kind == "identity_lineage":
-        parent_display = parent_uuid or "unknown"
         spawn_display = spawn_reason or "unknown"
+        if not parent_uuid:
+            # A lineage spawn_reason alone classifies as identity_lineage
+            # (classify_episode_fork), but with no parent visible there is no
+            # edge to describe: saying "declared parent unknown ... Lineage was
+            # declared" read as a recorded lineage beside
+            # lineage_state=no_lineage_declared. Hedged, not "none was
+            # declared": a rejected parent and the R6 sync race (an edge in
+            # storage not yet on the session metadata) also arrive here.
+            return (
+                "You are a distinct subject (a fresh UUID, spawn_reason "
+                f"{spawn_display}). No parent_agent_id is visible on this "
+                "fork, so this message describes no lineage edge, and an "
+                "earlier node on this thread is not your parent by sharing "
+                "it. lineage_state is the record of whether an edge exists."
+            )
+        parent_display = parent_uuid
         return (
             "You are a distinct subject (a fresh UUID under declared parent "
             f"{parent_display}, spawn_reason {spawn_display}). Lineage was "

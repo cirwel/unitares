@@ -406,6 +406,27 @@ async def test_a_declared_lineage_mint_keeps_the_whole_record_and_says_why():
 
 
 @pytest.mark.asyncio
+async def test_a_lineage_spawn_reason_without_a_parent_does_not_claim_recorded_lineage():
+    # Dogfood finding 7ff529440d65b7a1: spawn_reason=subagent with no
+    # parent_agent_id classifies as identity_lineage, and next_action said
+    # "Declared lineage ... is already recorded" beside no_lineage_declared.
+    arguments = {**_MODEL, "spawn_reason": "subagent"}
+    payload = await onboard_producer.mint(arguments, position=2)
+    env, _wire_bytes = await onboard_producer.start_session(arguments, payload)
+
+    assert payload["lineage_state"] == "no_lineage_declared"
+    assert payload["thread_context"]["episode_fork_kind"] == "identity_lineage"
+    assert env["state_summary"]["lineage_state"] == "no_lineage_declared"
+    assert env["state_summary"]["predecessor_uuid"] == _EARLIER
+    assert "already recorded" not in env["next_action"]
+    assert "spawn_reason alone records no lineage" in env["next_action"]
+    assert "A predecessor exists" not in payload.get("welcome", "")
+    honest = payload["thread_context"]["honest_message"]
+    assert "declared parent" not in honest
+    assert "describes no lineage edge" in honest
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", [{}, {"response_mode": "full"}], ids=["default", "full"])
 async def test_a_label_rename_keeps_the_whole_record_and_says_why(mode):
     """A refused label is abnormal and exists only in this response, so it is

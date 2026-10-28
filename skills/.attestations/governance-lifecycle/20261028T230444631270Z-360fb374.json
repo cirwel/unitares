@@ -1,0 +1,39 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-28T23:04:44Z",
+  "verified_date": "2026-10-28",
+  "verifier": "claude-opus-5-5 (UNITARES agent 15550ac6) re-checked envelope_step.py claims for PR #3127: the lifecycle skill's sibling_locus/predecessor_uuid/co-location next_action claim is unchanged by the PR (it only gates the 'already recorded' line on lineage_state and adds lineage-fork wording); unitares-governance envelope field claims (next_action, action_summary, typed refusal shape) unaffected",
+  "source_digests": {
+    "unitares/commands/closeout.md": "a295890758851260",
+    "unitares/src/agent_storage.py": "a9183c7ba16f1ecc",
+    "unitares/src/db/mixins/identity.py": "a349574205589e7b",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/governance_monitor.py": "165b38ccdd76283b",
+    "unitares/src/interface_contract.py": "7e9a511681a57085",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "d9c316bab3550511",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "aa3dca3feb9d9639",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "c9030614f118b5de",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/support/agent_auth.py": "f8e9124bf8bfe10b",
+    "unitares/src/mcp_handlers/support/pause_ttl.py": "2abc3f7d3c9432e7",
+    "unitares/src/mcp_handlers/tool_stability.py": "5471b6be3c292e93",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "cb3f512ccb38aed5",
+    "unitares/src/mcp_handlers/updates/phases.py": "0d66198249f41739",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "7967039273128b6c"
+  },
+  "skill_digest": "3c4557270d3cf8a7",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "82ce2e8d0a34d05b"
+    ]
+  }
+}
