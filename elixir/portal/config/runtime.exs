@@ -27,7 +27,8 @@ if config_env() != :test do
   # needed; without them the hub refuses everyone (Portal.Auth.Unconfigured).
   #   PORTAL_GOV_ORIGIN  the dashboard's origin, where the passkeys live
   #   PORTAL_GOV_SOCKET  the server's owner-only socket (UNITARES_UDS_SOCKET)
-  #   PORTAL_HUB_TOKEN   the hub credential (the server's UNITARES_HUB_TOKEN)
+  #   PORTAL_HUB_TOKEN   the raw hub key (the server's UNITARES_HUB_TOKEN holds
+  #                      its sha256: digest, never the key)
   gov_origin = System.get_env("PORTAL_GOV_ORIGIN", "")
   gov_socket = System.get_env("PORTAL_GOV_SOCKET", "")
   hub_token = System.get_env("PORTAL_HUB_TOKEN", "")
@@ -64,8 +65,8 @@ if config_env() == :prod do
 end
 
 # The timeline (portal-hub-v0 H2d-2b) reads with the hub's own read-only key
-# (operator decision 2026-10-27): the server's UNITARES_READ_ONLY_TOKENS,
-# accepted on /v1/timeline and /ws/eisv only. Without it the timeline does
+# (operator decision 2026-10-27), whose sha256: digest the server lists in
+# UNITARES_READ_ONLY_TOKENS, accepted on /v1/timeline and /ws/eisv only. Without it the timeline does
 # not start, rather than lean on the server trusting loopback.
 read_token = System.get_env("PORTAL_READ_TOKEN", "")
 

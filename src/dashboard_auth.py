@@ -903,7 +903,10 @@ async def http_auth_credential_revoke(request):
 # The /v1/hub routes answer only over the owner-only UDS listener, never
 # over TCP: the public tunnel arrives at a TCP listener from loopback, so the
 # accepting socket is the only property of a request it cannot choose. They
-# also need UNITARES_HUB_TOKEN, a credential scoped to these three routes.
+# also need the hub's key, a credential scoped to these three routes. The
+# server keeps only its digest: UNITARES_HUB_TOKEN is ``sha256:<64 hex>`` of
+# the key, so the service environment carries no secret (as with
+# UNITARES_HTTP_AGENT_TOKENS). Generate the key with ``openssl rand -hex 32``.
 # A hub session never extends its parent dashboard session; signing that
 # session out, its expiry, or revoking its passkey ends every hub session
 # made from it (the parent is minutes old at approval, with 30 days to run).
@@ -916,6 +919,7 @@ HUB_TOKEN_ENV = "UNITARES_HUB_TOKEN"
 HUB_CODE_TTL_SECONDS = 60
 HUB_SESSION_SECONDS = 24 * 60 * 60
 HUB_TOKEN_MIN_LENGTH = 32
+_HUB_TOKEN_DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
 HUB_LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 
 _HUB_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
@@ -966,8 +970,12 @@ def hub_config() -> tuple[dict[str, str] | None, str | None]:
             f"{HUB_CALLBACK_ENV} must be http://127.0.0.1:<port>/<path> "
             "(or [::1]) with no query, fragment or user info"
         )
-    if len(token) < HUB_TOKEN_MIN_LENGTH:
-        return None, f"{HUB_TOKEN_ENV} is not set or shorter than {HUB_TOKEN_MIN_LENGTH} characters"
+    digest = _HUB_TOKEN_DIGEST_RE.fullmatch(token)
+    if not digest:
+        return None, (
+            f"{HUB_TOKEN_ENV} must be sha256:<64 lowercase hex>, the digest of the hub's key "
+            "(the server keeps no copy of the key itself)"
+        )
     if not _hub_socket_supported():
         # The exchange, check and revoke routes answer only on the owner-only
         # socket, whose peer attestation runs on macOS alone. Approving a code
@@ -980,7 +988,7 @@ def hub_config() -> tuple[dict[str, str] | None, str | None]:
     return {
         "callback": callback,
         "origin": f"http://{host}:{port}",
-        "token": token,
+        "token_digest": bytes.fromhex(digest.group(1)),
     }, None
 
 
@@ -1123,8 +1131,11 @@ def _hub_internal_gate(request, config: dict[str, str]) -> JSONResponse | None:
         )
     authorization = request.headers.get("authorization", "")
     scheme, _, presented = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(
-        _sha256(presented.strip()), _sha256(config["token"])
+    presented = presented.strip()
+    if (
+        scheme.lower() != "bearer"
+        or len(presented) < HUB_TOKEN_MIN_LENGTH
+        or not secrets.compare_digest(_sha256(presented), config["token_digest"])
     ):
         return JSONResponse({"error": "hub credential required"}, status_code=401)
     return None

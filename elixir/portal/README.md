@@ -36,8 +36,8 @@ dashboard, whose passkeys are bound to the dashboard's domain:
 The home screen is the live timeline, copied from `dialectic_live`, whose copy
 stays until the hub has carried routine use. It reads `GET /v1/timeline` and
 the `/ws/eisv` stream with the hub's own read-only key, `PORTAL_READ_TOKEN`
-(the server's `UNITARES_READ_ONLY_TOKENS`), which the server accepts on those
-two routes only. Without the key the timeline does not start, and the page
+(whose digest the server lists in `UNITARES_READ_ONLY_TOKENS`), which the server
+accepts on those two routes only. Without the key the timeline does not start, and the page
 says so. The feed, its fetch tasks and the stream client run under a
 supervisor of their own, so a governance outage stays there.
 
