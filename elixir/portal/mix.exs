@@ -48,11 +48,14 @@ defmodule Portal.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
-      # The socket-Origin boundary test drives a real WebSocket upgrade.
-      {:mint_web_socket, "~> 1.0", only: :test},
+      # The timeline's stream client (Portal.Firehose); the socket-Origin
+      # boundary test drives a real WebSocket upgrade with it too.
+      {:mint_web_socket, "~> 1.0"},
       {:bandit, "~> 1.5"},
       # Calls the governance server over its owner-only Unix socket (H2c).
-      {:req, "~> 0.7"}
+      {:req, "~> 0.7"},
+      # Builds hub.css (Tailwind and daisyUI) at deploy; no Node.
+      {:tailwind, "~> 0.3", runtime: Mix.env() == :dev}
     ]
   end
 
@@ -64,7 +67,10 @@ defmodule Portal.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get"],
+      setup: ["deps.get", "assets.setup", "assets.build"],
+      "assets.setup": ["tailwind.install --if-missing"],
+      "assets.build": ["tailwind portal"],
+      "assets.deploy": ["tailwind portal --minify"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

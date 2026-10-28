@@ -1,8 +1,8 @@
 # Portal (the UNITARES hub)
 
 The local app from which an operator will see, start and resume agent
-sessions across vendors (`docs/proposals/active/portal-hub-v0.md`). So far it
-has the boundary and the sign-in; the timeline moves in next.
+sessions across vendors (`docs/proposals/active/portal-hub-v0.md`). It has the
+boundary, the sign-in, and the live timeline as its home screen.
 
 - **Loopback only.** It binds `127.0.0.1` and refuses to boot on any other
   address (`Portal.Boundary.check_bind!/1`). No setting widens it.
@@ -27,14 +27,40 @@ dashboard, whose passkeys are bound to the dashboard's domain:
    resulting handle.
 4. Every request asks the server, over that socket, whether the handle is
    still live. Signing out of the dashboard, or revoking its passkey, signs
-   the hub out on its next request. `/signout` ends the handle on the server.
+   the hub out on its next request. A page left open is asked again every 30
+   seconds (`config :portal, :reverify_ms`) and ends when the answer is no.
+   `/signout` ends the handle on the server.
+
+## Timeline
+
+The home screen is the live timeline, copied from `dialectic_live`, whose copy
+stays until the hub has carried routine use. It reads `GET /v1/timeline` and
+the `/ws/eisv` stream with the hub's own read-only key, `PORTAL_READ_TOKEN`
+(whose digest the server lists in `UNITARES_READ_ONLY_TOKENS`), which the server
+accepts on those two routes only. Without the key the timeline does not start, and the page
+says so. The feed, its fetch tasks and the stream client run under a
+supervisor of their own, so a governance outage stays there.
+
+Its styles come from Tailwind and daisyUI, built into
+`priv/static/assets/css/hub.css` by `mix assets.deploy`. That file is not
+committed. On macOS 27 the downloaded Tailwind CLI must be re-signed ad hoc
+before it runs (see `dialectic_live/scripts/prepare-asset-binaries.sh`).
+
+The LiveView client is served straight from the pinned dependencies
+(`/assets/vendor/phoenix.min.js`, `/assets/vendor/phoenix_live_view.min.js`),
+so the hub needs no JavaScript build step.
 
 The server half is `src/dashboard_auth.py`. It needs migration 079, and its
 `UNITARES_HUB_CALLBACK_URL` must be this hub's `/auth/callback` exactly.
 
+`mix setup` fetches the dependencies and the Tailwind CLI and builds
+`hub.css`. The timeline's lanes are positioned by that stylesheet, so build it
+before starting the hub, and again with `mix assets.deploy` for production:
+
 ```sh
-mix deps.get
+mix setup
 mix test
+MIX_ENV=prod mix assets.deploy
 PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run --no-halt
 ```
 
@@ -50,13 +76,19 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 | `PORTAL_GOV_ORIGIN` | none | The dashboard's origin, where the browser approves a sign-in. `https`, or `http` on loopback only. |
 | `PORTAL_GOV_SOCKET` | none | The governance server's owner-only socket (its `UNITARES_UDS_SOCKET`). |
 | `PORTAL_HUB_TOKEN` | none | The hub credential, a raw key of at least 32 characters. The server's `UNITARES_HUB_TOKEN` holds its digest, not the key. |
+| `PORTAL_READ_TOKEN` | none | The timeline's read-only key, a raw key of at least 32 characters. The server's `UNITARES_READ_ONLY_TOKENS` lists its digest, not the key. |
+| `PORTAL_GOV_TIMELINE_URL` | `http://127.0.0.1:8767/v1/timeline` | Where the timeline is read. |
+| `PORTAL_GOV_WS_URL` | `ws://127.0.0.1:8767/ws/eisv` | The governance event stream. |
+| `PORTAL_TIMELINE_WINDOW_HOURS` | `1` | The window shown on open. |
+| `PORTAL_TIMELINE_REREAD_MS` | `60000` | The re-read floor while someone is watching. |
 
 Sign-in is on only when all three `PORTAL_GOV_*`/`PORTAL_HUB_TOKEN` settings are set.
 
-The server never stores the key. `UNITARES_HUB_TOKEN` is `sha256:` followed
+The server never stores either key. Each server entry is `sha256:` followed
 by the key's SHA-256 digest in 64 lowercase hex characters; the server hashes
-the key the hub presents and compares the digests. A raw key there is
-malformed and turns hub sign-in off. For a key held in `KEY`:
+the key a request presents and compares the digests. A raw key in a server
+variable is malformed, and a malformed entry turns that variable's keys off.
+For a key held in `KEY`:
 
 ```sh
 printf 'sha256:%s\n' "$(printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1)"
@@ -64,5 +96,6 @@ printf 'sha256:%s\n' "$(printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1)"
 
 ## What comes next
 
-- **H2d:** the timeline as the home screen, and registration with `cirwel update`.
+- **H2d-3:** registration with `cirwel update`, including the asset build.
+- After routine use: remove `dialectic_live`'s copy of the timeline.
 - **H3 onward:** resume and start sessions through the orchestrator's launch profiles.
