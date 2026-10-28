@@ -369,6 +369,25 @@ class TestBuildForkContext:
         assert ctx["episode_fork_kind"] == "identity_lineage"
         assert ctx["identity_lineage_fork"] is True
 
+    def test_lineage_spawn_reason_without_parent_declares_no_edge(self):
+        ctx = build_fork_context(
+            thread_id="t-test",
+            position=2,
+            parent_uuid=None,
+            spawn_reason="subagent",
+            all_nodes=[
+                {"agent_id": "uuid-1", "thread_position": 1, "label": None},
+                {"agent_id": "uuid-2", "thread_position": 2, "label": None},
+            ],
+            agent_uuid="uuid-2",
+            minted_fresh=True,
+        )
+        assert ctx["episode_fork_kind"] == "identity_lineage"
+        assert "declared parent" not in ctx["honest_message"]
+        assert "Lineage was declared" not in ctx["honest_message"]
+        assert "declares no lineage edge" in ctx["honest_message"]
+        assert "spawn_reason subagent" in ctx["honest_message"]
+
     def test_subagent_spawn_reason_in_message(self):
         ctx = build_fork_context(
             thread_id="t-test",

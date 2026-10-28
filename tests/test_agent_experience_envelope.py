@@ -354,6 +354,65 @@ def test_onboard_envelope_does_not_redeclare_recorded_lineage():
     assert "future process" not in env["next_action"]
 
 
+def test_onboard_envelope_does_not_claim_lineage_a_spawn_reason_alone_implies():
+    # A lineage spawn_reason with no parent_agent_id still sets the fork flag;
+    # the predecessor is then only the previous thread node.
+    payload = {
+        "success": True,
+        "uuid": "u-new",
+        "lineage_state": "no_lineage_declared",
+        "thread_context": {
+            "predecessor": {"uuid": "u-prior"},
+            "episode_fork_kind": "identity_lineage",
+            "identity_lineage_fork": True,
+        },
+    }
+
+    env = build_experience_envelope("start_session", "onboard", payload)
+
+    assert env["state_summary"]["lineage_state"] == "no_lineage_declared"
+    assert "already recorded" not in env["next_action"]
+    assert "spawn_reason was given without parent_agent_id" in env["next_action"]
+
+
+@pytest.mark.parametrize("state", ["rejected_cross_role", "rejected_coincidental"])
+def test_onboard_envelope_names_a_rejected_parent_instead_of_recorded_lineage(state):
+    payload = {
+        "success": True,
+        "uuid": "u-new",
+        "lineage_state": state,
+        "thread_context": {
+            "predecessor": {"uuid": "u-parent"},
+            "episode_fork_kind": "identity_lineage",
+            "identity_lineage_fork": True,
+        },
+    }
+
+    env = build_experience_envelope("start_session", "onboard", payload)
+
+    assert "already recorded" not in env["next_action"]
+    assert f"lineage_state={state}" in env["next_action"]
+    assert env["response_shape"] == "full"
+
+
+@pytest.mark.parametrize("state", ["provisional", "confirmed"])
+def test_onboard_envelope_reports_recorded_lineage_for_live_edges(state):
+    payload = {
+        "success": True,
+        "uuid": "u-new",
+        "lineage_state": state,
+        "thread_context": {
+            "predecessor": {"uuid": "u-parent"},
+            "episode_fork_kind": "identity_lineage",
+            "identity_lineage_fork": True,
+        },
+    }
+
+    env = build_experience_envelope("start_session", "onboard", payload)
+
+    assert "Declared lineage for this fork is already recorded" in env["next_action"]
+
+
 def test_onboard_envelope_surfaces_recorded_creation_origin():
     payload = {
         "success": True,

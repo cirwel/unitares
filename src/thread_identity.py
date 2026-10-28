@@ -132,8 +132,20 @@ def fork_honest_message(
         )
 
     if episode_fork_kind == "identity_lineage":
-        parent_display = parent_uuid or "unknown"
         spawn_display = spawn_reason or "unknown"
+        if not parent_uuid:
+            # A lineage spawn_reason alone classifies as identity_lineage
+            # (classify_episode_fork), but with no parent there is no edge to
+            # describe: saying "declared parent unknown" read as a recorded
+            # lineage beside lineage_state=no_lineage_declared.
+            return (
+                "You are a distinct subject (a fresh UUID, spawn_reason "
+                f"{spawn_display}). No parent_agent_id accompanies this fork, "
+                "so it declares no lineage edge: an earlier node on this "
+                "thread is not your parent. Declaring a parent takes "
+                "parent_agent_id, not spawn_reason alone."
+            )
+        parent_display = parent_uuid
         return (
             "You are a distinct subject (a fresh UUID under declared parent "
             f"{parent_display}, spawn_reason {spawn_display}). Lineage was "

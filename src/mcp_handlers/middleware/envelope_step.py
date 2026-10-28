@@ -208,6 +208,10 @@ _ONBOARD_LIFT_KEYS = (
 # carries the whole onboard record, because those facts exist only in the
 # mint's own response (identity() re-reads the binding, not how it was made).
 _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
+# lineage_state values that mean a parent edge is on the record
+# (src/identity/lineage_lifecycle.derive_lineage_state, plus onboard's
+# "provisional"). Rejected, demoted and archived edges are not live.
+_RECORDED_LINEAGE_STATES = frozenset({"declared", "provisional", "confirmed"})
 # Compact identity_assurance for a mint that went as asked. The operator guide
 # tells agents to confirm the binding from tier and session_source here.
 # The minimal onboard payload carries its source only here (it has no
@@ -2884,10 +2888,31 @@ def build_experience_envelope(
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
             lineage_fork = thread_context.get("identity_lineage_fork")
-            if fork_kind == "identity_lineage" and lineage_fork is True:
+            lineage_state = payload.get("lineage_state")
+            # The fork flag alone is not a recorded edge: a lineage
+            # spawn_reason with no parent_agent_id also sets it, and then the
+            # predecessor is only the previous thread node. Only lineage_state
+            # says whether an edge was recorded.
+            if (
+                fork_kind == "identity_lineage"
+                and lineage_fork is True
+                and lineage_state in _RECORDED_LINEAGE_STATES
+            ):
                 next_action += (
                     " Declared lineage for this fork is already recorded; do not "
                     "redeclare it on the current session."
+                )
+            elif isinstance(lineage_state, str) and lineage_state.startswith("rejected"):
+                next_action += (
+                    f" The declared parent was not recorded as lineage "
+                    f"(lineage_state={lineage_state}); the full record says why."
+                )
+            elif fork_kind == "identity_lineage" and lineage_fork is True:
+                next_action += (
+                    " spawn_reason was given without parent_agent_id, so no "
+                    "lineage was recorded and the earlier thread node is not "
+                    "your parent. To declare a parent, pass parent_agent_id "
+                    "to start_session."
                 )
             else:
                 next_action += (
