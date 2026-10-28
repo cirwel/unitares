@@ -25,3 +25,5 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 portal-*.tar
 
+# Built by `mix assets.deploy` (Tailwind); not committed.
+/priv/static/assets/css/hub.css
