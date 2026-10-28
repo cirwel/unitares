@@ -123,3 +123,21 @@ def test_the_deploy_rolls_back_a_failed_build_and_reloads_a_changed_plist():
     assert block.count("&&") == 4  # set -e is off inside a condition
     assert 'deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"' in text
     assert "launchctl kickstart" not in text
+
+
+def test_a_file_that_fails_to_source_stops_cleanly(tmp_path):
+    app, env = _app(tmp_path)
+    broken = tmp_path / "broken.env"
+    broken.write_text("DIALECTIC_LIVE_SECRET_KEY_BASE=ok\nif then\n")
+    broken.chmod(0o600)
+    proc = _start(app, {**env, "UNITARES_SECRETS_ENV": str(broken), "SECRET_KEY_BASE": "from-service"})
+    assert proc.returncode == 0
+    assert "could not be read (it failed to source)" in proc.stderr
+    assert "skb=" not in proc.stdout  # the app never started
+
+
+def test_the_rollback_restarts_even_when_the_settings_check_fails():
+    text = DEPLOY.read_text()
+    body = text[text.index("roll_back() {"):text.index("\n}\n", text.index("roll_back() {"))]
+    check = body.index("deploy_lib_require_loaded_secrets_env")
+    assert body[check:body.index("\n", body.index("\n", check) + 1)].count("||") == 1

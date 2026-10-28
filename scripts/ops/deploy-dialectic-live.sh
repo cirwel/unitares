@@ -56,7 +56,11 @@ roll_back() {
   ( cd "$DEPLOY/elixir/dialectic_live" && export MIX_ENV=prod && mix compile \
       && if [ -x scripts/build-assets.sh ]; then scripts/build-assets.sh --strict; else mix assets.deploy; fi ) || \
     echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
-  deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL"
+  # A warning here, not a stop: a failed reload can leave the job unloaded,
+  # which this check reports as a failure, and the restart below is what
+  # bootstraps an unloaded job again.
+  deploy_lib_require_loaded_secrets_env "$TAG" "$PLIST" "gui/$UID_NUM/$LABEL" || \
+    echo "[deploy] WARNING: could not confirm the job's loaded settings; restarting anyway." >&2
   deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST" || \
     echo "[deploy] WARNING: the rollback restart failed too." >&2
   echo "[deploy] rolled back. Investigate:" >&2

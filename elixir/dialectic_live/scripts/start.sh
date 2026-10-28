@@ -28,8 +28,14 @@ not_configured() {
 }
 
 load_own_settings() {
-  local name value
+  local name value loaded=0
   while IFS= read -r -d '' name && IFS= read -r -d '' value; do
+    # The reader's last record says the file loaded in full; without it the
+    # file failed to source, and its settings must not silently go missing.
+    if [ "$name" = "__LOADED__" ]; then
+      loaded=1
+      continue
+    fi
     export "$name=$value"
   done < <(
     env -i HOME="$HOME" PATH="$PATH" /bin/bash -c '
@@ -43,8 +49,10 @@ load_own_settings() {
             printf "%s\0%s\0" "$n" "${!n}" ;;
         esac
       done
+      printf "__LOADED__\0\0"
     ' load-own-settings "$1"
   )
+  [ "$loaded" = 1 ] || not_configured "the selected settings file could not be read (it failed to source)."
 }
 
 SECRETS="${UNITARES_SECRETS_ENV:-}"
