@@ -770,20 +770,38 @@ defmodule PortalWeb.TimelineLiveTest do
       }
     end
 
+    c = "00000000-0000-4000-8000-0000000000c3"
+
+    checkin = fn agent, ms ->
+      %{
+        "kind" => "checkin",
+        "ts" => iso(ms),
+        "agent_id" => agent,
+        "authored_by" => "agent",
+        "action" => "risk_pause"
+      }
+    end
+
     ctx =
       feed_with([
+        checkin.(@a, -40_000),
         lifecycle.(@a, "lifecycle_paused", -30_000, "p1"),
         lifecycle.(@a, "lifecycle_archived", -20_000, "x1"),
-        lifecycle.(@b, "lifecycle_archived", -20_000, "x2")
+        lifecycle.(@b, "lifecycle_archived", -20_000, "x2"),
+        # Archived first, then a pause verdict: the verdict is newer.
+        lifecycle.(c, "lifecycle_archived", -20_000, "x3"),
+        checkin.(c, -10_000)
       ])
 
     view = mount_live(conn, ctx)
 
     [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
     assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    # Neither the pause nor the pause verdict before the archive needs anyone.
     refute has_element?(view, "#attention-#{@a}")
     # An archive with no pause before it draws no band.
     refute has_element?(view, "#agent-#{@b} .tl-band.pause")
+    assert has_element?(view, "#attention-#{c}", "pause verdict")
   end
 
   test "a hard stop recorded as its sub-action is a pause verdict", %{conn: conn} do

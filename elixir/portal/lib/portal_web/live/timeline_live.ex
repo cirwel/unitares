@@ -715,12 +715,20 @@ defmodule PortalWeb.TimelineLive do
     verdict =
       Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(verdict_of(m)) end)
 
+    # An archive after the agent's latest check-in settles it: the agent is
+    # gone, so its last verdict no longer asks anything of a person.
+    archived_after? =
+      verdict &&
+        Enum.any?(newest, fn {_, m} ->
+          m["event_type"] == "lifecycle_archived" and sort_key(m) > sort_key(elem(verdict, 1))
+        end)
+
     cond do
       pause && open_pause?(pause, resume, resumed_us) ->
         {pid, pm} = pause
         %{sel: pid, reason: "paused since " <> clock(pm["ts"])}
 
-      verdict && action_class(verdict_of(elem(verdict, 1))) == "pause" ->
+      verdict && not archived_after? && action_class(verdict_of(elem(verdict, 1))) == "pause" ->
         {vid, vm} = verdict
         %{sel: vid, reason: "its latest check-in drew a pause verdict at " <> clock(vm["ts"])}
 
