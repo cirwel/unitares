@@ -46,6 +46,7 @@ RELEVANT_PREFIXES: tuple[str, ...] = (
     "elixir/unitares_sdk/",
     "elixir/agent_orchestrator/",
     "elixir/dialectic_live/",
+    "elixir/portal/",
     "elixir/wave3a_handlers/",
     "db/postgres/",
     # Cross-runtime contract fixtures the lease_plane suite reads through
