@@ -759,6 +759,33 @@ defmodule PortalWeb.TimelineLiveTest do
     refute has_element?(view, "#attention-#{c}")
   end
 
+  test "archiving a paused agent ends its pause", %{conn: conn} do
+    lifecycle = fn agent, type, ms, id ->
+      %{
+        "kind" => "lifecycle",
+        "ts" => iso(ms),
+        "agent_id" => agent,
+        "event_type" => type,
+        "event_id" => id
+      }
+    end
+
+    ctx =
+      feed_with([
+        lifecycle.(@a, "lifecycle_paused", -30_000, "p1"),
+        lifecycle.(@a, "lifecycle_archived", -20_000, "x1"),
+        lifecycle.(@b, "lifecycle_archived", -20_000, "x2")
+      ])
+
+    view = mount_live(conn, ctx)
+
+    [band] = nodes(view, "#agent-#{@a} .tl-band.pause")
+    assert band |> LazyHTML.attribute("style") |> hd() =~ "--t2:"
+    refute has_element?(view, "#attention-#{@a}")
+    # An archive with no pause before it draws no band.
+    refute has_element?(view, "#agent-#{@b} .tl-band.pause")
+  end
+
   test "a hard stop recorded as its sub-action is a pause verdict", %{conn: conn} do
     checkin = fn agent, action ->
       %{

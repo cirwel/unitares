@@ -57,6 +57,9 @@ defmodule PortalWeb.TimelineLive do
   # The feed's own provisional cap.
   @provisional_cap 500
   @prune_every_s 10
+  # What ends a pause. Archiving sets the agent's status directly and emits no
+  # resume, so an archive closes a pause too.
+  @pause_ends ~w(lifecycle_resumed lifecycle_archived)
 
   # How a lineage child relates to its parent, by its spawn_reason. Mirrors
   # the tab and src/identity/lineage_semantics.py: only dispatched children
@@ -306,11 +309,11 @@ defmodule PortalWeb.TimelineLive do
     end
   end
 
-  # Each agent's latest resume, kept apart from the marks: it is what closes
-  # a pause band, so it must survive the cap and the window prune that drop
-  # the resume mark itself.
-  defp note_resume(acc, %{"event_type" => "lifecycle_resumed", "agent_id" => a} = m)
-       when is_binary(a) do
+  # Each agent's latest resume or archive, kept apart from the marks: it is
+  # what closes a pause band, so it must survive the cap and the window prune
+  # that drop the mark itself.
+  defp note_resume(acc, %{"event_type" => type, "agent_id" => a} = m)
+       when type in @pause_ends and is_binary(a) do
     case TimelineAdapter.ts_us(m["ts"]) do
       nil -> acc
       us -> Map.update(acc, a, us, &max(&1, us))
@@ -707,7 +710,7 @@ defmodule PortalWeb.TimelineLive do
   defp attention(own, resumed_us) do
     newest = Enum.sort_by(own, fn {_, m} -> sort_key(m) end, :desc)
     pause = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_paused" end)
-    resume = Enum.find(newest, fn {_, m} -> m["event_type"] == "lifecycle_resumed" end)
+    resume = Enum.find(newest, fn {_, m} -> m["event_type"] in @pause_ends end)
 
     verdict =
       Enum.find(newest, fn {_, m} -> m["kind"] == "checkin" and is_binary(verdict_of(m)) end)
@@ -827,22 +830,12 @@ defmodule PortalWeb.TimelineLive do
   defp live_verdict(%{"assessment" => %{"verdict" => v}}) when is_binary(v), do: v
   defp live_verdict(_m), do: nil
 
-  # The server's `verdict_bucket` (src/broadcaster.py): history stores the
-  # decision's sub_action, so a hard stop arrives as `risk_pause`,
-  # `cirs_block`, `basin_pause` and the like. Any action that is not a
-  # proceed or a guide is a pause, so a new one folds in rather than reading
-  # as a proceed.
-  defp action_class(action) do
-    case action |> to_string() |> String.downcase() do
-      "guide" -> "guide"
-      v when v in ["", "proceed", "approve", "continue"] -> "proceed"
-      _ -> "pause"
-    end
-  end
+  defp action_class(action), do: TimelineAdapter.verdict_bucket(action)
 
   # Pause bands pair lifecycle_paused with the next lifecycle_resumed on the
   # same row; a resume with no pause in the window started before it, and a
-  # pause with no resume runs to now. Dialectic sessions draw from creation
+  # pause with no resume runs to now. An archive closes a pause it follows,
+  # and draws nothing on its own. Dialectic sessions draw from creation
   # to close, or to now while active; the server's `ts` may precede the
   # window, which the CSS clamps.
   defp bands(own, anchor, labels, resumed_us) do
@@ -862,7 +855,11 @@ defmodule PortalWeb.TimelineLive do
             {acc, held}
           end
 
-        {id, %{"kind" => "lifecycle", "event_type" => "lifecycle_resumed"} = m}, {acc, held} ->
+        {_id, %{"kind" => "lifecycle", "event_type" => "lifecycle_archived"}}, {acc, nil} ->
+          {acc, nil}
+
+        {id, %{"kind" => "lifecycle", "event_type" => type} = m}, {acc, held}
+        when type in @pause_ends ->
           {from_id, from} = held || {id, nil}
 
           band = %{

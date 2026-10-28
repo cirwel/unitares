@@ -128,6 +128,22 @@ defmodule Portal.TimelineAdapter do
 
   def verdict_of(_frame), do: "proceed"
 
+  @doc """
+  The bucket a verdict falls in, as `src/broadcaster.py` `verdict_bucket`
+  sorts it: `"guide"`; `"proceed"` for no action or a proceed, approve or
+  continue; `"pause"` for anything else, so a hard stop recorded as its
+  sub-action (`risk_pause`, `cirs_block` and the like), or a new one, is a
+  pause rather than a proceed.
+  """
+  @spec verdict_bucket(term()) :: String.t()
+  def verdict_bucket(action) do
+    case action |> to_string() |> String.downcase() do
+      "guide" -> "guide"
+      v when v in ["", "proceed", "approve", "continue"] -> "proceed"
+      _ -> "pause"
+    end
+  end
+
   defp first_truthy(values), do: Enum.find(values, &py_truthy?/1)
 
   # Python's `or` skips None, False, 0, "" and empty containers.
@@ -201,7 +217,9 @@ defmodule Portal.TimelineAdapter do
 
     * knowledge: same `discovery_id`;
     * lifecycle: same `agent_id`, `event_type` and parsed `ts` instant;
-    * check-in: same `agent_id`, history `ts` in `[frame_ts − 2 s, frame_ts]`.
+    * check-in: same `agent_id`, history `ts` in `[frame_ts − 2 s, frame_ts]`,
+      and the same verdict bucket, so a pause arriving within 2 s of an
+      earlier proceed is not taken for that proceed's row.
   """
   @spec matches?(map(), map()) :: boolean()
   def matches?(%{"kind" => "checkin"} = mark, %{"kind" => "checkin"} = row),
@@ -218,8 +236,16 @@ defmodule Portal.TimelineAdapter do
     row_us = ts_us(row["ts"])
 
     mark["agent_id"] == row["agent_id"] and is_integer(frame_us) and is_integer(row_us) and
-      row_us <= frame_us and row_us >= frame_us - @checkin_lag_us
+      row_us <= frame_us and row_us >= frame_us - @checkin_lag_us and
+      same_verdict?(mark, row)
   end
+
+  # A live mark carries the frame's verdict as its assessment; a row carries
+  # the persisted action. Both are the decision's sub_action or action.
+  defp same_verdict?(%{"assessment" => %{"verdict" => verdict}}, row),
+    do: verdict_bucket(verdict) == verdict_bucket(row["action"])
+
+  defp same_verdict?(_mark, _row), do: true
 
   @doc "Whether any row in `history` is the persisted form of `mark`."
   @spec in_history?(map(), [map()]) :: boolean()

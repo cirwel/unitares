@@ -117,6 +117,42 @@ defmodule Portal.TimelineAdapterTest do
              })
     end
 
+    test "a check-in matches only a row whose verdict falls in the same bucket" do
+      mark = fn verdict ->
+        %{
+          "kind" => "checkin",
+          "agent_id" => @agent,
+          "ts" => "2026-10-24T04:16:18.847670+00:00",
+          "assessment" => %{"source" => "eisv", "verdict" => verdict}
+        }
+      end
+
+      row = fn action ->
+        %{
+          "kind" => "checkin",
+          "agent_id" => @agent,
+          "ts" => "2026-10-24T04:16:17.500000+00:00",
+          "action" => action
+        }
+      end
+
+      refute TimelineAdapter.matches?(mark.("risk_pause"), row.("proceed"))
+      refute TimelineAdapter.matches?(mark.("guide"), row.(nil))
+      assert TimelineAdapter.matches?(mark.("risk_pause"), row.("cirs_block"))
+      assert TimelineAdapter.matches?(mark.("proceed"), row.(nil))
+      assert TimelineAdapter.matches?(mark.("approve"), row.("proceed"))
+    end
+
+    test "verdict_bucket/1 sorts as the server's verdict_bucket does" do
+      for v <- [nil, "", "proceed", "approve", "continue"],
+          do: assert(TimelineAdapter.verdict_bucket(v) == "proceed")
+
+      assert TimelineAdapter.verdict_bucket("guide") == "guide"
+
+      for v <- ["pause", "reject", "risk_pause", "cirs_block", "void_pause", "a_new_one"],
+          do: assert(TimelineAdapter.verdict_bucket(v) == "pause")
+    end
+
     test "kinds never cross-match" do
       refute TimelineAdapter.matches?(
                %{"kind" => "checkin", "agent_id" => @agent, "ts" => "2026-10-24T04:16:18Z"},
@@ -195,6 +231,34 @@ defmodule Portal.TimelineAdapterTest do
       # A row that absorbed a mark at an earlier re-read is not taken again.
       claimed = MapSet.new([TimelineAdapter.key(r0)])
       {[{^m1, 1, 1}], _} = TimelineFeed.merge([{m1, 1, 0}], [r0], 2, 1, claimed)
+    end
+
+    test "a pause arriving within 2 s of an earlier proceed's row waits for its own row" do
+      t0 = DateTime.utc_now()
+      at = fn ms -> t0 |> DateTime.add(ms, :millisecond) |> DateTime.to_iso8601() end
+
+      pause = %{
+        "kind" => "checkin",
+        "agent_id" => @agent,
+        "ts" => at.(1_000),
+        "provisional" => true,
+        "assessment" => %{"source" => "eisv", "verdict" => "risk_pause"}
+      }
+
+      proceed_row = %{
+        "kind" => "checkin",
+        "agent_id" => @agent,
+        "ts" => at.(0),
+        "action" => "proceed"
+      }
+
+      pause_row = %{proceed_row | "ts" => at.(920), "action" => "risk_pause"}
+
+      {[{^pause, 1, 1}], matched} = TimelineFeed.merge([{pause, 1, 0}], [proceed_row], 2, 1)
+      assert matched == MapSet.new()
+
+      {[], matched} = TimelineFeed.merge([{pause, 1, 0}], [proceed_row, pause_row], 2, 1)
+      assert matched == MapSet.new([TimelineAdapter.key(pause_row)])
     end
 
     test "a mark older than the window is dropped" do
