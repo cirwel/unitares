@@ -27,7 +27,8 @@ if config_env() != :test do
   # needed; without them the hub refuses everyone (Portal.Auth.Unconfigured).
   #   PORTAL_GOV_ORIGIN  the dashboard's origin, where the passkeys live
   #   PORTAL_GOV_SOCKET  the server's owner-only socket (UNITARES_UDS_SOCKET)
-  #   PORTAL_HUB_TOKEN   the hub credential (the server's UNITARES_HUB_TOKEN)
+  #   PORTAL_HUB_TOKEN   the raw hub key (the server's UNITARES_HUB_TOKEN holds
+  #                      its sha256: digest, never the key)
   gov_origin = System.get_env("PORTAL_GOV_ORIGIN", "")
   gov_socket = System.get_env("PORTAL_GOV_SOCKET", "")
   hub_token = System.get_env("PORTAL_HUB_TOKEN", "")

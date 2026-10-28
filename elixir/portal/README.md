@@ -49,9 +49,18 @@ PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run -
 | `PORTAL_SECRET_KEY_BASE` | none (prod) | Signs and encrypts the session cookie; the prod boot refuses without it. |
 | `PORTAL_GOV_ORIGIN` | none | The dashboard's origin, where the browser approves a sign-in. `https`, or `http` on loopback only. |
 | `PORTAL_GOV_SOCKET` | none | The governance server's owner-only socket (its `UNITARES_UDS_SOCKET`). |
-| `PORTAL_HUB_TOKEN` | none | The hub credential, the same value as the server's `UNITARES_HUB_TOKEN`. |
+| `PORTAL_HUB_TOKEN` | none | The hub credential, a raw key of at least 32 characters. The server's `UNITARES_HUB_TOKEN` holds its digest, not the key. |
 
 Sign-in is on only when all three `PORTAL_GOV_*`/`PORTAL_HUB_TOKEN` settings are set.
+
+The server never stores the key. `UNITARES_HUB_TOKEN` is `sha256:` followed
+by the key's SHA-256 digest in 64 lowercase hex characters; the server hashes
+the key the hub presents and compares the digests. A raw key there is
+malformed and turns hub sign-in off. For a key held in `KEY`:
+
+```sh
+printf 'sha256:%s\n' "$(printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1)"
+```
 
 ## What comes next
 
