@@ -704,6 +704,44 @@ defmodule PortalWeb.TimelineLiveTest do
     assert has_element?(view, "#agent-#{@b} .tl-band.pause")
   end
 
+  test "a re-read keeps a pause that left the window while the agent stays paused",
+       %{conn: conn} do
+    ctx = feed_with([])
+    view = mount_live(conn, ctx)
+
+    delta = fn agent, type, ms ->
+      send(
+        view.pid,
+        {:timeline_delta, "1h",
+         %{
+           "kind" => "lifecycle",
+           "ts" => iso(ms),
+           "agent_id" => agent,
+           "event_type" => type,
+           "provisional" => true
+         }}
+      )
+    end
+
+    # @a paused and resumed; @b paused and never resumed. Both age out.
+    delta.(@a, "lifecycle_paused", -3_599_900)
+    delta.(@a, "lifecycle_resumed", -3_599_850)
+    delta.(@b, "lifecycle_paused", -3_599_900)
+    Process.sleep(200)
+
+    # A successful re-read whose window no longer holds either pause.
+    serve(ctx.stub, fn conn -> Req.Test.json(conn, window_body([])) end)
+    broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+    assert eventually(fn ->
+             :sys.get_state(view.pid).socket.assigns.last_reread_at != nil and
+               not has_element?(view, "#agent-#{@a} .tl-band.pause")
+           end)
+
+    assert has_element?(view, "#agent-#{@b} .tl-band.pause")
+    assert has_element?(view, "#attention-#{@b}", "paused since")
+  end
+
   test "live marks are capped at the feed's provisional cap", %{conn: conn} do
     ctx = feed_with([])
     view = mount_live(conn, ctx)

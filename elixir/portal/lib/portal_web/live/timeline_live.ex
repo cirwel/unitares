@@ -200,7 +200,7 @@ defmodule PortalWeb.TimelineLive do
         all = snap.events ++ snap.provisional
         last_seen = Enum.reduce(all, roster_last_seen(snap.agents), &bump_last_seen(&2, &1))
 
-        marks =
+        read =
           all
           |> Enum.filter(&visible?(&1, socket.assigns.substrate))
           |> Map.new(&{TimelineAdapter.dom_id(&1), &1})
@@ -211,6 +211,9 @@ defmodule PortalWeb.TimelineLive do
           if snap.status == :ok and snap.last_reread_at != socket.assigns[:last_reread_at],
             do: %{},
             else: socket.assigns.resumed_at
+
+        resumed = Enum.reduce(all, resumed_seed, &note_resume(&2, &1))
+        marks = Map.merge(held_pauses(socket, read, resumed), read)
 
         socket
         |> assign(
@@ -223,7 +226,7 @@ defmodule PortalWeb.TimelineLive do
           roster: roster,
           last_seen: last_seen,
           marks: marks,
-          resumed_at: Enum.reduce(all, resumed_seed, &note_resume(&2, &1)),
+          resumed_at: resumed,
           selected:
             carry_selection(
               socket.assigns.selected,
@@ -251,6 +254,30 @@ defmodule PortalWeb.TimelineLive do
         )
         |> relane()
     end
+  end
+
+  # A pause older than the window is not in a re-read, but while no later
+  # resume is known the agent is still paused: its band runs to now and it
+  # still needs attention, as `prune/1` keeps it between re-reads. Carry it
+  # across the re-read unless the re-read holds that same pause. A resume the
+  # page already knew of still counts, even when it too has left the window.
+  defp held_pauses(socket, read, resumed) do
+    %{marks: marks, resumed_at: known, substrate: substrate} = socket.assigns
+
+    in_read =
+      for {_, %{"event_type" => "lifecycle_paused"} = m} <- read,
+          into: MapSet.new(),
+          do: {m["agent_id"], TimelineAdapter.ts_us(m["ts"])}
+
+    Map.filter(marks, fn {_id, m} ->
+      us = TimelineAdapter.ts_us(m["ts"])
+      agent = m["agent_id"]
+
+      m["event_type"] == "lifecycle_paused" and is_binary(agent) and is_integer(us) and
+        not MapSet.member?(in_read, {agent, us}) and
+        us >= max(Map.get(known, agent, -1), Map.get(resumed, agent, -1)) and
+        visible?(m, substrate)
+    end)
   end
 
   # A re-read that confirms a provisional mark gives it a history id (`p-`

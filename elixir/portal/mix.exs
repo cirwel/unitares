@@ -67,7 +67,7 @@ defmodule Portal.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "assets.setup"],
+      setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["tailwind.install --if-missing"],
       "assets.build": ["tailwind portal"],
       "assets.deploy": ["tailwind portal --minify"],

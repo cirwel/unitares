@@ -53,9 +53,14 @@ so the hub needs no JavaScript build step.
 The server half is `src/dashboard_auth.py`. It needs migration 079, and its
 `UNITARES_HUB_CALLBACK_URL` must be this hub's `/auth/callback` exactly.
 
+`mix setup` fetches the dependencies and the Tailwind CLI and builds
+`hub.css`. The timeline's lanes are positioned by that stylesheet, so build it
+before starting the hub, and again with `mix assets.deploy` for production:
+
 ```sh
-mix deps.get
+mix setup
 mix test
+MIX_ENV=prod mix assets.deploy
 PORTAL_SECRET_KEY_BASE=$(mix phx.gen.secret) MIX_ENV=prod PHX_SERVER=1 mix run --no-halt
 ```
 
