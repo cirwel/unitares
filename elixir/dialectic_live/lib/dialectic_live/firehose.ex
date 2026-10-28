@@ -25,7 +25,8 @@ defmodule DialecticLive.Firehose do
 
   Options: `:url`, `:name` (default `#{inspect(__MODULE__)}`), `:pubsub`
   (default `DialecticLive.PubSub`), `:reconnect_min_ms`, `:reconnect_max_ms`
-  (`:reconnect_ms` is accepted as the ceiling), `:connect_timeout_ms`.
+  (`:reconnect_ms` is accepted as the ceiling), `:connect_timeout_ms`,
+  `:upgrade_timeout_ms` (how long an upgrade may go unanswered; default 5 s).
   """
 
   use GenServer
@@ -46,6 +47,7 @@ defmodule DialecticLive.Firehose do
             reconnect_max_ms: @default_reconnect_max_ms,
             backoff_ms: @default_reconnect_min_ms,
             connect_timeout_ms: @default_connect_timeout_ms,
+            upgrade_timeout_ms: @default_connect_timeout_ms,
             reconnect_timer: nil,
             conn: nil,
             websocket: nil,
@@ -96,7 +98,8 @@ defmodule DialecticLive.Firehose do
       reconnect_min_ms: min_ms,
       reconnect_max_ms: max(max_ms, min_ms),
       backoff_ms: min_ms,
-      connect_timeout_ms: Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
+      connect_timeout_ms: Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms),
+      upgrade_timeout_ms: Keyword.get(opts, :upgrade_timeout_ms, @default_connect_timeout_ms)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -112,6 +115,20 @@ defmodule DialecticLive.Firehose do
 
   @impl true
   def handle_info(:connect, state), do: connect(%{state | reconnect_timer: nil})
+
+  # The connect timeout bounds only TCP; a server that accepts and never
+  # answers the upgrade would otherwise hold this client forever, with no
+  # retry. A deadline for an earlier attempt, or one already upgraded, is moot.
+  def handle_info({:upgrade_deadline, ref}, %{ref: ref, connected?: false} = state) do
+    {:noreply,
+     fail(
+       state,
+       :unreachable,
+       "Firehose: no answer to the upgrade within #{state.upgrade_timeout_ms} ms"
+     )}
+  end
+
+  def handle_info({:upgrade_deadline, _ref}, state), do: {:noreply, state}
 
   def handle_info(message, %{conn: nil} = state) do
     Logger.debug("Firehose ignoring pre-connect message: #{inspect(message)}")
@@ -148,6 +165,8 @@ defmodule DialecticLive.Firehose do
              timeout: state.connect_timeout_ms
            ),
          {:ok, conn, ref} <- Mint.WebSocket.upgrade(schemes.ws, conn, path(uri), []) do
+      Process.send_after(self(), {:upgrade_deadline, ref}, state.upgrade_timeout_ms)
+
       {:noreply,
        %{
          state

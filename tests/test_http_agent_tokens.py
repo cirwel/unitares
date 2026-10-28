@@ -198,14 +198,18 @@ async def test_a_call_resolving_to_another_agent_is_refused(route):
     route["resolves_to"] = OTHER
     response = await route["call"](_request("process_agent_update", dict(CHECKIN)))
     assert response.status_code == 403
+    assert json.loads(response.body)["error_type"] == "AgentTokenScope"
     route["execute"].assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_an_unresolved_call_is_refused(route):
+async def test_an_unresolved_call_is_refused_with_the_operator_recovery(route):
     route["resolves_to"] = None
     response = await route["call"](_request("process_agent_update", dict(CHECKIN)))
     assert response.status_code == 403
+    body = json.loads(response.body)
+    assert body["error_type"] == "AgentTokenUnbound"
+    assert "rebind-resident-session.sh" in body["recovery"]
     route["execute"].assert_not_awaited()
 
 

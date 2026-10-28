@@ -8,10 +8,11 @@
   Phoenix.PubSub, plus /v1/tools/call POSTs for dialectic list/get. Binds
   127.0.0.1:8790 by default (DIALECTIC_LIVE_BIND_ALL=1 to expose).
 
-  Like the wave3a-handlers template, this ships in-tree but is NOT loaded by
-  default: there is intentionally NO `RunAtLoad`. The operator promotes it when
-  ready to evaluate the LiveView pane against the buildless JS dashboard, which
-  stays the live+sole UI until then.
+  Loading this plist starts the app: any KeepAlive implies RunAtLoad
+  (launchd.plist(5)), so leaving RunAtLoad out does not keep a loaded job
+  stopped. Load it only once its settings are in place. If they are missing,
+  start.sh logs why and exits 0, and KeepAlive restarts the app only after a
+  failing exit, so a premature load sits idle instead of looping.
 
   Prereq: set UNITARES_SECRETS_ENV to an absolute private file and persist that
   value in this job's EnvironmentVariables, or provision the required variables
@@ -51,14 +52,13 @@
     <key>WorkingDirectory</key>
     <string>__UNITARES_ROOT__/elixir/dialectic_live</string>
 
-    <!--
-      RunAtLoad is intentionally absent (mirrors wave3a-handlers). The plist is
-      configuration; the operator promotes it to running when ready to evaluate
-      the pane. Do NOT add this key without an explicit operator decision.
-    -->
-
+    <!-- Restart only after a failing exit: start.sh exits 0 when the app is
+         not configured, which must not become a restart loop. -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <key>ThrottleInterval</key>
     <integer>10</integer>

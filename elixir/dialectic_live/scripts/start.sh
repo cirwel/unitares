@@ -10,16 +10,57 @@ cd "$APP_DIR"
 # Secrets (mode 600). Provides DIALECTIC_LIVE_SECRET_KEY_BASE and, optionally,
 # UNITARES_HTTP_API_TOKEN for authenticated tool-calls.
 # Credentials come from the service environment, or an explicitly selected file.
+#
+# From that file only this app's own names are taken: the two credentials
+# above, SECRET_KEY_BASE, PORT, and settings named DIALECTIC_LIVE_*,
+# GOVERNANCE_*, TIMELINE_* or PHX_*. Sourcing the whole file handed this
+# process every credential in a shared secrets file (KG
+# 2026-10-27T22:16:58.919702). The file is read in a separate process with an
+# empty environment, and the chosen values come back through a pipe; none is
+# printed.
+#
+# A configuration problem exits 0, not 1: launchd restarts the app only after
+# a failing exit (KeepAlive SuccessfulExit=false), so a problem a restart
+# cannot fix leaves it stopped with the reason in the log, not looping.
+not_configured() {
+  echo "FATAL: $1 dialectic_live is not starting; launchd will not restart it." >&2
+  exit 0
+}
+
+load_own_settings() {
+  local name value loaded=0
+  while IFS= read -r -d '' name && IFS= read -r -d '' value; do
+    # The reader's last record says the file loaded in full; without it the
+    # file failed to source, and its settings must not silently go missing.
+    if [ "$name" = "__LOADED__" ]; then
+      loaded=1
+      continue
+    fi
+    export "$name=$value"
+  done < <(
+    env -i HOME="$HOME" PATH="$PATH" /bin/bash -c '
+      set -a
+      # shellcheck disable=SC1090
+      . "$1" >/dev/null 2>&1 || exit 1
+      set +a
+      for n in $(compgen -e); do
+        case "$n" in
+          DIALECTIC_LIVE_*|GOVERNANCE_*|TIMELINE_*|PHX_*|SECRET_KEY_BASE|UNITARES_HTTP_API_TOKEN|PORT)
+            printf "%s\0%s\0" "$n" "${!n}" ;;
+        esac
+      done
+      printf "__LOADED__\0\0"
+    ' load-own-settings "$1"
+  )
+  [ "$loaded" = 1 ] || not_configured "the selected settings file could not be read (it failed to source)."
+}
+
 SECRETS="${UNITARES_SECRETS_ENV:-}"
 if [[ -n "$SECRETS" && ( "$SECRETS" != /* || ! -f "$SECRETS" || ! -r "$SECRETS" ) ]]; then
-    echo "error: UNITARES_SECRETS_ENV must name an absolute, readable regular file" >&2
-    exit 1
+  not_configured "UNITARES_SECRETS_ENV must name an absolute, readable regular file."
 fi
 if [ -f "$SECRETS" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$SECRETS"
-  set +a
+  load_own_settings "$SECRETS"
 fi
 
 export MIX_ENV="${MIX_ENV:-prod}"
@@ -32,9 +73,7 @@ if [ -z "${SECRET_KEY_BASE:-}" ]; then
   if [ -n "${DIALECTIC_LIVE_SECRET_KEY_BASE:-}" ]; then
     export SECRET_KEY_BASE="$DIALECTIC_LIVE_SECRET_KEY_BASE"
   else
-    echo "FATAL: SECRET_KEY_BASE (or DIALECTIC_LIVE_SECRET_KEY_BASE) is unset." >&2
-    echo "Generate one with 'mix phx.gen.secret' and add it to $SECRETS" >&2
-    exit 1
+    not_configured "SECRET_KEY_BASE (or DIALECTIC_LIVE_SECRET_KEY_BASE) is unset. Generate one with 'mix phx.gen.secret' and add it to the selected file."
   fi
 fi
 
