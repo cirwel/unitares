@@ -27,7 +27,13 @@ dashboard, whose passkeys are bound to the dashboard's domain:
    resulting handle.
 4. Every request asks the server, over that socket, whether the handle is
    still live. Signing out of the dashboard, or revoking its passkey, signs
-   the hub out on its next request. `/signout` ends the handle on the server.
+   the hub out on its next request. A page left open is asked again every 30
+   seconds (`config :portal, :reverify_ms`) and ends when the answer is no.
+   `/signout` ends the handle on the server.
+
+The LiveView client is served straight from the pinned dependencies
+(`/assets/vendor/phoenix.min.js`, `/assets/vendor/phoenix_live_view.min.js`),
+so the hub needs no JavaScript build step.
 
 The server half is `src/dashboard_auth.py`. It needs migration 079, and its
 `UNITARES_HUB_CALLBACK_URL` must be this hub's `/auth/callback` exactly.
@@ -55,5 +61,6 @@ Sign-in is on only when all three `PORTAL_GOV_*`/`PORTAL_HUB_TOKEN` settings are
 
 ## What comes next
 
-- **H2d:** the timeline as the home screen, and registration with `cirwel update`.
+- **H2d-2:** the timeline as the home screen.
+- **H2d-3:** registration with `cirwel update`.
 - **H3 onward:** resume and start sessions through the orchestrator's launch profiles.
