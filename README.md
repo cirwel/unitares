@@ -36,7 +36,11 @@ UNITARES is a server you run that keeps that thread. Any agent or model that spe
 | **What happened?** | **Outcome grounding**: test, build, and task results are recorded against the check-ins that predicted them. |
 | **What can a successor recover?** | **Reconstruction**: a new process can search or export prior findings, open review conditions, and outcomes before it acts. |
 
-Two more pieces sit around the record. **Runtime policy**: each check-in returns `proceed`, `guide`, or `pause`, with a reason; a pause refuses that process's check-ins and new findings until review or recovery lifts it or it expires. **Second opinions**: when configured, `consult` asks another connected model (local Ollama, vLLM, LM Studio, or llama.cpp, or Claude, Codex, and Antigravity via the orchestrator) and keeps the answer with the task.
+Two optional pieces sit around the record. **Digital proprioception** returns an
+EISV estimate and retains its policy recommendation for inspection; it is
+observational by default, unless an operator enables the legacy actuator.
+**Second opinions** let `consult` ask a connected local or orchestrated model.
+Structured dialectic is available for durable review, not required recovery.
 
 ## See it
 
@@ -99,8 +103,8 @@ repository or session.
 
 Not a sandbox, an output validator, or a hosted agent platform. It runs beside
 your evals and guardrails and replaces neither. It does not run the agent's
-loop: the plugin's hooks and edit leases coordinate around the agent's work,
-and a pause refuses only that process's check-ins and new findings.
+loop or grant an estimator authority over it. Explicit identity, authorization,
+archive, and coordination boundaries remain enforced.
 
 ## How it fits together
 
@@ -119,8 +123,9 @@ for reconstruction later.
 Storage is PostgreSQL and Redis, with no required external model API. The
 quickstart runs the AGE backend, which stores the links between findings; the
 plain `postgres` backend has no supersession links and full-text search only.
-The check-in's policy action comes from a behavioral state estimate, a form of
-runtime [proprioception](docs/ontology/eisv-proprioception-contract.md).
+The check-in's behavioral state estimate is a form of runtime [proprioception](docs/ontology/eisv-proprioception-contract.md). Its raw policy
+recommendation is retained as part of the record. By default, that
+recommendation cannot pause an identity or block its writes.
 
 What each claim has been measured to do, and what has not been measured, is in
 [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) and the

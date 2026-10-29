@@ -587,7 +587,10 @@ class TestCircuitBreakerPersistsRuntimeState:
                           })) as pause_mock, \
              patch.object(ald, "save_monitor_state_async", AsyncMock()):
             # Disable auto-recovery to avoid touching unrelated code paths
-            with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "0"}):
+            with patch.dict("os.environ", {
+                "UNITARES_AUTO_DIALECTIC_RECOVERY": "0",
+                "UNITARES_POLICY_ACTUATION": "enforce",
+            }):
                 result = await ald.process_update_authenticated_async(
                     AGENT_ID, "test-key", {"task_type": "mixed"}
                 )
@@ -644,7 +647,10 @@ class TestCircuitBreakerPersistsRuntimeState:
              ), \
              patch.object(ald, "_auto_initiate_dialectic_recovery", auto_recovery), \
              patch.object(ald, "save_monitor_state_async", AsyncMock()):
-            with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "1"}):
+            with patch.dict("os.environ", {
+                "UNITARES_AUTO_DIALECTIC_RECOVERY": "1",
+                "UNITARES_POLICY_ACTUATION": "enforce",
+            }):
                 result = await ald.process_update_authenticated_async(
                     AGENT_ID, "test-key", {"task_type": "mixed"}
                 )
@@ -692,7 +698,10 @@ class TestCircuitBreakerPersistsRuntimeState:
                  }),
              ), \
              patch.object(ald, "save_monitor_state_async", AsyncMock()):
-            with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "0"}):
+            with patch.dict("os.environ", {
+                "UNITARES_AUTO_DIALECTIC_RECOVERY": "0",
+                "UNITARES_POLICY_ACTUATION": "enforce",
+            }):
                 result = await ald.process_update_authenticated_async(
                     AGENT_ID, "test-key", {"task_type": "mixed"}
                 )

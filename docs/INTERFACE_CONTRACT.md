@@ -62,6 +62,28 @@ check-ins, or honors a returned policy action outside UNITARES-governed writes.
 Those are host-integration capabilities, documented separately in the
 [client capability matrix](integration/CLIENT_CAPABILITY_MATRIX.md).
 
+### Policy recommendation and actuation
+
+The check-in response distinguishes inference from authority:
+
+- `policy_evaluation.action` is the unmodified EISV/risk/CIRS policy
+  recommendation;
+- `decision.action` is the effective directive projected for the client; and
+- `enforcement` reports `posture`, `recommended_action`, `effective_action`,
+  and whether a lifecycle effect was actually `applied`.
+
+`UNITARES_POLICY_ACTUATION=observe` is the default. A recommended pause then
+projects to `proceed` / `guide`, carries `enforcement.applied=false`, and
+creates no pause token or write gate. `UNITARES_POLICY_ACTUATION=enforce`
+preserves the compatibility circuit breaker. This setting is deployment-owned,
+not a request parameter. Authentication, authorization, archive state,
+existing durable pauses, and bounded loop cooldowns are outside this policy
+resolver and remain enforced in both postures.
+
+These are additive diagnostic fields within the existing normalized envelope;
+the capability catalog and input schemas do not change, so the interface
+contract version and digests do not move.
+
 ## Core workflow and advanced capabilities
 
 The [capability guide](CAPABILITIES_AND_DEPLOYMENT.md) presents identity,

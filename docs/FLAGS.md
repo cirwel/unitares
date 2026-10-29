@@ -195,6 +195,7 @@ additions merge cleanly. -->
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
+| `UNITARES_POLICY_ACTUATION` | `'observe'` | Return the operator-owned policy actuation posture | src/agent_loop_detection.py |
 | `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1744); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1753) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_DIR` | `None (no reader fallback)` | — | src/process_cleanup.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |

@@ -3,9 +3,9 @@
 [← Integrating agents](04-integrating-agents.md) · [Manual index](README.md) · [Next: Operating →](06-operating.md)
 
 This chapter reads the record in the order a successor or operator should:
-findings first, then outcomes, then the policy action and how a pause is
-lifted. The last section covers EISV, the behavioral state estimate behind the
-policy action: what its numbers mean, how they are produced, and how much to
+findings first, then outcomes, then the proprioceptive recommendation and the
+separate actuation boundary. The last section covers EISV, the behavioral state
+estimate behind that recommendation: what its numbers mean, how they are produced, and how much to
 trust them. EISV still ships in the core path; its move to an optional module
 follows a [staged plan](../proposals/active/eisv-core-boundary-v0.md). The exact
 formulas with source references are in
@@ -34,27 +34,45 @@ provenance and keep high-stakes outcome channels outside the agent's authority.
 
 ## 5.3 The policy action
 
-Each `sync_state` check-in returns a policy action. Internally the EISV assessment emits a `safe` / `caution` / `high-risk` label, which becomes the action the agent reads back. `action_summary.action` is only ever `proceed` or `pause`; `sub_action` carries the rest:
+Each `sync_state` check-in returns an effective action and preserves the raw
+policy recommendation. Internally the EISV assessment emits a `safe` /
+`caution` / `high-risk` interpretation. `policy_evaluation.action` records what
+the policy engine recommended; `action_summary.action` records what the agent
+is operationally being asked to do; `enforcement` records whether authority was
+actually applied.
 
-| `action` / `sub_action` | Internal sense | Agent action | Recovery path |
+The deployment posture is operator-owned:
+
+- `UNITARES_POLICY_ACTUATION=observe` (default) keeps EISV/risk/CIRS
+  observational. A raw pause recommendation becomes `proceed` / `guide`, with
+  `enforcement.applied=false`; it creates no pause token and blocks no write.
+- `UNITARES_POLICY_ACTUATION=enforce` retains the historical circuit breaker.
+  At the persistence-capable authenticated boundary, a raw pause becomes an
+  applied lifecycle hold. A dry run or in-process path without that actuator
+  reports the compatibility pause directive as requested but not applied.
+
+| Effective action / posture | Internal sense | Agent action | Recovery path |
 |---|---|---|---|
 | `proceed` | safe | Continue | — |
 | `proceed` / `guide` | slightly off | Read guidance, adjust | — |
-| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.4](#54-recovery-self-recovery--dialectic)) |
-| `pause` / `reject` | legacy or review label for significant concern | Human input or dialectic | dialectic |
+| `proceed` / `guide`, `enforcement.posture=observe`, recommended `pause` | instrument crossed an inferred policy edge | Inspect the recommendation if useful; continuing is neither permission nor a safety certification | none required; dialectic remains optional |
+| `pause`, `enforcement.posture=enforce`, `applied=false` | compatibility stop directive returned, but no lifecycle hold was committed on this path | Stop if honoring the legacy directive; do not assume writes are gated | inspect `enforcement` or `self_recovery(action="check")` for actual hold state |
+| `pause`, `enforcement.posture=enforce`, `applied=true` | compatibility hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.4](#54-recovery-self-recovery--dialectic)) |
+| applied `pause` / `reject` | legacy label for significant concern | Human input or optional dialectic | dialectic or operator |
 
 How the risk behind a pause is computed, and the margin that rides along with
 the action, are in [§5.5](#risk-components-and-margin).
 
 ## 5.4 Recovery: self-recovery → dialectic
 
-When an agent is paused, recovery is a structured escalation:
+When an agent has an **applied** pause, recovery is a structured escalation.
+An observational pause recommendation does not enter this workflow:
 
 1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. A paused agent cannot write the check-in that would lower its risk, so self-recovery succeeds only when the reading that paused it is already under the gate below; most pauses end through the dialectic, an operator, or re-evaluation at expiry. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
-2. **LLM-assisted dialectic** — a configured reviewer model supplies an
+2. **LLM-assisted dialectic** — when requested, a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.
-3. **Peer dialectic** — request one with `request_review` (that is,
+3. **Peer dialectic** — optionally request one with `request_review` (that is,
    `dialectic(action="request")`); a peer reviews through thesis → antithesis →
    synthesis.
 
@@ -63,16 +81,18 @@ Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DI
 ## 5.5 The EISV instrument
 
 EISV is one instrument attached to check-ins, not the record itself. Read it
-for *why* a check-in returned its action; read the findings and outcomes above
+as a proprioceptive hypothesis about current state; read the findings and outcomes above
 for what the work was and what happened.
 
 ### The pipeline at a glance
 
 ```
-observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
-(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed
- calibration,    sensor.py)           state.py)       assessment.py)        (+guide) /
- drift, tools)                                                               pause
+observables ──► observation blend ──► EMA state ──► residual / basin risk
+(decisions,     (behavioral_         (behavioral_    (behavioral_
+ calibration,    sensor.py)           state.py)       assessment.py)
+ drift, tools)                                             │
+                                      recommendation ──► operator posture
+                                      proceed/pause       observe/actuate
 ```
 
 The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.

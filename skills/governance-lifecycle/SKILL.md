@@ -1,13 +1,14 @@
 ---
 name: governance-lifecycle
 description: >
-  Use when an agent is interacting with UNITARES governance for the first time, needs to
-  onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
-  from session start through check-ins to recovery.
-last_verified: "2026-10-11"
+  Use when an agent is interacting with UNITARES for the first time, needs to
+  onboard, check in, or recover from an applied lifecycle hold. Covers the full
+  agent lifecycle from session start through check-ins to recovery.
+last_verified: "2026-10-29"
 freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
+  - unitares/src/agent_loop_detection.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
@@ -65,7 +66,10 @@ contract `2.2.0` on 2026-10-26.
 2. **Branch on control flow, not `success` alone.** Read
    `action_summary.action` and `sub_action`; check `refused`, `status`, and
    `rollout_flag` even when `success` is true. `proceed` and `guide` continue;
-   `pause` stops ordinary governed writes for its named recovery. Follow
+   an **applied** `pause` stops ordinary governed writes for its named recovery.
+   Under the default observation posture, a raw pause recommendation appears in
+   `policy_evaluation` while the effective action remains `proceed` / `guide`.
+   Follow
    `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
    describe state, not outcomes.
 3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
@@ -305,10 +309,14 @@ workflow is `commands/closeout.md`; shared-memory closure standards are in
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
+| **proceed / guide**, raw recommendation `pause`, `enforcement.applied=false` | Observation only. Inspect the policy record if useful; no lifecycle hold, permission check, or mandatory review exists |
+| **pause / reject**, `enforcement.posture=enforce`, `applied=false` | Compatibility directive only: the current path did not commit a lifecycle hold. Do not infer that writes are gated; inspect enforcement or `self_recovery(action="check")` |
+| **pause / reject**, `enforcement.applied=true` | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
-A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
+A `guide` is a proprioceptive suggestion, not a threat of punishment. It may
+also carry a raw pause recommendation that the default posture declined to
+actuate.
 
 ## Identity
 
@@ -329,7 +337,8 @@ Strong ownership proof is better than implicit continuity. If a call in a proces
 
 ## Recovery
 
-When you are paused, stuck, or need intervention. A paused agent cannot write
+When an applied lifecycle hold pauses you, or you are stuck and want
+intervention. A paused agent cannot write
 the check-in that would lower its risk, so quick and review succeed only when
 the reading that paused it is already under their gates; otherwise the dialectic
 review opened for the pause or an operator ends it. At expiry, the next check-in

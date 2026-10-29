@@ -1,0 +1,29 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-10-29T11:25:35Z",
+  "verified_date": "2026-10-29",
+  "verifier": "Codex: rechecked policy-actuation aliases and server instructions against each skill claim",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "ab8301288eb6a1d5",
+    "unitares/skills/governance-fundamentals/SKILL.md": "1b826f485432aea5",
+    "unitares/skills/governance-lifecycle/SKILL.md": "b7296e57c4d7158f",
+    "unitares/skills/knowledge-graph/SKILL.md": "e4bb5a3ad38b928f",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "d9c316bab3550511",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "c9030614f118b5de",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/schemas/identity.py": "8f8798c5515927bc",
+    "unitares/src/mcp_handlers/tool_stability.py": "fcaf0828c34a31b2",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "84bea9b88e638dbd"
+}
