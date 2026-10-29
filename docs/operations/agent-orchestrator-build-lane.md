@@ -17,7 +17,7 @@ that uses it.
 | `BUILD_CLI` | the claude CLI the generator found (`UNITARES_CLAUDE_CLI` override) | the CLI run, by its symlink path |
 | `BUILD_ROOTS` | `--build-root`, repeatable (`AGENT_ORCHESTRATOR_PROFILES_BUILD_ROOTS`, `:`-separated) | directories a build directory may sit under; never `/`, the home directory or a parent of it |
 | `BUILD_BRIEF` | `--build-brief` (`AGENT_ORCHESTRATOR_PROFILES_BUILD_BRIEF`) | the brief, read when the build starts and sent to the CLI on standard input; refused if group- or world-writable |
-| `BUILD_READ_ROOTS` | `--build-read-root`, repeatable (`..._BUILD_READ_ROOTS`) | directories the file tools may also read (`--add-dir`) |
+| `BUILD_READ_ROOTS` | `--build-read-root`, repeatable (`..._BUILD_READ_ROOTS`) | directories the file tools may also read (`--add-dir`); `Edit`, `Write` and `NotebookEdit` are denied under them |
 | `BUILD_MCP_CONFIG` | `--build-mcp-config` (`..._BUILD_MCP_CONFIG`) | the only MCP servers the CLI loads (`--strict-mcp-config`); none without it |
 | `max_runtime_ms` | fixed, 7 200 000 | the orchestrator kills the whole process tree at two hours; the client stops the CLI at 7 000 s so its result file is written first |
 | `max_concurrent` / `max_per_hour` | fixed, 1 / 4 | one build at a time |
@@ -37,8 +37,9 @@ the model except as files the caller put in the directory.
 
 `src/mcp_handlers/support/build_lane_client.py`, run with `python -I`:
 
-1. Validates the directory, brief, roots and model, and writes
-   `BUILD_DIR/.build-lane/started.json`.
+1. Validates the directory, brief, roots and model, removes an earlier run's
+   `result.json` and `build.log` from `BUILD_DIR/.build-lane/`, and writes
+   `started.json`.
 2. Builds the child environment from `claude_cli_client.ENV_ALLOWLIST` (the
    subscription login through `HOME` and `USER`; no console-API credentials,
    provider switches or the orchestrator's bearer) plus the provisioned
@@ -66,7 +67,8 @@ the model except as files the caller put in the directory.
    captures the tail) and to `.build-lane/build.log`; on exit, deadline or
    signal writes `.build-lane/result.json` with the exit status, times, the
    CLI's final result text, model, turn count and cost where reported, and
-   `killed` (`null`, `deadline` or `signal`).
+   `killed` (`null`, `deadline` or `signal`). A SIGKILL from the orchestrator
+   leaves no result file (see *Operating it*).
 
 Exit statuses: the CLI's own; 2 for the client's refusals, 124 at the
 client's deadline, 127 for a missing CLI.
@@ -126,8 +128,13 @@ curl -s -X POST http://127.0.0.1:8789/v1/agents \
 result is retained for five minutes, so a two-hour build is followed by
 `GET /v1/executions` (live ids) and the directory's `.build-lane/result.json`,
 not by awaiting. Stopping one: `DELETE /v1/executions/:id`, which kills the
-process tree (`kill_tree`: children first, then the client; the result file
-then records `killed`).
+process tree (`kill_tree`: children first, then the client, with SIGKILL).
+The client cannot write anything after that, so a stopped build leaves
+`started.json` and `build.log` but **no** `result.json`; once the execution
+is no longer live, that absence is the caller's signal that the build was
+stopped or killed (the orchestrator's own `max_runtime_ms` kill looks the
+same). Only the client's own deadline writes a `result.json` with `killed:
+"deadline"`.
 
 The first consumer is the operator's private task-building project, whose
 poller, brief and publishing live in that repository.

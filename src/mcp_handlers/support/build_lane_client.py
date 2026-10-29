@@ -20,7 +20,9 @@ What the lane is, and is not:
 * **The directory is confined.** ``BUILD_DIR`` is resolved with ``realpath``
   and accepted only at or under one of the profile's roots (``BUILD_ROOTS``),
   never a ``.env`` or ``.unitares`` path. Extra read directories
-  (``BUILD_READ_ROOTS``) go to ``--add-dir``.
+  (``BUILD_READ_ROOTS``) go to ``--add-dir`` with ``Edit``, ``Write`` and
+  ``NotebookEdit`` denied under them, so they stay read-only for the file
+  tools (Bash is not confined; see below).
 * **Customizations stay on.** Unlike the host and council lanes this runs
   without ``--safe-mode``: the project's instructions, the operator's hooks
   and the governance plugin are what make an unattended build behave like an
@@ -43,13 +45,18 @@ What the lane is, and is not:
   forwarded (``claude_cli_client.ENV_ALLOWLIST``), and the orchestrator's own
   bearer never is. The runner's provisioned lineage variables are passed
   through.
-* **The result outlives the orchestrator's retention.** The client writes
-  ``BUILD_DIR/.build-lane/started.json`` as it starts, streams the CLI's
-  ``stream-json`` output to ``.build-lane/build.log`` as well as to its own
-  standard output, and writes ``.build-lane/result.json`` (exit status, times,
-  the CLI's final result text, model and cost where reported) when the CLI
-  exits or is stopped. A caller that polls every few minutes reads these; the
-  orchestrator keeps a finished result for five minutes only.
+* **The result outlives the orchestrator's retention.** The client removes
+  any earlier run's ``result.json`` and ``build.log`` from
+  ``BUILD_DIR/.build-lane/``, writes ``started.json`` as it starts, streams
+  the CLI's ``stream-json`` output to ``build.log`` as well as to its own
+  standard output, and writes ``result.json`` (exit status, times, the CLI's
+  final result text, model and cost where reported) when the CLI exits or
+  hits the client's deadline. A caller that polls every few minutes reads
+  these; the orchestrator keeps a finished result for five minutes only. A
+  stop through the orchestrator (``DELETE /v1/executions/:id``) is a SIGKILL
+  of the whole tree, so it leaves ``started.json`` and the log but **no**
+  ``result.json``: a caller reads that absence, once the execution is no
+  longer live, as "stopped or killed".
 
 **What this does not bound.** Bash is not path-confined, and a process running
 as the operator's user can read whatever that user can, the GitHub App's key
@@ -301,7 +308,7 @@ def command(path: str, *, config: str | None, chosen: str | None,
         args += ["--mcp-config", config]
     args += ["--tools", ",".join(TOOLS),
              "--allowedTools", *ALLOWED_TOOLS,
-             "--disallowedTools", *DISALLOWED_TOOLS,
+             "--disallowedTools", *DISALLOWED_TOOLS, *read_only_rules(add_dirs),
              "--permission-mode", "dontAsk",
              "--permission-prompts", "none",
              "--no-session-persistence",
@@ -312,6 +319,16 @@ def command(path: str, *, config: str | None, chosen: str | None,
     if chosen:
         args += ["--model", chosen]
     return args
+
+
+def read_only_rules(add_dirs: list[str]) -> list[str]:
+    """Deny rules so an extra read directory stays read-only for the file
+    tools (a deny outranks the pre-approved Edit and Write)."""
+    rules: list[str] = []
+    for directory in add_dirs:
+        for tool in ("Edit", "Write", "NotebookEdit"):
+            rules.append(f"{tool}({directory}/**)")
+    return rules
 
 
 def write_shims(directory: str, real_git: str | None) -> None:
@@ -399,6 +416,13 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
 
     state = Path(directory, STATE_DIR)
     state.mkdir(mode=0o700, exist_ok=True)
+    # A result from an earlier run in this directory would read as this run's
+    # completion to a caller polling for the file.
+    for stale in ("result.json", "build.log"):
+        try:
+            (state / stale).unlink()
+        except FileNotFoundError:
+            pass
     started = _now()
     summary: dict = {"started": started, "dir": directory, "cli": path,
                      "parent_agent_id": environ.get("UNITARES_PARENT_AGENT_ID"),

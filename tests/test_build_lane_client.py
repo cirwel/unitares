@@ -149,7 +149,40 @@ def test_model_mcp_config_and_read_roots_are_passed(shim, roots, brief, tmp_path
     argv = report["argv"]
     assert argv[argv.index("--mcp-config") + 1] == str(config)
     assert argv[argv.index("--model") + 1] == "opus"
-    assert argv[argv.index("--add-dir") + 1] == os.path.realpath(docs)
+    real_docs = os.path.realpath(docs)
+    assert argv[argv.index("--add-dir") + 1] == real_docs
+    # A read root stays read-only for the file tools: deny rules under it.
+    for tool in ("Edit", "Write", "NotebookEdit"):
+        assert f"{tool}({real_docs}/**)" in argv
+    assert argv.index(f"Edit({real_docs}/**)") > argv.index("--disallowedTools")
+
+
+def test_an_earlier_runs_result_is_removed_before_the_cli_starts(shim, roots, brief):
+    state = roots / "build" / client.STATE_DIR
+    state.mkdir()
+    (state / "result.json").write_text('{"exit": 0, "stale": true}')
+    (state / "build.log").write_text("stale-log-line\n")
+    brief.write_text("sleep:2\n")
+    import threading
+    seen: dict = {}
+
+    def watch() -> None:
+        # While the CLI runs, the old result must already be gone.
+        import time
+        for _ in range(40):
+            if (state / "started.json").exists():
+                seen["result_during_run"] = (state / "result.json").exists()
+                return
+            time.sleep(0.05)
+
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    code, _, _ = _run(_environ(shim, roots, brief))
+    watcher.join()
+    assert code == 0
+    assert seen.get("result_during_run") is False
+    assert "stale" not in (state / "result.json").read_text()
+    assert "stale-log-line" not in (state / "build.log").read_text()
 
 
 def test_writes_started_log_and_result_files(shim, roots, brief):
