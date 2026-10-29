@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,11 @@ if data.startswith("git:"):
     for name in ("gh", "unitares-github"):
         proc = subprocess.run([name, "pr", "merge"], capture_output=True, text=True)
         report.setdefault("git", {})[name] = [proc.returncode, proc.stderr.strip()]
+if data.startswith("orphan:"):
+    # A background process with its output redirected, left behind on exit.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    open(data[len("orphan:"):].strip(), "w").write(str(child.pid))
 if data.startswith("sleep:"):
     print(json.dumps({"type": "assistant", "report": report}), flush=True)
     time.sleep(float(data.split(":")[1]))
@@ -224,6 +230,17 @@ def test_writes_started_log_and_result_files(shim, roots, brief):
     assert result["model"] == "stand-in" and result["num_turns"] == 3
     assert "ended" in result
     assert '"type": "result"' in (state / "build.log").read_text()
+
+
+def test_a_background_process_left_behind_does_not_outlive_the_build(shim, roots, brief, tmp_path):
+    pid_file = tmp_path / "orphan.pid"
+    brief.write_text(f"orphan:{pid_file}\n")
+    code, _, _ = _run(_environ(shim, roots, brief))
+    assert code == 0
+    pid = int(pid_file.read_text())
+    time.sleep(0.5)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 def test_the_deadline_stops_the_cli_and_still_writes_the_result(shim, roots, brief):

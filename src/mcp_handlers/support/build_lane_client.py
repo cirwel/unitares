@@ -498,6 +498,10 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
                 out.flush()
                 _final_result(line.rstrip("\n"), summary)
             code = proc.wait()
+            # The CLI is gone; anything it left behind in the group (a
+            # background process with its output redirected) must not outlive
+            # the build it belongs to.
+            _signal_group(proc.pid, signal.SIGKILL)
         except KeyboardInterrupt:
             killed.append("signal")
             _stop(proc)
