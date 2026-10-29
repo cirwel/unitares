@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for UNITARES, accountability infrastructure for
   long-running AI agents. Use this as the entrypoint when you need the overall
   model and route into the split governance skills.
-last_verified: "2026-09-24"
+last_verified: "2026-10-29"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -65,6 +65,16 @@ EISV estimates runtime state; `record_result` grades a check-in against a real
 outcome.
 How to read `coherence` and its producer tags is in
 `skills/governance-fundamentals/SKILL.md` (*Coherence*).
+
+EISV is digital proprioception, not an authority grant. By default,
+`UNITARES_POLICY_ACTUATION=observe`: `policy_evaluation` preserves the raw
+recommendation, while a recommended pause becomes non-coercive `proceed` /
+`guide` with `enforcement.applied=false`. Only an operator's explicit
+`UNITARES_POLICY_ACTUATION=enforce` setting gives inferred policy the historical
+circuit-breaker effect. Identity, authorization, archive state, existing
+durable pauses, and coordination controls remain authoritative in both modes.
+Dialectic is an optional communication and review protocol unless an actual
+applied pause needs recovery.
 
 Call `start_session(force_new=true)` once per process for a fresh process
 identity, then use `sync_state()` as the check-in loop for that same running

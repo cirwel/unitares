@@ -381,13 +381,14 @@ class TestServerInstructions:
         """A first-contact agent learns it can read before what it must do.
 
         search_shared_memory serves unbound callers, so the instructions lead
-        with it; a pause is explained where it is first named.
+        with it; inferred pauses are explained where first named.
         """
         text = build_server_instructions("progressive")
         assert text.index("search_shared_memory") < text.index("start_session")
         assert "works before start_session" in text
         pause = text.index("pause")
-        assert text.index("self_recovery") > pause
+        assert text.index("observational by default") > pause
+        assert text.index("operator-enabled actuator") > pause
         assert "never inferred from a shared thread" in text
 
     def test_full_instructions_match_full_advertisement(self):
@@ -456,8 +457,8 @@ _REQUIRED_IN_EVERY_MODE = (
     "start_session(force_new=true)",
     "client_session_id",
     "never inferred from a shared thread",
-    "a pause holds governed writes until self_recovery (not at high risk), "
-    "dialectic, an operator or a safety net lifts it, or it expires.",
+    "Inferred pauses are observational by default and do not block writes; "
+    "only an operator-enabled actuator applies one.",
     "sync_state",
     "record_result",
     "check_working_state",

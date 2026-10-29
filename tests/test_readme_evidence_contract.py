@@ -18,7 +18,7 @@ def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
         "Claims and evidence",
         "Governed review",
         "Outcome grounding",
-        "Runtime policy",
+        "Digital proprioception",
         "Reconstruction",
     ):
         assert capability in README

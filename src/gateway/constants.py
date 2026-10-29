@@ -23,7 +23,10 @@ REQUEST_TIMEOUT = 30.0
 HELP_TEXT = {
     "glossary": {
         "EISV": EISV_INLINE_SUMMARY,
-        "verdict": "Governance policy action: proceed, guide, or pause. proceed and guide are advisory",
+        "verdict": (
+            "Proprioceptive recommendation plus effective action. Inferred pauses "
+            "are observational unless the operator enables actuation"
+        ),
         "coherence / basin / risk": "Other fields in a status reply; call status to read your own values",
     },
     "tools": [
