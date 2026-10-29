@@ -156,6 +156,17 @@
 .tl-mk.lineage .tl-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--color-secondary); background: var(--color-base-100); }
 .tl-mk.lifecycle .tl-dot { width: 3px; height: 18px; background: var(--color-base-content); opacity: 0.7; }
 .tl-mk.other .tl-dot { width: 7px; height: 7px; background: var(--color-neutral); }
+/* A group of marks closer than one marker's width, drawn at its slot's
+   centre, with its count, in its most notable mark's tone. It is held
+   inside the window: a centre past now, or before the start while its later
+   marks are still shown, stays on the track. Its marks drop out on the next
+   prune once they leave the window, which re-forms the group. */
+.tl-mk.group { left: calc((clamp(var(--start), var(--t), var(--now)) - var(--start)) / var(--span) * 100%); }
+.tl-mk.group .tl-dot { min-width: 18px; height: 16px; padding: 0 3px; border-radius: 8px; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  background: var(--color-success); color: var(--color-success-content); }
+.tl-mk.group.warn .tl-dot { background: var(--color-warning); color: var(--color-warning-content); }
+.tl-mk.group.alert .tl-dot { background: var(--color-error); color: var(--color-error-content); }
+.tl-mk.group.quiet .tl-dot { background: var(--color-base-300); color: var(--color-base-content); }
 /* A band opened before the window starts at its left edge; an open band
    (no --t2) runs to now. */
 .tl-band { position: absolute; top: 50%; margin-top: -12px; height: 24px; padding: 0; border: 0; border-radius: 4px; cursor: pointer; z-index: 1;

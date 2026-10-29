@@ -135,7 +135,7 @@ defmodule PortalWeb.TimelineLiveTest do
       },
       %{
         "kind" => "lineage",
-        "ts" => iso(-2_000),
+        "ts" => iso(-301_000),
         "agent_id" => @a,
         "event_id" => "l-1",
         "parent_agent_id" => 42,
@@ -211,7 +211,7 @@ defmodule PortalWeb.TimelineLiveTest do
       },
       %{
         "kind" => "outcome",
-        "ts" => iso(-120_000),
+        "ts" => iso(-360_000),
         "agent_id" => @a,
         "outcome_id" => "o-1",
         "outcome_type" => "test_failed",
@@ -228,7 +228,7 @@ defmodule PortalWeb.TimelineLiveTest do
     assert has_element?(view, "#agent-#{@a} .tl-mk.outcome.bad", "✕")
 
     assert [{"outcome", t_outcome}, {"checkin", t_checkin}] = lane_marks(view, @a)
-    assert_in_delta t_checkin - t_outcome, 60.0, 0.2
+    assert_in_delta t_checkin - t_outcome, 300.0, 0.2
     assert has_element?(view, "#timeline-lanes[style*='--span:3600']")
   end
 
@@ -243,7 +243,7 @@ defmodule PortalWeb.TimelineLiveTest do
     ]
 
     events = [
-      %{"kind" => "outcome", "ts" => iso(-50_000), "agent_id" => @a, "outcome_id" => "1"},
+      %{"kind" => "outcome", "ts" => iso(-350_000), "agent_id" => @a, "outcome_id" => "1"},
       %{"kind" => "outcome", "ts" => iso(-20_000), "agent_id" => @b, "outcome_id" => "2"},
       %{"kind" => "outcome", "ts" => iso(-30_000), "agent_id" => c, "outcome_id" => "3"},
       %{
@@ -264,6 +264,166 @@ defmodule PortalWeb.TimelineLiveTest do
     # The lineage mark is drawn on the parent's lane.
     assert has_element?(view, "#agent-#{@a} .tl-mk.lineage[title*='Started a subagent']")
     refute has_element?(view, "#agent-#{@b} .tl-mk.lineage")
+  end
+
+  describe "marks close together" do
+    # Marks a millisecond apart share a slot whatever the page anchor, bar a
+    # boundary falling inside that millisecond. (A check-in is keyed by agent
+    # and instant, so two at one instant would be one record.)
+    defp near(seconds_ago, ms) do
+      DateTime.utc_now()
+      |> DateTime.add(-seconds_ago, :second)
+      |> DateTime.truncate(:second)
+      |> DateTime.add(ms, :millisecond)
+      |> DateTime.to_iso8601()
+    end
+
+    defp checkin_at(ts, action, text) do
+      %{
+        "kind" => "checkin",
+        "ts" => ts,
+        "agent_id" => @a,
+        "authored_by" => "agent",
+        "action" => action,
+        "state_id" => text,
+        "report_excerpt" => text
+      }
+    end
+
+    test "draw one counted group in the tone of the most notable, which opens to a list",
+         %{conn: conn} do
+      events = [
+        checkin_at(near(10, 0), "proceed", "all fine"),
+        checkin_at(near(10, 1), "pause", "held for risk"),
+        %{"kind" => "knowledge", "ts" => near(10, 2), "agent_id" => @a, "discovery_id" => "k1"}
+      ]
+
+      ctx = feed_with(events, [agent(@a, "worker one")])
+      view = mount_live(conn, ctx)
+
+      assert [group] = nodes(view, "#agent-#{@a} .tl-mk")
+      assert group |> LazyHTML.attribute("class") |> hd() =~ "group alert"
+      assert LazyHTML.text(group) =~ "3"
+      assert group |> LazyHTML.attribute("title") |> hd() =~ "3 events"
+      assert group |> LazyHTML.attribute("title") |> hd() =~ "assessment: pause"
+
+      view |> element("#agent-#{@a} .tl-mk.group") |> render_click()
+      assert has_element?(view, "#mark-detail", "3 events close together")
+      assert length(nodes(view, "#group-members button")) == 3
+
+      [pause_id] =
+        view
+        |> nodes("#group-members button")
+        |> Enum.find(&(LazyHTML.text(&1) =~ "assessment: pause"))
+        |> LazyHTML.attribute("id")
+
+      view |> element("##{pause_id}") |> render_click()
+      assert has_element?(view, "#mark-detail", "held for risk")
+      assert has_element?(view, "#agent-#{@a} .tl-mk.group.sel")
+
+      view |> element("#back-to-group") |> render_click()
+      assert has_element?(view, "#group-members")
+    end
+
+    test "take the tone of their most notable mark", %{conn: conn} do
+      events = [
+        checkin_at(near(10, 0), "proceed", "fine"),
+        checkin_at(near(10, 1), "guide", "steer"),
+        %{
+          "kind" => "checkin",
+          "ts" => near(900, 0),
+          "agent_id" => @a,
+          "authored_by" => "substrate"
+        },
+        %{
+          "kind" => "checkin",
+          "ts" => near(900, 1),
+          "agent_id" => @a,
+          "authored_by" => "substrate"
+        }
+      ]
+
+      ctx = feed_with(events, [agent(@a, "worker one")])
+      view = mount_live(conn, ctx)
+
+      assert has_element?(view, "#agent-#{@a} .tl-mk.group.warn")
+      assert has_element?(view, "#agent-#{@a} .tl-mk.group.quiet")
+      refute has_element?(view, "#agent-#{@a} .tl-mk.group.alert")
+    end
+
+    test "marks two slots apart stay separate", %{conn: conn} do
+      events = [
+        checkin_at(iso(-10_000), "proceed", "one"),
+        checkin_at(iso(-400_000), "proceed", "two")
+      ]
+
+      ctx = feed_with(events, [agent(@a, "worker one")])
+      view = mount_live(conn, ctx)
+
+      refute has_element?(view, "#agent-#{@a} .tl-mk.group")
+      assert length(nodes(view, "#agent-#{@a} .tl-mk.checkin")) == 2
+    end
+
+    test "a selected group follows its live marks when the re-read confirms them into another slot",
+         %{conn: conn} do
+      ctx = feed_with([])
+      view = mount_live(conn, ctx)
+
+      # A slot boundary falls at the page anchor: live check-ins just after it,
+      # their history rows just before it, inside the 2 s pairing lag.
+      anchor = :sys.get_state(view.pid).socket.assigns.anchor
+
+      at = fn ms ->
+        DateTime.from_unix!(anchor * 1000 + ms, :millisecond) |> DateTime.to_iso8601()
+      end
+
+      for ms <- [100, 200] do
+        broadcast_frame(ctx, %{"type" => "eisv_update", "agent_id" => @a, "timestamp" => at.(ms)})
+        assert_receive {:timeline_delta, "1h", _}
+      end
+
+      _ = :sys.get_state(ctx.feed)
+      view |> element("#agent-#{@a} .tl-mk.group") |> render_click()
+      assert has_element?(view, "#group-members")
+
+      serve(ctx.stub, fn conn ->
+        Req.Test.json(
+          conn,
+          window_body([
+            checkin_at(at.(-500), "proceed", "one"),
+            checkin_at(at.(-400), "proceed", "two")
+          ])
+        )
+      end)
+
+      broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+      assert eventually(fn ->
+               has_element?(view, "#agent-#{@a} .tl-mk.group.sel:not([data-provisional])")
+             end)
+
+      assert has_element?(view, "#group-members")
+    end
+
+    test "a selected group that a re-read leaves with one mark selects that mark",
+         %{conn: conn} do
+      stays = checkin_at(near(10, 0), "proceed", "stays")
+      ctx = feed_with([stays, checkin_at(near(10, 1), "guide", "goes")])
+      view = mount_live(conn, ctx)
+
+      view |> element("#agent-#{@a} .tl-mk.group") |> render_click()
+      assert has_element?(view, "#group-members")
+
+      serve(ctx.stub, fn conn ->
+        Req.Test.json(conn, window_body([stays]))
+      end)
+
+      broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+      assert eventually(fn -> has_element?(view, "#mark-detail", "stays") end)
+      refute has_element?(view, "#agent-#{@a} .tl-mk.group")
+      assert has_element?(view, "#agent-#{@a} .tl-mk.checkin.sel")
+    end
   end
 
   test "a pause and its resume draw a band; an unresumed pause runs to now", %{conn: conn} do
@@ -642,10 +802,22 @@ defmodule PortalWeb.TimelineLiveTest do
     assert_receive {:timeline_delta, "1h", _}
     _ = :sys.get_state(ctx.feed)
 
-    # Select the second live check-in mark (lanes render marks oldest first).
-    [_first_node, second_node] = nodes(view, "#agent-#{@a} .tl-mk.checkin")
-    [second_live_id] = LazyHTML.attribute(second_node, "id")
-    view |> element("##{second_live_id}") |> render_click()
+    # Select the second live check-in. The two sit 200 ms apart, so they are
+    # one group unless a slot boundary (one falls at the page anchor, moments
+    # ago) lies between them; open the group and pick the second (members
+    # list oldest first), or pick the second mark.
+    second_node =
+      case nodes(view, "#agent-#{@a} .tl-mk.group") do
+        [_group] ->
+          view |> element("#agent-#{@a} .tl-mk.group") |> render_click()
+          view |> nodes("#group-members button") |> Enum.at(1)
+
+        [] ->
+          view |> nodes("#agent-#{@a} .tl-mk.checkin") |> Enum.at(1)
+      end
+
+    [second_id] = LazyHTML.attribute(second_node, "id")
+    view |> element("##{second_id}") |> render_click()
 
     row = fn ms, text ->
       %{
@@ -944,7 +1116,7 @@ defmodule PortalWeb.TimelineLiveTest do
     events = [
       %{
         "kind" => "checkin",
-        "ts" => iso(-2_000),
+        "ts" => iso(-302_000),
         "agent_id" => @a,
         "authored_by" => "substrate",
         "epistemic_class" => "substrate_interpretation"

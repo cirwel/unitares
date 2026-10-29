@@ -13,7 +13,9 @@ defmodule PortalWeb.TimelineLive do
   same lanes as the dashboard's Timeline tab (`dashboard/redesign/sections/
   timeline.js`): one row per agent across the window, marks placed in time,
   bands for pauses and dialectic reviews, subagents nested under a visible
-  parent. Selecting a mark shows its record. Around the lanes:
+  parent. Selecting a mark shows its record. Marks too close together to
+  tell apart draw as one counted group, in the tone of its most notable
+  mark; selecting it lists them. Around the lanes:
 
     * rows ordered by the most recent event of each family, recomputed on
       re-read only so rows do not jump while you read; an agent first seen
@@ -60,6 +62,12 @@ defmodule PortalWeb.TimelineLive do
   # What ends a pause. Archiving sets the agent's status directly and emits no
   # resume, so an archive closes a pause too.
   @pause_ends ~w(lifecycle_resumed lifecycle_archived)
+  # A lane's marks closer than one marker's width overlap into a smear, so
+  # the window is cut into this many slots, fixed to the page anchor, and a
+  # slot holding two or more marks draws one counted group at its centre.
+  # At the track's 520 px minimum a slot is about one marker wide; slots stay
+  # put as the window slides, so a group does not regroup as marks expire.
+  @cluster_slots 30
 
   # How a lineage child relates to its parent, by its spawn_reason. Mirrors
   # the tab and src/identity/lineage_semantics.py: only dispatched children
@@ -100,6 +108,8 @@ defmodule PortalWeb.TimelineLive do
         meta: %{},
         feed_reachable: true,
         marks: %{},
+        clusters: %{},
+        group_hint: nil,
         resumed_at: %{},
         row_order: [],
         selected: nil,
@@ -217,6 +227,7 @@ defmodule PortalWeb.TimelineLive do
 
         resumed = Enum.reduce(all, resumed_seed, &note_resume(&2, &1))
         marks = Map.merge(held_pauses(socket, resumed), read)
+        paired = Map.get(snap, :paired, %{})
 
         socket
         |> assign(
@@ -230,13 +241,8 @@ defmodule PortalWeb.TimelineLive do
           last_seen: last_seen,
           marks: marks,
           resumed_at: resumed,
-          selected:
-            carry_selection(
-              socket.assigns.selected,
-              socket.assigns.marks,
-              marks,
-              Map.get(snap, :paired, %{})
-            ),
+          selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks, paired),
+          group_hint: carry_group(socket.assigns, marks, paired),
           row_order: order_rows(roster, marks, last_seen)
         )
         |> relane()
@@ -289,6 +295,8 @@ defmodule PortalWeb.TimelineLive do
   # feed's mark-to-row pairing first; fall back to the latest matching row when
   # the mark arrived directly on the page without a feed pairing.
   defp carry_selection(nil, _old, _new, _paired), do: nil
+  # A group is not a mark; `relane/1` resolves it against the new groups.
+  defp carry_selection("c-" <> _ = id, _old, _new, _paired), do: id
 
   defp carry_selection(id, old, new, paired) do
     cond do
@@ -308,6 +316,23 @@ defmodule PortalWeb.TimelineLive do
         nil
     end
   end
+
+  # A selected group's marks, each carried as a selected mark is, so that
+  # `relane/1` can find them when the re-read confirms them into another
+  # slot (a live mark and its history row can sit either side of a boundary).
+  defp carry_group(%{selected: "c-" <> _ = id} = assigns, new, paired) do
+    case Map.get(assigns.clusters, id) do
+      nil ->
+        nil
+
+      group ->
+        group.members
+        |> Enum.map(&carry_selection(&1, assigns.marks, new, paired))
+        |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  defp carry_group(_assigns, _new, _paired), do: nil
 
   # Each agent's latest resume or archive, kept apart from the marks: it is
   # what closes a pause band, so it must survive the cap and the window prune
@@ -608,10 +633,21 @@ defmodule PortalWeb.TimelineLive do
     flagged = MapSet.new(attention, & &1.agent)
     lane = &build_lane(&1, by_owner, flagged, socket.assigns)
     open_background = socket.assigns.show_background or filter != ""
+    lanes = Enum.map(shown, lane)
+    background_lanes = if open_background, do: Enum.map(background, lane), else: []
+
+    clusters =
+      for l <- lanes ++ background_lanes,
+          %{cluster: true} = c <- l.marks,
+          into: %{},
+          do: {c.id, c}
 
     assign(socket,
-      lanes: Enum.map(shown, lane),
-      background_lanes: if(open_background, do: Enum.map(background, lane), else: []),
+      lanes: lanes,
+      background_lanes: background_lanes,
+      clusters: clusters,
+      selected: resolve_group(socket.assigns, clusters),
+      group_hint: nil,
       background_open: open_background,
       background_count: length(background),
       background_names:
@@ -642,10 +678,104 @@ defmodule PortalWeb.TimelineLive do
           {mid, m} <- own,
           m["kind"] != "dialectic",
           do: mark_view(mid, m, anchor, roster, labels)
-        ),
+        )
+        |> group_marks(id, hours(assigns) * 3600 / @cluster_slots),
       bands: bands(own, anchor, labels, Map.get(assigns.resumed_at, id))
     }
   end
+
+  # `own` is in time order, and so is the result. A mark with no time stays
+  # as it is (hidden), last. Lifecycle marks stay single: they mark the pause
+  # bands' edges, and an unresumed pause is kept after it leaves the window,
+  # where a group would be held at the window's start.
+  defp group_marks(views, lane_id, slot) do
+    {timed, untimed} = Enum.split_with(views, &is_number(&1.t))
+    {grouping, single} = Enum.split_with(timed, &(&1.kind != "lifecycle"))
+
+    grouping
+    |> Enum.chunk_by(&floor(&1.t / slot))
+    |> Enum.map(fn
+      [one] -> one
+      group -> group_view(group, lane_id, slot)
+    end)
+    |> Kernel.++(single)
+    |> Enum.sort_by(& &1.t)
+    |> Kernel.++(untimed)
+  end
+
+  # The group takes the look of its most notable mark, so a pause verdict or
+  # a failed outcome inside it still shows red.
+  defp group_view(group, lane_id, slot) do
+    n = floor(hd(group).t / slot)
+    top = Enum.max_by(group, &notability/1)
+    first = hd(group)
+    last = List.last(group)
+
+    %{
+      id: "c-#{lane_id}-#{n}",
+      cluster: true,
+      members: Enum.map(group, & &1.id),
+      kind: "group",
+      cls: "group " <> group_tone(notability(top)),
+      glyph: Integer.to_string(length(group)),
+      t: Float.round((n + 0.5) * slot, 1),
+      at: first.at,
+      until: last.at,
+      provisional: Enum.all?(group, & &1.provisional),
+      seen_live: false,
+      label:
+        joined([
+          "#{length(group)} events, #{utc(first.at)} to #{utc(last.at)}",
+          "most notable: " <> top.label
+        ])
+    }
+  end
+
+  defp notability(%{cls: cls}) do
+    cond do
+      cls in ["checkin pause", "outcome bad"] -> 4
+      cls == "checkin guide" -> 3
+      cls in ["checkin substrate", "checkin unassessed"] -> 1
+      true -> 2
+    end
+  end
+
+  defp group_tone(4), do: "alert"
+  defp group_tone(3), do: "warn"
+  defp group_tone(2), do: "ok"
+  defp group_tone(_), do: "quiet"
+
+  # A selected group that no longer exists follows its marks: to the group
+  # that now holds one of them, or else to the first still shown on its own.
+  # After a re-read its marks are the ones `carry_group/3` carried.
+  defp resolve_group(%{selected: "c-" <> _ = id} = assigns, new) do
+    members =
+      assigns.group_hint ||
+        case Map.get(assigns.clusters, id) do
+          nil -> []
+          group -> group.members
+        end
+
+    cond do
+      Map.has_key?(new, id) ->
+        id
+
+      holder = Enum.find_value(members, &group_of(new, &1)) ->
+        holder.id
+
+      true ->
+        Enum.find(members, &Map.has_key?(assigns.marks, &1))
+    end
+  end
+
+  defp resolve_group(%{selected: id}, _new), do: id
+
+  defp group_of(_clusters, nil), do: nil
+
+  defp group_of(clusters, id),
+    do: clusters |> Map.values() |> Enum.find(&(id in &1.members))
+
+  defp selected?(m, selected), do: selected == m.id or selected in Map.get(m, :members, [])
 
   # Each row's family root: the nearest row above it at depth 0.
   defp family_roots(order) do
@@ -800,6 +930,7 @@ defmodule PortalWeb.TimelineLive do
       cls: cls,
       glyph: glyph,
       t: rel_s(m["ts"], anchor),
+      at: m["ts"],
       provisional: m["provisional"] == true,
       seen_live: m["seen_live"] == true,
       label:
@@ -1265,7 +1396,7 @@ defmodule PortalWeb.TimelineLive do
           :key={m.id}
           type="button"
           id={m.id}
-          class={["tl-mk", m.cls, @selected == m.id && "sel"]}
+          class={["tl-mk", m.cls, selected?(m, @selected) && "sel"]}
           style={mark_style(m)}
           data-kind={m.kind}
           data-provisional={m.provisional && "true"}
@@ -1290,6 +1421,8 @@ defmodule PortalWeb.TimelineLive do
       |> assign(:latency, latency_summary(assigns.latencies))
       |> assign(:hours, hours(assigns))
       |> assign(:sel_mark, assigns.selected && Map.get(assigns.marks, assigns.selected))
+      |> assign(:sel_group, assigns.selected && Map.get(assigns.clusters, assigns.selected))
+      |> assign(:in_group, group_of(assigns.clusters, assigns.selected))
 
     ~H"""
     <div class="mx-auto max-w-7xl p-6 space-y-4">
@@ -1505,24 +1638,56 @@ defmodule PortalWeb.TimelineLive do
         <span><span class="tl-mk knowledge"><span class="tl-dot"></span></span>finding shared</span>
         <span><span class="tl-mk lineage"><span class="tl-dot"></span></span>lineage</span>
         <span><span class="tl-mk lifecycle"><span class="tl-dot"></span></span>lifecycle</span>
+        <span>
+          <span class="tl-mk group alert"><span class="tl-dot">3</span></span>events close together, coloured by the most notable
+        </span>
         <span><span class="tl-band pause"></span>paused</span>
         <span><span class="tl-band dialectic"></span>dialectic review</span>
       </div>
 
       <section id="mark-detail" class="rounded-box border border-base-300 p-5 text-sm">
-        <%= if @sel_mark do %>
-          <h2 class="font-semibold mb-2">{mark_title(@sel_mark, @roster)}</h2>
-          <p :if={detail_note(@sel_mark)} class="text-base-content/70 mb-3">
-            {detail_note(@sel_mark)}
-          </p>
-          <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
-            <%= for {k, v} <- detail_rows(@sel_mark, @labels, @roster) do %>
-              <dt class="text-base-content/60">{k}</dt>
-              <dd class="break-words">{v}</dd>
-            <% end %>
-          </dl>
-        <% else %>
-          <p class="text-base-content/60">Select a mark to see its record.</p>
+        <%= cond do %>
+          <% @sel_group -> %>
+            <h2 class="font-semibold mb-1">{length(@sel_group.members)} events close together</h2>
+            <p class="text-base-content/70 mb-3">
+              {utc(@sel_group.at)} to {utc(@sel_group.until)}. Select one to see its record.
+            </p>
+            <ul id="group-members" class="space-y-1">
+              <li :for={mid <- @sel_group.members} :if={m = @marks[mid]}>
+                <button
+                  type="button"
+                  id={"member-#{mid}"}
+                  phx-click="select"
+                  phx-value-id={mid}
+                  class="link link-hover text-left"
+                >
+                  {joined([utc(m["ts"]), mark_title(m, @roster), assessment(m)])}
+                </button>
+              </li>
+            </ul>
+          <% @sel_mark -> %>
+            <button
+              :if={@in_group}
+              type="button"
+              id="back-to-group"
+              phx-click="select"
+              phx-value-id={@in_group.id}
+              class="link link-hover text-xs text-base-content/70 mb-2"
+            >
+              ← {length(@in_group.members)} events close together
+            </button>
+            <h2 class="font-semibold mb-2">{mark_title(@sel_mark, @roster)}</h2>
+            <p :if={detail_note(@sel_mark)} class="text-base-content/70 mb-3">
+              {detail_note(@sel_mark)}
+            </p>
+            <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
+              <%= for {k, v} <- detail_rows(@sel_mark, @labels, @roster) do %>
+                <dt class="text-base-content/60">{k}</dt>
+                <dd class="break-words">{v}</dd>
+              <% end %>
+            </dl>
+          <% true -> %>
+            <p class="text-base-content/60">Select a mark to see its record.</p>
         <% end %>
       </section>
     </div>
