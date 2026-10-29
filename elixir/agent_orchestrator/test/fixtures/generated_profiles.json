@@ -1,5 +1,44 @@
 {
   "profiles": {
+    "build.claude": {
+      "args": [
+        "-I",
+        "/srv/unitares/src/mcp_handlers/support/build_lane_client.py"
+      ],
+      "cmd": "/usr/bin/python3",
+      "env": {
+        "inherit": [
+          "HOME",
+          "PATH",
+          "LANG",
+          "TMPDIR"
+        ],
+        "set": {
+          "BUILD_BRIEF": "/srv/build-brief.md",
+          "BUILD_CLI": "/usr/local/bin/claude",
+          "BUILD_READ_ROOTS": "/srv/docs",
+          "BUILD_ROOTS": "/srv/builds",
+          "USER": "operator"
+        }
+      },
+      "lease": false,
+      "lineage": "caller",
+      "max_concurrent": 1,
+      "max_output_lines": 20000,
+      "max_per_hour": 4,
+      "max_runtime_ms": 7200000,
+      "vars": {
+        "BUILD_DIR": {
+          "max_bytes": 4096,
+          "pattern": "/[^\\n\\r]{0,4095}",
+          "required": true
+        },
+        "BUILD_MODEL": {
+          "max_bytes": 128,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]{0,127}"
+        }
+      }
+    },
     "council.agy": {
       "args": [
         "-I",
