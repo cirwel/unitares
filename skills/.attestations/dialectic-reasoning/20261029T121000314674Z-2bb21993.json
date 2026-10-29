@@ -1,0 +1,34 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-29T12:10:00Z",
+  "verified_date": "2026-10-29",
+  "verifier": "claude (PR #3133): re-checked dialectic-reasoning against the only change to tool_stability.py, the rewording of sync_state's alias note to name simulate_update and check_working_state as separate tools; the skill quotes neither the old nor the new sentence, mentions no simulate_update, and names no alias that changed",
+  "source_digests": {
+    "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
+    "unitares/db/postgres/migrations/077_dialectic_transcript_revision.sql": "c74d05125d80f7b2",
+    "unitares/db/postgres/migrations/078_dialectic_resolution_saga_revision.sql": "62319aa203b4ae8d",
+    "unitares/src/dialectic_db.py": "9e224e2e71094def",
+    "unitares/src/dialectic_protocol.py": "e8d17c53bd0cfcbb",
+    "unitares/src/dialectic_reviewed_work.py": "0c670806a8acabce",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "4612264644a5a512",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "aa3dca3feb9d9639",
+    "unitares/src/mcp_handlers/dialectic/read_projection.py": "e28bb84176c94efc",
+    "unitares/src/mcp_handlers/dialectic/resolution.py": "7fea651cb6043b42",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "4a3e6c01255346b4",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "8073682129722ba1",
+    "unitares/src/mcp_handlers/identity/operator.py": "b5d86906c9800f00",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "283c8ce971b1556c",
+    "unitares/src/mcp_handlers/tool_stability.py": "463eed1c0550d65f"
+  },
+  "skill_digest": "832e0c87c94ed243",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "5471b6be3c292e93"
+    ]
+  }
+}
