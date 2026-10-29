@@ -1,9 +1,9 @@
 # Independent-operator cohort
 
-UNITARES is looking for one operator who already runs several AI agents and
-wants a durable record across their sessions, restarts, and handoffs. This is
-a bounded usability study, not a sales program and not a request to generate
-synthetic traffic.
+UNITARES is looking for one operator who runs at least one genuine agent
+workload and wants a durable record across its sessions, restarts, and
+handoffs. This is a bounded usability study, not a sales program and not a
+request to generate synthetic traffic.
 
 The study's protocol was registered before recruitment began. Negative,
 inconclusive, and abandoned runs are reported as readily as successful ones.
@@ -35,12 +35,14 @@ any consideration would be agreed and disclosed before enrollment.
 1. **Short fit call.** Confirm the workload, infrastructure, outcome source,
    relationship to the maintainer, and publication expectations.
 2. **Install and connect.** Start a release-tagged Docker Compose stack, run
-   the quickstart check, remove its demo rows, and connect a real agent.
+   the quickstart check, record the demo agent's `identity_id`, delete that
+   identity's rows, note the deletion timestamp, and connect a real agent.
 3. **Plumbing check.** Emit at least three outcomes through each declared
    producer and confirm that the recorded rows are attributable and visible
    to the registered analysis.
 4. **Enrollment.** Add the release, fleet shape, producers, harness hashes,
-   plumbing counts, and publication consent to the append-only
+   demo identity and deletion timestamp, plumbing counts, and publication
+   consent to the append-only
    [enrollment ledger](../proposals/active/independent-operator-cohort-enrollments.md).
 5. **Operate for 28 UTC days.** Use the agents for their ordinary work. Keep a
    timestamped friction log and record maintainer-support time.
@@ -53,7 +55,8 @@ the first non-demo agent completes a qualifying check-in.
 
 ## What the maintainer provides
 
-- a release-tagged install path and a guided first setup;
+- a release-tagged install path and a guided first setup within the study's
+  disclosed support budget;
 - help connecting Claude Code, Codex, Hermes Agent, or another MCP client;
 - diagnosis of setup and integration failures;
 - a public record of every maintainer-support interaction and its approximate
@@ -61,9 +64,19 @@ the first non-demo agent completes a qualifying check-in.
 - preparation of the enrollment and result artifacts for the operator to
   review.
 
-Questions are allowed and logged. A repository change made in response to the
-participant's blocker prevents the study from claiming that the tested release
-was independently deployable; the blocker remains useful product evidence.
+Questions are allowed and logged. The study may claim that the tested release
+was independently deployable only if all four registered conditions hold:
+
+1. no repository change was made in response to a blocker the participant
+   raised during setup or the window;
+2. at least 14 of the 28 window days contain a qualifying check-in;
+3. the day-28 capture has a behavioral primary rate of at least 0.5 and zero
+   contract violations; and
+4. no `blocked` friction item remains unresolved at window end, with no more
+   than 120 total minutes of logged maintainer support.
+
+Anything less is still published as a usability result, but the independent-
+deployment claim is not made.
 
 ## Data and claims
 
@@ -79,7 +92,10 @@ adoption, predictive validity across fleets, or causal incident prevention.
 
 ## Express interest
 
-Email `founder@cirwel.org` with:
+Comment on [issue #1607](https://github.com/cirwel/unitares/issues/1607) to
+leave a visible expression of interest. If the deployment details should not
+be public, the comment can say only that you are interested and the remaining
+intake can continue by email at `founder@cirwel.org`:
 
 - the agent clients or runtimes you operate;
 - roughly how many agents or recurring jobs are active;
