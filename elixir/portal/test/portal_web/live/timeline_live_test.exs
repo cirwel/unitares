@@ -364,6 +364,47 @@ defmodule PortalWeb.TimelineLiveTest do
       assert length(nodes(view, "#agent-#{@a} .tl-mk.checkin")) == 2
     end
 
+    test "a selected group follows its live marks when the re-read confirms them into another slot",
+         %{conn: conn} do
+      ctx = feed_with([])
+      view = mount_live(conn, ctx)
+
+      # A slot boundary falls at the page anchor: live check-ins just after it,
+      # their history rows just before it, inside the 2 s pairing lag.
+      anchor = :sys.get_state(view.pid).socket.assigns.anchor
+
+      at = fn ms ->
+        DateTime.from_unix!(anchor * 1000 + ms, :millisecond) |> DateTime.to_iso8601()
+      end
+
+      for ms <- [100, 200] do
+        broadcast_frame(ctx, %{"type" => "eisv_update", "agent_id" => @a, "timestamp" => at.(ms)})
+        assert_receive {:timeline_delta, "1h", _}
+      end
+
+      _ = :sys.get_state(ctx.feed)
+      view |> element("#agent-#{@a} .tl-mk.group") |> render_click()
+      assert has_element?(view, "#group-members")
+
+      serve(ctx.stub, fn conn ->
+        Req.Test.json(
+          conn,
+          window_body([
+            checkin_at(at.(-500), "proceed", "one"),
+            checkin_at(at.(-400), "proceed", "two")
+          ])
+        )
+      end)
+
+      broadcast_frame(ctx, %{"type" => "dialectic_session_resolved", "timestamp" => iso()})
+
+      assert eventually(fn ->
+               has_element?(view, "#agent-#{@a} .tl-mk.group.sel:not([data-provisional])")
+             end)
+
+      assert has_element?(view, "#group-members")
+    end
+
     test "a selected group that a re-read leaves with one mark selects that mark",
          %{conn: conn} do
       stays = checkin_at(near(10, 0), "proceed", "stays")

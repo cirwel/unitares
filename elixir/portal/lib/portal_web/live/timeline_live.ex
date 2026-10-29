@@ -109,6 +109,7 @@ defmodule PortalWeb.TimelineLive do
         feed_reachable: true,
         marks: %{},
         clusters: %{},
+        group_hint: nil,
         resumed_at: %{},
         row_order: [],
         selected: nil,
@@ -226,6 +227,7 @@ defmodule PortalWeb.TimelineLive do
 
         resumed = Enum.reduce(all, resumed_seed, &note_resume(&2, &1))
         marks = Map.merge(held_pauses(socket, resumed), read)
+        paired = Map.get(snap, :paired, %{})
 
         socket
         |> assign(
@@ -239,13 +241,8 @@ defmodule PortalWeb.TimelineLive do
           last_seen: last_seen,
           marks: marks,
           resumed_at: resumed,
-          selected:
-            carry_selection(
-              socket.assigns.selected,
-              socket.assigns.marks,
-              marks,
-              Map.get(snap, :paired, %{})
-            ),
+          selected: carry_selection(socket.assigns.selected, socket.assigns.marks, marks, paired),
+          group_hint: carry_group(socket.assigns, marks, paired),
           row_order: order_rows(roster, marks, last_seen)
         )
         |> relane()
@@ -319,6 +316,23 @@ defmodule PortalWeb.TimelineLive do
         nil
     end
   end
+
+  # A selected group's marks, each carried as a selected mark is, so that
+  # `relane/1` can find them when the re-read confirms them into another
+  # slot (a live mark and its history row can sit either side of a boundary).
+  defp carry_group(%{selected: "c-" <> _ = id} = assigns, new, paired) do
+    case Map.get(assigns.clusters, id) do
+      nil ->
+        nil
+
+      group ->
+        group.members
+        |> Enum.map(&carry_selection(&1, assigns.marks, new, paired))
+        |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  defp carry_group(_assigns, _new, _paired), do: nil
 
   # Each agent's latest resume or archive, kept apart from the marks: it is
   # what closes a pause band, so it must survive the cap and the window prune
@@ -632,7 +646,8 @@ defmodule PortalWeb.TimelineLive do
       lanes: lanes,
       background_lanes: background_lanes,
       clusters: clusters,
-      selected: resolve_group(socket.assigns.selected, socket.assigns.clusters, clusters, marks),
+      selected: resolve_group(socket.assigns, clusters),
+      group_hint: nil,
       background_open: open_background,
       background_count: length(background),
       background_names:
@@ -669,17 +684,22 @@ defmodule PortalWeb.TimelineLive do
     }
   end
 
-  # `own` is in time order, so each slot's marks are adjacent. A mark with no
-  # time stays as it is (hidden).
+  # `own` is in time order, and so is the result. A mark with no time stays
+  # as it is (hidden), last. Lifecycle marks stay single: they mark the pause
+  # bands' edges, and an unresumed pause is kept after it leaves the window,
+  # where a group would be held at the window's start.
   defp group_marks(views, lane_id, slot) do
     {timed, untimed} = Enum.split_with(views, &is_number(&1.t))
+    {grouping, single} = Enum.split_with(timed, &(&1.kind != "lifecycle"))
 
-    timed
+    grouping
     |> Enum.chunk_by(&floor(&1.t / slot))
     |> Enum.map(fn
       [one] -> one
       group -> group_view(group, lane_id, slot)
     end)
+    |> Kernel.++(single)
+    |> Enum.sort_by(& &1.t)
     |> Kernel.++(untimed)
   end
 
@@ -725,23 +745,30 @@ defmodule PortalWeb.TimelineLive do
   defp group_tone(2), do: "ok"
   defp group_tone(_), do: "quiet"
 
-  # A selected group that no longer exists (a re-read or the window moved its
-  # marks) falls back to the first of its marks still shown on its own.
-  defp resolve_group("c-" <> _ = id, old, new, marks) do
+  # A selected group that no longer exists follows its marks: to the group
+  # that now holds one of them, or else to the first still shown on its own.
+  # After a re-read its marks are the ones `carry_group/3` carried.
+  defp resolve_group(%{selected: "c-" <> _ = id} = assigns, new) do
+    members =
+      assigns.group_hint ||
+        case Map.get(assigns.clusters, id) do
+          nil -> []
+          group -> group.members
+        end
+
     cond do
       Map.has_key?(new, id) ->
         id
 
-      group = Map.get(old, id) ->
-        grouped = new |> Map.values() |> Enum.flat_map(& &1.members) |> MapSet.new()
-        Enum.find(group.members, &(Map.has_key?(marks, &1) and &1 not in grouped))
+      holder = Enum.find_value(members, &group_of(new, &1)) ->
+        holder.id
 
       true ->
-        nil
+        Enum.find(members, &Map.has_key?(assigns.marks, &1))
     end
   end
 
-  defp resolve_group(id, _old, _new, _marks), do: id
+  defp resolve_group(%{selected: id}, _new), do: id
 
   defp group_of(_clusters, nil), do: nil
 
