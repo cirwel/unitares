@@ -173,7 +173,7 @@ def build_server_instructions(mode: str = None) -> str:
 
 Reading needs no identity: search_shared_memory works before start_session, so search first and again before you write. Full replacement-link traversal requires the AGE backend.
 
-Writes are attributed: bind once with start_session(force_new=true) and pass its client_session_id on every later call. Lineage is declared, never inferred from a shared thread. sync_state returns a state estimate and a policy action (proceed, guide, or pause); each check-in keeps a bounded excerpt of its report text. proceed and guide are advisory; a pause holds governed writes until self_recovery (not at high risk), dialectic, an operator or a safety net lifts it, or it expires. record_result grades a check-in against a real outcome; without one the estimate is self-report. check_working_state reads without writing. Advertising a tool does not establish dependency readiness.
+Writes are attributed: bind once with start_session(force_new=true) and pass its client_session_id on later calls. Lineage is declared, never inferred from a shared thread. sync_state records a state estimate, raw recommendation, and effective action; a bounded excerpt of its report text is kept. Inferred pauses are observational by default and do not block writes; only an operator-enabled actuator applies one. Identity, archive, existing-pause, and coordination gates remain enforced. record_result grades a check-in against a real outcome; without one the estimate is self-report. check_working_state reads without writing. Advertising a tool does not establish dependency readiness.
 
 {advertisement_guidance} Parameter descriptions are abridged; describe_tool has the full text."""
 

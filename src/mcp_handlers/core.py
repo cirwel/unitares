@@ -504,7 +504,13 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     This allows quick testing of "what would governance say about X?" without
     requiring onboarding first.
     """
+    from src.agent_loop_detection import (
+        apply_policy_actuation_posture,
+        policy_actuation_posture,
+    )
     from src.governance_monitor import UNITARESMonitor
+
+    posture = policy_actuation_posture()
 
     # Try to get agent_id from session/arguments (but don't require registration)
     agent_id, _ = require_agent_id(arguments)  # Ignore error - we'll handle missing agent
@@ -592,6 +598,11 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
         except Exception as e:
             logger.warning(f"Could not enforce post-ODE dialectic conditions: {e}", exc_info=True)
 
+    # A simulation previews the same effective directive as a real check-in.
+    # It never applies a lifecycle effect, but it must preserve the raw policy
+    # recommendation and operator posture in the same response fields.
+    apply_policy_actuation_posture(result, posture=posture)
+
     # LITE MODE: Simplified response for smaller models/local agents
     lite_mode = arguments.get("lite", False)
     
@@ -613,6 +624,9 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
             "guidance": result.get("guidance"),
             "_note": "Lite mode: Use lite=false for full diagnostics",
         }
+        if result.get("enforcement", {}).get("requested"):
+            response["policy_evaluation"] = result.get("policy_evaluation", {})
+            response["enforcement"] = result.get("enforcement", {})
     else:
         # Full response with all details
         response = {

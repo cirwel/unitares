@@ -121,7 +121,8 @@ class MetricsResult(_GovModel):
     success: bool
     metrics: dict = Field(default_factory=dict)
     verdict: str | None = None
-    # Policy action: proceed or pause. With no decision to report it is
+    # Effective action: proceed or pause. The raw inferred recommendation is
+    # separate in the full response. With no decision to report this is
     # "uninitialized" (no check-in yet) or "unbound" (no identity on the call).
     action: str | None = None
     coherence: float | None = None

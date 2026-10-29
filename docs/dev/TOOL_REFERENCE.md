@@ -521,7 +521,7 @@ CURRENT OUTCOME TYPES:
 CURRENT CALIBRATION / PROVENANCE FIELDS:
 - confidence: agent confidence at outcome time; inferred from last check-in if omitted
 - prediction_id: tactical prediction id returned by process_agent_update; binds this outcome to that prediction
-- decision_action: decision taken, e.g. proceed or pause
+- decision_action: effective action, e.g. proceed or an applied pause
 - session_id: optional session id; falls back to client_session_id/context
 - verification_source: agent_reported_tool_result | server_observation | external_signal
 - response/detail corroboration metadata: corroboration_grade, evidence_weight, claim_risk, claimed_fields, verified_fields, unverified_fields. Agent-reported task_completed summaries with no independent evidence are claim_only and low-weight.

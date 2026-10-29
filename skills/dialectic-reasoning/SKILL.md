@@ -1,12 +1,14 @@
 ---
 name: dialectic-reasoning
 description: >
-  Use when an agent is participating in a UNITARES dialectic session — paused and needs to
-  submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
-  Covers structured argumentation and convergence.
-last_verified: "2026-09-23"
+  Use when an agent chooses to participate in a UNITARES dialectic session —
+  requesting structured review, submitting a thesis, reviewing another agent's
+  thesis, or synthesizing conditions for resolution. Covers structured
+  argumentation and convergence.
+last_verified: "2026-10-29"
 freshness_days: 28
 source_files:
+  - unitares/src/agent_loop_detection.py
   - unitares/src/dialectic_protocol.py
   - unitares/src/dialectic_db.py
   - unitares/src/dialectic_reviewed_work.py
@@ -36,7 +38,8 @@ source_files:
 
 A dialectic session is useful when:
 
-- You receive a **pause** or **reject** verdict and want to contest it
+- You have an applied **pause** and choose structured review as a recovery path
+- You receive an observational pause recommendation and want a second perspective
 - You call `request_review()` for peer or model-assisted verification
 - You find something that contradicts the knowledge graph
 - A high-stakes decision needs structured verification before proceeding
@@ -77,8 +80,8 @@ sessions rather than authorizing a second review.
 
 ## Phase 1: Thesis
 
-The paused agent submits their position (the protocol rejects a thesis from
-anyone else):
+The requesting agent submits their position. For a session bound to an applied
+pause, the protocol rejects a thesis from anyone else:
 
 ```
 dialectic(
@@ -443,7 +446,9 @@ finalized with.
 
 - **Be honest about metrics.** The EISV data is right there. Denying it undermines your credibility.
 - **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
-- **Do not be defensive.** A pause verdict is data, not judgment. Analyze why it happened.
+- **Do not treat the instrument as a judge.** A pause recommendation is data,
+  not permission or a moral verdict. Analyze it only to the extent it helps the
+  work.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
 - **Look at attributed evidence, not feelings.** Call
   `check_working_state(client_session_id=...)` (`get_governance_metrics()`

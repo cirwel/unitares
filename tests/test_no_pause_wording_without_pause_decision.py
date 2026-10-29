@@ -440,16 +440,12 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 # --- the server instructions ------------------------------------------------
 
 @pytest.mark.parametrize("mode", ["progressive", "full"])
-def test_instructions_state_how_a_pause_actually_ends(mode):
-    """The exits in the code, stated as they are: self_recovery (not at high
-    risk), dialectic resolution, an operator or the automatic safety nets,
-    and expiry. Both advertisement modes carry the sentence."""
+def test_instructions_distinguish_observation_from_applied_pause(mode):
+    """Both advertisement modes deny inferred policy implicit authority."""
     text = build_server_instructions(mode)
-    sentence = text[text.index("a pause holds governed writes"):]
-    sentence = sentence[:sentence.index("expires.") + len("expires.")]
-    for exit_route in ("self_recovery (not at high risk)", "dialectic",
-                       "an operator", "a safety net", "or it expires"):
-        assert exit_route in sentence, exit_route
+    assert "Inferred pauses are observational by default" in text
+    assert "do not block writes" in text
+    assert "only an operator-enabled actuator applies one" in text
     # agent(action='resume') is the operator's route (the agent itself cannot
     # lift its own pause with it, and it has no risk or void gate); it must
     # never be advertised to agents as a way out of a pause.
@@ -503,6 +499,7 @@ def test_simulate_update_escalation_rewraps_the_nested_verdict():
     source = inspect.getsource(core.handle_simulate_update)
     escalation = source[source.index("escalated_decision is not decision"):]
     assert "_rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
+    assert "apply_policy_actuation_posture(result, posture=posture)" in source
 
 
 def test_resumed_agent_with_cleared_history_is_not_told_to_pause():

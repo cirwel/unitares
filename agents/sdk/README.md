@@ -265,11 +265,13 @@ What it does, and what it deliberately does not claim:
   agent's process, so this is in-band evidence, not an external signal.
   Rejections issued by the integration's own gate are never filed as
   outcomes, so the governor does not grade its own enforcement.
-- **A contestable gate.** With `enforce` on (the default), a Relay
-  conditional-execution guardrail refuses tool calls for a run whose latest
-  policy action is `pause` or `reject`. The refusal names the verdict, the
-  guidance, and the review path. The gate never touches the network, so
-  enforcement latency is bounded by the check-in cadence.
+- **An optional effective-action gate.** With the Relay integration's `enforce`
+  option on (its default), a conditional-execution guardrail refuses tool calls
+  only when the server returned an effective `pause` or `reject`. The server's
+  default `UNITARES_POLICY_ACTUATION=observe` posture projects an inferred pause
+  to non-coercive guidance, so it never reaches this gate. Operators that set
+  the server posture to `enforce` get the historical contestable refusal. The
+  gate never touches the network, so its latency is bounded by check-in cadence.
 - **Fail-open by default.** A scope the exporter has not bound yet, or an
   unreachable server, allows the call and logs. `fail_closed: true` refuses
   instead.
@@ -280,7 +282,7 @@ What it does, and what it deliberately does not claim:
 | `timeout` | `10.0` | Seconds per server call, on the worker thread |
 | `agent_name` | `relay-run` | Display-name prefix; the run's scope name is appended |
 | `checkin_every_tool_calls` | `20` | Substrate check-in cadence within a run |
-| `enforce` | `true` | Register the policy gate |
+| `enforce` | `true` | Register the effective-action gate; it does not override the server's policy-actuation posture |
 | `fail_closed` | `false` | Refuse tool calls for unbound runs or when the gate cannot resolve its scope |
 | `record_tool_failures` | `true` | File tool errors and foreign guardrail rejections as outcome events |
 | `subagent_identities` | `false` | Mint a lineage-linked identity per nested agent scope |

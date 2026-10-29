@@ -35,14 +35,16 @@ and residents retain their own reasoning loops and interaction surfaces.
 
 The [interface contract](INTERFACE_CONTRACT.md) defines callable capabilities
 across MCP, REST discovery, and local stdio. A connected MCP client reaches every
-capability; a host integration (hooks or an adapter) adds automatic onboarding,
-check-ins, and enforcement of policy actions beyond governed writes.
+capability; a host integration (hooks or an adapter) adds automatic onboarding
+and check-ins. An integration may honor an explicitly configured policy
+actuator; an EISV recommendation alone carries no authority by default.
 
 ## Core and Resident are different products
 
 This repository ships **UNITARES Core** and specialized reference residents.
 Core owns identity, shared knowledge, review, outcomes, audit, coordination,
-and behavioral state and policy. Agents own their reasoning and execution.
+and the optional behavioral-state instrument. Agents own their reasoning and
+execution; an operator owns every authority boundary.
 
 **UNITARES Resident** is a separate first-party agent project for persistent
 conversations, provider and tool adapters, scheduling, task queues, and operator
@@ -70,18 +72,23 @@ a new process:
    starts fresh, declares lineage only for a real handoff from an exited
    predecessor, and retrieves the findings, review, and available outcomes.
 
-Check-ins return an EISV behavioral state estimate and `proceed`, `guide`, or
-`pause`. A pause holds governed writes until recovery, review, an operator,
-or expiry lifts it. EISV ships in the core path today and moves to an optional
-module under the [staged plan](proposals/active/eisv-core-boundary-v0.md). The
+Check-ins return an EISV behavioral state estimate and preserve the policy
+engine's raw recommendation under `policy_evaluation`. The default
+`UNITARES_POLICY_ACTUATION=observe` posture projects a recommended pause into
+non-coercive guidance: it creates no lifecycle hold and blocks no write.
+Operators that still need the historical circuit breaker can opt into
+`UNITARES_POLICY_ACTUATION=enforce`. Existing durable pauses remain real state
+until their normal recovery, review, operator, or expiry path lifts them. EISV
+ships in the core path today and moves to an optional module under the
+[staged plan](proposals/active/eisv-core-boundary-v0.md). The
 [computation reference](EISV_COMPUTATION.md) defines the deployed instrument.
 
 ## Who it is for, and what "done" looks like
 
 Agents are direct users. One operator running several long-lived agents
 controls the deployment and chooses their runtimes and infrastructure. The
-goal is a retrievable record of claims, evidence, reviews, outcomes, and policy
-decisions that lets a later process continue the work. UNITARES connects those
+goal is a retrievable record of claims, evidence, reviews, outcomes, and state
+interpretations that lets a later process continue the work. UNITARES connects those
 records alongside the outputs of evals, guardrails, and sandboxes.
 
 ## Provenance
@@ -101,8 +108,9 @@ server responses. The
 traces findings to the fixes they produced: evidence grades preserved,
 formatting repair kept from manufacturing approval, unresolved findings kept
 visible, and a review condition carried into an implementation ten days after
-its review opened. Governed pauses are delivered: 370+ are on record since
-April 2026, the most recent on 2026-09-21.
+its review opened. Historical deployments also delivered 370+ policy pauses
+between April and September 2026; that is evidence that the actuator operated,
+not that the pauses improved outcomes. The actuator is now explicit opt-in.
 
 Comparative benefit and task-outcome improvement remain unmeasured. The
 [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the

@@ -134,7 +134,7 @@ carries them only when its binding was not server-inferred (for example, the
 call passed `client_session_id`), because `outcome_event` signs nothing for a
 server-inferred binding.
 
-For `sync_state`, read `action_summary` first. It always keeps the policy action,
+For `sync_state`, read `action_summary` first. It always keeps the effective action,
 one-line reason and risk score. A non-routine response also keeps the verdict
 and its maturity; a cold-start result is labeled
 `verdict_confidence="provisional"` at that surface. A routine proceed instead
@@ -158,13 +158,17 @@ for a steady check-in and to `mirror` (actionable self-signals) for a guide,
 pause, at-risk, degraded-identity or warning-bearing response.
 
 For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
-`policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,
-reject, suppression, or actuator event restores bounded summaries marked
+`policy_evaluation` and advisory-only `enforcement` blocks. A guide, raw pause
+recommendation, reject, suppression, or actuator event restores bounded summaries marked
 `_detail_level="summary"`; use `full` for the self-contained maturity gates and
 audit diagnostics. `minimal` remains the smallest legacy shape and `standard`
 is a bounded interpreted summary for agents: action/reason, explained state and
 verdict provenance, EISV/risk, and only actionable policy/enforcement summaries.
-Both retain the normalized action and cold-start verdict caveat. Compatibility
+Both retain the effective action and cold-start verdict caveat. In the default
+`observe` posture, clients must read `policy_evaluation.action` for the raw
+recommendation and `enforcement.applied` for actual authority; the effective
+`decision.action` stays non-coercive so older clients do not halt on an
+observation. Compatibility
 aliases are exact: `lite=compact`, `verbose=full`, and `interpreted=standard`.
 
 A consolidated router (`knowledge`, `dialectic`, `observe`, `agent`, and the

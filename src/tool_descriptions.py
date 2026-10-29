@@ -299,7 +299,7 @@ _DESCRIPTION_APPENDICES = {
         "check-in if omitted\n"
         "- prediction_id: tactical prediction id returned by process_agent_update; "
         "binds this outcome to that prediction\n"
-        "- decision_action: decision taken, e.g. proceed or pause\n"
+        "- decision_action: effective action, e.g. proceed or an applied pause\n"
         "- session_id: optional session id; falls back to client_session_id/context\n"
         "- verification_source: agent_reported_tool_result | server_observation | "
         "external_signal\n"

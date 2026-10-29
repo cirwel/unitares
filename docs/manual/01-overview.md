@@ -105,23 +105,27 @@ The shared record answers five questions about any piece of work:
 
 ## 1.5 The policy action
 
-Each `sync_state` check-in returns a policy action. `action_summary.action` is
-always `proceed` or `pause`, qualified by `sub_action`:
+Each `sync_state` check-in returns an effective action and preserves the raw
+recommendation separately. `action_summary.action` is `proceed` or `pause`,
+qualified by `sub_action`:
 
 | `action` / `sub_action` | Meaning | What the agent should do |
 |---|---|---|
-| `proceed` | Policy permits continuation | Continue working normally |
+| `proceed` | No lifecycle hold is applied | Continue working normally; this is not a safety certification |
 | `proceed` / `guide` | Continuation with guidance | Read the guidance text and adjust approach |
-| `pause` (`risk_pause`, `basin_pause`, `void_pause`, `coherence_pause`, `cirs_block`) | A hard stop: check-ins and new shared-memory entries are refused, not queued; `sub_action` names the cause | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
+| observed `pause` recommendation (default) | The instrument crossed a policy edge, but `decision.action` remains `proceed` / `guide` and `enforcement.applied=false` | Inspect if useful; no permission or recovery step is required |
+| applied `pause` (`UNITARES_POLICY_ACTUATION=enforce`) | Compatibility hard stop: check-ins and new shared-memory entries are refused, not queued | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
 | `pause` / `reject` | Legacy or review label for significant concern, normalized to `pause` | Request a dialectic review (`request_review`) to resolve or contest, or bring in a human |
 
-A pause holds governed writes until self-recovery, review, an operator or
-expiry lifts it. Enforcement outside those writes is the host's job. Verdict
-definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py).
+Only an **applied** pause holds governed writes until self-recovery, review, an
+operator or expiry lifts it. Authentication, authorization, archive state,
+existing durable pauses, and short loop cooldowns remain independent of this
+posture. Verdict definitions live in
+[`src/governance_glossary.py`](../../src/governance_glossary.py).
 
 ## 1.6 The check-in instrument: EISV
 
-The policy action is derived from EISV, a behavioral state estimate computed at
+The policy recommendation is derived from EISV, a behavioral state estimate computed at
 each check-in. EISV ships in the core path today and moves to an optional
 module subscribed to check-ins under a
 [staged plan](../proposals/active/eisv-core-boundary-v0.md). You do not need

@@ -4,10 +4,11 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-09-24"
+last_verified: "2026-10-29"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
+  - unitares/src/agent_loop_detection.py
   - unitares/governance_core/coherence.py
   - unitares/governance_core/parameters.py
   - unitares/src/auto_ground_truth.py
@@ -72,7 +73,7 @@ For the formulas and producer distinctions, see the repository's
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
 - **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
 
-The headline math is proprioceptive residuals. The live authority stages are
+The headline math is proprioceptive residuals. The live estimation stages are
 explicit: check-ins 1–2 use the mostly server-derived Φ cold-start prior;
 check-ins 3–24 use the behavioral assessment against fixed universal
 thresholds; check-in 25 enables self-relative z-score deviation against the
@@ -85,9 +86,10 @@ remain in force throughout.
 The roadmap target for richer cold-start grounding (a class-anchor reference
 blend) is in `docs/ontology/eisv-proprioception-contract.md`, *Core
 mathematical posture*; it is not the live path.
-Deviation is information first, not a guilty verdict. Policy can map persistent or
-high-margin residuals to `guide`, `pause`, or `reject`, but EISV itself is
-measurement/diagnosis, not prosecution.
+Deviation is information first, not a guilty verdict. Policy can recommend
+`guide`, `pause`, or `reject`, but EISV itself is measurement/diagnosis, not
+prosecution. In the default `observe` posture those recommendations cannot
+change lifecycle state or block writes.
 
 Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
 
@@ -116,22 +118,27 @@ measurement distinction explicit (the compact formatter keeps `basin`,
 
 ## Verdicts
 
-Governance issues a decision after each check-in. The decision **action** is binary — `proceed` or `pause` — returned as the top-level `action` field and qualified by a top-level `sub_action`. The separate `verdict` field is a glossary wrapper (`{value, meaning, next_action, …}`), not the action: in `compact` / `minimal` / `standard` modes its `value` is `metrics.verdict` (`safe` / `caution` / `high-risk`); in `mirror` mode its `value` is an agent-facing vocabulary (`pause` / `reject`, `caution` / `high-risk`, `guide`, or a steady `safe` / `proceed`). Never read `verdict.value` as the action.
+Each check-in records three different things: `policy_evaluation.action` is the
+raw inferred recommendation; top-level `action` is the effective operational
+directive; and `enforcement.applied` says whether lifecycle authority actually
+crossed the boundary. The separate `verdict` field is a glossary wrapper
+(`{value, meaning, next_action, …}`), not any of those. Never read
+`verdict.value` as the action.
 
 | Action | Sub-action | Meaning | What to do |
 |--------|-----------|---------|------------|
 | **proceed** | `approve` | State is healthy | Continue working normally |
 | **proceed** | `guide` | Something is slightly off | Read the guidance text, adjust approach |
-| **pause** | `reject` | Risk threshold reached | Stop current work, reflect; dialectic review or human input |
-| **pause** | `void_pause`, `coherence_pause`, `basin_pause`, `risk_pause`, `cirs_block` | A specific subsystem tripped | Read the `reason`/`guidance` fields; consider dialectic review |
+| **proceed** | `guide` with `recommended_action=pause` | Default observation posture: an inferred edge was crossed, but no hold was applied | Inspect if useful; continuing is neither permission nor a safety certification |
+| **pause** | named pause with `enforcement.applied=false` | Enforcement posture returned the compatibility directive, but this path did not commit a lifecycle hold | Do not infer a write gate; inspect enforcement or recovery state |
+| **pause** | `reject` or a named pause, with `enforcement.applied=true` | Explicit compatibility actuator applied a lifecycle hold | Stop and use the named recovery, optional dialectic review, or human input |
 
 Separately, `metrics.verdict` may carry an internal UNITARES verdict such as
 `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as
-moral judgment. In the current default posture, the behavioral assessment owns
-the main risk/verdict path after the two-check-in prior window. The configured
-coherence pause, CIRS, basin, and adaptive-governor compatibility backstops still
-actuate inside the check-in policy while their replacement is shadow-calibrated
-(see *Coherence*).
+moral judgment. The behavioral assessment owns the main risk/verdict path after
+the two-check-in prior window. Coherence, CIRS, basin, and adaptive-governor
+compatibility backstops remain part of that inference, but they actuate only
+when the operator sets `UNITARES_POLICY_ACTUATION=enforce` (see *Coherence*).
 
 On read-only metrics, headline `risk_score` and `status` use the risk that
 actually produced the last verdict when available. Inspect `risk_score_source`:
