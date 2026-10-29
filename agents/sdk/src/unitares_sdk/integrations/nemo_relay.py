@@ -16,10 +16,12 @@ UNITARES to that runtime as a Relay *plugin* and does two things:
    ``tool_rejected`` outcome events, except rejections issued by this
    module's own gate, which are never fed back as outcomes so the governor
    does not grade its own enforcement.
-2. **Policy gate.** A Relay tool conditional-execution guardrail refuses tool
-   calls for a run whose latest UNITARES policy action is ``pause`` or
-   ``reject``. The rejection message carries the verdict, the guidance, and
-   the review path, so a refusal is contestable rather than opaque.
+2. **Optional effective-action gate.** When enabled, a Relay tool
+   conditional-execution guardrail refuses tool calls whose latest UNITARES
+   *effective* action is ``pause`` or ``reject``. Under the server's default
+   observation posture, an inferred pause is returned as non-coercive guidance
+   and never reaches this gate. The rejection message for an actually applied
+   pause carries the verdict, guidance, and review path.
 
 Provenance is stated honestly: outcome events keep the server's default
 ``verification_source`` (``agent_reported_tool_result``). The integration runs

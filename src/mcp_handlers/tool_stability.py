@@ -177,9 +177,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "sync_state": ToolAlias(
         old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
         migration_note=(
-            "Record a work check-in and get a governance decision: it advances "
-            "and persists this agent's EISV state and returns proceed or pause "
-            "with a named reason, plus a prediction_id — only when you pass "
+            "Record a check-in: persist EISV, preserve the raw recommendation, "
+            "and return the effective action. Inferred pauses are observational "
+            "unless the operator enables actuation. A prediction_id — only when you pass "
             "confidence — to grade that check-in later with record_result. The "
             "first call auto-binds an identity, except under strict identity, "
             "which refuses and points at start_session. simulate_update previews "
@@ -207,7 +207,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "session. verbosity='standard' adds mode and basin with their "
             "meanings under raw_governance; verbosity='full' (alias "
             "lite=false) returns the full canonical diagnostics. sync_state "
-            "also logs work and returns proceed or pause. "
+            "also logs work and returns the effective action. "
             "get_governance_metrics returns this read's raw payload. "
             f"{EISV_INLINE_SUMMARY}"
         ),

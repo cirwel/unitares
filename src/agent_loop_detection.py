@@ -42,6 +42,134 @@ _governance_pause_timestamps: deque[datetime] = deque(maxlen=100)
 _background_tasks: set[asyncio.Task] = set()
 
 
+_POLICY_ACTUATION_MODES = frozenset({"observe", "enforce"})
+
+
+def policy_actuation_posture() -> str:
+    """Return the operator-owned policy actuation posture.
+
+    EISV, risk, and CIRS produce an inferred recommendation. They acquire
+    lifecycle authority only when the deployment explicitly opts into the
+    compatibility posture. Invalid values fail the check-in instead of
+    silently granting or removing authority.
+    """
+    posture = os.getenv("UNITARES_POLICY_ACTUATION", "observe").strip().lower()
+    if posture not in _POLICY_ACTUATION_MODES:
+        choices = ", ".join(sorted(_POLICY_ACTUATION_MODES))
+        raise ValueError(
+            "UNITARES_POLICY_ACTUATION must be one of "
+            f"{choices}; got {posture!r}"
+        )
+    return posture
+
+
+def apply_policy_actuation_posture(result: Dict[str, Any]) -> bool:
+    """Project an inferred policy recommendation into an effective action.
+
+    ``policy_evaluation`` keeps the monitor's unmodified recommendation for
+    introspection and replay. ``decision`` is the agent-facing operational
+    directive: in the default ``observe`` posture, a recommended pause becomes
+    non-coercive guidance and cannot create a pause token or lifecycle hold.
+
+    Returns ``True`` only when the compatibility posture authorizes the caller
+    to apply a policy-requested circuit breaker. Explicit operator/security
+    holds, authentication failures, archive state, and rapid-loop cooldowns do
+    not pass through this resolver and remain authoritative.
+    """
+    posture = policy_actuation_posture()
+    decision = result.get("decision")
+    decision = dict(decision) if isinstance(decision, dict) else {}
+    recommended_action = decision.get("action", "unknown")
+    requested = recommended_action in {"pause", "reject"}
+
+    policy = result.get("policy_evaluation")
+    if not isinstance(policy, dict):
+        # The normal monitor result always supplies this envelope. Keep raw
+        # provenance intact for in-process/custom monitor implementations too.
+        result["policy_evaluation"] = {
+            "policy_name": "monitor_decision",
+            "policy_version": "v1",
+            **decision,
+        }
+
+    enforcement = result.get("enforcement")
+    enforcement = dict(enforcement) if isinstance(enforcement, dict) else {}
+    enforcement.update({
+        "schema": enforcement.get("schema") or "governance.enforcement.v1",
+        "scope": enforcement.get("scope") or "runtime_circuit_breaker",
+        "posture": posture,
+        "requested": requested,
+        "recommended_action": recommended_action,
+        "effective_action": recommended_action,
+        "applied": False,
+    })
+
+    if posture == "observe" and requested:
+        recommended_sub_action = decision.get("sub_action")
+        projected = {
+            **decision,
+            "action": "proceed",
+            "sub_action": "guide",
+            "critical": False,
+            "advisory": True,
+            "recommended_action": recommended_action,
+            "recommended_sub_action": recommended_sub_action,
+            "reason": (
+                "Observation only; no lifecycle hold was applied. "
+                + str(decision.get("reason") or "Policy recommended a pause.")
+            ),
+            "guidance": (
+                "Inspect the policy recommendation if useful; continuing does "
+                "not mean the instrument certified safety. "
+                + str(decision.get("guidance") or "")
+            ).rstrip(),
+        }
+        result["decision"] = projected
+        enforcement.update({
+            "mode": "observation_only",
+            "basis": "posture_observe",
+            "policy_basis": enforcement.get("basis"),
+            "effective_action": "proceed",
+            "actor": None,
+            "effect": None,
+            "actuation_id": None,
+            "applied_at": None,
+            "note": (
+                "Policy recommended a pause, but this deployment keeps inferred "
+                "policy observational. No lifecycle state or write gate changed."
+            ),
+        })
+        logger.info(
+            "Policy pause left observational (sub_action=%s)",
+            recommended_sub_action,
+        )
+        result["enforcement"] = enforcement
+        return False
+
+    result["decision"] = decision
+    enforcement.setdefault(
+        "mode", "circuit_breaker_candidate" if requested else "advisory"
+    )
+    enforcement.setdefault(
+        "basis", "policy_request" if requested else "advisory_policy"
+    )
+    enforcement.setdefault("actor", None)
+    enforcement.setdefault("effect", None)
+    enforcement.setdefault("actuation_id", None)
+    enforcement.setdefault("applied_at", None)
+    enforcement.setdefault(
+        "note",
+        (
+            "Policy requested compatibility enforcement at the authenticated "
+            "runtime boundary."
+            if requested
+            else "No enforcement requested by policy."
+        ),
+    )
+    result["enforcement"] = enforcement
+    return posture == "enforce" and requested
+
+
 def mark_circuit_breaker_enforcement_applied(
     result: Dict[str, Any],
     *,
@@ -199,6 +327,7 @@ def process_update_authenticated(
 
     monitor = get_or_create_monitor(agent_id)
     result = monitor.process_update(agent_state)
+    apply_policy_actuation_posture(result)
 
     if auto_save:
         # Count this check-in under the current EISV instrument before the
@@ -372,6 +501,8 @@ async def process_update_authenticated_async(
     )
     _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
 
+    policy_actuation_authorized = apply_policy_actuation_posture(result)
+
     if auto_save:
         decision_action = result.get('decision', {}).get('action', 'unknown')
         now = datetime.now(timezone.utc).isoformat()
@@ -404,7 +535,11 @@ async def process_update_authenticated_async(
                 meta.total_updates += 1
 
         # Enforce pause decisions (circuit breaker)
-        if decision_action == 'pause' and meta is not None:
+        if (
+            policy_actuation_authorized
+            and decision_action == 'pause'
+            and meta is not None
+        ):
             decision_reason = result.get('decision', {}).get('reason', 'Circuit breaker triggered')
             actuation_id = str(uuid4())
             pause_event = {

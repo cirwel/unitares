@@ -28,12 +28,14 @@ questions the record answers. This document maps them onto the system:
 | What can a successor recover? | Reads across those layers ([reconstruction](CAPABILITIES_AND_DEPLOYMENT.md#start-with-the-core-workflow)) |
 
 EISV is one instrument inside the kernel, not its definition: each check-in
-returns a behavioral state estimate and a policy action. The operator adopted
+returns a behavioral state estimate and preserves an inferred policy
+recommendation. The estimate is observational by default; only explicit
+operator configuration gives that recommendation lifecycle authority. The operator adopted
 moving EISV out of the core to an optional module on 2026-10-10
 ([`proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
 This settles the direction, not implementation authorization: the staged gates
 and standing governed-review conditions still apply, and the estimator still
-derives today's check-in policy action. [EISV_COMPUTATION.md](EISV_COMPUTATION.md)
+derives today's check-in policy recommendation. [EISV_COMPUTATION.md](EISV_COMPUTATION.md)
 owns the instrument.
 
 ## Layered architecture
@@ -62,8 +64,8 @@ deployed Core component.
 │   FINDINGS & KG        shared, provenance-tagged cross-agent memory          │  what supports it
 │   REVIEW (DIALECTIC)   thesis / antithesis / synthesis, recorded positions   │  who challenged it
 │   OUTCOMES             typed outcome events with provenance                  │  what happened
-│   POLICY & EISV        state estimate → risk → action (proceed/pause         │  one instrument,
-│                        + sub_action); moving to an optional module           │  not the record
+│   PROPRIOCEPTION       state estimate → risk → recommendation; optional      │  one instrument,
+│   & POLICY             operator-configured actuator                          │  not the record
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ COORDINATION    BEAM lease plane · governed effects · agent messaging        │  single-writer
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -103,7 +105,7 @@ live longer than one session is a set of capabilities, not a roster:
 
 `agents/` ships **reference** long-lived agents: a janitor, a fleet monitor, a code watcher, a metrics chronicler and a local-model triage scribe. They are examples of the pattern and operational tools for the deployment that runs them. They are specialized, optional governed clients, not Core internals or a general agent framework, and are **live** in the reference deployment. They are outside the shipped server package and are not governance internals; see [`agents/README.md`](../agents/README.md). The orchestrated dialectic reviewer also lives in `agents/`, but it is part of an optional server feature and is described under [Review](#review-dialectic-and-recovery) below.
 
-The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, EISV dynamics, policy actions and knowledge graph apply to both.
+The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, EISV dynamics, policy recommendations and knowledge graph apply to both.
 
 ## Interfaces and transport surfaces
 
@@ -176,8 +178,8 @@ discipline: search before writing; supersede over duplicate.
 
 ## Review: dialectic and recovery
 
-When an agent's state degrades, or a verdict or claim is contested, it can
-escalate to a **dialectic review**: a separate reasoner argues the case
+When an agent wants structured challenge, or a verdict or claim is contested,
+it can request a **dialectic review**: a separate reasoner argues the case
 (thesis / antithesis / synthesis, typed messages, resolution tracking) instead
 of a rubber stamp. The record keeps positions, objections, conditions, and
 resolution; requesting review does not complete it. The orchestrated
@@ -199,7 +201,8 @@ synthesis) is answered by one of:
   process under a synthetic reviewer id, so it is not an independent reviewer
 - **Peer agent** — another agent takes the antithesis role
 
-**Recovering from a pause.** A pause refuses check-ins and new shared-memory
+**Recovering from an applied pause.** Under the explicit `enforce` posture, a
+policy pause refuses check-ins and new shared-memory
 entries (not queued); dialectic moves still work. A paused agent's risk is
 frozen at the reading that paused it, because it cannot write the check-in that
 would lower it, so most pauses end through a dialectic review, an operator
@@ -247,15 +250,25 @@ An agent calls `process_agent_update` (advertised to agents as `sync_state`) wit
 
 At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer (`src/dual_log/`) compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available. Each check-in keeps a bounded excerpt of its report text (`src/report_excerpt.py`), not the full text; durable claims belong in a finding.
 
-The check-in returns an EISV behavioral state estimate and a policy action. The decision engine (`src/monitor_decision.py`) returns one of two actions, `proceed` or `pause`; `guide` is a `sub_action` of `proceed` that the response surfaces as its own policy action:
+The check-in returns an EISV behavioral state estimate, a raw policy
+recommendation, and an effective operational action. The decision engine
+(`src/monitor_decision.py`) computes `proceed` or `pause`; the authenticated
+runtime boundary then applies the operator-owned actuation posture:
 
-| Policy action | Meaning | Agent action |
+| Posture / result | Meaning | Agent action |
 |---------|---------|-------------|
-| `proceed` | Policy permits continuation | Continue working |
-| `guide` | `proceed` with guidance — slightly off track or at a basin boundary | Read guidance, adjust approach |
-| `pause` | A hard stop: check-ins and new shared-memory entries are refused, not queued | Stop, read the reason, `self_recovery(action="check")` for self-recovery eligibility |
+| `observe` + recommended `proceed` | Instrument found no policy edge | Continue; this is not a safety certification |
+| `observe` + recommended `pause` | `policy_evaluation.action=pause`, effective `decision.action=proceed` / `guide`, `enforcement.applied=false` | Inspect the observation if useful; no permission or recovery step is required |
+| `enforce` + recommended `pause` | Compatibility circuit breaker applied; check-ins and new shared-memory entries are refused | Stop, read the reason, `self_recovery(action="check")` for recovery eligibility |
 
-`reject` is no longer an action: it appears as a `sub_action` of `pause` on the risk-threshold path, and is accepted as a legacy input alias that normalizes to `pause`. Responses also carry a `margin` reporting proximity to the nearest decision threshold. A pause holds governed writes; enforcement outside those writes requires host integration.
+`reject` is no longer an action: it appears as a `sub_action` of a raw `pause`
+recommendation on the risk-threshold path, and is accepted as a legacy input
+alias. Responses carry a `margin` reporting proximity to the nearest decision
+threshold. `policy_evaluation` is the unmodified inference;
+`enforcement.posture`, `recommended_action`, `effective_action`, and `applied`
+say what authority, if any, crossed the runtime boundary. Authentication,
+authorization, archive state, existing durable pauses, and bounded loop
+cooldowns are independent controls and remain enforced in both postures.
 
 **Who owns what.** [Manual §5.3](manual/05-reading-the-signals.md#53-the-policy-action) owns agent-facing handling of each action and sub-action. [EISV_COMPUTATION.md](EISV_COMPUTATION.md) owns how the state and risk are computed: observation blends, EMA smoothing, warmup stages, the drift vector, risk components, margin levels, the ODE coupling, and the oscillation posture near a threshold, together with its evidence caveats (the frozen ablation read is a `NON_DETECTION`, no prevention is demonstrated, and the deployed heuristic blend is not the Paper v6 target formulation).
 
@@ -392,7 +405,7 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 | `src/mcp_handlers/dialectic/handlers.py` | Thesis/antithesis/synthesis |
 | `src/mcp_handlers/observability/outcome_events.py` | Outcome events (`record_result`) |
 | `src/mcp_handlers/core.py` | `process_agent_update` handler |
-| `src/monitor_decision.py` | Final policy action |
+| `src/monitor_decision.py` | Raw policy recommendation |
 | `config/governance_config.py` | Thresholds, margin computation |
 | `governance_core.dynamics` | EISV differential equations |
 | `governance_core.coherence` | Coherence function C(V, Theta) |
