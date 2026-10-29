@@ -53,6 +53,43 @@ any consideration would be agreed and disclosed before enrollment.
 The participation window begins only after a valid enrollment has merged and
 the first non-demo agent completes a qualifying check-in.
 
+### Record and remove the quickstart identity
+
+`make demo` prints the demo agent's `agent_uuid`; the enrollment ledger instead
+records the matching internal `identity_id`. Copy the printed UUID exactly,
+then look up and record the numeric ID before deleting anything:
+
+```bash
+DEMO_AGENT_UUID='<agent_uuid printed by make demo>'
+docker compose exec -T postgres-age psql \
+  -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-governance}" \
+  -Atc "SELECT identity_id FROM core.identities WHERE agent_id = '$DEMO_AGENT_UUID';"
+```
+
+An empty result means stop and diagnose the install. After recording the ID,
+remove the demo's direct audit rows and its core record; the schema's foreign-
+key cascades remove the associated identity, session, state, and baseline rows:
+
+```bash
+docker compose exec -T postgres-age psql \
+  -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-governance}" \
+  -v ON_ERROR_STOP=1 -c "
+BEGIN;
+DELETE FROM audit.outcome_prediction_bindings WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM audit.outcome_events WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM audit.coordination_events WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM audit.tool_usage WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM audit.events WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM audit.rate_limits WHERE agent_id = '$DEMO_AGENT_UUID';
+DELETE FROM core.onboard_pins WHERE agent_uuid = '$DEMO_AGENT_UUID';
+DELETE FROM core.session_bindings WHERE agent_uuid = '$DEMO_AGENT_UUID';
+DELETE FROM core.agents WHERE id = '$DEMO_AGENT_UUID';
+COMMIT;"
+```
+
+The final delete must report `DELETE 1`. Record the UTC completion time in the
+enrollment entry as the demo-row deletion timestamp.
+
 ## What the maintainer provides
 
 - a release-tagged install path and a guided first setup within the study's
@@ -92,16 +129,19 @@ adoption, predictive validity across fleets, or causal incident prevention.
 
 ## Express interest
 
-Comment on [issue #1607](https://github.com/cirwel/unitares/issues/1607) to
-leave a visible expression of interest. If the deployment details should not
-be public, the comment can say only that you are interested and the remaining
-intake can continue by email at `founder@cirwel.org`:
+Supply these details either in a comment on
+[issue #1607](https://github.com/cirwel/unitares/issues/1607) or by email at
+`founder@cirwel.org`:
 
 - the agent clients or runtimes you operate;
 - roughly how many agents or recurring jobs are active;
 - the real work they perform;
 - the outcome source you could connect; and
 - the host on which you would run Docker Compose.
+
+If those details should not be public, comment only that you are interested
+and send the five-item intake by email. The issue comment leaves a visible
+recruitment trace without exposing deployment details.
 
 Recruitment closes on **2026-11-30**. If no valid operator enrolls by that
 date, the protocol requires recording recruitment as the unresolved dependency
