@@ -461,6 +461,9 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
         except OSError as exc:
             log.close()
             err.write(f"build_lane_client: CLI spawn failed: {type(exc).__name__}\n")
+            summary.update({"ended": _now(), "exit": EXIT_NO_CLI, "killed": None,
+                            "refusal": f"CLI spawn failed: {type(exc).__name__}"})
+            _write_json(state / "result.json", summary)
             return EXIT_NO_CLI
         assert proc.stdin is not None and proc.stdout is not None
         killed: list[str] = []
@@ -500,7 +503,11 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
             _stop(proc)
             code = proc.wait()
         finally:
+            # cancel() does not stop a callback already running; its _stop()
+            # may still owe the group its SIGKILL, so wait for it before the
+            # result is written and the interpreter can exit.
             timer.cancel()
+            timer.join(KILL_GRACE_S + 5)
             log.close()
             if "deadline" in killed:
                 err.write("build_lane_client: build stopped at the client's deadline\n")

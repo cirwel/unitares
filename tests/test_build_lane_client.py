@@ -25,6 +25,11 @@ CLIENT = Path(client.__file__).resolve()
 # steers itself by the brief's first line.
 SHIM = """
 import json, os, subprocess, sys, time
+# Noise past the pipe buffer before stdin is read: a client that wrote the
+# whole brief before draining output would deadlock here.
+for _ in range(1200):
+    print(json.dumps({"type": "noise", "pad": "x" * 100}))
+sys.stdout.flush()
 data = sys.stdin.read()
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s-1",
                   "model": "stand-in"}))
@@ -170,8 +175,8 @@ def test_a_refusal_after_the_directory_is_known_replaces_the_old_result(shim, ro
 
 
 def test_a_brief_larger_than_the_pipe_does_not_deadlock(shim, roots, brief):
-    # The stand-in prints before it reads; a brief past the pipe buffer used
-    # to block the write while the CLI blocked on its full stdout.
+    # The stand-in prints ~130 KB before it reads; a brief past the pipe
+    # buffer used to block the write while the CLI blocked on its full stdout.
     brief.write_text("x" * 300_000 + "\n")
     code, report, _ = _run(_environ(shim, roots, brief, BUILD_DEADLINE_S="30"))
     assert code == 0
