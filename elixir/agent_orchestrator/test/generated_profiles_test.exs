@@ -26,6 +26,7 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     "host.antigravity" => "antigravity_cli_client.py"
   }
   @council ["council.claude", "council.codex", "council.agy"]
+  @build "build.claude"
 
   # Each stand-in echoes what its client handed the CLI: the arguments, the
   # prompt and the names of the environment, in that CLI's output shape.
@@ -80,6 +81,16 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     """
   }
 
+  # The build lane's stand-in: the brief arrives on standard input, and the
+  # report is one stream-json result event, as the client parses it.
+  @build_shim """
+  import json, os, sys
+  data = sys.stdin.read()
+  print(json.dumps({"type": "result", "is_error": False, "result": "ok",
+                    "argv": sys.argv[1:], "stdin": data, "env": sorted(os.environ),
+                    "cwd": os.getcwd()}))
+  """
+
   defp start_profiles(document, dir, environ) do
     path = Path.join(dir, "profiles.json")
     File.write!(path, Jason.encode!(document))
@@ -125,6 +136,25 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
         end)
       end)
 
+    build_shim = Path.join(dir, "build-cli")
+    File.write!(build_shim, "#!#{python}\n" <> @build_shim)
+    File.chmod!(build_shim, 0o700)
+    File.mkdir_p!(Path.join([dir, "builds", "job"]))
+    brief = Path.join(dir, "BRIEF.md")
+    File.write!(brief, "build it\n")
+    File.chmod!(brief, 0o600)
+
+    doc =
+      update_in(doc, ["profiles", @build], fn profile ->
+        profile
+        |> Map.put("cmd", python)
+        |> Map.put("args", ["-I", Path.join(@support, "build_lane_client.py")])
+        |> put_in(["env", "set", "BUILD_CLI"], build_shim)
+        |> put_in(["env", "set", "BUILD_BRIEF"], brief)
+        |> put_in(["env", "set", "BUILD_ROOTS"], dir |> Path.join("builds") |> real_path())
+        |> update_in(["env", "set"], &Map.delete(&1, "BUILD_READ_ROOTS"))
+      end)
+
     Enum.reduce(@clients, doc, fn {name, client}, doc ->
       shim = Path.join(dir, name)
       File.write!(shim, "#!#{python}\n" <> Map.fetch!(@shims, name))
@@ -148,12 +178,147 @@ defmodule AgentOrchestrator.GeneratedProfilesTest do
     assert {:ok, profiles} = @fixture |> File.read!() |> Profiles.parse()
 
     assert Map.keys(profiles) |> Enum.sort() ==
-             Enum.sort(["dialectic.reviewer" | Map.keys(@clients) ++ @council])
+             Enum.sort(["dialectic.reviewer", @build | Map.keys(@clients) ++ @council])
 
     for {name, profile} <- profiles, not String.starts_with?(name, "dialectic.") do
-      assert profile.lineage == "none"
+      assert profile.lineage == if(name == @build, do: "caller", else: "none")
       assert profile.lease == false
       assert profile.env.secrets == %{}
+    end
+  end
+
+  describe "build.claude requests" do
+    setup %{tmp_dir: dir} do
+      %{name: start_profiles(Jason.decode!(File.read!(@fixture)), dir, %{"PATH" => "/bin"})}
+    end
+
+    test "take a directory, a model and the caller's lineage, one at a time", %{name: name} do
+      assert {:ok, %{spec: spec}} =
+               Profiles.prepare(name, %{
+                 "profile" => @build,
+                 "vars" => %{"BUILD_DIR" => "/srv/builds/job", "BUILD_MODEL" => "opus"},
+                 "lineage" => %{
+                   "parent_agent_uuid" => "11111111-1111-4111-8111-111111111111",
+                   "spawn_reason" => "build_request-pr7"
+                 }
+               })
+
+      assert {"BUILD_DIR", "/srv/builds/job"} in spec.env
+      assert spec.lineage.parent_agent_uuid == "11111111-1111-4111-8111-111111111111"
+      assert spec.max_runtime_ms == 7_200_000
+      assert {"BUILD_BRIEF", "/srv/build-brief.md"} in spec.env
+      assert {"BUILD_ROOTS", "/srv/builds"} in spec.env
+
+      profile = Jason.decode!(File.read!(@fixture))["profiles"][@build]
+      assert profile["max_concurrent"] == 1
+    end
+
+    test "refuse a relative directory, a fixed variable and a runtime over the ceiling",
+         %{name: name} do
+      for {vars, extra} <- [
+            {%{"BUILD_DIR" => "relative"}, %{}},
+            {%{"BUILD_DIR" => "/srv/builds/job", "BUILD_BRIEF" => "/tmp/x"}, %{}},
+            {%{"BUILD_DIR" => "/srv/builds/job", "BUILD_CLI" => "/bin/sh"}, %{}},
+            {%{"BUILD_DIR" => "/srv/builds/job"}, %{"max_runtime_ms" => 7_200_001}},
+            {%{}, %{}}
+          ] do
+        body = Map.merge(%{"profile" => @build, "vars" => vars}, extra)
+        assert {:error, :schema_invalid, _} = Profiles.prepare(name, body)
+      end
+    end
+  end
+
+  describe "build.claude end to end" do
+    setup %{tmp_dir: dir} do
+      MemoryIdempotencyLedger.clear()
+      Application.put_env(:agent_orchestrator, :bearer_token, @token)
+      Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
+
+      environ =
+        System.get_env()
+        |> Map.put("ANTHROPIC_API_KEY", "metered-key-must-not-pass")
+        |> Map.put("AGENT_ORCHESTRATOR_BEARER_TOKEN", @token)
+
+      name = start_profiles(runnable(dir), dir, environ)
+      Application.put_env(:agent_orchestrator, :profiles_server, name)
+
+      on_exit(fn ->
+        Application.delete_env(:agent_orchestrator, :profiles_server)
+        Enum.each(AgentOrchestrator.list(), &AgentOrchestrator.stop(&1, :test_cleanup))
+      end)
+
+      %{job: Path.join([real_path(dir), "builds", "job"])}
+    end
+
+    test "runs the client in the directory with the fixed brief and the caller's lineage",
+         %{job: job} do
+      body = %{
+        "profile" => @build,
+        "vars" => %{"BUILD_DIR" => job},
+        "lineage" => %{"parent_agent_uuid" => "11111111-1111-4111-8111-111111111111"}
+      }
+
+      conn =
+        conn(:post, "/v1/agents", Jason.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+
+      assert conn.status == 201
+      id = Jason.decode!(conn.resp_body)["execution_id"]
+
+      result =
+        conn(:post, "/v1/executions/#{id}/await", Jason.encode!(%{timeout_ms: 30_000}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+        |> Map.get(:resp_body)
+        |> Jason.decode!()
+        |> Map.fetch!("result")
+
+      assert result["exit_status"] == 0
+      assert result["lineage"] == "provisioned"
+
+      report =
+        Enum.find_value(result["output"], fn line ->
+          case Jason.decode(line) do
+            {:ok, %{"type" => "result"} = r} -> r
+            _ -> nil
+          end
+        end)
+
+      assert report["stdin"] == "build it\n"
+      assert report["cwd"] == job
+      assert "--strict-mcp-config" in report["argv"]
+      refute "--safe-mode" in report["argv"]
+      assert "UNITARES_PARENT_AGENT_ID" in report["env"]
+      refute "ANTHROPIC_API_KEY" in report["env"]
+      refute "AGENT_ORCHESTRATOR_BEARER_TOKEN" in report["env"]
+      assert File.exists?(Path.join([job, ".build-lane", "result.json"]))
+    end
+
+    test "a directory outside the roots is refused by the client", %{job: job} do
+      body = %{"profile" => @build, "vars" => %{"BUILD_DIR" => Path.dirname(Path.dirname(job))}}
+
+      conn =
+        conn(:post, "/v1/agents", Jason.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+
+      assert conn.status == 201
+      id = Jason.decode!(conn.resp_body)["execution_id"]
+
+      result =
+        conn(:post, "/v1/executions/#{id}/await", Jason.encode!(%{timeout_ms: 30_000}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> HTTPRouter.call(HTTPRouter.init([]))
+        |> Map.get(:resp_body)
+        |> Jason.decode!()
+        |> Map.fetch!("result")
+
+      assert result["exit_status"] == 2
     end
   end
 

@@ -47,7 +47,20 @@ standard error when its CLI is not found:
   in start.sh), and are omitted without one. A root may not be ``/``, the
   home directory or one of its parents. The agy lane reads no directory.
 
-The host and council lanes are subscription lanes: none binds a secret, and no API key
+* ``build.claude``: a write-capable build lane (``build_lane_client.py``).
+  It runs Claude Code unattended in a caller-named directory, accepted only
+  at or under a ``--build-root`` (repeatable; the orchestrator's
+  ``AGENT_ORCHESTRATOR_PROFILES_BUILD_ROOTS``), with a brief the operator
+  fixes (``--build-brief``, read when the build starts) and, optionally,
+  directories the file tools may also read (``--build-read-root``) and an
+  MCP configuration file (``--build-mcp-config``). The caller fills the
+  directory and, optionally, the model. It takes lineage from the caller
+  (``lineage: caller``), runs one build at a time for up to two hours, and
+  is omitted without a root or a brief. A root or brief that is named but
+  missing is an error, never a silent omission: the doctor's replay would
+  otherwise read a lane's absence as current.
+
+The host, council and build lanes are subscription lanes: none binds a secret, and no API key
 is inherited. The reviewer binds, by name only, the MCP bearer when the
 server has one and the external reviewer host's key variable when one is
 configured; the orchestrator resolves them from its own environment.
@@ -110,7 +123,16 @@ CLAUDE_CLIENT = "src/mcp_handlers/support/claude_cli_client.py"
 CODEX_CLIENT = "src/mcp_handlers/support/codex_app_server_client.py"
 AGY_CLIENT = "src/mcp_handlers/support/antigravity_cli_client.py"
 COUNCIL_CLIENT = "src/mcp_handlers/support/council_lane_client.py"
-CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT, COUNCIL_CLIENT)
+BUILD_CLIENT = "src/mcp_handlers/support/build_lane_client.py"
+CLIENTS = (CLAUDE_CLIENT, CODEX_CLIENT, AGY_CLIENT, COUNCIL_CLIENT, BUILD_CLIENT)
+
+#: A build runs for up to two hours; the client stops the CLI at its own
+#: deadline (build_lane_client.DEADLINE_S, 7000 s) so its result file is
+#: written before the orchestrator's kill.
+BUILD_MAX_RUNTIME_MS = 7_200_000
+#: An absolute path with no line breaks; the client resolves it and checks
+#: it against the roots.
+BUILD_DIR_PATTERN = "/[^\\n\\r]{0,4095}"
 
 #: A council lane's prompt also travels in the environment.
 COUNCIL_PROMPT_MAX_BYTES = 131_072 - len("COUNCIL_PROMPT=") - 1
@@ -352,37 +374,84 @@ def council_profile(*, repo_root: str, python: str, cli: str, user: str, lane: s
     }
 
 
-def council_roots(raw: list[str], home: str) -> list[str]:
+def build_profile(*, repo_root: str, python: str, cli: str, user: str, roots: list[str],
+                  brief: str, read_roots: list[str], mcp_config: str | None) -> dict[str, Any]:
+    """A write-capable build lane: the caller chooses the directory and the
+    model only; the brief, roots and read directories are fixed here."""
+    env_set = {"BUILD_CLI": cli, "BUILD_ROOTS": os.pathsep.join(roots), "BUILD_BRIEF": brief,
+               "USER": user}
+    if read_roots:
+        env_set["BUILD_READ_ROOTS"] = os.pathsep.join(read_roots)
+    if mcp_config:
+        env_set["BUILD_MCP_CONFIG"] = mcp_config
+    return {
+        "cmd": python,
+        "args": ["-I", os.path.join(repo_root, BUILD_CLIENT)],
+        "env": {"inherit": ["HOME", "PATH", "LANG", "TMPDIR"], "set": env_set},
+        "vars": {
+            "BUILD_DIR": {"max_bytes": 4096, "pattern": BUILD_DIR_PATTERN, "required": True},
+            "BUILD_MODEL": {"max_bytes": 128, "pattern": MODEL_PATTERN},
+        },
+        "lineage": "caller",
+        "lease": False,
+        "max_runtime_ms": BUILD_MAX_RUNTIME_MS,
+        "max_output_lines": 20_000,
+        "max_concurrent": 1,
+        "max_per_hour": 4,
+    }
+
+
+def council_roots(raw: list[str], home: str, what: str = "council root") -> list[str]:
     """The roots a council lane may read under, resolved. Refuses ``/``,
     the home directory and its parents, each of which would put the
-    operator's credentials in reach."""
+    operator's credentials in reach. The build lane's roots and read
+    directories go through the same check, named by ``what``."""
     resolved: list[str] = []
     real_home = os.path.realpath(home)
     for entry in raw:
         path = os.path.expanduser(entry)
         if not os.path.isabs(path):
-            raise SystemExit(f"a council root must be an absolute path: {entry}")
+            raise SystemExit(f"a {what} must be an absolute path: {entry}")
         real = os.path.realpath(path)
         if not os.path.isdir(real):
-            raise SystemExit(f"council root {entry} is not a directory")
+            raise SystemExit(f"{what} {entry} is not a directory")
         if os.path.commonpath([real, real_home]) == real:
-            raise SystemExit(f"council root {entry} is / or contains the home directory")
+            raise SystemExit(f"{what} {entry} is / or contains the home directory")
         if real not in resolved:
             resolved.append(real)
     return sorted(resolved)
+
+
+def build_file(raw: str | None, what: str) -> str | None:
+    """A file the build lane reads, resolved; None when unset. Named but
+    missing is an error (see the module docstring)."""
+    if not raw:
+        return None
+    path = os.path.expanduser(raw)
+    if not os.path.isabs(path):
+        raise SystemExit(f"the {what} must be an absolute path: {raw}")
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        raise SystemExit(f"{what} {raw} is not a file")
+    return real
 
 
 def build_profiles(*, repo_root: str, python: str, user: str, claude_cli: str | None,
                    codex_cli: str | None = None, antigravity_cli: str | None = None,
                    codex_app_server: bool = True,
                    reviewer: dict[str, Any] | None = None,
-                   council_roots: list[str] | None = None) -> dict[str, Any]:
+                   council_roots: list[str] | None = None,
+                   build: dict[str, Any] | None = None) -> dict[str, Any]:
     """``reviewer``: keyword arguments for reviewer_profile beyond the common
     ones, or None to omit it. ``council_roots``: resolved roots for the claude
-    and codex council lanes, which are omitted without any."""
+    and codex council lanes, which are omitted without any. ``build``: keyword
+    arguments for build_profile (roots, brief, read_roots, mcp_config), or None
+    to omit the build lane."""
     common = {"repo_root": repo_root, "python": python, "user": user}
     roots = council_roots or []
     profiles: dict[str, Any] = {}
+    if build is not None and claude_cli:
+        profiles["build.claude"] = build_profile(cli=claude_cli, **common, **build)
     for lane, path in (("claude", claude_cli), ("codex", codex_cli), ("agy", antigravity_cli)):
         if path and (roots or lane == "agy"):
             profiles[f"council.{lane}"] = council_profile(cli=path, lane=lane, roots=roots,
@@ -454,13 +523,18 @@ def write_atomically(path: Path, text: str) -> bool:
 
 
 def recorded_inputs(*, out: str, repo_root: str, python: str, env_files: list[str],
-                    launchd_plists: list[str], council_roots: list[str]) -> dict[str, Any]:
+                    launchd_plists: list[str], council_roots: list[str],
+                    build_roots: list[str] = (), build_brief: str | None = None,
+                    build_read_roots: list[str] = (),
+                    build_mcp_config: str | None = None) -> dict[str, Any]:
     """What a write was generated from, with every path made absolute, so a
-    replay from another working directory reads the same files."""
+    replay from another working directory reads the same files. The build
+    keys are written only when set, so a record from before the build lane
+    reads back unchanged."""
     def absolute(paths: list[str]) -> list[str]:
         return [os.path.abspath(os.path.expanduser(path)) for path in paths]
 
-    return {
+    document = {
         "schema": INPUTS_SCHEMA,
         "out": out,
         "repo_root": repo_root,
@@ -469,6 +543,15 @@ def recorded_inputs(*, out: str, repo_root: str, python: str, env_files: list[st
         "launchd_plist": absolute(launchd_plists),
         "council_root": absolute(council_roots),
     }
+    if build_roots:
+        document["build_root"] = absolute(list(build_roots))
+    if build_brief:
+        document["build_brief"] = absolute([build_brief])[0]
+    if build_read_roots:
+        document["build_read_root"] = absolute(list(build_read_roots))
+    if build_mcp_config:
+        document["build_mcp_config"] = absolute([build_mcp_config])[0]
+    return document
 
 
 def read_inputs(path: str) -> dict[str, Any]:
@@ -481,10 +564,14 @@ def read_inputs(path: str) -> dict[str, Any]:
     for key in ("out", "repo_root", "python"):
         if not isinstance(document.get(key), str) or not document[key]:
             raise SystemExit(f"{path}: {key} must be a non-empty string")
-    for key in ("env_file", "launchd_plist", "council_root"):
+    for key in ("env_file", "launchd_plist", "council_root", "build_root", "build_read_root"):
         value = document.get(key, [])
         if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
             raise SystemExit(f"{path}: {key} must be a list of paths")
+    for key in ("build_brief", "build_mcp_config"):
+        value = document.get(key)
+        if value is not None and not (isinstance(value, str) and value):
+            raise SystemExit(f"{path}: {key} must be a non-empty string")
     return document
 
 
@@ -496,6 +583,10 @@ def replay_inputs(args: argparse.Namespace, inputs: dict[str, Any]) -> None:
     args.env_file = list(inputs.get("env_file", []))
     args.launchd_plist = list(inputs.get("launchd_plist", []))
     args.council_root = list(inputs.get("council_root", []))
+    args.build_root = list(inputs.get("build_root", []))
+    args.build_brief = inputs.get("build_brief")
+    args.build_read_root = list(inputs.get("build_read_root", []))
+    args.build_mcp_config = inputs.get("build_mcp_config")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -510,6 +601,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="the server's LaunchAgent plist, for its EnvironmentVariables")
     parser.add_argument("--council-root", action="append", default=[],
                         help="a directory the claude and codex council lanes may read under")
+    parser.add_argument("--build-root", action="append", default=[],
+                        help="a directory the build lane's working directory may sit under")
+    parser.add_argument("--build-brief",
+                        help="the fixed brief the build lane gives its CLI (absolute path)")
+    parser.add_argument("--build-read-root", action="append", default=[],
+                        help="a directory the build lane's file tools may also read")
+    parser.add_argument("--build-mcp-config",
+                        help="the MCP configuration file the build lane loads (absolute path)")
     parser.add_argument("--check", action="store_true",
                         help="exit 1 if the file differs from a fresh generation; write nothing")
     args = parser.parse_args(argv)
@@ -551,6 +650,23 @@ def main(argv: list[str] | None = None) -> int:
         print("orchestrator-profiles: no --council-root; council.claude and council.codex "
               "omitted", file=sys.stderr)
 
+    build_roots = council_roots(args.build_root, account.pw_dir, "build root")
+    build_brief = build_file(args.build_brief, "build brief")
+    build: dict[str, Any] | None = None
+    if build_roots and build_brief:
+        build = {
+            "roots": build_roots,
+            "brief": build_brief,
+            "read_roots": council_roots(args.build_read_root, account.pw_dir, "build read root"),
+            "mcp_config": build_file(args.build_mcp_config, "build MCP configuration"),
+        }
+    elif build_roots or build_brief:
+        raise SystemExit("orchestrator-profiles: the build lane needs both --build-root and "
+                         "--build-brief")
+    else:
+        print("orchestrator-profiles: no --build-root/--build-brief; build.claude omitted",
+              file=sys.stderr)
+
     try:
         fixed, secrets = reviewer_config.reviewer_profile_env(settings)
     except ValueError as exc:
@@ -567,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         claude_cli=found["claude"], codex_cli=found["codex"],
         antigravity_cli=found["antigravity"],
         codex_app_server=flag_on(settings.get("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION")),
-        reviewer=reviewer, council_roots=roots))
+        reviewer=reviewer, council_roots=roots, build=build))
     out = Path(os.path.abspath(args.out))
     if args.check:
         try:
@@ -579,7 +695,9 @@ def main(argv: list[str] | None = None) -> int:
     changed = write_atomically(out, text)
     write_atomically(Path(f"{out}{INPUTS_SUFFIX}"), render(recorded_inputs(
         out=str(out), repo_root=repo_root, python=python, env_files=args.env_file,
-        launchd_plists=args.launchd_plist, council_roots=args.council_root)))
+        launchd_plists=args.launchd_plist, council_roots=args.council_root,
+        build_roots=args.build_root, build_brief=args.build_brief,
+        build_read_roots=args.build_read_root, build_mcp_config=args.build_mcp_config)))
     print(f"orchestrator-profiles: {out} {'written' if changed else 'unchanged'}")
     return 0
 

@@ -536,6 +536,15 @@ sets nothing.
      reads no directory. Each lane was checked live against its real CLI
      with a probe file outside the roots. Next: dispatch_beam sending these
      profiles, the other callers, and the doctor's digest check.
+     *Build lane (2026-10-28):* `build.claude` runs
+     `src/mcp_handlers/support/build_lane_client.py`: Claude Code
+     unattended in a caller-named directory under `--build-root`, with a
+     brief fixed by `--build-brief`, `lineage: caller`, one build at a time
+     for up to two hours. It keeps hooks, plugins and project instructions
+     on (no `--safe-mode`), fixes the tool set and the MCP servers, and
+     refuses `gh` and `git push` through PATH shims; Bash is not
+     path-confined, so the caller builds from a trusted base and copies in
+     only validated content (`docs/operations/agent-orchestrator-build-lane.md`).
      *Callers (2026-10-27):*
      - dispatch_beam's council sends these profiles behind
        `DISPATCH_COUNCIL_PROFILES=1` (cirwel/dispatch_beam#102).

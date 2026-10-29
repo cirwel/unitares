@@ -67,6 +67,27 @@ if [[ "${AGENT_ORCHESTRATOR_PROFILES_GENERATE:-}" == "1" && -n "${AGENT_ORCHESTR
             [[ -n "$root" ]] && profile_args+=(--council-root "$root")
         done
     fi
+    # The build lane (build.claude): directories its working directory may sit
+    # under, the fixed brief, directories its file tools may also read, and an
+    # MCP configuration file; omitted without the first two.
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_BUILD_ROOTS:-}" ]]; then
+        IFS=: read -r -a build_roots <<< "$AGENT_ORCHESTRATOR_PROFILES_BUILD_ROOTS"
+        for root in "${build_roots[@]}"; do
+            [[ -n "$root" ]] && profile_args+=(--build-root "$root")
+        done
+    fi
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_BUILD_BRIEF:-}" ]]; then
+        profile_args+=(--build-brief "$AGENT_ORCHESTRATOR_PROFILES_BUILD_BRIEF")
+    fi
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_BUILD_READ_ROOTS:-}" ]]; then
+        IFS=: read -r -a build_read_roots <<< "$AGENT_ORCHESTRATOR_PROFILES_BUILD_READ_ROOTS"
+        for root in "${build_read_roots[@]}"; do
+            [[ -n "$root" ]] && profile_args+=(--build-read-root "$root")
+        done
+    fi
+    if [[ -n "${AGENT_ORCHESTRATOR_PROFILES_BUILD_MCP_CONFIG:-}" ]]; then
+        profile_args+=(--build-mcp-config "$AGENT_ORCHESTRATOR_PROFILES_BUILD_MCP_CONFIG")
+    fi
     if [[ -z "$PROFILES_PYTHON" ]] || ! env -i PATH="$PATH" "$PROFILES_PYTHON" -I \
             "$REPO_ROOT/scripts/ops/orchestrator-profiles.py" "${profile_args[@]}" >&2; then
         echo "[agent-orchestrator] warning: launch profiles not regenerated; the last good file, if any, stays in force" >&2
