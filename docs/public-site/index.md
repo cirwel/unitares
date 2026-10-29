@@ -2,6 +2,12 @@
 
 *Many agents, one record.*
 
+<div class="hero-actions" role="group" aria-label="Get started">
+  <a class="primary" href="demo.html">See it without installing</a>
+  <a class="secondary" href="#is-it-for-you">Is it for you?</a>
+  <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
+</div>
+
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its single-operator federation kernel connects independent
 runtimes to one operator-controlled server over MCP or HTTP, where they share a
@@ -22,19 +28,28 @@ opinion.
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
-<div class="hero-actions" role="group" aria-label="Get started">
-  <a class="primary" href="demo.html">See it without installing</a>
-  <a class="secondary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
-  <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
-</div>
-
 ## The operating problem
 
-An agent can remain within per-action permissions while its claims, evidence,
-and behavior drift apart over a long task. UNITARES retains the longitudinal
-record that an action-level guardrail usually does not: what a process claimed,
-what evidence was available, what state the service estimated, and which policy
-response it returned.
+Agent work fragments when a process restarts, loses context, changes vendors,
+or hands a task to another runtime. Git preserves repository changes and issue
+trackers preserve conversations, but neither necessarily gives every agent one
+queryable account of who made a claim, what evidence supported or contradicted
+it, who challenged it, what replaced it, and what outcome followed.
+
+UNITARES keeps that account outside any one model's context window. It does not
+make a claim true and does not force an agent to consult the record.
+
+## Is it for you?
+
+**Do not install UNITARES merely because you use an agent.** If your work stays
+in one repository and git plus an issue tracker or reliable handoff note lets
+the next session reconstruct it, keep that simpler system.
+
+Consider UNITARES when several independent agent processes or vendors work over
+long periods and need one operator-owned record of authorship, evidence,
+corrections, review, and outcomes across handoffs. Start with the
+[no-install incident walkthrough](demo.html); it includes the cases where
+ordinary artifacts performed just as well.
 
 ## What operators get
 
@@ -42,24 +57,27 @@ response it returned.
 |---|---|
 | Accountable identity | Bind writes to a process instance and retain lineage across explicit handoffs. |
 | Claims and evidence | Retain check-in claims beside tests, exit codes, tool results, review labels, and recorded outcomes. |
-| Cross-vendor second opinions | Ask another vendor's model for advice, or the configured reviewer for on-record review, and keep the request with the work. |
-| Policy and recovery | Return a proceed or pause action with a named reason and next step; support governed recovery and review paths. |
-| Operator visibility | Inspect lifecycle, state, evidence, and decision history through MCP, HTTP, and a self-hosted dashboard. |
+| Corrections and review | Keep objections with the work they concern, and link a replaced claim to its replacement instead of silently rewriting history. |
+| Outcome grounding | Record test, build, and task results against the check-ins that predicted them. |
+| Reconstruction | Let a later process search the record and recover the chain without sharing the earlier process's context window. |
 
 Tool-boundary enforcement, trace emission, and agent-to-agent transport are not
-this server's job: runtime middleware (NeMo Relay has a shipped integration),
-OpenTelemetry, and A2A own those. UNITARES keeps the record beside them.
+this server's job: runtime middleware, OpenTelemetry, and A2A own those.
+UNITARES keeps the record beside them.
 
-EISV, the state-estimation instrument in the check-in path, summarizes runtime
-observations and controller history over time. Its readings let you inspect
-changes in those inputs and their relation to policy responses. The
-[computation reference](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#what-the-signals-record)
-defines each signal and its provenance; the
-[reading guide](https://github.com/cirwel/unitares/blob/master/docs/manual/05-reading-the-signals.md)
-explains how to interpret a reading. The instrument is moving to an optional
-module within UNITARES.
+Two optional instruments sit around the record. Digital proprioception returns
+an EISV state estimate and retains its raw policy recommendation for inspection;
+the recommendation is observational by default and cannot pause an identity or
+block writes unless the operator explicitly enables the legacy actuator.
+`consult` can ask a connected model for a second opinion, and structured
+dialectic is available for durable review. Neither is required to use the
+record.
 
-## Try the released surfaces
+## Run the released server
+
+You do not need a server to inspect the data model: use the
+[hosted incident walkthrough](demo.html) first. If the narrow use case above
+fits, run the released stack.
 
 On an **Apple Silicon Mac**, install the native preview with Homebrew (server,
 coordination lease plane, PostgreSQL 17 with AGE/pgvector, and Redis — no Docker
@@ -74,16 +92,17 @@ brew install cirwel/unitares/unitares
 brew pin unitares unitares-lease-plane apache-age unitares-pgvector
 ```
 
-Or run the **Docker Compose** stack on macOS or Linux and execute the
-six-check-in telemetry demo and coordination lease proof:
+Or run the **Docker Compose** stack on macOS or Linux:
 
 ```bash
 git clone --branch v3.6.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
-make demo
-make coordination-demo
 ```
+
+Connect an MCP client at `http://localhost:8767/mcp/`, open the dashboard at
+`http://localhost:8767/dashboard`, or follow the
+[captured two-process walkthrough](https://github.com/cirwel/unitares/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md).
 
 To include in-container `sentence-transformers` (`BAAI/bge-m3`) for semantic and
 hybrid knowledge-graph search, layer `docker-compose.full.yml` (or use
@@ -105,9 +124,6 @@ Or inspect the signed multi-architecture server image:
 ```bash
 docker pull ghcr.io/cirwel/unitares:v3.6.0
 ```
-
-The demo onboards an agent and runs six check-ins against your server. Each one
-returns a state estimate and a policy response with its reason.
 
 ## Evaluate the project
 
@@ -138,7 +154,7 @@ centralizing raw telemetry.
 
 ## Where to go next
 
-Run the [six-check-in demo](#try-the-released-surfaces). To assess the boundary
-between deployed mechanisms and research claims, start with the
+Read the [incident walkthrough](demo.html). To assess the boundary between
+deployed mechanisms and research claims, start with the
 [Reviewer Guide](https://github.com/cirwel/unitares/blob/master/docs/REVIEWER_GUIDE.md).
 For integration or pilot questions, [start a GitHub Discussion](https://github.com/cirwel/unitares/discussions).
