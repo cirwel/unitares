@@ -1,7 +1,16 @@
 import json
 from datetime import datetime
 from typing import Annotated, Optional, Union, Literal, Dict, Any, List
-from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import InitErrorDetails, PydanticCustomError
 from .mixins import AgentIdentityMixin
 
 
@@ -366,6 +375,26 @@ class ToolResultEvidence(BaseModel):
         return data
 
 
+# Keys that express a no-write intent on a check-in. A check-in always advances
+# state, so a caller who sends one has misread the surface: simulate_update is
+# the separate dry-run tool the description names (and the initial tools/list
+# does not show it, so a reader of sync_state's description alone cannot tell it
+# is a tool), and dry_run is the spelling admin, lifecycle and calibration
+# already accept. The middleware deliberately passes undeclared keys through to
+# the handler for the S22 provenance callers (params_step.py), so without this
+# refusal the flag is ignored and the write commits (dogfood pulse, 2026-10-29).
+# Refused by name, not with extra="forbid", to keep that pass-through intact.
+CHECKIN_NO_WRITE_INTENT_KEYS = ("simulate_update", "dry_run")
+
+_NO_WRITE_INTENT_MESSAGE = (
+    "{key} is not a parameter of this check-in, which always advances state. "
+    "To preview a check-in without advancing state, call the separate "
+    "simulate_update tool with the same fields (it still appends an audit "
+    "event); to read the current verdict without writing, call "
+    "check_working_state."
+)
+
+
 class ProcessAgentUpdateParams(AgentIdentityMixin):
     """
     Record a work check-in and get a governance decision.
@@ -574,6 +603,32 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             )
         },
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def refuse_no_write_intent_keys(cls, data):
+        """Refuse a dry-run flag at its own location, before anything is written.
+
+        Raised as a located ValidationError rather than a bare ValueError so the
+        middleware's formatter names the offending key, as it does for any other
+        parameter error, instead of an anonymous model-level entry.
+        """
+        if not isinstance(data, dict):
+            return data
+        refused = [
+            InitErrorDetails(
+                type=PydanticCustomError(
+                    "no_write_intent_key", _NO_WRITE_INTENT_MESSAGE, {"key": key}
+                ),
+                loc=(key,),
+                input=data[key],
+            )
+            for key in CHECKIN_NO_WRITE_INTENT_KEYS
+            if key in data
+        ]
+        if refused:
+            raise ValidationError.from_exception_data(cls.__name__, refused)
+        return data
 
     @model_validator(mode='before')
     @classmethod
