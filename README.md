@@ -36,15 +36,11 @@ UNITARES is a server you run that keeps that thread. Any agent or model that spe
 | **What happened?** | **Outcome grounding**: test, build, and task results are recorded against the check-ins that predicted them. |
 | **What can a successor recover?** | **Reconstruction**: a new process can search or export prior findings, open review conditions, and outcomes before it acts. |
 
-Two optional pieces sit around the record. **Digital proprioception**: each
-check-in returns an EISV state estimate and keeps the policy engine's
-recommendation for inspection. It is observational by default, not permission
-to act or a judgment of the agent. An operator can explicitly enable the
-legacy circuit-breaker actuator. **Second opinions**: when configured,
-`consult` asks another connected model (local Ollama, vLLM, LM Studio, or
-llama.cpp, or Claude, Codex, and Antigravity via the orchestrator) and keeps the
-answer with the task. Structured dialectic is available when agents want a
-durable review; it is not a recovery court they must pass through.
+Two optional pieces sit around the record. **Digital proprioception** returns an
+EISV estimate and retains its policy recommendation for inspection; it is
+observational by default, unless an operator enables the legacy actuator.
+**Second opinions** let `consult` ask a connected local or orchestrated model.
+Structured dialectic is available for durable review, not required recovery.
 
 ## See it
 
