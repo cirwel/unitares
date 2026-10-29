@@ -64,6 +64,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 - [`AGENT_SESSION_WALKTHROUGH.md`](guides/AGENT_SESSION_WALKTHROUGH.md) — one task across two processes, every call with the server's captured response: search, start, check in, grade, exit cleanly, hand off
 - [`CODEX_START.md`](guides/CODEX_START.md) — human-facing Codex quickstart for direct repository work
+- [`INDEPENDENT_OPERATOR_COHORT.md`](guides/INDEPENDENT_OPERATOR_COHORT.md) — participant-facing invitation and onboarding outline for the registered independent-operator usability study
 - [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
 - [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)
