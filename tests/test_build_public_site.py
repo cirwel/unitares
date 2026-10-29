@@ -37,10 +37,15 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "did not establish predictive lift" in ledger_text
     assert "read-specific power" in ledger_text
     assert "inconclusive, not a demonstrated negative" in ledger_text
-    assert "its claims, evidence, and behavior drift apart" in landing_text
+    assert "Agent work fragments when a process restarts" in landing_text
+    assert "Do not install UNITARES merely because you use an agent." in landing_text
+    assert "observational by default" in landing_text
+    assert "cannot pause an identity or block writes" in landing_text
+    assert "Policy and recovery" not in landing_text
+    assert "six-check-in telemetry demo" not in landing_text
     assert "Claims and evidence" in landing
     assert 'class="hero-actions"' in landing
-    assert 'href="#try-the-released-surfaces"' in landing
+    assert 'href="#is-it-for-you"' in landing
     assert 'href="#evaluate-the-project"' in landing
     assert "github.com/cirwel/unitares/discussions" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing
@@ -101,6 +106,9 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     # The page shows the mechanism and says plainly it is not a win over git.
     assert "docs/evaluations/accountability-journey/result-v0.md" in demo
     assert "both scored 1.000" in demo_text
+    assert "ordinary repository artifacts recovered the incident facts and UNITARES did not" in demo_text
+    assert "capture-stage-2168-v0.md" in demo
+    assert "Should you install it?" in demo_text
     # Reachable from the landing hero and the nav.
     assert 'class="primary" href="demo.html"' in landing
     # The viewer has its own nav template; it links the demo too.

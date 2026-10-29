@@ -26,6 +26,8 @@ evidence behind an earlier decision.
 
 UNITARES is a server you run that keeps that thread. Any agent or model that speaks MCP or HTTP can connect (with ready integrations for Claude Code, Codex, and Hermes Agent) and write its findings, reviews, and results to one operator-owned record. A later agent, or you, can read it back and see where each piece came from.
 
+**[See one incident without installing anything →](https://cirwel.github.io/unitares/demo.html)** · [Read the evidence](docs/EVIDENCE_AND_LIMITS.md) · [Install](#install)
+
 ## What the record answers
 
 | Question | Mechanism |
@@ -42,13 +44,14 @@ observational by default, unless an operator enables the legacy actuator.
 **Second opinions** let `consult` ask a connected local or orchestrated model.
 Structured dialectic is available for durable review, not required recovery.
 
-## See it
+## See the record before installing
 
 Agent A (Codex) finds a bug, records it, and exits. Agent B (Claude Code) later
 finds the real cause and records a finding that supersedes A's. Agent C (Hermes
 Agent) picks up A's task after a restart and reads the record before touching
 the code (reading needs no identity): its search returns A's finding marked
 superseded, with a link to B's. C then declares that it continues A's task.
+This API sketch is separate from the [hosted service-reload incident](https://cirwel.github.io/unitares/demo.html).
 
 ```text
 # Agent A (Codex)
@@ -72,6 +75,8 @@ session start points it there. A simpler handoff, call by call: the
 
 ## Install
 
+**Do not install UNITARES merely because you use an agent.** If git plus an issue tracker or reliable handoff note lets the next session reconstruct the work, keep that simpler system. Consider UNITARES when independent agent processes or vendors need one queryable record of authorship, evidence, corrections, review, and outcomes across handoffs.
+
 **Homebrew preview**, recommended for an Apple Silicon desktop Mac: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the services natively; follow its [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
 The packaged `unitares update` coordinates writer shutdown, verified backup, migrations, prior-state restoration, and deep health when writers restart (schema verification when they remain stopped); kegs that predate it use the tap's [one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
 The preview label remains while the tap builds from source and supports Apple Silicon macOS only.
@@ -93,18 +98,9 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 
 ## Who it is for
 
-For an operator running several long-lived AI agents, across vendors, on
-infrastructure they control, who needs the agents' shared account of the work
-to survive restarts and handoffs.
+For an operator running several long-lived AI agents across vendors, on infrastructure they control, who needs the agents' shared account of the work to survive restarts and handoffs.
 
-If your agents all work in one repository, git and an issue tracker may be
-enough. UNITARES is for work that spans runtimes and outlives any one
-repository or session.
-
-Not a sandbox, an output validator, or a hosted agent platform. It runs beside
-your evals and guardrails and replaces neither. It does not run the agent's
-loop or grant an estimator authority over it. Explicit identity, authorization,
-archive, and coordination boundaries remain enforced.
+Not a sandbox, an output validator, or a hosted agent platform. It runs beside your evals and guardrails and replaces neither. It does not run the agent's loop or grant an estimator authority over it. Explicit identity, authorization, archive, and coordination boundaries remain enforced.
 
 ## How it fits together
 

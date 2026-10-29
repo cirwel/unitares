@@ -208,18 +208,24 @@ effect of governance check-in.
 
 ```python
 summary = result.get("action_summary", {})
-if summary.get("action") == "pause":
-    # Governed writes are held. Read the reason and next_action, then try
-    # self_recovery(action="check"); a dialectic review, an operator, or the
-    # pause's expiry also lift it.
-    handle_pause(summary.get("reason"), result.get("next_action"))
+enforcement = result.get("enforcement", {})
+recommendation = result.get("policy_evaluation", {}).get("action")
+if summary.get("action") == "pause" and enforcement.get("applied"):
+    # The operator enabled the compatibility actuator and a lifecycle hold was
+    # committed. Read the reason and next_action, then inspect recovery.
+    handle_applied_pause(summary.get("reason"), result.get("next_action"))
+elif recommendation in {"pause", "reject"}:
+    inspect_recommendation(result)  # observational default; no hold to recover
 elif summary.get("sub_action") == "guide":
     adjust(summary.get("reason"))  # advisory; work may continue
 ```
 
 `action_summary.action` is always `proceed` or `pause`. A guide verdict arrives
 as `proceed` with `sub_action: "guide"`, and a reject-severity decision as
-`pause` with `sub_action: "reject"`.
+`pause` with `sub_action: "reject"` only when the compatibility actuator is in
+the explicit `enforce` posture. In the default `observe` posture, inspect
+`policy_evaluation.action` for the raw recommendation and `enforcement.applied`
+for whether any authority was exercised.
 
 Treat the response as a policy affordance, not a moral judgment or outcome
 label. For finer client behavior, read the E/I/S/V fields and the named risk

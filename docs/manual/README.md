@@ -19,15 +19,16 @@ recover. Process identity and lineage, durable findings, structured review and
 typed outcomes are the mechanisms
 ([product definition](../PRODUCT_DEFINITION.md)).
 
-Each check-in also returns a policy action, `proceed` or `pause`; a pause holds
-governed writes until recovery, review, an operator or expiry lifts it. The
-action is derived from EISV, a behavioral state estimate. EISV still ships in
-the core path, and its move to an optional module follows a
-[staged plan](../proposals/active/eisv-core-boundary-v0.md).
+Each check-in also returns a raw policy recommendation derived from EISV, a
+behavioral state estimate. That recommendation is observational by default: it
+cannot pause an identity or block writes unless the operator explicitly enables
+the legacy actuator. EISV still ships in the check-in path, and its move to an
+optional module follows a [staged plan](../proposals/active/eisv-core-boundary-v0.md).
 
-Core can refuse governed writes; the host remains responsible for actions
-outside that boundary. MCP is the primary agent-facing interface, not the only
-surface and not the agent runtime itself.
+Explicit identity, authorization, archive, durable-pause, and coordination
+boundaries remain authoritative. The host remains responsible for actions
+outside those boundaries. MCP is the primary agent-facing interface, not the
+only surface and not the agent runtime itself.
 
 ## How to read this manual
 

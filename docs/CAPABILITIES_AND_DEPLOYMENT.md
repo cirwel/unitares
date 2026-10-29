@@ -30,7 +30,7 @@ see the [interface contract](INTERFACE_CONTRACT.md) for the authoritative mappin
 
 | Capability | Entry points | Prerequisites and limits |
 |---|---|---|
-| Behavioral state and policy | `sync_state`, `check_working_state`, `self_recovery` | State estimates and policy actions come from the deployed heuristic instrument ([EISV computation](EISV_COMPUTATION.md)). A host integration enforces actions beyond governed writes. |
+| Behavioral state and policy | `sync_state`, `check_working_state`, `self_recovery` | State estimates and raw policy recommendations come from the deployed heuristic instrument ([EISV computation](EISV_COMPUTATION.md)). Recommendations are observational by default; an operator must explicitly select the compatibility `enforce` posture before they create lifecycle holds on governed writes. A host integration remains responsible for actions beyond that boundary. |
 | Advisory inference | `consult` | Needs a configured provider/host and appropriate privacy/authorization. Cloud-enabled processing may send submitted content externally. No bundled model is implied. |
 | Observation and calibration | `observe`, `calibration` | Built from retained observations and outcomes. `calibration` `update`, `backfill` and `rebuild` write calibration state; `check` reads it. |
 | Operations and configuration | `agent`, `config`, `admin`, `health_check` | Action-specific authorization applies. `health_check` returns the latest background probe snapshot; read `_cache.age_seconds` and `_cache.stale` before treating it as current. |

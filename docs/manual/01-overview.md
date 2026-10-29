@@ -63,8 +63,10 @@ result = sync_state(
     complexity=0.4,
     confidence=0.7,
 )
-if result.get("action_summary", {}).get("action") == "pause":
-    handle_pause(result)  # governed writes are held; see §1.5
+if result.get("enforcement", {}).get("applied"):
+    handle_applied_pause(result)  # explicit enforce posture; see §1.5
+elif result.get("policy_evaluation", {}).get("action") in {"pause", "reject"}:
+    inspect_recommendation(result)  # observational by default; continuing is allowed
 
 record_result(
     client_session_id=csid,

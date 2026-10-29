@@ -1,9 +1,14 @@
 # See the record, without installing anything
 
-One incident, step by step, as the record holds it. A process claims a service
-reload worked, a test says it did not, a reviewer challenges the claim, a
-correction replaces it, and a fresh process that saw none of this reconstructs
-the whole chain from the record alone.
+The narrow question is not whether UNITARES can replace git or an issue
+tracker. It is whether several independent agent processes can recover one
+attributed chain of claims, evidence, objections, corrections, and outcomes
+after the process that lived through it is gone.
+
+This page shows one incident, step by step, as the record holds it. A process
+claims a service reload worked, a test says it did not, a reviewer challenges
+the claim, a correction replaces it, and a fresh process that saw none of this
+reconstructs the whole chain from the record alone.
 
 !!! note "Where this comes from"
     Every quoted fact, record id and link name on this page is read, at build
@@ -74,6 +79,23 @@ lives: typed, attributed, and shared by every runtime in one place, instead of
 spread across each agent's own notes. Whether that changes outcomes in real
 work is a question for [Evidence and limits]({evidence_blob}), not a claim made
 here.
+
+The first real capture-stage incident was less favorable: ordinary repository
+artifacts recovered the incident facts and UNITARES did not. The record had no
+bridge from CI or git for that event, no finding surfaced to a bound agent, and
+the hosted connector was unreachable at capture time. The
+[capture-stage result](../evaluations/accountability-journey/capture-stage-2168-v0.md)
+is retained because a reconstruction system is only useful when the relevant
+facts enter it. This fixture proves the record shape and retrieval path; it does
+not prove capture coverage or adoption value.
+
+## Should you install it?
+
+Probably not if one repository, its issues, and a reliable handoff note already
+give every session the history it needs. Consider UNITARES only when several
+independent runtimes need a shared, queryable record across repositories or
+context boundaries, and typed authorship, supersession, review, and outcomes
+are worth operating a service.
 
 ## Try it yourself
 
