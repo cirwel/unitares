@@ -92,7 +92,7 @@ never reaches the child.
 
 ## Operating it
 
-Settings for `scripts/start.sh`, beside the existing profile settings:
+Settings for the orchestrator's `elixir/agent_orchestrator/scripts/start.sh`, beside the existing profile settings:
 
 ```sh
 AGENT_ORCHESTRATOR_PROFILES_FILE=...            # already required for any profile
