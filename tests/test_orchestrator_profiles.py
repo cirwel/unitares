@@ -40,7 +40,9 @@ def placeholder_document():
         claude_cli="/usr/local/bin/claude", codex_cli="/usr/local/bin/codex",
         antigravity_cli="/usr/local/bin/agy", council_roots=["/srv/repos"],
         reviewer={"fixed": fixed, "secrets": secrets, "clis": clis,
-                  "max_runtime_ms": rc.reviewer_max_runtime_ms(settings)})
+                  "max_runtime_ms": rc.reviewer_max_runtime_ms(settings)},
+        build={"roots": ["/srv/builds"], "brief": "/srv/build-brief.md",
+               "read_roots": ["/srv/docs"], "mcp_config": None})
 
 
 def test_fixture_is_the_generator_output_for_placeholder_paths():
@@ -495,3 +497,121 @@ def test_main_writes_council_lanes_for_a_root(tmp_path):
     assert code == 0
     profiles = json.loads(out.read_text())["profiles"]
     assert profiles["council.claude"]["env"]["set"]["COUNCIL_ROOTS"] == os.path.realpath(repos)
+
+
+# ---------- the build lane ----------
+
+def _build(**overrides):
+    build = {"roots": ["/srv/builds"], "brief": "/srv/brief.md", "read_roots": [],
+             "mcp_config": None}
+    build.update(overrides)
+    return gen.build_profiles(repo_root="/r", python="/p", user="u", claude_cli="/a",
+                              build=build)["profiles"]["build.claude"]
+
+
+def test_the_build_lane_is_omitted_without_a_request_or_a_claude_cli():
+    assert "build.claude" not in gen.build_profiles(repo_root="/r", python="/p", user="u",
+                                                    claude_cli="/a")["profiles"]
+    assert "build.claude" not in gen.build_profiles(
+        repo_root="/r", python="/p", user="u", claude_cli=None, codex_cli="/b",
+        build={"roots": ["/srv/b"], "brief": "/srv/x", "read_roots": [], "mcp_config": None},
+    )["profiles"]
+
+
+def test_the_build_lane_fixes_cli_roots_brief_and_limits():
+    profile = _build(read_roots=["/srv/docs", "/srv/logs"], mcp_config="/srv/mcp.json")
+    assert profile["args"] == ["-I", os.path.join("/r", gen.BUILD_CLIENT)]
+    fixed = profile["env"]["set"]
+    assert fixed["BUILD_CLI"] == "/a" and fixed["BUILD_BRIEF"] == "/srv/brief.md"
+    assert fixed["BUILD_ROOTS"] == "/srv/builds"
+    assert fixed["BUILD_READ_ROOTS"] == os.pathsep.join(["/srv/docs", "/srv/logs"])
+    assert fixed["BUILD_MCP_CONFIG"] == "/srv/mcp.json"
+    assert profile["lineage"] == "caller" and profile["lease"] is False
+    assert profile["max_concurrent"] == 1
+    assert profile["max_runtime_ms"] == gen.BUILD_MAX_RUNTIME_MS
+    assert "secrets" not in profile["env"] and "cd" not in profile
+    assert "BUILD_READ_ROOTS" not in _build()["env"]["set"]
+    assert "BUILD_MCP_CONFIG" not in _build()["env"]["set"]
+
+
+def test_the_build_lane_takes_only_a_directory_and_a_model():
+    variables = _build()["vars"]
+    assert set(variables) == {"BUILD_DIR", "BUILD_MODEL"}
+    assert variables["BUILD_DIR"]["required"] is True
+    assert "required" not in variables["BUILD_MODEL"]
+
+
+def test_build_model_pattern_matches_the_client():
+    from src.mcp_handlers.support import build_lane_client as build
+    assert gen.MODEL_PATTERN == build.MODEL_PATTERN.pattern
+
+
+def test_the_client_deadline_sits_inside_the_profile_ceiling():
+    from src.mcp_handlers.support import build_lane_client as build
+    assert build.DEADLINE_S * 1000 < gen.BUILD_MAX_RUNTIME_MS
+
+
+def _build_main(tmp_path, *extra):
+    cli = tmp_path / "bin" / "claude"
+    cli.parent.mkdir(exist_ok=True)
+    cli.write_text("#!/bin/sh\n")
+    cli.chmod(0o700)
+    (tmp_path / "server.env").write_text(f"UNITARES_CLAUDE_CLI={cli}\n")
+    out = tmp_path / "state" / "profiles.json"
+    code = gen.main(["--out", str(out), "--repo-root", str(REPO_ROOT), "--python",
+                     sys.executable, "--env-file", str(tmp_path / "server.env"), *extra])
+    return code, out
+
+
+def test_build_inputs_are_recorded_and_replayed(tmp_path, capsys):
+    root = tmp_path / "wt"
+    root.mkdir()
+    brief = tmp_path / "BRIEF.md"
+    brief.write_text("build\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    code, out = _build_main(tmp_path, "--build-root", str(root), "--build-brief", str(brief),
+                            "--build-read-root", str(docs))
+    assert code == 0
+    document = json.loads(out.read_text())
+    assert document["profiles"]["build.claude"]["env"]["set"]["BUILD_BRIEF"] == \
+        os.path.realpath(brief)
+    inputs = json.loads(Path(f"{out}{gen.INPUTS_SUFFIX}").read_text())
+    assert inputs["build_root"] == [str(root)]
+    assert inputs["build_brief"] == str(brief)
+    assert inputs["build_read_root"] == [str(docs)]
+    assert "build_mcp_config" not in inputs
+    capsys.readouterr()
+    assert gen.main(["--replay", f"{out}{gen.INPUTS_SUFFIX}", "--check"]) == 0
+
+
+def test_a_record_without_build_keys_still_replays(tmp_path, capsys):
+    code, out = _build_main(tmp_path)
+    assert code == 0
+    inputs_path = Path(f"{out}{gen.INPUTS_SUFFIX}")
+    assert "build_root" not in json.loads(inputs_path.read_text())
+    assert gen.main(["--replay", str(inputs_path), "--check"]) == 0
+    assert "build.claude" not in json.loads(out.read_text())["profiles"]
+
+
+def test_a_named_but_missing_build_input_is_an_error_not_an_omission(tmp_path):
+    root = tmp_path / "wt"
+    root.mkdir()
+    with pytest.raises(SystemExit, match="not a file"):
+        _build_main(tmp_path, "--build-root", str(root), "--build-brief",
+                    str(tmp_path / "missing.md"))
+    brief = tmp_path / "BRIEF.md"
+    brief.write_text("build\n")
+    with pytest.raises(SystemExit, match="not a directory"):
+        _build_main(tmp_path, "--build-root", str(tmp_path / "missing"), "--build-brief",
+                    str(brief))
+    with pytest.raises(SystemExit, match="both"):
+        _build_main(tmp_path, "--build-brief", str(brief))
+
+
+@pytest.mark.parametrize("root", ["/", "~"])
+def test_a_build_root_holding_the_home_directory_is_refused(tmp_path, root):
+    brief = tmp_path / "BRIEF.md"
+    brief.write_text("build\n")
+    with pytest.raises(SystemExit, match="home directory"):
+        _build_main(tmp_path, "--build-root", root, "--build-brief", str(brief))
