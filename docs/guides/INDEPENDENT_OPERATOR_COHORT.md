@@ -1,0 +1,92 @@
+# Independent-operator cohort
+
+UNITARES is looking for one operator who already runs several AI agents and
+wants a durable record across their sessions, restarts, and handoffs. This is
+a bounded usability study, not a sales program and not a request to generate
+synthetic traffic.
+
+The study's protocol was registered before recruitment began. Negative,
+inconclusive, and abandoned runs are reported as readily as successful ones.
+The complete protocol is
+[`independent-operator-cohort-preregistration-v0.md`](../proposals/registered/independent-operator-cohort-preregistration-v0.md),
+tracked by [issue #1607](https://github.com/cirwel/unitares/issues/1607).
+
+## Who fits
+
+The study is intended for an operator who:
+
+- runs one or more coding, research, background, or resident agents or
+  recurring agent jobs on real work;
+- is comfortable running a Docker Compose stack on infrastructure they
+  control;
+- can keep at least one genuine agent workload connected for four weeks;
+- can name at least one real outcome source, such as CI, a test harness, or a
+  review tool; and
+- is willing to record setup friction and permit publication of the result,
+  including failure or abandonment.
+
+The operator must not share the maintainer's production database. The study
+uses the operator's own release-tagged installation and keeps its traffic
+separate from the maintainer deployment. This guide promises no compensation;
+any consideration would be agreed and disclosed before enrollment.
+
+## What participation involves
+
+1. **Short fit call.** Confirm the workload, infrastructure, outcome source,
+   relationship to the maintainer, and publication expectations.
+2. **Install and connect.** Start a release-tagged Docker Compose stack, run
+   the quickstart check, remove its demo rows, and connect a real agent.
+3. **Plumbing check.** Emit at least three outcomes through each declared
+   producer and confirm that the recorded rows are attributable and visible
+   to the registered analysis.
+4. **Enrollment.** Add the release, fleet shape, producers, harness hashes,
+   plumbing counts, and publication consent to the append-only
+   [enrollment ledger](../proposals/active/independent-operator-cohort-enrollments.md).
+5. **Operate for 28 UTC days.** Use the agents for their ordinary work. Keep a
+   timestamped friction log and record maintainer-support time.
+6. **Review the report.** The operator reviews and approves every public post
+   about their deployment. The primary result is operational usability; the
+   study does not claim that governance prevented an incident.
+
+The participation window begins only after a valid enrollment has merged and
+the first non-demo agent completes a qualifying check-in.
+
+## What the maintainer provides
+
+- a release-tagged install path and a guided first setup;
+- help connecting Claude Code, Codex, Hermes Agent, or another MCP client;
+- diagnosis of setup and integration failures;
+- a public record of every maintainer-support interaction and its approximate
+  duration; and
+- preparation of the enrollment and result artifacts for the operator to
+  review.
+
+Questions are allowed and logged. A repository change made in response to the
+participant's blocker prevents the study from claiming that the tested release
+was independently deployable; the blocker remains useful product evidence.
+
+## Data and claims
+
+UNITARES is self-hosted. The participant keeps their database. Shared study
+artifacts are limited to the registered harness outputs, telemetry-health JSON
+bodies, the friction log, support time, and enrollment metadata. A participant
+may opt in to sharing a de-identified analytic slice; otherwise the secondary
+analysis is described as attested rather than independently reproducible.
+
+The study can establish whether one independent operator deployed and operated
+the tested release under the registered conditions. It cannot establish broad
+adoption, predictive validity across fleets, or causal incident prevention.
+
+## Express interest
+
+Email `founder@cirwel.org` with:
+
+- the agent clients or runtimes you operate;
+- roughly how many agents or recurring jobs are active;
+- the real work they perform;
+- the outcome source you could connect; and
+- the host on which you would run Docker Compose.
+
+Recruitment closes on **2026-11-30**. If no valid operator enrolls by that
+date, the protocol requires recording recruitment as the unresolved dependency
+rather than substituting maintainer or synthetic traffic.
