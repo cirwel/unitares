@@ -152,9 +152,30 @@ def test_model_mcp_config_and_read_roots_are_passed(shim, roots, brief, tmp_path
     real_docs = os.path.realpath(docs)
     assert argv[argv.index("--add-dir") + 1] == real_docs
     # A read root stays read-only for the file tools: deny rules under it.
+    # Two leading slashes: an absolute rule path (one would be project-relative).
     for tool in ("Edit", "Write", "NotebookEdit"):
-        assert f"{tool}({real_docs}/**)" in argv
-    assert argv.index(f"Edit({real_docs}/**)") > argv.index("--disallowedTools")
+        assert f"{tool}(/{real_docs}/**)" in argv
+    assert argv.index(f"Edit(/{real_docs}/**)") > argv.index("--disallowedTools")
+
+
+def test_a_refusal_after_the_directory_is_known_replaces_the_old_result(shim, roots, brief):
+    state = roots / "build" / client.STATE_DIR
+    state.mkdir()
+    (state / "result.json").write_text('{"exit": 0, "stale": true}')
+    brief.write_text("   \n")  # the brief became empty since the last run
+    code, report, err = _run(_environ(shim, roots, brief))
+    assert code == 2 and report is None and "empty" in err
+    result = json.loads((state / "result.json").read_text())
+    assert result["exit"] == 2 and "stale" not in result and "empty" in result["refusal"]
+
+
+def test_a_brief_larger_than_the_pipe_does_not_deadlock(shim, roots, brief):
+    # The stand-in prints before it reads; a brief past the pipe buffer used
+    # to block the write while the CLI blocked on its full stdout.
+    brief.write_text("x" * 300_000 + "\n")
+    code, report, _ = _run(_environ(shim, roots, brief, BUILD_DEADLINE_S="30"))
+    assert code == 0
+    assert len(report["stdin"]) == 300_001
 
 
 def test_an_earlier_runs_result_is_removed_before_the_cli_starts(shim, roots, brief):

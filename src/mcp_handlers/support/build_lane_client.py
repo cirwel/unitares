@@ -327,7 +327,9 @@ def read_only_rules(add_dirs: list[str]) -> list[str]:
     rules: list[str] = []
     for directory in add_dirs:
         for tool in ("Edit", "Write", "NotebookEdit"):
-            rules.append(f"{tool}({directory}/**)")
+            # A rule path with one leading slash is relative to the project
+            # root; two anchor it at the filesystem root.
+            rules.append(f"{tool}(/{directory}/**)")
     return rules
 
 
@@ -403,13 +405,7 @@ def _final_result(line: str, summary: dict) -> None:
 
 def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.stderr) -> int:
     try:
-        path = cli(environ)
         directory = resolve_dir(environ.get("BUILD_DIR", ""), roots(environ))
-        text = brief(environ)
-        config = mcp_config(environ)
-        chosen = model(environ)
-        add_dirs = read_roots(environ)
-        deadline_s(environ)
     except Refusal as refusal:
         err.write(f"build_lane_client: {refusal}\n")
         return refusal.code
@@ -417,17 +413,32 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
     state = Path(directory, STATE_DIR)
     state.mkdir(mode=0o700, exist_ok=True)
     # A result from an earlier run in this directory would read as this run's
-    # completion to a caller polling for the file.
+    # completion to a caller polling for the file, so it goes before anything
+    # else can refuse; a refusal from here on leaves its own result.
     for stale in ("result.json", "build.log"):
         try:
             (state / stale).unlink()
         except FileNotFoundError:
             pass
     started = _now()
-    summary: dict = {"started": started, "dir": directory, "cli": path,
+    summary: dict = {"started": started, "dir": directory,
                      "parent_agent_id": environ.get("UNITARES_PARENT_AGENT_ID"),
                      "spawn_reason": environ.get("UNITARES_SPAWN_REASON")}
     _write_json(state / "started.json", summary)
+    try:
+        path = cli(environ)
+        text = brief(environ)
+        config = mcp_config(environ)
+        chosen = model(environ)
+        add_dirs = read_roots(environ)
+        deadline_s(environ)
+    except Refusal as refusal:
+        err.write(f"build_lane_client: {refusal}\n")
+        summary.update({"ended": _now(), "exit": refusal.code, "killed": None,
+                        "refusal": str(refusal)})
+        _write_json(state / "result.json", summary)
+        return refusal.code
+    summary["cli"] = path
 
     real_git = None
     for candidate in environ.get("PATH", "/usr/bin:/bin").split(os.pathsep):
@@ -452,20 +463,29 @@ def run(environ: dict[str, str], out: TextIO = sys.stdout, err: TextIO = sys.std
             err.write(f"build_lane_client: CLI spawn failed: {type(exc).__name__}\n")
             return EXIT_NO_CLI
         assert proc.stdin is not None and proc.stdout is not None
-        try:
-            proc.stdin.write(text)
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
         killed: list[str] = []
 
         def on_deadline() -> None:
             killed.append("deadline")
             _stop(proc)
 
+        # The deadline is armed before the brief is sent, and the brief goes
+        # from its own thread while this one drains output: a brief larger
+        # than the pipe, with a CLI that prints before it reads, must not
+        # deadlock the two with the deadline never armed.
         timer = threading.Timer(deadline_s(environ), on_deadline)
         timer.daemon = True
         timer.start()
+
+        def feed() -> None:
+            try:
+                proc.stdin.write(text)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
         code = None
         try:
             for line in proc.stdout:
