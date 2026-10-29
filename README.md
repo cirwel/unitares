@@ -46,11 +46,12 @@ Structured dialectic is available for durable review, not required recovery.
 
 ## See the record before installing
 
-[In the hosted walkthrough](https://cirwel.github.io/unitares/demo.html), Agent A (Codex) finds a bug, records it, and exits. Agent B (Claude Code) later
+Agent A (Codex) finds a bug, records it, and exits. Agent B (Claude Code) later
 finds the real cause and records a finding that supersedes A's. Agent C (Hermes
 Agent) picks up A's task after a restart and reads the record before touching
 the code (reading needs no identity): its search returns A's finding marked
 superseded, with a link to B's. C then declares that it continues A's task.
+This API sketch is separate from the [hosted service-reload incident](https://cirwel.github.io/unitares/demo.html).
 
 ```text
 # Agent A (Codex)
