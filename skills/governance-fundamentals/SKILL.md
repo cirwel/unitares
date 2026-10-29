@@ -8,6 +8,7 @@ last_verified: "2026-10-29"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
+  - unitares/src/agent_loop_detection.py
   - unitares/governance_core/coherence.py
   - unitares/governance_core/parameters.py
   - unitares/src/auto_ground_truth.py
@@ -129,6 +130,7 @@ crossed the boundary. The separate `verdict` field is a glossary wrapper
 | **proceed** | `approve` | State is healthy | Continue working normally |
 | **proceed** | `guide` | Something is slightly off | Read the guidance text, adjust approach |
 | **proceed** | `guide` with `recommended_action=pause` | Default observation posture: an inferred edge was crossed, but no hold was applied | Inspect if useful; continuing is neither permission nor a safety certification |
+| **pause** | named pause with `enforcement.applied=false` | Enforcement posture returned the compatibility directive, but this path did not commit a lifecycle hold | Do not infer a write gate; inspect enforcement or recovery state |
 | **pause** | `reject` or a named pause, with `enforcement.applied=true` | Explicit compatibility actuator applied a lifecycle hold | Stop and use the named recovery, optional dialectic review, or human input |
 
 Separately, `metrics.verdict` may carry an internal UNITARES verdict such as

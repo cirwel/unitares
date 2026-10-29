@@ -63,7 +63,26 @@ def policy_actuation_posture() -> str:
     return posture
 
 
-def apply_policy_actuation_posture(result: Dict[str, Any]) -> bool:
+def _rewrap_behavioral_verdict(
+    result: Dict[str, Any], decision: Dict[str, Any]
+) -> None:
+    """Keep the nested behavioral directive aligned with the effective action."""
+    try:
+        assessment = result.get("behavioral", {}).get("assessment", {})
+        verdict = assessment.get("verdict")
+        if isinstance(verdict, dict) and verdict.get("value") is not None:
+            from src.governance_glossary import explain_verdict
+
+            assessment["verdict"] = explain_verdict(
+                verdict["value"], decision_action=decision.get("action")
+            )
+    except Exception as exc:
+        logger.debug("Behavioral verdict re-wrap skipped: %s", exc)
+
+
+def apply_policy_actuation_posture(
+    result: Dict[str, Any], *, posture: str | None = None
+) -> bool:
     """Project an inferred policy recommendation into an effective action.
 
     ``policy_evaluation`` keeps the monitor's unmodified recommendation for
@@ -76,7 +95,13 @@ def apply_policy_actuation_posture(result: Dict[str, Any]) -> bool:
     holds, authentication failures, archive state, and rapid-loop cooldowns do
     not pass through this resolver and remain authoritative.
     """
-    posture = policy_actuation_posture()
+    posture = posture or policy_actuation_posture()
+    if posture not in _POLICY_ACTUATION_MODES:
+        choices = ", ".join(sorted(_POLICY_ACTUATION_MODES))
+        raise ValueError(
+            "UNITARES_POLICY_ACTUATION must be one of "
+            f"{choices}; got {posture!r}"
+        )
     decision = result.get("decision")
     decision = dict(decision) if isinstance(decision, dict) else {}
     recommended_action = decision.get("action", "unknown")
@@ -144,9 +169,22 @@ def apply_policy_actuation_posture(result: Dict[str, Any]) -> bool:
             recommended_sub_action,
         )
         result["enforcement"] = enforcement
+        _rewrap_behavioral_verdict(result, projected)
         return False
 
+    if posture == "enforce" and recommended_action == "reject":
+        # The public operational action contract is binary. Preserve the raw
+        # reject recommendation in policy_evaluation, but route it through the
+        # same pause actuator as every other hard-stop recommendation.
+        decision = {
+            **decision,
+            "action": "pause",
+            "sub_action": decision.get("sub_action") or "reject",
+            "recommended_action": "reject",
+        }
+
     result["decision"] = decision
+    enforcement["effective_action"] = decision.get("action", recommended_action)
     enforcement.setdefault(
         "mode", "circuit_breaker_candidate" if requested else "advisory"
     )
@@ -167,6 +205,7 @@ def apply_policy_actuation_posture(result: Dict[str, Any]) -> bool:
         ),
     )
     result["enforcement"] = enforcement
+    _rewrap_behavioral_verdict(result, decision)
     return posture == "enforce" and requested
 
 
@@ -325,9 +364,10 @@ def process_update_authenticated(
     if not is_valid:
         raise PermissionError(f"Authentication failed: {error_msg}")
 
+    posture = policy_actuation_posture()
     monitor = get_or_create_monitor(agent_id)
     result = monitor.process_update(agent_state)
-    apply_policy_actuation_posture(result)
+    apply_policy_actuation_posture(result, posture=posture)
 
     if auto_save:
         # Count this check-in under the current EISV instrument before the
@@ -378,6 +418,10 @@ async def process_update_authenticated_async(
     _perf_record_ms("ode.auth_ms", (time.perf_counter() - _t0) * 1000.0)
     if not is_valid:
         raise PermissionError(f"Authentication failed: {error_msg}")
+
+    # Validate deployment authority before any monitor, loop, or prediction
+    # state can be mutated by this check-in.
+    posture = policy_actuation_posture()
 
     # Sticky-archive gate for in-process callers. The MCP-tool path
     # (handle_process_agent_update → phases.py) has its own auto-resume /
@@ -501,7 +545,9 @@ async def process_update_authenticated_async(
     )
     _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
 
-    policy_actuation_authorized = apply_policy_actuation_posture(result)
+    policy_actuation_authorized = apply_policy_actuation_posture(
+        result, posture=posture
+    )
 
     if auto_save:
         decision_action = result.get('decision', {}).get('action', 'unknown')

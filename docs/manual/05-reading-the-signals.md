@@ -47,13 +47,16 @@ The deployment posture is operator-owned:
   observational. A raw pause recommendation becomes `proceed` / `guide`, with
   `enforcement.applied=false`; it creates no pause token and blocks no write.
 - `UNITARES_POLICY_ACTUATION=enforce` retains the historical circuit breaker.
-  A raw pause becomes an applied lifecycle hold.
+  At the persistence-capable authenticated boundary, a raw pause becomes an
+  applied lifecycle hold. A dry run or in-process path without that actuator
+  reports the compatibility pause directive as requested but not applied.
 
 | Effective action / posture | Internal sense | Agent action | Recovery path |
 |---|---|---|---|
 | `proceed` | safe | Continue | — |
 | `proceed` / `guide` | slightly off | Read guidance, adjust | — |
 | `proceed` / `guide`, `enforcement.posture=observe`, recommended `pause` | instrument crossed an inferred policy edge | Inspect the recommendation if useful; continuing is neither permission nor a safety certification | none required; dialectic remains optional |
+| `pause`, `enforcement.posture=enforce`, `applied=false` | compatibility stop directive returned, but no lifecycle hold was committed on this path | Stop if honoring the legacy directive; do not assume writes are gated | inspect `enforcement` or `self_recovery(action="check")` for actual hold state |
 | `pause`, `enforcement.posture=enforce`, `applied=true` | compatibility hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.4](#54-recovery-self-recovery--dialectic)) |
 | applied `pause` / `reject` | legacy label for significant concern | Human input or optional dialectic | dialectic or operator |
 

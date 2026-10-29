@@ -7,6 +7,7 @@ description: >
 last_verified: "2026-10-29"
 freshness_days: 35
 source_files:
+  - unitares/src/agent_loop_detection.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/tool_stability.py

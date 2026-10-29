@@ -8,6 +8,7 @@ last_verified: "2026-10-29"
 freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
+  - unitares/src/agent_loop_detection.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
@@ -309,6 +310,7 @@ workflow is `commands/closeout.md`; shared-memory closure standards are in
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
 | **proceed / guide**, raw recommendation `pause`, `enforcement.applied=false` | Observation only. Inspect the policy record if useful; no lifecycle hold, permission check, or mandatory review exists |
+| **pause / reject**, `enforcement.posture=enforce`, `applied=false` | Compatibility directive only: the current path did not commit a lifecycle hold. Do not infer that writes are gated; inspect enforcement or `self_recovery(action="check")` |
 | **pause / reject**, `enforcement.applied=true` | Before expiry, check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this). After expiry, the next check-in waits for an exact-token durable resume before proceeding; a synchronous shared-memory write starts the same resume but remains refused and must be resubmitted after the pause lifts (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 

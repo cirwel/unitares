@@ -8,6 +8,7 @@ description: >
 last_verified: "2026-10-29"
 freshness_days: 28
 source_files:
+  - unitares/src/agent_loop_detection.py
   - unitares/src/dialectic_protocol.py
   - unitares/src/dialectic_db.py
   - unitares/src/dialectic_reviewed_work.py

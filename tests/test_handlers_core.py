@@ -229,6 +229,37 @@ class TestSimulateUpdate:
             assert "_note" in data  # Lite mode note
 
     @pytest.mark.asyncio
+    async def test_simulate_pause_uses_observational_projection(
+        self, monkeypatch, mock_mcp_server, mock_monitor
+    ):
+        """A preview returns the same effective action as a real check-in."""
+        monkeypatch.delenv("UNITARES_POLICY_ACTUATION", raising=False)
+        mock_monitor.simulate_update.return_value = {
+            "status": "critical",
+            "decision": {
+                "action": "pause",
+                "sub_action": "risk_pause",
+                "reason": "risk threshold crossed",
+            },
+            "policy_evaluation": {"action": "pause"},
+            "metrics": {"risk_score": 0.9},
+        }
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_mcp_server), \
+             patch("src.governance_monitor.UNITARESMonitor", return_value=mock_monitor), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=(None, None)):
+            from src.mcp_handlers.core import handle_simulate_update
+
+            result = await handle_simulate_update({"complexity": 0.5})
+
+        data = json.loads(result[0].text)
+        assert data["decision"]["action"] == "proceed"
+        assert data["decision"]["sub_action"] == "guide"
+        assert data["policy_evaluation"]["action"] == "pause"
+        assert data["enforcement"]["posture"] == "observe"
+        assert data["enforcement"]["applied"] is False
+
+    @pytest.mark.asyncio
     async def test_simulate_dialectic_conditions_cap(self, mock_mcp_server, mock_monitor):
         """Dialectic conditions should cap complexity."""
         meta = MagicMock()
