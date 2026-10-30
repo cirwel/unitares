@@ -392,13 +392,15 @@ async def stuck_agent_recovery_task():
             # no X-Unitares-Operator header) could never satisfy.
             from src.mcp_handlers.lifecycle.stuck import run_stuck_agent_sweep
 
-            result = await run_stuck_agent_sweep({
+            # Preserve the MCP decorator's former 15-second bound even though
+            # this trusted path no longer goes through the request handler.
+            result = await asyncio.wait_for(run_stuck_agent_sweep({
                 "max_age_minutes": 30.0,
                 "critical_margin_timeout_minutes": 5.0,
                 "tight_margin_timeout_minutes": 15.0,
                 "min_updates": 1,
                 "note_cooldown_minutes": 120.0
-            }, auto_recover=True)
+            }, auto_recover=True), timeout=15.0)
 
             if result and len(result) > 0:
                 import json

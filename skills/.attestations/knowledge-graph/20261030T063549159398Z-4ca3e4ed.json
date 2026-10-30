@@ -1,0 +1,38 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-30T06:35:49Z",
+  "verified_date": "2026-10-30",
+  "verifier": "gpt-6-astra; rechecked knowledge-graph: detect_stuck_agents description only, KG interfaces unchanged",
+  "source_digests": {
+    "unitares/db/postgres/migrations/074_knowledge_change_notices.sql": "af3d714755d077d4",
+    "unitares/src/alias_schema.py": "ae5622ef37dff03c",
+    "unitares/src/db/mixins/knowledge_graph.py": "efac23f29ed6bea2",
+    "unitares/src/knowledge_authority.py": "46fe8b45e4912d4d",
+    "unitares/src/knowledge_graph.py": "d76c1b4a5da778c2",
+    "unitares/src/knowledge_graph_lifecycle.py": "9410fc5f608f4bcd",
+    "unitares/src/knowledge_notices.py": "604b6ec9cced9334",
+    "unitares/src/mcp_handlers/consolidated.py": "7fb614d8e4d8bf4f",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "a21d7258bd6a08db",
+    "unitares/src/mcp_handlers/knowledge/read_metadata.py": "6f1961e994adbcb3",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "20e8291dd8791785",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_MEMORY_SUGGESTION_LIMIT": "2dfb81538d8a6f3a",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_SEARCH_MORE_ROW_LIMIT": "e734715e4042bb2d",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_append_more_results": "1a9771f6dc3f506a",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_enforce_search_projection_budget": "03fad7d588ebcb80",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_memory_suggestions": "010f28c7ce378c9d",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py#_note_stale_digests": "2a203289f280c88d",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "a0d65c33a4ca023b",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "b271b275a249db52",
+    "unitares/src/storage/knowledge_graph_age.py": "5b722963ebfbe0e7",
+    "unitares/src/storage/knowledge_graph_postgres.py": "b4b787a4b13bda85",
+    "unitares/src/tool_descriptions.json": "71eddbe3d147681f"
+  },
+  "skill_digest": "e4bb5a3ad38b928f",
+  "superseded_digests": {
+    "unitares/src/tool_descriptions.json": [
+      "f11942e5f09efe5b"
+    ]
+  }
+}

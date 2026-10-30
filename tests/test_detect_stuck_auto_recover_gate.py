@@ -136,11 +136,33 @@ async def test_background_task_calls_internal_sweep_with_recovery():
 
     sweep = AsyncMock(return_value=[])
     sleeps = AsyncMock(side_effect=[None, None, asyncio.CancelledError()])
+    original_wait_for = asyncio.wait_for
     with patch(f"{_STUCK}.run_stuck_agent_sweep", sweep), \
-         patch.object(background_tasks.asyncio, "sleep", sleeps):
+         patch.object(background_tasks.asyncio, "sleep", sleeps), \
+         patch.object(background_tasks.asyncio, "wait_for", wraps=original_wait_for) as bounded:
         await background_tasks.stuck_agent_recovery_task()
 
     sweep.assert_awaited_once()
     args, kwargs = sweep.await_args
     assert kwargs == {"auto_recover": True}
     assert "auto_recover" not in args[0]
+    assert bounded.await_args.kwargs["timeout"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_background_task_continues_after_sweep_timeout():
+    import asyncio
+    from src import background_tasks
+
+    async def timed_out(awaitable, *, timeout):
+        assert timeout == 15.0
+        awaitable.close()
+        raise asyncio.TimeoutError()
+
+    sleeps = AsyncMock(side_effect=[None, None, None, asyncio.CancelledError()])
+    with patch(f"{_STUCK}.run_stuck_agent_sweep", AsyncMock()), \
+         patch.object(background_tasks.asyncio, "sleep", sleeps), \
+         patch.object(background_tasks.asyncio, "wait_for", side_effect=timed_out) as bounded:
+        await background_tasks.stuck_agent_recovery_task()
+    bounded.assert_awaited_once()
+    assert sleeps.await_count == 4
