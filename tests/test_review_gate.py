@@ -1070,12 +1070,13 @@ def test_sweep_uses_only_callers_ordered_choices(monkeypatch, tmp_path, choices,
     ("codex/neutrality-1019", "openai"),
     ("claude/sweep-author-family", "anthropic"),
     ("gemini/bearer-resolver-3018", "google"),
-    ("agy/x", "google"),
+    ("agy/x", None),             # agy runs several families: the prefix names none
+    ("hermes/x", None),
     ("dependabot/npm_and_yarn/x", None),
     ("kenny/topic", None),
     ("sonnet/fix", None),        # a model name is not an agent prefix
     ("codex-tools/fix", None),   # matched exactly, not by token
-    ("antigravity/x", "google"),
+    ("antigravity/x", None),
     ("codex", None),  # no author prefix without a slash
     ("", None),
 ])
@@ -1083,13 +1084,14 @@ def test_branch_author_family_reads_only_the_author_prefix(branch, family):
     assert rg.branch_author_family(branch) == family
 
 
-def _author_sweep(monkeypatch, tmp_path, branch, choices, agy_model=None):
+def _author_sweep(monkeypatch, tmp_path, branch, choices, agy_model=None, body=""):
     if agy_model is None:
         monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)  # agy's default model is Gemini
     else:
         monkeypatch.setenv("REVIEW_AGY_MODEL", agy_model)
     pr = _pr(3)
     pr["headRefName"] = branch
+    pr["body"] = body
     monkeypatch.setattr(rg, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
@@ -1139,6 +1141,57 @@ def test_sweep_judges_agy_by_the_model_it_would_run(monkeypatch, tmp_path, branc
     calls = _author_sweep(monkeypatch, tmp_path, branch, ["antigravity", "codex"],
                           agy_model="claude-sonnet-4-6")
     assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == expected
+
+
+def _signed(model, uuid="9203c516-50c5-4ce1-aec5-765a030f0fda"):
+    return f"Summary.\n\n---\nModel: {model}\nUNITARES agent: {uuid}\n"
+
+
+@pytest.mark.parametrize("body,families", [
+    (_signed("claude-opus-5-5"), {"anthropic"}),
+    (_signed("gpt-6-astra"), {"openai"}),
+    (_signed("gemini-4-argon"), {"google"}),
+    (_signed("anthropic/claude-opus-5-5"), {"anthropic"}),  # provider-qualified (Hermes, OpenRouter)
+    (_signed("gpt-oss-120b"), {"openai"}),                   # lineage, wherever it runs
+    (_signed("unavailable"), set()),
+    (_signed("hermes-4-70b"), set()),                        # unclassified: names no family
+    (_signed("claude-opus-5-5") + "\nFollow-up.\n" + _signed("gpt-6-terra"), {"anthropic", "openai"}),
+    ("Model: claude-opus-5-5\n", set()),                    # no UNITARES agent line: not a signature
+    ("> Model: gpt-6-astra\n> UNITARES agent: 9203c516-50c5-4ce1-aec5-765a030f0fda\n", set()),
+    ("```\nModel: gpt-6-astra\nUNITARES agent: 9203c516-50c5-4ce1-aec5-765a030f0fda\n```\n", set()),
+    ("", set()),
+])
+def test_signature_author_families(body, families):
+    assert rg.signature_author_families(body) == families
+
+
+@pytest.mark.parametrize("branch,body,families", [
+    ("agy/x", _signed("claude-opus-5-5"), {"anthropic"}),    # Claude in agy is Anthropic
+    ("claude/x", _signed("gemini-4-argon"), {"google"}),     # the signature outranks the prefix
+    ("claude/x", "", {"anthropic"}),                         # no signature: prefix fallback
+    ("claude/x", _signed("hermes-4-70b"), {"anthropic"}),    # unclassified signature: prefix fallback
+    ("agy/x", "", set()),
+    ("hermes/x", _signed("unavailable"), set()),
+])
+def test_pr_author_families_reads_the_signature_before_the_prefix(branch, body, families):
+    assert rg.pr_author_families({"headRefName": branch, "body": body}) == families
+
+
+def test_sweep_routes_a_claude_pr_from_agy_away_from_claude(monkeypatch, tmp_path):
+    calls = _author_sweep(monkeypatch, tmp_path, "agy/x", ["claude", "codex", "antigravity"],
+                          body=_signed("claude-opus-5-5"))
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == "codex"
+
+
+def test_sweep_excludes_every_family_that_signed(monkeypatch, tmp_path):
+    body = _signed("claude-opus-5-5") + _signed("gpt-6-astra")
+    calls = _author_sweep(monkeypatch, tmp_path, "claude/x", ["claude", "codex", "antigravity"], body=body)
+    assert len(calls) == 1 and calls[0][1]["env"]["UNITARES_REVIEWER"] == "antigravity"
+
+
+def test_pr_fields_carries_the_body():
+    assert rg.pr_fields(_rest_pr(body="hi"))["body"] == "hi"
+    assert rg.pr_fields(_rest_pr(body=None))["body"] == ""
 
 
 def test_an_unknown_author_family_excludes_no_reviewer(monkeypatch, tmp_path):
@@ -1339,7 +1392,7 @@ def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, 
                     "baseRefName": "master", "state": expected, "isDraft": False,
                     "author": {"login": "owner"}, "updatedAt": "2026-10-03T00:00:00Z",
                     "labels": [{"name": "x"}], "trustedReviewApp": False,
-                    "routedAuthorApp": False, "sameRepository": True}
+                    "routedAuthorApp": False, "sameRepository": True, "body": ""}
 
 
 def test_pr_reads_and_writes_never_use_graphql(monkeypatch):

@@ -295,6 +295,7 @@ def pr_fields(pr: dict) -> dict:
                            and type(base_repo) is int and head_repo == base_repo),
         "updatedAt": pr.get("updated_at", ""),
         "labels": [{"name": label["name"]} for label in pr.get("labels") or []],
+        "body": pr.get("body") or "",
     }
 
 
@@ -3841,12 +3842,13 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
 
 # The agent prefixes of the branch-naming convention, matched exactly, so a
 # contributor branch such as `sonnet/fix` or `codex-tools/fix` names no author.
+# Only hosts that run one family are listed: agy and Hermes run models from
+# several families, so `agy/`, `antigravity/` and `hermes/` name none
+# (operator clarification, 2026-10-30).
 _AUTHOR_PREFIX_FAMILY = {
     "codex": "openai",
     "claude": "anthropic",
     "gemini": "google",
-    "agy": "google",
-    "antigravity": "google",
 }
 
 
@@ -3854,19 +3856,63 @@ def branch_author_family(branch: str) -> str | None:
     """The model family an agent branch names in its author prefix
     (`codex/…`, `claude/…`, `gemini/…`), or None for any other branch.
 
-    The sweep skips configured reviewers of that family, judged by the model
-    each would run here (agy by its configured model), so each PR is read by
-    another model family than the one that wrote it (operator direction,
-    2026-10-23). The prefix is the branch-naming convention, not proof of
-    authorship; a branch without one is reviewed in the configured order."""
+    The prefix is the branch-naming convention, not proof of authorship; it is
+    consulted only when the PR's provenance signature names no family."""
     prefix, sep, _ = (branch or "").partition("/")
     return _AUTHOR_PREFIX_FAMILY.get(prefix) if sep else None
 
 
-def _skips_author_family(provider: str, authored_by: str | None) -> bool:
+_SIGNATURE_MODEL = re.compile(r"^Model:[ \t]*(\S+)[ \t]*$", re.IGNORECASE)
+_SIGNATURE_AGENT = re.compile(r"^UNITARES agent:[ \t]*[0-9A-Fa-f-]{36}[ \t]*$", re.IGNORECASE)
+
+
+def signature_author_families(body: str) -> set[str]:
+    """The families of the models named in a PR body's provenance signatures.
+
+    A signature is a `Model: <id>` line directly followed by its
+    `UNITARES agent: <uuid>` line, outside code fences and block quotes, so a
+    quoted commit or review cannot name the author. Every signature counts: a
+    PR a second agent followed up carries both, and both families wrote it. An
+    unclassified model (`unavailable`, a Hermes model, a local open model)
+    names no family."""
+    lines = (body or "").splitlines()
+    families: set[str] = set()
+    fenced = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        match = _SIGNATURE_MODEL.match(line)
+        if match and i + 1 < len(lines) and _SIGNATURE_AGENT.match(lines[i + 1]):
+            family = reviewer_family(match.group(1))
+            if family:
+                families.add(family)
+    return families
+
+
+def pr_author_families(pr: dict) -> set[str]:
+    """The families that wrote a PR, which the sweep keeps out of its review.
+
+    Read from the provenance signature (the model, not the host that ran it:
+    Claude running in agy is Anthropic), falling back to the branch prefix only
+    when no signature names a family. Empty means unknown: any classified
+    reviewer may take it."""
+    families = signature_author_families(pr.get("body") or "")
+    if families:
+        return families
+    prefix = branch_author_family(pr.get("headRefName") or "")
+    return {prefix} if prefix else set()
+
+
+def _skips_author_family(provider: str, authored_by: set[str]) -> bool:
     """Whether the sweep passes over ``provider`` for a PR its family wrote.
-    Only a known author family excludes: an unknown one matches nothing."""
-    return authored_by is not None and provider_family(provider) == authored_by
+    Each reviewer is judged by the model it would run here (agy by its
+    configured model), so a PR is read by another family than the one that
+    wrote it (operator direction 2026-10-23, restated by family 2026-10-30).
+    An unknown author family excludes nothing."""
+    return provider_family(provider) in authored_by
 
 
 def cmd_sweep(args) -> int:
@@ -3886,7 +3932,7 @@ def cmd_sweep(args) -> int:
         reviewer = None
         required_family = False
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
-        authored_by = branch_author_family(p["headRefName"])
+        authored_by = pr_author_families(p)
         git("fetch", "--quiet", "--no-tags", "origin",
             f"+refs/heads/{base}:refs/remotes/origin/{base}",
             f"+refs/pull/{n}/head:refs/review-gate/pr-{n}")
