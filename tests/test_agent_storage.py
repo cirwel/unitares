@@ -1305,6 +1305,44 @@ class TestArchiveAgent:
 class TestDeleteAgent:
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure_step", ["update_identity_status", "update_agent_fields"])
+    @pytest.mark.parametrize("raises", [True, False])
+    async def test_failed_write_does_not_publish_memory(self, failure_step, raises):
+        db = _mock_db()
+        db.update_identity_status = AsyncMock(return_value=True)
+        db.update_agent_fields = AsyncMock(return_value=True)
+        failed = getattr(db, failure_step)
+        failed.return_value = False
+        if raises:
+            failed.side_effect = RuntimeError("database unavailable")
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_metadata_persistence.mirror_status_to_dict") as mirror:
+            from src.agent_storage import delete_agent
+            if raises:
+                with pytest.raises(RuntimeError, match="database unavailable"):
+                    await delete_agent("agent-1")
+            else:
+                assert await delete_agent("agent-1") is False
+            mirror.assert_not_called()
+            if failure_step == "update_identity_status":
+                db.update_agent_fields.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_memory_is_published_after_both_writes(self):
+        db = _mock_db()
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_metadata_persistence.mirror_status_to_dict") as mirror:
+            async def write_fields(**kwargs):
+                db.update_identity_status.assert_awaited_once()
+                mirror.assert_not_called()
+                return True
+            db.update_identity_status = AsyncMock(return_value=True)
+            db.update_agent_fields = AsyncMock(side_effect=write_fields)
+            from src.agent_storage import delete_agent
+            assert await delete_agent("agent-1") is True
+            mirror.assert_called_once_with("agent-1", "deleted")
+
+    @pytest.mark.asyncio
     async def test_sets_deleted_status(self):
         db = _mock_db()
         with patch("src.agent_storage.get_db", return_value=db):

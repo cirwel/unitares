@@ -508,25 +508,30 @@ async def delete_agent(agent_id: str) -> bool:
 
     Sets status to 'deleted' and records disabled_at timestamp.
     Does NOT physically delete the data (soft delete).
-    Returns True if successful.
+    Returns True if both durable writes succeed. They use separate database
+    calls, so a failure can leave a partial durable update; in-memory status
+    is mirrored only after both calls succeed.
     """
     await _ensure_db_ready()
     db = get_db()
 
-    await db.update_identity_status(
+    persisted = await db.update_identity_status(
         agent_id=agent_id,
         status="deleted",
         disabled_at=datetime.now(timezone.utc),
     )
+    if not persisted:
+        return False
+    if hasattr(db, "update_agent_fields"):
+        if not await db.update_agent_fields(agent_id=agent_id, status="deleted"):
+            return False
+
     # S21-b §3
     try:
         from src.agent_metadata_persistence import mirror_status_to_dict
         mirror_status_to_dict(agent_id, "deleted")
     except Exception as e:
         logger.debug("Status mirror failed during delete: %s", type(e).__name__)
-
-    if hasattr(db, "update_agent_fields"):
-        await db.update_agent_fields(agent_id=agent_id, status="deleted")
 
     logger.info("Deleted agent")
     return True

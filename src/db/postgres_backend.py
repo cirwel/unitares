@@ -322,17 +322,18 @@ class PostgresBackend(
             return await ExecutorPool.create(_create_factory)
         except asyncio.TimeoutError:
             _emit_bootstrap_coord_failure(self._db_url, "TimeoutError", timeout_s=5.0)
+            # URLs and driver exception chains can contain credentials, even
+            # when the driver's top-level message appears harmless.
             raise ConnectionError(
-                f"PostgreSQL connection timeout after 5s. "
-                f"Is PostgreSQL running on {self._db_url}? "
-                f"Check: psql -d {self._db_url.split('/')[-1]}"
-            )
+                "PostgreSQL connection timeout after 5s. "
+                "Check PostgreSQL availability and connection settings."
+            ) from None
         except Exception as e:
             _emit_bootstrap_coord_failure(self._db_url, type(e).__name__, timeout_s=5.0)
             raise ConnectionError(
-                f"Failed to connect to PostgreSQL at {self._db_url}: {e}. "
-                f"Is PostgreSQL running?"
-            ) from e
+                f"Failed to connect to PostgreSQL ({type(e).__name__}). "
+                "Check PostgreSQL availability and connection settings."
+            ) from None
 
     def acquire(self, timeout: float = None):
         """
