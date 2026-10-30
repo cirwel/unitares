@@ -271,6 +271,16 @@ def verify_transition_receipt(
     except TransitionReceiptError as exc:
         return False, [exc.code]
 
+    expected_receipt = build_knowledge_promotion_receipt(subject)
+    if dict(receipt) != expected_receipt:
+        errors.append("receipt_contract_mismatch")
+    provenance = _mapping_value(subject, "provenance") or {}
+    embedded_receipt = provenance.get("transition_receipt")
+    if not isinstance(embedded_receipt, Mapping):
+        errors.append("subject_receipt_missing")
+    elif dict(embedded_receipt) != dict(receipt):
+        errors.append("subject_receipt_mismatch")
+
     expected_subject = {
         "kind": KNOWLEDGE_SUBJECT_KIND,
         "id": projection["id"],

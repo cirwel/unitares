@@ -57,6 +57,13 @@ def _promoted_discovery() -> DiscoveryNode:
     )
 
 
+def _receipt_bearing_subject() -> tuple[DiscoveryNode, dict]:
+    subject = _promoted_discovery()
+    receipt = build_knowledge_promotion_receipt(subject)
+    subject.provenance["transition_receipt"] = deepcopy(receipt)
+    return subject, receipt
+
+
 def test_knowledge_promotion_receipt_golden_vector():
     receipt = build_knowledge_promotion_receipt(_promoted_discovery())
 
@@ -77,9 +84,7 @@ def test_knowledge_promotion_receipt_golden_vector():
 
 
 def test_receipt_verifies_after_json_and_timestamp_round_trip():
-    subject = _promoted_discovery()
-    receipt = build_knowledge_promotion_receipt(subject)
-    subject.provenance["transition_receipt"] = receipt
+    subject, receipt = _receipt_bearing_subject()
 
     stored = json.loads(json.dumps(subject.to_dict()))
     # PostgreSQL reads TIMESTAMPTZ back as an ISO string; this alternate UTC
@@ -121,8 +126,7 @@ def test_subject_projection_excludes_receipt_and_session_secret():
 
 
 def test_verifier_detects_subject_and_receipt_tampering():
-    subject = _promoted_discovery()
-    receipt = build_knowledge_promotion_receipt(subject)
+    subject, receipt = _receipt_bearing_subject()
 
     tampered_subject = deepcopy(subject.to_dict())
     tampered_subject["details"] = "different durable bytes"
@@ -139,8 +143,8 @@ def test_verifier_detects_subject_and_receipt_tampering():
 
 
 def test_verifier_rejects_rehashed_verification_overclaims():
-    subject = _promoted_discovery()
-    receipt = build_knowledge_promotion_receipt(subject)
+    subject, receipt = _receipt_bearing_subject()
+    receipt = deepcopy(receipt)
     receipt["verification"]["verified_fields"].append("operator_approval")
     receipt["verification"]["unverified_fields"].remove("operator_approval")
     receipt["verification"]["basis"] = "operator sign-off"
@@ -149,19 +153,67 @@ def test_verifier_rejects_rehashed_verification_overclaims():
     valid, errors = verify_transition_receipt(receipt, subject)
 
     assert valid is False
-    assert errors == ["verification_contract_mismatch"]
+    assert errors == [
+        "receipt_contract_mismatch",
+        "subject_receipt_mismatch",
+        "verification_contract_mismatch",
+    ]
 
 
 def test_verifier_returns_error_for_non_string_verification_field():
-    subject = _promoted_discovery()
-    receipt = build_knowledge_promotion_receipt(subject)
+    subject, receipt = _receipt_bearing_subject()
+    receipt = deepcopy(receipt)
     receipt["verification"]["verified_fields"] = [{}]
     receipt["receipt_id"] = _receipt_id(receipt)
 
     valid, errors = verify_transition_receipt(receipt, subject)
 
     assert valid is False
-    assert errors == ["invalid_verification"]
+    assert errors == [
+        "receipt_contract_mismatch",
+        "subject_receipt_mismatch",
+        "invalid_verification",
+    ]
+
+
+@pytest.mark.parametrize("location", ["top", "actor", "verification"])
+def test_verifier_rejects_rehashed_injected_claims(location):
+    subject, original = _receipt_bearing_subject()
+    receipt = deepcopy(original)
+    if location == "top":
+        receipt["operator_approval"] = True
+    elif location == "actor":
+        receipt["actor"]["role"] = "operator"
+    else:
+        receipt["verification"]["operator_approval"] = "verified"
+    receipt["receipt_id"] = _receipt_id(receipt)
+
+    valid, errors = verify_transition_receipt(receipt, subject)
+
+    assert valid is False
+    assert "receipt_contract_mismatch" in errors
+    assert "subject_receipt_mismatch" in errors
+
+
+def test_verifier_rejects_forged_receipt_for_edited_durable_subject():
+    subject, _original = _receipt_bearing_subject()
+    subject.summary = "altered claim"
+    forged_receipt = build_knowledge_promotion_receipt(subject)
+
+    valid, errors = verify_transition_receipt(forged_receipt, subject)
+
+    assert valid is False
+    assert errors == ["subject_receipt_mismatch"]
+
+
+def test_verifier_requires_receipt_embedded_in_authoritative_subject():
+    subject = _promoted_discovery()
+    detached_receipt = build_knowledge_promotion_receipt(subject)
+
+    valid, errors = verify_transition_receipt(detached_receipt, subject)
+
+    assert valid is False
+    assert errors == ["subject_receipt_missing"]
 
 
 @pytest.mark.parametrize(
