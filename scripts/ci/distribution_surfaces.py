@@ -188,7 +188,7 @@ def _gh_file(net: Net, repo: str, path: str) -> str | None:
     if not isinstance(payload, dict):
         return None
     content = payload.get("content")
-    if isinstance(content, str) and content:
+    if isinstance(content, str) and payload.get("encoding") != "none":
         return base64.b64decode(content).decode("utf-8", "replace")
 
     # The Contents API omits inline content for files above its size limit.
@@ -201,7 +201,7 @@ def _gh_file(net: Net, repo: str, path: str) -> str | None:
     if not isinstance(blob, dict):
         return None
     blob_content = blob.get("content")
-    if not isinstance(blob_content, str) or not blob_content:
+    if not isinstance(blob_content, str):
         return None
     return base64.b64decode(blob_content).decode("utf-8", "replace")
 

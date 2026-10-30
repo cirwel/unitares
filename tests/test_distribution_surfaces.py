@@ -192,6 +192,13 @@ def test_large_listing_uses_git_blob_fallback() -> None:
     assert _statuses(ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)) == ["OK"]
 
 
+def test_empty_listing_remains_readable_drift() -> None:
+    net = _listing_net("", {"state": "closed", "merged_at": "2026-10-07T00:00:00Z"})
+    results = ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)
+    assert _statuses(results) == ["DRIFT"]
+    assert "is gone" in results[0].message
+
+
 def test_unlisted_with_open_pr_is_pending() -> None:
     net = _listing_net("nothing", {"state": "open", "merged_at": None})
     assert _statuses(ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)) == ["PENDING"]
