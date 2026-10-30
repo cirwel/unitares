@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from typing import Any, Dict, List, Optional
 
 from src.logging_utils import get_logger
@@ -145,6 +146,25 @@ class GraphMixin:
         except json.JSONDecodeError:
             return result
 
+    @staticmethod
+    def _cypher_sql(graph: str, cypher: str) -> str:
+        """Wrap Cypher text in a ``cypher()`` call under an unguessable dollar-quote tag.
+
+        PostgreSQL ends a dollar-quoted literal at the first matching delimiter,
+        whatever Cypher quoting surrounds it. With a bare ``$$`` wrapper, any
+        interpolated value containing ``$$`` (shell ``$$``, SQL docs) closes the
+        literal early and the rest of the value is lexed as SQL. A random tag
+        that is checked absent from the text cannot be closed from inside it.
+        """
+        while True:
+            delimiter = f"$cypher_{secrets.token_hex(8)}$"
+            if delimiter not in cypher:
+                break
+        return (
+            f"SELECT * FROM cypher('{graph}', {delimiter} {cypher} {delimiter}) "
+            "as (result agtype)"
+        )
+
     def _interpolate_params(self, cypher: str, params: Optional[Dict[str, Any]]) -> str:
         """Substitute ``${key}`` placeholders with sanitized values in ONE pass.
 
@@ -248,9 +268,7 @@ class GraphMixin:
 
             safe_cypher = self._interpolate_params(cypher, params)
 
-            rows = await conn.fetch(
-                f"SELECT * FROM cypher('{self._age_graph}', $$ {safe_cypher} $$) as (result agtype)"
-            )
+            rows = await conn.fetch(self._cypher_sql(self._age_graph, safe_cypher))
 
             return [self._decode_agtype_value(row["result"]) for row in rows]
 

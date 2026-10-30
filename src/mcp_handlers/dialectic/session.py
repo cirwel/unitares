@@ -227,10 +227,21 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         for msg_dict in session_data.get("transcript") or session_data.get("messages") or []:
             # DB uses message_type; JSON uses phase.
             phase = msg_dict.get("phase") or msg_dict.get("message_type") or "thesis"
+            # core.dialectic_messages.timestamp is TIMESTAMPTZ, so a PG row
+            # arrives as an aware datetime, while JSON snapshots and freshly
+            # submitted messages carry an isoformat string. The protocol clocks
+            # (get_thesis_timestamp / get_last_update_timestamp) parse it with
+            # fromisoformat and silently swallow the TypeError a datetime
+            # raises, which made check_timeout measure the synthesis wait from
+            # created_at and never fire the antithesis timeout on a reloaded
+            # session. Normalize here, as the fast read path does.
+            msg_timestamp = msg_dict.get("timestamp", "")
+            if isinstance(msg_timestamp, datetime):
+                msg_timestamp = msg_timestamp.isoformat()
             msg = DialecticMessage(
                 phase=phase,
                 agent_id=msg_dict.get("agent_id", ""),
-                timestamp=msg_dict.get("timestamp", ""),
+                timestamp=msg_timestamp,
                 root_cause=msg_dict.get("root_cause"),
                 observed_metrics=msg_dict.get("observed_metrics"),
                 proposed_conditions=_normalize_string_list(
