@@ -248,7 +248,18 @@ def test_redact_db_url_shapes():
     assert _redact_db_url("postgresql://u@h/db?passfile=/x&mypassword=y") == (
         "postgresql://u@h/db?passfile=/x&mypassword=y"
     )
+    assert _redact_db_url("postgresql://u@h/db?password=foo&sslpassword=foosupersecret") == (
+        "postgresql://u@h/db?password=***&sslpassword=***"
+    )
     assert _db_name("postgresql://u@h/db?password=s") == "db"
+
+
+def test_redact_error_text_overlapping_values():
+    from src.db.postgres_backend import _redact_error_text
+
+    url = "postgresql://u@h/db?password=foo&sslpassword=foosupersecret"
+    out = _redact_error_text("echo sslpassword=foosupersecret and password=foo", url)
+    assert "supersecret" not in out and "=foo" not in out
 
 
 def test_redact_error_text_keeps_default_postgres_words_readable():

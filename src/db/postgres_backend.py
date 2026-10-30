@@ -90,6 +90,22 @@ def _db_url_secret_fragments(db_url: str) -> list:
     return fragments
 
 
+def _mask_fragments(text: str, fragments: list) -> str:
+    """Replace every raw fragment in ONE pass, longest first.
+
+    Sequential replaces interact when one value prefixes another
+    (``password=foo`` inside ``sslpassword=foosecret``) and leave a tail exposed.
+    """
+    import re
+    if not fragments:
+        return text
+    masks = dict(fragments)
+    pattern = re.compile(
+        "|".join(re.escape(raw) for raw in sorted(masks, key=len, reverse=True))
+    )
+    return pattern.sub(lambda m: masks[m.group(0)], text)
+
+
 def _redact_db_url(db_url: str) -> str:
     """The connection URL with every embedded password replaced by ``***``.
 
@@ -100,9 +116,7 @@ def _redact_db_url(db_url: str) -> str:
         fragments = _db_url_secret_fragments(db_url)
     except ValueError:
         return "***"
-    for raw, masked in fragments:
-        db_url = db_url.replace(raw, masked)
-    return db_url
+    return _mask_fragments(db_url, fragments)
 
 
 def _redact_error_text(text: str, db_url: str) -> str:
@@ -116,9 +130,7 @@ def _redact_error_text(text: str, db_url: str) -> str:
         fragments = _db_url_secret_fragments(db_url)
     except ValueError:
         fragments = []
-    for raw, masked in fragments:
-        text = text.replace(raw, masked)
-    return text
+    return _mask_fragments(text, fragments)
 
 
 def _db_name(db_url: str) -> str:
