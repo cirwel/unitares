@@ -156,150 +156,51 @@ class TestBootstrapEmit:
         assert "admin" not in hash_value
         assert "example.test" not in hash_value
 
+
+class TestCredentialSafeErrors:
+    @pytest.mark.parametrize("url", [
+        "postgresql://admin:supersecret@example.test:5432/mydb",
+        "postgresql://admin:supersecret#tail@example.test:5432/mydb",
+        "postgresql://admin:supersecret?tail@example.test:5432/mydb",
+        "postgresql://admin:first@tail:supersecret@h/db",
+        "postgresql://u@h/db?password=supersecret&sslpassword=supersecret-tail",
+        "postgresql://u@h/db?pass%77ord=supersecret",
+    ])
+    @pytest.mark.parametrize("channel", ["message", "cause", "context", "notes"])
+    @pytest.mark.parametrize("failure_type", [ValueError, asyncio.TimeoutError])
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "side_effect",
-        [
-            asyncio.TimeoutError(),
-            OSError("connect to postgresql://admin:supersecretpw@example.test:5432/mydb failed"),
-            OSError("bad target admin:supersecretpw@example.test"),
-        ],
-    )
-    async def test_connection_error_message_masks_password(self, side_effect):
-        """The ConnectionError text reaches health_check's init_error and the
-        logs, so it must name the target without the password, including when
-        the driver's own message echoes the URL or the password."""
+    async def test_error_and_traceback_withhold_driver_credentials(self, url, channel, failure_type):
+        import traceback
         from src.db.postgres_backend import PostgresBackend
 
-        backend = PostgresBackend()
-        backend._pool = None
-        backend._db_url = "postgresql://admin:supersecretpw@example.test:5432/mydb"
+        driver_error = failure_type("connection refused")
+        secret_text = f"bad target {url}; password fragment supersecret"
+        if channel == "message":
+            driver_error = failure_type(secret_text)
+        elif channel == "cause":
+            driver_error.__cause__ = RuntimeError(secret_text)
+        elif channel == "context":
+            driver_error.__context__ = RuntimeError(secret_text)
+        else:
+            driver_error.add_note(secret_text)
 
-        with patch(
-            "src.db.postgres_backend.ExecutorPool.create",
-            new=AsyncMock(side_effect=side_effect),
-        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+        backend = PostgresBackend()
+        backend._db_url = url
+        with patch("src.db.postgres_backend.ExecutorPool.create",
+                   new=AsyncMock(side_effect=driver_error)), \
+             patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
             with pytest.raises(ConnectionError) as excinfo:
                 await backend._create_pool()
 
         message = str(excinfo.value)
-        assert "supersecretpw" not in message
-        assert "postgresql://admin:***@example.test:5432/mydb" in message
-        cause = excinfo.value.__cause__
-        assert cause is None or "supersecretpw" not in str(cause)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "side_effect",
-        [asyncio.TimeoutError(), OSError("bad dsn postgresql://admin@h/db?password=qsecret")],
-    )
-    async def test_query_string_password_is_masked(self, side_effect):
-        from src.db.postgres_backend import PostgresBackend
-
-        backend = PostgresBackend()
-        backend._pool = None
-        backend._db_url = "postgresql://admin@h/db?password=qsecret"
-
-        with patch(
-            "src.db.postgres_backend.ExecutorPool.create",
-            new=AsyncMock(side_effect=side_effect),
-        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-            with pytest.raises(ConnectionError) as excinfo:
-                await backend._create_pool()
-
-        assert "qsecret" not in str(excinfo.value)
-        assert excinfo.value.__cause__ is None or "qsecret" not in str(excinfo.value.__cause__)
-
-    @pytest.mark.asyncio
-    async def test_clean_driver_error_keeps_its_cause(self):
-        from src.db.postgres_backend import PostgresBackend
-
-        backend = PostgresBackend()
-        backend._pool = None
-        backend._db_url = "postgresql://admin:supersecretpw@example.test:5432/mydb"
-        driver_error = OSError("connection refused")
-
-        with patch(
-            "src.db.postgres_backend.ExecutorPool.create",
-            new=AsyncMock(side_effect=driver_error),
-        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-            with pytest.raises(ConnectionError) as excinfo:
-                await backend._create_pool()
-
-        assert excinfo.value.__cause__ is driver_error
-
-
-def test_redact_db_url_shapes():
-    from src.db.postgres_backend import _db_name, _redact_db_url
-
-    assert _redact_db_url("postgresql://u:p%40ss@h:5432/db") == "postgresql://u:***@h:5432/db"
-    assert _redact_db_url("postgresql://u@h/db") == "postgresql://u@h/db"
-    assert _redact_db_url("postgresql://localhost/db") == "postgresql://localhost/db"
-    assert _redact_db_url("postgresql://u@h/db?password=s&sslmode=require") == (
-        "postgresql://u@h/db?password=***&sslmode=require"
-    )
-    assert _redact_db_url("postgresql://u@h/db?sslmode=require&sslpassword=k") == (
-        "postgresql://u@h/db?sslmode=require&sslpassword=***"
-    )
-    assert _redact_db_url("postgresql://u@h/db?pass%77ord=supersecretpw") == (
-        "postgresql://u@h/db?pass%77ord=***"
-    )
-    assert _redact_db_url("postgresql://u@h/db?PASSWORD=s") == "postgresql://u@h/db?PASSWORD=***"
-    assert _redact_db_url("postgresql://u@h/db?passfile=/x&mypassword=y") == (
-        "postgresql://u@h/db?passfile=/x&mypassword=y"
-    )
-    assert _redact_db_url("postgresql://u@h/db?password=foo&sslpassword=foosupersecret") == (
-        "postgresql://u@h/db?password=***&sslpassword=***"
-    )
-    assert _db_name("postgresql://u@h/db?password=s") == "db"
-
-
-def test_redact_error_text_overlapping_values():
-    from src.db.postgres_backend import _redact_error_text
-
-    url = "postgresql://u@h/db?password=foo&sslpassword=foosupersecret"
-    out = _redact_error_text("echo sslpassword=foosupersecret and password=foo", url)
-    assert "supersecret" not in out and "=foo" not in out
-
-
-def test_ambiguous_query_password_hides_unescaped_tail():
-    from src.db.postgres_backend import _redact_db_url, _redact_error_text
-    url = "postgresql://u@h/db?password=secret&tail"
-    assert _redact_db_url(url) == "***"
-    assert "tail" not in _redact_error_text("invalid option tail", url)
-
-
-@pytest.mark.parametrize("secret", ["secret#tail", "secret?tail", "secret/tail", "secret\ntail"])
-@pytest.mark.parametrize("failure_type", [OSError, asyncio.TimeoutError])
-@pytest.mark.asyncio
-async def test_ambiguous_url_never_reaches_errors_or_tracebacks(secret, failure_type):
-    import traceback
-    from src.db.postgres_backend import PostgresBackend, _db_name, _redact_db_url
-
-    url = f"postgresql://admin:{secret}@example.test:5432/mydb"
-    assert _redact_db_url(url) == "***"
-    assert _db_name(url) == "governance"
-    backend = PostgresBackend()
-    backend._db_url = url
-    # A driver may echo only a credential fragment, not the complete URL.
-    with patch("src.db.postgres_backend.ExecutorPool.create",
-               new=AsyncMock(side_effect=failure_type(f"bad credential {secret}"))), \
-         patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-        with pytest.raises(ConnectionError) as excinfo:
-            await backend._create_pool()
-    rendered = "".join(traceback.format_exception(excinfo.value))
-    assert "secret" not in rendered
-    assert "tail" not in rendered
-    assert excinfo.value.__cause__ is None
-    assert excinfo.value.__suppress_context__ is True
-
-
-def test_redact_error_text_keeps_default_postgres_words_readable():
-    from src.db.postgres_backend import _redact_error_text
-
-    url = "postgresql://postgres:postgres@localhost:5432/governance"
-    out = _redact_error_text(f"could not reach {url}: postgres refused", url)
-    assert out == "could not reach postgresql://postgres:***@localhost:5432/governance: postgres refused"
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "PostgreSQL" in message
+        assert ("timeout after 5s" if failure_type is asyncio.TimeoutError else "ValueError") in message
+        assert "supersecret" not in message + rendered
+        assert url not in message + rendered
+        assert "connection refused" not in message
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
 
 
 # ============================================================================
