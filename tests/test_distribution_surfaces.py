@@ -177,6 +177,21 @@ def test_listed_is_ok() -> None:
     assert _statuses(ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)) == ["OK"]
 
 
+def test_large_listing_uses_git_blob_fallback() -> None:
+    sha = "c" * 40
+    net = FakeNet(
+        {
+            "repos/o/list/contents/README.md": {
+                "content": "",
+                "encoding": "none",
+                "sha": sha,
+            },
+            f"repos/o/list/git/blobs/{sha}": _file("- [CIRWEL/unitares](x)"),
+        }
+    )
+    assert _statuses(ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)) == ["OK"]
+
+
 def test_unlisted_with_open_pr_is_pending() -> None:
     net = _listing_net("nothing", {"state": "open", "merged_at": None})
     assert _statuses(ds.probe_upstream_listing("l", LISTING, net, PROJECT_ROOT)) == ["PENDING"]

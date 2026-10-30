@@ -185,9 +185,25 @@ class LiveNet:
 
 def _gh_file(net: Net, repo: str, path: str) -> str | None:
     payload = net.gh_json(f"repos/{repo}/contents/{path}")
-    if not isinstance(payload, dict) or "content" not in payload:
+    if not isinstance(payload, dict):
         return None
-    return base64.b64decode(payload["content"]).decode("utf-8", "replace")
+    content = payload.get("content")
+    if isinstance(content, str) and content:
+        return base64.b64decode(content).decode("utf-8", "replace")
+
+    # The Contents API omits inline content for files above its size limit.
+    # Follow the returned blob SHA rather than treating an empty payload as an
+    # empty file; awesome-mcp-servers' README is large enough to take this path.
+    sha = payload.get("sha")
+    if not isinstance(sha, str) or not sha:
+        return None
+    blob = net.gh_json(f"repos/{repo}/git/blobs/{sha}")
+    if not isinstance(blob, dict):
+        return None
+    blob_content = blob.get("content")
+    if not isinstance(blob_content, str) or not blob_content:
+        return None
+    return base64.b64decode(blob_content).decode("utf-8", "replace")
 
 
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
