@@ -925,6 +925,13 @@ class TestDetectStuckAgentsInternalEdgeCases:
 
 class TestDetectStuckAgentsAutoRecover:
 
+    @pytest.fixture(autouse=True)
+    def _operator_caller(self):
+        # auto_recover=true is operator-gated in the MCP handler; these tests
+        # exercise the recovery paths behind that gate.
+        with patch("src.mcp_handlers.identity.operator.is_operator_caller", return_value=True):
+            yield
+
     @pytest.fixture
     def server(self):
         server = make_mock_server()
@@ -1347,6 +1354,13 @@ class TestGetAgentMetadataAdditional:
 
 class TestDetectStuckAgentsAutoRecoverAdditional:
     """Additional auto-recover tests for deeply nested paths."""
+
+    @pytest.fixture(autouse=True)
+    def _operator_caller(self):
+        # auto_recover=true is operator-gated in the MCP handler; these tests
+        # exercise the recovery paths behind that gate.
+        with patch("src.mcp_handlers.identity.operator.is_operator_caller", return_value=True):
+            yield
 
     @pytest.fixture
     def server(self):

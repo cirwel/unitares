@@ -387,16 +387,18 @@ async def stuck_agent_recovery_task():
         try:
             await asyncio.sleep(interval_seconds)
 
-            from src.mcp_handlers.lifecycle.handlers import handle_detect_stuck_agents
+            # In-process trusted caller: bypasses the MCP handler's operator
+            # gate on auto_recover, which a background task (no request,
+            # no X-Unitares-Operator header) could never satisfy.
+            from src.mcp_handlers.lifecycle.stuck import run_stuck_agent_sweep
 
-            result = await handle_detect_stuck_agents({
+            result = await run_stuck_agent_sweep({
                 "max_age_minutes": 30.0,
                 "critical_margin_timeout_minutes": 5.0,
                 "tight_margin_timeout_minutes": 15.0,
-                "auto_recover": True,
                 "min_updates": 1,
                 "note_cooldown_minutes": 120.0
-            })
+            }, auto_recover=True)
 
             if result and len(result) > 0:
                 import json

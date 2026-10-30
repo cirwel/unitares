@@ -141,7 +141,7 @@ TOOL_META: Tuple[ToolMeta, ...] = (
     # Updates agent status
     ToolMeta("mark_response_complete", category="lifecycle", tier="common", operation="write", stability=BETA,
              related_to=('process_agent_update', "agent(action='get')")),
-    # write: auto_recover=true resumes agents
+    # write: auto_recover=true (operator only) resumes agents
     ToolMeta("detect_stuck_agents", category="observability", tier="advanced", operation="write", stability=BETA,
              related_to=('observe', 'agent')),
     ToolMeta("archive_old_test_agents", category="lifecycle", tier="advanced", operation="write", stability=BETA,
