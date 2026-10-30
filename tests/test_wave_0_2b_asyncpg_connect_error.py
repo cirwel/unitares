@@ -241,6 +241,13 @@ def test_redact_db_url_shapes():
     assert _redact_db_url("postgresql://u@h/db?sslmode=require&sslpassword=k") == (
         "postgresql://u@h/db?sslmode=require&sslpassword=***"
     )
+    assert _redact_db_url("postgresql://u@h/db?pass%77ord=supersecretpw") == (
+        "postgresql://u@h/db?pass%77ord=***"
+    )
+    assert _redact_db_url("postgresql://u@h/db?PASSWORD=s") == "postgresql://u@h/db?PASSWORD=***"
+    assert _redact_db_url("postgresql://u@h/db?passfile=/x&mypassword=y") == (
+        "postgresql://u@h/db?passfile=/x&mypassword=y"
+    )
     assert _db_name("postgresql://u@h/db?password=s") == "db"
 
 

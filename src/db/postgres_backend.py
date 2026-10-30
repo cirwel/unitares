@@ -76,17 +76,17 @@ def _db_url_secret_fragments(db_url: str) -> list:
     Covers the ``user:password@`` form and ``?password=`` / ``?sslpassword=``
     query parameters, which asyncpg also accepts.
     """
-    import re
-    from urllib.parse import urlsplit
+    from urllib.parse import unquote_plus, urlsplit
     parts = urlsplit(db_url)
     fragments = []
     netloc_password = parts.netloc.rpartition("@")[0].partition(":")[2]
     if netloc_password:
         fragments.append((f":{netloc_password}@", ":***@"))
-    for name in _DB_URL_SECRET_PARAMS:
-        for raw in re.findall(rf"(?:^|&){name}=([^&]*)", parts.query):
-            if raw:
-                fragments.append((f"{name}={raw}", f"{name}=***"))
+    for segment in parts.query.split("&"):
+        raw_name, _, raw_value = segment.partition("=")
+        # Match the decoded name, so pass%77ord= is caught like password=.
+        if raw_value and unquote_plus(raw_name).lower() in _DB_URL_SECRET_PARAMS:
+            fragments.append((segment, f"{raw_name}=***"))
     return fragments
 
 
