@@ -3884,7 +3884,10 @@ def signature_author_families(body: str) -> set[str]:
         if run:
             marker = run.group(1)
             if not fence:
-                fence = marker
+                # A backtick run with a backtick after it is inline code
+                # (```x```), not a fence opening (CommonMark 4.5).
+                if not (marker[0] == "`" and "`" in run.group(2)):
+                    fence = marker
                 continue
             # CommonMark: only the same character, at least as long, with
             # nothing after it, closes the open fence.

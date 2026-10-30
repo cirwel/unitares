@@ -1165,6 +1165,10 @@ def _signed(model, uuid="9203c516-50c5-4ce1-aec5-765a030f0fda"):
     ("~~~\n```\n~~~\n" + _signed("claude-opus-5-5"), {"anthropic"}),
     ("```\n~~~\n" + _signed("gpt-6-astra") + "```\n" + _signed("claude-opus-5-5"), {"anthropic"}),
     ("```py\n" + _signed("gpt-6-astra"), set()),             # unclosed fence runs to the end
+    # agy's finding on #3143: inline code at a line start opens no fence.
+    ("```foo``` in the output\n" + _signed("claude-opus-5-5"), {"anthropic"}),
+    ("```x``` here\n```\n" + _signed("gpt-6-astra") + "```\n" + _signed("claude-opus-5-5"), {"anthropic"}),
+    ("~~~x~~~\n" + _signed("gpt-6-astra"), set()),           # ~~~ info may hold ~: still a fence
     ("", set()),
 ])
 def test_signature_author_families(body, families):
