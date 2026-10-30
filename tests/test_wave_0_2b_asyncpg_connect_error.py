@@ -262,6 +262,38 @@ def test_redact_error_text_overlapping_values():
     assert "supersecret" not in out and "=foo" not in out
 
 
+def test_ambiguous_query_password_hides_unescaped_tail():
+    from src.db.postgres_backend import _redact_db_url, _redact_error_text
+    url = "postgresql://u@h/db?password=secret&tail"
+    assert _redact_db_url(url) == "***"
+    assert "tail" not in _redact_error_text("invalid option tail", url)
+
+
+@pytest.mark.parametrize("secret", ["secret#tail", "secret?tail", "secret/tail", "secret\ntail"])
+@pytest.mark.parametrize("failure_type", [OSError, asyncio.TimeoutError])
+@pytest.mark.asyncio
+async def test_ambiguous_url_never_reaches_errors_or_tracebacks(secret, failure_type):
+    import traceback
+    from src.db.postgres_backend import PostgresBackend, _db_name, _redact_db_url
+
+    url = f"postgresql://admin:{secret}@example.test:5432/mydb"
+    assert _redact_db_url(url) == "***"
+    assert _db_name(url) == "governance"
+    backend = PostgresBackend()
+    backend._db_url = url
+    # A driver may echo only a credential fragment, not the complete URL.
+    with patch("src.db.postgres_backend.ExecutorPool.create",
+               new=AsyncMock(side_effect=failure_type(f"bad credential {secret}"))), \
+         patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+        with pytest.raises(ConnectionError) as excinfo:
+            await backend._create_pool()
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "secret" not in rendered
+    assert "tail" not in rendered
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__ is True
+
+
 def test_redact_error_text_keeps_default_postgres_words_readable():
     from src.db.postgres_backend import _redact_error_text
 

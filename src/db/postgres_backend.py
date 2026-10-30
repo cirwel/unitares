@@ -70,14 +70,39 @@ def _hash_db_url(db_url: str) -> str:
 _DB_URL_SECRET_PARAMS = ("password", "sslpassword")
 
 
+def _split_db_url_for_diagnostics(db_url: str):
+    """Reject ambiguous URL boundaries before deriving any diagnostic text.
+
+    urlsplit is permissive: an unescaped /, ? or # inside a password can
+    put credential text outside netloc. Suppress diagnostics in that case.
+    """
+    from urllib.parse import unquote_plus, urlsplit
+    parts = urlsplit(db_url)
+    if (
+        parts.scheme not in {"postgres", "postgresql"}
+        or not parts.netloc
+        or parts.fragment
+        or any(ord(char) <= 32 for char in db_url)
+        or "@" in parts.path + parts.query
+    ):
+        raise ValueError("Ambiguous database URL")
+    # Accessing port validates forms urlsplit otherwise accepts untouched.
+    parts.port
+    segments = parts.query.split("&") if parts.query else []
+    if any(unquote_plus(s.partition("=")[0]).lower() in _DB_URL_SECRET_PARAMS for s in segments):
+        if any("=" not in s for s in segments):
+            raise ValueError("Ambiguous database password query")
+    return parts
+
+
 def _db_url_secret_fragments(db_url: str) -> list:
     """``(raw, masked)`` pairs for every credential fragment in the URL.
 
     Covers the ``user:password@`` form and ``?password=`` / ``?sslpassword=``
     query parameters, which asyncpg also accepts.
     """
-    from urllib.parse import unquote_plus, urlsplit
-    parts = urlsplit(db_url)
+    from urllib.parse import unquote_plus
+    parts = _split_db_url_for_diagnostics(db_url)
     fragments = []
     netloc_password = parts.netloc.rpartition("@")[0].partition(":")[2]
     if netloc_password:
@@ -125,19 +150,21 @@ def _redact_error_text(text: str, db_url: str) -> str:
     A bare-word replacement of the password is avoided: the default
     ``postgres:postgres`` URL would turn every "postgres" in the message into ``***``.
     """
-    text = text.replace(db_url, _redact_db_url(db_url))
     try:
         fragments = _db_url_secret_fragments(db_url)
     except ValueError:
-        fragments = []
+        # Parsing cannot establish which substrings are credentials. The
+        # driver may echo just a fragment, so replacing the whole URL is not
+        # enough; withhold its message and let the caller retain its type.
+        return "driver message withheld: check URL escaping and port syntax"
+    text = text.replace(db_url, _redact_db_url(db_url))
     return _mask_fragments(text, fragments)
 
 
 def _db_name(db_url: str) -> str:
     """The database name from the URL path, without any query string."""
-    from urllib.parse import urlsplit
     try:
-        return urlsplit(db_url).path.lstrip("/") or "governance"
+        return _split_db_url_for_diagnostics(db_url).path.lstrip("/") or "governance"
     except ValueError:
         return "governance"
 
@@ -402,7 +429,7 @@ class PostgresBackend(
                 f"PostgreSQL connection timeout after 5s. "
                 f"Is PostgreSQL running on {_redact_db_url(self._db_url)}? "
                 f"Check: psql -d {_db_name(self._db_url)}"
-            )
+            ) from None
         except Exception as e:
             _emit_bootstrap_coord_failure(self._db_url, type(e).__name__, timeout_s=5.0)
             driver_text = str(e)
