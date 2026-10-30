@@ -36,9 +36,7 @@ from typing import Any, Final
 
 
 RECEIPT_SCHEMA: Final = "unitares.transition_receipt.v1"
-KNOWLEDGE_PROMOTION_PROFILE: Final = (
-    "unitares.projection.knowledge_promotion.v1"
-)
+KNOWLEDGE_PROMOTION_PROFILE: Final = "unitares.projection.knowledge_promotion.v1"
 KNOWLEDGE_PROMOTION_TRANSITION: Final = "knowledge.promote_memory_claim"
 KNOWLEDGE_SUBJECT_KIND: Final = "knowledge.discovery"
 
@@ -61,6 +59,21 @@ _RUNTIME_CONTEXT_KEYS: Final = (
     "model_source",
     "harness_type",
     "harness_version",
+)
+_VERIFICATION_BASIS: Final = (
+    "session ownership, knowledge-promotion policy checks, and same-object persistence"
+)
+_VERIFIED_FIELDS: Final = (
+    "actor.agent_uuid",
+    "accepted_at",
+    "status",
+    "subject.id",
+    "subject_sha256",
+)
+_UNVERIFIED_FIELDS: Final = (
+    "independent_review",
+    "operator_approval",
+    "subject.claim_correctness",
 )
 
 
@@ -107,9 +120,7 @@ def _validate_canonical_value(value: Any, *, path: str) -> None:
                 )
             _validate_canonical_value(item, path=f"{path}.{key}")
         return
-    if isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, item in enumerate(value):
             _validate_canonical_value(item, path=f"{path}[{index}]")
         return
@@ -138,9 +149,11 @@ def canonical_utc_timestamp(value: Any) -> str:
         raise TransitionReceiptError(
             "naive_timestamp", "timestamp must include an offset"
         )
-    return parsed.astimezone(timezone.utc).isoformat(
-        timespec="microseconds"
-    ).replace("+00:00", "Z")
+    return (
+        parsed.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def knowledge_promotion_projection(subject: Any) -> dict[str, Any]:
@@ -153,20 +166,17 @@ def knowledge_promotion_projection(subject: Any) -> dict[str, Any]:
             "knowledge promotion subject lacks provenance.knowledge_authority",
         )
     promotion_receipt = {
-        key: authority[key]
-        for key in _PROMOTION_RECEIPT_KEYS
-        if key in authority
+        key: authority[key] for key in _PROMOTION_RECEIPT_KEYS if key in authority
     }
-    missing = [
-        key
-        for key in _PROMOTION_RECEIPT_KEYS
-        if key not in promotion_receipt
-    ]
+    missing = [key for key in _PROMOTION_RECEIPT_KEYS if key not in promotion_receipt]
     if missing:
         raise TransitionReceiptError(
             "incomplete_promotion_receipt",
             "knowledge promotion receipt lacks: " + ", ".join(missing),
         )
+    promotion_receipt["promoted_at"] = canonical_utc_timestamp(
+        promotion_receipt["promoted_at"]
+    )
 
     projection: dict[str, Any] = {
         "id": _required_text(subject, "id"),
@@ -219,9 +229,7 @@ def build_knowledge_promotion_receipt(subject: Any) -> dict[str, Any]:
             "kind": KNOWLEDGE_SUBJECT_KIND,
             "id": projection["id"],
         },
-        "subject_sha256": _subject_sha256(
-            KNOWLEDGE_PROMOTION_PROFILE, projection
-        ),
+        "subject_sha256": _subject_sha256(KNOWLEDGE_PROMOTION_PROFILE, projection),
         "actor": {
             "agent_uuid": actor_uuid,
             "authentication": "caller_owned_registered_identity",
@@ -229,22 +237,9 @@ def build_knowledge_promotion_receipt(subject: Any) -> dict[str, Any]:
         "accepted_at": accepted_at,
         "verification": {
             "issuer": "unitares-server",
-            "basis": (
-                "session ownership, knowledge-promotion policy checks, and "
-                "same-object persistence"
-            ),
-            "verified_fields": [
-                "actor.agent_uuid",
-                "accepted_at",
-                "status",
-                "subject.id",
-                "subject_sha256",
-            ],
-            "unverified_fields": [
-                "independent_review",
-                "operator_approval",
-                "subject.claim_correctness",
-            ],
+            "basis": _VERIFICATION_BASIS,
+            "verified_fields": list(_VERIFIED_FIELDS),
+            "unverified_fields": list(_UNVERIFIED_FIELDS),
         },
         "stance": "descriptive",
         "authorizes": [],
@@ -318,13 +313,31 @@ def verify_transition_receipt(
         _validate_verification_fields(verification)
         if verification.get("issuer") != "unitares-server":
             errors.append("issuer_mismatch")
+        expected_unverified = [
+            *_UNVERIFIED_FIELDS,
+            *(
+                f"runtime_provenance.{key}"
+                for key in sorted(projection["provenance"].get("runtime_context", {}))
+            ),
+        ]
+        if (
+            verification.get("basis") != _VERIFICATION_BASIS
+            or verification.get("verified_fields") != list(_VERIFIED_FIELDS)
+            or verification.get("unverified_fields") != expected_unverified
+        ):
+            errors.append("verification_contract_mismatch")
     except TransitionReceiptError as exc:
         errors.append(exc.code)
     return not errors, errors
 
 
 def _subject_sha256(profile: str, projection: Mapping[str, Any]) -> str:
-    material = _SUBJECT_DOMAIN + profile.encode("utf-8") + b"\x00" + canonical_bytes(projection)
+    material = (
+        _SUBJECT_DOMAIN
+        + profile.encode("utf-8")
+        + b"\x00"
+        + canonical_bytes(projection)
+    )
     return hashlib.sha256(material).hexdigest()
 
 
@@ -354,12 +367,31 @@ def _validate_knowledge_promotion_projection(
             "promoted_at must equal the durable subject timestamp",
         )
 
-    source_id = str(authority.get("source_id") or "").strip()
-    evidence_ids = _text_list(authority.get("evidence_ids"))
+    source_value = authority.get("source_id")
+    source_id = source_value.strip() if isinstance(source_value, str) else ""
+    evidence_value = authority.get("evidence_ids")
+    evidence_ids = (
+        list(evidence_value)
+        if isinstance(evidence_value, list)
+        and all(isinstance(item, str) and item.strip() for item in evidence_value)
+        else []
+    )
     if not source_id or not evidence_ids:
         raise TransitionReceiptError(
             "invalid_promotion_evidence",
             "promotion requires one source and at least one evidence row",
+        )
+    verification_basis = authority.get("verification_basis")
+    if not isinstance(verification_basis, str) or not verification_basis.strip():
+        raise TransitionReceiptError(
+            "invalid_promotion_verification_basis",
+            "promotion requires a nonblank verification basis",
+        )
+    decision_standard = authority.get("decision_standard")
+    if not isinstance(decision_standard, str) or not decision_standard.strip():
+        raise TransitionReceiptError(
+            "invalid_promotion_decision_standard",
+            "promotion requires a nonblank decision standard",
         )
     if source_id in evidence_ids:
         raise TransitionReceiptError(
@@ -391,11 +423,24 @@ def _validate_verification_fields(verification: Mapping[str, Any]) -> None:
         raise TransitionReceiptError(
             "invalid_verification", "verified and unverified fields must be lists"
         )
+    if not all(
+        isinstance(item, str) and item.strip() for item in [*verified, *unverified]
+    ):
+        raise TransitionReceiptError(
+            "invalid_verification",
+            "verified and unverified fields must contain nonblank strings",
+        )
+    if len(set(verified)) != len(verified) or len(set(unverified)) != len(unverified):
+        raise TransitionReceiptError(
+            "invalid_verification",
+            "verified and unverified fields cannot contain duplicates",
+        )
     overlap = set(verified).intersection(unverified)
     if overlap:
         raise TransitionReceiptError(
             "verification_overlap",
-            "fields cannot be both verified and unverified: " + ", ".join(sorted(overlap)),
+            "fields cannot be both verified and unverified: "
+            + ", ".join(sorted(overlap)),
         )
 
 
@@ -426,5 +471,7 @@ def _text_list(value: Any) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        raise TransitionReceiptError("invalid_subject_field", "expected a list of strings")
+        raise TransitionReceiptError(
+            "invalid_subject_field", "expected a list of strings"
+        )
     return [str(item) for item in value]

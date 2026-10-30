@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 
 import pytest
@@ -11,6 +12,7 @@ from src.knowledge_authority import PROMOTION_SCHEMA
 from src.knowledge_graph import DiscoveryNode
 from src.transition_receipt import (
     TransitionReceiptError,
+    _receipt_id,
     build_knowledge_promotion_receipt,
     canonical_bytes,
     canonical_utc_timestamp,
@@ -59,10 +61,10 @@ def test_knowledge_promotion_receipt_golden_vector():
     receipt = build_knowledge_promotion_receipt(_promoted_discovery())
 
     assert receipt["subject_sha256"] == (
-        "870411103c30deca369afe35cfd16a8d47ebabcd1f9f4da99293da4a1ee1d5a9"
+        "9fdad4fa996efd270081f96f3296303902f2f944b00b9f57a63a1a50b97951fa"
     )
     assert receipt["receipt_id"] == (
-        "tr_v1_02c1029098ca6245375b9f1c71e896426c0080b0fe25d944ef5f03c5e18a8225"
+        "tr_v1_8c1a29827a9e2098975fb6e97e8e230830980bf06f4b90d3ce86f1e3fa3c3ecc"
     )
     assert receipt["accepted_at"] == "2026-10-30T10:00:00.123456Z"
     assert receipt["stance"] == "descriptive"
@@ -83,16 +85,35 @@ def test_receipt_verifies_after_json_and_timestamp_round_trip():
     # PostgreSQL reads TIMESTAMPTZ back as an ISO string; this alternate UTC
     # rendering must still verify against the fixed receipt representation.
     stored["timestamp"] = "2026-10-30T10:00:00.123456Z"
+    stored["provenance"]["knowledge_authority"]["promoted_at"] = (
+        "2026-10-30T10:00:00.123456Z"
+    )
     valid, errors = verify_transition_receipt(receipt, stored)
 
     assert valid is True
     assert errors == []
 
 
+def test_projection_normalizes_datetime_promotion_timestamp():
+    subject = _promoted_discovery().to_dict()
+    accepted_at = datetime(2026, 10, 30, 10, tzinfo=timezone.utc)
+    subject["timestamp"] = accepted_at
+    subject["provenance"]["knowledge_authority"]["promoted_at"] = accepted_at
+
+    projection = knowledge_promotion_projection(subject)
+
+    assert projection["timestamp"] == "2026-10-30T10:00:00.000000Z"
+    assert projection["provenance"]["knowledge_authority"]["promoted_at"] == (
+        "2026-10-30T10:00:00.000000Z"
+    )
+
+
 def test_subject_projection_excludes_receipt_and_session_secret():
     subject = _promoted_discovery()
     before = knowledge_promotion_projection(subject)
-    subject.provenance["transition_receipt"] = build_knowledge_promotion_receipt(subject)
+    subject.provenance["transition_receipt"] = build_knowledge_promotion_receipt(
+        subject
+    )
     after = knowledge_promotion_projection(subject)
 
     assert before == after
@@ -115,6 +136,62 @@ def test_verifier_detects_subject_and_receipt_tampering():
     assert valid is False
     assert "receipt_id_mismatch" in errors
     assert "actor_mismatch" in errors
+
+
+def test_verifier_rejects_rehashed_verification_overclaims():
+    subject = _promoted_discovery()
+    receipt = build_knowledge_promotion_receipt(subject)
+    receipt["verification"]["verified_fields"].append("operator_approval")
+    receipt["verification"]["unverified_fields"].remove("operator_approval")
+    receipt["verification"]["basis"] = "operator sign-off"
+    receipt["receipt_id"] = _receipt_id(receipt)
+
+    valid, errors = verify_transition_receipt(receipt, subject)
+
+    assert valid is False
+    assert errors == ["verification_contract_mismatch"]
+
+
+def test_verifier_returns_error_for_non_string_verification_field():
+    subject = _promoted_discovery()
+    receipt = build_knowledge_promotion_receipt(subject)
+    receipt["verification"]["verified_fields"] = [{}]
+    receipt["receipt_id"] = _receipt_id(receipt)
+
+    valid, errors = verify_transition_receipt(receipt, subject)
+
+    assert valid is False
+    assert errors == ["invalid_verification"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_code"),
+    [
+        ("verification_basis", None, "invalid_promotion_verification_basis"),
+        ("verification_basis", "  ", "invalid_promotion_verification_basis"),
+        ("decision_standard", None, "invalid_promotion_decision_standard"),
+        ("decision_standard", "", "invalid_promotion_decision_standard"),
+    ],
+)
+def test_projection_rejects_blank_promotion_policy_fields(field, value, error_code):
+    subject = _promoted_discovery()
+    subject.provenance["knowledge_authority"][field] = value
+
+    with pytest.raises(TransitionReceiptError) as raised:
+        knowledge_promotion_projection(subject)
+
+    assert raised.value.code == error_code
+
+
+def test_projection_rejects_blank_evidence_id_even_when_links_match():
+    subject = _promoted_discovery()
+    subject.provenance["knowledge_authority"]["evidence_ids"] = [""]
+    subject.related_to = ["memory-1", ""]
+
+    with pytest.raises(TransitionReceiptError) as raised:
+        knowledge_promotion_projection(subject)
+
+    assert raised.value.code == "invalid_promotion_evidence"
 
 
 @pytest.mark.parametrize(
