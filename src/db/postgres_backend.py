@@ -66,6 +66,41 @@ def _hash_db_url(db_url: str) -> str:
     return hashlib.sha256(db_url.encode("utf-8")).hexdigest()[:12]
 
 
+def _redact_db_url(db_url: str) -> str:
+    """The connection URL with any embedded password replaced by ``***``.
+
+    Connection errors reach the health_check response and log sinks, so they
+    must name the target without the credential.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(db_url)
+        password = parts.password
+    except ValueError:
+        return "***"
+    if not password:
+        return db_url
+    netloc = parts.netloc.replace(f":{password}@", ":***@", 1)
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
+def _redact_error_text(text: str, db_url: str) -> str:
+    """``text`` with the raw URL and its ``:password@`` form masked, in case the driver echoes them.
+
+    A bare-word replacement of the password is avoided: the default
+    ``postgres:postgres`` URL would turn every "postgres" in the message into ``***``.
+    """
+    from urllib.parse import urlsplit
+    text = text.replace(db_url, _redact_db_url(db_url))
+    try:
+        password = urlsplit(db_url).password
+    except ValueError:
+        password = None
+    if password:
+        text = text.replace(f":{password}@", ":***@")
+    return text
+
+
 def _emit_bootstrap_coord_failure(
     db_url: str,
     error_class: str,
@@ -324,13 +359,14 @@ class PostgresBackend(
             _emit_bootstrap_coord_failure(self._db_url, "TimeoutError", timeout_s=5.0)
             raise ConnectionError(
                 f"PostgreSQL connection timeout after 5s. "
-                f"Is PostgreSQL running on {self._db_url}? "
+                f"Is PostgreSQL running on {_redact_db_url(self._db_url)}? "
                 f"Check: psql -d {self._db_url.split('/')[-1]}"
             )
         except Exception as e:
             _emit_bootstrap_coord_failure(self._db_url, type(e).__name__, timeout_s=5.0)
             raise ConnectionError(
-                f"Failed to connect to PostgreSQL at {self._db_url}: {e}. "
+                f"Failed to connect to PostgreSQL at {_redact_db_url(self._db_url)}: "
+                f"{_redact_error_text(str(e), self._db_url)}. "
                 f"Is PostgreSQL running?"
             ) from e
 

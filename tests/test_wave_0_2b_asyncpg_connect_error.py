@@ -156,6 +156,52 @@ class TestBootstrapEmit:
         assert "admin" not in hash_value
         assert "example.test" not in hash_value
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "side_effect",
+        [
+            asyncio.TimeoutError(),
+            OSError("connect to postgresql://admin:supersecretpw@example.test:5432/mydb failed"),
+            OSError("bad target admin:supersecretpw@example.test"),
+        ],
+    )
+    async def test_connection_error_message_masks_password(self, side_effect):
+        """The ConnectionError text reaches health_check's init_error and the
+        logs, so it must name the target without the password, including when
+        the driver's own message echoes the URL or the password."""
+        from src.db.postgres_backend import PostgresBackend
+
+        backend = PostgresBackend()
+        backend._pool = None
+        backend._db_url = "postgresql://admin:supersecretpw@example.test:5432/mydb"
+
+        with patch(
+            "src.db.postgres_backend.ExecutorPool.create",
+            new=AsyncMock(side_effect=side_effect),
+        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+            with pytest.raises(ConnectionError) as excinfo:
+                await backend._create_pool()
+
+        message = str(excinfo.value)
+        assert "supersecretpw" not in message
+        assert "postgresql://admin:***@example.test:5432/mydb" in message
+
+
+def test_redact_db_url_shapes():
+    from src.db.postgres_backend import _redact_db_url
+
+    assert _redact_db_url("postgresql://u:p%40ss@h:5432/db") == "postgresql://u:***@h:5432/db"
+    assert _redact_db_url("postgresql://u@h/db") == "postgresql://u@h/db"
+    assert _redact_db_url("postgresql://localhost/db") == "postgresql://localhost/db"
+
+
+def test_redact_error_text_keeps_default_postgres_words_readable():
+    from src.db.postgres_backend import _redact_error_text
+
+    url = "postgresql://postgres:postgres@localhost:5432/governance"
+    out = _redact_error_text(f"could not reach {url}: postgres refused", url)
+    assert out == "could not reach postgresql://postgres:***@localhost:5432/governance: postgres refused"
+
 
 # ============================================================================
 # Runtime site — _AcquireContext.__aenter__ TimeoutError path
