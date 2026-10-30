@@ -965,10 +965,63 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
     Args:
         critical_margin_timeout_minutes: Timeout for critical margin (default: 5)
         tight_margin_timeout_minutes: Timeout for tight margin (default: 15)
-        auto_recover: If True, automatically recover safe stuck agents (default: False)
+        auto_recover: If True, automatically recover safe stuck agents
+            (default: False). Requires an operator caller; anyone else is
+            refused with NOT_OPERATOR rather than silently downgraded.
 
     Returns:
         List of stuck agents with detection reasons and recovery status
+    """
+    auto_recover = _auto_recover_requested(arguments.get("auto_recover", False))
+    if auto_recover:
+        # The sweep itself stays pre_onboard (dashboard refresh, unbound
+        # observers). The mutating branch does not: it archives superseded
+        # parents, opens dialectic sessions against other agents and resumes
+        # them, so it takes the same principal as the other cross-agent
+        # lifecycle writes: an X-Unitares-Operator token
+        # (GHSA-r9q5-7j8h-82rr). The in-process 5-minute recovery task calls
+        # run_stuck_agent_sweep directly and is not affected.
+        from ..identity.operator import is_operator_caller
+
+        if not is_operator_caller():
+            logger.warning(
+                "[STUCK_AGENT_RECOVERY] auto_recover refused: caller is not an operator"
+            )
+            return [error_response(
+                "auto_recover=true requires an operator caller "
+                "(X-Unitares-Operator token). Call detect_stuck_agents without "
+                "auto_recover to read the stuck set; recovery of a named agent "
+                "goes through operator_resume_agent or self_recovery.",
+                error_code="NOT_OPERATOR",
+                error_category="auth_error",
+                recovery={
+                    "action": "Retry without auto_recover, or present an operator token",
+                    "related_tools": ["operator_resume_agent", "self_recovery"],
+                },
+            )]
+    return await run_stuck_agent_sweep(arguments, auto_recover=auto_recover)
+
+
+def _auto_recover_requested(value: Any) -> bool:
+    """Normalize ``auto_recover`` to a bool, once, for gate and sweep alike.
+
+    The raw value was previously tested for Python truthiness, so the string
+    ``"false"`` would have run recovery. Strings count only when they spell
+    an affirmative; anything else uses ``bool()``.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
+async def run_stuck_agent_sweep(arguments: Dict[str, Any], *, auto_recover: bool) -> Sequence:
+    """Run the stuck-agent sweep, recovering when ``auto_recover`` is set.
+
+    No authorization check happens here. The MCP handler gates
+    ``auto_recover`` on an operator caller before calling this; the only
+    other caller is the in-process background recovery task
+    (``src.background_tasks.stuck_agent_recovery_task``). Do not expose this
+    to request-driven callers without the same gate.
     """
     try:
         # Reload metadata to ensure we have latest state (async for PostgreSQL)
@@ -978,7 +1031,6 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
         critical_timeout = float(arguments.get("critical_margin_timeout_minutes", 5.0))
         tight_timeout = float(arguments.get("tight_margin_timeout_minutes", 15.0))
         min_updates = int(arguments.get("min_updates", 1))
-        auto_recover = arguments.get("auto_recover", False)
         note_cooldown_minutes = float(arguments.get("note_cooldown_minutes", 120.0))
 
         try:
