@@ -3864,6 +3864,7 @@ def branch_author_family(branch: str) -> str | None:
 
 _SIGNATURE_MODEL = re.compile(r"^Model:[ \t]*(\S+)[ \t]*$", re.IGNORECASE)
 _SIGNATURE_AGENT = re.compile(r"^UNITARES agent:[ \t]*[0-9A-Fa-f-]{36}[ \t]*$", re.IGNORECASE)
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def signature_author_families(body: str) -> set[str]:
@@ -3877,12 +3878,20 @@ def signature_author_families(body: str) -> set[str]:
     names no family."""
     lines = (body or "").splitlines()
     families: set[str] = set()
-    fenced = False
+    fence = ""  # the open fence's run of ` or ~, empty outside a fence
     for i, line in enumerate(lines):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
+        run = _FENCE.match(line)
+        if run:
+            marker = run.group(1)
+            if not fence:
+                fence = marker
+                continue
+            # CommonMark: only the same character, at least as long, with
+            # nothing after it, closes the open fence.
+            if marker[0] == fence[0] and len(marker) >= len(fence) and not run.group(2).strip():
+                fence = ""
             continue
-        if fenced:
+        if fence:
             continue
         match = _SIGNATURE_MODEL.match(line)
         if match and i + 1 < len(lines) and _SIGNATURE_AGENT.match(lines[i + 1]):

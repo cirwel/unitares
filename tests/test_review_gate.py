@@ -1159,6 +1159,12 @@ def _signed(model, uuid="9203c516-50c5-4ce1-aec5-765a030f0fda"):
     ("Model: claude-opus-5-5\n", set()),                    # no UNITARES agent line: not a signature
     ("> Model: gpt-6-astra\n> UNITARES agent: 9203c516-50c5-4ce1-aec5-765a030f0fda\n", set()),
     ("```\nModel: gpt-6-astra\nUNITARES agent: 9203c516-50c5-4ce1-aec5-765a030f0fda\n```\n", set()),
+    # Codex's finding on #3143: an inner fence of another length or character
+    # must not close the outer one and hide the real signature below it.
+    ("````md\n```\nnested\n```\n````\n" + _signed("claude-opus-5-5"), {"anthropic"}),
+    ("~~~\n```\n~~~\n" + _signed("claude-opus-5-5"), {"anthropic"}),
+    ("```\n~~~\n" + _signed("gpt-6-astra") + "```\n" + _signed("claude-opus-5-5"), {"anthropic"}),
+    ("```py\n" + _signed("gpt-6-astra"), set()),             # unclosed fence runs to the end
     ("", set()),
 ])
 def test_signature_author_families(body, families):
