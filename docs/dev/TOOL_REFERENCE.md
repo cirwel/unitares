@@ -1117,7 +1117,7 @@ Monitor agents, compare patterns, and detect anomalies
 - **Timeout:** 15s
 - **Related:** `observe`, `agent`
 
-Sweeps active agents for margin-timeout, cognitive-loop and time-box stuck states. The advertised timeout_minutes and auto_resolve are accepted and ignored; the honoured critical_margin_timeout_minutes and tight_margin_timeout_minutes ride unadvertised. Its one inactivity signal, cadence_silence, fires only for an agent that had an established check-in cadence and then went quiet, so a silent agent without one is never flagged: this is not a general liveness detector. The unadvertised auto_recover=true also mutates state, writing notes, opening dialectic sessions, resuming agents and archiving superseded parents. Agents tagged autonomous or embodied (or embodied's deprecated alias) are skipped entirely; a changed non-empty result appends a stuck_detected audit entry. To act on one named agent, use operator_resume_agent.
+Sweeps active agents for margin-timeout, cognitive-loop and time-box stuck states. The advertised timeout_minutes and auto_resolve are accepted and ignored; the honoured critical_margin_timeout_minutes and tight_margin_timeout_minutes ride unadvertised. Its one inactivity signal, cadence_silence, fires only for an agent that had an established check-in cadence and then went quiet, so a silent agent without one is never flagged: this is not a general liveness detector. The unadvertised auto_recover=true also mutates state, writing notes, opening dialectic sessions, resuming agents and archiving superseded parents, so it requires an operator caller (X-Unitares-Operator token); anyone else is refused with NOT_OPERATOR. Agents tagged autonomous or embodied (or embodied's deprecated alias) are skipped entirely; a changed non-empty result appends a stuck_detected audit entry. To act on one named agent, use operator_resume_agent.
 
 Detection rules — an agent is stuck only when in a problematic STATE or actively looping. Inactivity alone is NOT stuck:
 1) Critical margin + no updates > 5 min → reason "critical_margin_timeout"
@@ -1166,7 +1166,7 @@ PARAMS:
 - tight_margin_timeout_minutes (default 15)
 - min_updates (default 1) — agents below this are treated as orphans, not stuck
 - include_pattern_detection (default true)
-- auto_recover (default false)
+- auto_recover (default false; operator only)
 - note_cooldown_minutes (default 120)
 - max_age_minutes — DEPRECATED, accepted but ignored (there is no inactivity rule; kept for API compatibility)
 
