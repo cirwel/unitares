@@ -157,6 +157,52 @@ class TestBootstrapEmit:
         assert "example.test" not in hash_value
 
 
+class TestCredentialSafeErrors:
+    @pytest.mark.parametrize("url", [
+        "postgresql://admin:supersecret@example.test:5432/mydb",
+        "postgresql://admin:supersecret#tail@example.test:5432/mydb",
+        "postgresql://admin:supersecret?tail@example.test:5432/mydb",
+        "postgresql://admin:first@tail:supersecret@h/db",
+        "postgresql://u@h/db?password=supersecret&sslpassword=supersecret-tail",
+        "postgresql://u@h/db?pass%77ord=supersecret",
+    ])
+    @pytest.mark.parametrize("channel", ["message", "cause", "context", "notes"])
+    @pytest.mark.parametrize("failure_type", [ValueError, asyncio.TimeoutError])
+    @pytest.mark.asyncio
+    async def test_error_and_traceback_withhold_driver_credentials(self, url, channel, failure_type):
+        import traceback
+        from src.db.postgres_backend import PostgresBackend
+
+        driver_error = failure_type("connection refused")
+        secret_text = f"bad target {url}; password fragment supersecret"
+        if channel == "message":
+            driver_error = failure_type(secret_text)
+        elif channel == "cause":
+            driver_error.__cause__ = RuntimeError(secret_text)
+        elif channel == "context":
+            driver_error.__context__ = RuntimeError(secret_text)
+        else:
+            driver_error.add_note(secret_text)
+
+        backend = PostgresBackend()
+        backend._db_url = url
+        with patch("src.db.postgres_backend.ExecutorPool.create",
+                   new=AsyncMock(side_effect=driver_error)), \
+             patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+            with pytest.raises(ConnectionError) as excinfo:
+                await backend._create_pool()
+
+        message = str(excinfo.value)
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "PostgreSQL" in message
+        assert ("timeout after 5s" if failure_type is asyncio.TimeoutError else "ValueError") in message
+        assert "supersecret" not in message + rendered
+        assert url not in message + rendered
+        assert "connection refused" not in message
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
+
+
 # ============================================================================
 # Runtime site — _AcquireContext.__aenter__ TimeoutError path
 # ============================================================================
