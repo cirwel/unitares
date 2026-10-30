@@ -680,6 +680,49 @@ async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         logger.error(f"Error pinging agent: {e}", exc_info=True)
         return [error_response(f"Error pinging agent: {str(e)}")]
 
+def _sweep_caller_is_operator() -> bool:
+    """Whether the caller of a fleet-wide archival sweep presents operator
+    authority: a valid ``X-Unitares-Operator`` token, the same check
+    ``require_owner_or_operator`` applies for single-target archive_agent.
+
+    A sweep has no single target, so the "agent itself" half of that gate
+    cannot apply: only an operator may archive other agents in bulk or see
+    their ids.
+    """
+    from ..identity.operator import is_operator_caller
+
+    return is_operator_caller()
+
+
+def _sweep_operator_required_error(tool_name: str) -> Sequence[TextContent]:
+    logger.warning("[LIFECYCLE_AUTH] %s mutation refused: caller is not an operator", tool_name)
+    return [error_response(
+        f"{tool_name} with dry_run=false archives other agents and requires an "
+        "operator (X-Unitares-Operator token).",
+        error_code="ARCHIVAL_SWEEP_OPERATOR_REQUIRED",
+        error_category="auth_error",
+        details={"error_type": "operator_required", "tool": tool_name},
+        recovery={
+            "action": (
+                "Preview with dry_run=true, or archive your own agent with "
+                "agent(action='archive'); a fleet-wide sweep needs an operator token"
+            ),
+            "related_tools": ["agent"],
+        },
+    )]
+
+
+def _redact_sweep_ids(payload: Dict[str, Any], operator: bool) -> Dict[str, Any]:
+    """Non-operators get counts only: the per-agent lists carry other agents'
+    registry ids, which list/get visibility rules withhold from them."""
+    if operator:
+        return payload
+    payload["archived_agents"] = []
+    payload["would_archive_agents"] = []
+    payload["agent_ids_redacted"] = True
+    return payload
+
+
 @mcp_tool("archive_old_test_agents", timeout=20.0)
 async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Preview stale agents - test agents by default, or ALL stale agents with include_all=true
@@ -697,6 +740,9 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     dry_run = arguments.get("dry_run", True)
     auto_enabled = auto_agent_archival_enabled()
     mutation_enabled = auto_enabled and not dry_run
+    operator = _sweep_caller_is_operator()
+    if mutation_enabled and not operator:
+        return _sweep_operator_required_error("archive_old_test_agents")
 
     if include_all and max_age_days is None and "max_age_hours" not in arguments:
         max_age_days = 3
@@ -764,7 +810,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     else:
         action = "archived"
 
-    return success_response({
+    return success_response(_redact_sweep_ids({
         "success": True,
         "dry_run": dry_run,
         "auto_archival_enabled": auto_enabled,
@@ -776,7 +822,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
         "max_age_days": max_age_hours / 24,
         "include_all": include_all,
         "action": action,
-    })
+    }, operator))
 
 @mcp_tool("archive_orphan_agents", timeout=30.0)
 async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -800,6 +846,9 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     max_updates = int(arguments.get("max_updates", 3))
     dry_run = arguments.get("dry_run", True)
     auto_enabled = auto_agent_archival_enabled()
+    operator = _sweep_caller_is_operator()
+    if auto_enabled and not dry_run and not operator:
+        return _sweep_operator_required_error("archive_orphan_agents")
 
     low_update_hours = min(max(max_age_hours / 2, 1.0), max_age_hours)
     unlabeled_hours = max_age_hours
@@ -841,7 +890,7 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     else:
         action = "archived"
 
-    return success_response({
+    return success_response(_redact_sweep_ids({
         "success": True,
         "dry_run": dry_run,
         "auto_archival_enabled": auto_enabled,
@@ -857,4 +906,4 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
             "unlabeled_hours": unlabeled_hours
         },
         "action": action,
-    })
+    }, operator))

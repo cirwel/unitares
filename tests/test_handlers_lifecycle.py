@@ -565,6 +565,14 @@ class TestPingAgent:
 
 class TestArchiveOldTestAgents:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
+
     @pytest.fixture
     def mock_mcp_server(self):
         server = MagicMock()

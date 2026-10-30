@@ -707,7 +707,7 @@ DEPENDENCIES:
 - **Timeout:** 20s
 - **Related:** `agent(action='archive')`, `agent(action='list')`
 
-Fleet-wide sweep for agents whose id or label reads as test or demo; include_all=true widens it to every agent. It applies none of archive_orphan_agents' protections, so a pioneer/persistent/protected or verified-tier resident can be listed, and test-named agents with 2 or fewer updates qualify at any age. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which archives every candidate and no tool un-archives one; agent(action='archive') takes one known agent instead.
+Fleet-wide sweep for agents whose id or label reads as test or demo; include_all=true widens it to every agent. It applies none of archive_orphan_agents' protections, so a pioneer/persistent/protected or verified-tier resident can be listed, and test-named agents with 2 or fewer updates qualify at any age. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false with a valid X-Unitares-Operator token, which archives every candidate and no tool un-archives one; agent(action='archive') takes one known agent instead. Non-operators may preview counts, but agent lists are empty and agent_ids_redacted=true; a mutating call without operator authority is refused.
 
 ~~~text
 RETURNS:
@@ -750,7 +750,7 @@ EXAMPLE RESPONSE:
 - **Timeout:** 30s
 - **Related:** `agent`, `agent(action='list')`
 
-Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false, which persists archival and drops the agent's monitor and calibration state.
+Classify agents fleet-wide as orphan or opted-in archival candidates. Unlike archive_old_test_agents it applies protections: 0-update agents, pioneer/persistent/protected tags and verified/established/trusted tiers are never candidates, and a labeled agent qualifies only through the explicit archive-eligible tag; neither its label nor the server's automatic ephemeral class opts it in. Previews only unless the server sets UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL=true and the call passes dry_run=false with a valid X-Unitares-Operator token, which persists archival and drops the agent's monitor and calibration state. Non-operators may preview counts, but agent lists are empty and agent_ids_redacted=true; a mutating call without operator authority is refused.
 
 TARGETS (classified as candidates; agents with more than max_updates updates, default 3, are skipped first):
 - Unlabeled agents with 1 update after 3 hours
