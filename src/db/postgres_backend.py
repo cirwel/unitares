@@ -66,39 +66,68 @@ def _hash_db_url(db_url: str) -> str:
     return hashlib.sha256(db_url.encode("utf-8")).hexdigest()[:12]
 
 
+# Query parameters libpq/asyncpg accept that carry a secret value.
+_DB_URL_SECRET_PARAMS = ("password", "sslpassword")
+
+
+def _db_url_secret_fragments(db_url: str) -> list:
+    """``(raw, masked)`` pairs for every credential fragment in the URL.
+
+    Covers the ``user:password@`` form and ``?password=`` / ``?sslpassword=``
+    query parameters, which asyncpg also accepts.
+    """
+    import re
+    from urllib.parse import urlsplit
+    parts = urlsplit(db_url)
+    fragments = []
+    netloc_password = parts.netloc.rpartition("@")[0].partition(":")[2]
+    if netloc_password:
+        fragments.append((f":{netloc_password}@", ":***@"))
+    for name in _DB_URL_SECRET_PARAMS:
+        for raw in re.findall(rf"(?:^|&){name}=([^&]*)", parts.query):
+            if raw:
+                fragments.append((f"{name}={raw}", f"{name}=***"))
+    return fragments
+
+
 def _redact_db_url(db_url: str) -> str:
-    """The connection URL with any embedded password replaced by ``***``.
+    """The connection URL with every embedded password replaced by ``***``.
 
     Connection errors reach the health_check response and log sinks, so they
     must name the target without the credential.
     """
-    from urllib.parse import urlsplit, urlunsplit
     try:
-        parts = urlsplit(db_url)
-        password = parts.password
+        fragments = _db_url_secret_fragments(db_url)
     except ValueError:
         return "***"
-    if not password:
-        return db_url
-    netloc = parts.netloc.replace(f":{password}@", ":***@", 1)
-    return urlunsplit(parts._replace(netloc=netloc))
+    for raw, masked in fragments:
+        db_url = db_url.replace(raw, masked)
+    return db_url
 
 
 def _redact_error_text(text: str, db_url: str) -> str:
-    """``text`` with the raw URL and its ``:password@`` form masked, in case the driver echoes them.
+    """``text`` with the raw URL and its credential fragments masked, in case the driver echoes them.
 
     A bare-word replacement of the password is avoided: the default
     ``postgres:postgres`` URL would turn every "postgres" in the message into ``***``.
     """
-    from urllib.parse import urlsplit
     text = text.replace(db_url, _redact_db_url(db_url))
     try:
-        password = urlsplit(db_url).password
+        fragments = _db_url_secret_fragments(db_url)
     except ValueError:
-        password = None
-    if password:
-        text = text.replace(f":{password}@", ":***@")
+        fragments = []
+    for raw, masked in fragments:
+        text = text.replace(raw, masked)
     return text
+
+
+def _db_name(db_url: str) -> str:
+    """The database name from the URL path, without any query string."""
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(db_url).path.lstrip("/") or "governance"
+    except ValueError:
+        return "governance"
 
 
 def _emit_bootstrap_coord_failure(
@@ -360,15 +389,22 @@ class PostgresBackend(
             raise ConnectionError(
                 f"PostgreSQL connection timeout after 5s. "
                 f"Is PostgreSQL running on {_redact_db_url(self._db_url)}? "
-                f"Check: psql -d {self._db_url.split('/')[-1]}"
+                f"Check: psql -d {_db_name(self._db_url)}"
             )
         except Exception as e:
             _emit_bootstrap_coord_failure(self._db_url, type(e).__name__, timeout_s=5.0)
-            raise ConnectionError(
+            driver_text = str(e)
+            safe_text = _redact_error_text(driver_text, self._db_url)
+            error = ConnectionError(
                 f"Failed to connect to PostgreSQL at {_redact_db_url(self._db_url)}: "
-                f"{_redact_error_text(str(e), self._db_url)}. "
+                f"{type(e).__name__}: {safe_text}. "
                 f"Is PostgreSQL running?"
-            ) from e
+            )
+            if safe_text != driver_text:
+                # The driver's exception carries the credential; chaining it
+                # would print it in any exc_info traceback.
+                raise error from None
+            raise error from e
 
     def acquire(self, timeout: float = None):
         """

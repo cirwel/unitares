@@ -185,14 +185,63 @@ class TestBootstrapEmit:
         message = str(excinfo.value)
         assert "supersecretpw" not in message
         assert "postgresql://admin:***@example.test:5432/mydb" in message
+        cause = excinfo.value.__cause__
+        assert cause is None or "supersecretpw" not in str(cause)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "side_effect",
+        [asyncio.TimeoutError(), OSError("bad dsn postgresql://admin@h/db?password=qsecret")],
+    )
+    async def test_query_string_password_is_masked(self, side_effect):
+        from src.db.postgres_backend import PostgresBackend
+
+        backend = PostgresBackend()
+        backend._pool = None
+        backend._db_url = "postgresql://admin@h/db?password=qsecret"
+
+        with patch(
+            "src.db.postgres_backend.ExecutorPool.create",
+            new=AsyncMock(side_effect=side_effect),
+        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+            with pytest.raises(ConnectionError) as excinfo:
+                await backend._create_pool()
+
+        assert "qsecret" not in str(excinfo.value)
+        assert excinfo.value.__cause__ is None or "qsecret" not in str(excinfo.value.__cause__)
+
+    @pytest.mark.asyncio
+    async def test_clean_driver_error_keeps_its_cause(self):
+        from src.db.postgres_backend import PostgresBackend
+
+        backend = PostgresBackend()
+        backend._pool = None
+        backend._db_url = "postgresql://admin:supersecretpw@example.test:5432/mydb"
+        driver_error = OSError("connection refused")
+
+        with patch(
+            "src.db.postgres_backend.ExecutorPool.create",
+            new=AsyncMock(side_effect=driver_error),
+        ), patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+            with pytest.raises(ConnectionError) as excinfo:
+                await backend._create_pool()
+
+        assert excinfo.value.__cause__ is driver_error
 
 
 def test_redact_db_url_shapes():
-    from src.db.postgres_backend import _redact_db_url
+    from src.db.postgres_backend import _db_name, _redact_db_url
 
     assert _redact_db_url("postgresql://u:p%40ss@h:5432/db") == "postgresql://u:***@h:5432/db"
     assert _redact_db_url("postgresql://u@h/db") == "postgresql://u@h/db"
     assert _redact_db_url("postgresql://localhost/db") == "postgresql://localhost/db"
+    assert _redact_db_url("postgresql://u@h/db?password=s&sslmode=require") == (
+        "postgresql://u@h/db?password=***&sslmode=require"
+    )
+    assert _redact_db_url("postgresql://u@h/db?sslmode=require&sslpassword=k") == (
+        "postgresql://u@h/db?sslmode=require&sslpassword=***"
+    )
+    assert _db_name("postgresql://u@h/db?password=s") == "db"
 
 
 def test_redact_error_text_keeps_default_postgres_words_readable():
