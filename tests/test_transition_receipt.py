@@ -154,7 +154,6 @@ def test_verifier_rejects_rehashed_verification_overclaims():
 
     assert valid is False
     assert errors == [
-        "receipt_contract_mismatch",
         "subject_receipt_mismatch",
         "verification_contract_mismatch",
     ]
@@ -170,7 +169,6 @@ def test_verifier_returns_error_for_non_string_verification_field():
 
     assert valid is False
     assert errors == [
-        "receipt_contract_mismatch",
         "subject_receipt_mismatch",
         "invalid_verification",
     ]
@@ -191,8 +189,8 @@ def test_verifier_rejects_rehashed_injected_claims(location):
     valid, errors = verify_transition_receipt(receipt, subject)
 
     assert valid is False
-    assert "receipt_contract_mismatch" in errors
     assert "subject_receipt_mismatch" in errors
+    assert "receipt_contract_mismatch" in errors
 
 
 def test_verifier_rejects_forged_receipt_for_edited_durable_subject():
@@ -214,6 +212,70 @@ def test_verifier_requires_receipt_embedded_in_authoritative_subject():
 
     assert valid is False
     assert errors == ["subject_receipt_missing"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("summary", "A bounded promoted claim\n"),
+        ("tags", ["promoted-from-memory"]),
+        ("related_to", ["memory-1", "different-evidence"]),
+    ],
+)
+def test_later_covered_edits_report_only_subject_hash_mismatch(field, value):
+    subject, receipt = _receipt_bearing_subject()
+    setattr(subject, field, value)
+
+    valid, errors = verify_transition_receipt(receipt, subject)
+
+    assert valid is False
+    assert errors == ["subject_hash_mismatch"]
+
+
+def test_verifier_rejects_partial_subject_projection_explicitly():
+    subject, receipt = _receipt_bearing_subject()
+    partial = subject.to_dict(include_details=False)
+
+    valid, errors = verify_transition_receipt(receipt, partial)
+
+    assert valid is False
+    assert errors == ["subject_projection_incomplete"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda subject: setattr(subject, "summary", 0.5),
+        lambda subject: setattr(subject, "related_to", ["memory-1", {}]),
+        lambda subject: subject.provenance["s22_context"].__setitem__(
+            "model", {"name": "not-a-string"}
+        ),
+    ],
+)
+def test_projection_rejects_implicit_string_coercion(mutation):
+    subject = _promoted_discovery()
+    mutation(subject)
+
+    with pytest.raises(TransitionReceiptError) as raised:
+        knowledge_promotion_projection(subject)
+
+    assert raised.value.code == "invalid_subject_field"
+
+
+def test_verifier_rejects_present_null_runtime_provenance():
+    subject = _promoted_discovery()
+    subject.provenance.pop("s22_context")
+    receipt = build_knowledge_promotion_receipt(subject)
+    subject.provenance["transition_receipt"] = deepcopy(receipt)
+    receipt = deepcopy(receipt)
+    receipt["runtime_provenance"] = None
+    receipt["receipt_id"] = _receipt_id(receipt)
+
+    valid, errors = verify_transition_receipt(receipt, subject)
+
+    assert valid is False
+    assert "receipt_contract_mismatch" in errors
+    assert "subject_receipt_mismatch" in errors
 
 
 @pytest.mark.parametrize(

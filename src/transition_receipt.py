@@ -75,6 +75,22 @@ _UNVERIFIED_FIELDS: Final = (
     "operator_approval",
     "subject.claim_correctness",
 )
+_RECEIPT_KEYS: Final = frozenset(
+    {
+        "schema",
+        "projection_profile",
+        "transition_type",
+        "status",
+        "subject",
+        "subject_sha256",
+        "actor",
+        "accepted_at",
+        "verification",
+        "stance",
+        "authorizes",
+        "receipt_id",
+    }
+)
 
 
 class TransitionReceiptError(ValueError):
@@ -158,6 +174,13 @@ def canonical_utc_timestamp(value: Any) -> str:
 
 def knowledge_promotion_projection(subject: Any) -> dict[str, Any]:
     """Project a promoted discovery onto its durable receipt-bearing fields."""
+    return _knowledge_promotion_projection(subject, validate_profile=True)
+
+
+def _knowledge_promotion_projection(
+    subject: Any, *, validate_profile: bool
+) -> dict[str, Any]:
+    """Project exact stored values, optionally enforcing creation invariants."""
     provenance = _mapping_value(subject, "provenance") or {}
     authority = provenance.get("knowledge_authority")
     if not isinstance(authority, Mapping):
@@ -183,31 +206,38 @@ def knowledge_promotion_projection(subject: Any) -> dict[str, Any]:
         "agent_id": _required_text(subject, "agent_id"),
         "type": _required_text(subject, "type"),
         "summary": _required_text(subject, "summary"),
-        "details": str(_value(subject, "details") or ""),
+        "details": _details_text(subject),
         "tags": _text_list(_value(subject, "tags")),
         # Both durable KG backends store an omitted severity as "low".
-        "severity": str(_value(subject, "severity") or "low"),
+        "severity": _optional_text(_value(subject, "severity"), "severity", "low"),
         "timestamp": canonical_utc_timestamp(_value(subject, "timestamp")),
-        "status": str(_value(subject, "status") or "open"),
+        "status": _optional_text(_value(subject, "status"), "status", "open"),
         "related_to": _text_list(_value(subject, "related_to")),
         "references_files": _text_list(_value(subject, "references_files")),
         "provenance": {
-            "source": str(provenance.get("source") or ""),
+            "source": _optional_text(provenance.get("source"), "source", ""),
             "knowledge_authority": promotion_receipt,
         },
     }
 
     s22_context = provenance.get("s22_context")
     if isinstance(s22_context, Mapping):
-        runtime_context = {
-            key: str(s22_context[key])
-            for key in _RUNTIME_CONTEXT_KEYS
-            if s22_context.get(key) is not None
-        }
+        runtime_context: dict[str, str] = {}
+        for key in _RUNTIME_CONTEXT_KEYS:
+            value = s22_context.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise TransitionReceiptError(
+                    "invalid_subject_field",
+                    f"runtime context field {key} must be a string",
+                )
+            runtime_context[key] = value
         if runtime_context:
             projection["provenance"]["runtime_context"] = runtime_context
 
-    _validate_knowledge_promotion_projection(projection)
+    if validate_profile:
+        _validate_knowledge_promotion_projection(projection)
     # Validating here makes projection failures happen before persistence.
     canonical_bytes(projection)
     return projection
@@ -267,13 +297,15 @@ def verify_transition_receipt(
         return False, errors
 
     try:
-        projection = knowledge_promotion_projection(subject)
+        projection = _knowledge_promotion_projection(subject, validate_profile=False)
     except TransitionReceiptError as exc:
-        return False, [exc.code]
+        errors.append(exc.code)
+        return False, errors
 
-    expected_receipt = build_knowledge_promotion_receipt(subject)
-    if dict(receipt) != expected_receipt:
-        errors.append("receipt_contract_mismatch")
+    receipt_keys = set(receipt)
+    allowed_receipt_keys = (_RECEIPT_KEYS, _RECEIPT_KEYS | {"runtime_provenance"})
+    if receipt_keys not in allowed_receipt_keys:
+        _append_error(errors, "receipt_contract_mismatch")
     provenance = _mapping_value(subject, "provenance") or {}
     embedded_receipt = provenance.get("transition_receipt")
     if not isinstance(embedded_receipt, Mapping):
@@ -285,6 +317,12 @@ def verify_transition_receipt(
         "kind": KNOWLEDGE_SUBJECT_KIND,
         "id": projection["id"],
     }
+    receipt_subject = receipt.get("subject")
+    if not isinstance(receipt_subject, Mapping) or set(receipt_subject) != {
+        "kind",
+        "id",
+    }:
+        _append_error(errors, "receipt_contract_mismatch")
     if receipt.get("subject") != expected_subject:
         errors.append("subject_mismatch")
     if receipt.get("accepted_at") != projection["timestamp"]:
@@ -306,12 +344,25 @@ def verify_transition_receipt(
     if receipt.get("authorizes") != []:
         errors.append("authorizes_not_empty")
     actor = receipt.get("actor")
+    if not isinstance(actor, Mapping) or set(actor) != {
+        "agent_uuid",
+        "authentication",
+    }:
+        _append_error(errors, "receipt_contract_mismatch")
     if (
         not isinstance(actor, Mapping)
         or actor.get("agent_uuid") != projection["agent_id"]
         or actor.get("authentication") != "caller_owned_registered_identity"
     ):
         errors.append("actor_mismatch")
+    runtime_receipt = receipt.get("runtime_provenance")
+    if "runtime_provenance" in receipt and (
+        not isinstance(runtime_receipt, Mapping)
+        or not runtime_receipt
+        or not set(runtime_receipt).issubset(_RUNTIME_CONTEXT_KEYS)
+        or not all(isinstance(value, str) for value in runtime_receipt.values())
+    ):
+        _append_error(errors, "receipt_contract_mismatch")
     if receipt.get("runtime_provenance") != projection["provenance"].get(
         "runtime_context"
     ):
@@ -320,6 +371,13 @@ def verify_transition_receipt(
         verification = receipt.get("verification")
         if not isinstance(verification, Mapping):
             raise TransitionReceiptError("invalid_verification")
+        if set(verification) != {
+            "issuer",
+            "basis",
+            "verified_fields",
+            "unverified_fields",
+        }:
+            _append_error(errors, "receipt_contract_mismatch")
         _validate_verification_fields(verification)
         if verification.get("issuer") != "unitares-server":
             errors.append("issuer_mismatch")
@@ -327,7 +385,11 @@ def verify_transition_receipt(
             *_UNVERIFIED_FIELDS,
             *(
                 f"runtime_provenance.{key}"
-                for key in sorted(projection["provenance"].get("runtime_context", {}))
+                for key in sorted(
+                    receipt.get("runtime_provenance", {})
+                    if isinstance(receipt.get("runtime_provenance"), Mapping)
+                    else {}
+                )
             ),
         ]
         if (
@@ -351,6 +413,11 @@ def _subject_sha256(profile: str, projection: Mapping[str, Any]) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def _append_error(errors: list[str], code: str) -> None:
+    if code not in errors:
+        errors.append(code)
+
+
 def _validate_knowledge_promotion_projection(
     projection: Mapping[str, Any],
 ) -> None:
@@ -367,7 +434,7 @@ def _validate_knowledge_promotion_projection(
         raise TransitionReceiptError(
             "invalid_promotion_schema", "unexpected knowledge promotion schema"
         )
-    if str(authority.get("promoted_by") or "") != actor_uuid:
+    if authority.get("promoted_by") != actor_uuid:
         raise TransitionReceiptError(
             "promoter_mismatch", "promoted_by must equal the durable writer UUID"
         )
@@ -378,7 +445,7 @@ def _validate_knowledge_promotion_projection(
         )
 
     source_value = authority.get("source_id")
-    source_id = source_value.strip() if isinstance(source_value, str) else ""
+    source_id = source_value if isinstance(source_value, str) else ""
     evidence_value = authority.get("evidence_ids")
     evidence_ids = (
         list(evidence_value)
@@ -386,7 +453,7 @@ def _validate_knowledge_promotion_projection(
         and all(isinstance(item, str) and item.strip() for item in evidence_value)
         else []
     )
-    if not source_id or not evidence_ids:
+    if not source_id.strip() or not evidence_ids:
         raise TransitionReceiptError(
             "invalid_promotion_evidence",
             "promotion requires one source and at least one evidence row",
@@ -469,12 +536,44 @@ def _mapping_value(subject: Any, key: str) -> Mapping[str, Any] | None:
 
 def _required_text(subject: Any, key: str) -> str:
     value = _value(subject, key)
-    text = str(value or "").strip()
-    if not text:
+    if not isinstance(value, str):
+        raise TransitionReceiptError(
+            "invalid_subject_field", f"knowledge promotion field {key} must be a string"
+        )
+    if not value.strip():
         raise TransitionReceiptError(
             "missing_subject_field", f"knowledge promotion subject lacks {key}"
         )
-    return text
+    return value
+
+
+def _optional_text(value: Any, key: str, default: str) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TransitionReceiptError(
+            "invalid_subject_field", f"knowledge promotion field {key} must be a string"
+        )
+    return value
+
+
+def _details_text(subject: Any) -> str:
+    if isinstance(subject, Mapping) and "details" not in subject:
+        if subject.get("has_details") or "details_preview" in subject:
+            raise TransitionReceiptError(
+                "subject_projection_incomplete",
+                "receipt verification requires the complete details field",
+            )
+        return ""
+    value = _value(subject, "details")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise TransitionReceiptError(
+            "invalid_subject_field",
+            "knowledge promotion field details must be a string",
+        )
+    return value
 
 
 def _text_list(value: Any) -> list[str]:
@@ -484,4 +583,8 @@ def _text_list(value: Any) -> list[str]:
         raise TransitionReceiptError(
             "invalid_subject_field", "expected a list of strings"
         )
-    return [str(item) for item in value]
+    if not all(isinstance(item, str) for item in value):
+        raise TransitionReceiptError(
+            "invalid_subject_field", "list fields must contain only strings"
+        )
+    return list(value)

@@ -251,6 +251,9 @@ not prove claim correctness, independent review, operator approval or external
 non-repudiation, and its empty `authorizes` list grants no authority. Verify it
 against the durable row before relying on it; a later row edit intentionally
 produces `subject_hash_mismatch` rather than rewriting the historical receipt.
+Verification needs the complete covered row, including the full `details`
+value. Summary-mode and paginated fragments fail explicitly as an incomplete
+subject projection; retrieve and assemble all details pages before verifying.
 
 ## Discovery Types
 
