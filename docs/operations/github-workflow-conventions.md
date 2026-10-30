@@ -500,15 +500,24 @@ Unattended callers make their policy explicit: `review.sh sweep --reviewer claud
 --reviewer antigravity --worktree PATH` supplies an ordered fallback list chosen
 by that caller. The sweep filters that list by availability, cooldown, retry
 budget and missing model family, and attempts only one provider per tick. It
-also skips providers from the family the PR's branch prefix names (exactly
-`codex/`, `claude/`, `gemini/`, `agy/` or `antigravity/`), judging agy by the
+also skips providers from the families that wrote the PR, judging agy by the
 model it is configured to run, so a PR is read by another family than the one
-that wrote it (operator direction, 2026-10-23). A list of all three providers,
-for example `--reviewer claude --reviewer codex --reviewer antigravity`, sends
-a Codex PR to Claude and then agy, an agy PR to Claude and then Codex, and a
-Claude PR to Codex and then agy. A branch without an agent prefix is reviewed
-in the configured order. When only the author's family is configured, the
-sweep starts nothing and says so. A
+that wrote it (operator direction 2026-10-23, restated by family 2026-10-30).
+A family is the lab behind the base model (`anthropic`, `openai`, `google`),
+never the host that ran it. The author's families come from the PR body's
+provenance signatures: each `Model:` line directly followed by its
+`UNITARES agent:` line, outside code fences and quotes. Every signature
+counts, so a PR another family followed up excludes both. Claude running in
+agy is `anthropic`. An unclassified model (`unavailable`, a Hermes or local
+open model) names no family. Only when no signature names one does the sweep
+fall back to the branch prefix, and only `codex/`, `claude/` and `gemini/`
+name a family: agy and Hermes run several, so `agy/`, `antigravity/` and
+`hermes/` name none. A list of all three providers, for example
+`--reviewer claude --reviewer codex --reviewer antigravity` with agy on
+Gemini, sends an OpenAI PR to Claude and then agy, a Google PR to Claude and
+then Codex, and an Anthropic PR to Codex and then agy. A PR with no known
+author family is reviewed in the configured order. When only the author's
+family is configured, the sweep starts nothing and says so. A
 local Codex CLI cooldown does not prevent its separately enabled native route
 (though if a selected Codex native request has expired or is unavailable while
 the local CLI is cooling down, that PR can consume subsequent sweep ticks
