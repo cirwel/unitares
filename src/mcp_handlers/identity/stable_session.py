@@ -44,6 +44,7 @@ logger = get_logger(__name__)
 
 _KEYED = re.compile(r"^agent-([0-9a-f]{8}-[0-9a-f]{3})-([a-z2-7]{20})$")
 _LEGACY = re.compile(r"^agent-([0-9a-f]{8}-[0-9a-f]{3})$")
+_UA_HASH = re.compile(r"^[0-9a-f]{6}$")
 _TAG_DOMAIN = b"unitares.csid.v2|"
 _KEY_DOMAIN = b"unitares.csid.v1"
 LEGACY_MODE_ENV = "UNITARES_LEGACY_SESSION_IDS"
@@ -98,6 +99,27 @@ def classify(session_key: Optional[str]) -> str:
     if _LEGACY.match(session_key):
         return "legacy"
     return "other"
+
+
+def same_host_ua_shift(bound_fp: Optional[str], current_fp: Optional[str]) -> bool:
+    """True when two ``<host>:<ua6>`` fingerprints share a known host IP and
+    differ only in the 6-hex User-Agent hash suffix.
+
+    A keyed session id (``agent-{uuid12}-{tag}``) is an HMAC capability shared
+    across companion processes on the same machine — e.g. an IDE/CLI MCP client
+    (``codex-mcp-client``, ``claude-code``) and out-of-process governance plugin
+    hooks (``scripts/checkin.py`` over ``urllib``). They present the same keyed
+    id from the same host IP with different User-Agent strings.
+    """
+    if not bound_fp or not current_fp or bound_fp == current_fp:
+        return False
+    b_host, b_sep, b_ua = bound_fp.rpartition(":")
+    c_host, c_sep, c_ua = current_fp.rpartition(":")
+    if not (b_sep and c_sep and b_host and b_host == c_host):
+        return False
+    if b_host == "unknown":
+        return False
+    return bool(_UA_HASH.fullmatch(b_ua) and _UA_HASH.fullmatch(c_ua))
 
 
 def verifies_for(session_key: str, agent_uuid: Optional[str]) -> bool:

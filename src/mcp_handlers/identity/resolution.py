@@ -659,7 +659,10 @@ async def _fingerprint_hijack_check(
     # A keyed agent-{uuid12}-{tag} id is not UUID-derivable, so it is exempt;
     # every other agent- key keeps the stricter per-path mode.
     from .stable_session import classify as _csid_kind
-    _is_prefix_key = session_key.startswith("agent-") and _csid_kind(session_key) != "keyed"
+    from .stable_session import same_host_ua_shift as _same_host_ua_shift
+    _kind = _csid_kind(session_key)
+    _is_keyed = _kind == "keyed"
+    _is_prefix_key = session_key.startswith("agent-") and not _is_keyed
     _global_fp_mode = session_fingerprint_check_mode()
     _prefix_fp_mode = prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
     _FP_RANK = {"off": 0, "log": 1, "strict": 2}
@@ -681,7 +684,12 @@ async def _fingerprint_hijack_check(
 
     _violation = None
     if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
-        _violation = "fingerprint_mismatch"
+        # For an HMAC-keyed session id, companion processes on the same host
+        # (e.g. an IDE/CLI MCP client and a plugin hook script over urllib)
+        # legitimately share the session from the same IP with different
+        # User-Agent strings.
+        if not (_is_keyed and _same_host_ua_shift(cached_bind_fp, current_fp)):
+            _violation = "fingerprint_mismatch"
     elif _prefix_active and not cached_bind_fp:
         _violation = "no_bind_fingerprint"
     elif _prefix_active and not current_fp:
@@ -1304,16 +1312,38 @@ async def resolve_session_identity(
                 resume = False
                 resume_rejected_reason = "token_mismatch"
                 _keyed_uuid = None
-            elif await _fingerprint_hijack_check(
-                session_key,
-                await _keyed_bind_fingerprint(session_key, _keyed_uuid),
-                _keyed_uuid,
-                path_label="keyed_session",
-                source_label="keyed_session_fingerprint_mismatch",
-            ):
-                resume = False
-                resume_rejected_reason = "fingerprint_mismatch"
-                _keyed_uuid = None
+            else:
+                _keyed_bind_fp = await _keyed_bind_fingerprint(session_key, _keyed_uuid)
+                if await _fingerprint_hijack_check(
+                    session_key,
+                    _keyed_bind_fp,
+                    _keyed_uuid,
+                    path_label="keyed_session",
+                    source_label="keyed_session_fingerprint_mismatch",
+                ):
+                    resume = False
+                    resume_rejected_reason = "fingerprint_mismatch"
+                    _keyed_uuid = None
+                elif _keyed_bind_fp:
+                    # In non-strict (log) mode, a route change on a verified
+                    # keyed session (e.g. a resident moving from loopback to
+                    # Tailscale) already emitted identity_hijack_suspected once
+                    # above. Re-record the bind fingerprint so sliding TTL below
+                    # does not re-fire the same mismatch on every heartbeat.
+                    from .persistence import schedule_attested_bind_fingerprint_refresh
+                    from .stable_session import same_host_ua_shift
+                    try:
+                        from ..context import get_session_signals
+                        _sig = get_session_signals()
+                        _curr_fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
+                    except Exception:
+                        _curr_fp = None
+                    if (
+                        _curr_fp
+                        and _curr_fp != _keyed_bind_fp
+                        and not same_host_ua_shift(_keyed_bind_fp, _curr_fp)
+                    ):
+                        schedule_attested_bind_fingerprint_refresh(session_key, _keyed_uuid)
         if _kind == "keyed" and resume and _keyed_uuid:
             # Sliding TTL, as on a PATH 1 hit: the binding keeps its recorded
             # fingerprint, which the strict check above compares against.
