@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import time
@@ -101,15 +102,26 @@ def classify(session_key: Optional[str]) -> str:
     return "other"
 
 
+def _is_loopback_host(host: str) -> bool:
+    cleaned = host.strip().strip("[]").lower()
+    if cleaned == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(cleaned).is_loopback
+    except ValueError:
+        return False
+
+
 def same_host_ua_shift(bound_fp: Optional[str], current_fp: Optional[str]) -> bool:
-    """True when two ``<host>:<ua6>`` fingerprints share a known host IP and
-    differ only in the 6-hex User-Agent hash suffix.
+    """True when two ``<host>:<ua6>`` fingerprints share the same loopback host
+    and differ only in the 6-hex User-Agent hash suffix.
 
     A keyed session id (``agent-{uuid12}-{tag}``) is an HMAC capability shared
-    across companion processes on the same machine — e.g. an IDE/CLI MCP client
+    across companion processes on the local machine — e.g. an IDE/CLI MCP client
     (``codex-mcp-client``, ``claude-code``) and out-of-process governance plugin
     hooks (``scripts/checkin.py`` over ``urllib``). They present the same keyed
-    id from the same host IP with different User-Agent strings.
+    id over loopback with different User-Agent strings. Non-loopback shared
+    addresses (e.g. a reverse proxy or NAT) are not exempted.
     """
     if not bound_fp or not current_fp or bound_fp == current_fp:
         return False
@@ -117,7 +129,7 @@ def same_host_ua_shift(bound_fp: Optional[str], current_fp: Optional[str]) -> bo
     c_host, c_sep, c_ua = current_fp.rpartition(":")
     if not (b_sep and c_sep and b_host and b_host == c_host):
         return False
-    if b_host == "unknown":
+    if not _is_loopback_host(b_host):
         return False
     return bool(_UA_HASH.fullmatch(b_ua) and _UA_HASH.fullmatch(c_ua))
 

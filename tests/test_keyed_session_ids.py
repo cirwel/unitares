@@ -558,6 +558,36 @@ async def test_a_keyed_resume_refreshes_bind_fp_once_on_log_mode_ip_shift(keyed)
 
 
 @pytest.mark.asyncio
+async def test_a_keyed_resume_does_not_refresh_bind_fp_when_check_is_off(keyed):
+    """When UNITARES_SESSION_FINGERPRINT_CHECK=off, neither an alert nor a
+    stored-fingerprint refresh runs on a keyed resume from a different IP."""
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    bcast = MagicMock()
+    bcast.broadcast_event = AsyncMock()
+    refresh = MagicMock()
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(
+            resolution, "127.0.0.1:000000", "97.171.0.192:000000", mode="off",
+        ):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("src.mcp_handlers.identity.handlers._broadcaster", return_value=bcast),
+        )
+        stack.enter_context(
+            patch("src.mcp_handlers.identity.persistence.schedule_attested_bind_fingerprint_refresh", refresh),
+        )
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
+    bcast.broadcast_event.assert_not_awaited()
+    refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status, reason", [("deleted", "agent_deleted"), (None, "no_such_agent")])
 async def test_a_cached_keyed_id_is_refused_once_its_agent_is_deleted(keyed, status, reason):
     """The 60 s verification cache must not outlive a deletion, which another

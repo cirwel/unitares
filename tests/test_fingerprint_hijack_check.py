@@ -125,3 +125,17 @@ async def test_nonkeyed_session_same_host_ua_shift_still_fires():
     assert result is True
     b.broadcast_event.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_keyed_session_nonloopback_same_ip_ua_shift_still_fires():
+    """A shared non-loopback address (e.g. proxy/NAT) is not exempted on keyed sessions."""
+    keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
+    result, b = await _call(
+        keyed_key,
+        "10.0.0.1:f6f44a",
+        global_mode="strict",
+        current_fp="10.0.0.1:020f1c",
+    )
+    assert result is True
+    b.broadcast_event.assert_awaited_once()
+

@@ -731,6 +731,14 @@ async def _fingerprint_hijack_check(
     except Exception as _be:
         logger.warning(f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}")
 
+    if _is_keyed and _fp_mode == "log" and _violation == "fingerprint_mismatch":
+        # A route change on a verified keyed session in log mode has just
+        # emitted identity_hijack_suspected once above. Re-record the bind
+        # fingerprint (in-memory, Redis, and PG) so sliding TTL on the session
+        # does not re-fire the same mismatch on every subsequent heartbeat.
+        from .persistence import schedule_attested_bind_fingerprint_refresh
+        schedule_attested_bind_fingerprint_refresh(session_key, agent_uuid)
+
     return _fp_mode == "strict"
 
 
@@ -1312,38 +1320,16 @@ async def resolve_session_identity(
                 resume = False
                 resume_rejected_reason = "token_mismatch"
                 _keyed_uuid = None
-            else:
-                _keyed_bind_fp = await _keyed_bind_fingerprint(session_key, _keyed_uuid)
-                if await _fingerprint_hijack_check(
-                    session_key,
-                    _keyed_bind_fp,
-                    _keyed_uuid,
-                    path_label="keyed_session",
-                    source_label="keyed_session_fingerprint_mismatch",
-                ):
-                    resume = False
-                    resume_rejected_reason = "fingerprint_mismatch"
-                    _keyed_uuid = None
-                elif _keyed_bind_fp:
-                    # In non-strict (log) mode, a route change on a verified
-                    # keyed session (e.g. a resident moving from loopback to
-                    # Tailscale) already emitted identity_hijack_suspected once
-                    # above. Re-record the bind fingerprint so sliding TTL below
-                    # does not re-fire the same mismatch on every heartbeat.
-                    from .persistence import schedule_attested_bind_fingerprint_refresh
-                    from .stable_session import same_host_ua_shift
-                    try:
-                        from ..context import get_session_signals
-                        _sig = get_session_signals()
-                        _curr_fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
-                    except Exception:
-                        _curr_fp = None
-                    if (
-                        _curr_fp
-                        and _curr_fp != _keyed_bind_fp
-                        and not same_host_ua_shift(_keyed_bind_fp, _curr_fp)
-                    ):
-                        schedule_attested_bind_fingerprint_refresh(session_key, _keyed_uuid)
+            elif await _fingerprint_hijack_check(
+                session_key,
+                await _keyed_bind_fingerprint(session_key, _keyed_uuid),
+                _keyed_uuid,
+                path_label="keyed_session",
+                source_label="keyed_session_fingerprint_mismatch",
+            ):
+                resume = False
+                resume_rejected_reason = "fingerprint_mismatch"
+                _keyed_uuid = None
         if _kind == "keyed" and resume and _keyed_uuid:
             # Sliding TTL, as on a PATH 1 hit: the binding keeps its recorded
             # fingerprint, which the strict check above compares against.
