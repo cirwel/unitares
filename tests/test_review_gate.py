@@ -5997,3 +5997,29 @@ def test_main_accepts_agy_model_and_rejects_malformed_agy_model(monkeypatch):
         rg.main(["review", "--reviewer", "antigravity", "--agy-model", "bad model>"])
 
 
+def test_second_family_pass_judges_printed_candidates_without_one_shot_agy_model_override(monkeypatch, capsys):
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set(),
+                       candidates=("antigravity",))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30,
+                           agy_model="claude-opus-5-5-high", completed_by="antigravity",
+                           failed_providers={"antigravity"})
+    assert rg._with_agy_model(rg.second_family_pass)(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
+    out = capsys.readouterr().out
+    assert "have: anthropic" in out
+    assert "--fresh --reviewer antigravity" in out
+
+
+def test_malformed_cooldown_state_never_raises(monkeypatch, tmp_path):
+    path = tmp_path / "antigravity.json"
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: path)
+    for bad in ("null", "[]", "1", '{"retry_after": "bad"}', '{"models": {"gemini-4-argon-high": "bad"}}',
+                '{"models": {"gemini-4-argon-high": {"retry_after": null, "reason": "quota"}}}'):
+        path.write_text(bad)
+        assert rg.provider_cooldown("antigravity") is None
+        rg.clear_provider_cooldown("antigravity")
+        rg.remember_unavailable("antigravity", "quota", "exit 1")
+        assert rg.provider_cooldown("antigravity") == "quota"
+
+
+

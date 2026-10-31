@@ -2235,15 +2235,24 @@ def provider_state_path(reviewer: str) -> Path:
     return common / "review-gate" / f"{reviewer}-availability.json"
 
 
+def _retry_after(entry) -> float:
+    try:
+        return float(entry.get("retry_after", 0)) if isinstance(entry, dict) else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def provider_cooldown(reviewer: str) -> str | None:
     try:
         state = json.loads(provider_state_path(reviewer).read_text())
+        if not isinstance(state, dict):
+            return None
         now = time.time()
-        if float(state.get("retry_after", 0)) > now:
+        if _retry_after(state) > now and state.get("reason"):
             return str(state["reason"])
         if reviewer == "antigravity" and isinstance(state.get("models"), dict):
-            entry = state["models"].get(agy_model_name()) or {}
-            if float(entry.get("retry_after", 0)) > now:
+            entry = state["models"].get(agy_model_name())
+            if _retry_after(entry) > now and entry.get("reason"):
                 return str(entry["reason"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -2260,8 +2269,7 @@ def clear_provider_cooldown(reviewer: str) -> None:
         if isinstance(state, dict) and isinstance(state.get("models"), dict):
             now = time.time()
             models = {m: v for m, v in state["models"].items()
-                      if m != agy_model_name() and isinstance(v, dict)
-                      and float(v.get("retry_after", 0)) > now}
+                      if m != agy_model_name() and _retry_after(v) > now and v.get("reason")}
             if models:
                 with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
                     json.dump({"models": models}, f)
@@ -2299,11 +2307,11 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
         prior = {}
     raw_models = prior.get("models") if isinstance(prior, dict) and isinstance(prior.get("models"), dict) else {}
     models = {m: v for m, v in raw_models.items()
-              if isinstance(v, dict) and float(v.get("retry_after", 0)) > now}
+              if _retry_after(v) > now and v.get("reason")}
     if reviewer == "antigravity" and reason == "quota":
         models[agy_model_name()] = entry
         payload: dict = {"models": models}
-        if isinstance(prior, dict) and float(prior.get("retry_after", 0)) > now and prior.get("reason") != "quota":
+        if _retry_after(prior) > now and prior.get("reason") not in (None, "quota"):
             payload.update(retry_after=prior["retry_after"], reason=prior["reason"])
     else:
         payload = {**entry, **({"models": models} if reviewer == "antigravity" and models else {})}
@@ -2592,8 +2600,7 @@ def _under_project_config(path: str) -> bool:
 
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                  materials: list[tuple[str, bytes]] | None = None,
-                 codex_model: str = "gpt-6.1-sol", codex_effort: str = "medium",
-                 agy_model: str | None = None) -> tuple[str, str]:
+                 codex_model: str = "gpt-6.1-sol", codex_effort: str = "medium") -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure.
 
     ``materials`` are written into antigravity's workspace (see
@@ -2669,7 +2676,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         # ("--mode plan has no effect while slash command expansion is
         # disabled"). The prompt is fixed text that never starts with "/".
         cmd = ["agy", "-p", prompt, "--mode", "plan", "--sandbox",
-               "--output-format", "json", *agy_model_args(agy_model)]
+               "--output-format", "json", *agy_model_args()]
     elif reviewer == "claude":
         # --safe-mode: no CLAUDE.md (the PR head's would steer the
         # reviewer), plugins, hooks, skills or MCP servers. --restricted:
@@ -3340,9 +3347,17 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     if waived:
         print(f"[review] second family waived by the operator ({waived[:120]}); CI accepts it")
         return result
-    candidates = second_family_candidates(
-        getattr(args, "branch", "") or "", families, comments, key,
-        set(getattr(args, "failed_providers", set()) or set()))
+    global _AGY_MODEL_OVERRIDE
+    prev_agy = _AGY_MODEL_OVERRIDE
+    _AGY_MODEL_OVERRIDE = None
+    try:
+        failed = set(getattr(args, "failed_providers", set()) or set())
+        if prev_agy:
+            failed.discard("antigravity")
+        candidates = second_family_candidates(
+            getattr(args, "branch", "") or "", families, comments, key, failed)
+    finally:
+        _AGY_MODEL_OVERRIDE = prev_agy
     have = ", ".join(sorted(families)) or "none"
     if candidates:
         runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
