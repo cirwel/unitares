@@ -881,10 +881,9 @@ def test_a_write_a_read_cannot_settle_gets_no_resend_step(tool, action, operatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["onboard", "identity"])
+@pytest.mark.parametrize("tool_name", ["start_session", "onboard", "identity"])
 async def test_identity_minting_timeout_never_gets_the_retry_reply(tool_name):
-    """The catalog labels onboard and identity read, but both can create an
-    identity, and a repeat creates another."""
+    """Both tools can create an identity, and a repeat creates another."""
     @mcp_tool(tool_name, timeout=0.05, register=False)
     async def _slow(arguments):
         await asyncio.sleep(5)
@@ -893,7 +892,7 @@ async def test_identity_minting_timeout_never_gets_the_retry_reply(tool_name):
         payload = _payload(await _slow({"force_new": True}))
 
     assert payload["outcome"] == "unknown"
-    assert payload["operation"] == "read", "the catalog label is reported as it is"
+    assert payload["operation"] == ("read" if tool_name == "identity" else "write")
     assert READ_RECOVERY not in json.dumps(payload)
     assert "creat" in payload["recovery"]["action"]
     assert "start_session" in payload["recovery"]["related_tools"]
