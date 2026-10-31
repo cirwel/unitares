@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import time
@@ -44,6 +45,7 @@ logger = get_logger(__name__)
 
 _KEYED = re.compile(r"^agent-([0-9a-f]{8}-[0-9a-f]{3})-([a-z2-7]{20})$")
 _LEGACY = re.compile(r"^agent-([0-9a-f]{8}-[0-9a-f]{3})$")
+_UA_HASH = re.compile(r"^[0-9a-f]{6}$")
 _TAG_DOMAIN = b"unitares.csid.v2|"
 _KEY_DOMAIN = b"unitares.csid.v1"
 LEGACY_MODE_ENV = "UNITARES_LEGACY_SESSION_IDS"
@@ -98,6 +100,50 @@ def classify(session_key: Optional[str]) -> str:
     if _LEGACY.match(session_key):
         return "legacy"
     return "other"
+
+
+def _is_loopback_host(host: str) -> bool:
+    cleaned = host.strip().strip("[]").lower()
+    if cleaned == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(cleaned).is_loopback
+    except ValueError:
+        return False
+
+
+def same_host_ua_shift(bound_fp: Optional[str], current_fp: Optional[str]) -> bool:
+    """True when two ``<host>:<ua6>`` fingerprints share the same loopback host
+    and differ only in the 6-hex User-Agent hash suffix.
+
+    Used only in ``log`` mode to suppress false-positive
+    ``identity_hijack_suspected`` telemetry when local companion processes
+    (e.g. an IDE/CLI MCP client and ``unitares-governance-plugin`` hooks over
+    ``urllib``) share a verified keyed session over loopback with different
+    User-Agent strings. Never used to bypass ``strict`` mode, because a
+    headerless local forwarder (SSH tunnel / socat) also appears as loopback.
+    """
+    if not bound_fp or not current_fp or bound_fp == current_fp:
+        return False
+    b_host, b_sep, b_ua = bound_fp.rpartition(":")
+    c_host, c_sep, c_ua = current_fp.rpartition(":")
+    if not (b_sep and c_sep and b_host and b_host == c_host):
+        return False
+    if not _is_loopback_host(b_host):
+        return False
+    return bool(_UA_HASH.fullmatch(b_ua) and _UA_HASH.fullmatch(c_ua))
+
+
+def same_ua_hash(bound_fp: Optional[str], current_fp: Optional[str]) -> bool:
+    """True when two ``<host>:<ua6>`` fingerprints differ in host and share the
+    same valid 6-hex User-Agent hash suffix."""
+    if not bound_fp or not current_fp or bound_fp == current_fp:
+        return False
+    b_host, b_sep, b_ua = bound_fp.rpartition(":")
+    c_host, c_sep, c_ua = current_fp.rpartition(":")
+    if not (b_sep and c_sep and b_host and c_host and b_host != c_host):
+        return False
+    return bool(b_ua == c_ua and _UA_HASH.fullmatch(b_ua))
 
 
 def verifies_for(session_key: str, agent_uuid: Optional[str]) -> bool:

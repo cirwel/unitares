@@ -659,7 +659,13 @@ async def _fingerprint_hijack_check(
     # A keyed agent-{uuid12}-{tag} id is not UUID-derivable, so it is exempt;
     # every other agent- key keeps the stricter per-path mode.
     from .stable_session import classify as _csid_kind
-    _is_prefix_key = session_key.startswith("agent-") and _csid_kind(session_key) != "keyed"
+    from .stable_session import same_host_ua_shift as _same_host_ua_shift
+    from .stable_session import same_ua_hash as _same_ua_hash
+    from .stable_session import verifies_for as _verifies_for
+    _kind = _csid_kind(session_key)
+    _is_keyed = _kind == "keyed"
+    _is_verified_keyed = _is_keyed and _verifies_for(session_key, agent_uuid)
+    _is_prefix_key = session_key.startswith("agent-") and not _is_keyed
     _global_fp_mode = session_fingerprint_check_mode()
     _prefix_fp_mode = prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
     _FP_RANK = {"off": 0, "log": 1, "strict": 2}
@@ -681,7 +687,17 @@ async def _fingerprint_hijack_check(
 
     _violation = None
     if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
-        _violation = "fingerprint_mismatch"
+        # In log mode, companion processes on loopback (e.g. an IDE/CLI MCP
+        # client and a plugin hook script over urllib) legitimately share a
+        # cryptographically verified keyed session with different User-Agent
+        # strings. Strict mode keeps the full fingerprint guard so a headerless
+        # loopback forwarder (SSH tunnel / socat) cannot bypass strict enforcement.
+        if not (
+            _is_verified_keyed
+            and _fp_mode == "log"
+            and _same_host_ua_shift(cached_bind_fp, current_fp)
+        ):
+            _violation = "fingerprint_mismatch"
     elif _prefix_active and not cached_bind_fp:
         _violation = "no_bind_fingerprint"
     elif _prefix_active and not current_fp:
@@ -722,6 +738,24 @@ async def _fingerprint_hijack_check(
             )
     except Exception as _be:
         logger.warning(f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}")
+
+    if (
+        _is_verified_keyed
+        and path_label == "keyed_session"
+        and _fp_mode == "log"
+        and _violation == "fingerprint_mismatch"
+        and _same_ua_hash(cached_bind_fp, current_fp)
+    ):
+        # A route change (e.g. loopback -> Tailscale) on a cryptographically
+        # verified keyed_session with the same User-Agent hash in log mode has
+        # just emitted identity_hijack_suspected once above. Re-record the bind
+        # fingerprint (in-memory, Redis, and PG) so sliding TTL on the session
+        # does not re-fire the same mismatch on every subsequent heartbeat.
+        # Requiring path_label == "keyed_session", verifies_for, and matching
+        # ua_hash prevents unverified keys or foreign clients with a different
+        # User-Agent from overwriting the stored baseline.
+        from .persistence import schedule_attested_bind_fingerprint_refresh
+        schedule_attested_bind_fingerprint_refresh(session_key, agent_uuid)
 
     return _fp_mode == "strict"
 
