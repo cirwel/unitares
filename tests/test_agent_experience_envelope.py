@@ -738,6 +738,29 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
     }
 
 
+def test_behavioral_provisional_caveat_does_not_call_it_the_cold_start_prior():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"primary_eisv_source": "behavioral", "verdict": "safe"},
+        "risk_attribution": {
+            "primary_driver": "behavioral_assessment",
+            "discriminability": {
+                "non_discriminative": True,
+                "updates_until_baseline": 12,
+            },
+        },
+    }
+
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+
+    assert env["action_summary"]["verdict_confidence"] == "provisional"
+    assert env["action_summary"]["evidence_basis"] == "behavioral_assessment"
+    assert "behavioral baseline is still forming" in env["verdict_caveat"]
+    assert "cold-start prior" not in env["verdict_caveat"]
+    assert "~12 more check-in(s)" in env["verdict_caveat"]
+
+
 def test_sync_state_envelope_coherence_stays_a_bare_float_when_not_legacy():
     """Only the known-legacy tanh coherence gets the inline badge; an
     ordinary coherence reading (no legacy source/role) is left as a plain
