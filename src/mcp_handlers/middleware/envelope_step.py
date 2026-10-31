@@ -1114,7 +1114,7 @@ def _verdict_caveat(
     primary_driver = attribution.get("primary_driver")
     discriminability = attribution.get("discriminability")
     discriminability = discriminability if isinstance(discriminability, dict) else {}
-    cold_start = primary_driver == "phi_cold_start"
+    cold_start = _is_cold_start(source_payload)
     non_discriminative = discriminability.get("non_discriminative") is True
     until = discriminability.get("updates_until_baseline")
     tail = ""
@@ -1141,10 +1141,19 @@ def _verdict_caveat(
             None,
         )
     pointer = f" See {evidence_path} for provenance." if evidence_path else ""
+    if cold_start:
+        message = (
+            "Verdict is provisional: behavioral confidence is below the assessment "
+            "threshold. 'safe'/'proceed' means no trouble detected under the "
+            "cold-start prior, not a validated all-clear."
+        )
+    else:
+        message = (
+            "Verdict is provisional: the behavioral baseline is still forming. "
+            "'safe'/'proceed' is not a validated all-clear."
+        )
     return (
-        "Verdict is provisional: the behavioral baseline is not warm. "
-        "'safe'/'proceed' means no trouble detected under the cold-start prior, "
-        f"not a validated all-clear. Evidence basis: {evidence_basis or 'cold-start prior'}."
+        f"{message} Evidence basis: {evidence_basis or 'unspecified'}."
         + pointer
         + tail
     )

@@ -455,6 +455,10 @@ class TestGetGovernanceMetrics:
             )
             assert "feeds governance policy" in semantics["behavioral_eisv_role"]
             assert "Determines proceed/guide/pause/reject" not in semantics["behavioral_eisv_role"]
+            assert "cold-start prior" in semantics["ode_eisv_role"]
+            assert "structural basin, void and coherence checks" in semantics["ode_eisv_role"]
+            assert "diagnostic only" not in semantics["ode_eisv_role"].lower()
+            assert "not every input to the final policy action" in semantics["verdict_source_scope"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("lite", [True, False])

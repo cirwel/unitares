@@ -71,6 +71,9 @@ VERSION_REFERENCES = [
     ("pyproject.toml", [
         (r'version = "([\d.]+)"', r'version = "{version}"'),
     ]),
+    ("server.json", [
+        (r'"version": "([\d.]+)"', r'"version": "{version}"'),
+    ]),
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
