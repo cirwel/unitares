@@ -481,6 +481,7 @@ async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
     its governance plugin hook helper (Python-urllib) on the same host IP
     succeeds without emitting identity_hijack_suspected, even in strict mode."""
     from contextlib import ExitStack
+    from types import SimpleNamespace
 
     from src.mcp_handlers.identity import resolution, shared
 
@@ -499,10 +500,24 @@ async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
         stack.enter_context(
             patch("src.mcp_handlers.identity.persistence.schedule_attested_bind_fingerprint_refresh", refresh),
         )
+        stack.enter_context(
+            patch.object(shared, "session_fingerprint_check_mode", return_value="strict"),
+        )
         result = await resolution.resolve_session_identity(csid, resume=True)
         shared._bind_fingerprints[csid] = "127.0.0.1:f6f44a"
         try:
-            assert shared._check_path1_fingerprint_sync(csid, VICTIM) is True
+            with patch.object(
+                shared,
+                "get_session_signals",
+                return_value=SimpleNamespace(ip_ua_fingerprint="127.0.0.1:020f1c"),
+            ):
+                assert shared._check_path1_fingerprint_sync(csid, VICTIM) is True
+            with patch.object(
+                shared,
+                "get_session_signals",
+                return_value=SimpleNamespace(ip_ua_fingerprint="10.0.0.2:020f1c"),
+            ):
+                assert shared._check_path1_fingerprint_sync(csid, VICTIM) is False
         finally:
             shared._bind_fingerprints.pop(csid, None)
 
