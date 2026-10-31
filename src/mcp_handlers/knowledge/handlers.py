@@ -6519,10 +6519,11 @@ async def handle_promote_memory_claim(
     """Promote one imported memory into a corroborated, governed KG claim.
 
     Promotion creates a new discovery and leaves the source memory unchanged.
-    The new row receives a server-authored receipt binding the source, evidence
-    rows, promoter identity, verification basis, and decision standard.  A
-    normal store cannot forge that receipt because callers cannot supply
-    provenance directly.
+    The new row keeps the compatible knowledge-authority receipt and embeds a
+    content-addressed ``unitares.transition_receipt.v1`` over the exact
+    promotion projection.  A normal store cannot forge either receipt because
+    callers cannot supply provenance directly.  The transition receipt proves
+    attributable same-object persistence, not correctness or approval.
     """
     from ..support.agent_auth import verify_agent_ownership
     from ..utils import check_agent_can_operate
@@ -6651,7 +6652,12 @@ async def handle_promote_memory_claim(
         provenance, provenance_chain = await _capture_store_provenance(
             arguments, agent_id
         )
-        promoted_at = _utc_now_iso()
+        # One server-minted timestamp identifies the durable row and the
+        # accepted transition.  The receipt normalizes it to fixed UTC
+        # microseconds when hashing; storage may render the same instant with
+        # ``+00:00`` instead of ``Z`` on read-back.
+        claim_id = _new_discovery_id()
+        promoted_at = claim_id
         provenance["source"] = "explicit_promotion"
         provenance["knowledge_authority"] = {
             "schema": PROMOTION_SCHEMA,
@@ -6668,13 +6674,14 @@ async def handle_promote_memory_claim(
             "promoted-from-memory",
         ])
         claim = DiscoveryNode(
-            id=_new_discovery_id(),
+            id=claim_id,
             agent_id=agent_id,
             type=discovery_type,
             summary=summary,
             details=details,
             tags=tags,
             severity=severity,
+            timestamp=promoted_at,
             status="open",
             related_to=[source_id, *evidence_ids],
             references_files=arguments.get("related_files") or [],
@@ -6682,6 +6689,10 @@ async def handle_promote_memory_claim(
             provenance_chain=provenance_chain,
             confidence=_parse_store_confidence(arguments),
         )
+        from src.transition_receipt import build_knowledge_promotion_receipt
+
+        transition_receipt = build_knowledge_promotion_receipt(claim)
+        provenance["transition_receipt"] = transition_receipt
         _annotate_knowledge_confidence_authority(claim)
         # Measured on the stored list, which includes the two promotion tags.
         oversized = _oversized_tags(
@@ -6702,6 +6713,7 @@ async def handle_promote_memory_claim(
                 "evidence_ids": evidence_ids,
                 "authority": assess_authority(claim).to_dict(),
                 "promotion_receipt": provenance["knowledge_authority"],
+                "transition_receipt": transition_receipt,
                 "discovery": claim.to_dict(include_details=False),
                 "note": (
                     "Governed means the promotion transition is attributable and "
