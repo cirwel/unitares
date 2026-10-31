@@ -570,6 +570,37 @@ async def test_a_keyed_resume_refreshes_bind_fp_once_on_log_mode_ip_shift(keyed)
 
 
 @pytest.mark.asyncio
+async def test_a_keyed_resume_does_not_refresh_bind_fp_when_ua_hash_differs_across_ip_shift(keyed):
+    """When both the IP and User-Agent hash change on a keyed session in log
+    mode, identity_hijack_suspected is emitted and the stored bind fingerprint
+    is NOT overwritten by the foreign client."""
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    bcast = MagicMock()
+    bcast.broadcast_event = AsyncMock()
+    refresh = MagicMock()
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(
+            resolution, "127.0.0.1:f6f44a", "97.171.0.192:020f1c", mode="log",
+        ):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("src.mcp_handlers.identity.handlers._broadcaster", return_value=bcast),
+        )
+        stack.enter_context(
+            patch("src.mcp_handlers.identity.persistence.schedule_attested_bind_fingerprint_refresh", refresh),
+        )
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
+    bcast.broadcast_event.assert_awaited_once()
+    refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_a_keyed_resume_does_not_refresh_bind_fp_when_check_is_off(keyed):
     """When UNITARES_SESSION_FINGERPRINT_CHECK=off, neither an alert nor a
     stored-fingerprint refresh runs on a keyed resume from a different IP."""

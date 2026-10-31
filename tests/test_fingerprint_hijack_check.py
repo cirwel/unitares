@@ -99,10 +99,13 @@ async def test_global_mode_never_penalizes_missing_fp_on_nonprefix():
 
 
 @pytest.mark.asyncio
-async def test_keyed_session_same_host_ua_shift_is_not_a_violation_in_log_mode():
-    """In log mode, a keyed session id shared between an IDE/CLI MCP client and
-    a local hook helper (urllib) on loopback does not emit a hijack alert."""
-    keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
+async def test_keyed_session_same_host_ua_shift_is_not_a_violation_in_log_mode(monkeypatch):
+    """In log mode, a verified keyed session id shared between an IDE/CLI MCP
+    client and a local hook helper (urllib) on loopback does not emit a hijack
+    alert."""
+    from src.mcp_handlers.identity.shared import make_client_session_id
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "keyed-session-test-secret")
+    keyed_key = make_client_session_id(_AU)
     result, b = await _call(
         keyed_key,
         "127.0.0.1:f6f44a",
@@ -114,10 +117,28 @@ async def test_keyed_session_same_host_ua_shift_is_not_a_violation_in_log_mode()
 
 
 @pytest.mark.asyncio
-async def test_keyed_session_same_host_ua_shift_still_blocked_in_strict_mode():
+async def test_forged_keyed_session_same_host_ua_shift_still_fires_in_log_mode(monkeypatch):
+    """A forged keyed id whose HMAC tag does not verify for agent_uuid is not
+    exempted from the loopback UA-shift check in log mode."""
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "keyed-session-test-secret")
+    forged_key = "agent-11111111-111-abcdefghijklmnopqrst"
+    result, b = await _call(
+        forged_key,
+        "127.0.0.1:f6f44a",
+        global_mode="log",
+        current_fp="127.0.0.1:020f1c",
+    )
+    assert result is False
+    b.broadcast_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_keyed_session_same_host_ua_shift_still_blocked_in_strict_mode(monkeypatch):
     """Strict mode keeps the full fingerprint guard on loopback so a headerless
     local forwarder (SSH tunnel / socat) cannot bypass strict enforcement."""
-    keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
+    from src.mcp_handlers.identity.shared import make_client_session_id
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "keyed-session-test-secret")
+    keyed_key = make_client_session_id(_AU)
     result, b = await _call(
         keyed_key,
         "127.0.0.1:f6f44a",
@@ -142,9 +163,11 @@ async def test_nonkeyed_session_same_host_ua_shift_still_fires():
 
 
 @pytest.mark.asyncio
-async def test_keyed_session_nonloopback_same_ip_ua_shift_still_fires():
+async def test_keyed_session_nonloopback_same_ip_ua_shift_still_fires(monkeypatch):
     """A shared non-loopback address (e.g. proxy/NAT) is not exempted on keyed sessions."""
-    keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
+    from src.mcp_handlers.identity.shared import make_client_session_id
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "keyed-session-test-secret")
+    keyed_key = make_client_session_id(_AU)
     result, b = await _call(
         keyed_key,
         "10.0.0.1:f6f44a",
@@ -153,4 +176,3 @@ async def test_keyed_session_nonloopback_same_ip_ua_shift_still_fires():
     )
     assert result is True
     b.broadcast_event.assert_awaited_once()
-

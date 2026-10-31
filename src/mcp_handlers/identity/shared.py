@@ -189,11 +189,11 @@ def _check_path1_fingerprint_sync(key: str, agent_uuid: Optional[str]) -> bool:
     if mode == "off":
         return True
 
-    from .stable_session import classify as _csid_kind
     from .stable_session import same_host_ua_shift as _same_host_ua_shift
+    from .stable_session import verifies_for as _verifies_for
     if (
         mode == "log"
-        and _csid_kind(key) == "keyed"
+        and _verifies_for(key, agent_uuid)
         and _same_host_ua_shift(bound_fp, current_fp)
     ):
         return True
