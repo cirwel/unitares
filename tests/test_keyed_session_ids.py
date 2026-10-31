@@ -527,6 +527,7 @@ async def test_a_keyed_resume_suppresses_loopback_ua_shift_alert_in_log_mode_onl
     bcast.broadcast_event.assert_not_awaited()
     refresh.assert_not_called()
 
+    ss.forget_verified()
     with ExitStack() as stack:
         for p in _keyed_resume_patches(
             resolution, "127.0.0.1:f6f44a", "127.0.0.1:020f1c", mode="strict",
