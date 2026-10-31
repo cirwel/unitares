@@ -1487,6 +1487,7 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 #: per diff, so a sample, not a quality guarantee. REVIEW_AGY_MODEL overrides
 #: it; "default" leaves the choice to agy.
 AGY_DEFAULT_MODEL = "gemini-4-argon-high"
+_AGY_MODEL_OVERRIDE: str | None = None
 #: A changed file whose name agy would load as instructions (AGENTS.md,
 #: GEMINI.md, CLAUDE.md, anything under .agents/, .agent/ or .gemini/) is
 #: written with this suffix, so the PR under review cannot configure its own
@@ -1496,10 +1497,25 @@ _AGY_CONFIG_NAMES = {"agents.md", "gemini.md", "claude.md"}
 _AGY_CONFIG_DIRS = {".agents", ".agent", ".gemini"}
 
 
-def agy_model_name() -> str:
-    """The model an agy review runs: REVIEW_AGY_MODEL, else the default;
-    "default" means agy's own default, which is a Gemini model."""
-    return os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
+def _with_agy_model(fn):
+    def wrapped(args, *rest, **kw):
+        global _AGY_MODEL_OVERRIDE
+        prev = _AGY_MODEL_OVERRIDE
+        override = (getattr(args, "agy_model", None) or "").strip()
+        if override:
+            _AGY_MODEL_OVERRIDE = override
+        try:
+            return fn(args, *rest, **kw)
+        finally:
+            _AGY_MODEL_OVERRIDE = prev
+    return wrapped
+
+
+def agy_model_name(model: str | None = None) -> str:
+    """The model an agy review runs: explicit model, --agy-model, REVIEW_AGY_MODEL,
+    else the default; "default" means agy's own default, which is a Gemini model."""
+    chosen = model if model is not None else (_AGY_MODEL_OVERRIDE or os.environ.get("REVIEW_AGY_MODEL", ""))
+    return chosen.strip() or AGY_DEFAULT_MODEL
 
 
 def marker_model(model: str) -> str:
@@ -1509,9 +1525,9 @@ def marker_model(model: str) -> str:
     return model if model and REVIEWER_NAME_RE.fullmatch(model) else ""
 
 
-def agy_model_args() -> list[str]:
-    model = os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
-    return [] if model == "default" else ["--model", model]
+def agy_model_args(model: str | None = None) -> list[str]:
+    chosen = agy_model_name(model)
+    return [] if chosen == "default" else ["--model", chosen]
 
 # agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
 # untrusted text (a PR diff, a paused agent's thesis), and an injected "print
@@ -2219,14 +2235,47 @@ def provider_state_path(reviewer: str) -> Path:
     return common / "review-gate" / f"{reviewer}-availability.json"
 
 
+def _retry_after(entry) -> float:
+    try:
+        return float(entry.get("retry_after", 0)) if isinstance(entry, dict) else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def provider_cooldown(reviewer: str) -> str | None:
     try:
         state = json.loads(provider_state_path(reviewer).read_text())
-        if float(state["retry_after"]) > time.time():
+        if not isinstance(state, dict):
+            return None
+        now = time.time()
+        if _retry_after(state) > now and state.get("reason"):
             return str(state["reason"])
+        if reviewer == "antigravity" and isinstance(state.get("models"), dict):
+            entry = state["models"].get(agy_model_name())
+            if _retry_after(entry) > now and entry.get("reason"):
+                return str(entry["reason"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return None
+
+
+def clear_provider_cooldown(reviewer: str) -> None:
+    path = provider_state_path(reviewer)
+    if reviewer == "antigravity":
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, ValueError, TypeError):
+            state = None
+        if isinstance(state, dict) and isinstance(state.get("models"), dict):
+            now = time.time()
+            models = {m: v for m, v in state["models"].items()
+                      if m != agy_model_name() and _retry_after(v) > now and v.get("reason")}
+            if models:
+                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+                    json.dump({"models": models}, f)
+                os.replace(f.name, path)
+                return
+    path.unlink(missing_ok=True)
 
 
 def remember_unavailable(reviewer: str, text: str, note: str) -> None:
@@ -2234,6 +2283,8 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
 
     Only classified infrastructure errors impose an hour's cooldown. An
     incomplete/model-generated answer isn't proof the provider is unavailable.
+    Antigravity enforces quota per model, so an agy quota failure cools down
+    only the active model while auth/startup failures cool down the provider.
     """
     message = (text + "\n" + note).lower()
     reasons = {
@@ -2248,10 +2299,26 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
         return
     path = provider_state_path(reviewer)
     path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    entry = {"retry_after": now + PROVIDER_COOLDOWN_S, "reason": reason}
+    try:
+        prior = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        prior = {}
+    raw_models = prior.get("models") if isinstance(prior, dict) and isinstance(prior.get("models"), dict) else {}
+    models = {m: v for m, v in raw_models.items()
+              if _retry_after(v) > now and v.get("reason")}
+    if reviewer == "antigravity" and reason == "quota":
+        models[agy_model_name()] = entry
+        payload: dict = {"models": models}
+        if _retry_after(prior) > now and prior.get("reason") not in (None, "quota"):
+            payload.update(retry_after=prior["retry_after"], reason=prior["reason"])
+    else:
+        payload = {**entry, **({"models": models} if reviewer == "antigravity" and models else {})}
     # Atomic per-provider file; concurrent reviews of other diffs cannot
     # clobber another provider's cooldown or observe partially written JSON.
     with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
-        json.dump({"retry_after": time.time() + PROVIDER_COOLDOWN_S, "reason": reason}, f)
+        json.dump(payload, f)
     os.replace(f.name, path)
 
 
@@ -2413,7 +2480,7 @@ def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
         return None, None
     denied = data.get("denied_actions")
     response = str(data.get("response") or "")
-    if not response.strip() and (
+    if parse_verdict(response) is None and (
             _AGY_DENIED_MARK in stderr or (isinstance(denied, list) and denied)):
         return "denied", cid
     if parse_verdict(response) is not None and not has_reasoning(response):
@@ -3032,6 +3099,7 @@ class review_lock:
             self.held = False
 
 
+@_with_agy_model
 def cmd_review(args) -> int:
     args.base = getattr(args, "base", DEFAULT_BASE)
     pr, repo, key, branch = _resolve(args)
@@ -3279,9 +3347,17 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     if waived:
         print(f"[review] second family waived by the operator ({waived[:120]}); CI accepts it")
         return result
-    candidates = second_family_candidates(
-        getattr(args, "branch", "") or "", families, comments, key,
-        set(getattr(args, "failed_providers", set()) or set()))
+    global _AGY_MODEL_OVERRIDE
+    prev_agy = _AGY_MODEL_OVERRIDE
+    _AGY_MODEL_OVERRIDE = None
+    try:
+        failed = set(getattr(args, "failed_providers", set()) or set())
+        if prev_agy:
+            failed.discard("antigravity")
+        candidates = second_family_candidates(
+            getattr(args, "branch", "") or "", families, comments, key, failed)
+    finally:
+        _AGY_MODEL_OVERRIDE = prev_agy
     have = ", ".join(sorted(families)) or "none"
     if candidates:
         runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
@@ -3459,6 +3535,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     return finish_record(repo, pr, key, head, rec, pr_comments(repo, pr))
 
 
+@_with_agy_model
 def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     """One independent provider attempt within the wall-clock budget.
 
@@ -3509,6 +3586,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     return UNREVIEWED
 
 
+@_with_agy_model
 def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     require_open(pr)
     out_dir = Path(CACHE_DIR) / key / reviewer
@@ -3594,12 +3672,13 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         partial = partial_finding_count(text)
         if partial:
             text = partial_review_text(text) + f"\n\nIncomplete provider attempt ({note}); no completed review coverage."
-        rec = Record(key, "FINDINGS" if partial else "FAILED", partial, False, reviewer)
+        rec = Record(key, "FINDINGS" if partial else "FAILED", partial, False, reviewer,
+                     model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = (f"FINDINGS({partial}) (incomplete review: {note})" if partial else
                    f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})")
     else:
         verdict, n = parsed
-        provider_state_path(reviewer).unlink(missing_ok=True)
+        clear_provider_cooldown(reviewer)
         rec = Record(key, verdict, n, False, reviewer,
                      model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
@@ -3796,13 +3875,15 @@ SWEEP_HOLD_LABEL = "no-auto-review"
 
 
 def failed_runs(comments: list[dict], key: str, reviewer: str | None = None) -> int:
+    agy_model = marker_model(agy_model_name()) if reviewer == "antigravity" else ""
     n = 0
     for c in comments:
         if not trusted_review_comment(c):
             continue
         rec = parse_record(c.get("body", ""))
         n += bool(rec and rec.key == key and rec.verdict == "FAILED"
-                  and (reviewer is None or rec.reviewer == reviewer))
+                  and (reviewer is None or rec.reviewer == reviewer)
+                  and (not agy_model or not rec.model or rec.model == agy_model))
     return n
 
 
@@ -3927,6 +4008,7 @@ def _skips_author_family(provider: str, authored_by: set[str]) -> bool:
     return provider_family(provider) in authored_by
 
 
+@_with_agy_model
 def cmd_sweep(args) -> int:
     """Review at most ONE PR per run: bounded cost, and launchd never overlaps
     a job with itself. Runs THIS script (the caller's trusted checkout) with
@@ -4028,6 +4110,8 @@ def cmd_sweep(args) -> int:
         command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
         if required_family:
             command += ["--reviewer", reviewer, "--fresh"]
+        if getattr(args, "agy_model", None):
+            command += ["--agy-model", args.agy_model]
         # The chosen provider is explicit even without a CLI flag. Preserve
         # the optional native route for a first Codex pass; --reviewer pins a
         # local attempt, which the missing-family pass deliberately requests.
@@ -4188,6 +4272,8 @@ def main(argv: list[str] | None = None) -> int:
                                help="consume a user-authored, revision-bound grant for one extra review cycle")
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
+    r.add_argument("--agy-model", default=None,
+                   help="model for --reviewer antigravity (overrides REVIEW_AGY_MODEL)")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
     r.add_argument("--respect-provider-cooldown", action="store_true",
                    help="select a provider without overriding cooldown or exhausted retries (resumable delivery)")
@@ -4235,6 +4321,8 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--reviewer", action="append", choices=sorted(KNOWN_PROVIDERS),
                     help="caller-selected provider; repeat in desired fallback order; "
                          "otherwise UNITARES_REVIEWER (no built-in default)")
+    sw.add_argument("--agy-model", default=None,
+                    help="model for --reviewer antigravity (overrides REVIEW_AGY_MODEL)")
 
     c = sub.add_parser("ci", help="workflow: set the review evidence check on a PR head")
     c.add_argument("--repo", required=True)
@@ -4244,6 +4332,8 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
+    if getattr(args, "agy_model", None) and not REVIEWER_NAME_RE.fullmatch(args.agy_model):
+        p.error("--agy-model must match [A-Za-z0-9_.:@/+-]+")
     try:
         result = {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
                   "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)

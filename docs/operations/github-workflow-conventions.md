@@ -604,7 +604,12 @@ a fresh temporary `HOME` (only the login keychain is linked in), so standing
 permission grants and MCP servers in `~/.gemini` never load, plus
 `--mode plan --sandbox` (without `--disable-slash-commands`, which disables plan
 mode in `agy` 1.2.11). The default model is Gemini 4 Argon (High);
-`REVIEW_AGY_MODEL` overrides it (`default` leaves the choice to `agy`). Shell
+`--agy-model <model>` or `REVIEW_AGY_MODEL` overrides it (`default` leaves the
+choice to `agy`), including Claude models served by `agy` (such as
+`claude-opus-5-5-high` or `claude-sonnet-5-5-high`, which record and count as
+Anthropic-family reviews). Antigravity quota cooldowns and per-diff retry
+counts are tracked per `agy` model rather than locking out all `agy` models
+when one hits its quota. Shell
 commands are denied. The dialectic reviewer can use Antigravity too
 (`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the orchestrator's
 environment) through its own backend, which inlines a short self-contained
@@ -615,6 +620,7 @@ machine:
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy        # once, interactively: sign in, then /exit
 ./scripts/dev/review.sh --reviewer antigravity   # explicit caller choice
+./scripts/dev/review.sh --reviewer antigravity --agy-model claude-opus-5-5-high
 ```
 
 Antigravity's terms let Google collect interaction data unless you opt out in

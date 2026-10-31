@@ -4,6 +4,7 @@
 # command, keyed on the diff, a no-op when this diff already has a record.
 #
 #   ./scripts/dev/review.sh --reviewer claude    # choose based on this change's context
+#   ./scripts/dev/review.sh --reviewer antigravity --agy-model claude-opus-5-5-high
 #   UNITARES_REVIEWER=antigravity ./scripts/dev/review.sh
 #   ./scripts/dev/review.sh                     # read existing review; no implicit provider
 #   ./scripts/dev/review.sh --background --reviewer claude  # detach; join before readiness
