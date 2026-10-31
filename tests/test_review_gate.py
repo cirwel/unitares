@@ -3527,6 +3527,16 @@ def test_a_denied_file_read_is_resumed_like_a_denied_command():
     assert rg._agy_stall(out, err) == ("denied", "c")
     listed = '{"conversation_id":"c","status":"SUCCESS","response":"","denied_actions":[{"action":"read_file"}]}'
     assert rg._agy_stall(listed, "") == ("denied", "c")
+    # Claude on agy emits pre-tool narration in response before the denied tool call.
+    claude_denied = ('{"conversation_id":"c","status":"SUCCESS",'
+                     '"response":"I will start by reading diff.patch.\\n",'
+                     '"denied_actions":[{"action":"command","display_name":"RunCommand"}]}')
+    assert rg._agy_stall(claude_denied, "") == ("denied", "c")
+    # A completed review that recovered and produced a verdict is not a stall.
+    completed = ('{"conversation_id":"c","status":"SUCCESS",'
+                 '"response":"' + _REASONED.replace("\n", "\\n") + '",'
+                 '"denied_actions":[{"action":"command"}]}')
+    assert rg._agy_stall(completed, "") == (None, None)
 
 
 def test_the_denied_resume_prompt_fits_a_denied_file_read():

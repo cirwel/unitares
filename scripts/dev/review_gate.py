@@ -2480,7 +2480,7 @@ def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
         return None, None
     denied = data.get("denied_actions")
     response = str(data.get("response") or "")
-    if not response.strip() and (
+    if parse_verdict(response) is None and (
             _AGY_DENIED_MARK in stderr or (isinstance(denied, list) and denied)):
         return "denied", cid
     if parse_verdict(response) is not None and not has_reasoning(response):
