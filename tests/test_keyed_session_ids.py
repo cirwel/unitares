@@ -476,10 +476,11 @@ async def test_a_keyed_resume_without_a_recorded_fingerprint_proceeds(keyed):
 
 
 @pytest.mark.asyncio
-async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
+async def test_a_keyed_resume_suppresses_loopback_ua_shift_alert_in_log_mode_only(keyed):
     """A keyed id shared between a local MCP client (e.g. codex-mcp-client) and
-    its governance plugin hook helper (Python-urllib) on the same host IP
-    succeeds without emitting identity_hijack_suspected, even in strict mode."""
+    its governance plugin hook helper (Python-urllib) on loopback suppresses
+    identity_hijack_suspected in log mode, while strict mode still enforces the
+    full fingerprint match."""
     from contextlib import ExitStack
     from types import SimpleNamespace
 
@@ -491,7 +492,7 @@ async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
     refresh = MagicMock()
     with ExitStack() as stack:
         for p in _keyed_resume_patches(
-            resolution, "127.0.0.1:f6f44a", "127.0.0.1:020f1c", mode="strict",
+            resolution, "127.0.0.1:f6f44a", "127.0.0.1:020f1c", mode="log",
         ):
             stack.enter_context(p)
         stack.enter_context(
@@ -500,22 +501,23 @@ async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
         stack.enter_context(
             patch("src.mcp_handlers.identity.persistence.schedule_attested_bind_fingerprint_refresh", refresh),
         )
-        stack.enter_context(
-            patch.object(shared, "session_fingerprint_check_mode", return_value="strict"),
-        )
         result = await resolution.resolve_session_identity(csid, resume=True)
         shared._bind_fingerprints[csid] = "127.0.0.1:f6f44a"
         try:
             with patch.object(
+                shared, "session_fingerprint_check_mode", return_value="log",
+            ), patch.object(
                 shared,
                 "get_session_signals",
                 return_value=SimpleNamespace(ip_ua_fingerprint="127.0.0.1:020f1c"),
             ):
                 assert shared._check_path1_fingerprint_sync(csid, VICTIM) is True
             with patch.object(
+                shared, "session_fingerprint_check_mode", return_value="strict",
+            ), patch.object(
                 shared,
                 "get_session_signals",
-                return_value=SimpleNamespace(ip_ua_fingerprint="10.0.0.2:020f1c"),
+                return_value=SimpleNamespace(ip_ua_fingerprint="127.0.0.1:020f1c"),
             ):
                 assert shared._check_path1_fingerprint_sync(csid, VICTIM) is False
         finally:
@@ -524,6 +526,15 @@ async def test_a_keyed_resume_accepts_same_host_ua_shift_in_strict_mode(keyed):
     assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
     bcast.broadcast_event.assert_not_awaited()
     refresh.assert_not_called()
+
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(
+            resolution, "127.0.0.1:f6f44a", "127.0.0.1:020f1c", mode="strict",
+        ):
+            stack.enter_context(p)
+        strict_result = await resolution.resolve_session_identity(csid, resume=True)
+    assert strict_result.get("error") == "resume_rejected_hijack_guard"
+    assert strict_result.get("reason") == "fingerprint_mismatch"
 
 
 @pytest.mark.asyncio

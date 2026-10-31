@@ -181,17 +181,21 @@ def _check_path1_fingerprint_sync(key: str, agent_uuid: Optional[str]) -> bool:
     if current_fp == bound_fp:
         return True
 
-    from .stable_session import classify as _csid_kind
-    from .stable_session import same_host_ua_shift as _same_host_ua_shift
-    if _csid_kind(key) == "keyed" and _same_host_ua_shift(bound_fp, current_fp):
-        return True
-
     try:
         mode = session_fingerprint_check_mode()
     except Exception:
         mode = "log"
 
     if mode == "off":
+        return True
+
+    from .stable_session import classify as _csid_kind
+    from .stable_session import same_host_ua_shift as _same_host_ua_shift
+    if (
+        mode == "log"
+        and _csid_kind(key) == "keyed"
+        and _same_host_ua_shift(bound_fp, current_fp)
+    ):
         return True
 
     logger.warning(

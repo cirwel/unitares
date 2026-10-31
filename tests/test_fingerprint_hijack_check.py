@@ -99,9 +99,24 @@ async def test_global_mode_never_penalizes_missing_fp_on_nonprefix():
 
 
 @pytest.mark.asyncio
-async def test_keyed_session_same_host_ua_shift_is_not_a_violation():
-    """A keyed session id shared between an IDE/CLI MCP client and a local hook
-    helper (urllib) on the same host IP differs only in the 6-hex UA suffix."""
+async def test_keyed_session_same_host_ua_shift_is_not_a_violation_in_log_mode():
+    """In log mode, a keyed session id shared between an IDE/CLI MCP client and
+    a local hook helper (urllib) on loopback does not emit a hijack alert."""
+    keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
+    result, b = await _call(
+        keyed_key,
+        "127.0.0.1:f6f44a",
+        global_mode="log",
+        current_fp="127.0.0.1:020f1c",
+    )
+    assert result is False
+    b.broadcast_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keyed_session_same_host_ua_shift_still_blocked_in_strict_mode():
+    """Strict mode keeps the full fingerprint guard on loopback so a headerless
+    local forwarder (SSH tunnel / socat) cannot bypass strict enforcement."""
     keyed_key = "agent-11111111-111-abcdefghijklmnopqrst"
     result, b = await _call(
         keyed_key,
@@ -109,8 +124,8 @@ async def test_keyed_session_same_host_ua_shift_is_not_a_violation():
         global_mode="strict",
         current_fp="127.0.0.1:020f1c",
     )
-    assert result is False
-    b.broadcast_event.assert_not_awaited()
+    assert result is True
+    b.broadcast_event.assert_awaited_once()
 
 
 @pytest.mark.asyncio

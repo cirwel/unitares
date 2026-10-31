@@ -684,11 +684,16 @@ async def _fingerprint_hijack_check(
 
     _violation = None
     if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
-        # For an HMAC-keyed session id, companion processes on the same host
-        # (e.g. an IDE/CLI MCP client and a plugin hook script over urllib)
-        # legitimately share the session from the same IP with different
-        # User-Agent strings.
-        if not (_is_keyed and _same_host_ua_shift(cached_bind_fp, current_fp)):
+        # In log mode, companion processes on loopback (e.g. an IDE/CLI MCP
+        # client and a plugin hook script over urllib) legitimately share a
+        # verified keyed session with different User-Agent strings. Strict mode
+        # keeps the full fingerprint guard so a headerless loopback forwarder
+        # (SSH tunnel / socat) cannot bypass strict enforcement.
+        if not (
+            _is_keyed
+            and _fp_mode == "log"
+            and _same_host_ua_shift(cached_bind_fp, current_fp)
+        ):
             _violation = "fingerprint_mismatch"
     elif _prefix_active and not cached_bind_fp:
         _violation = "no_bind_fingerprint"

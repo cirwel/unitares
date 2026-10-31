@@ -116,12 +116,12 @@ def same_host_ua_shift(bound_fp: Optional[str], current_fp: Optional[str]) -> bo
     """True when two ``<host>:<ua6>`` fingerprints share the same loopback host
     and differ only in the 6-hex User-Agent hash suffix.
 
-    A keyed session id (``agent-{uuid12}-{tag}``) is an HMAC capability shared
-    across companion processes on the local machine — e.g. an IDE/CLI MCP client
-    (``codex-mcp-client``, ``claude-code``) and out-of-process governance plugin
-    hooks (``scripts/checkin.py`` over ``urllib``). They present the same keyed
-    id over loopback with different User-Agent strings. Non-loopback shared
-    addresses (e.g. a reverse proxy or NAT) are not exempted.
+    Used only in ``log`` mode to suppress false-positive
+    ``identity_hijack_suspected`` telemetry when local companion processes
+    (e.g. an IDE/CLI MCP client and ``unitares-governance-plugin`` hooks over
+    ``urllib``) share a verified keyed session over loopback with different
+    User-Agent strings. Never used to bypass ``strict`` mode, because a
+    headerless local forwarder (SSH tunnel / socat) also appears as loopback.
     """
     if not bound_fp or not current_fp or bound_fp == current_fp:
         return False
