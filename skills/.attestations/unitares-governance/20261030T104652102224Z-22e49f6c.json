@@ -1,0 +1,35 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-10-30T10:46:52Z",
+  "verified_date": "2026-10-30",
+  "verifier": "Codex agent ad5df17e-cb56-4f9a-a702-890f9d6120c6 (model unavailable): rechecked umbrella routing after knowledge-graph transition-receipt documentation update",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "67b5e4970711ca7e",
+    "unitares/skills/governance-fundamentals/SKILL.md": "759757f571bd4776",
+    "unitares/skills/governance-lifecycle/SKILL.md": "c723b18704909f93",
+    "unitares/skills/knowledge-graph/SKILL.md": "5c857f604bf88d30",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
+    "unitares/src/agent_loop_detection.py": "5080b5c06fc2b56d",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "862831ee9525d389",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "c9030614f118b5de",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/schemas/identity.py": "8f8798c5515927bc",
+    "unitares/src/mcp_handlers/tool_stability.py": "b271b275a249db52",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "dd3d584e396b47c2",
+  "superseded_digests": {
+    "unitares/skills/knowledge-graph/SKILL.md": [
+      "e4bb5a3ad38b928f"
+    ]
+  }
+}

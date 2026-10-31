@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -205,12 +206,26 @@ async def test_promote_memory_claim_creates_server_receipt_and_leaves_source():
     assert result["source_id"] == "memory-1"
     assert result["authority"]["tier"] == GOVERNED_CLAIM
     assert result["promotion_receipt"]["evidence_ids"] == ["evidence-1"]
+    assert result["transition_receipt"]["stance"] == "descriptive"
+    assert result["transition_receipt"]["authorizes"] == []
     graph.add_discovery.assert_awaited_once()
     stored = graph.add_discovery.await_args.args[0]
     assert stored.related_to == ["memory-1", "evidence-1"]
     assert stored.provenance["source"] == "explicit_promotion"
+    assert stored.provenance["transition_receipt"] == result["transition_receipt"]
     assert PROMOTION_TAG in stored.tags
     assert source.status == "open"
+
+    # Verify from a serialized read-back shape rather than the in-memory object
+    # used to construct the receipt.  A verifier needs no server or database.
+    from src.transition_receipt import verify_transition_receipt
+
+    read_back = json.loads(json.dumps(stored.to_dict()))
+    valid, errors = verify_transition_receipt(
+        read_back["provenance"]["transition_receipt"], read_back
+    )
+    assert valid is True
+    assert errors == []
 
 
 @pytest.mark.asyncio

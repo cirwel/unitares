@@ -242,6 +242,19 @@ evidence. It creates a new row linked to the source and evidence; it does not
 rewrite or delete the imported memory. “Governed” means the transition is
 attributable and evidence-linked, not that the resulting claim is infallible.
 
+The created row also stores `provenance.transition_receipt`, and the promotion
+response returns that object alongside the existing policy receipt. This v1
+receipt is an unsigned, content-addressed statement inside the UNITARES
+server's existing authority domain: it covers the exact accepted creation
+projection and names which fields the server did and did not verify. It does
+not prove claim correctness, independent review, operator approval or external
+non-repudiation, and its empty `authorizes` list grants no authority. Verify it
+against the durable row before relying on it; a later row edit intentionally
+produces `subject_hash_mismatch` rather than rewriting the historical receipt.
+Verification needs the complete covered row, including the full `details`
+value. Summary-mode and paginated fragments fail explicitly as an incomplete
+subject projection; retrieve and assemble all details pages before verifying.
+
 ## Discovery Types
 
 When storing a discovery, classify it. The current caller-facing set is:
