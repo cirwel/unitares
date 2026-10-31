@@ -5929,3 +5929,71 @@ def test_missing_second_family_on_sensitive_path_is_not_blocked_by_round_cap(rep
     assert rg.cmd_review(args) == rg.UNREVIEWED
     assert not ran
 
+
+def test_agy_quota_cooldown_is_scoped_per_model_while_auth_is_provider_wide(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    rg.remember_unavailable("antigravity", "Individual quota reached for this model", "exit 1")
+    assert rg.provider_cooldown("antigravity") == "quota"
+
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
+    assert rg.provider_cooldown("antigravity") is None
+    rg.remember_unavailable("antigravity", "Individual quota reached for this model", "exit 1")
+    assert rg.provider_cooldown("antigravity") == "quota"
+
+    # A successful run on claude-opus-5-5-high clears only that model's cooldown.
+    rg.clear_provider_cooldown("antigravity")
+    assert rg.provider_cooldown("antigravity") is None
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    assert rg.provider_cooldown("antigravity") == "quota"
+
+    # Authentication failures apply across all antigravity models.
+    rg.remember_unavailable("antigravity", "not logged in", "exit 1")
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
+    assert rg.provider_cooldown("antigravity") == "authentication"
+
+
+def test_agy_failed_runs_are_counted_per_model(monkeypatch):
+    k = "k" * 64
+    comments = [
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
+        _comment(full_record(k, "FAILED", 0, False, "antigravity", model="gemini-4-argon-high")),
+    ]
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
+    assert rg.failed_runs(comments, k, "antigravity") == 3
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
+    assert rg.failed_runs(comments, k, "antigravity") == 0
+
+
+def test_agy_model_cli_flag_overrides_env_and_records_anthropic_family(repo, monkeypatch):
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "gemini-4-argon-high")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "require_open", lambda pr: None)
+    seen_models, records = [], []
+
+    def fake_run(reviewer, prompt, out_dir, budget, materials=None):
+        seen_models.append((rg.agy_model_name(), rg.provider_family("antigravity")))
+        return "Examined all changed lines and verified callers.\nVERDICT: CLEAN", "exit 0"
+
+    monkeypatch.setattr(rg, "run_reviewer", fake_run)
+    monkeypatch.setattr(rg, "post_record", lambda pr, rec, heading, text: records.append(rec))
+    args = SimpleNamespace(base="master", budget=30, reviewer="antigravity",
+                           agy_model="claude-opus-5-5-high")
+    assert rg.review_with_fallback(args, 1, "k", "antigravity") == 0
+    assert seen_models == [("claude-opus-5-5-high", "anthropic")]
+    assert len(records) == 1 and records[0].model == "claude-opus-5-5-high"
+    assert rg.record_family(records[0]) == "anthropic"
+    # Scope restores outside the call.
+    assert rg.agy_model_name() == "gemini-4-argon-high"
+
+
+def test_main_accepts_agy_model_and_rejects_malformed_agy_model(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(rg, "cmd_review", lambda args: seen.setdefault("model", args.agy_model) and 0)
+    assert rg.main(["review", "--reviewer", "antigravity", "--agy-model", "claude-opus-5-5-high"]) == 0
+    assert seen["model"] == "claude-opus-5-5-high"
+    with pytest.raises(SystemExit):
+        rg.main(["review", "--reviewer", "antigravity", "--agy-model", "bad model>"])
+
+
