@@ -76,6 +76,8 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
 
 
 LITE_PARAMETER_PRIORITIES: Dict[str, List[str]] = {
+    "start_session": ["force_new", "parent_agent_id", "spawn_reason"],
+    "onboard": ["force_new", "parent_agent_id", "spawn_reason"],
     "request_review": [
         "issue_description",
         "reasoning",

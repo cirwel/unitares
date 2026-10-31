@@ -71,7 +71,7 @@ Get started - create your identity and set up your session
 
 ### `onboard`
 
-- **Tier** common · **operation** read · **stability** beta
+- **Tier** common · **operation** write · **stability** beta
 - **Identity:** `pre_onboard`
 - **Timeout:** 15s
 - **Workflow alias:** `start_session`

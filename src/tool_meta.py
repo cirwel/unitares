@@ -200,10 +200,10 @@ TOOL_META: Tuple[ToolMeta, ...] = (
              related_to=('consult', 'describe_inference_host', 'dialectic')),
     # -- Identity
     # Mint a process identity; implemented by onboard
-    ToolMeta("start_session", category="identity", tier="essential", operation="read", workflow_alias=True,
+    ToolMeta("start_session", category="identity", tier="essential", operation="write", workflow_alias=True,
              related_to=('onboard', 'identity')),
     # Returns identity + templates (creates if new)
-    ToolMeta("onboard", category="identity", tier="common", operation="read", stability=BETA,
+    ToolMeta("onboard", category="identity", tier="common", operation="write", stability=BETA,
              related_to=('identity', 'process_agent_update')),
     # Primary identity tool (auto-creates on first call); renamed from status
     ToolMeta("identity", category="identity", tier="essential", operation="read", stability=STABLE,
