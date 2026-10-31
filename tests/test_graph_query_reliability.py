@@ -146,6 +146,43 @@ def test_interpolate_escapes_quotes():
     assert out == "RETURN 'O\\'Brien'"
 
 
+# --------------------------------------------------------------------------
+# dollar-quote wrapper (_cypher_sql)
+# --------------------------------------------------------------------------
+
+def _delimiter(sql: str) -> str:
+    return sql.split("'test_graph', ", 1)[1].split(" ", 1)[0]
+
+
+def test_cypher_sql_value_with_dollar_dollar_stays_inside_literal():
+    # A value containing `$$` must not close the SQL literal: the old bare
+    # `$$` wrapper let the rest of the value be lexed as SQL.
+    g = _Graph()
+    payload = "x$$) as (result agtype) UNION ALL SELECT 1 --"
+    cypher = g._interpolate_params("RETURN ${v}", {"v": payload})
+
+    sql = GraphMixin._cypher_sql("test_graph", cypher)
+
+    delimiter = _delimiter(sql)
+    assert delimiter.startswith("$cypher_") and delimiter.endswith("$")
+    assert delimiter != "$$"
+    assert sql.count(delimiter) == 2
+    body = sql.split(delimiter)[1]
+    assert body == f" {cypher} "
+    assert sql.endswith(f"{delimiter}) as (result agtype)")
+
+
+def test_cypher_sql_regenerates_tag_found_in_text(monkeypatch):
+    tokens = iter(["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"])
+    monkeypatch.setattr(
+        "src.db.mixins.graph.secrets.token_hex", lambda n: next(tokens)
+    )
+
+    sql = GraphMixin._cypher_sql("test_graph", "RETURN '$cypher_aaaaaaaaaaaaaaaa$'")
+
+    assert _delimiter(sql) == "$cypher_bbbbbbbbbbbbbbbb$"
+
+
 def test_sanitize_accepts_max_kg_details_with_truncation_marker():
     """The AGE wrapper must accept every details value the KG handler emits."""
     details = "D" * MAX_DETAILS_LEN + "... [truncated]"

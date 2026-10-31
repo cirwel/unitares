@@ -2568,22 +2568,66 @@ class TestDeleteAgentEdgeCases:
                 assert data["backup_path"] is None
 
     @pytest.mark.asyncio
-    async def test_delete_postgres_failure_still_succeeds(self, server):
-        """Lines 951-954: PostgreSQL delete failure is logged but doesn't block."""
+    @pytest.mark.parametrize("raises", [True, False])
+    async def test_delete_postgres_failure_preserves_live_state(self, server, raises):
+        """A failed durable delete must not claim success or remove live state."""
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
+        agent_id = "aaaaaaaa-0000-4000-8000-000000000001"
+        monitor = object()
+        server.agent_metadata = {agent_id: meta}
+        server.monitors = {agent_id: monitor}
 
         with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
-             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
-            mock_storage.delete_agent = AsyncMock(side_effect=RuntimeError("PG down"))
+             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+             patch("src.mcp_handlers.lifecycle.mutation._invalidate_agent_cache", new_callable=AsyncMock) as invalidate, \
+             patch("src.audit_log.audit_logger._write_entry") as audit:
+            mock_storage.delete_agent = AsyncMock(
+                side_effect=RuntimeError("PG down") if raises else None,
+                return_value=False,
+            )
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
             result = await handle_delete_agent({
                 "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": False,
             })
             data = _parse(result)
-            assert data["success"] is True
+            assert data["success"] is False
+            assert data["error_code"] == "DELETE_PERSIST_FAILED"
+            assert meta.status == "active"
+            assert server.monitors[agent_id] is monitor
+            meta.add_lifecycle_event.assert_not_called()
+            invalidate.assert_not_awaited()
+            audit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_persists_before_mutating_live_state(self, server):
+        agent_id = "aaaaaaaa-0000-4000-8000-000000000001"
+        meta = make_agent_meta(status="active", tags=[])
+        monitor = object()
+        server.agent_metadata = {agent_id: meta}
+        server.monitors = {agent_id: monitor}
+
+        async def persist(target):
+            assert target == agent_id
+            assert meta.status == "active"
+            assert server.monitors[agent_id] is monitor
+            meta.add_lifecycle_event.assert_not_called()
+            return True
+
+        with patch_lifecycle_server(server, require_registered=(agent_id, None)), \
+             patch_agent_storage() as mock_storage, \
+             patch("src.mcp_handlers.lifecycle.mutation._invalidate_agent_cache", new_callable=AsyncMock) as invalidate:
+            mock_storage.delete_agent = AsyncMock(side_effect=persist)
+            from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
+            result = await handle_delete_agent({
+                "agent_id": agent_id, "confirm": True, "backup_first": False,
+            })
+            assert _parse(result)["success"] is True
+            mock_storage.delete_agent.assert_awaited_once_with(agent_id)
             assert meta.status == "deleted"
+            assert agent_id not in server.monitors
+            meta.add_lifecycle_event.assert_called_once_with("deleted", "Manual deletion")
+            invalidate.assert_awaited_once_with(agent_id)
 
 
 # ============================================================================

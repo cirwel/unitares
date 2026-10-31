@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -446,6 +446,70 @@ class TestReconstructSessionFromDict:
         session = _reconstruct_session_from_dict("sess-015", data)
         assert session is not None
         assert session.topic == "Agent oscillation pattern"
+
+
+class TestReconstructPgMessageTimestamps:
+    """DialecticDB.get_session returns raw asyncpg rows: TIMESTAMPTZ message
+    timestamps arrive as aware datetimes, not isoformat strings. The protocol
+    clocks must still read the message time, not fall back to created_at."""
+
+    @staticmethod
+    def _pg_row(phase, agent_id, ts):
+        return {"message_type": phase, "agent_id": agent_id, "timestamp": ts}
+
+    def test_datetime_timestamp_normalized_to_isoformat(self):
+        ts = datetime(2026, 10, 29, 12, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "paused_agent_id": "agent-a",
+            "reviewer_agent_id": "agent-b",
+            "paused_agent_state": {},
+            "messages": [self._pg_row("thesis", "agent-a", ts)],
+        }
+        session = _reconstruct_session_from_dict("sess-pg-ts-1", data)
+        assert session is not None
+        assert session.transcript[0].timestamp == ts.isoformat()
+        assert session.get_thesis_timestamp() == ts
+
+    def test_synthesis_clock_uses_last_message_not_created_at(self):
+        now = datetime.now(timezone.utc)
+        last_synthesis = now - timedelta(minutes=10)
+        data = {
+            "paused_agent_id": "agent-a",
+            "reviewer_agent_id": "agent-b",
+            "paused_agent_state": {},
+            "phase": "synthesis",
+            "created_at": now - timedelta(hours=3),
+            "messages": [
+                self._pg_row("thesis", "agent-a", now - timedelta(hours=2, minutes=50)),
+                self._pg_row("antithesis", "agent-b", now - timedelta(hours=2, minutes=40)),
+                self._pg_row("synthesis", "agent-a", last_synthesis),
+            ],
+        }
+        session = _reconstruct_session_from_dict("sess-pg-ts-2", data)
+        assert session is not None
+        assert session.get_last_update_timestamp() == last_synthesis
+        # Measured from created_at (3h > 1h MAX_SYNTHESIS_WAIT) this would be a
+        # spurious "Synthesis timeout"; the last synthesis was 10 minutes ago.
+        assert session.check_timeout() is None
+
+    def test_antithesis_clock_uses_thesis_time(self):
+        now = datetime.now(timezone.utc)
+        thesis_at = now - timedelta(hours=3)
+        data = {
+            "paused_agent_id": "agent-a",
+            "reviewer_agent_id": "agent-b",
+            "paused_agent_state": {},
+            "phase": "antithesis",
+            "created_at": now - timedelta(hours=3, minutes=5),
+            "messages": [self._pg_row("thesis", "agent-a", thesis_at)],
+        }
+        session = _reconstruct_session_from_dict("sess-pg-ts-3", data)
+        assert session is not None
+        assert session.get_thesis_timestamp() == thesis_at
+        # 3h > 2h MAX_ANTITHESIS_WAIT: the reviewer timeout must fire.
+        timeout = session.check_timeout()
+        assert timeout is not None
+        assert timeout.startswith("Reviewer timeout")
 
 
 # ============================================================================
