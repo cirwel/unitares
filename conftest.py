@@ -11,9 +11,16 @@ call fails fast into the client's no-Redis branch instead of reading or
 writing live keys. Tests that exercise the client use fakeredis or patch
 REDIS_URL themselves, which still wins. Set UNITARES_TEST_LIVE_REDIS=1 to opt
 out deliberately.
+
+Dotenv: cold focused runs can first import application modules inside a
+fixture. Keep those imports from loading a checkout or account .env into the
+test process and its children. Tests of dotenv loading explicitly remove the
+opt-out and use a synthetic file; the environment leak guard stays enabled.
 """
 
 import os
+
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 
 UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 
