@@ -157,13 +157,15 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
                 "ODE otherwise. Check primary_eisv_source for which is active."
             ),
             "behavioral_eisv_role": (
-                "PRIMARY measurement source for governance policy when confidence >= 0.3. "
-                "Observation-first EMA of actual agent behavior; feeds governance policy "
-                "rather than directly acting as an actuator."
+                "Primary EISV measurement when confidence >= 0.3. "
+                "Observation-first EMA of agent behavior; feeds governance policy "
+                "while structural ODE checks still apply."
             ),
             "ode_eisv_role": (
-                "DIAGNOSTIC only. ODE dynamics with universal attractor. "
-                "Used for convergence tracking and phi calculation. NOT used for verdicts."
+                "ODE controller state. Supplies the primary EISV fallback and the "
+                "cold-start prior while behavioral confidence is below 0.3; also "
+                "supplies structural basin, void and coherence checks. Its dynamics "
+                "are used for convergence tracking and phi calculation."
             ),
             "ode_diagnostics_role": "Thermostat dynamics diagnostics (phi, regime, lambda1)",
             "sensor_divergence_role": (
@@ -177,6 +179,10 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
             ),
             "verdict_source": primary_source,
             "verdict_source_meta": primary_source_meta,
+            "verdict_source_scope": (
+                "Names the primary EISV source used in the assessment, not every "
+                "input to the final policy action; structural ODE checks still apply."
+            ),
             "hierarchy": [
                 "1. behavioral_eisv (primary when confidence >= 0.3)",
                 "2. ode_eisv (fallback when behavioral data insufficient)",

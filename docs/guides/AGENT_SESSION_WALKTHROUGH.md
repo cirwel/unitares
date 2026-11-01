@@ -53,7 +53,7 @@ start_session {"force_new": true, "name": "upload-fixer", "model_type": "claude"
  "is_new": true,
  "identity_resolution_outcome": "minted_force_new",
  "label_is": "social_or_cosmetic",
- "identity_assurance": {"tier": "weak", "session_source": "ip_ua_fingerprint", "caller_proven": false, "baseline": "fresh_identity"},
+ "identity_assurance": {"tier": "weak", "session_source": "pinned_onboard_session", "caller_proven": false, "baseline": "fresh_identity"},
  "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work. Tier describes this mint only; check_working_state(client_session_id=...) confirms threading."
 }
 ```
@@ -81,7 +81,21 @@ check_working_state {"client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zal
 The returned `agent_uuid` matches step 2, so `client_session_id` is binding
 this process's calls to its own identity.
 
+These labels describe different things: `tier: weak` is the proof on the
+*minting call*; `uninitialized` says no check-in has recorded behavioral state;
+`ode_fallback` labels the source of the provisional EISV shown before behavioral
+confidence reaches 0.3. None is a verdict about the agent's work. A later
+`check_working_state(client_session_id=...)` confirms the call binding, while
+the first meaningful `sync_state` begins the state history.
+
 ### 4. Record what a later process would search for
+
+Search shared memory before storing. A search result may point to later
+corrections by `resolution_notes.latest_offset`; read that section with
+`use_tool(tool_name="knowledge", arguments={"action": "details", "discovery_id": "<id>", "offset": <latest_offset>, "length": 1200})`.
+The `knowledge` router is absent from the initial progressive tool list, but
+`use_tool` can invoke it. The `details` action pages the stored text; a
+`knowledge` `get` call can return the entire finding at once.
 
 ```json
 store_finding {
@@ -124,7 +138,7 @@ sync_state {
  },
  "next_action": "Keep working; sync_state after your next substantial step. When an outcome lands, pass this prediction_id to record_result so it grades this check-in.",
  "prediction_id": "e269304b-65a2-4a30-87ba-85668eb3022c",
- "verdict_caveat": "Verdict is provisional: the behavioral baseline is not warm. 'safe'/'proceed' means no trouble detected under the cold-start prior, not a validated all-clear. Evidence basis: ode_fallback."
+ "verdict_caveat": "Verdict is provisional: behavioral confidence is below the assessment threshold. 'safe'/'proceed' means no trouble detected under the cold-start prior, not a validated all-clear. Evidence basis: ode_fallback."
 }
 ```
 

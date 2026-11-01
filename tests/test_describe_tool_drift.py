@@ -172,6 +172,20 @@ async def test_process_agent_update_describe_mentions_recent_tool_results():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["start_session", "onboard"])
+async def test_identity_minting_describe_labels_write_and_leads_with_force_new(tool_name):
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": tool_name, "lite": True})
+    data = json.loads(result[0].text)
+
+    assert data["operation"] == "write"
+    assert data["parameters"][0].startswith("force_new")
+    assert any(p.startswith("parent_agent_id") for p in data["parameters"])
+    assert any(p.startswith("spawn_reason") for p in data["parameters"])
+
+
+@pytest.mark.asyncio
 async def test_process_agent_update_lite_mentions_current_parameters():
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
