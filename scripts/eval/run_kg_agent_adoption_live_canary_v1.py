@@ -2,14 +2,16 @@
 """Run the isolated UNITARES adoption infrastructure canary v1.
 
 Version 0 is immutable evidence for the 2026-08-27 production-plugin probe.
-This follow-up preserves its frozen retrieval contract while closing three seams:
+This follow-up preserves its frozen retrieval contract while closing these seams:
 
 * a fresh canary may run only through the full loopback MCP endpoint from this
   standalone process; captured in-slot plugin evidence is recovery-only;
 * audit readback uses the canonical audit query API, which returns normalized
   JSON payloads and supports exact event-ID filtering;
 * details reads preserve both complete nested records and paginated text,
-  within the frozen root's two-page read budget.
+  within the frozen root's two-page read budget;
+* search responses are validated before another request is allowed, and an
+  optional private progress log retains bounded evidence across failures.
 
 The runner remains HOLD-only. It does not call a model, write the KG, record an
 outcome, execute a scored task, invoke orchestration, or surface an alert.
@@ -21,8 +23,10 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 import ipaddress
+import json
 import os
 from pathlib import Path
+import stat
 import sys
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
@@ -43,6 +47,30 @@ LIVE_RECEIPT_SCHEMA = "unitares.kg-agent-adoption.live-canary.v1"
 ISOLATION_CONTRACT_SCHEMA = "unitares.kg-agent-adoption.isolation-contract.v1"
 FULL_MCP_PORT = 8767
 _MAX_DETAIL_PAGES = 2  # Frozen root: 2717 characters, requested in 2000-char pages.
+_PROGRESS_LIMIT = 128 * 1024
+
+
+def _checkpoint(path: Path | None, stage: str, **fields: Any) -> None:
+    """Durably retain bounded metadata before a possibly ambiguous operation."""
+    if path is None:
+        return
+    line = (json.dumps({"stage": stage, **fields}, sort_keys=True) + "\n").encode()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        v0._require(
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o600,
+            "progress log must be an owned private regular file",
+        )
+        v0._require(info.st_size + len(line) <= _PROGRESS_LIMIT, "progress log limit exceeded")
+        with os.fdopen(fd, "ab", closefd=False) as stream:
+            stream.write(line)
+            stream.flush()
+            os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def validate_isolation_contract(
@@ -110,6 +138,7 @@ async def _fetch_discovery(
     *,
     client_session_id: str,
     timeout_s: float,
+    progress_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Read the frozen root without dropping the unpaginated details field."""
     offset = 0
@@ -130,6 +159,8 @@ async def _fetch_discovery(
             },
             timeout_s=timeout_s,
         )
+        _checkpoint(progress_path, "details_received", offset=offset,
+                    payload_sha256=v0.sha256_json(payload))
         v0._require(payload.get("success") is True, "knowledge details failed")
         record = payload.get("discovery")
         v0._require(
@@ -164,6 +195,59 @@ async def _fetch_discovery(
     raise v0.LiveCanaryError("KG details exceeded the frozen two-page read budget")
 
 
+async def _run_live_searches(
+    url: str,
+    tasks: Mapping[str, Any],
+    source_map: Mapping[str, Any],
+    *,
+    client_session_id: str,
+    timeout_s: float,
+    progress_path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Validate one frozen search before permitting the next request."""
+    results: dict[str, dict[str, Any]] = {}
+    for chain in tasks["chains"]:
+        for step in chain["steps"]:
+            if not step["eligible_for_prior_work"]:
+                continue
+            payload = await v0._call_mcp_tool(
+                url, "knowledge",
+                {
+                    "action": v0.RETRIEVAL_CONTRACT["action"],
+                    "query": step["injection_query"],
+                    "search_mode": v0.RETRIEVAL_CONTRACT["search_mode"],
+                    "operator": v0.RETRIEVAL_CONTRACT["operator"],
+                    "limit": v0.RETRIEVAL_CONTRACT["limit"],
+                    "include_details": v0.RETRIEVAL_CONTRACT["include_details"],
+                    "include_archived": v0.RETRIEVAL_CONTRACT["include_archived"],
+                    "response_mode": "full",
+                    "client_session_id": client_session_id,
+                },
+                timeout_s=timeout_s,
+            )
+            step_id = step["step_id"]
+            _checkpoint(progress_path, "search_received", step_id=step_id,
+                        payload_sha256=v0.sha256_json(payload))
+            rows = payload.get("discoveries")
+            v0._require(
+                isinstance(rows, list)
+                and len(rows) <= v0.RETRIEVAL_CONTRACT["limit"]
+                and all(isinstance(row, Mapping)
+                        and isinstance(row.get("id"), str) and row["id"] for row in rows),
+                f"invalid discovery rows for {step_id}",
+            )
+            ids = [row["id"] for row in rows]
+            v0._require(len(ids) == len(set(ids)), f"duplicate discovery rows for {step_id}")
+            # This is a validation view, not a new task/enrollment. A rank miss
+            # remains adverse evidence; refused or degraded responses stop here.
+            check = v0.summarize_search_results(
+                {"chains": [{"steps": [step]}]}, source_map, {step_id: payload},
+            )[0]
+            _checkpoint(progress_path, "search_validated", **check)
+            results[step_id] = payload
+    return results
+
+
 async def _query_exact_audit_event(event_id: str) -> list[dict[str, Any]]:
     """Read one event through the normalized application query seam."""
     from src.audit_db import query_audit_events_async
@@ -190,6 +274,7 @@ async def _run_audit_probe(
     master_commit: str,
     enrollment_sha256: str,
     task_manifest_sha256: str,
+    progress_path: Path | None = None,
 ) -> dict[str, Any]:
     from src.audit_db import append_audit_event_async
 
@@ -218,14 +303,20 @@ async def _run_audit_probe(
         "confidence": 1.0,
         "details": details,
     }
+    _checkpoint(progress_path, "audit_append_prepared", event_id=event_id,
+                content_sha256=content_digest)
     appended = await append_audit_event_async(entry, raw_hash=content_digest)
+    _checkpoint(progress_path, "audit_append_returned", event_id=event_id,
+                appended=appended is True)
     v0._require(appended is True, "awaited audit append returned false")
     rows = await _query_exact_audit_event(event_id)
-    return v0.validate_audit_readback(
+    result = v0.validate_audit_readback(
         event_id=event_id,
         expected_details=details,
         rows=rows,
     )
+    _checkpoint(progress_path, "audit_readback_verified", **result)
+    return result
 
 
 async def _recover_audit_probe(
@@ -306,6 +397,7 @@ async def run_live_canary(
     authorization_ref: str,
     probe_evidence_path: Path | None = None,
     recover_event_id: str | None = None,
+    progress_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run the v1 isolation contract while reusing the frozen v0 validators."""
     from src.db import close_db
@@ -348,6 +440,15 @@ async def run_live_canary(
     else:
         started_at = datetime.now(timezone.utc) - timedelta(seconds=1)
 
+    if progress_path is not None:
+        parent = progress_path.parent.stat()
+        v0._require(
+            parent.st_uid == os.getuid() and stat.S_IMODE(parent.st_mode) == 0o700,
+            "progress directory must be owned and mode 0700",
+        )
+        fd = os.open(progress_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        _checkpoint(progress_path, "preflight_validated")
     try:
         if probe_evidence is not None:
             identity = dict(probe_evidence["identity"])
@@ -361,6 +462,7 @@ async def run_live_canary(
             )
         else:
             identity = await v0._mint_canary_identity(mcp_url, timeout_s)
+        _checkpoint(progress_path, "identity_bound", **identity)
         exclusion_contract = v0.validate_measurement_exclusion_contract(
             identity["label"]
         )
@@ -370,14 +472,18 @@ async def run_live_canary(
                 source_map["discovery"]["id"],
                 client_session_id=identity["client_session_id"],
                 timeout_s=timeout_s,
+                progress_path=progress_path,
             )
         projection = v0.validate_source_map(tasks, source_map, discovery)
+        _checkpoint(progress_path, "source_projection_verified", **projection)
         if probe_evidence is None:
-            search_payloads = await v0._run_live_searches(
+            search_payloads = await _run_live_searches(
                 mcp_url,
                 tasks,
+                source_map,
                 client_session_id=identity["client_session_id"],
                 timeout_s=timeout_s,
+                progress_path=progress_path,
             )
         search_checks = v0.summarize_search_results(
             tasks,
@@ -394,6 +500,7 @@ async def run_live_canary(
             identity=identity,
             started_at=started_at,
         )
+        _checkpoint(progress_path, "postflight_validated")
         enrollment_digest = v0.sha256_file(enrollment_path)
         task_digest = v0.sha256_file(tasks_path)
         if recover_event_id is not None:
@@ -410,7 +517,11 @@ async def run_live_canary(
                 master_commit=source_map["code"]["master_commit"],
                 enrollment_sha256=enrollment_digest,
                 task_manifest_sha256=task_digest,
+                progress_path=progress_path,
             )
+    except BaseException as exc:
+        _checkpoint(progress_path, "failed", exception_type=type(exc).__name__)
+        raise
     finally:
         await close_db()
 
@@ -535,6 +646,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=v0.DEFAULT_OFFLINE_RECEIPT,
     )
     parser.add_argument("--receipt", type=Path, default=DEFAULT_LIVE_RECEIPT)
+    parser.add_argument("--progress", type=Path, default=None,
+                        help="New private metadata log in an owned mode-0700 directory")
     parser.add_argument(
         "--mcp-url",
         default=os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/"),
@@ -584,6 +697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     else None
                 ),
                 recover_event_id=args.recover_event_id,
+                progress_path=args.progress.resolve() if args.progress else None,
             )
         )
         v0.write_content_addressed_receipt(args.receipt.resolve(), receipt)

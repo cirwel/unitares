@@ -115,6 +115,91 @@ def test_detail_read_budget_stops_without_a_third_request(monkeypatch) -> None:
     assert call.await_count == 2
 
 
+@pytest.mark.parametrize("changes", [
+    {"success": False},
+    {"search_mode_used": "semantic"},
+    {"operator_used": "AND"},
+    {"fallback_used": True},
+    {"discoveries": [None]},
+    {"discoveries": [{"id": "duplicate"}, {"id": "duplicate"}]},
+])
+def test_search_contract_failure_stops_before_next_request(monkeypatch, changes) -> None:
+    tasks = _load(v0.DEFAULT_TASKS)
+    source_map = _load(v0.DEFAULT_SOURCE_MAP)
+    first = next(iter(_payloads(tasks, source_map["discovery"]["id"]).values()))
+    first.update(changes)
+    call = AsyncMock(side_effect=[first, AssertionError("unexpected second request")])
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    with pytest.raises(v0.LiveCanaryError):
+        asyncio.run(canary._run_live_searches(
+            "http://127.0.0.1:8767/mcp/", tasks, source_map,
+            client_session_id="test", timeout_s=1,
+        ))
+    assert call.await_count == 1
+
+
+def test_valid_top_five_miss_preserves_all_six_frozen_searches(monkeypatch) -> None:
+    tasks = _load(v0.DEFAULT_TASKS)
+    source_map = _load(v0.DEFAULT_SOURCE_MAP)
+    payloads = _payloads(tasks, source_map["discovery"]["id"])
+    next(iter(payloads.values()))["discoveries"] = []
+    call = AsyncMock(side_effect=list(payloads.values()))
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    result = asyncio.run(canary._run_live_searches(
+        "http://127.0.0.1:8767/mcp/", tasks, source_map,
+        client_session_id="test", timeout_s=1,
+    ))
+    assert call.await_count == 6
+    assert list(result) == list(payloads)
+    assert v0.summarize_search_results(tasks, source_map, result)[0]["passed"] is False
+
+
+def test_progress_file_is_private_and_bounded(tmp_path) -> None:
+    path = tmp_path / "progress.jsonl"
+    path.touch(mode=0o600)
+    canary._checkpoint(path, "test", count=1)
+    assert json.loads(path.read_text()) == {"stage": "test", "count": 1}
+    path.write_bytes(b"x" * canary._PROGRESS_LIMIT)
+    with pytest.raises(v0.LiveCanaryError, match="limit exceeded"):
+        canary._checkpoint(path, "another")
+    assert path.stat().st_size == canary._PROGRESS_LIMIT
+    path.chmod(0o644)
+    with pytest.raises(v0.LiveCanaryError, match="private regular file"):
+        canary._checkpoint(path, "another")
+
+
+def test_progress_refuses_symlink(tmp_path) -> None:
+    target = tmp_path / "target"
+    target.touch(mode=0o600)
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    with pytest.raises(OSError):
+        canary._checkpoint(link, "test")
+    assert target.read_bytes() == b""
+
+
+def test_ambiguous_audit_append_retains_event_id_without_retry(monkeypatch, tmp_path) -> None:
+    from src import audit_db
+
+    append = AsyncMock(side_effect=TimeoutError())
+    query = AsyncMock()
+    monkeypatch.setattr(audit_db, "append_audit_event_async", append)
+    monkeypatch.setattr(canary, "_query_exact_audit_event", query)
+    path = tmp_path / "progress.jsonl"
+    path.touch(mode=0o600)
+    with pytest.raises(TimeoutError):
+        asyncio.run(canary._run_audit_probe(
+            experiment_id="experiment", master_commit="a" * 40,
+            enrollment_sha256="b" * 64, task_manifest_sha256="c" * 64,
+            progress_path=path,
+        ))
+    event = json.loads(path.read_text())
+    assert event["stage"] == "audit_append_prepared"
+    assert event["event_id"] == append.call_args.args[0]["event_id"]
+    assert append.await_count == 1
+    query.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -258,7 +343,7 @@ def test_audit_probe_appends_once_then_reads_canonical_row(monkeypatch) -> None:
     assert result["recovery_used"] is False
 
 
-def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> None:
+def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch, tmp_path) -> None:
     tasks = _load(v0.DEFAULT_TASKS)
     source_map = _load(v0.DEFAULT_SOURCE_MAP)
     identity = {
@@ -283,7 +368,7 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> Non
         },
     )
     monkeypatch.setattr(
-        v0,
+        canary,
         "_run_live_searches",
         AsyncMock(
             return_value=_payloads(tasks, source_map["discovery"]["id"])
@@ -332,6 +417,7 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> Non
             mcp_url="http://127.0.0.1:8767/mcp/",
             timeout_s=1,
             authorization_ref="operator-test",
+            progress_path=tmp_path / "progress.jsonl",
         )
     )
 
@@ -342,6 +428,11 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> Non
     assert content["claims"]["durable_calibration_exclusion_proven"] is False
     assert content["claims"]["production_plumbing_fully_proven"] is False
     assert content["attempted_operations"]["audit_append_attempts_this_run"] == 1
+    events = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
+    assert [event["stage"] for event in events] == [
+        "preflight_validated", "identity_bound", "source_projection_verified", "postflight_validated",
+    ]
+    assert (tmp_path / "progress.jsonl").stat().st_mode & 0o777 == 0o600
     close_db.assert_awaited_once()
 
 
