@@ -84,7 +84,7 @@ def dangling_history(tmp_path, monkeypatch):
 @pytest.mark.parametrize("closed_pr", [False, True])
 @pytest.mark.parametrize("evolved", [False, True])
 @pytest.mark.parametrize("deletion", [False, True])
-def test_dangling_squash_landing_is_prunable(
+def test_dangling_squash_landing_requires_current_master_match(
     dangling_history, monkeypatch, closed_pr, evolved, deletion,
 ):
     git, path = dangling_history
@@ -112,14 +112,15 @@ def test_dangling_squash_landing_is_prunable(
     findings = audit.audit("example/repo", 7, 14)
 
     assert len(findings) == 1
-    assert findings[0]["class"] == "PRUNABLE"
+    assert findings[0]["class"] == ("DANGLING-REVIEW" if evolved else "PRUNABLE")
     assert findings[0]["reason"] == "no_pr_route"
-    assert "exact changed-file state is accounted for" in findings[0]["detail"]
+    if not evolved:
+        assert "exact changed-file state is accounted for" in findings[0]["detail"]
 
 
-@pytest.mark.parametrize("history_failure", [False, True])
+@pytest.mark.parametrize("path_scan_failure", [False, True])
 def test_unproven_dangling_work_keeps_alarm(
-    dangling_history, monkeypatch, history_failure,
+    dangling_history, monkeypatch, path_scan_failure,
 ):
     git, path = dangling_history
     path.write_text("Unlanded work\n")
@@ -131,15 +132,11 @@ def test_unproven_dangling_work_keeps_alarm(
         lambda commits: {"present": 1, "total": 1, "pct": 100.0,
                          "commits_sampled": 1, "commits_total": 1},
     )
-    if history_failure:
-        real_run = audit.run
+    if path_scan_failure:
+        def failing_path_scan(commits):
+            raise subprocess.CalledProcessError(1, "git diff-tree")
 
-        def failing_history(*cmd):
-            if cmd[:3] == ("git", "log", "--format=%H"):
-                raise subprocess.CalledProcessError(1, cmd)
-            return real_run(*cmd)
-
-        monkeypatch.setattr(audit, "run", failing_history)
+        monkeypatch.setattr(audit, "_paths_touched_by", failing_path_scan)
 
     findings = audit.audit("example/repo", 7, 14)
 
@@ -148,18 +145,10 @@ def test_unproven_dangling_work_keeps_alarm(
     assert "100.0%" in findings[0]["detail"]
 
 
-def test_historical_master_match_prevents_false_stranded_alarm(monkeypatch):
+def test_historical_master_match_does_not_clear_finding(monkeypatch):
     monkeypatch.setattr(audit, "_paths_touched_by", lambda commits: ["src/example.py"])
 
-    def fake_run(*cmd):
-        if cmd[:2] == ("git", "merge-base"):
-            return "fork\n"
-        assert "--ancestry-path" in cmd
-        assert f"--max-count={audit._MAX_LANDING_CANDIDATES}" in cmd
-        assert "fork..origin/master" in cmd
-        return "newer\nlanded\n"
-
-    monkeypatch.setattr(audit, "run", fake_run)
+    monkeypatch.setattr(audit, "run", lambda *cmd: "newer\nlanded\n")
 
     def fake_succeeds(*cmd):
         # Current master evolved, but commit `landed` exactly matched the branch.
@@ -167,7 +156,7 @@ def test_historical_master_match_prevents_false_stranded_alarm(monkeypatch):
 
     monkeypatch.setattr(audit, "succeeds", fake_succeeds)
 
-    assert audit._end_state_differs("topic", ["post-merge-commit"]) is False
+    assert audit._end_state_differs("topic", ["post-merge-commit"]) is True
 
 
 @pytest.mark.parametrize("pr_state", [None, "CLOSED", "MERGED"])
@@ -197,7 +186,7 @@ def test_unlanded_rollback_matching_pre_fork_master_keeps_alarm(
     assert audit.audit("example/repo", 7, 14)[0]["class"] == expected
 
 
-def test_net_zero_branch_delta_is_accounted_for(dangling_history, monkeypatch):
+def test_branch_restoring_fork_state_keeps_finding(dangling_history, monkeypatch):
     git, path = dangling_history
     original = path.read_text()
     path.write_text("Temporary branch change\n")
@@ -212,26 +201,38 @@ def test_net_zero_branch_delta_is_accounted_for(dangling_history, monkeypatch):
     monkeypatch.setattr(audit, "newest_pr", lambda repo, branch: None)
 
     assert len(audit.unmerged_patch_commits("topic")) == 2
-    assert audit.audit("example/repo", 7, 14)[0]["class"] == "PRUNABLE"
+    assert audit.audit("example/repo", 7, 14)[0]["class"] == "DANGLING-REVIEW"
 
 
-def test_exhausted_landing_search_budget_keeps_finding(dangling_history, monkeypatch):
+@pytest.mark.parametrize("merged_pr", [False, True])
+@pytest.mark.parametrize("restore_fork", [False, True])
+def test_revert_of_landed_prefix_keeps_alarm(
+    dangling_history, monkeypatch, merged_pr, restore_fork,
+):
     git, path = dangling_history
-    for index in range(2):
-        path.write_text(f"Branch change {index}\n")
-        git("commit", "-am", f"Topic change {index}")
+    original = path.read_text()
+    prefix = []
+    for index in range(1 if restore_fork else 2):
+        path.write_text(f"Landed state {index}\n")
+        git("commit", "-am", f"Landed prefix {index}")
+        prefix.append(git("rev-parse", "HEAD"))
+    # Restore either the fork or a post-fork state that already appeared on master.
+    path.write_text(original if restore_fork else "Landed state 0\n")
+    git("commit", "-am", "Unlanded revert of landed work")
     git("update-ref", "refs/remotes/origin/topic", "HEAD")
     git("checkout", "master")
-    git("merge", "--squash", "topic")
-    git("commit", "-m", "Squash landing")
-    path.write_text("Later master evolution\n")
-    git("commit", "-am", "Evolve master")
+    for commit in prefix:
+        git("cherry-pick", "-x", commit)
     git("update-ref", "refs/remotes/origin/master", "HEAD")
-    monkeypatch.setattr(audit, "newest_pr", lambda repo, branch: None)
-    monkeypatch.setattr(audit, "_MAX_LANDING_CANDIDATES", 1)
+    monkeypatch.setattr(
+        audit, "newest_pr", lambda repo, branch: {
+            "number": 17, "state": "MERGED", "headRefOid": prefix[-1],
+        } if merged_pr else None,
+    )
 
-    # The valid landing is beyond the scan budget, so no landing is claimed.
-    assert audit.audit("example/repo", 7, 14)[0]["class"] == "DANGLING-REVIEW"
+    assert len(audit.unmerged_patch_commits("topic")) == 1
+    expected = "STRANDED" if merged_pr else "DANGLING-REVIEW"
+    assert audit.audit("example/repo", 7, 14)[0]["class"] == expected
 
 
 def test_absent_changed_file_evidence_keeps_finding(monkeypatch):
@@ -327,9 +328,8 @@ def test_resolve_merged_head_short_circuits_when_already_present(monkeypatch):
 class TestContentPresence:
     """The triage hint: how much of a commit's added content is in master.
 
-    `_end_state_differs` proves a landing by exact file match somewhere in
-    master's history. When a fix landed and the file kept evolving, no such
-    point exists, so the branch stays an alarm with nothing to distinguish
+    `_end_state_differs` accounts for exact current file matches. When a fix
+    landed and the file kept evolving, the branch stays an alarm with nothing to distinguish
     "superseded" from "lost". This reading fills that gap — and must never
     fill it by retiring the alarm itself.
     """

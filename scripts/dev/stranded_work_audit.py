@@ -12,12 +12,12 @@ the commit stays on the branch, the session ends, nobody re-lands it.
 Classification per remote branch (skips master/main, archive/*, backup/*):
 
   STRANDED  newest PR for the branch is MERGED, the branch HEAD advanced past
-            the merged head, and the post-merge file state has never existed
-            in master. Real work is marooned -> re-land or explicitly discard.
+            the merged head, and the post-merge file state differs from current
+            master. Review delivery -> re-land, explicitly discard, or park.
             THE ALARM CLASS.
   PRUNABLE  branch content is fully contained in master (merged ghost) -> safe
-            to delete, pure hygiene. Exact changed-file matches in master's
-            history also establish a landing after squash/reworked merges.
+            to delete, pure hygiene. Exact changed-file matches against current
+            master also account for squash/reworked merges.
   DANGLING-REVIEW
             unique commits but no PR route (no PR ever, or newest PR CLOSED
             unmerged), with a recent tip or a deploy-sensitive path. Requires
@@ -86,8 +86,6 @@ SENSITIVE_PATH_SUFFIXES = (".plist", ".plist.template")
 _TRIVIAL_LINE = re.compile(r"^[\s\W]*$")
 _MIN_SAMPLED_LINE = 12   # shorter lines collide across unrelated files
 _MAX_SAMPLED_COMMITS = 20
-# Bound subprocess fan-out; exhausting this search retains the finding.
-_MAX_LANDING_CANDIDATES = 200
 
 
 def run(*cmd: str) -> str:
@@ -337,19 +335,17 @@ def _paths_touched_by(commits: list[str]) -> list[str]:
 def _end_state_differs(branch: str, commits: list[str]) -> bool:
     """Return whether the branch work has no demonstrated home on master.
 
-    ``git cherry`` misses squash/reworked landings. First compare the current
-    end state, then inspect master's history after the branch fork for a commit
-    where every touched file exactly matched the branch. Pre-fork matches do
-    not establish a landing: an unlanded rollback can recreate an older state.
-    A branch with no net changed-file delta from its fork is also accounted for.
-    Later evolution must not turn a demonstrated landing back into an alarm.
-    An exhausted search budget or absent changed-file evidence keeps the finding.
+    ``git cherry`` misses squash/reworked landings. An exact match of all touched
+    files against current master accounts for their final state. Historical or
+    fork-state matches cannot establish delivery: a later unlanded revert can
+    recreate either state after earlier branch commits landed. Keep those cases
+    for explicit review, along with absent or failed changed-file evidence.
     """
     try:
         touched = _paths_touched_by(commits)
         if not touched:
             return True
-        if succeeds(
+        return not succeeds(
             "git",
             "diff",
             "--quiet",
@@ -357,21 +353,6 @@ def _end_state_differs(branch: str, commits: list[str]) -> bool:
             f"origin/{branch}",
             "--",
             *touched,
-        ):
-            return False
-        fork = run("git", "merge-base", "origin/master", f"origin/{branch}").strip()
-        if succeeds("git", "diff", "--quiet", fork, f"origin/{branch}", "--", *touched):
-            return False  # The branch's unique patches have no net file-state change.
-        candidates = run(
-            "git", "log", "--format=%H", "--ancestry-path",
-            f"--max-count={_MAX_LANDING_CANDIDATES}",
-            f"{fork}..origin/master", "--", *touched
-        ).splitlines()
-        return not any(
-            succeeds(
-                "git", "diff", "--quiet", candidate, f"origin/{branch}", "--", *touched
-            )
-            for candidate in candidates
         )
     except subprocess.CalledProcessError:
         return True  # can't prove it landed -> keep the alarm
@@ -411,10 +392,9 @@ def content_presence(commits: list[str]) -> dict | None:
     `scripts/dev/stranded_work_audit.py`'s own INDETERMINATE class, which exists
     precisely so a degraded run cannot report clean).
 
-    What it adds is triage speed. `_end_state_differs` proves a landing by exact
-    file match against some point in master's history; when a fix landed and the
-    file kept evolving afterwards, no such point exists and the branch stays an
-    alarm with no way to tell "superseded" from "lost" short of reading it. This
+    What it adds is triage speed. `_end_state_differs` accounts for exact current
+    file matches; when master kept evolving, the branch stays an alarm with no
+    way to tell "superseded" from "lost" short of reading it. This
     reports the weaker fact that is still decisive in practice -- 94% of the added
     lines are already in master, so look here last; 0% are, so look here first.
 
