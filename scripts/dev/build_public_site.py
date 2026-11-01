@@ -88,7 +88,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   *{{box-sizing:border-box}}
   body{{margin:0;background:rgb(var(--bg));color:rgb(var(--ink));font:17px/1.6 Georgia,"Times New Roman",serif}}
   header{{position:sticky;top:0;z-index:5;background:rgb(var(--bg) / .94);backdrop-filter:blur(4px);border-bottom:1px solid rgb(var(--line));padding:14px 22px;display:flex;gap:22px;align-items:baseline;flex-wrap:wrap}}
-  header .brand{{font-family:Didot,"Bodoni MT",Georgia,serif;font-weight:700;font-variant-caps:all-small-caps;letter-spacing:.08em;font-size:19px}}
+  header .brand,header a.brand{{font-family:Didot,"Bodoni MT",Georgia,serif;font-weight:700;font-variant-caps:all-small-caps;letter-spacing:.08em;font-size:19px;color:rgb(var(--ink));text-decoration:none}}
   header nav a{{color:rgb(var(--dim));text-decoration:none;margin-right:16px;font:500 12.5px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.14em;text-transform:uppercase}}
   header nav a.active,header nav a:hover{{color:rgb(var(--acc))}}
   main{{max-width:880px;margin:0 auto;padding:36px 22px 90px}}
@@ -118,13 +118,14 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <span class="brand">UNITARES</span>
+  <a class="brand" href="https://cirwel.org">UNITARES</a>
   <nav>
-    <a href="index.html"{home_active}>Home</a>
+    <a href="index.html"{home_active}>Artifacts</a>
     <a href="demo.html"{demo_active}>Demo</a>
     <a href="glossary.html"{glossary_active}>Glossary</a>
     <a href="glossary-viewer.html">Viewer</a>
     <a href="drift-audit.html"{audit_active}>Drift audit</a>
+    <a href="https://cirwel.org">cirwel.org ↗</a>
     <a href="{repo}">Repo ↗</a>
   </nav>
 </header>
@@ -249,10 +250,10 @@ def build(out_dir: Path, cname: str | None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(FAVICON, out_dir / "favicon.svg")
 
-    # Product/evaluator landing page. Its copy remains reviewable as markdown.
+    # Repository artifacts index page. Its copy remains reviewable as markdown.
     out_dir.joinpath("index.html").write_text(
         PAGE_TEMPLATE.format(
-            title="UNITARES — Accountability infrastructure for long-running AI agents",
+            title="UNITARES — Repository artifacts",
             home_active=' class="active"',
             demo_active="",
             glossary_active="",

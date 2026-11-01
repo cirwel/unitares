@@ -1,13 +1,13 @@
 # Public site (GitHub Pages)
 
-This folder holds the sources for the public UNITARES GitHub Pages site. The
-landing page, read-only demo, ontology glossary, interactive glossary viewer,
-and latest glossary drift audit are published to GitHub Pages. Each page is **generated
-from repository markdown**; the built HTML is never hand-edited.
+This folder holds the sources for the public UNITARES GitHub Pages directory.
+The artifact index, read-only demo, ontology glossary, interactive glossary
+viewer, and latest glossary drift audit are published to GitHub Pages. Each page
+is **generated from repository markdown**; the built HTML is never hand-edited.
 
 | File | Role |
 | --- | --- |
-| [`index.md`](index.md) | Landing page source |
+| [`index.md`](index.md) | Repository artifacts index page source |
 | [`demo.md`](demo.md) | Read-only demo source; the build fills its facts, record ids and link names from `tests/accountability_journey/incident-v0.json` and fails on anything it cannot fill |
 | [`glossary-viewer.template.html`](glossary-viewer.template.html) | Interactive glossary viewer template; the build injects the glossary data |
 | [`favicon.svg`](favicon.svg) | Site icon |

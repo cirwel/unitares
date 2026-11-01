@@ -20,7 +20,7 @@
   *{box-sizing:border-box}
   body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
   header.site{position:sticky;top:0;z-index:10;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px}
-  header.site .brand{font-weight:650;letter-spacing:.01em;margin-right:18px}
+  header.site .brand,header.site a.brand{font-weight:650;letter-spacing:.01em;margin-right:18px;color:var(--ink);text-decoration:none}
   header.site nav{display:inline}
   header.site nav a{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}
   header.site nav a.active,header.site nav a:hover{color:var(--ink)}
@@ -55,13 +55,14 @@
 </head>
 <body>
 <header class="site">
-  <span class="brand">UNITARES</span>
+  <a class="brand" href="https://cirwel.org">UNITARES</a>
   <nav>
-    <a href="index.html">Home</a>
+    <a href="index.html">Artifacts</a>
     <a href="demo.html">Demo</a>
     <a href="glossary.html">Glossary</a>
     <a href="glossary-viewer.html" class="active">Viewer</a>
     <a href="drift-audit.html">Drift audit</a>
+    <a href="https://cirwel.org">cirwel.org ↗</a>
     <a href="__REPO_URL__">Repo ↗</a>
   </nav>
   <div class="controls">

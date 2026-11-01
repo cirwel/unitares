@@ -410,7 +410,7 @@ class DatabaseBackend(ABC):
 
     @abstractmethod
     async def update_calibration(self, data: Dict[str, Any]) -> bool:
-        """Update calibration data (replaces entire object)."""
+        """Replace calibration at data['_version']; stale versions return False."""
         pass
 
     # =========================================================================

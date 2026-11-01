@@ -62,10 +62,11 @@ import json
 import math
 import os
 import sys
-import tempfile
 from datetime import datetime, UTC
 
 from config.governance_config import GovernanceConfig
+from src.calibration_file_store import read_state, sync_directory, write_state
+from src.calibration_mutations import CalibrationVersionConflict
 
 # S10: the bucket name used when a write arrives without a class_tag, or when
 # the classifier cannot resolve a class for an agent_id during a rebucket pass.
@@ -143,7 +144,7 @@ class SequentialCalibrationTracker:
     ):
         if state_file is None:
             state_file = DEFAULT_STATE_FILE
-        self.state_file = Path(state_file)
+        self.state_file = Path(state_file).resolve()
         self.prior_success = float(prior_success)
         self.prior_failure = float(prior_failure)
         self.load_state()
@@ -161,6 +162,9 @@ class SequentialCalibrationTracker:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def reset(self) -> None:
+        # Resetting counters is not permission to forget delivery identities.
+        self._delivery_receipts = getattr(self, "_delivery_receipts", {})
+        self._file_version = getattr(self, "_file_version", 0)
         self.global_state = _empty_state()
         self.agent_states = defaultdict(_empty_state)
         # S10: denormalized per-class rollup. Writes update class_states alongside
@@ -190,36 +194,27 @@ class SequentialCalibrationTracker:
             "prior_success": self.prior_success,
             "prior_failure": self.prior_failure,
             "epoch": GovernanceConfig.CURRENT_EPOCH,
+            "_delivery_receipts": self._delivery_receipts,
+            "_version": self._file_version,
         }
 
     def _save_state_unlocked(self) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(self.state_file.parent),
-            prefix=f".{self.state_file.name}.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(self._serialize(), f, indent=2)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.state_file)
-            self._loaded_mtime = self._file_mtime()
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        self._file_version += 1
+        write_state(self.state_file, self._serialize())
+        self._loaded_mtime = self._file_mtime()
 
-    def save_state(self) -> None:
+    def save_state(self) -> bool:
         try:
             with self._state_file_lock(exclusive=True):
+                current = read_state(self.state_file)
+                if int(current.get("_version", 0)) != self._file_version:
+                    raise CalibrationVersionConflict("sequential bulk save is stale")
                 self._save_state_unlocked()
+            return True
         except Exception as e:
             print(f"Warning: Failed to save sequential calibration state: {e}", file=sys.stderr)
+            self.load_state()
+            return False
 
     def _file_mtime(self) -> float:
         try:
@@ -238,10 +233,18 @@ class SequentialCalibrationTracker:
         if current_mtime > getattr(self, "_loaded_mtime", 0.0):
             self._load_state_unlocked()
 
-    def _load_state_unlocked(self) -> None:
+    def _refresh_for_write_unlocked(self) -> None:
+        current = read_state(self.state_file)
+        if (int(current.get("_version", 0)) != self._file_version
+                or current.get("epoch", GovernanceConfig.CURRENT_EPOCH)
+                != GovernanceConfig.CURRENT_EPOCH):
+            self._load_state_unlocked(strict=True)
+
+    def _load_state_unlocked(self, *, strict: bool = False) -> None:
         try:
             if not self.state_file.exists():
                 self.reset()
+                self._delivery_receipts, self._file_version = {}, 0
                 self._loaded_mtime = 0.0
                 return
             with open(self.state_file, "r") as f:
@@ -264,9 +267,12 @@ class SequentialCalibrationTracker:
                     file=sys.stderr,
                 )
                 self.reset()
+                self._delivery_receipts, self._file_version = {}, 0
                 self._loaded_mtime = 0.0
                 return
 
+            self._delivery_receipts = data.get("_delivery_receipts", {})
+            self._file_version = int(data.get("_version", 0))
             self.global_state = _empty_state()
             self.global_state.update(data.get("global", {}))
 
@@ -298,6 +304,8 @@ class SequentialCalibrationTracker:
                 self.class_states_bootstrapped = True
             self._loaded_mtime = self._file_mtime()
         except Exception as e:
+            if strict:
+                raise
             print(f"Warning: Failed to load sequential calibration state: {e}, resetting", file=sys.stderr)
             self.reset()
             self._loaded_mtime = 0.0
@@ -438,6 +446,8 @@ class SequentialCalibrationTracker:
         timestamp: Optional[str] = None,
         prediction_id: Optional[str] = None,
         persist: bool = True,
+        delivery_id: Optional[str] = None,
+        delivery_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Record one eligible hard exogenous tactical outcome.
 
@@ -453,20 +463,32 @@ class SequentialCalibrationTracker:
         """
         if persist:
             with self._state_file_lock(exclusive=True):
-                self._reload_if_stale_unlocked()
-                result = self._record_exogenous_tactical_outcome_in_memory(
-                    confidence=confidence,
-                    outcome_correct=outcome_correct,
-                    agent_id=agent_id,
-                    class_tag=class_tag,
-                    signal_source=signal_source,
-                    decision_action=decision_action,
-                    outcome_type=outcome_type,
-                    timestamp=timestamp,
-                    prediction_id=prediction_id,
-                )
-                self._save_state_unlocked()
-                return result
+                self._refresh_for_write_unlocked()
+                if delivery_id and delivery_id in self._delivery_receipts:
+                    if self._delivery_receipts[delivery_id]["digest"] != delivery_digest:
+                        raise CalibrationVersionConflict("sequential delivery identity was reused")
+                    sync_directory(self.state_file)
+                    return {"idempotent_replay": True}
+                try:
+                    result = self._record_exogenous_tactical_outcome_in_memory(
+                        confidence=confidence, outcome_correct=outcome_correct,
+                        agent_id=agent_id, class_tag=class_tag, signal_source=signal_source,
+                        decision_action=decision_action, outcome_type=outcome_type,
+                        timestamp=timestamp, prediction_id=prediction_id,
+                    )
+                    if delivery_id:
+                        if not delivery_digest:
+                            raise ValueError("delivery_digest is required with delivery_id")
+                        self._delivery_receipts[delivery_id] = {
+                            "digest": delivery_digest, "observed_at": timestamp,
+                        }
+                    self._save_state_unlocked()
+                    return result
+                except BaseException:
+                    # Includes rename-success / directory-fsync-failure. The
+                    # durable file, rather than speculative memory, wins.
+                    self._load_state_unlocked(strict=True)
+                    raise
 
         return self._record_exogenous_tactical_outcome_in_memory(
             confidence=confidence,
@@ -501,7 +523,7 @@ class SequentialCalibrationTracker:
         """
         if persist:
             with self._state_file_lock(exclusive=True):
-                self._load_state_unlocked()
+                self._load_state_unlocked(strict=True)
                 changed = self._drop_agent_state_in_memory(agent_id)
                 if changed:
                     self._save_state_unlocked()
@@ -685,6 +707,13 @@ class SequentialCalibrationTracker:
         Returns a telemetry dict (tracked_agents, unresolved_agents, buckets,
         classifier_errors) and flips class_states_bootstrapped to True.
         """
+        if persist:
+            with self._state_file_lock(exclusive=True):
+                self._refresh_for_write_unlocked()
+                result = self.rebucket_from_agent_states(classifier, persist=False)
+                self._save_state_unlocked()
+                return result
+
         new_class_states: Dict[str, Dict[str, Any]] = defaultdict(_empty_state)
         movement: Dict[str, int] = defaultdict(int)
         unresolved = 0

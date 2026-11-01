@@ -134,7 +134,7 @@ async def test_caller_supplied_confidence_still_trains():
 
 
 @pytest.mark.asyncio
-async def test_missing_prediction_with_caller_argument_still_trains():
+async def test_missing_prediction_with_caller_argument_remains_delivery_eligible():
     """The subtle one, and why this gate keys on prediction_SOURCE.
 
     When a `prediction_id` is passed and the agent HAS a prediction registry
@@ -160,7 +160,11 @@ async def test_missing_prediction_with_caller_argument_still_trains():
     assert persisted["prediction_binding"] == "missing_prediction"
     assert persisted["prediction_source"] == "argument"
     assert persisted["calibration_excluded"] is False
-    checker.record_prediction.assert_called_once()
+    assert persisted["reported_confidence"] == 0.8
+    # A supplied prediction_id selects durable delivery, even when its local
+    # registry cache entry is absent. The real sink effect is covered by
+    # test_missing_registry_argument_is_delivered_without_sequential_training.
+    checker.record_prediction.assert_not_called()
 
 
 @pytest.mark.asyncio
