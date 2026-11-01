@@ -86,6 +86,8 @@ SENSITIVE_PATH_SUFFIXES = (".plist", ".plist.template")
 _TRIVIAL_LINE = re.compile(r"^[\s\W]*$")
 _MIN_SAMPLED_LINE = 12   # shorter lines collide across unrelated files
 _MAX_SAMPLED_COMMITS = 20
+# Bound subprocess fan-out; exhausting this search retains the finding.
+_MAX_LANDING_CANDIDATES = 200
 
 
 def run(*cmd: str) -> str:
@@ -285,8 +287,8 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                     "class": "PRUNABLE",
                     "reason": "no_pr_route",
                     "detail": (
-                        "no open route needed — exact changed-file state already "
-                        "landed in master"
+                        "no open route needed — exact changed-file state is "
+                        "accounted for on master"
                         if commits
                         else "no open route needed — content is in master"
                     ),
@@ -336,15 +338,17 @@ def _end_state_differs(branch: str, commits: list[str]) -> bool:
     """Return whether the branch work has no demonstrated home on master.
 
     ``git cherry`` misses squash/reworked landings. First compare the current
-    end state, then inspect master's history for a commit where every file
-    touched by the allegedly stranded commits exactly matched the branch. If
-    that state once existed, the work landed and later evolution must not turn
-    the old branch back into an alarm.
+    end state, then inspect master's history after the branch fork for a commit
+    where every touched file exactly matched the branch. Pre-fork matches do
+    not establish a landing: an unlanded rollback can recreate an older state.
+    A branch with no net changed-file delta from its fork is also accounted for.
+    Later evolution must not turn a demonstrated landing back into an alarm.
+    An exhausted search budget or absent changed-file evidence keeps the finding.
     """
     try:
         touched = _paths_touched_by(commits)
         if not touched:
-            return False
+            return True
         if succeeds(
             "git",
             "diff",
@@ -355,8 +359,13 @@ def _end_state_differs(branch: str, commits: list[str]) -> bool:
             *touched,
         ):
             return False
+        fork = run("git", "merge-base", "origin/master", f"origin/{branch}").strip()
+        if succeeds("git", "diff", "--quiet", fork, f"origin/{branch}", "--", *touched):
+            return False  # The branch's unique patches have no net file-state change.
         candidates = run(
-            "git", "log", "--format=%H", "origin/master", "--", *touched
+            "git", "log", "--format=%H", "--ancestry-path",
+            f"--max-count={_MAX_LANDING_CANDIDATES}",
+            f"{fork}..origin/master", "--", *touched
         ).splitlines()
         return not any(
             succeeds(
