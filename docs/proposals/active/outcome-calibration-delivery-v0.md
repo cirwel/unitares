@@ -173,11 +173,42 @@ implementation evidence. Historical cohorts and receipts are not backfilled
 without independent evidence. No claim of improved calibration quality follows
 from a durability fix.
 
+There is a separate constraint in the registered
+[coordination ablation](../registered/accountable-coordination-ablation-v0.md).
+Arm D includes outcome binding, and the [outcome-binding assurance case, L1](../../evaluations/assurance-cases/outcome-binding-v0.md#6-known-limits)
+identifies #2247 as a defect specific to that arm. The assurance case recommends
+disclosing it as arm-specific; that recommendation is not an operator
+classification. Classification remains the operator's decision because success
+condition 5 depends on whether a common-mode repair occurred. Under the
+protocol, a common-mode repair must reach every arm and invalidates the affected
+block before an arm comparison is read. This contract cannot redefine that rule,
+reclassify L1, patch only arm D inside a block, or treat the outcome-grounding
+cutoff as permission to modify a different experiment.
+
+Before live adoption, check the immutable enrollment artifact and included
+blocks, not just the protocol's draft status. If adopting this repair would
+affect an enrolled block, hold that adoption for the operator's classification
+and block-disposition decision. Isolated implementation and fixture testing do
+not enroll a cohort or authorize changing frozen experiment arms.
+
+The assurance case also recommends measuring L1's production frequency. The
+current store has no durable calibration-delivery receipt, so a canonical row
+or a successful replay cannot establish whether calibration was delivered.
+The forced ambiguous-commit regression proves the failure is reachable, not
+its production rate. Record that incidence is unmeasured; do not turn a zero
+from this blind surface into a reason to retain or retire a capability. Any
+operational incidence audit must name its observable numerator, denominator,
+coverage and unresolved cases, and remain separate from confirmatory arm data.
+
 ## Implementation and verification sequence
 
 1. Review this storage and writer-coherence contract. The advisory council
    request timed out at the MCP transport boundary; it supplies no completed
-   critique or implementation-review coverage.
+   critique or implementation-review coverage. Verify both registered-study
+   constraints and current enrollment evidence. Adoption into an enrolled
+   coordination-ablation block requires the operator's classification and
+   disposition; no implementation test or readout can substitute for it. State
+   L1 incidence as unmeasured until an adequate operational audit exists.
 2. Implement the private operation reducer and coherent persistence adapters.
    Verify numerical parity and serialization with all current writer families,
    including a stale writer that overlaps a durable sample and reset/backfill
