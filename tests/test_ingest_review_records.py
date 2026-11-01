@@ -544,3 +544,46 @@ def test_github_runner_is_read_only_and_scoped_to_the_requested_repo(monkeypatch
     monkeypatch.setattr(producer.subprocess, "run", run_stub)
     assert producer._gh(["gh", "pr", "list"], "list", REPO) == "[]"
     assert calls == [["/runner/unitares-github", "--repo", REPO, "--read-only", "--", "gh", "pr", "list"]]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Not fixed — rebutted: the caller validates.", "rebutted"),
+    ("Not accepted; this needs investigation.", "unclassified"),
+    ("Never agreed to this change.", "unclassified"),
+    ("Wasn't fixed; rebutted because it is already guarded.", "rebutted"),
+    ("Not yet fixed, but accepted for follow-up.", "accepted"),
+    ("Not rebutted; accepted and deferred.", "accepted"),
+])
+def test_negated_disposition_words_are_not_counted_as_acceptance(text, expected):
+    assert producer.classify_disposition(text) == expected
+
+
+def test_snapshot_ignores_incidental_github_metadata_but_tracks_identity_and_content():
+    comment = review(7, KEY_A, "CLEAN", 0)
+    comment.update(user={"id": 42, "type": "Bot", "login": "old-name"},
+                   performed_via_github_app={"id": 101, "updated_at": "old", "permissions": {}})
+    entries = producer.review_records([comment])
+    source_pull = pull(7)
+    source_pull["author"].update(id="stable-id", name="Old display name")
+    original = producer.source_fingerprint(source_pull, entries)
+    source_pull["author"].update(name="New name", login="renamed-login")
+    source_pull["new_api_field"] = "added by GitHub"
+    comment["author_association"] = "NONE"
+    comment["user"].update(login="new-name", avatar_url="new-avatar")
+    comment["performed_via_github_app"].update(updated_at="new", permissions={"issues": "write"})
+    assert producer.source_fingerprint(source_pull, entries) == original
+    comment["user"]["id"] = 43
+    assert producer.source_fingerprint(source_pull, entries) != original
+    comment["user"]["id"] = 42
+    comment["body"] += " amended"
+    assert producer.source_fingerprint(source_pull, entries) != original
+
+
+def test_stored_disposition_excerpts_are_not_claimed_verbatim():
+    comment = review(7, KEY_A, "FINDINGS", 1)
+    entries = producer.review_records([
+        comment, dispose(7, comment, KEY_A, 1, ["Accepted: " + "long " * 200]),
+    ])
+    details = producer.build_details(REPO, pull(7), entries)
+    assert "whitespace-normalized excerpt" in details and "[trimmed]" in details
+    assert "verbatim" not in details

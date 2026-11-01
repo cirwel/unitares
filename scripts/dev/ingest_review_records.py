@@ -9,7 +9,7 @@ WHAT THIS IS
     request's review history as one knowledge-graph observation: every round,
     its reviewer and verdict, and for each finding the author's disposition of
     it (accepted, rebutted, unclassified, superseded or undisposed), with the
-    disposition text kept verbatim.
+    disposition text retained as bounded, whitespace-normalized excerpts.
 
 THE LEVER IT REPAIRS
     A review record is a claim (a reviewer says this diff has defects), and its
@@ -146,6 +146,10 @@ _ITEM_RE = re.compile(r"^[ \t]*\**(\d+)\.\**[ \t]+(.*)$")
 _SEVERITY_PREFIX_RE = re.compile(r"^\s*\[P[0-3]\]\s*", re.IGNORECASE)
 _ACCEPT_RE = re.compile(r"\b(fixed|accepted|accept|confirmed|agreed)\b", re.IGNORECASE)
 _REBUT_RE = re.compile(r"\brebut(?:ted|tal)?\b", re.IGNORECASE)
+_NEGATED_PREFIX_RE = re.compile(
+    r"\b(?:not|never|no|isn['’]t|wasn['’]t|hasn['’]t|haven['’]t)\s+"
+    r"(?:(?:yet|fully|actually|really|been)\s+){0,2}$", re.IGNORECASE,
+)
 
 DISPOSITION_PROVENANCE = (
     "self-attested: written by the pull request's authoring agent through "
@@ -232,18 +236,22 @@ def gh_comments(repo: str, number: int) -> list[dict]:
 
 
 def classify_disposition(text: str) -> str:
-    """Coarse class of one disposition item: the author's earliest keyword.
+    """Coarse class of one item: the earliest unnegated keyword.
 
     ``accepted`` covers "fixed", "accepted", "deferred (accepted)" and
-    "confirmed"; ``rebutted`` is an argued non-defect. The earliest keyword
+    "confirmed"; ``rebutted`` is an argued non-defect. The earliest unnegated keyword
     wins, so "Accepted, not rebutted" is accepted and "rebutted, fixed in
     #2414" is rebutted, as the author led with it. Anything else is
-    ``unclassified`` and keeps its text: this is a reading aid, never a
+    ``unclassified`` and retains an excerpt: this is a reading aid, never a
     judgement the producer makes on the author's behalf.
     """
     lead = _SEVERITY_PREFIX_RE.sub("", text or "")
-    rebut = _REBUT_RE.search(lead)
-    accept = _ACCEPT_RE.search(lead)
+    def first_unnegated(pattern):
+        return next((m for m in pattern.finditer(lead)
+                     if not _NEGATED_PREFIX_RE.search(lead[:m.start()])), None)
+
+    rebut = first_unnegated(_REBUT_RE)
+    accept = first_unnegated(_ACCEPT_RE)
     if rebut and (not accept or rebut.start() < accept.start()):
         return "rebutted"
     if accept:
@@ -329,11 +337,22 @@ def source_fingerprint(pull: dict, entries: list[dict]) -> str:
         for field in ("comment", "disposition_comment"):
             comment = entry[field]
             if comment is not None:
-                comments.append({key: comment.get(key) for key in (
+                item = {key: comment.get(key) for key in (
                     "id", "html_url", "created_at", "updated_at", "body",
-                    "author_association", "user", "performed_via_github_app",
-                )})
-    payload = {"schema": 1, "pull": pull, "comments": comments}
+                )}
+                # Display names, avatars, App permissions and associations
+                # are mutable surrounding metadata, not edits to the record.
+                actor = comment.get("user") or {}
+                app = comment.get("performed_via_github_app") or {}
+                item["actor"] = {key: actor.get(key) for key in ("id", "type")}
+                item["app_id"] = app.get("id")
+                comments.append(item)
+    metadata = {key: pull.get(key) for key in (
+        "number", "title", "url", "state", "mergedAt", "closedAt",
+    )}
+    author = pull.get("author") or {}
+    metadata["author_id"] = author.get("id") or author.get("login")
+    payload = {"schema": 1, "pull": metadata, "comments": comments}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -462,7 +481,8 @@ def build_details(repo: str, pull: dict, entries: list[dict]) -> str:
         f"pr-closed-at: {pull.get('closedAt') or pull.get('mergedAt') or 'unknown'}; "
         "closed PRs can receive later comments; this is a bounded snapshot",
         f"disposition-provenance: {DISPOSITION_PROVENANCE}",
-        "disposition class: the author's earliest keyword (accepted/rebutted), kept verbatim; "
+        "disposition class: the author's earliest unnegated keyword (accepted/rebutted); "
+        "text is a bounded, whitespace-normalized excerpt; "
         "superseded = no disposition but a later round reviewed a newer diff (a push, not proof of a fix)",
         f"ingested-by: {PRODUCER_NAME}",
         "",
