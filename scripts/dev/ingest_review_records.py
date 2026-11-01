@@ -143,7 +143,7 @@ MAX_DETAILS_CHARS = 48_000
 _DISPOSITION_HEADING_RE = re.compile(r"dispositions for FINDINGS\((\d+)\) — (\S+)")
 # Match the gate's numbered dispositions (1., 1), 1:, optional #),
 # retaining the prototype's support for bold numbering too.
-_ITEM_RE = re.compile(r"^\s*\**#?(\d+)[.):]\**\s*(.*)$")
+_ITEM_RE = re.compile(r"^\s*\**#?(\d+)[.):]\**(?:\s+(.*))?$")
 _SEVERITY_PREFIX_RE = re.compile(r"^\s*\[P[0-3]\]\s*", re.IGNORECASE)
 _ACCEPT_RE = re.compile(
     r"^(?:fixed|accepted|accept|confirmed|agreed)\b|^deferred\s+\(accepted\)",
@@ -260,7 +260,7 @@ def parse_disposition_items(body: str, count: int) -> dict[int, str]:
         match = _ITEM_RE.match(line)
         if match and 1 <= int(match.group(1)) <= count and int(match.group(1)) not in items:
             current = int(match.group(1))
-            items[current] = [match.group(2).strip()]
+            items[current] = [(match.group(2) or "").strip()]
             continue
         if current is not None:
             if line.startswith(("---", "_Generated")):

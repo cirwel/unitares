@@ -626,3 +626,30 @@ def test_next_line_disposition_is_retained_by_the_actual_store(env):
     result = run(environ, "--apply")
     assert result.returncode == 0, result.stderr
     assert "1. [rebutted] Rebutted: the caller validates." in stub.bodies("store")[0]["details"]
+
+
+@pytest.mark.parametrize("wrapped", ["2.5s in the default config.", "3:00 on the clock.", "2)without whitespace", "2:no whitespace"])
+def test_numeric_continuation_is_not_a_new_disposition(wrapped):
+    body = f"1. Rebutted: the value is\n{wrapped}\n\n2. Fixed in abc123.\n3. Accepted for follow-up."
+    assert gate.dispositions_complete(body, 3)
+    assert producer.parse_disposition_items(body, 3) == {
+        1: f"Rebutted: the value is {wrapped}",
+        2: "Fixed in abc123.",
+        3: "Accepted for follow-up.",
+    }
+
+
+def test_decimal_continuation_cannot_drop_the_authors_real_second_disposition(env):
+    environ, data, stub = env
+    first = review(7, KEY_A, "FINDINGS", 2)
+    answer = dispose(7, first, KEY_A, 2, [
+        "Rebutted: the timeout is\n2.5s in the default config.\n", "Fixed in abc123.",
+    ])
+    assert gate.dispositions_complete(answer["body"], 2)
+    seed(data, [pull(7)], {7: [first, answer]})
+    result = run(environ, "--apply")
+    assert result.returncode == 0, result.stderr
+    [stored] = stub.bodies("store")
+    assert "1. [rebutted] Rebutted: the timeout is 2.5s in the default config." in stored["details"]
+    assert "2. [accepted] Fixed in abc123." in stored["details"]
+    assert "1 accepted" in stored["summary"] and "1 rebutted" in stored["summary"]
