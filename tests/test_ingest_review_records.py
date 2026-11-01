@@ -606,3 +606,23 @@ def test_gate_supported_numbering_keeps_the_disposition_in_the_stored_record(env
     assert "1. [rebutted] Rebutted: the caller validates." in stored["details"]
     assert "1 rebutted" in stored["summary"]
     assert "[undisposed]" not in stored["details"]
+
+
+@pytest.mark.parametrize("prefix", ["1.", "1)", "1:", "#1.", "#1)", "#1:"])
+@pytest.mark.parametrize("separator", [" ", "\t", "\n", "\n\n", "\r\n", "\u00a0", "\u2003"])
+def test_disposition_layout_matrix_matches_the_gates_acceptance(prefix, separator):
+    body = f"\u00a0{prefix}{separator}Rebutted: the caller validates."
+    assert gate.dispositions_complete(body, 1)
+    assert producer.parse_disposition_items(body, 1) == {1: "Rebutted: the caller validates."}
+
+
+def test_next_line_disposition_is_retained_by_the_actual_store(env):
+    environ, data, stub = env
+    first = review(7, KEY_A, "FINDINGS", 1)
+    answer = dispose(7, first, KEY_A, 1, ["Rebutted: the caller validates."])
+    answer["body"] = answer["body"].replace("\n1. Rebutted:", "\n1.\n\nRebutted:")
+    assert gate.dispositions_complete(answer["body"], 1)
+    seed(data, [pull(7)], {7: [first, answer]})
+    result = run(environ, "--apply")
+    assert result.returncode == 0, result.stderr
+    assert "1. [rebutted] Rebutted: the caller validates." in stub.bodies("store")[0]["details"]
