@@ -3,12 +3,9 @@
 ## Status and question
 
 This is a retrospective operational audit of recent UNITARES repository work.
-It asks a narrow question: **does the development record contain review findings
-that can be traced to concrete revisions?**
-
-It does not test whether UNITARES outperforms GitHub review, a structured
-handoff, self-review, or an unreviewed control. It does not estimate incident
-prevention, net productivity, or the causal contribution of EISV signals.
+It asks a focused question: **does the development record contain review findings
+that can be traced to concrete revisions?** It answers it from a fixed sample of
+merged pull requests, as a record of what review produced.
 
 ## Sample
 

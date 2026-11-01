@@ -20,11 +20,9 @@ This page brings those results together with their sources, dates, and scope.
 | Review conditions surviving a session | A public PR implements a condition ten days after its originating review opened; the original transcript is operator-private. | [Carried condition and later repair](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317) |
 | Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
 
-Comparative benefit over other review or handoff approaches remains
-unmeasured, as do complete reconstruction across retention and authorization
-boundaries and whether agents prefer this workflow. Deployment counts measure recorded activity, not uptime or
-independent trials. For predictive lift, pause benefit, and cross-operator
-verification, see the [evaluation boundaries](#evaluation-boundaries).
+Deployment counts measure recorded activity. Research questions on predictive
+lift, the outcome effect of pausing, and cross-operator verification are tracked
+under [evaluation boundaries](#evaluation-boundaries).
 
 The [two-process walkthrough](guides/AGENT_SESSION_WALKTHROUGH.md) was captured
 on 2026-10-08 from a fresh Docker quickstart install. Its task is illustrative;
@@ -59,14 +57,14 @@ the originating review transcript is operator-private.
 [Carried condition and patch](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317)
 
 These records establish specific, consequential corrections and continuity of
-review conditions. The sample is recent and non-random, with no matched
-unreviewed or conventional-review control; some reviews were author-relayed or
-filed under the same GitHub identity. It therefore supplies no estimate of
-incident reduction, net productivity, or UNITARES's incremental contribution.
-Dialectic review, councils, external models, and ordinary repository review
-have incomplete common instrumentation. The registered prospective comparison
-(`accountable-coordination-ablation-v0`) was stopped on 2026-10-01 before any
-run, as infeasible for a single operator.
+review conditions. They come from a fixed sample of 20 recent merged PRs, with
+no matched unreviewed or conventional-review control; some reviews were
+author-relayed or filed under the same GitHub identity. Dialectic review,
+councils, external models, and ordinary repository review have incomplete
+common instrumentation, so this channel is one of several through which review
+runs. A prospective comparison (`accountable-coordination-ablation-v0`) was
+registered and closed on 2026-10-01 before any run; it needs more than one
+operator.
 
 <details>
 <summary>Recorded exercise of the review constraint</summary>
@@ -95,11 +93,10 @@ event composition, and date ranges at one cutoff:
 | Shared findings | **2,129 retained discovery records** in the knowledge graph. |
 | Process registry | **8,677 retained process-instance records**; 287 distinct identities emitted audit events in the preceding week. |
 
-This is a single-operator deployment whose agents also help build the system.
-The counts establish recorded activity and exercised paths. They include
-resident, ephemeral, development, and test/operational traffic; they are retained
-inventories, not lifetime totals, independent-user counts, or an uptime
-measurement. The [deployment data notes](operations/DEPLOYMENT_DATA_CAVEAT.md)
+The source is CIRWEL's own single-operator deployment, whose agents also help
+build the system. The counts are retained inventories of recorded activity and
+exercised paths across resident, ephemeral, development, and test/operational
+traffic. The [deployment data notes](operations/DEPLOYMENT_DATA_CAVEAT.md)
 explain the sampling and co-development context. The August snapshot remains
 available as a historical record on the same page.
 
@@ -246,10 +243,9 @@ receipts as of the 2026-09-25 decision record. The
 [federation trust decisions](proposals/active/federation-trust-decisions-2026-09-25.md)
 and [receipt proposal](proposals/active/dialectic-resolution-receipt-v0.md)
 preserve the signing history and conditions for further work. The
-multi-principal trust track is not scheduled without external funding or an
-outside principal; its wake conditions are an outside party with its own
-administrative root asking to verify a deployment record, or external funding
-for, or an outside principal joining, the multi-principal testbed (the
+multi-principal trust track starts when an outside party with its own
+administrative root asks to verify a deployment record, or with external
+funding for, or an outside principal joining, the multi-principal testbed (the
 decision record's 2026-10-19 addendum).
 
 #### Identity binding and the lease plane
