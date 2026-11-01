@@ -39,6 +39,82 @@ def _payloads(tasks: dict, discovery_id: str) -> dict:
     return payloads
 
 
+@pytest.mark.parametrize("text", ["nested complete details", ""])
+def test_complete_discovery_keeps_nested_details(monkeypatch, text: str) -> None:
+    call = AsyncMock(return_value={
+        "success": True,
+        "discovery": {"id": "root", "summary": "summary", "details": text},
+    })
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+
+    record, pages = asyncio.run(canary._fetch_discovery(
+        "http://127.0.0.1:8767/mcp/", "root",
+        client_session_id="test", timeout_s=1,
+    ))
+
+    assert record["details"] == text
+    assert pages == 1
+    assert call.await_count == 1
+
+
+def test_paginated_discovery_joins_exact_slices(monkeypatch) -> None:
+    call = AsyncMock(side_effect=[
+        {"success": True, "discovery": {"id": "root", "summary": "summary"},
+         "details": "first", "pagination": {"has_more": True, "next_offset": 5}},
+        {"success": True, "discovery": {"id": "root", "summary": "summary"},
+         "details": "second", "pagination": {"has_more": False}},
+    ])
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+
+    record, pages = asyncio.run(canary._fetch_discovery(
+        "http://127.0.0.1:8767/mcp/", "root",
+        client_session_id="test", timeout_s=1,
+    ))
+
+    assert record["details"] == "firstsecond"
+    assert pages == 2
+    assert [args.args[2]["offset"] for args in call.await_args_list] == [0, 5]
+
+
+@pytest.mark.parametrize("payload", [
+    {"success": False},
+    {"success": True, "discovery": {"id": "other", "details": "text"}},
+    {"success": True, "discovery": {"id": "root"}},
+    {"success": True, "discovery": {"id": "root", "details": None}},
+    {"success": True, "discovery": {"id": "root", "details": "full"},
+     "pagination": {"has_more": False}},
+    {"success": True, "discovery": {"id": "root"}, "details": "a",
+     "pagination": {"has_more": True, "next_offset": True}},
+    {"success": True, "discovery": {"id": "root"}, "details": "a",
+     "pagination": {"has_more": True, "next_offset": 2000}},
+])
+def test_invalid_detail_pages_fail_before_another_read(monkeypatch, payload) -> None:
+    call = AsyncMock(return_value=payload)
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    with pytest.raises(v0.LiveCanaryError):
+        asyncio.run(canary._fetch_discovery(
+            "http://127.0.0.1:8767/mcp/", "root",
+            client_session_id="test", timeout_s=1,
+        ))
+    assert call.await_count == 1
+
+
+def test_detail_read_budget_stops_without_a_third_request(monkeypatch) -> None:
+    call = AsyncMock(side_effect=[
+        {"success": True, "discovery": {"id": "root"}, "details": "a",
+         "pagination": {"has_more": True, "next_offset": 1}},
+        {"success": True, "discovery": {"id": "root"}, "details": "b",
+         "pagination": {"has_more": True, "next_offset": 2}},
+    ])
+    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    with pytest.raises(v0.LiveCanaryError, match="two-page read budget"):
+        asyncio.run(canary._fetch_discovery(
+            "http://127.0.0.1:8767/mcp/", "root",
+            client_session_id="test", timeout_s=1,
+        ))
+    assert call.await_count == 2
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -192,7 +268,7 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> Non
     }
     monkeypatch.setattr(v0, "_mint_canary_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(
-        v0,
+        canary,
         "_fetch_discovery",
         AsyncMock(return_value=({"id": source_map["discovery"]["id"]}, 2)),
     )

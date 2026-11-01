@@ -2,12 +2,14 @@
 """Run the isolated UNITARES adoption infrastructure canary v1.
 
 Version 0 is immutable evidence for the 2026-08-27 production-plugin probe.
-This follow-up preserves its frozen retrieval contract while closing two seams:
+This follow-up preserves its frozen retrieval contract while closing three seams:
 
 * a fresh canary may run only through the full loopback MCP endpoint from this
   standalone process; captured in-slot plugin evidence is recovery-only;
 * audit readback uses the canonical audit query API, which returns normalized
-  JSON payloads and supports exact event-ID filtering.
+  JSON payloads and supports exact event-ID filtering;
+* details reads preserve both complete nested records and paginated text,
+  within the frozen root's two-page read budget.
 
 The runner remains HOLD-only. It does not call a model, write the KG, record an
 outcome, execute a scored task, invoke orchestration, or surface an alert.
@@ -40,6 +42,7 @@ DEFAULT_LIVE_RECEIPT = (
 LIVE_RECEIPT_SCHEMA = "unitares.kg-agent-adoption.live-canary.v1"
 ISOLATION_CONTRACT_SCHEMA = "unitares.kg-agent-adoption.isolation-contract.v1"
 FULL_MCP_PORT = 8767
+_MAX_DETAIL_PAGES = 2  # Frozen root: 2717 characters, requested in 2000-char pages.
 
 
 def validate_isolation_contract(
@@ -99,6 +102,66 @@ def validate_isolation_contract(
         "full_mcp_port": FULL_MCP_PORT,
         "captured_plugin_probe_accepted_for_fresh_append": False,
     }
+
+
+async def _fetch_discovery(
+    url: str,
+    discovery_id: str,
+    *,
+    client_session_id: str,
+    timeout_s: float,
+) -> tuple[dict[str, Any], int]:
+    """Read the frozen root without dropping the unpaginated details field."""
+    offset = 0
+    parts: list[str] = []
+    metadata: dict[str, Any] | None = None
+    for page_index in range(_MAX_DETAIL_PAGES):
+        payload = await v0._call_mcp_tool(
+            url,
+            "knowledge",
+            {
+                "action": "details",
+                "discovery_id": discovery_id,
+                "offset": offset,
+                "length": 2000,
+                "include_response_chain": False,
+                "response_mode": "compact",
+                "client_session_id": client_session_id,
+            },
+            timeout_s=timeout_s,
+        )
+        v0._require(payload.get("success") is True, "knowledge details failed")
+        record = payload.get("discovery")
+        v0._require(
+            isinstance(record, Mapping) and record.get("id") == discovery_id,
+            "knowledge details returned the wrong or missing discovery",
+        )
+        pagination = payload.get("pagination", {})
+        v0._require(isinstance(pagination, Mapping), "invalid KG pagination")
+        # The server nests the complete text when no pagination is needed.
+        # A paginated page must supply its own slice, never the full record.
+        details = payload.get("details") if pagination else payload.get(
+            "details", record.get("details")
+        )
+        v0._require(isinstance(details, str), "KG details text is missing or invalid")
+        if metadata is None:
+            metadata = dict(record)
+        parts.append(details)
+        has_more = pagination.get("has_more", False)
+        v0._require(isinstance(has_more, bool), "invalid KG has_more flag")
+        if not has_more:
+            metadata["details"] = "".join(parts)
+            return metadata, page_index + 1
+        next_offset = pagination.get("next_offset")
+        v0._require(
+            isinstance(next_offset, int)
+            and not isinstance(next_offset, bool)
+            and bool(details)
+            and next_offset == offset + len(details),
+            "invalid KG pagination offset",
+        )
+        offset = next_offset
+    raise v0.LiveCanaryError("KG details exceeded the frozen two-page read budget")
 
 
 async def _query_exact_audit_event(event_id: str) -> list[dict[str, Any]]:
@@ -302,7 +365,7 @@ async def run_live_canary(
             identity["label"]
         )
         if probe_evidence is None:
-            discovery, details_pages = await v0._fetch_discovery(
+            discovery, details_pages = await _fetch_discovery(
                 mcp_url,
                 source_map["discovery"]["id"],
                 client_session_id=identity["client_session_id"],
