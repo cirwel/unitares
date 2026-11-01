@@ -38,7 +38,7 @@ IDENTITY
     ``antigravity``, a subagent label) and GitHub records the pull request's
     author login. Neither is a UNITARES identity, and this producer does not
     infer one: both are stored as text, and the entry states that no agent
-    identity was recorded. The producer never onboards: pass the operator's
+    identity was inferred. The producer never onboards: pass the importing driver's
     bound session with ``--client-session-id`` and every write is attributed
     to that identity. A bearer configures transport access, not attribution.
     On a deployment with the strict write
@@ -144,12 +144,11 @@ _DISPOSITION_HEADING_RE = re.compile(r"dispositions for FINDINGS\((\d+)\) — (\
 # A numbered item at the start of a line, optionally bolded: "1. ...", "**2.** ...".
 _ITEM_RE = re.compile(r"^[ \t]*\**(\d+)\.\**[ \t]+(.*)$")
 _SEVERITY_PREFIX_RE = re.compile(r"^\s*\[P[0-3]\]\s*", re.IGNORECASE)
-_ACCEPT_RE = re.compile(r"\b(fixed|accepted|accept|confirmed|agreed)\b", re.IGNORECASE)
-_REBUT_RE = re.compile(r"\brebut(?:ted|tal)?\b", re.IGNORECASE)
-_NEGATED_PREFIX_RE = re.compile(
-    r"\b(?:not|never|no|isn['’]t|wasn['’]t|hasn['’]t|haven['’]t)\s+"
-    r"(?:(?:yet|fully|actually|really|been)\s+){0,2}$", re.IGNORECASE,
+_ACCEPT_RE = re.compile(
+    r"^(?:fixed|accepted|accept|confirmed|agreed)\b|^deferred\s+\(accepted\)",
+    re.IGNORECASE,
 )
+_REBUT_RE = re.compile(r"^rebut(?:ted|tal)?\b", re.IGNORECASE)
 
 DISPOSITION_PROVENANCE = (
     "self-attested: written by the pull request's authoring agent through "
@@ -236,25 +235,18 @@ def gh_comments(repo: str, number: int) -> list[dict]:
 
 
 def classify_disposition(text: str) -> str:
-    """Coarse class of one item: the earliest unnegated keyword.
+    """Read explicit leading labels; do not interpret free-form prose.
 
-    ``accepted`` covers "fixed", "accepted", "deferred (accepted)" and
-    "confirmed"; ``rebutted`` is an argued non-defect. The earliest unnegated keyword
-    wins, so "Accepted, not rebutted" is accepted and "rebutted, fixed in
-    #2414" is rebutted, as the author led with it. Anything else is
-    ``unclassified`` and retains an excerpt: this is a reading aid, never a
-    judgement the producer makes on the author's behalf.
+    After an optional severity prefix, recognize fixed/accepted/accept/
+    confirmed/agreed, rebutted/rebuttal/rebut, or "deferred (accepted)".
+    Everything else remains unclassified, including negative phrasings with
+    an acceptance keyword later in the sentence. This is a format-reading
+    aid, not a determination of what the author meant or what was verified.
     """
-    lead = _SEVERITY_PREFIX_RE.sub("", text or "")
-    def first_unnegated(pattern):
-        return next((m for m in pattern.finditer(lead)
-                     if not _NEGATED_PREFIX_RE.search(lead[:m.start()])), None)
-
-    rebut = first_unnegated(_REBUT_RE)
-    accept = first_unnegated(_ACCEPT_RE)
-    if rebut and (not accept or rebut.start() < accept.start()):
+    lead = _SEVERITY_PREFIX_RE.sub("", (text or "").strip())
+    if _REBUT_RE.match(lead):
         return "rebutted"
-    if accept:
+    if _ACCEPT_RE.match(lead):
         return "accepted"
     return "unclassified"
 
@@ -481,7 +473,7 @@ def build_details(repo: str, pull: dict, entries: list[dict]) -> str:
         f"pr-closed-at: {pull.get('closedAt') or pull.get('mergedAt') or 'unknown'}; "
         "closed PRs can receive later comments; this is a bounded snapshot",
         f"disposition-provenance: {DISPOSITION_PROVENANCE}",
-        "disposition class: the author's earliest unnegated keyword (accepted/rebutted); "
+        "disposition class: an explicit leading label (accepted/rebutted), otherwise unclassified; "
         "text is a bounded, whitespace-normalized excerpt; "
         "superseded = no disposition but a later round reviewed a newer diff (a push, not proof of a fix)",
         f"ingested-by: {PRODUCER_NAME}",

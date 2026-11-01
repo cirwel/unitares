@@ -56,7 +56,11 @@ reconstruct what the trust policy was when the original comment was posted.
 Only review-gate issue comments are covered; native inline reviews are omitted.
 
 Disposition categories are text-reading aids: accepted, rebutted, unclassified,
-superseded or undisposed. “Superseded” only means a later completed round
+superseded or undisposed. Accepted/rebutted categories require an explicit
+leading label after an optional severity prefix (fixed, accepted, accept,
+confirmed, agreed, rebutted, rebuttal, rebut, or deferred (accepted)). Other
+prose remains unclassified; the importer does not interpret natural language.
+“Superseded” only means a later completed round
 reviewed another diff; it does not prove that an earlier finding was fixed.
 Dispositions remain self-attested claims. No `outcome_event` is called and no
 verified outcome or model-quality score is created.

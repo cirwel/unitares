@@ -547,12 +547,16 @@ def test_github_runner_is_read_only_and_scoped_to_the_requested_repo(monkeypatch
 
 
 @pytest.mark.parametrize("text,expected", [
-    ("Not fixed — rebutted: the caller validates.", "rebutted"),
+    ("Not fixed — rebutted: the caller validates.", "unclassified"),
     ("Not accepted; this needs investigation.", "unclassified"),
     ("Never agreed to this change.", "unclassified"),
-    ("Wasn't fixed; rebutted because it is already guarded.", "rebutted"),
-    ("Not yet fixed, but accepted for follow-up.", "accepted"),
-    ("Not rebutted; accepted and deferred.", "accepted"),
+    ("Wasn't fixed; rebutted because it is already guarded.", "unclassified"),
+    ("Not yet fixed, but accepted for follow-up.", "unclassified"),
+    ("Not rebutted; accepted and deferred.", "unclassified"),
+    ("Don't accept: the guard already exists — rebutted.", "unclassified"),
+    ("Can't accept this; rebutted.", "unclassified"),
+    ("Cannot be confirmed; rebutted.", "unclassified"),
+    ("Will not be fixed.", "unclassified"),
 ])
 def test_negated_disposition_words_are_not_counted_as_acceptance(text, expected):
     assert producer.classify_disposition(text) == expected
