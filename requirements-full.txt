@@ -85,4 +85,4 @@ fakeredis>=2.38.0,<3.0.0
 Markdown>=3.6.0,<4.0.0
 
 # Environment variable loading
-python-dotenv>=1.0.0,<2.0.0
+python-dotenv>=1.2.0,<2.0.0

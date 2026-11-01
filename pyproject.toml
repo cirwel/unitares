@@ -54,7 +54,8 @@ full = [
     "asyncpg>=0.29.0,<1.0.0",
     "redis>=5.0.0,<9.0.0",
     "requests>=2.31.0,<3.0.0",
-    "python-dotenv>=1.0.0,<2.0.0",
+    # PYTHON_DOTENV_DISABLED keeps pytest and bootstrap acceptance hermetic.
+    "python-dotenv>=1.2.0,<2.0.0",
     # Ed25519 signing/verification for the Agent Identity Credential (AIC)
     # attestation primitive (src/identity/agent_identity_credential.py). The
     # module guards the import, so the core install does not require it.
