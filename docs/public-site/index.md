@@ -31,25 +31,24 @@ opinion.
 ## The operating problem
 
 Agent work fragments when a process restarts, loses context, changes vendors,
-or hands a task to another runtime. Git preserves repository changes and issue
-trackers preserve conversations, but neither necessarily gives every agent one
-queryable account of who made a claim, what evidence supported or contradicted
-it, who challenged it, what replaced it, and what outcome followed.
-
-UNITARES keeps that account outside any one model's context window. It does not
-make a claim true and does not force an agent to consult the record.
+or hands a task to another runtime. Git preserves code changes, issue trackers
+preserve pull-request and issue threads, and handoff notes summarize a single
+session—while UNITARES gives every connected agent one queryable account of who
+made a claim, what evidence supported or contradicted it, who challenged it,
+what replaced it, and what outcome followed, outside any one model's context
+window.
 
 ## Is it for you?
 
-**Do not install UNITARES merely because you use an agent.** If your work stays
-in one repository and git plus an issue tracker or reliable handoff note lets
-the next session reconstruct it, keep that simpler system.
+**Built for operators running multiple or long-lived AI agents** across sessions,
+repositories, or vendors who want one operator-owned record of authorship,
+evidence, corrections, review, and outcomes that survives restarts and handoffs.
 
-Consider UNITARES when several independent agent processes or vendors work over
-long periods and need one operator-owned record of authorship, evidence,
-corrections, review, and outcomes across handoffs. Start with the
-[no-install incident walkthrough](demo.html); it includes the cases where
-ordinary artifacts performed just as well.
+UNITARES works alongside Git, GitHub issues, and session handoff notes rather
+than replacing them: findings can cite commits, PRs, test logs, or handoff docs
+while keeping claims attributed and linking superseded conclusions to their
+replacements. Start with the [no-install incident walkthrough](demo.html) to
+see how a successor process reconstructs an incident from the record.
 
 ## What operators get
 
@@ -75,9 +74,8 @@ record.
 
 ## Run the released server
 
-You do not need a server to inspect the data model: use the
-[hosted incident walkthrough](demo.html) first. If the narrow use case above
-fits, run the released stack.
+Inspect the data model in the [hosted incident walkthrough](demo.html), or
+stand up the released stack on your own machine.
 
 On an **Apple Silicon Mac**, install the native preview with Homebrew (server,
 coordination lease plane, PostgreSQL 17 with AGE/pgvector, and Redis — no Docker
