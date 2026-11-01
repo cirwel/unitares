@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
+import os
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import uuid
 
@@ -45,7 +49,7 @@ def test_complete_discovery_keeps_nested_details(monkeypatch, text: str) -> None
         "success": True,
         "discovery": {"id": "root", "summary": "summary", "details": text},
     })
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
 
     record, pages = asyncio.run(canary._fetch_discovery(
         "http://127.0.0.1:8767/mcp/", "root",
@@ -64,7 +68,7 @@ def test_paginated_discovery_joins_exact_slices(monkeypatch) -> None:
         {"success": True, "discovery": {"id": "root", "summary": "summary"},
          "details": "second", "pagination": {"has_more": False}},
     ])
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
 
     record, pages = asyncio.run(canary._fetch_discovery(
         "http://127.0.0.1:8767/mcp/", "root",
@@ -90,7 +94,7 @@ def test_paginated_discovery_joins_exact_slices(monkeypatch) -> None:
 ])
 def test_invalid_detail_pages_fail_before_another_read(monkeypatch, payload) -> None:
     call = AsyncMock(return_value=payload)
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
     with pytest.raises(v0.LiveCanaryError):
         asyncio.run(canary._fetch_discovery(
             "http://127.0.0.1:8767/mcp/", "root",
@@ -106,7 +110,7 @@ def test_detail_read_budget_stops_without_a_third_request(monkeypatch) -> None:
         {"success": True, "discovery": {"id": "root"}, "details": "b",
          "pagination": {"has_more": True, "next_offset": 2}},
     ])
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
     with pytest.raises(v0.LiveCanaryError, match="two-page read budget"):
         asyncio.run(canary._fetch_discovery(
             "http://127.0.0.1:8767/mcp/", "root",
@@ -129,7 +133,7 @@ def test_search_contract_failure_stops_before_next_request(monkeypatch, changes)
     first = next(iter(_payloads(tasks, source_map["discovery"]["id"]).values()))
     first.update(changes)
     call = AsyncMock(side_effect=[first, AssertionError("unexpected second request")])
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
     with pytest.raises(v0.LiveCanaryError):
         asyncio.run(canary._run_live_searches(
             "http://127.0.0.1:8767/mcp/", tasks, source_map,
@@ -144,7 +148,7 @@ def test_valid_top_five_miss_preserves_all_six_frozen_searches(monkeypatch) -> N
     payloads = _payloads(tasks, source_map["discovery"]["id"])
     next(iter(payloads.values()))["discoveries"] = []
     call = AsyncMock(side_effect=list(payloads.values()))
-    monkeypatch.setattr(v0, "_call_mcp_tool", call)
+    monkeypatch.setattr(canary, "_call_mcp_tool", call)
     result = asyncio.run(canary._run_live_searches(
         "http://127.0.0.1:8767/mcp/", tasks, source_map,
         client_session_id="test", timeout_s=1,
@@ -152,6 +156,88 @@ def test_valid_top_five_miss_preserves_all_six_frozen_searches(monkeypatch) -> N
     assert call.await_count == 6
     assert list(result) == list(payloads)
     assert v0.summarize_search_results(tasks, source_map, result)[0]["passed"] is False
+
+
+@pytest.mark.parametrize("result", [
+    SimpleNamespace(isError=True, content=[SimpleNamespace(text='{"success": true}')]),
+    SimpleNamespace(isError=False, content=[SimpleNamespace(type="refusal", text='{"success": true}')]),
+    SimpleNamespace(isError=False, content=[SimpleNamespace(text='{"success": true, "refused": true}')]),
+    SimpleNamespace(isError=False, content=[SimpleNamespace(text='{"success": true, "refusal": "denied"}')]),
+    SimpleNamespace(isError=False, content=[SimpleNamespace(text='{"success": false}')]),
+    SimpleNamespace(isError=False, content=[SimpleNamespace(text='{"success": true}'),
+                                          SimpleNamespace(text='{"success": false}')]),
+])
+def test_mcp_error_or_refusal_cannot_be_hidden_by_success_json(result) -> None:
+    with pytest.raises(v0.LiveCanaryError):
+        canary._decode_mcp_result(result)
+
+
+def test_real_sdk_result_decodes_wire_alias_for_success_and_error() -> None:
+    from mcp.types import CallToolResult
+
+    wire = {"isError": False, "content": [{"type": "text", "text": '{"success": true}'}]}
+    assert canary._decode_mcp_result(CallToolResult.model_validate(wire)) == {"success": True}
+    wire["isError"] = True
+    with pytest.raises(v0.LiveCanaryError, match="error-marked"):
+        canary._decode_mcp_result(CallToolResult.model_validate(wire))
+
+
+def test_error_marked_search_stops_real_transport_before_next_search_or_audit(monkeypatch) -> None:
+    from mcp.client import session as mcp_session, streamable_http
+    from mcp.types import CallToolResult
+
+    tasks = _load(v0.DEFAULT_TASKS)
+    source_map = _load(v0.DEFAULT_SOURCE_MAP)
+    success = next(iter(_payloads(tasks, source_map["discovery"]["id"]).values()))
+    call = AsyncMock(return_value=CallToolResult.model_validate({
+        "isError": True, "content": [{"type": "text", "text": json.dumps(success)}],
+    }))
+
+    @asynccontextmanager
+    async def http(*args, **kwargs):
+        yield (None, None)
+
+    @asynccontextmanager
+    async def session(*args, **kwargs):
+        yield SimpleNamespace(initialize=AsyncMock(), call_tool=call)
+
+    monkeypatch.setattr(streamable_http, "streamable_http_client", http)
+    monkeypatch.setattr(mcp_session, "ClientSession", session)
+    monkeypatch.setattr(canary, "_mint_canary_identity", AsyncMock(return_value={
+        "agent_uuid": "test", "client_session_id": "test", "label": "canary_agent_adoption",
+    }))
+    monkeypatch.setattr(canary, "_fetch_discovery", AsyncMock(return_value=({}, 1)))
+    monkeypatch.setattr(v0, "validate_source_map", lambda *args: {})
+    audit = AsyncMock()
+    monkeypatch.setattr(canary, "_run_audit_probe", audit)
+    close = AsyncMock()
+    monkeypatch.setattr("src.db.close_db", close)
+    with pytest.raises(v0.LiveCanaryError, match="error-marked"):
+        asyncio.run(canary.run_live_canary(
+            enrollment_path=v0.DEFAULT_ENROLLMENT, tasks_path=v0.DEFAULT_TASKS,
+            source_map_path=v0.DEFAULT_SOURCE_MAP, offline_receipt_path=v0.DEFAULT_OFFLINE_RECEIPT,
+            mcp_url="http://127.0.0.1:8767/mcp/", timeout_s=1, authorization_ref="inert-test",
+        ))
+    assert call.await_count == 1
+    audit.assert_not_awaited()
+    close.assert_awaited_once()
+
+
+def test_progress_creation_syncs_file_and_directory_before_checkpoint(monkeypatch, tmp_path) -> None:
+    synced = []
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    path = tmp_path / "progress.jsonl"
+    canary._create_progress_log(path)
+    assert synced == [False, True]
+    assert path.read_bytes() == b""
+    with pytest.raises(FileExistsError):
+        canary._create_progress_log(path)
 
 
 def test_progress_file_is_private_and_bounded(tmp_path) -> None:
@@ -261,7 +347,7 @@ def test_main_refuses_captured_plugin_probe_before_live_operations(
 ) -> None:
     mint = AsyncMock()
     append = AsyncMock()
-    monkeypatch.setattr(v0, "_mint_canary_identity", mint)
+    monkeypatch.setattr(canary, "_mint_canary_identity", mint)
     monkeypatch.setattr("src.audit_db.append_audit_event_async", append)
 
     result = canary.main(
@@ -351,7 +437,7 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch, tmp_pa
         "client_session_id": "agent-4d54b929-ab2",
         "label": "canary_agent_adoption",
     }
-    monkeypatch.setattr(v0, "_mint_canary_identity", AsyncMock(return_value=identity))
+    monkeypatch.setattr(canary, "_mint_canary_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(
         canary,
         "_fetch_discovery",

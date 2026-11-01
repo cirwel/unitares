@@ -50,6 +50,83 @@ _MAX_DETAIL_PAGES = 2  # Frozen root: 2717 characters, requested in 2000-char pa
 _PROGRESS_LIMIT = 128 * 1024
 
 
+def _decode_mcp_result(result: Any) -> dict[str, Any]:
+    """Reject transport errors/refusals before accepting any success payload."""
+    is_error = getattr(result, "is_error", getattr(result, "isError", None))
+    v0._require(is_error is False, "MCP result is error-marked")
+    payloads = []
+    for content in result.content:
+        v0._require(getattr(content, "type", None) != "refusal", "MCP result is a refusal")
+        text = getattr(content, "text", None)
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            v0._require(
+                payload.get("success") is True
+                and not payload.get("refusal")
+                and not payload.get("refused")
+                and not payload.get("error"),
+                "MCP result refused or failed",
+            )
+            payloads.append(payload)
+    v0._require(len(payloads) == 1, "MCP result must contain exactly one successful JSON object")
+    return payloads[0]
+
+
+async def _call_mcp_tool(
+    url: str, tool_name: str, arguments: Mapping[str, Any], *, timeout_s: float,
+) -> dict[str, Any]:
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+    from src.mcp_compat import mcp_httpx
+
+    async with mcp_httpx().AsyncClient(timeout=timeout_s) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                return _decode_mcp_result(await session.call_tool(tool_name, dict(arguments)))
+
+
+async def _mint_canary_identity(url: str, timeout_s: float) -> dict[str, str]:
+    payload = await _call_mcp_tool(
+        url, "start_session",
+        {"force_new": True, "name": v0.CANARY_LABEL_PREFIX,
+         "client_hint": "KG adoption production-plumbing canary", "response_mode": "minimal"},
+        timeout_s=timeout_s,
+    )
+    raw = payload.get("raw_governance") or payload
+    v0._require(isinstance(raw, Mapping), "onboarding returned invalid governance metadata")
+    identity = payload.get("agent_uuid") or raw.get("uuid")
+    client_session_id = payload.get("client_session_id") or raw.get("client_session_id")
+    label = raw.get("display_name") or payload.get("display_name")
+    v0._require(isinstance(identity, str) and identity, "onboarding returned no UUID")
+    v0._require(isinstance(client_session_id, str) and client_session_id,
+                "onboarding returned no client_session_id")
+    v0._require(isinstance(label, str) and label.startswith(v0.CANARY_LABEL_PREFIX),
+                "onboarding label is outside the canary partition")
+    return {"agent_uuid": identity, "client_session_id": client_session_id, "label": label}
+
+
+def _create_progress_log(path: Path) -> None:
+    parent = path.parent.stat()
+    v0._require(parent.st_uid == os.getuid() and stat.S_IMODE(parent.st_mode) == 0o700,
+                "progress directory must be owned and mode 0700")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def _checkpoint(path: Path | None, stage: str, **fields: Any) -> None:
     """Durably retain bounded metadata before a possibly ambiguous operation."""
     if path is None:
@@ -145,7 +222,7 @@ async def _fetch_discovery(
     parts: list[str] = []
     metadata: dict[str, Any] | None = None
     for page_index in range(_MAX_DETAIL_PAGES):
-        payload = await v0._call_mcp_tool(
+        payload = await _call_mcp_tool(
             url,
             "knowledge",
             {
@@ -210,7 +287,7 @@ async def _run_live_searches(
         for step in chain["steps"]:
             if not step["eligible_for_prior_work"]:
                 continue
-            payload = await v0._call_mcp_tool(
+            payload = await _call_mcp_tool(
                 url, "knowledge",
                 {
                     "action": v0.RETRIEVAL_CONTRACT["action"],
@@ -441,13 +518,7 @@ async def run_live_canary(
         started_at = datetime.now(timezone.utc) - timedelta(seconds=1)
 
     if progress_path is not None:
-        parent = progress_path.parent.stat()
-        v0._require(
-            parent.st_uid == os.getuid() and stat.S_IMODE(parent.st_mode) == 0o700,
-            "progress directory must be owned and mode 0700",
-        )
-        fd = os.open(progress_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(fd)
+        _create_progress_log(progress_path)
         _checkpoint(progress_path, "preflight_validated")
     try:
         if probe_evidence is not None:
@@ -461,7 +532,7 @@ async def run_live_canary(
                 "probe evidence search payloads are missing",
             )
         else:
-            identity = await v0._mint_canary_identity(mcp_url, timeout_s)
+            identity = await _mint_canary_identity(mcp_url, timeout_s)
         _checkpoint(progress_path, "identity_bound", **identity)
         exclusion_contract = v0.validate_measurement_exclusion_contract(
             identity["label"]
