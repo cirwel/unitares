@@ -140,10 +140,6 @@ def unmerged_patch_commits(branch: str, since: str | None = None) -> list[str]:
     return [line.split()[1] for line in out.splitlines() if line.startswith("+ ")]
 
 
-def unmerged_patch_count(branch: str, since: str | None = None) -> int:
-    return len(unmerged_patch_commits(branch, since))
-
-
 def tip_age_days(branch: str) -> int:
     ts = int(run("git", "log", "-1", "--format=%ct", f"origin/{branch}").strip())
     return int((time.time() - ts) // 86400)

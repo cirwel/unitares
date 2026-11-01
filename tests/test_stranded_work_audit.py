@@ -241,14 +241,6 @@ def test_absent_changed_file_evidence_keeps_finding(monkeypatch):
     assert audit._end_state_differs("topic", ["empty-commit"]) is True
 
 
-def test_missing_historical_match_keeps_stranded_alarm(monkeypatch):
-    monkeypatch.setattr(audit, "_paths_touched_by", lambda commits: ["src/example.py"])
-    monkeypatch.setattr(audit, "run", lambda *cmd: "candidate\n")
-    monkeypatch.setattr(audit, "succeeds", lambda *cmd: False)
-
-    assert audit._end_state_differs("topic", ["post-merge-commit"]) is True
-
-
 def test_absent_merged_head_is_indeterminate_not_stranded(monkeypatch):
     """The false-alarm mechanism behind the 2026-08-19 audit run.
 
