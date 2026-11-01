@@ -234,3 +234,26 @@ async def test_ordinary_writer_retry_and_concurrency_preserve_outcome_delivery(i
     assert not await db.update_calibration({"_version": 1, "bins": {}})
     with pytest.raises(CalibrationVersionConflict):
         await db.update_calibration({"bins": {}})
+
+
+@pytest.mark.asyncio
+async def test_recovery_refreshes_live_cache_even_when_delivery_ack_was_lost(instrument, monkeypatch, tmp_path):
+    from src.calibration import CalibrationChecker
+    import src.calibration
+    import src.db
+
+    db, agent, _ = instrument
+    checker = CalibrationChecker(state_file=tmp_path / "cold-cache.json")
+    checker._backend = "postgres"
+    monkeypatch.setattr(src.calibration, "get_calibration_checker", lambda: checker)
+    monkeypatch.setattr(src.db, "get_db", lambda: db)
+    await record(db, agent)
+    db.lose_ack = True
+
+    async def stop_after_one_pass(_):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(delivery.asyncio, "sleep", stop_after_one_pass)
+    with pytest.raises(asyncio.CancelledError):
+        await delivery.calibration_delivery_task()
+    assert checker.bin_stats["0.8-0.9"]["count"] == 1

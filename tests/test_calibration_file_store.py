@@ -89,3 +89,34 @@ def test_stale_reset_is_rejected_and_cache_returns_to_durable_state(tmp_path, mo
     assert stale.save_state() is False
     assert read_state(path)["bins"]["0.8-0.9"]["count"] == 2
     assert stale.bin_stats["0.8-0.9"]["count"] == 2
+
+
+def test_symlink_alias_shares_calibration_state_and_lock(tmp_path, monkeypatch):
+    from src.calibration import CalibrationChecker
+
+    monkeypatch.setenv("UNITARES_CALIBRATION_BACKEND", "json")
+    path, alias = tmp_path / "canonical.json", tmp_path / "alias.json"
+    path.write_text("{}")
+    alias.symlink_to(path)
+    first, second = CalibrationChecker(state_file=path), CalibrationChecker(state_file=alias)
+    first.record_prediction(0.85, True, 1.0)
+    second.record_prediction(0.85, True, 1.0)
+    assert alias.is_symlink()
+    assert read_state(path)["bins"]["0.8-0.9"]["count"] == 2
+
+
+def test_symlink_alias_preserves_sequential_delivery_identity(tmp_path):
+    from src.sequential_calibration import SequentialCalibrationTracker
+
+    path, alias = tmp_path / "canonical.json", tmp_path / "alias.json"
+    first = SequentialCalibrationTracker(path)
+    first.save_state()
+    alias.symlink_to(path)
+    second = SequentialCalibrationTracker(alias)
+    args = dict(confidence=0.8, outcome_correct=True, signal_source="tests",
+                delivery_id="canonical-outcome", delivery_digest="a" * 64)
+    first.record_exogenous_tactical_outcome(**args)
+    second.record_exogenous_tactical_outcome(**args)
+    second.record_exogenous_tactical_outcome(confidence=0.7, outcome_correct=False, signal_source="tasks")
+    assert alias.is_symlink()
+    assert SequentialCalibrationTracker(path).compute_metrics()["eligible_samples"] == 2

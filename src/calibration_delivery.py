@@ -211,13 +211,14 @@ async def calibration_delivery_task() -> None:
 
     while True:
         try:
-            delivered = await drain_deliveries(get_db())
+            await drain_deliveries(get_db())
             checker = get_calibration_checker()
             # Also retries an ordinary writer's frozen operation after transient
             # storage failure, even if no further observation arrives.
             await checker.flush_state_async()
-            if delivered:
-                await checker.load_state_async()
+            # A different consumer, or a commit whose acknowledgement was
+            # lost, can advance durable state even when this pass reports zero.
+            await checker.load_state_async()
         except asyncio.CancelledError:
             raise
         except Exception as exc:

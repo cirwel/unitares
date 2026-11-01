@@ -136,7 +136,9 @@ class CalibrationChecker:
         # Set up state file path
         if state_file is None:
             state_file = DEFAULT_STATE_FILE
-        self.state_file = Path(state_file)
+        # The delivery worker pins this physical path. Aliases must use the
+        # same lock and atomic replace rather than replacing the symlink itself.
+        self.state_file = Path(state_file).resolve()
 
         # Backend: postgres (default), json (fallback)
         self._backend = os.getenv("UNITARES_CALIBRATION_BACKEND", "postgres").strip().lower()

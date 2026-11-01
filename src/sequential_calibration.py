@@ -144,7 +144,7 @@ class SequentialCalibrationTracker:
     ):
         if state_file is None:
             state_file = DEFAULT_STATE_FILE
-        self.state_file = Path(state_file)
+        self.state_file = Path(state_file).resolve()
         self.prior_success = float(prior_success)
         self.prior_failure = float(prior_failure)
         self.load_state()
