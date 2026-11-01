@@ -591,3 +591,18 @@ def test_stored_disposition_excerpts_are_not_claimed_verbatim():
     details = producer.build_details(REPO, pull(7), entries)
     assert "whitespace-normalized excerpt" in details and "[trimmed]" in details
     assert "verbatim" not in details
+
+
+@pytest.mark.parametrize("prefix", ["1.", "1)", "1:", "#1.", "#1)", "#1:", "**1.**", "**#1:**"])
+def test_gate_supported_numbering_keeps_the_disposition_in_the_stored_record(env, prefix):
+    environ, data, stub = env
+    first = review(7, KEY_A, "FINDINGS", 1)
+    answer = dispose(7, first, KEY_A, 1, ["Rebutted: the caller validates."])
+    answer["body"] = answer["body"].replace("\n1. Rebutted:", f"\n{prefix} Rebutted:")
+    seed(data, [pull(7)], {7: [first, answer]})
+    result = run(environ, "--apply")
+    assert result.returncode == 0, result.stderr
+    [stored] = stub.bodies("store")
+    assert "1. [rebutted] Rebutted: the caller validates." in stored["details"]
+    assert "1 rebutted" in stored["summary"]
+    assert "[undisposed]" not in stored["details"]

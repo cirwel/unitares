@@ -141,8 +141,9 @@ MAX_DETAILS_CHARS = 48_000
 # The heading `review.sh dispose` writes, naming the record it answers
 # (review_gate.post_record; the native form is review_gate._NATIVE_DISPOSITION_RE).
 _DISPOSITION_HEADING_RE = re.compile(r"dispositions for FINDINGS\((\d+)\) — (\S+)")
-# A numbered item at the start of a line, optionally bolded: "1. ...", "**2.** ...".
-_ITEM_RE = re.compile(r"^[ \t]*\**(\d+)\.\**[ \t]+(.*)$")
+# Match the gate's numbered dispositions (1., 1), 1:, optional #),
+# retaining the prototype's support for bold numbering too.
+_ITEM_RE = re.compile(r"^[ \t]*\**#?(\d+)[.):]\**[ \t]+(.*)$")
 _SEVERITY_PREFIX_RE = re.compile(r"^\s*\[P[0-3]\]\s*", re.IGNORECASE)
 _ACCEPT_RE = re.compile(
     r"^(?:fixed|accepted|accept|confirmed|agreed)\b|^deferred\s+\(accepted\)",
@@ -677,7 +678,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                         help=f"governance REST endpoint (env {ci.REST_URL_ENV})")
     parser.add_argument("--client-session-id", default=os.environ.get(CLIENT_SESSION_ENV) or None,
                         help=f"bound session to attribute writes to (env {CLIENT_SESSION_ENV}); "
-                             "required on a deployment with the strict identity gate")
+                             "required for --apply")
     parser.add_argument("--timeout", type=float, default=ci.DEFAULT_TIMEOUT_SECONDS,
                         help="per-request timeout in seconds")
     parser.add_argument("--apply", action="store_true", help="actually store (default is a dry run)")
