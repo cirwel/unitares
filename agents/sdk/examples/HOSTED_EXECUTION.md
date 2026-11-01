@@ -7,6 +7,9 @@ registers a resident, mints on import, persists a credential, or activates a
 service. Do not run the example against a server until the host contract and
 identity-write authorization are established.
 
+This example covers ordinary executions, not host-provisioned orchestrated
+anchors that can span processes; see the [identity ontology](../../../docs/ontology/identity.md).
+
 ## Three different continuities
 
 - **Enduring assistant:** its display name and durable work/decisions. These are
@@ -33,8 +36,8 @@ writing a report, skips blank reports, and sends no idle heartbeat or synthetic
 start/end check-in. Generated summaries belong to `substrate_interpretation`,
 not this agent-report stream. The host must supply only useful milestones,
 usually zero or one report per turn. Reports use `call_tool("sync_state", ...)`,
-not the resident convenience `checkin()`: a display-name collision with a roster
-entry must not produce `resident:/` substrate observations or resident recovery.
+not the SDK resident convenience method `GovernanceClient.checkin()`:
+a display-name collision with a roster entry must not produce `resident:/` substrate observations or resident recovery.
 Report writes also disable transport retries; ambiguous delivery needs
 reconciliation, not replay. Finishing the stream closes the transport;
 it does not establish or attest that the host process exited.
