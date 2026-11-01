@@ -37,18 +37,20 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "did not establish predictive lift" in ledger_text
     assert "read-specific power" in ledger_text
     assert "inconclusive, not a demonstrated negative" in ledger_text
-    assert "Agent work fragments when a process restarts" in landing_text
-    assert "Built for operators running multiple or long-lived AI agents" in landing_text
-    assert "works alongside Git, GitHub issues, and session handoff notes" in landing_text
+    # The index page is a directory of generated repository artifacts, not a
+    # rival product landing page alongside cirwel.org and README.md.
+    assert "<title>UNITARES — Repository artifacts</title>" in landing
+    assert "UNITARES repository artifacts" in landing_text
+    assert 'class="brand" href="https://cirwel.org"' in landing
+    assert 'href="index.html" class="active">Artifacts</a>' in landing
+    assert 'href="https://cirwel.org">cirwel.org ↗</a>' in landing
+    assert 'href="demo.html"' in landing
+    assert 'href="glossary.html"' in landing
+    assert 'href="glossary-viewer.html"' in landing
+    assert 'href="drift-audit.html"' in landing
+    assert "brew install" not in landing_text
+    assert "docker compose up" not in landing_text
     assert "Do not install UNITARES" not in landing_text
-    assert "observational by default" in landing_text
-    assert "cannot pause an identity or block writes" in landing_text
-    assert "Policy and recovery" not in landing_text
-    assert "six-check-in telemetry demo" not in landing_text
-    assert "Claims and evidence" in landing
-    assert 'class="hero-actions"' in landing
-    assert 'href="#is-it-for-you"' in landing
-    assert 'href="#evaluate-the-project"' in landing
     assert "github.com/cirwel/unitares/discussions" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing
     assert f"releases/tag/v{server_version}" in landing
@@ -57,7 +59,8 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
     assert "UNITARES Glossary" in glossary
     assert "field is inventing terms" in glossary
-    assert 'href="index.html"' in glossary
+    assert 'href="index.html">Artifacts</a>' in glossary
+    assert 'class="brand" href="https://cirwel.org"' in glossary
 
     assert (tmp_path / "drift-audit.html").is_file()
     assert (tmp_path / "favicon.svg").is_file()
@@ -111,10 +114,13 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     assert "docs/EVIDENCE_AND_LIMITS.md" in demo
     assert "docs/guides/AGENT_SESSION_WALKTHROUGH.md" in demo
     assert "Probably not if one repository" not in demo_text
-    # Reachable from the landing hero and the nav.
-    assert 'class="primary" href="demo.html"' in landing
-    # The viewer has its own nav template; it links the demo too.
-    assert 'href="demo.html"' in (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
+    # Reachable from the artifact directory and the nav.
+    assert 'href="demo.html"' in landing
+    # The viewer has its own nav template; it links cirwel.org and the demo too.
+    viewer_html = (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
+    assert 'href="demo.html"' in viewer_html
+    assert 'class="brand" href="https://cirwel.org"' in viewer_html
+    assert 'href="index.html">Artifacts</a>' in viewer_html
     assert 'href="demo.html" class="active"' in demo
 
 
