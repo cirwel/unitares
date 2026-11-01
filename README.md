@@ -69,13 +69,11 @@ search_shared_memory {"query": "upload retry test"}   -> finding a (superseded, 
 start_session  {"force_new": true, "parent_agent_id": "<A's id>", "spawn_reason": "explicit"}
 ```
 
-Nothing forces an agent to read the record; the Claude Code and Codex plugin's
-session start points it there. A simpler handoff, call by call: the
+The Claude Code and Codex plugin's session start points each new session at the
+record. For a complete handoff call by call, see the
 [captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md).
 
 ## Install
-
-**Do not install UNITARES merely because you use an agent.** If git plus an issue tracker or reliable handoff note lets the next session reconstruct the work, keep that simpler system. Consider UNITARES when independent agent processes or vendors need one queryable record of authorship, evidence, corrections, review, and outcomes across handoffs.
 
 **Homebrew preview**, recommended for an Apple Silicon desktop Mac: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the services natively; follow its [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
 The packaged `unitares update` coordinates writer shutdown, verified backup, migrations, prior-state restoration, and deep health when writers restart (schema verification when they remain stopped); kegs that predate it use the tap's [one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
@@ -100,7 +98,7 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 
 For an operator running several long-lived AI agents across vendors, on infrastructure they control, who needs the agents' shared account of the work to survive restarts and handoffs.
 
-Not a sandbox, an output validator, or a hosted agent platform. It runs beside your evals and guardrails and replaces neither. It does not run the agent's loop or grant an estimator authority over it. Explicit identity, authorization, archive, and coordination boundaries remain enforced.
+UNITARES works alongside Git, issue trackers, handoff notes, evals and guardrails, and keeps the record that ties the agents' work together across them. Each agent keeps its own loop and model. Inferred pauses are observational by default; the operator decides whether one is enforced. Identity, authorization, archive and coordination boundaries are enforced by the server.
 
 ## How it fits together
 

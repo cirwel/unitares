@@ -100,6 +100,9 @@ async def isolated_binding_agent():
     connection = await asyncpg.connect(TEST_DB_URL)
     try:
         await connection.execute(
+            "DELETE FROM audit.outcome_calibration_deliveries WHERE agent_id = $1", agent_id,
+        )
+        await connection.execute(
             "DELETE FROM audit.outcome_prediction_bindings WHERE agent_id = $1",
             agent_id,
         )
@@ -259,7 +262,7 @@ async def test_lost_commit_ack_replays_canonical_through_new_connection(
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_commit_currently_delivers_calibration_zero_times(
+async def test_ambiguous_commit_leaves_durable_delivery_for_recovery(
     isolated_binding_agent,
 ):
     from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
@@ -329,6 +332,14 @@ async def test_ambiguous_commit_currently_delivers_calibration_zero_times(
     checker.record_prediction.assert_not_called()
     checker.record_tactical_decision.assert_not_called()
     sequential.record_exogenous_tactical_outcome.assert_not_called()
+    connection = await asyncpg.connect(TEST_DB_URL)
+    try:
+        assert await connection.fetchval(
+            "SELECT count(*) FROM audit.outcome_calibration_deliveries "
+            "WHERE agent_id=$1 AND completed_at IS NULL", isolated_binding_agent,
+        ) == 1
+    finally:
+        await connection.close()
 
 
 @pytest.mark.asyncio
@@ -502,5 +513,14 @@ async def test_non_exact_score_is_canonical_across_response_row_replay_and_calib
     assert replay["idempotent_replay"] is True
     assert first["outcome_score"] == persisted_score
     assert replay["outcome_score"] == persisted_score
-    assert checker.record_prediction.call_count == 1
-    assert checker.record_prediction.call_args.kwargs["actual_correct"] == persisted_score
+    checker.record_prediction.assert_not_called()
+    connection = await asyncpg.connect(TEST_DB_URL)
+    try:
+        payload = await connection.fetchval(
+            "SELECT payload FROM audit.outcome_calibration_deliveries WHERE agent_id=$1",
+            isolated_binding_agent,
+        )
+        import json
+        assert json.loads(payload)["score"] == persisted_score
+    finally:
+        await connection.close()

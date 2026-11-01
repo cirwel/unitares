@@ -57,9 +57,9 @@ def test_readme_stays_a_landing_page() -> None:
     assert "cannot be described as clean single-read blinding" not in README
 
 
-def test_readme_offers_a_no_install_path_and_disqualifies_simple_cases() -> None:
+def test_readme_offers_a_no_install_path_and_complements_git_and_handoffs() -> None:
     demo = "https://cirwel.github.io/unitares/demo.html"
     assert README.count(demo) >= 2
     assert README.index(demo) < README.index("## Install")
-    assert "Do not install UNITARES merely because you use an agent." in README
-    assert "git plus an issue tracker or reliable handoff note" in README
+    assert "Do not install UNITARES" not in README
+    assert "works alongside Git, issue trackers, handoff notes" in README

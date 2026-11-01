@@ -37,16 +37,20 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "did not establish predictive lift" in ledger_text
     assert "read-specific power" in ledger_text
     assert "inconclusive, not a demonstrated negative" in ledger_text
-    assert "Agent work fragments when a process restarts" in landing_text
-    assert "Do not install UNITARES merely because you use an agent." in landing_text
-    assert "observational by default" in landing_text
-    assert "cannot pause an identity or block writes" in landing_text
-    assert "Policy and recovery" not in landing_text
-    assert "six-check-in telemetry demo" not in landing_text
-    assert "Claims and evidence" in landing
-    assert 'class="hero-actions"' in landing
-    assert 'href="#is-it-for-you"' in landing
-    assert 'href="#evaluate-the-project"' in landing
+    # The index page is a directory of generated repository artifacts, not a
+    # rival product landing page alongside cirwel.org and README.md.
+    assert "<title>UNITARES — Repository artifacts</title>" in landing
+    assert "UNITARES repository artifacts" in landing_text
+    assert 'class="brand" href="https://cirwel.org"' in landing
+    assert 'href="index.html" class="active">Artifacts</a>' in landing
+    assert 'href="https://cirwel.org">cirwel.org ↗</a>' in landing
+    assert 'href="demo.html"' in landing
+    assert 'href="glossary.html"' in landing
+    assert 'href="glossary-viewer.html"' in landing
+    assert 'href="drift-audit.html"' in landing
+    assert "brew install" not in landing_text
+    assert "docker compose up" not in landing_text
+    assert "Do not install UNITARES" not in landing_text
     assert "github.com/cirwel/unitares/discussions" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing
     assert f"releases/tag/v{server_version}" in landing
@@ -55,7 +59,8 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
     assert "UNITARES Glossary" in glossary
     assert "field is inventing terms" in glossary
-    assert 'href="index.html"' in glossary
+    assert 'href="index.html">Artifacts</a>' in glossary
+    assert 'class="brand" href="https://cirwel.org"' in glossary
 
     assert (tmp_path / "drift-audit.html").is_file()
     assert (tmp_path / "favicon.svg").is_file()
@@ -103,16 +108,19 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     for edge in fixture["oracle"]["edges"]:
         assert f"<code>{edge['relation']}</code>" in demo
     assert "{{" not in demo and "{fixture_blob}" not in demo
-    # The page shows the mechanism and says plainly it is not a win over git.
+    # The page shows how the record fits alongside Git, GitHub, and handoffs, and links the evidence.
+    assert "works alongside repository history, pull requests, and session handoff notes" in demo_text
     assert "docs/evaluations/accountability-journey/result-v0.md" in demo
-    assert "both scored 1.000" in demo_text
-    assert "ordinary repository artifacts recovered the incident facts and UNITARES did not" in demo_text
-    assert "capture-stage-2168-v0.md" in demo
-    assert "Should you install it?" in demo_text
-    # Reachable from the landing hero and the nav.
-    assert 'class="primary" href="demo.html"' in landing
-    # The viewer has its own nav template; it links the demo too.
-    assert 'href="demo.html"' in (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
+    assert "docs/EVIDENCE_AND_LIMITS.md" in demo
+    assert "docs/guides/AGENT_SESSION_WALKTHROUGH.md" in demo
+    assert "Probably not if one repository" not in demo_text
+    # Reachable from the artifact directory and the nav.
+    assert 'href="demo.html"' in landing
+    # The viewer has its own nav template; it links cirwel.org and the demo too.
+    viewer_html = (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
+    assert 'href="demo.html"' in viewer_html
+    assert 'class="brand" href="https://cirwel.org"' in viewer_html
+    assert 'href="index.html">Artifacts</a>' in viewer_html
     assert 'href="demo.html" class="active"' in demo
 
 

@@ -949,7 +949,9 @@ class TestCalibrationOperations:
 
     @pytest.mark.asyncio
     async def test_update_calibration(self, backend):
+        original = await backend.get_calibration()
         result = await backend.update_calibration({
+            "_version": original["_version"],
             "lambda1_threshold": 0.4,
             "bins": [0.0, 0.5, 1.0],
         })
@@ -960,15 +962,23 @@ class TestCalibrationOperations:
 
     @pytest.mark.asyncio
     async def test_update_calibration_strips_internal_fields(self, backend):
+        original = await backend.get_calibration()
         await backend.update_calibration({
             "real_key": True,
-            "_version": 999,
+            "_version": original["_version"],
             "_updated_at": "ignore",
         })
         data = await backend.get_calibration()
         assert data["real_key"] is True
         # Internal fields should not be stored in data
         assert data.get("_version") is not None  # _version comes from the row, not the data
+
+    @pytest.mark.asyncio
+    async def test_stale_calibration_replacement_does_not_erase_new_state(self, backend):
+        original = await backend.get_calibration()
+        assert await backend.update_calibration({"_version": original["_version"], "new": 1})
+        assert not await backend.update_calibration({"_version": original["_version"], "old": 1})
+        assert (await backend.get_calibration())["new"] == 1
 
 
 # ============================================================================

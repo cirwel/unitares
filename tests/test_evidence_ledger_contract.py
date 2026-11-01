@@ -63,7 +63,9 @@ def test_ledger_preserves_earned_and_unearned_claims_side_by_side() -> None:
     assert "current rate has not been re-measured" in NORMALIZED
     assert "did not establish predictive lift" in NORMALIZED
     assert "inconclusive, not a demonstrated negative" in NORMALIZED
-    assert "Incident prevention and benefit from pausing remain untested" in NORMALIZED
+    # The effect of pausing is stated as an open research question, not framed
+    # against a prevention claim the project does not make (operator direction 2026-11-01).
+    assert "Whether pausing changes outcomes is an open research question" in NORMALIZED
     assert "sets no standing AUC ceiling" in NORMALIZED
 
 
@@ -74,11 +76,11 @@ def test_ledger_separates_the_review_mechanism_from_its_benefit() -> None:
     measured. Neither should erase the other, regardless of the page layout.
     """
     assert "cannot resolve its own review over a standing reviewer objection" in NORMALIZED
+    # The sample's scope (fixed size, no control arm) is the boundary; the ledger
+    # no longer rebuts an incident-reduction claim the project does not make
+    # (operator direction 2026-11-01).
     assert "no matched unreviewed or conventional-review control" in NORMALIZED
-    assert (
-        "no estimate of incident reduction, net productivity, or UNITARES's incremental contribution"
-        in NORMALIZED
-    )
+    assert "fixed sample of 20 recent merged PRs" in NORMALIZED
 
 
 def test_ledger_states_the_review_coverage_boundary() -> None:

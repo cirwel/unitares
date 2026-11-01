@@ -211,6 +211,8 @@ async def ensure_test_database_schema() -> None:
 # tables in opposite orders. `test_truncate_tables_covers_cascade_reachable`
 # fails if a new foreign key adds a child that is not named here.
 TRUNCATE_TABLES = [
+    "core.calibration_writer_receipts",
+    "audit.outcome_calibration_deliveries",
     "coordination.session_resolution_sagas",
     "coordination.dialectic_resolution_effects",
     "core.dialectic_messages",
