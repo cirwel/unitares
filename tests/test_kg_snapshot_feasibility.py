@@ -73,7 +73,8 @@ def test_fts_adapter_acquires_exact_held_connection_and_filters_before_limit():
     asyncio.run(scenario())
 
 
-def test_drift_stops_before_any_output_or_fts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("column_write", [False, True])
+def test_drift_or_column_write_privilege_stops_before_any_output_or_fts(tmp_path, monkeypatch, column_write):
     class Connection:
         def __init__(self):
             self.calls = []
@@ -89,7 +90,7 @@ def test_drift_stops_before_any_output_or_fts(tmp_path, monkeypatch):
         async def fetchrow(self, sql):
             if "relkind" in sql:
                 return {"relkind": b"r", "relrowsecurity": False}
-            return {"can_select": True, "direct_login": True,
+            return {"can_select": True, "direct_login": True, "can_write_columns": column_write,
                     **{key: False for key in ("rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication",
                                               "rolbypassrls", "memberships", "can_write", "owns_table")}}
 
@@ -97,8 +98,9 @@ def test_drift_stops_before_any_output_or_fts(tmp_path, monkeypatch):
     row = {"id": "a", "summary": "Target", "details": "evidence", "tags": ["agent-adoption"]}
     monkeypatch.setattr(kg, "enumerate_universe", AsyncMock(return_value=([row], kg.canonical([row]))))
     monkeypatch.setattr(kg, "pinned_backend", lambda _: pytest.fail("must stop before FTS"))
-    with pytest.raises(ValueError, match="corpus drift"):
+    with pytest.raises(ValueError, match="SELECT-only" if column_write else "corpus drift"):
         asyncio.run(kg.operate(connection, {"mode": "evaluate", "corpus_sha256": "stale"}, tmp_path))
+    assert kg.enumerate_universe.await_count == (0 if column_write else 1)
     assert connection.calls == [{"isolation": "repeatable_read", "readonly": True}]
     assert not list(tmp_path.iterdir())
 

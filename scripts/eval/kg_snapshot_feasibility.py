@@ -195,12 +195,13 @@ async def operate(connection, document, artifacts):
             current_user = session_user AS direct_login,
             EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members m WHERE m.member=r.oid) AS memberships,
             has_table_privilege(current_user,'knowledge.discoveries','SELECT') AS can_select,
-            has_table_privilege(current_user,'knowledge.discoveries','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS can_write,
+            has_table_privilege(current_user,'knowledge.discoveries','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS can_write,
+            has_any_column_privilege(current_user,'knowledge.discoveries','INSERT,UPDATE,REFERENCES') AS can_write_columns,
             (SELECT relowner=r.oid FROM pg_catalog.pg_class WHERE oid='knowledge.discoveries'::regclass) AS owns_table
             FROM pg_catalog.pg_roles r WHERE r.rolname=current_user""")
         rt.require(role and role["can_select"] and role["direct_login"]
                    and not any(role[key] for key in ("rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication",
-                                                    "rolbypassrls", "memberships", "can_write", "owns_table")),
+                                                    "rolbypassrls", "memberships", "can_write", "can_write_columns", "owns_table")),
                    "dedicated non-superuser SELECT-only role required")
         records, data = await enumerate_universe(connection)
         fingerprint = hashlib.sha256(data).hexdigest()
