@@ -1,9 +1,21 @@
 # UNITARES Glossary — Terms Keyed by the Question They Answer
 
 **Created:** June 20, 2026
+**Last refined:** November 1, 2026
 **Status:** Living document. Expect churn; the field is inventing terms and so are we.
-**Companion to:** `docs/ontology/identity.md`, `docs/ontology/harness-substrate-plurality.md`, `docs/ontology/beam-coordination-kernel.md`
-**Audit trail:** `docs/ontology/glossary-drift-audit-2026-06-20.md` (point-in-time sweep that seeded this file); `docs/ontology/glossary-drift-audit-2026-09-18.md` (re-sweep: ODE coupling correction; V / coherence / drift / entropy homonyms; persistence false friends)
+**Companion to:** [Product definition](../PRODUCT_DEFINITION.md), [identity](identity.md), [harness and substrate plurality](harness-substrate-plurality.md), [coordination kernel](beam-coordination-kernel.md)
+**Audit trail:** [June 20](glossary-drift-audit-2026-06-20.md) (initial sweep); [September 18](glossary-drift-audit-2026-09-18.md) (ODE coupling, metric homonyms and storage); [November 1](glossary-drift-audit-2026-11-01.md) (policy actuation, identity, evidence boundaries and core vocabulary)
+
+UNITARES is a self-hosted, single-operator federation kernel for agent identity,
+claims and evidence, review, outcomes, and reconstruction. EISV is one
+state-estimation instrument within it. This glossary covers both the shared
+record and the instrument; an EISV definition does not define the whole product.
+
+**Start here:** [core terms](#single-sense-load-bearing-terms) ·
+[ambiguous terms](#high-risk-homonyms-same-word-different-questions) ·
+[storage names](#persistence-false-friends) ·
+[cross-register translations](#cross-register-map-rosetta--skeleton) ·
+[open gaps](#open-gaps-terms-were-already-pointing-at-but-havent-coined).
 
 ---
 
@@ -60,8 +72,8 @@ load-bearing in more than one sense; none of the senses is wrong.
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `substrate (inference)` | What inference engine generates this behavior? (GPT-5.5, Opus, Qwen, Ollama) | `harness-substrate-plurality.md` — "Model / substrate \| What inference substrate generates behavior?" |
-| `substrate (deployment / identity layer)` | What persistent hardware/disk/DB/config survives a process restart and can *earn* continuity? (Lumen's Pi) | `identity.md` five-layer table — "Substrate \| persistent hardware, disk, DB, configuration"; Appendix "Substrate-Earned Identity" |
+| `substrate (inference)` | What model and serving engine generate this behavior? A model and the service running it are different parts of this answer. | `harness-substrate-plurality.md` — "Model / substrate \| What inference substrate generates behavior?" |
+| `substrate (deployment / identity layer)` | What persistent hardware/disk/DB/config survives a process restart and can *earn* continuity? | `identity.md` five-layer table — "Substrate \| persistent hardware, disk, DB, configuration"; Appendix "Substrate-Earned Identity" |
 | `substrate (runtime / scheduler)` | What execution model runs the work — per-process scheduling + protocol-level checkout vs. a shared asyncio loop? | `UNIFIED_ARCHITECTURE.md` *asyncpg, Redis and the anyio scheduler* — per-process scheduling with protocol-level connection checkout "should not express this shape", recorded there as a design expectation whose comparison channel holds no rows |
 
 These three are orthogonal axes. An agent can switch `substrate (inference)`
@@ -78,9 +90,11 @@ which axis you mean in cross-doc prose.
 | `fingerprint (finding-dedup)` | Is this CI/Watcher finding the same issue we already saw? (sha256 hash) | `CLAUDE.md` Watcher section — `--resolve <fingerprint>`; `docs/operations/ci-issue-surfacing.md` |
 
 The first two are identity machinery and live in the same document; the third is
-operational tooling. The transport vs. behavioral split is the dangerous one
-because both appear in `identity.md`: one is a *weak* heuristic proof, the other
-is the *strongest earned* layer. Never let "fingerprint" stand unqualified there.
+operational tooling. A transport match is weak inference, not caller ownership
+proof; behavioral similarity tests a declared continuity claim and does not
+grant credentials. Under strict identity, the transport pin cannot authorize
+an ordinary check-in write. See `identity.md`, *Operational contract* and
+*Who receives credentials*. Never leave "fingerprint" unqualified there.
 
 ### surface — two distinct questions
 
@@ -121,12 +135,15 @@ the two questions they each answer best, rather than coining anything new.
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `fork (sibling locus)` | Is this a fresh process-instance under the *same* registry UUID, no child minted? | `r6-episode-fork-response-shape.md` — `episode_fork_kind = sibling_locus` |
+| `fork (sibling locus)` | Does this process occupy a thread already used by other process-instances without declared identity lineage? This includes a freshly minted UUID on a shared thread, not only legacy same-UUID cases. | `src/thread_identity.py::fork_honest_message`; `r6-episode-fork-response-shape.md` — `episode_fork_kind = sibling_locus` |
 | `fork (identity lineage)` | Is this a *distinct child UUID* with declared `parent_agent_id` + `spawn_reason`? | `r6-episode-fork-response-shape.md` — `identity_lineage_fork` boolean |
 
 R6 already disambiguates via the `episode_fork_kind` enum and the
 `identity_lineage_fork` boolean precisely because a bare `is_fork` is "too
-compressed." Never ship a field or sentence with unqualified "fork."
+compressed." `is_fork` is a position-based compatibility field, not proof of
+ancestry. Ordinary new processes mint fresh; a context compaction within the
+same process keeps its binding. See `identity.md`, *Operational contract* and
+*Compaction*. Qualify "fork" when discussing identity.
 
 ### continuity — concept vs. mechanism
 
@@ -135,15 +152,16 @@ compressed." Never ship a field or sentence with unqualified "fork."
 | `continuity (layered concept)` | At which layers does this identity claim actually hold? | `identity.md` — the five-layer taxonomy |
 | `continuity_token (mechanism)` | *Advanced:* can this same live process re-bind by signed proof? | `identity.md` — "an advanced same-live-process rebind proof"; largely retired for cross-process use |
 
-The token is a deprecated implementation that borrowed the concept's name. When
-you write "continuity," mean the layered concept unless you write the full
-`continuity_token`.
+Cross-process token reuse is retired for ordinary sessions; same-live-process
+rebind remains supported. Use the active binding or `client_session_id` for
+routine calls. When you write "continuity," mean the layered concept unless
+you write the full `continuity_token`.
 
 ### lineage — ancestry vs. conversation thread (same doc, both senses)
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `lineage (causal ancestry)` | Which finished predecessor's work does this process inherit? (`parent_agent_id`) | `identity.md` — "inherits work from, not is identical to" |
+| `lineage (causal ancestry)` | Which process caused this child or handed it work? (`parent_agent_id`, `spawn_reason`); ordinary succession requires an exited predecessor, while dispatched children can have a live parent. | `identity.md` — "inherits work from, not is identical to"; *Operational contract* |
 | `thread lineage (conversation history)` | Which logical conversation/history thread is this? (`thread_id`) | `harness-substrate-plurality.md` — "`thread_id` names logical conversation/history lineage" |
 
 Both appear in the provenance envelope; keep `thread_id` out of any sentence
@@ -164,15 +182,15 @@ regime-visualization number.
 
 Two further properties a peer needs before consuming `metrics.phi` off the wire:
 
-- **Telemetry, not authority.** `UNITARES_PHI_TELEMETRY_ONLY=1` is live, so Φ is
-  not a verdict floor. Its remaining verdict-shaped role is the cold-start path
+- **Telemetry by default after warmup.** `UNITARES_PHI_TELEMETRY_ONLY` defaults
+  to `1`, so Φ is not a floor on a confident behavioral assessment. Its
+  remaining verdict-shaped role under that default is the cold-start path
   (`phi_cold_start`), which is a fallback prior, not a behavioral read.
-- **Expressive, not validated.** Φ has the widest dynamic range of any field and
-  separates regimes that categorical verdicts collapse. That is *sensitivity*.
-  The outcome evidence runs the other way, and wide swings plus sign flips plus no
-  predictive lift is the signature of a number that looks informative on a
-  dashboard while carrying no outcome signal. Keep it for visualization and regime
-  reads; ⛔never cite it as validated discrimination.
+- **Variation is not validation.** A changing Φ records distance under its
+  objective; it does not establish outcome discrimination. The frozen
+  outcome-prediction study is inconclusive, not a demonstrated negative
+  ([evaluation boundaries](../EVIDENCE_AND_LIMITS.md#predictive-lift)). Neither
+  claim predictive validity nor infer an absence of information from that read.
 
 Per rule 2 above, the fix is disambiguation, not renaming: `metrics.phi` is a
 published wire field and consumers depend on it. Qualify the sense, keep the key.
@@ -210,13 +228,14 @@ physical quantity: `V` is a dimensionless signed integrator, clamped to `[-1, 1]
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `V (behavioral)` | Which side of the E−I imbalance is leading right now, smoothed? EMA of E−I, `[-1, 1]` (same range as the ODE V, so range cannot tell them apart); the value in `metrics['V']` once the agent is warm. | `src/behavioral_state.py`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
+| `V (behavioral)` | What is the separately EMA-smoothed gap `E_obs − I_obs` between raw observations? `[-1, 1]`; generally not the difference of the current smoothed E and I values. | `src/behavioral_state.py`; `docs/EISV_COMPUTATION.md`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
 | `V (ODE)` | What is the damped running integral of the E−I imbalance? Clamped to `[-1, 1]` by default; the old Helmholtz comparison is an analogy only. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
 | `V (embodied, instantaneous)` | What is the undamped E−I imbalance of a sensor-driven agent this tick? | *external:* `anima-mcp` `eisv_mapper.py` — "V is Valence — the signed E-I imbalance shared with governance" (separate repo; not checked by the drift gate) |
 
 ⛔ **`metrics['V']` and the V that coherence is computed from can be different
-variables.** Coherence always reads the **ODE** V (`governance_core/coherence.py`,
-"depends on the signed void integral V"). `metrics['V']` is the behavioral V
+variables.** The default legacy coherence producer reads the **ODE** V
+(`governance_core/coherence.py`, "depends on the signed void integral V"). Read
+`coherence_source` / `coherence_role` for other producers. `metrics['V']` is the behavioral V
 only when `primary_eisv_source == "behavioral"` (behavioral confidence ≥ 0.3);
 before warmup it is `ode_fallback`. Read `primary_eisv_source` before
 comparing the two. Two naming layers sit on top of this, and neither is a
@@ -230,8 +249,8 @@ unrelated word (null-and-void).
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `coherence (ODE control feedback)` | What is the ODE's V-driven feedback term `C(V, Θ)`? The **deployed** value in `metrics['coherence']` and `core.agent_state.coherence`. | `governance_core/coherence.py`; `src/coherence_provenance.py` source `legacy_tanh_v`, role `ode_control_feedback` |
-| `coherence (manifold)` | How structurally consistent is the (E, I, S) state? Canonical **only** under `UNITARES_GROUNDING_APPLY`, which is off; shadow-computed otherwise. | `src/grounding/coherence.py::compute_coherence`; source `manifold`, role `eis_structural_measurement` |
+| `coherence (ODE control feedback)` | What is the ODE's V-driven feedback term `C(V, Θ)`? The default compatibility producer for `metrics['coherence']` and `core.agent_state.coherence`. | `governance_core/coherence.py`; `src/coherence_provenance.py` source `legacy_tanh_v`, role `ode_control_feedback` |
+| `coherence (manifold)` | How structurally consistent is the (E, I, S) state? Applied only when `UNITARES_GROUNDING_APPLY` is enabled; shadow-computed by default. | `src/grounding/coherence.py::compute_coherence`; source `manifold`, role `eis_structural_measurement` |
 | `coherence (behavioral)` | How consistent is this agent's sequence of behavioral updates? | `src/coherence_provenance.py` source `behavioral_assessment`, role `behavioral_update_consistency` |
 | `coherence (trajectory identity)` | Is the current trajectory signature similar to the recent one, so this is the same subject as a moment ago? Tier 1 of two-tier identity verification (lineage is Tier 2). **Not** `metrics['coherence']`; it is one input to the weak-to-medium assurance upgrade, which takes the lower of the available coherence and lineage similarities (at least 0.7), so with no current signature lineage alone decides. | `src/trajectory_identity.py::verify_trajectory_identity` · `eisv-proprioception-contract.md` (names the collision itself) |
 
@@ -254,8 +273,9 @@ path after warmup.
 | `drift (S axis)` | How far is the work drifting from this agent's own usual pattern? The runtime description of `S` ("Entropy"). | `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
 
 The third row is partly part-of rather than a pure homonym: `S_obs` *consumes*
-the deviation signal (`drift_norm`, 0.40 weight — `docs/EISV_COMPUTATION.md`),
-so "S is drift" and "S contains drift" are both approximately true. It stays
+the deviation signal (`drift_norm`, base weight 0.40 before optional-input
+reweighting — `docs/EISV_COMPUTATION.md`). S contains drift; it is not identical
+to the drift vector. It stays
 listed because readers meet the S description and the deviation components
 under the same word. The Rosetta table below uses `drift` as the `standard`
 name for the deviation signal, which is fine on public surfaces. In technical
@@ -298,7 +318,7 @@ The first is a *claim the subject makes*; the second is a *fact something watchi
 | `attestation (kernel peer)` | Which process is really on the other end of this Unix socket? (kernel-attested PID, owning launchd label, executable path, process start time to catch PID reuse; the S19 substrate-claim path. The orchestrator-vouched extension in `substrate/vouch.py` is inert, not wired into resolution) | `src/substrate/peer_attestation.py::read_peer_pid` · `identity.md` S19 |
 | `attestation (self-reported)` | What does the agent *claim* about its own state? (caller-attested EISV and confidence in a `sync_state` check-in; verification may raise risk but never lowers a worse self-attested signal; the check-in is scored for risk and a policy action at once, but stays uncalibrated against an outcome until `record_result` attaches one) | `governance_core/verification.py` |
 
-The first sense is a *descriptive* stance (it reports standing already accrued), the second a *performative* one (it grants a bounded act), the third an observation by the kernel, and the fourth a claim by the subject. Binding the wrong one is the bug: an `aic.v2` token is not a resume credential (copying it grants nothing, unlike `continuity_token`), a `drr.v1` receipt proves what the deployment *persisted* and not that either party intended it, and a self-reported check-in is not evidence of anything until an outcome grades it. This is the same self-reported vs. externally-observed split as `proof of life` above, applied to identity and state claims; the *self-reported* sense there and here is the weakest of its pair.
+The first sense is a *descriptive* stance (it reports standing already accrued), the second a *performative* one (it grants a bounded act), the third an observation by the kernel, and the fourth a claim by the subject. Binding the wrong one is the bug: an `aic.v2` token is not a resume credential (copying it grants nothing, unlike `continuity_token`), a `drr.v1` receipt proves what the deployment *persisted* and not that either party intended it, and a self-reported check-in records what the caller said rather than independently verifying its outcome. This is the same self-reported vs. externally-observed split as `proof of life` above, applied to identity and state claims.
 
 ---
 
@@ -315,15 +335,23 @@ Two of these are about *trust* (what may be believed), one is a *physical coupli
 
 ---
 
-### pause — policy verdict vs. persisted state vs. scheduled-job state
+### pause — recommendation vs. effective action vs. persisted state
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `pause (policy verdict)` | Did the governance gate decide to stop this agent's governed writes? (`coherence_pause`, `risk_pause`, `void_pause`; an output of the decision, advisory `proceed`/`guide` being its siblings) | `src/coherence_gate_shadow.py` · `governance-fundamentals` skill |
+| `pause (policy recommendation)` | Did the inferred policy recommend a hold? (`policy_evaluation.action == "pause"`, with a named reason such as `risk_pause` or `void_pause`) | `src/monitor_result.py::_build_policy_evaluation` |
+| `pause (effective action)` | What operational directive survived the configured actuation posture? Under default `observe`, an inferred pause becomes `proceed` / `guide`; `enforce` permits the compatibility actuator to attempt a hold. | `src/agent_loop_detection.py::apply_policy_actuation_posture` |
 | `pause (agent lifecycle state)` | What status is this agent record *currently in*? (`lifecycle_status == "paused"`, `paused_at`; persists until the dialectic review opened for the pause, an operator, or re-evaluation at expiry ends it; `self_recovery` applies only when the frozen risk is already below its gates) | `src/mcp_handlers/support/pause_ttl.py::maybe_auto_expire_pause_async` |
 | `pause (automation)` | Is this scheduled job (launchd, Hermes cron) switched off by an operator? (the census `paused` row; nothing to do with any agent's governance state) | the operator's automation registry runbook (`unitares-automations census`) |
 
-The first causes the second, but they answer different questions: the verdict is a *decision at a moment*, the lifecycle state is *what is persisted afterward*, and the TTL can clear the state without the gate re-deciding. The third is unrelated to both. A census "paused" row is not a governance pause, and a cleared lifecycle pause is not evidence the original verdict was wrong.
+An inferred recommendation does not itself create a lifecycle pause. Read
+`policy_evaluation.action`, the effective `action` / `sub_action`, and
+`enforcement.applied` separately: even an effective `pause` can accompany
+`applied=false` when no lifecycle hold was committed. An applied hold uses its
+named recovery path; expiry attempts a durable resume rather than proving the
+original recommendation wrong. Explicit operator/security holds, identity,
+archive and coordination gates retain their own authority under `observe`.
+An automation's "paused" row is unrelated to these agent states.
 
 ---
 
@@ -375,14 +403,58 @@ Precedence matters: `classify_by_label_and_tags` resolves a roster label *first*
 
 ---
 
-### verdict — behavioral tier vs. policy decision
+### verdict — behavioral tier vs. policy recommendation vs. response wrapper
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `verdict (behavioral tier)` | How risky does this agent's current EISV state read, on the three-step `safe` / `caution` / `high-risk` scale? | `src/behavioral_assessment.py::assess_behavioral_state` |
-| `verdict (policy decision)` | What did the governance gate decide? (`action` is `proceed` or `pause`; `guide` is a `sub_action` of `proceed`; `reject` is a legacy label `explain_verdict` still explains, never emitted by the current gate) | `src/monitor_decision.py::make_decision` · `src/governance_glossary.py::explain_verdict` |
+| `verdict (policy recommendation)` | What action did the inference layer recommend before actuation? Read `policy_evaluation.action` / `sub_action`; the effective `action` may differ under `observe`. | `src/monitor_decision.py::make_decision`; `src/agent_loop_detection.py::apply_policy_actuation_posture` |
+| `verdict (response wrapper)` | What plain-language interpretation and next step accompany this reading? The object at `verdict` carries `value`, `meaning` and `next_action`; `verdict.value` is not the operational `action`. | `src/governance_glossary.py::explain_verdict` |
 
-The two are decoupled in code: per the `explain_verdict` docstring a `high-risk` tier can land with `proceed` and a `safe` tier can land with `pause`. The `VERDICTS` table in the runtime glossary lists words from both vocabularies, and the variable named `unitares_verdict` in the monitor holds the *tier* despite its name. Bind the sense before quoting either.
+These are decoupled in code: a `high-risk` tier can accompany `proceed`, and a
+`safe` tier can accompany a pause recommendation. The `VERDICTS` runtime table
+lists words from multiple vocabularies, and the monitor variable
+`unitares_verdict` holds the *tier*. Bind the sense before quoting a verdict.
+
+---
+
+### confidence — forecast vs. derived estimate vs. estimator maturity
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `confidence (reported forecast)` | What probability did the caller state for a result that can later be graded? Supplying `confidence` can mint a `prediction_id`; retain it for `record_result`. | `docs/guides/AGENT_SESSION_WALKTHROUGH.md`; `src/mcp_handlers/updates/phases.py::_self_report_record` |
+| `confidence (effective)` | What value reached the update after identity-assurance dampening? It can differ from `confidence_reported`. | `src/mcp_handlers/updates/phases.py::_self_report_record` |
+| `confidence (derived fallback)` | What internal estimate is used when the caller omits confidence? Its legacy coherence dependency is disclosed in `confidence_reliability`; it does not become an agent-reported forecast or mint a tactical prediction. | `src/confidence.py`; `docs/EISV_COMPUTATION.md` |
+| `confidence (behavioral / baseline)` | Is there enough history to use behavioral assessment or self-relative deviation? This is estimator maturity, not a probability the work will succeed. | `src/behavioral_state.py`; `docs/EISV_COMPUTATION.md` |
+
+Omit forecast confidence when there is no forecast to score. An assurance tier,
+an estimator's warmup progress, and a caller's probability answer different
+questions even when all are described as "confidence".
+
+---
+
+### review — advisory critique vs. governed session vs. implementation check
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `review (advisory critique)` | What assumptions or alternatives should be reconsidered? `consult(purpose="critique")` returns advice, not an on-record governed verdict or completed implementation review. | `docs/CAPABILITIES_AND_DEPLOYMENT.md`; `AGENTS.md`, *Before Committing* |
+| `review (governed dialectic)` | What positions, objections, conditions and resolution were recorded in this session? `request_review` opens the workflow; a request does not establish a completed review. | `docs/PRODUCT_DEFINITION.md`; `docs/REVIEWER_GUIDE.md` |
+| `review (implementation)` | Did an independent reviewer examine the actual diff and relevant context? Repository review records bind that examination to a revision; model family determines independence. | `docs/operations/github-workflow-conventions.md`; `AGENTS.md`, *Before Committing* |
+
+No entry here changes review policy. A request, a critique, and a completed
+diff review provide different evidence; use the record appropriate to the claim.
+
+---
+
+### margin — check-in thresholds vs. recovery eligibility
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `margin (check-in)` | How close is the state to a policy threshold that could be measured? Read `nearest_edge`, `margin_scope` and `unmeasurable_edges`; `comfortable` can cover only some edges. | `config/governance_config.py`, `GovernanceConfig.compute_proprioceptive_margin` |
+| `margin (recovery)` | How far is this agent from the risk and active-void conditions governing self-recovery? `recovery.margin.v2` excludes legacy coherence from authority. | `src/mcp_handlers/lifecycle/recovery_policy.py::compute_recovery_margin` |
+
+Neither margin is an attractor-basin position. Do not transfer a check-in's
+`comfortable` label into permission to resume a lifecycle hold.
 
 ---
 
@@ -421,6 +493,17 @@ against a baseline.
 
 | Term | Question it answers | Canonical source |
 |---|---|---|
+| `UNITARES` | What shared system attributes and preserves agent identity, claims and evidence, review, outcomes, and reconstruction? A self-hosted, single-operator federation kernel. | `docs/PRODUCT_DEFINITION.md` |
+| `federation` | Which independent runtimes share the record and authority domain? Many runtimes connect to one operator-controlled server; this does not mean replication between independent servers. | `docs/PRODUCT_DEFINITION.md` |
+| `finding` | What durable claim, evidence, correction or unresolved question should another agent retrieve? Search before storing; keep its sources and later revisions attached. | `docs/CAPABILITIES_AND_DEPLOYMENT.md`; `docs/PRODUCT_DEFINITION.md` |
+| `supersession` | Which newer finding replaces this older claim, and where can the reader follow that correction? It records replacement rather than silently erasing the original. | `docs/PRODUCT_DEFINITION.md`; `docs/CAPABILITIES_AND_DEPLOYMENT.md` |
+| `reconstruction` | What can a successor recover from findings, review conditions, history and outcomes, given each surface's retention and authorization? Retrieval is not proof that the successor integrated the record. | `docs/CAPABILITIES_AND_DEPLOYMENT.md`; `docs/PRODUCT_DEFINITION.md` |
+| `check-in` | What work report and derived state did this update record? `sync_state` retains a bounded report excerpt; durable claim text belongs in a finding. An agent-authored check-in expresses a meaningful judgment, not a heartbeat obligation. | `docs/PRODUCT_DEFINITION.md`; `AGENTS.md`, *Codex-specific wiring* |
+| `outcome event` | What result actually occurred, with what provenance and evidence grade? A typed result can be recorded with or without a prediction binding; recording it is distinct from predicting it. | `docs/PRODUCT_DEFINITION.md`; `docs/CAPABILITIES_AND_DEPLOYMENT.md` |
+| `prediction` | Which forecast should a later observed outcome grade? Preserve the `prediction_id` when one is minted and attach the actual result through `record_result`. | `docs/guides/AGENT_SESSION_WALKTHROUGH.md` |
+| `model` | Which specific model produced the work or review? Record the actual identifier; a model is distinct from its host and base-model family. | `docs/operations/github-workflow-conventions.md`, *Reviewer selection is an agent decision* |
+| `family` (review independence) | Which lab's base-model lineage produced the contribution? `anthropic`, `openai`, `google`, or `unclassified` when no classified lineage is established; two models in one family do not supply independent family coverage. | `docs/operations/github-workflow-conventions.md`, *Reviewer selection is an agent decision* |
+| `host` | Which harness ran that model for this contribution? A host can run multiple model families and does not itself establish review independence. | `docs/operations/github-workflow-conventions.md`, *Reviewer selection is an agent decision* |
 | `process-instance` | Which live subject is speaking right now? | `identity.md`, `harness-substrate-plurality.md` |
 | `EISV` | What proprioceptive state vector says how this agent is running right now? | `eisv-proprioception-contract.md`; runtime `primary_eisv` / `behavioral_eisv` / `ode_eisv` fields |
 | `outcome label` | What external evidence/rubric classified a result as task-negative, contract/process violation, authority/harm, synthetic fixture, or unknown? | `eisv-proprioception-contract.md`; `audit.outcome_events.is_bad` is the compact storage label, not a moral verdict |
@@ -433,7 +516,7 @@ against a baseline.
 | `affordance_state` | What reach/permissions/capability does the agent actually have at event time? | `harness-substrate-plurality.md` |
 | `assurance` (`identity_assurance`) | How strongly is this identity claim grounded? (tier + source) | `harness-substrate-plurality.md`, `identity.md` |
 | `governance_mode` | Under what authority context was this write made? (explicit / ambient / gated / lifecycle / posthoc) | `harness-substrate-plurality.md` |
-| `epistemic_class` | Who *composed* this report? (`agent_report` the agent itself; `substrate_interpretation` a hook or process reading turn shape; `substrate_observation` a direct runtime reading; `prediction`; and `synthetic` for bootstrap rows the server writes itself, which the check-in API does not accept) — never a statement of *choice* | `src/mcp_handlers/updates/phases.py::_ALLOWED_EPISTEMIC_CLASSES` · `eisv-proprioception-contract.md`; an omitted value is still coerced to `agent_report` server-side, so the label over-states authorship for automation |
+| `epistemic_class` | What kind of report is this, and who composed it? `agent_report`, `substrate_interpretation`, `substrate_observation`, or `prediction`; server-written bootstrap rows can be `synthetic`, which the check-in API does not accept. This labels provenance, not accuracy or volition. | `src/mcp_handlers/updates/phases.py::_ALLOWED_EPISTEMIC_CLASSES` · `eisv-proprioception-contract.md`; omission still defaults to `agent_report`, so the label alone does not verify authorship |
 | `typed absence` | *What kind* of absence is this? (`not_found` / `pending` / `expired` / `stale` / …) — never a bare null | `beam-coordination-kernel.md` |
 | `provenance envelope` | What situated facts surrounded this single governance write? | `harness-substrate-plurality.md` (s22 write_context) |
 
@@ -480,7 +563,7 @@ explicit, not silently papered over by reusing a near-term.
 The vocabulary feels unbounded because it spans several **registers** — parallel
 ways of describing the *same* underlying referents, each existing for a different
 reason. The term count is not really growing without bound; a roughly fixed set
-of referents is being named in four registers. Tagging a term's register is the
+of referents is being named in five registers. Tagging a term's register is the
 orthogonal second axis to "question answered."
 
 | Register | What it is *for* | Source of truth |
@@ -594,6 +677,13 @@ gap to backfill.
 
 ### FEP promotion conditions (roadmap)
 
+**Research sketches, not implementation authorization.** The conditions below
+describe proposed interpretations, not adopted scientific stop rules or a
+current delivery order. The [EISV core-boundary proposal](../proposals/active/eisv-core-boundary-v0.md)
+governs staged implementation; the [claim ledger](../EVIDENCE_AND_LIMITS.md#claim-ledger)
+governs evidence of benefit. A stronger mathematical mapping does not by itself
+validate outcome prediction or authorize enforcement.
+
 Each `~ candidate` from the table above, with the **falsifiable condition** it
 must meet before its `fep` cell is promoted to `✓ earned`. The discipline: if you
 can't state a test that would *fail*, the mapping is decoration, not rigor. Listed
@@ -615,16 +705,11 @@ agent's internal states from external ones (sensory + active states mediating) �
 closer to `affordance_state` than to a coordination claim — and it is earned only
 when that statistical independence structure is actually modeled, not asserted.
 
-**Roadmap reading (code-corrected):** the work is mostly *wiring, not building*.
-`basin-as-attractor` is a wire-up (ODE exists); `precision-weighting` is the
-closest greenfield-ish step (the basin-health gate is already a 0→1 ramp, which is
-precision-shaped); the EISV-distributional change is the prerequisite that unlocks
-surprise + active-inference; `heartbeat→NESS` should be dropped. The single
-highest-leverage move is **making EISV distributional** (mean + precision), because
-it both unlocks three FEP rows *and* is the precondition for letting the ODE drive
-verdicts honestly. That ordering is the actual deliverable — it says which physics
-claims to earn
-next and which to stop borrowing.
+**Research reading:** an existing ODE is a prerequisite, not evidence that its
+attractor should replace a policy gate. Distributional EISV, precision weighting,
+surprise and active inference remain proposed formalizations with separate
+modeling and validation work. This glossary does not rank those projects or
+authorize a change to the default observation posture.
 
 ---
 
