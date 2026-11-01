@@ -74,6 +74,10 @@ Files here are capped at 800 lines. Files already longer are listed with their c
 
 ## EISV maths, coherence, and outcome grounding
 
+[Durable outcome-calibration delivery](outcome-calibration-delivery-v0.md) is a
+draft implementation contract for #2247: transactional enqueue, atomic sink
+receipts, writer coherence and retention. It makes no runtime change.
+
 | Document | Status |
 |---|---|
 | [`eisv-maths-roadmap-v0.md`](eisv-maths-roadmap-v0.md) | **Active** · Design-intent roadmap (not a change); captures the direction, each step lands separately. Its §6 outcome gate is now owned by the [registered stop rule](../registered/eisv-outcome-grounding-stop-rule-v0.md) (2026-12-01 read); a 2026-09-23 note in the roadmap points there |
