@@ -19,7 +19,7 @@ async def get_calibration_async() -> Dict[str, Any]:
 
 
 async def update_calibration_async(state: Dict[str, Any]) -> bool:
-    """Update calibration state in PostgreSQL."""
+    """Replace state carrying the '_version' returned by get_calibration_async."""
     from src.db import get_db
     db = get_db()
     if not hasattr(db, '_pool') or db._pool is None:

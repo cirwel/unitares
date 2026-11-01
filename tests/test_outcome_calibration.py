@@ -690,20 +690,10 @@ class TestPredictionIdLookup:
         # Registry was consumed (two-phase path)
         assert open_predictions[pid].get('consumed') is True
 
-        # Calibration used the registered confidence (0.9), not _prev_confidence (0.4)
-        mock_checker.record_prediction.assert_called_once_with(
-            confidence=0.9,
-            predicted_correct=True,
-            actual_correct=1.0,
-            agent_id='agent-pid',
-        )
-
-        # Sequential tracker received prediction_id for audit
-        mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once()
-        _, seq_kwargs = mock_seq_tracker.record_exogenous_tactical_outcome.call_args
-        assert seq_kwargs['confidence'] == 0.9
-        assert seq_kwargs['prediction_id'] == pid
-        assert seq_kwargs['signal_source'] == 'tests'
+        # Bound outcomes train through the binding transaction's outbox.
+        # Running either callback here would race that durable delivery.
+        mock_checker.record_prediction.assert_not_called()
+        mock_seq_tracker.record_exogenous_tactical_outcome.assert_not_called()
 
         # Detail preserves provenance
         _, db_kwargs = mock_db.record_bound_outcome_event.call_args
