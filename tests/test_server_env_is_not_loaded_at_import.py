@@ -38,23 +38,46 @@ DOTENV_KEYS = (
 )
 
 
-def _run(snippet: str) -> str:
+def _run(snippet: str, tmp_path: Path) -> str:
     """Run in a CLEAN child interpreter.
 
     In-process assertions cannot prove this: by the time this test runs, some
     earlier test may already have imported the module, so os.environ would
     carry the values regardless of whether the import is what set them.
     """
-    env = {k: v for k, v in os.environ.items() if k not in DOTENV_KEYS}
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".env.mcp").write_text(
+        "DB_POSTGRES_URL=postgresql://fixture.invalid/fixture\n"
+        "GITHUB_TOKEN=fixture-only\n"
+    )
+    env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
+           if key in os.environ}
+    env["HOME"] = str(home)
+    # Enable real dotenv loading for the synthetic account file. Inheriting
+    # pytest's default opt-out would make the import regression unable to fail.
+    # Other application imports may request the checkout's .env; deny those
+    # reads so this probe never depends on an operator's configuration.
+    bootstrap = """
+        from pathlib import Path
+        import dotenv
+        real_load_dotenv = dotenv.load_dotenv
+        account_env = Path.home() / '.env.mcp'
+        def fixture_only(path=None, *args, **kwargs):
+            if path is not None and Path(path).resolve() == account_env.resolve():
+                return real_load_dotenv(path, *args, **kwargs)
+            return False
+        dotenv.load_dotenv = fixture_only
+    """
     proc = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(snippet)],
+        [sys.executable, "-c", textwrap.dedent(bootstrap) + textwrap.dedent(snippet)],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=180,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return proc.stdout
 
 
-def test_importing_the_server_injects_nothing():
+def test_importing_the_server_injects_nothing(tmp_path):
     """The regression. Reports only NAMES, never values."""
     out = _run(
         """
@@ -64,7 +87,7 @@ def test_importing_the_server_injects_nothing():
         import src.mcp_server  # noqa: F401
         added = sorted(k for k in os.environ if k not in before)
         print("ADDED:" + ",".join(added))
-        """
+        """, tmp_path,
     )
     added = [k for k in out.split("ADDED:")[-1].strip().split(",") if k]
     leaked = sorted(set(added) & set(DOTENV_KEYS))
@@ -74,7 +97,7 @@ def test_importing_the_server_injects_nothing():
     )
 
 
-def test_the_entrypoint_helper_still_loads_the_file():
+def test_the_entrypoint_helper_still_loads_the_file(tmp_path):
     """Deferring the load must not silently disable it, or the server starts
     unconfigured and the fix trades one silent failure for another."""
     out = _run(
@@ -85,14 +108,10 @@ def test_the_entrypoint_helper_still_loads_the_file():
         loaded = m.load_server_env()
         print("LOADED:%s" % loaded)
         print("HAS_DSN:%s" % ("DB_POSTGRES_URL" in os.environ))
-        """
+        """, tmp_path,
     )
-    if "LOADED:True" in out:
-        assert "HAS_DSN:True" in out, "load_server_env() reported success but set nothing"
-    else:
-        # No ~/.env.mcp on this machine (CI). The helper must still be callable
-        # and must report honestly rather than raising.
-        assert "LOADED:False" in out
+    assert "LOADED:True" in out
+    assert "HAS_DSN:True" in out, "load_server_env() reported success but set nothing"
 
 
 def test_no_module_level_env_read_reintroduces_the_dependency():
