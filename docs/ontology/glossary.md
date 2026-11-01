@@ -399,7 +399,7 @@ The `proof of life` entry's self-attested row says "heartbeat/check-in" as thoug
 | `resident (roster label)` | Is this identity's onboarding name declared in the deployment's `UNITARES_RESIDENTS` roster, so it is stamped `persistent` + `autonomous` at mint? (by default: a name absent from the roster is stamped `ephemeral` instead, and an identity that already carries tags keeps them either way) | `docs/operations/resident-roster.md` · `src/grounding/onboard_classifier.py::RESIDENT_DEFAULT_TAGS` · `src/grounding/class_indicator.py::load_resident_labels` |
 | `resident (calibration class)` | Which per-behavior-class scale constants apply to an agent carrying `persistent` + `autonomous` tags, independent of any roster name? (`resident_persistent`) | `src/grounding/class_indicator.py::CLASS_RESIDENT_PERSISTENT` · `src/grounding/class_indicator.py::classify_by_label_and_tags` |
 
-Precedence matters: `classify_by_label_and_tags` resolves a roster label *first* and returns the label itself as the class, so a roster resident is **not** in class `resident_persistent`; that class is the tag-derived fallback for agents whose name is not on the roster. The informal use, "a launchd or cron fleet agent", is a deployment label and, per `identity.md`, "not an ontological category".
+Precedence matters: `classify_by_label_and_tags` resolves a roster label *first* and returns the label itself as the class, so a roster resident is **not** in class `resident_persistent`; that class is the tag-derived fallback for agents whose name is not on the roster. The roster defaults to empty: installing UNITARES selects no named residents. The informal use, "a launchd or cron fleet agent", is a deployment label and, per `identity.md`, "not an ontological category".
 
 ---
 
@@ -708,8 +708,8 @@ when that statistical independence structure is actually modeled, not asserted.
 **Research reading:** an existing ODE is a prerequisite, not evidence that its
 attractor should replace a policy gate. Distributional EISV, precision weighting,
 surprise and active inference remain proposed formalizations with separate
-modeling and validation work. This glossary does not rank those projects or
-authorize a change to the default observation posture.
+modeling and validation work. These sketches do not set the implementation
+order or authorize a change to the default observation posture.
 
 ---
 
