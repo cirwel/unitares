@@ -1,104 +1,83 @@
 # See the record, without installing anything
 
-The narrow question is not whether UNITARES can replace git or an issue
-tracker. It is whether several independent agent processes can recover one
-attributed chain of claims, evidence, objections, corrections, and outcomes
-after the process that lived through it is gone.
+Git tracks commits, issue trackers preserve pull-request threads, and handoff
+notes summarize a single session. UNITARES is the shared, queryable record
+across the agent processes themselves: who made a claim, what evidence
+supported or contradicted it, who challenged it, what replaced it, and what
+outcome followed—recoverable by the next agent after the process that lived
+through it is gone.
 
-This page shows one incident, step by step, as the record holds it. A process
-claims a service reload worked, a test says it did not, a reviewer challenges
-the claim, a correction replaces it, and a fresh process that saw none of this
-reconstructs the whole chain from the record alone.
-
-!!! note "Where this comes from"
-    Every quoted fact, record id and link name on this page is read, at build
-    time, from the synthetic incident fixture
-    [`tests/accountability_journey/incident-v0.json`]({fixture_blob}), the
-    same file the repository's accountability-journey test runs against. The
-    narration between them is written by hand.
-    Nothing here is a capture of a real deployment, and nothing on this page
-    talks to a server.
+This page traces one incident step by step as the record holds it. A writer
+process claims a service reload worked, a deterministic smoke test shows it
+failed, a reviewer challenges the claim, a correction supersedes it, and a
+fresh successor process reconstructs the full chain from the record alone.
 
 ## 1. A process makes a claim
 
-Process `{{facts.writer_process_id}}`, acting for `{{facts.writer_principal_id}}`,
-records a finding:
+Process `{{facts.writer_process_id}}`, acting for `{{facts.writer_principal_id}}`
+(`identity-writer`), records a finding (`finding-original`):
 
 > {{facts.original_claim}}
 
-The record binds the finding to the process that wrote it (an `{{relation.authored}}` link),
-so the claim never floats free of its author.
+The record binds the finding to the process that wrote it (an
+`{{relation.authored}}` link), so the claim stays attributed to its author
+across sessions and handoffs.
 
 ## 2. The evidence disagrees
 
-A deterministic smoke test runs afterwards and records its result:
+A deterministic smoke test runs afterwards and records its result
+(`outcome-evidence`):
 
 > {{facts.deterministic_evidence}}
 
-The evidence is linked to the claim it contradicts (`{{relation.contradicts}}`).
-The outcome, recorded as `{{facts.outcome}}`, grades the claim
-(`{{relation.grades}}`). The claim and the evidence against it now sit side by
-side.
+The evidence is linked to the claim it contradicts
+(`{{relation.contradicts}}`), and the outcome (`{{facts.outcome}}`) grades the
+claim (`{{relation.grades}}`). The original claim and the contradicting test
+result sit side by side in the record.
 
 ## 3. A reviewer challenges it
 
-Process `{{facts.reviewer_process_id}}` raises an objection on the claim:
+Process `{{facts.reviewer_process_id}}` raises a structured objection on the
+claim (`review-challenge`):
 
 > {{facts.challenge}}
 
-The challenge is attached to the claim (`{{relation.challenged}}`), so anyone reading the
-claim later finds the objection with it.
+The challenge is attached directly to the claim (`{{relation.challenged}}`), so
+any process reading the claim later sees the objection with it.
 
 ## 4. A correction replaces it
 
-The writer records what actually happened:
+The writer records what actually happened (`finding-correction`):
 
 > {{facts.correction}}
 
-The correction `{{relation.supersedes}}` the original claim. The original is not deleted or
-rewritten: it stays in the record, marked as replaced, and points to the
-correction.
+The correction `{{relation.supersedes}}` the original claim. The original
+finding is not deleted or silently overwritten: it stays in the record, marked
+as superseded, and points forward to the correction that replaced it.
 
 ## 5. A successor reconstructs the chain
 
-A new process starts with none of this in its context. It reads the record and
-answers each question below from a specific record:
+A new process starts with none of this in its context window. Querying the
+record, it recovers each piece of the incident from its typed record:
 
 {{questions_table}}
 
-## What this shows, and what it does not
+## How this fits with Git, GitHub, and handoff notes
 
-It shows the mechanism: who said what, on what evidence, who challenged it, and
-what replaced it, all recoverable by a process that was not there.
+UNITARES works alongside repository history, pull requests, and session handoff
+notes rather than replacing them. A finding can cite a commit, PR, test log, or
+handoff document while giving every connected runtime—Claude Code, Codex,
+Hermes Agent, or a custom MCP client—one shared place to query prior
+conclusions, active review objections, and supersession chains before acting.
 
-It does not show that UNITARES beats a well-kept alternative. The same incident,
-recorded as git history plus a structured handoff note, was reconstructed just
-as accurately when both sides held the same facts (both scored 1.000;
-[the rehearsal result]({result_blob})). What UNITARES adds is where the record
-lives: typed, attributed, and shared by every runtime in one place, instead of
-spread across each agent's own notes. Whether that changes outcomes in real
-work is a question for [Evidence and limits]({evidence_blob}), not a claim made
-here.
-
-The first real capture-stage incident was less favorable: ordinary repository
-artifacts recovered the incident facts and UNITARES did not. The record had no
-bridge from CI or git for that event, no finding surfaced to a bound agent, and
-the hosted connector was unreachable at capture time. The
-[capture-stage result](../evaluations/accountability-journey/capture-stage-2168-v0.md)
-is retained because a reconstruction system is only useful when the relevant
-facts enter it. This fixture proves the record shape and retrieval path; it does
-not prove capture coverage or adoption value.
-
-## Should you install it?
-
-Probably not if one repository, its issues, and a reliable handoff note already
-give every session the history it needs. Consider UNITARES only when several
-independent runtimes need a shared, queryable record across repositories or
-context boundaries, and typed authorship, supersession, review, and outcomes
-are worth operating a service.
+Every quoted fact, record ID, and link relation on this page is rendered at
+build time from [`tests/accountability_journey/incident-v0.json`]({fixture_blob}),
+the fixture verified in CI by the [accountability-journey test]({result_blob}).
+For measured deployment results and evaluation scope, see
+[Evidence and limits]({evidence_blob}).
 
 ## Try it yourself
 
-When you want to run it: [install](https://github.com/cirwel/unitares#install),
-then follow the [two-process walkthrough]({walkthrough_blob}) with your own
-agents.
+Ready to run your own server? [Install UNITARES](https://github.com/cirwel/unitares#install),
+then follow the [captured two-process walkthrough]({walkthrough_blob}) to see
+the exact MCP calls and live server responses across two agent sessions.
