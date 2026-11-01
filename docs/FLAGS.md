@@ -53,7 +53,8 @@ additions merge cleanly. -->
 | `UNITARES_BIND_ALL_INTERFACES` | `False (via env_truthy)` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_BUILD_SHA` | `''` | The git commit of the checkout this process runs from, and how it was known | src/mcp_handlers/dialectic/events.py, src/versioning.py |
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
-| `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
+| `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py, src/calibration_delivery.py |
+| `UNITARES_CALIBRATION_INSTRUMENT_ID` | `None (no reader fallback)` | read by delivery_target() | src/calibration_delivery.py |
 | `UNITARES_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/calibration.py |
 | `UNITARES_CALL_MODEL_TIMEOUT` | `None (no reader fallback)` | Wall-clock budget for one call_model round-trip | src/mcp_handlers/support/model_inference.py |
 | `UNITARES_CHECKIN_EXCERPT_CHARS` | `''` | Characters kept per check-in (UNITARES_CHECKIN_EXCERPT_CHARS) | src/report_excerpt.py |
