@@ -36,10 +36,17 @@ cleanup. It cannot perform a canary invocation. Earlier evidence remains intact.
 commands. Planning makes no database connection. Each capture or evaluation plan
 binds its exact code/dependency files, interpreter, selected DB settings (private
 HMAC), output directory, global one-use reservation, explicit bounds and queries.
-Execution requires an independently reviewed approval binding the exact plan
-SHA-256 and operator authorization reference. The reservation is outside the
+The stdlib-only `run_kg_snapshot.py` launcher captures and verifies both the
+entrypoint and helper source bytes before compiling either. Execution requires
+an approval-file digest supplied through the trusted driver, plus a durable
+independent governance resolution explicitly binding plan SHA-256, operation ID,
+capture/evaluation scope and operator authorization. The driver verifies that
+canonical record immediately before launch; a local receipt alone grants nothing. The reservation is outside the
 copyable artifact directory and is durably created before any connection.
 
+The runner requires a dedicated non-superuser SELECT-only login with no role
+memberships or table ownership/write privileges. Provisioning that login changes
+access control and requires explicit operator approval. No role has been created.
 The runner opens one native asyncpg connection with read-only defaults, UTC,
 UTF-8, fixed search path, finite statement/lock/idle timeouts and a 45-second total
 timeout. It checks a physical table with no row-level filtering, enters a

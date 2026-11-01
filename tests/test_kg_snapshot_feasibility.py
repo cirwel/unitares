@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from decimal import Decimal
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import AsyncMock
 import json
 
@@ -83,7 +87,11 @@ def test_drift_stops_before_any_output_or_fts(tmp_path, monkeypatch):
             return "on" if "read_only" in sql else "repeatable read"
 
         async def fetchrow(self, sql):
-            return {"relkind": b"r", "relrowsecurity": False}
+            if "relkind" in sql:
+                return {"relkind": b"r", "relrowsecurity": False}
+            return {"can_select": True, "direct_login": True,
+                    **{key: False for key in ("rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication",
+                                              "rolbypassrls", "memberships", "can_write", "owns_table")}}
 
     connection = Connection()
     row = {"id": "a", "summary": "Target", "details": "evidence", "tags": ["agent-adoption"]}
@@ -111,3 +119,49 @@ def test_every_advertised_operation_bound_must_match(field, value):
     document[field] = value
     with pytest.raises(ValueError, match="operation contract changed"):
         kg.validate_contract(document)
+
+
+def test_trusted_launcher_verifies_both_sources_before_entrypoint_execution(tmp_path):
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts/eval"
+    scripts.mkdir(parents=True)
+    marker = tmp_path / "entered"
+    entry = scripts / "kg_snapshot_feasibility.py"
+    helper = scripts / "kg_canary_runtime.py"
+    helper.write_bytes(b"# verified helper source\n")
+    entry.write_text(f"from pathlib import Path\nassert _VERIFIED_HELPER_BYTES == {helper.read_bytes()!r}\nPath({str(marker)!r}).write_text('verified')\n")
+    plan = tmp_path / "plan.json"
+    kg.rt.save_new(plan, {"repo": str(repo), "files": {str(p): kg.rt.digest(p) for p in (entry, helper)}})
+    launcher = Path(kg.__file__).with_name("run_kg_snapshot.py")
+    command = [sys.executable, "-I", "-S", "-B", str(launcher), str(plan), kg.rt.digest(plan), "unused-approval", "unused-approval-sha"]
+    assert subprocess.run(command, capture_output=True).returncode == 0
+    assert marker.read_text() == "verified"
+    marker.unlink()
+    helper.write_bytes(b"raise AssertionError('unreviewed helper')\n")
+    result = subprocess.run(command, capture_output=True)
+    assert result.returncode != 0 and b"changed before execution" in result.stderr
+    assert not marker.exists()
+    changed = plan.read_bytes() + b" "
+    plan.write_bytes(changed)
+    assert hashlib.sha256(changed).hexdigest() != command[-3]
+    assert subprocess.run(command, capture_output=True).returncode != 0
+
+
+def test_truthy_approval_strings_cannot_substitute_for_independent_operation_resolution():
+    document = {"mode": "capture", "operation_id": "operation-1"}
+    approval = {"approved": True, "plan_sha256": "digest", "scope": "read_only_kg_capture",
+                "operator_authorization_ref": "inert-test", "review_session": "review-1"}
+    with pytest.raises(ValueError, match="durable independent governance"):
+        kg.validate_approval(approval, document, "digest")
+    record = {"success": True, "phase": "resolved", "status": "resolved", "session_id": "review-1",
+              "reviewer": "reviewer", "paused_agent": "author",
+              "reviewed_work_authorship": {"reviewed_work_author_agent_ids": ["author"]},
+              "resolution": {"action": "resume", "conditions": ["APPROVE_CAPTURE sha256=digest operation_id=operation-1"]}}
+    approval["governance_record"] = record
+    kg.validate_approval(approval, document, "digest")
+    record["reviewer"] = "author"
+    with pytest.raises(ValueError, match="durable independent governance"):
+        kg.validate_approval(approval, document, "digest")
+    record["reviewer"] = "reviewer"
+    with pytest.raises(ValueError, match="durable independent governance"):
+        kg.validate_approval(approval, dict(document, operation_id="copied-operation"), "digest")

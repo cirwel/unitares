@@ -32,7 +32,9 @@ _helper = REPO / "scripts/eval/kg_canary_runtime.py"
 _spec = importlib.util.spec_from_file_location("scripts.eval.kg_canary_runtime", _helper)
 rt = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = rt
-_helper_bytes = _helper.read_bytes()
+if __name__ == "__main__" and sys.argv[1:2] == ["execute"] and "_VERIFIED_HELPER_BYTES" not in globals():
+    raise SystemExit("execution requires the trusted run_kg_snapshot.py launcher")
+_helper_bytes = _VERIFIED_HELPER_BYTES if "_VERIFIED_HELPER_BYTES" in globals() else _helper.read_bytes()
 exec(compile(_helper_bytes, str(_helper), "exec"), rt.__dict__)
 
 SCHEMA = "unitares.kg-snapshot-feasibility.v1"
@@ -184,13 +186,22 @@ async def enumerate_universe(connection):
 
 
 async def operate(connection, document, artifacts):
-    from scripts.eval.kg_agent_adoption import lexical_search
-
     async with connection.transaction(isolation="repeatable_read", readonly=True):
         rt.require(await connection.fetchval("SHOW transaction_read_only") == "on", "transaction is writable")
         rt.require(await connection.fetchval("SHOW transaction_isolation") == "repeatable read", "wrong isolation")
         relation = await connection.fetchrow("SELECT relkind, relrowsecurity FROM pg_catalog.pg_class WHERE oid='knowledge.discoveries'::regclass")
         rt.require(relation and relation["relkind"] == b"r" and not relation["relrowsecurity"], "expected unfiltered physical table")
+        role = await connection.fetchrow("""SELECT r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls,
+            current_user = session_user AS direct_login,
+            EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members m WHERE m.member=r.oid) AS memberships,
+            has_table_privilege(current_user,'knowledge.discoveries','SELECT') AS can_select,
+            has_table_privilege(current_user,'knowledge.discoveries','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS can_write,
+            (SELECT relowner=r.oid FROM pg_catalog.pg_class WHERE oid='knowledge.discoveries'::regclass) AS owns_table
+            FROM pg_catalog.pg_roles r WHERE r.rolname=current_user""")
+        rt.require(role and role["can_select"] and role["direct_login"]
+                   and not any(role[key] for key in ("rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication",
+                                                    "rolbypassrls", "memberships", "can_write", "owns_table")),
+                   "dedicated non-superuser SELECT-only role required")
         records, data = await enumerate_universe(connection)
         fingerprint = hashlib.sha256(data).hexdigest()
         projected = projection(records)
@@ -206,7 +217,9 @@ async def operate(connection, document, artifacts):
                   "backend_pid": await connection.fetchval("SELECT pg_backend_pid()"),
                   "transaction_snapshot": str(await connection.fetchval("SELECT pg_current_snapshot()")),
                   "ordering_caveat": "Native rank/created_at ties have no final ID tie-breaker; returned order is retained."}
-        backend = pinned_backend(connection)
+        if document["tasks"]:
+            from scripts.eval.kg_agent_adoption import lexical_search
+            backend = pinned_backend(connection)
         for index, task in enumerate(document["tasks"]):
             for arm in ("native_fts", "lexical_bm25"):
                 start = time.monotonic()
@@ -251,18 +264,39 @@ def validate_contract(document):
                and len(document["tasks"]) == (3 if document["mode"] == "evaluate" else 0), "operation contract changed")
 
 
-def execute(plan_path, expected_sha, approval_path):
+def validate_approval(approval, document, expected_sha):
+    rt.require(approval.get("approved") is True and approval.get("plan_sha256") == expected_sha
+               and approval.get("scope") == "read_only_kg_" + document["mode"]
+               and approval.get("operator_authorization_ref"), "exact independent approval required")
+    # Export of the actual bound-tool governance get response. The trusted
+    # operator/driver must verify the live canonical record immediately before
+    # launch and supply its approval-file digest independently. This file is an
+    # integrity-bound receipt, not a standalone grant or hostile-user boundary.
+    record = approval.get("governance_record", {})
+    authors = record.get("reviewed_work_authorship", {}).get("reviewed_work_author_agent_ids", [])
+    marker = f"APPROVE_{document['mode'].upper()} sha256={expected_sha} operation_id={document['operation_id']}"
+    rt.require(record.get("success") is True and record.get("phase") == record.get("status") == "resolved"
+               and record.get("session_id") == approval.get("review_session")
+               and record.get("reviewer") and record["reviewer"] not in authors
+               and record.get("paused_agent") in authors
+               and record.get("resolution", {}).get("action") == "resume"
+               and marker in record.get("resolution", {}).get("conditions", []),
+               "durable independent governance approval for exact operation required")
+
+
+def execute(plan_path, expected_sha, approval_path, approval_sha):
     document = rt.load(plan_path, expected_digest=expected_sha)
     rt.require(document["schema"] == SCHEMA and document["mode"] in ("capture", "evaluate"), "wrong operation")
     artifacts = Path(document["artifacts"])
     rt.private_dir(artifacts)
     rt.require(plan_path.resolve() == artifacts / "plan.json", "plan moved from reviewed artifact location")
-    approval = rt.load(approval_path)
-    rt.require(approval.get("approved") is True and approval.get("plan_sha256") == expected_sha
-               and approval.get("scope") == "read_only_kg_" + document["mode"]
-               and approval.get("review_session") and approval.get("operator_authorization_ref"), "exact independent approval required")
+    approval = rt.load(approval_path, expected_digest=approval_sha)
+    validate_approval(approval, document, expected_sha)
     rt.require(Path(sys.executable).resolve() == Path(document["python"]) and sys.version == document["python_version"], "interpreter changed")
     rt.require(document["repo"] == str(REPO), "checkout changed")
+    rt.require("_VERIFIED_ENTRY_BYTES" in globals()
+               and hashlib.sha256(_VERIFIED_ENTRY_BYTES).hexdigest() == document["files"].get(str(Path(__file__).resolve())),
+               "entrypoint must execute verified captured source bytes")
     rt.require(hashlib.sha256(_helper_bytes).hexdigest() == document["files"].get(str(_helper)), "loaded helper differs from sealed source")
     for path, expected in document["files"].items():
         rt.require(rt.digest(path) == expected, "sealed runtime changed")
@@ -301,11 +335,12 @@ def main(argv=None):
     execution.add_argument("--plan", type=Path, required=True)
     execution.add_argument("--plan-sha256", required=True)
     execution.add_argument("--approval", type=Path, required=True)
+    execution.add_argument("--approval-sha256", required=True)
     args = parser.parse_args(argv)
     if args.action == "plan":
         result = plan(args.artifacts.resolve(), args.db_config.resolve(), args.corpus, args.tasks)
     else:
-        result = execute(args.plan.resolve(), args.plan_sha256, args.approval.resolve())
+        result = execute(args.plan.resolve(), args.plan_sha256, args.approval.resolve(), args.approval_sha256)
     print(json.dumps(result))
 
 
