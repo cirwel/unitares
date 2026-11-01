@@ -109,8 +109,6 @@ PUBLISHED_VERSION_REFERENCES = [
     ("docs/public-site/index.md", [
         (r'\[server v([\d.]+)\]\(https://github.com/cirwel/unitares/releases/tag/v[\d.]+\)',
          r'[server v{version}](https://github.com/cirwel/unitares/releases/tag/v{version})'),
-        (r'git clone --branch v([\d.]+) --depth 1',
-         r'git clone --branch v{version} --depth 1'),
         (r'ghcr\.io/cirwel/unitares:v([\d.]+)',
          r'ghcr.io/cirwel/unitares:v{version}'),
     ]),
