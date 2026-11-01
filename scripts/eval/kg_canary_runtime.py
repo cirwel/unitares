@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Seal and verify an isolated runtime for the HOLD-only KG plumbing canary.
+"""Inspect the frozen KG canary runtime with network access disabled.
 
 Use CPython with -I -S -B. ``seal`` and ``prepare`` have no live operation.
-``run`` additionally needs an independently reviewed, digest-bound approval.
+Live execution was withdrawn; neither CLI nor child offers a run operation.
 This is an experiment launcher, not a hostile-native-code security sandbox.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sys
 # The child installs its guard before importing even the remaining stdlib.
 # -S prevents site/.pth startup; -I ignores user paths and Python environment.
 _CHILD = __name__ == "__main__" and sys.argv[1:2] == ["--_child"]
-_STATE = {"live": False, "reads": [], "artifacts": "", "destinations": set()}
+_STATE = {"reads": [], "artifacts": ""}
 
 
 def _within(path, root):
@@ -57,12 +57,7 @@ def _audit(event, args):
                 or any(fd not in (None, -1) for fd in args[2:])):
             raise PermissionError("canary external rename/link denied")
     if event.startswith("socket."):
-        if not _STATE["live"]:
-            raise PermissionError("network disabled during runtime preparation")
-        if event in {"socket.connect", "socket.sendto"}:
-            address = args[-1]
-            if not isinstance(address, tuple) or address[:2] not in _STATE["destinations"]:
-                raise PermissionError("canary network destination denied")
+        raise PermissionError("network disabled during runtime preparation")
 
 
 if _CHILD:
@@ -73,7 +68,6 @@ if _CHILD:
     sys.addaudithook(_audit)
 
 import argparse  # noqa: E402
-import asyncio  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 import hashlib  # noqa: E402
@@ -86,7 +80,6 @@ from pathlib import Path  # noqa: E402
 import resource  # noqa: E402
 import shlex  # noqa: E402
 import signal  # noqa: E402
-import socket  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import sysconfig  # noqa: E402
@@ -204,7 +197,7 @@ def seal(repo, artifacts, site, db_config):
         "bootstrap": str(Path(__file__).resolve()),
         "inputs": {name: digest(repo / name) for name in INPUTS},
         "db_binding": db_binding(artifacts, db),
-        "bounds": {"detail_pages": 2, "fixed_searches": 6, "explicit_audit_appends": 1,
+        "bounds": {"detail_pages": 0, "fixed_searches": 0, "explicit_audit_appends": 0,
                    "client_model_calls": 0, "kg_writes": 0, "automatic_retries": 0},
         "claims": {"scored_run_authorized": False, "parity_proven": False,
                    "durable_calibration_exclusion_proven": False},
@@ -376,6 +369,7 @@ def _watch_parent(artifacts, parent_pid, stopped):
 
 
 def child(mode, manifest_path, artifacts, expected_digest, parent_pid):
+    require(mode == "prepare", "live execution withdrawn; preparation only")
     stopped = threading.Event()
     threading.Thread(target=_watch_parent, args=(artifacts, parent_pid, stopped), daemon=True).start()
     manifest = load(manifest_path, expected_digest=expected_digest)
@@ -385,9 +379,6 @@ def child(mode, manifest_path, artifacts, expected_digest, parent_pid):
     validate_manifest(manifest)
     db = {name: os.environ[name] for name in DB_KEYS if name in os.environ}
     require(db_binding(artifacts, db) == manifest["db_binding"], "child DB settings differ from reviewed target")
-    if mode == "run":
-        require(load(artifacts / "attempt.json")["runtime_sha256"] == expected_digest,
-                "child manifest differs from reserved attempt")
     sys.path[:] = [*manifest["stdlib_path"], str(repo), manifest["site"]]
     finder = OriginFinder(manifest["files"])
     sys.meta_path[:] = [importlib.machinery.BuiltinImporter, importlib.machinery.FrozenImporter, finder]
@@ -427,25 +418,6 @@ def child(mode, manifest_path, artifacts, expected_digest, parent_pid):
         "network_enabled_during_preparation": False, "frozen_inputs": dict(manifest["inputs"]),
         "process_creation_permitted": False,
     })
-    if mode == "prepare":
-        stopped.set()
-        return 0
-    require(mode == "run", "unsupported child mode")
-    target = urlsplit(os.environ["DB_POSTGRES_URL"])
-    host, port = target.hostname, target.port or 5432
-    require(bool(host), "Unix/default DB endpoint is not authorized")
-    # Resolve only the configured DB target, then enforce exact destinations.
-    # DNS here is preparation of the allowlist, not a KG/model request.
-    _STATE["live"] = True
-    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    _STATE["destinations"] = {("127.0.0.1", 8767), *((a[4][0], port) for a in addresses)}
-    receipt = asyncio.run(module.run_live_canary(
-        enrollment_path=enrollment, tasks_path=tasks, source_map_path=source_map,
-        offline_receipt_path=offline_receipt, mcp_url="http://127.0.0.1:8767/mcp/",
-        timeout_s=15, progress_path=artifacts / "live.progress.jsonl",
-        authorization_ref=load(artifacts / "attempt.json")["operator_authorization_ref"],
-    ))
-    module.v0.write_content_addressed_receipt(artifacts / "live.receipt.json", receipt)
     stopped.set()
     return 0
 
@@ -454,7 +426,8 @@ def bound_files():
     resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
 
 
-def launch(mode, artifacts, db_config, approval=None):
+def launch(mode, artifacts, db_config):
+    require(mode == "prepare", "live execution withdrawn; preparation only")
     private_dir(artifacts)
     manifest_path = artifacts / "runtime.json"
     manifest, runtime_digest = load(manifest_path, with_digest=True)
@@ -462,23 +435,6 @@ def launch(mode, artifacts, db_config, approval=None):
     db = db_environment(db_config)
     require(db_binding(artifacts, db) == manifest["db_binding"], "DB configuration differs from reviewed target")
     env = minimal_environment(artifacts, db)
-    reviewed = None
-    if mode == "run":
-        require(not (artifacts / "attempt.json").exists(), "live attempt already reserved; never retry")
-        prepared = load(artifacts / "prepare.outcome.json")
-        require(prepared.get("status") == "completed" and prepared.get("runtime_sha256") == runtime_digest,
-                "reviewed runtime has not passed inert preparation")
-        require(approval is not None, "live run needs independent execution approval")
-        reviewed = load(approval)
-        require(reviewed.get("runtime_sha256") == runtime_digest
-                and reviewed.get("scope") == "one_hold_only_infrastructure_canary"
-                and reviewed.get("approved") is True
-                and isinstance(reviewed.get("review_session"), str) and reviewed["review_session"]
-                and isinstance(reviewed.get("operator_authorization_ref"), str)
-                and reviewed["operator_authorization_ref"],
-                "approval does not bind this one-canary runtime")
-    else:
-        require(mode == "prepare", "unsupported launcher mode")
     handles = []
     process = None
     outcome = {"status": "setup_failed_before_spawn_no_retry", "mode": mode,
@@ -511,12 +467,6 @@ def launch(mode, artifacts, db_config, approval=None):
             fd = os.open(artifacts / f"{mode}.{suffix}", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             handles.append(os.fdopen(fd, "wb", buffering=0))
         sync_dir(artifacts)
-        if mode == "run":
-            save_new(artifacts / "attempt.json", {
-                "started_at": datetime.now(timezone.utc).isoformat(), "runtime_sha256": runtime_digest,
-                "review_session": reviewed["review_session"], "automatic_retries": 0,
-                "operator_authorization_ref": reviewed["operator_authorization_ref"],
-            })
         bootstrap = Path(manifest["bootstrap"]).read_bytes()
         require(hashlib.sha256(bootstrap).hexdigest() == manifest["files"][manifest["bootstrap"]],
                 "bootstrap changed before spawn")
@@ -581,12 +531,11 @@ def launch(mode, artifacts, db_config, approval=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("seal", "prepare", "run"))
+    parser.add_argument("action", choices=("seal", "prepare"))
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--site", type=Path, default=Path(sysconfig.get_path("purelib")))
     parser.add_argument("--db-config", type=Path)
-    parser.add_argument("--approval", type=Path)
     args = parser.parse_args(argv)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode,
             "launcher requires python -I -S -B")
@@ -595,7 +544,7 @@ def main(argv=None):
     if args.action == "seal":
         result = seal(args.repo.resolve(), artifacts, args.site.resolve(), args.db_config.resolve())
     else:
-        result = launch(args.action, artifacts, args.db_config.resolve(), args.approval)
+        result = launch(args.action, artifacts, args.db_config.resolve())
     print(json.dumps(result))
     return 0 if result.get("status", "completed") == "completed" else 1
 

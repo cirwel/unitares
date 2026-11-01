@@ -2,8 +2,7 @@
 
 **Status:** prospective proposal; no model-assisted study enrolled or authorized
 
-**Scope:** repair the isolated infrastructure probe, then prepare a descriptive
-comparison of native KG PostgreSQL FTS and a lexical substitute over the same
+**Scope:** prepare a descriptive comparison of native KG PostgreSQL FTS and a lexical substitute over the same
 actual records. This proposal does not reopen the stopped v0 enrollment.
 
 ## Preserve the earlier result
@@ -17,43 +16,40 @@ contaminated the canary's calibration partition. These remain adverse evidence.
 The separate 90-step code-reading QA pack is not a KG task corpus. It supplies
 neither live source parity nor scientific enrollment authority.
 
-## Infrastructure repair
+## Withdrawn live canary; offline inspection only
 
-`scripts/eval/kg_canary_runtime.py` seals an exact interpreter, bootstrap,
-Python/native module origins, dependency metadata, selected database settings,
-and the original canary inputs. Its preparation mode disables network access.
-The child starts with `-I -S -B`, installs guards before application imports,
-compiles verified Python source rather than accepting an existing bytecode
-cache, and does not process site startup hooks.
+The attempted live-write execution design was rejected in governed review
+`afb1859ca456187a`. No invocation, fresh canary identity or audit append occurred.
+The exact prepared runtime digest
+`48b9e5d210e50d608039e4b6693619831410a03af11c445a5047de6aed97ca73`
+is withdrawn permanently. Its rejection and withdrawal are not execution approval.
 
-The selected DB assignments are committed with a private random-key HMAC.
-The approval covers that commitment and the non-password target metadata as
-part of the runtime digest. The child validates the exact manifest bytes against
-the parent's approved digest and reserved attempt before enabling networking.
-It receives no model credentials or interactive host session/slot bindings.
+`scripts/eval/kg_canary_runtime.py` now exposes only `seal` and `prepare`.
+Both the internal child and launcher reject `run` before doing work; its audit
+guard denies all socket events. It retains offline source/input validation,
+private DB-target commitments, source-bound imports and supervised process
+cleanup. It cannot perform a canary invocation. Earlier evidence remains intact.
 
-An immutable, directory-synced attempt precedes process creation. Final outcomes
-are separate atomic publications; an interrupt, timeout or lost parent never
-authorizes a replay. Logs are bounded and retained. Parent interruption kills
-and reaps its child group; a child watchdog terminates on parent loss/deadline.
-These are safeguards for a trusted, reviewed Python workload, not an OS sandbox
-against compromised native extensions or the machine owner.
+## Read-only feasibility implementation
 
-A fresh **infrastructure-only** invocation still requires an independent,
-on-record review of the exact prepared runtime and explicit operator authority.
-Its bounds remain two details pages, six unchanged FTS/OR/top-five searches,
-at most one explicit neutral audit append, no retry, no KG writes and no model
-calls by the client. The output remains HOLD, with parity and scored-run claims
-false. Ordinary server identity/tool-usage telemetry is not claimed absent.
+`scripts/eval/kg_snapshot_feasibility.py` has separate `plan` and `execute`
+commands. Planning makes no database connection. Each capture or evaluation plan
+binds its exact code/dependency files, interpreter, selected DB settings (private
+HMAC), output directory, global one-use reservation, explicit bounds and queries.
+Execution requires an independently reviewed approval binding the exact plan
+SHA-256 and operator authorization reference. The reservation is outside the
+copyable artifact directory and is durably created before any connection.
 
-The previous private launcher remains withdrawn. Its rejected execution is not
-relabelled as approved by an implementation review or this proposal.
-
-After child exit, an independently authorized read-only observation can report
-measured-state, outcome and adoption-event counts for the canary identity over
-the actual observed interval. A finite zero must be reported as an observation,
-not proof of perpetual exclusion. No new quiet-period threshold is established
-here.
+The runner opens one native asyncpg connection with read-only defaults, UTC,
+UTF-8, fixed search path, finite statement/lock/idle timeouts and a 45-second total
+timeout. It checks a physical table with no row-level filtering, enters a
+read-only repeatable-read transaction, and uses a connection-bound adapter for
+the existing FTS method. It never initializes the normal application, a pool,
+MCP, identity, audit infrastructure or model client. No intentional application,
+data or audit writes occur; ordinary PostgreSQL logs/statistics may change.
+Connection loss, drift or a query failure terminates the operation; there is no
+retry or reconnect path. Partial query receipts remain private and are not
+reported as a completed comparison.
 
 ## Prospective corpus boundary
 
@@ -81,7 +77,7 @@ The smallest proposed implementation uses the existing PostgreSQL backend's
 `kg_full_text_search` method on a held **read-only, repeatable-read transaction**.
 Enumeration and every FTS query must use that exact connection/transaction;
 an unrelated transaction around a method that acquires another connection does
-not establish a snapshot. A connection-bound acquisition adapter must be tested
+not establish a snapshot. The connection-bound acquisition adapter is tested
 with an intervening concurrent commit in a disposable database before evaluation.
 Its existing tag/status predicates define the complete eligible universe.
 
@@ -98,7 +94,7 @@ The proposed `canonical_kg_universe_v1` codec uses SQL predicate
 `tags && ARRAY['agent-adoption']::text[] AND status IS DISTINCT FROM 'archived'
 AND status IS DISTINCT FROM 'cold'`, ordered by the actual unique discovery ID.
 Capture every full SQL row using `to_jsonb(row)`, including provenance and the
-stored search vector. Decode JSON, serialize records in ID order with sorted
+stored search vector. Decode JSON with exact decimal numbers (without float rounding), serialize records in ID order with sorted
 keys, UTF-8, compact separators and one trailing newline per record; reject
 nonfinite numbers and duplicate/missing IDs. Bind schema, predicate, count,
 byte count and SHA-256. Empty or over-budget universes abort without sampling.
@@ -114,7 +110,9 @@ A two-stage freeze separates task preparation from evaluative retrieval:
    its complete canonical fingerprint to equal the frozen capture. If it differs,
    stop this enrollment. Do not silently refresh or substitute records.
 5. Run each frozen query once per backend using the held transaction for FTS.
-   Retain IDs, ranks, content hashes, latency, errors and missingness.
+   Retain IDs, ranks, frozen corpus content hashes, latency and missingness.
+   Native ordering uses rank and creation time without a final ID tie-breaker;
+   retain returned order and disclose cutoff ties rather than changing it.
 
 This measures the actual KG **database retrieval component** over actual records
 at a defined snapshot. It does not measure the full MCP service, graph expansion,

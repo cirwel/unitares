@@ -143,18 +143,18 @@ def isolated_case(tmp_path, request):
                   "chmod": "os.fchmod(fd, 0)\n"}[variant]
     elif variant == "retarget":
         extra = "os.environ['DB_AGE_GRAPH'] = 'unreviewed'\n"
-    sleep = ("    (Path(os.environ['HOME']).parent / 'child.pid').write_text(str(os.getpid()))\n"
-             "    import time\n    time.sleep(120)\n") if variant == "sleep" else ""
+    sleep = ("(Path(os.environ['HOME']).parent / 'child.pid').write_text(str(os.getpid()))\n"
+             "import time\ntime.sleep(120)\n") if variant == "sleep" else ""
     entry.write_text(
         "import socket\nfrom pathlib import Path\nimport os\n"
         "from scripts.eval import run_kg_agent_adoption_live_canary as v0\n"
         "from importlib.metadata import version\nassert version('canary-fixture') == '1.0'\n"
         "socket.getaddrinfo = lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', 5432))]\n"
-        + extra +
+        + extra + sleep +
         "async def run_live_canary(**kwargs):\n"
         "    assert kwargs['authorization_ref'] == 'operator-test'\n"
         "    (Path(os.environ['HOME']).parent / 'entered-main').write_text('once')\n"
-        + sleep + "    content = {'status': 'hold', 'scope': 'inert test'}\n"
+        + "    content = {'status': 'hold', 'scope': 'inert test'}\n"
         "    return {'schema': 'unitares.content-addressed-receipt.v0', 'content': content, 'receipt_content_sha256': v0.sha256_json(content)}\n")
     source_root = Path(runtime.__file__).resolve().parents[2]
     for name in ("scripts/eval/run_kg_agent_adoption_live_canary.py", "scripts/eval/run_kg_agent_adoption.py",
@@ -190,7 +190,7 @@ def invoke(case, mode, *args):
                           text=True, capture_output=True, timeout=30)
 
 
-def test_real_child_skips_site_hooks_and_requires_digest_bound_approval(isolated_case):
+def test_real_child_skips_site_hooks_and_has_no_live_execution_path(isolated_case):
     _, artifacts, _, _, _ = isolated_case
     prepared = invoke(isolated_case, "prepare")
     assert prepared.returncode == 0, prepared.stderr
@@ -200,17 +200,10 @@ def test_real_child_skips_site_hooks_and_requires_digest_bound_approval(isolated
     refused = invoke(isolated_case, "run")
     assert refused.returncode != 0
     assert not (artifacts / "attempt.json").exists()
-    approval = artifacts / "approval.json"
-    runtime.save_new(approval, {"runtime_sha256": runtime.digest(artifacts / "runtime.json"),
-                              "scope": "one_hold_only_infrastructure_canary", "approved": True,
-                              "review_session": "independent-test-review", "operator_authorization_ref": "operator-test"})
-    done = invoke(isolated_case, "run", "--approval", str(approval))
-    assert done.returncode == 0, done.stderr
-    marker = (artifacts / "attempt.json").read_bytes()
-    assert (artifacts / "entered-main").read_text() == "once"
-    repeated = invoke(isolated_case, "run", "--approval", str(approval))
-    assert repeated.returncode != 0
-    assert (artifacts / "attempt.json").read_bytes() == marker
+    with pytest.raises(ValueError, match="live execution withdrawn"):
+        runtime.child("run", None, None, None, None)
+    with pytest.raises(ValueError, match="live execution withdrawn"):
+        runtime.launch("run", artifacts, None)
 
 
 def test_child_refuses_import_drift_before_entrypoint(isolated_case):
@@ -226,18 +219,13 @@ def test_child_refuses_import_drift_before_entrypoint(isolated_case):
 
 def test_config_target_and_graph_are_bound_before_reservation(isolated_case):
     _, artifacts, config, _, _ = isolated_case
-    assert invoke(isolated_case, "prepare").returncode == 0
-    approval = artifacts / "approval.json"
-    runtime.save_new(approval, {"runtime_sha256": runtime.digest(artifacts / "runtime.json"),
-                              "scope": "one_hold_only_infrastructure_canary", "approved": True,
-                              "review_session": "test-review", "operator_authorization_ref": "operator-test"})
     config.write_text("DB_POSTGRES_URL=postgresql://192.0.2.9/changed\nDB_AGE_GRAPH=changed\n")
-    refused = invoke(isolated_case, "run", "--approval", str(approval))
+    refused = invoke(isolated_case, "prepare")
     assert refused.returncode != 0
     assert "differs from reviewed target" in refused.stderr
     assert not (artifacts / "attempt.json").exists()
     config.unlink()
-    assert invoke(isolated_case, "run", "--approval", str(approval)).returncode != 0
+    assert invoke(isolated_case, "prepare").returncode != 0
     assert not (artifacts / "attempt.json").exists()
 
 
@@ -291,15 +279,10 @@ def test_actual_child_rechecks_database_settings_after_application_imports(isola
 
 @pytest.mark.parametrize("isolated_case", ["sleep"], indirect=True)
 @pytest.mark.parametrize("interrupt", [signal.SIGINT, signal.SIGTERM])
-def test_parent_interrupt_kills_reaps_and_retains_ambiguous_reservation(isolated_case, interrupt):
+def test_parent_interrupt_kills_reaps_and_records_ambiguous_preparation(isolated_case, interrupt):
     command, artifacts, config, _, _ = isolated_case
-    assert invoke(isolated_case, "prepare").returncode == 0
-    approval = artifacts / "approval.json"
-    runtime.save_new(approval, {"runtime_sha256": runtime.digest(artifacts / "runtime.json"),
-                              "scope": "one_hold_only_infrastructure_canary", "approved": True,
-                              "review_session": "test-review", "operator_authorization_ref": "operator-test"})
-    parent = subprocess.Popen([*command, "run", "--artifacts", str(artifacts), "--db-config", str(config),
-                               "--approval", str(approval)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    parent = subprocess.Popen([*command, "prepare", "--artifacts", str(artifacts), "--db-config", str(config)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     child_pid = None
     try:
         deadline = time.monotonic() + 10
@@ -307,12 +290,11 @@ def test_parent_interrupt_kills_reaps_and_retains_ambiguous_reservation(isolated
             time.sleep(0.02)
         assert (artifacts / "child.pid").exists()
         child_pid = int((artifacts / "child.pid").read_text())
-        marker = (artifacts / "attempt.json").read_bytes()
         parent.send_signal(interrupt)
         parent.communicate(timeout=10)
-        outcome = json.loads((artifacts / "run.outcome.json").read_text())
+        outcome = json.loads((artifacts / "prepare.outcome.json").read_text())
         assert outcome["status"] == "interrupted_ambiguous_no_retry"
-        assert (artifacts / "attempt.json").read_bytes() == marker
+        assert not (artifacts / "attempt.json").exists()
         with pytest.raises(ProcessLookupError):
             os.kill(child_pid, 0)
     finally:
