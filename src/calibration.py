@@ -13,6 +13,13 @@ import sys
 import time
 import os
 import math
+import asyncio
+from copy import deepcopy
+from uuid import uuid4
+
+from src.calibration_mutations import (
+    CalibrationVersionConflict, apply_mutation, make_mutation, projection_state,
+)
 
 
 @dataclass
@@ -122,13 +129,8 @@ class CalibrationChecker:
             state_file: Path to calibration state file (defaults to data/calibration_state.json)
         """
         if bins is None:
-            bins = [
-                (0.0, 0.5),
-                (0.5, 0.7),
-                (0.7, 0.8),
-                (0.8, 0.9),
-                (0.9, 1.0)
-            ]
+            from src.calibration_delivery import CONFIDENCE_BINS
+            bins = list(CONFIDENCE_BINS)
         self.bins = bins
         
         # Set up state file path
@@ -158,6 +160,15 @@ class CalibrationChecker:
         
         # Load existing state or reset
         self.load_state()
+        self._storage_snapshot = self._snapshot_state()
+        self._storage_version = (
+            getattr(self, "_loaded_json_version", 0) if self._backend == "json" else None
+        )
+        self._writer_id = str(uuid4())
+        self._writer_sequence = 0
+        self._pending_mutation = None
+        self._storage_lock = asyncio.Lock()
+        self._persistence_error = None
 
 
     def _run_async(self, async_fn, *args, **kwargs):
@@ -1295,35 +1306,21 @@ class CalibrationChecker:
     def save_state(self):
         """Save calibration state to file"""
         try:
-            # PostgreSQL backend: single-flight writer with coalescing (#1375).
-            # The previous per-call create_task captured a snapshot at SCHEDULE
-            # time with no ordering guarantee — two saves microseconds apart
-            # could land out of order and persist the older snapshot (observed
-            # live 2026-07-26: a tactical-bin update vanished from the blob
-            # until the next save re-persisted it). Now each mutation marks
-            # dirty and one drain task snapshots at WRITE time, so the persisted
-            # blob can only move forward.
+            self._save_dirty = True
             if self._backend == "postgres":
-                self._save_dirty = True
                 if not self._pg_writer_running:
                     async def _drain():
                         try:
-                            from src.db import get_db
-                            db = get_db()
-                            # Note: do NOT call db.close() here — this is the
-                            # shared singleton pool. Closing it breaks all
-                            # other concurrent users.
-                            while self._save_dirty:
-                                self._save_dirty = False
-                                try:
-                                    await db.update_calibration(self._snapshot_state())
-                                except Exception as e_pg:
-                                    print(f"Warning: calibration PG save failed: {e_pg}", file=sys.stderr)
-                                    break
+                            await self.flush_state_async()
+                        except Exception as exc:
+                            self._persistence_error = type(exc).__name__
+                            print(f"Warning: calibration save failed: {type(exc).__name__}", file=sys.stderr)
                         finally:
                             self._pg_writer_running = False
                     if self._run_async(_drain):
                         self._pg_writer_running = True
+            else:
+                self._flush_file()
 
             # Write JSON snapshot as write-through cache.
             # When postgres is the backend, debounce to <=1 write per 10s (JSON is
@@ -1332,20 +1329,115 @@ class CalibrationChecker:
             if self._backend != "postgres" or now - self._last_json_write >= 10.0:
                 try:
                     self.state_file.parent.mkdir(parents=True, exist_ok=True)
-                    with open(self.state_file, 'w') as f:
-                        json.dump(self._snapshot_state(), f, indent=2)
+                    if self._backend == "postgres":
+                        from src.calibration_file_store import state_lock, write_state
+                        with state_lock(self.state_file):
+                            write_state(self.state_file, self._snapshot_state())
                     self._last_json_write = now
                 except Exception as e_json:
                     print(f"Warning: Failed to write calibration JSON snapshot: {e_json}", file=sys.stderr)
         except Exception as e:
             # Don't fail silently, but don't crash either
+            self._persistence_error = type(e).__name__
             print(f"Warning: Failed to save calibration state: {e}", file=sys.stderr)
+            return False
+
+    def _next_mutation(self):
+        if self._pending_mutation is None:
+            after = deepcopy(self._snapshot_state())
+            self._pending_mutation = {
+                "writer_id": self._writer_id,
+                "sequence": self._writer_sequence + 1,
+                "mutation": make_mutation(self._storage_snapshot, after),
+                "expected_version": self._storage_version,
+                "after": after,
+            }
+        return self._pending_mutation
+
+    def _ack_mutation(self, pending, result):
+        # Only changes made after this operation was frozen are still pending.
+        remaining = make_mutation(pending["after"], self._snapshot_state())
+        canonical = projection_state(result["data"])
+        if remaining["kind"] != "additive":
+            # The acknowledged operation is durable, but this later local
+            # replacement did not observe concurrent durable updates.
+            self._apply_state_data(canonical)
+            self._storage_snapshot = canonical
+            self._storage_version = result["version"]
+            self._writer_sequence = pending["sequence"]
+            self._pending_mutation = None
+            self._save_dirty = False
+            raise CalibrationVersionConflict("replacement overlapped an in-flight calibration save")
+        self._apply_state_data(apply_mutation(canonical, remaining))
+        self._storage_snapshot = canonical
+        self._storage_version = result["version"]
+        self._writer_sequence = pending["sequence"]
+        self._pending_mutation = None
+        self._save_dirty = bool(remaining["changes"])
+        self._persistence_error = None
+
+    def _flush_file(self):
+        from src.calibration_file_store import apply_file_mutation, read_state, state_lock
+
+        while self._save_dirty or self._pending_mutation is not None:
+            pending = self._next_mutation()
+            try:
+                result = apply_file_mutation(
+                    self.state_file, **{k: v for k, v in pending.items() if k != "after"},
+                )
+            except CalibrationVersionConflict:
+                with state_lock(self.state_file):
+                    current = read_state(self.state_file)
+                self._apply_state_data(projection_state(current))
+                self._storage_snapshot = self._snapshot_state()
+                self._storage_version = current.get("_version", 0)
+                self._pending_mutation = None
+                self._save_dirty = False
+                self._writer_id = str(uuid4())
+                self._writer_sequence = 0
+                raise
+            self._ack_mutation(pending, result)
+
+    async def flush_state_async(self):
+        """Await the same single-flight, receipted writer used by ordinary saves."""
+        if self._backend != "postgres":
+            self._flush_file()
+            return
+        from src.db import get_db
+
+        async with self._storage_lock:
+            db = get_db()
+            await self._flush_pg_unlocked(db)
+
+    async def _flush_pg_unlocked(self, db):
+        while self._save_dirty or self._pending_mutation is not None:
+            pending = self._next_mutation()
+            try:
+                result = await db.apply_calibration_mutation(
+                    **{k: v for k, v in pending.items() if k != "after"},
+                )
+            except CalibrationVersionConflict:
+                # Reject the entire stale local edit; an explicit reset or
+                # backfill must be retried from current durable state.
+                current = await db.get_calibration()
+                self._apply_state_data(projection_state(current))
+                self._storage_snapshot = self._snapshot_state()
+                self._storage_version = current.get("_version")
+                self._pending_mutation = None
+                self._save_dirty = False
+                self._writer_id = str(uuid4())
+                self._writer_sequence = 0
+                raise
+            self._ack_mutation(pending, result)
     
     def _apply_state_data(self, state_data: dict):
         """Apply loaded state data to bin structures.
 
         Shared by both sync load_state() and async load_state_async().
         """
+        # Read caches must never share mutable counters with the acknowledged
+        # baseline used to calculate a writer's next frozen mutation.
+        state_data = deepcopy(state_data)
         # Restore bin_stats (STRATEGIC calibration)
         self.bin_stats = defaultdict(lambda: {
             'count': 0,
@@ -1407,12 +1499,14 @@ class CalibrationChecker:
         try:
             # Load from JSON snapshot (the sync-readable write-through cache)
             if not self.state_file.exists():
+                self._loaded_json_version = 0
                 self.reset()
                 return
             with open(self.state_file, 'r') as f:
                 state_data = json.load(f)
 
             self._apply_state_data(state_data)
+            self._loaded_json_version = state_data.get("_version", 0)
         except Exception as e:
             # If loading fails, reset to empty state
             print(f"Warning: Failed to load calibration state: {e}, resetting", file=sys.stderr)
@@ -1434,21 +1528,33 @@ class CalibrationChecker:
         if self._backend == "postgres":
             try:
                 from src.db import get_db
-                db = get_db()
-                result = await db.get_calibration()
-                if result and isinstance(result, dict):
-                    state_data = {k: v for k, v in result.items() if not k.startswith('_')}
-                    if any(state_data.get(key) for key in (
-                        'bins', 'complexity_bins', 'tactical_bins',
-                        'tactical_bins_by_channel', 'bins_by_agent', 'tactical_bins_by_agent',
-                    )):
-                        self._apply_state_data(state_data)
-                        return True
+                async with self._storage_lock:
+                    db = get_db()
+                    await self._flush_pg_unlocked(db)
+                    before = self._snapshot_state()
+                    result = await db.get_calibration()
+                    if result and isinstance(result, dict):
+                        state_data = projection_state(result)
+                        if any(state_data.values()):
+                            remaining = make_mutation(before, self._snapshot_state())
+                            if remaining["kind"] != "additive":
+                                raise CalibrationVersionConflict("replacement overlapped calibration reload")
+                            self._apply_state_data(apply_mutation(state_data, remaining))
+                            self._storage_snapshot = state_data
+                            self._storage_version = result.get("_version")
+                            self._save_dirty = bool(remaining["changes"])
+                            return True
+            except CalibrationVersionConflict:
+                raise
             except Exception as e:
                 print(f"Warning: async calibration load failed: {e}", file=sys.stderr)
-        # Fallback to sync JSON load (already done at __init__, but re-read in case
-        # the file was updated since then)
-        self.load_state()
+        # The constructor already loaded the JSON cache. A failed reload must
+        # not discard local observations or an ambiguously acknowledged write.
+        if not self._save_dirty and self._pending_mutation is None:
+            self.load_state()
+            self._storage_snapshot = self._snapshot_state()
+            if self._backend == "json":
+                self._storage_version = self._loaded_json_version
         return False
 
     def compute_correction_factors(self, min_samples: int = 5) -> Dict[str, float]:

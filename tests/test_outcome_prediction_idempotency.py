@@ -226,7 +226,7 @@ async def test_lost_ack_retry_returns_canonical_row_without_duplicate():
 
 
 @pytest.mark.asyncio
-async def test_identical_retry_returns_canonical_and_calibrates_only_once():
+async def test_identical_retry_returns_canonical_without_inline_calibration():
     db = DurableBindingDB()
     monitor, pid = make_monitor()
     checker = MagicMock()
@@ -247,13 +247,16 @@ async def test_identical_retry_returns_canonical_and_calibrates_only_once():
     assert retry["prediction_source"] == first["prediction_source"] == "registry"
     assert retry["eisv_snapshot"] == first["eisv_snapshot"]
     assert len(db.rows) == 1
-    checker.record_prediction.assert_called_once()
-    checker.record_tactical_decision.assert_called_once()
-    sequential.record_exogenous_tactical_outcome.assert_called_once()
+    # Binding-store delivery is exercised with real transactions in
+    # tests/db/test_calibration_delivery_postgres.py. The handler must not
+    # also train inline, even when the acknowledgement says "created".
+    checker.record_prediction.assert_not_called()
+    checker.record_tactical_decision.assert_not_called()
+    sequential.record_exogenous_tactical_outcome.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_created_response_and_calibration_use_canonical_store_score():
+async def test_created_response_uses_canonical_store_score_without_inline_delivery():
     class RoundingBindingDB(DurableBindingDB):
         async def record_bound_outcome_event(self, **kwargs):
             result = await super().record_bound_outcome_event(**kwargs)
@@ -287,7 +290,7 @@ async def test_created_response_and_calibration_use_canonical_store_score():
     canonical_score = db.rows[0]["outcome_score"]
     assert first["outcome_score"] == canonical_score
     assert replay["outcome_score"] == canonical_score
-    assert checker.record_prediction.call_args.kwargs["actual_correct"] == canonical_score
+    checker.record_prediction.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -309,7 +312,7 @@ async def test_conflicting_retry_is_rejected_without_new_row_or_calibration():
     assert conflict["error_code"] == "PREDICTION_REUSE_CONFLICT"
     assert conflict["canonical_outcome_id"] == "outcome-1"
     assert len(db.rows) == 1
-    checker.record_prediction.assert_called_once()
+    checker.record_prediction.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -326,7 +329,7 @@ async def test_public_conflict_response_names_canonical_outcome():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_identical_submissions_have_one_row_and_one_calibration():
+async def test_concurrent_identical_submissions_have_one_row_without_inline_delivery():
     db = DurableBindingDB()
     monitor, pid = make_monitor()
     checker = MagicMock()
@@ -347,8 +350,8 @@ async def test_concurrent_identical_submissions_have_one_row_and_one_calibration
     assert {result["outcome_id"] for result in results} == {"outcome-1"}
     assert {result["prediction_binding"] for result in results} == {"registry"}
     assert len(db.rows) == 1
-    checker.record_prediction.assert_called_once()
-    sequential.record_exogenous_tactical_outcome.assert_called_once()
+    checker.record_prediction.assert_not_called()
+    sequential.record_exogenous_tactical_outcome.assert_not_called()
 
 
 @pytest.mark.asyncio

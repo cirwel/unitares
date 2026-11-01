@@ -16,6 +16,7 @@ import asyncio
 import json
 import pytest
 import sys
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -35,6 +36,27 @@ def mock_db():
         "complexity_bins": {},
         "tactical_bins": {},
     })
+    db.persisted_state = {}
+    db.persisted_version = 1
+    receipts = {}
+
+    async def apply(**request):
+        from src.calibration_mutations import apply_mutation, mutation_digest
+
+        key = (request['writer_id'], request['sequence'])
+        digest = mutation_digest(request['mutation'], request['expected_version'])
+        if key not in receipts:
+            db.persisted_state = apply_mutation(
+                db.persisted_state, request['mutation'],
+                expected_version=request['expected_version'], actual_version=db.persisted_version,
+            )
+            db.persisted_version += 1
+            receipts[key] = digest
+        else:
+            assert receipts[key] == digest
+        return {'data': deepcopy(db.persisted_state), 'version': db.persisted_version}
+
+    db.apply_calibration_mutation = AsyncMock(side_effect=apply)
     return db
 
 
@@ -70,8 +92,8 @@ class TestCalibrationSaveNoClose:
         mock_db.init.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_save_calls_update_calibration(self, calibration_checker):
-        """save_state() should still call db.update_calibration().
+    async def test_save_calls_receipted_calibration_writer(self, calibration_checker):
+        """save_state() uses the receipted mutation path.
 
         _run_async uses asyncio.get_running_loop() + create_task, so we must
         be inside an async context for the DB call to fire.
@@ -81,7 +103,8 @@ class TestCalibrationSaveNoClose:
             checker.save_state()
             # Allow the created task to execute
             await asyncio.sleep(0)
-        mock_db.update_calibration.assert_called_once()
+        mock_db.apply_calibration_mutation.assert_called_once()
+        mock_db.update_calibration.assert_not_called()
 
 
 class TestCalibrationLoadNoClose:
@@ -127,8 +150,8 @@ class TestSingleFlightWriter:
             # Both record_* calls invoked save_state before the drain task ran.
             for _ in range(5):
                 await asyncio.sleep(0)
-        mock_db.update_calibration.assert_called_once()
-        persisted = mock_db.update_calibration.call_args.args[0]
+        mock_db.apply_calibration_mutation.assert_called_once()
+        persisted = mock_db.persisted_state
         assert persisted["bins"], "strategic bin missing from coalesced write"
         assert persisted["tactical_bins_by_channel"].get("tests"), (
             "tactical channel missing — the exact loss shape #1375 regressions against"
@@ -142,11 +165,13 @@ class TestSingleFlightWriter:
         checker, mock_db = calibration_checker
         gate = asyncio.Event()
 
-        async def slow_update(data):
-            await gate.wait()
-            return True
+        apply = mock_db.apply_calibration_mutation.side_effect
 
-        mock_db.update_calibration = AsyncMock(side_effect=slow_update)
+        async def slow_update(**request):
+            await gate.wait()
+            return await apply(**request)
+
+        mock_db.apply_calibration_mutation = AsyncMock(side_effect=slow_update)
         with patch("src.db.get_db", return_value=mock_db):
             checker.record_prediction(confidence=0.85, predicted_correct=True, actual_correct=1.0)
             await asyncio.sleep(0)  # drain starts, blocks in slow_update
@@ -155,8 +180,8 @@ class TestSingleFlightWriter:
             gate.set()
             for _ in range(5):
                 await asyncio.sleep(0)
-        assert mock_db.update_calibration.call_count == 2
-        final = mock_db.update_calibration.call_args.args[0]
+        assert mock_db.apply_calibration_mutation.call_count == 2
+        final = mock_db.persisted_state
         assert final["tactical_bins_by_channel"].get("tests"), (
             "second drain iteration must persist the mutation that raced the slow write"
         )
@@ -213,7 +238,7 @@ class TestAgentCalibrationPersistence:
             checker.record_tactical_decision(0.9, 'proceed', False, agent_id='agent-b')
             for _ in range(5):
                 await asyncio.sleep(0)
-        payload = mock_db.update_calibration.call_args.args[0]
+        payload = mock_db.persisted_state
         assert payload['bins_by_agent'] == checker.bins_by_agent
         assert payload['tactical_bins_by_agent'] == checker.tactical_bins_by_agent
         assert payload['bins'] and payload['tactical_bins']

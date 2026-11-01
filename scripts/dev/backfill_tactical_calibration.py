@@ -135,25 +135,15 @@ async def backfill(days: int, dry_run: bool) -> Dict[str, int]:
 
     if not dry_run and summary["replayed"] > 0:
         # Single atomic save for the SequentialCalibrationTracker (json file).
-        sequential_calibration_tracker.save_state()
+        if sequential_calibration_tracker.save_state() is False:
+            raise RuntimeError("Sequential calibration changed during backfill; reload before retry")
 
         # CalibrationChecker writes to postgres via fire-and-forget _run_async.
         # In a short-lived script those tasks get cancelled when asyncio.run
         # exits, so the per-channel bin stats never persist. Force a synchronous
         # flush by awaiting the postgres write directly.
         try:
-            from src.db import get_db
-            db = get_db()
-            state_data = {
-                'bins': {k: dict(v) for k, v in calibration_checker.bin_stats.items()},
-                'complexity_bins': {k: dict(v) for k, v in calibration_checker.complexity_stats.items()},
-                'tactical_bins': {k: dict(v) for k, v in calibration_checker.tactical_bin_stats.items()},
-                'tactical_bins_by_channel': {
-                    channel: {k: dict(v) for k, v in bins.items()}
-                    for channel, bins in calibration_checker.tactical_bin_stats_by_channel.items()
-                },
-            }
-            await db.update_calibration(state_data)
+            await calibration_checker.flush_state_async()
         except Exception as e:
             print(f"Warning: failed to flush CalibrationChecker to postgres: {e}", file=sys.stderr)
             print("  SequentialCalibrationTracker state was saved successfully.", file=sys.stderr)

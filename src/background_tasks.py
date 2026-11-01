@@ -2155,6 +2155,8 @@ def start_all_background_tasks(set_ready):
         set_ready: Callable that sets SERVER_READY = True
     """
     _supervised_create_task(startup_auto_calibration(), name="auto_calibration")
+    from src.calibration_delivery import calibration_delivery_task
+    _supervised_create_task(calibration_delivery_task(), name="calibration_delivery")
     # KG lifecycle temporarily disabled — AGE graph queries deadlock in anyio context
     # _supervised_create_task(startup_kg_lifecycle(), name="kg_lifecycle")
     logger.info("[KG_LIFECYCLE] Disabled — AGE query deadlock under investigation")

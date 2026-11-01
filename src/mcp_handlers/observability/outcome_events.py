@@ -98,10 +98,8 @@ _HARD_EXOGENOUS_DETAIL_KEYS = (
 # Both this constant and the gate inside handle_outcome_event must stay in
 # sync; the classifier below is driven from _HARD_EXOGENOUS_TYPE_TO_CHANNEL,
 # and the handler gate uses HARD_EXOGENOUS_TYPES directly.
-HARD_EXOGENOUS_TYPES = frozenset({
-    "test_passed", "test_failed",
-    "task_completed", "task_failed",
-})
+from src.calibration_delivery import HARD_EXOGENOUS_CHANNELS
+HARD_EXOGENOUS_TYPES = frozenset(HARD_EXOGENOUS_CHANNELS)
 
 _CONTROLLED_FIXTURE_FLAGS = frozenset(
     {
@@ -134,10 +132,7 @@ _CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
 # so the reader that classifies historical rows cannot drift from the writer.
 _SERVER_SCRAPED_PREDICTION_SOURCES = SCRAPED_PREDICTION_SOURCES
 
-_HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
-    "test_passed": "tests", "test_failed": "tests",
-    "task_completed": "tasks", "task_failed": "tasks",
-}
+_HARD_EXOGENOUS_TYPE_TO_CHANNEL = HARD_EXOGENOUS_CHANNELS
 
 
 def _coerce_bool_flag(value: Any) -> bool:
@@ -641,7 +636,8 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # Record calibration from outcome event (never for self-declared synthetic
     # fixtures — they persist above but do not train the calibration channels).
     if (
-        persistence_status == "created"
+        not prediction_id  # Bound outcomes use the durable outbox, including replay.
+        and persistence_status == "created"
         and _confidence is not None
         and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT
         and not calibration_excluded

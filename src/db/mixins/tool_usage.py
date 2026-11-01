@@ -354,6 +354,10 @@ class ToolUsageMixin:
                     GovernanceConfig.CURRENT_EPOCH,
                     verification_source,
                 )
+                from src.calibration_delivery import enqueue_delivery
+                await enqueue_delivery(
+                    conn, claim=claim, agent_id=agent_id, prediction_id=prediction_id,
+                )
                 return _result("created", claim)
 
         async with self.acquire() as conn:

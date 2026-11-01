@@ -1,7 +1,8 @@
 # Durable delivery of prediction-bound outcome calibration
 
-Status: draft implementation contract for [#2247](https://github.com/cirwel/unitares/issues/2247).
-This document implements no runtime change and does not close the issue.
+Status: implementation contract for [#2247](https://github.com/cirwel/unitares/issues/2247),
+implemented in draft [#3155](https://github.com/cirwel/unitares/pull/3155).
+This is not a claim that the running deployment has adopted the change.
 
 ## Required invariant and boundary
 
@@ -25,7 +26,7 @@ absence is not proof that calibration was missed, so neither migration nor
 retry may silently enqueue them. Historical reconciliation is a separate,
 evidence-dependent operation.
 
-## Verified current failure boundaries
+## Verified failure boundaries before this repair
 
 1. `ToolUsageMixin.record_bound_outcome_event` commits the binding and outcome
    together. Its real-PostgreSQL tests lose the acknowledgement after commit
@@ -82,20 +83,28 @@ write the resulting state, and advance that sample's outbox receipt in one
 transaction. A duplicate consumer observes the receipt and performs no second
 update. A lost acknowledgement is recovered by reading the receipt.
 
-Normal asynchronous calibration writers must stop replacing a state they read
-before that transaction. Capture their existing mutation methods as operations,
-with arguments and observation times frozen when called. Persist a stable
-operation identity with the projection update under the same row lock; reuse
-that identity after an ambiguous acknowledgement. Rebuild the local read cache
-from the acknowledged projection plus still-pending local operations.
+Normal asynchronous calibration writers stop replacing a state they read before
+that transaction. Freeze the effects already computed by their existing model:
+nonnegative counter increments, initialization and maximum observation times.
+This preserves computed weights rather than re-running a method against a newer
+model state. Coalesced calls form one frozen patch. Persist a writer UUID,
+monotonic sequence and request digest with the patch under the same row lock;
+reuse that identity after an ambiguous acknowledgement. Rebuild the local read
+cache from the acknowledged projection plus still-pending local effects.
 
 This applies to prediction, tactical, complexity, ground-truth and peer-update
-methods. Nested mutations form one logical operation rather than independently
-replaying an inner call twice. Direct reset, replacement and backfill callers
+methods. Nested mutations are captured once in the resulting patch. Deletions,
+negative corrections and other non-additive edits are replacements. Direct
+reset, replacement and backfill callers
 must use explicit replacement semantics with a version precondition; a stale
 whole-object replacement must fail visibly instead of erasing committed work.
 This writer-coherence change must land before durable outcome delivery is
 enabled.
+
+Rollout requires quiescing pre-repair writers before enabling the new server.
+The new persistence APIs reject blind or stale replacements, but this does not
+retroactively protect the row from old binaries issuing raw whole-state SQL.
+All consumers of one file instrument must use this protocol and canonical lock.
 
 Unbound outcomes keep their existing non-idempotent submission semantics. Their
 local mutation queue remains best-effort until persistence acknowledges it;
@@ -107,7 +116,8 @@ unbound submission itself became durable or deduplicated.
 
 For the existing canonical sequential state file, persist the canonical outcome
 receipt in the same locked JSON replacement as its counters. Reload the latest
-file while holding the lock, check the receipt, apply the sample using the
+file version while holding the lock, reload when it changed, check the receipt,
+apply the sample using the
 existing sequential update, add the receipt, flush, `fsync`, replace and `fsync`
 the containing directory. Only
 then acknowledge that sink in PostgreSQL. A crash between file replacement and
@@ -116,12 +126,20 @@ the PostgreSQL acknowledgement leaves a recoverable receipt, not a second bet.
 All legacy file updates, pruning and rebucketing must preserve the receipt
 section. A failed replacement must restore or reload the in-memory object
 before it is reused; an unpersisted in-memory receipt cannot suppress a retry.
+Bulk saves reject a changed durable version rather than erasing a newer sample.
+Delivery receipts are retained in the file, including after completed outbox
+cleanup; no age-based receipt eviction is introduced. This trades storage growth
+for a conservative replay boundary. A later compactor needs proof of retirement.
 
 Competing consumers of this sink must share its canonical file and lock. Two
 independent local files are different instruments, even if their path strings
 match. Pin the destination in the work record and refuse a mismatched consumer;
 do not silently redirect work after a host, backend, path or epoch change.
 Distributed replication of the sequential instrument is outside this repair.
+`UNITARES_CALIBRATION_INSTRUMENT_ID` supplies a stable deployment identity when
+hostnames change, such as container recreation. It defaults to the hostname;
+changing that identity leaves old work pending. Consumers sharing an identity
+must share the actual durable files, not independent volumes with equal paths.
 JSON-only ordinary calibration needs the same locked, atomic state-plus-receipt
 adapter and writer-coherence rule; it cannot fall back to an unreceipted callback.
 
@@ -238,5 +256,6 @@ coverage and unresolved cases, and remain separate from confirmatory arm data.
 | Fixture, shadow, scraped and low-weight rows | Existing exclusion rules remain unchanged. |
 | Unbound submission | Existing non-idempotent recording semantics remain explicit. |
 
-Until these implementation gates pass, #2247 remains open and the current
-zero-delivery regression remains the truthful description of the live boundary.
+Until validation and review pass, the PR remains draft. The running deployment's
+delivery boundary changes only when it adopts this implementation under the
+rollout and study constraints above.
