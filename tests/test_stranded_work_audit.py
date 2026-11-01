@@ -38,7 +38,8 @@ def test_audit_forces_review_for_recent_or_sensitive_dangling_work(monkeypatch):
     monkeypatch.setattr(audit, "remote_branches", lambda: branches)
     monkeypatch.setattr(audit, "newest_pr", lambda repo, branch: None)
     monkeypatch.setattr(audit, "tip_age_days", lambda branch: ages[branch])
-    monkeypatch.setattr(audit, "unmerged_patch_count", lambda branch: 1)
+    monkeypatch.setattr(audit, "unmerged_patch_commits", lambda branch: ["unique"])
+    monkeypatch.setattr(audit, "_end_state_differs", lambda branch, commits: True)
     monkeypatch.setattr(audit, "sensitive_paths", lambda branch: sensitive[branch])
 
     findings = {
@@ -51,6 +52,100 @@ def test_audit_forces_review_for_recent_or_sensitive_dangling_work(monkeypatch):
     assert findings["sensitive"]["class"] == "DANGLING-REVIEW"
     assert "064_fix.sql" in findings["sensitive"]["detail"]
     assert findings["stale"]["class"] == "DANGLING-STALE"
+
+
+@pytest.fixture
+def dangling_history(tmp_path, monkeypatch):
+    """A two-commit branch whose combined patch can land by squash elsewhere."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=Audit fixture", "-c",
+             "user.email=audit@example.invalid", "-c", "commit.gpgsign=false",
+             "-c", "core.hooksPath=/dev/null", *args],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git("init", "--initial-branch=master")
+    path = tmp_path / "example.txt"
+    path.write_text("first\nsecond\nthird\n")
+    git("add", ".")
+    git("commit", "-m", "Base")
+    git("update-ref", "refs/remotes/origin/master", "HEAD")
+    git("checkout", "-b", "topic")
+    monkeypatch.setattr(audit, "remote_branches", lambda: ["topic"])
+    monkeypatch.setattr(audit, "tip_age_days", lambda branch: 10)
+    return git, path
+
+
+@pytest.mark.parametrize("closed_pr", [False, True])
+@pytest.mark.parametrize("evolved", [False, True])
+@pytest.mark.parametrize("deletion", [False, True])
+def test_dangling_squash_landing_is_prunable(
+    dangling_history, monkeypatch, closed_pr, evolved, deletion,
+):
+    git, path = dangling_history
+    monkeypatch.setattr(
+        audit, "newest_pr",
+        lambda repo, branch: {"number": 17, "state": "CLOSED"} if closed_pr else None,
+    )
+    for index, content in enumerate(
+        ("second\nthird\n", "third\n") if deletion
+        else ("first\nsecond\nthird\nfourth\n", "first\nsecond\nthird\nfourth\nfifth\n")
+    ):
+        path.write_text(content)
+        git("commit", "-am", f"Topic change {index}")
+    git("update-ref", "refs/remotes/origin/topic", "HEAD")
+    git("checkout", "master")
+    git("merge", "--squash", "topic")
+    git("commit", "-m", "Land combined patch via another branch")
+    if evolved:
+        path.write_text("Later master evolution\n")
+        git("commit", "-am", "Evolve after landing")
+    git("update-ref", "refs/remotes/origin/master", "HEAD")
+
+    # Patch-id comparison alone misses both commits after a squash landing.
+    assert len(audit.unmerged_patch_commits("topic")) == 2
+    findings = audit.audit("example/repo", 7, 14)
+
+    assert len(findings) == 1
+    assert findings[0]["class"] == "PRUNABLE"
+    assert findings[0]["reason"] == "no_pr_route"
+    assert "exact changed-file state already landed" in findings[0]["detail"]
+
+
+@pytest.mark.parametrize("history_failure", [False, True])
+def test_unproven_dangling_work_keeps_alarm(
+    dangling_history, monkeypatch, history_failure,
+):
+    git, path = dangling_history
+    path.write_text("Unlanded work\n")
+    git("commit", "-am", "Unlanded change")
+    git("update-ref", "refs/remotes/origin/topic", "HEAD")
+    monkeypatch.setattr(audit, "newest_pr", lambda repo, branch: None)
+    monkeypatch.setattr(
+        audit, "content_presence",
+        lambda commits: {"present": 1, "total": 1, "pct": 100.0,
+                         "commits_sampled": 1, "commits_total": 1},
+    )
+    if history_failure:
+        real_run = audit.run
+
+        def failing_history(*cmd):
+            if cmd[:3] == ("git", "log", "--format=%H"):
+                raise subprocess.CalledProcessError(1, cmd)
+            return real_run(*cmd)
+
+        monkeypatch.setattr(audit, "run", failing_history)
+
+    findings = audit.audit("example/repo", 7, 14)
+
+    assert len(findings) == 1
+    assert findings[0]["class"] == "DANGLING-REVIEW"
+    assert "100.0%" in findings[0]["detail"]
 
 
 def test_historical_master_match_prevents_false_stranded_alarm(monkeypatch):

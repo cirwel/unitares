@@ -16,7 +16,8 @@ Classification per remote branch (skips master/main, archive/*, backup/*):
             in master. Real work is marooned -> re-land or explicitly discard.
             THE ALARM CLASS.
   PRUNABLE  branch content is fully contained in master (merged ghost) -> safe
-            to delete, pure hygiene.
+            to delete, pure hygiene. Exact changed-file matches in master's
+            history also establish a landing after squash/reworked merges.
   DANGLING-REVIEW
             unique commits but no PR route (no PR ever, or newest PR CLOSED
             unmerged), with a recent tip or a deploy-sensitive path. Requires
@@ -276,14 +277,19 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
         # No PR, or newest PR closed-unmerged.
         if age < active_days:
             continue  # ACTIVE: recent tip, assume a session is still on it
-        unique = unmerged_patch_count(branch)
-        if unique == 0:
+        commits = unmerged_patch_commits(branch)
+        if not commits or not _end_state_differs(branch, commits):
             findings.append(
                 {
                     "branch": branch,
                     "class": "PRUNABLE",
                     "reason": "no_pr_route",
-                    "detail": "no open route needed — content is in master",
+                    "detail": (
+                        "no open route needed — exact changed-file state already "
+                        "landed in master"
+                        if commits
+                        else "no open route needed — content is in master"
+                    ),
                 }
             )
         else:
@@ -298,7 +304,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                     shown += f" (+{len(sensitive) - 3} more)"
                 reasons.append(f"sensitive path: {shown}")
             classification = "DANGLING-REVIEW" if reasons else "DANGLING-STALE"
-            detail = f"{unique} unique commit(s), {route}, tip {age}d old"
+            detail = f"{len(commits)} unique commit(s), {route}, tip {age}d old"
             if reasons:
                 detail += "; " + "; ".join(reasons)
             findings.append(
@@ -309,7 +315,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                         "reason": "no_pr_route",
                         "detail": detail,
                     },
-                    unmerged_patch_commits(branch),
+                    commits,
                 )
             )
     return findings
@@ -327,7 +333,7 @@ def _paths_touched_by(commits: list[str]) -> list[str]:
 
 
 def _end_state_differs(branch: str, commits: list[str]) -> bool:
-    """Return whether the post-merge work has no demonstrated home on master.
+    """Return whether the branch work has no demonstrated home on master.
 
     ``git cherry`` misses squash/reworked landings. First compare the current
     end state, then inspect master's history for a commit where every file
