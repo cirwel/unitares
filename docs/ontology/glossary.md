@@ -136,12 +136,14 @@ the two questions they each answer best, rather than coining anything new.
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `fork (sibling locus)` | Does this process occupy a thread already used by other process-instances without declared identity lineage? This includes a freshly minted UUID on a shared thread, not only legacy same-UUID cases. | `src/thread_identity.py::fork_honest_message`; `r6-episode-fork-response-shape.md` — `episode_fork_kind = sibling_locus` |
-| `fork (identity lineage)` | Is this a *distinct child UUID* with declared `parent_agent_id` + `spawn_reason`? | `r6-episode-fork-response-shape.md` — `identity_lineage_fork` boolean |
+| `fork (identity lineage)` | Does R6 classify this event as an identity-lineage fork? A distinct parent UUID qualifies; a known lineage spawn reason can also qualify while parent metadata is unavailable. | `src/thread_identity.py::classify_episode_fork`; `r6-episode-fork-response-shape.md` — `identity_lineage_fork` boolean |
 
 R6 already disambiguates via the `episode_fork_kind` enum and the
 `identity_lineage_fork` boolean precisely because a bare `is_fork` is "too
 compressed." `is_fork` is a position-based compatibility field, not proof of
-ancestry. Ordinary new processes mint fresh; a context compaction within the
+ancestry. The classifier's `identity_lineage` label alone also does not prove a
+recorded parent edge; inspect `lineage_state` and the declared parent. Ordinary
+new processes mint fresh; a context compaction within the
 same process keeps its binding. See `identity.md`, *Operational contract* and
 *Compaction*. Qualify "fork" when discussing identity.
 

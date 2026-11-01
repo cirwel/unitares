@@ -29,8 +29,12 @@ The sibling-locus row required the same UUID and no mint. The September
 additions to `r6-episode-fork-response-shape.md` and
 `src/thread_identity.py::fork_honest_message` explicitly cover fresh UUIDs on a
 thread occupied by unrelated processes. The row now covers both cases without
-asserting ancestry. The identity operational contract also distinguishes a
-same-process compaction from an actual restart.
+asserting ancestry. R6's `identity_lineage` label also has a known-spawn-reason
+fallback while parent metadata is unavailable
+(`src/thread_identity.py::classify_episode_fork`); the glossary now points to
+`lineage_state` and the declared parent rather than treating that classifier as
+proof of a recorded edge. The identity operational contract also distinguishes
+a same-process compaction from an actual restart.
 
 The token note called `continuity_token` deprecated as a whole. `identity.md`
 still supports an explicit same-live-process proof rebind. The correction
