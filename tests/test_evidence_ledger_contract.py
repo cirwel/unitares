@@ -63,7 +63,9 @@ def test_ledger_preserves_earned_and_unearned_claims_side_by_side() -> None:
     assert "current rate has not been re-measured" in NORMALIZED
     assert "did not establish predictive lift" in NORMALIZED
     assert "inconclusive, not a demonstrated negative" in NORMALIZED
-    assert "Incident prevention and benefit from pausing remain untested" in NORMALIZED
+    # The effect of pausing is stated as an open research question, not framed
+    # against a prevention claim the project does not make (operator direction 2026-11-01).
+    assert "Whether pausing changes outcomes is an open research question" in NORMALIZED
     assert "sets no standing AUC ceiling" in NORMALIZED
 
 

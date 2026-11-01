@@ -182,6 +182,13 @@ of mechanism. "`start_session` binds later writes to a process identity" is
 stated flat. "Binding reduces misattribution" carries its evidence class. Do not
 open a description of a working mechanism with doubt. Do not call a capability
 overhead or ceremony until you have measured it against the alternative route.
+Do not disclaim claims the project does not make: lines such as "UNITARES does
+not prevent incidents" or "it does not replace Git or handoff notes" rebut
+positions nobody took, read as apology, and repel adoption. Lead with what was
+shown or built; state scope once, in `docs/EVIDENCE_AND_LIMITS.md` and
+`docs/SCOPE_AND_THREAT_MODEL.md`, and keep process discipline in the repository
+rather than in reader-facing prose (operator direction 2026-11-01; site copy
+follows `cirwel-site` `EDITORIAL.md` §4).
 
 **Shared memory is the source; harness memory is a cache.** Durable facts about
 this project live in the knowledge graph, where every harness can read them:

@@ -138,11 +138,11 @@ a patient actor may still shape or poison its own baseline. Verdicts lean toward
 are also costly. Drift (S) is a salience signal, not an ethics label; Integrity
 (I) is only as grounded as the outcome channel feeding it.
 
-**The genuine open question.** Robustness against a *motivated* attacker
+**Open research question.** Robustness against a *motivated* attacker
 deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far
 has been ad hoc rather than systematic or sustained, and the deployment is
-single-operator. That is the real limitation: a shortfall of *sustained
-adversarial testing*, not of adversarial design.
+single-operator. The adversarial design is in place; the next step is
+*sustained adversarial testing*.
 
 **A named, fixture-demonstrated blind spot: calibrated capability concealment.** The
 Integrity (I) signal anchors confidence to outcomes, so it catches an agent that
@@ -275,8 +275,8 @@ surface, so it is the place a motivated attacker would aim. It is **off by defau
 a fail-closed boot guard blocks commit-without-dispatch), and when an operator enables
 it every effect is gated by strong-tier identity re-certification, a per-effect
 governance veto (`POST /v1/effect-veto`) on every path, a bearer token, loopback
-binding, per-class payload ceilings, and content-hash reversibility. The honest
-residual: those gates have had the same ad-hoc-rather-than-sustained adversarial
+binding, per-class payload ceilings, and content-hash reversibility. Residual
+risk: those gates have had the same ad-hoc-rather-than-sustained adversarial
 testing as the rest of the system, and a compromised strong-tier proposer credential
 would convert to host execution — so the credential boundary is load-bearing. The
 security-reporting contract for this surface lives in [`SECURITY.md`](../.github/SECURITY.md).

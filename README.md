@@ -98,7 +98,7 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 
 For an operator running several long-lived AI agents across vendors, on infrastructure they control, who needs the agents' shared account of the work to survive restarts and handoffs.
 
-UNITARES works alongside Git, issue trackers, handoff notes, evals, and guardrails rather than replacing them—not a sandbox, an output validator, or a hosted agent platform. It does not run the agent's loop or grant an estimator authority over it. Explicit identity, authorization, archive, and coordination boundaries remain enforced.
+UNITARES works alongside Git, issue trackers, handoff notes, evals and guardrails, and keeps the record that ties the agents' work together across them. Each agent keeps its own loop and model. Inferred pauses are observational by default; the operator decides whether one is enforced. Identity, authorization, archive and coordination boundaries are enforced by the server.
 
 ## How it fits together
 
