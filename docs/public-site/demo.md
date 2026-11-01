@@ -1,11 +1,9 @@
 # See the record, without installing anything
 
-Git tracks commits, issue trackers preserve pull-request threads, and handoff
-notes summarize a single session. UNITARES is the shared, queryable record
-across the agent processes themselves: who made a claim, what evidence
-supported or contradicted it, who challenged it, what replaced it, and what
-outcome followed—recoverable by the next agent after the process that lived
-through it is gone.
+UNITARES is the shared, queryable record across agent processes: who made a
+claim, what evidence supported or contradicted it, who challenged it, what
+replaced it, and what outcome followed—recoverable by the next agent after the
+process that lived through it is gone.
 
 This page traces one incident step by step as the record holds it. A writer
 process claims a service reload worked, a deterministic smoke test shows it
@@ -62,12 +60,12 @@ record, it recovers each piece of the incident from its typed record:
 
 {{questions_table}}
 
-## How this fits with Git, GitHub, and handoff notes
+## Working with Git, GitHub, and handoff notes
 
 UNITARES works alongside repository history, pull requests, and session handoff
-notes rather than replacing them. A finding can cite a commit, PR, test log, or
-handoff document while giving every connected runtime—Claude Code, Codex,
-Hermes Agent, or a custom MCP client—one shared place to query prior
+notes. A finding can cite a commit, PR, test log, or handoff document, giving
+every connected runtime—Claude Code, Codex, Hermes Agent, or a custom MCP
+client—one shared place to query prior
 conclusions, active review objections, and supersession chains before acting.
 
 Every quoted fact, record ID, and link relation on this page is rendered at
