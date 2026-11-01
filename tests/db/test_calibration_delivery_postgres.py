@@ -184,6 +184,24 @@ async def test_wrong_destination_and_ineligible_outcomes_are_not_delivered(instr
 
 
 @pytest.mark.asyncio
+async def test_missing_registry_argument_is_delivered_without_sequential_training(instrument):
+    db, agent, target = instrument
+    result = await db.record_bound_outcome_event(
+        agent_id=agent, prediction_id="missing-local-registry", request_digest="b" * 64,
+        outcome_type="test_passed", outcome_score=1.0, is_bad=False,
+        detail={"reported_confidence": 0.83, "prediction_source": "argument",
+                "prediction_binding": "missing_prediction", "calibration_excluded": False,
+                "evidence_weight": GRADE_WEIGHTS[TOOL_OBSERVED], "eprocess_eligible": False},
+    )
+    assert result["status"] == "created"
+    assert await delivery.drain_deliveries(db) == 1
+    state = await projection(db, target)
+    assert state["bins"]["0.8-0.9"]["count"] == 1
+    assert state["tactical_bins"]["0.8-0.9"]["count"] == 1
+    assert not Path(target["sequential_file"]).exists()
+
+
+@pytest.mark.asyncio
 async def test_enqueue_failure_rolls_back_binding_and_outcome(instrument):
     db, agent, target = instrument
     db.fail_enqueue = True
