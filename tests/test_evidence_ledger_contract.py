@@ -76,11 +76,11 @@ def test_ledger_separates_the_review_mechanism_from_its_benefit() -> None:
     measured. Neither should erase the other, regardless of the page layout.
     """
     assert "cannot resolve its own review over a standing reviewer objection" in NORMALIZED
+    # The sample's scope (fixed size, no control arm) is the boundary; the ledger
+    # no longer rebuts an incident-reduction claim the project does not make
+    # (operator direction 2026-11-01).
     assert "no matched unreviewed or conventional-review control" in NORMALIZED
-    assert (
-        "no estimate of incident reduction, net productivity, or UNITARES's incremental contribution"
-        in NORMALIZED
-    )
+    assert "fixed sample of 20 recent merged PRs" in NORMALIZED
 
 
 def test_ledger_states_the_review_coverage_boundary() -> None:
