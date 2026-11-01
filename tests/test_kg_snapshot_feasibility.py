@@ -167,3 +167,15 @@ def test_truthy_approval_strings_cannot_substitute_for_independent_operation_res
     record["reviewer"] = "reviewer"
     with pytest.raises(ValueError, match="durable independent governance"):
         kg.validate_approval(approval, dict(document, operation_id="copied-operation"), "digest")
+
+
+def test_database_home_is_fresh_private_empty_and_never_reused(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", "/ambient-account-home")
+    monkeypatch.setenv("OPENAI_API_KEY", "inert-test-key")
+    env = kg.isolated_environment(tmp_path)
+    home = Path(env["HOME"])
+    assert home == tmp_path / "empty-home" and not list(home.iterdir())
+    assert home.stat().st_mode & 0o777 == 0o700
+    assert set(env) == {"HOME", "PYTHON_DOTENV_DISABLED", "PATH", "LANG"}
+    with pytest.raises(FileExistsError):
+        kg.isolated_environment(tmp_path)

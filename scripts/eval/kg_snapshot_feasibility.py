@@ -285,6 +285,16 @@ def validate_approval(approval, document, expected_sha):
                "durable independent governance approval for exact operation required")
 
 
+def isolated_environment(artifacts):
+    # An unset HOME falls back to the account database in Path.home(), which
+    # asyncpg uses for implicit PostgreSQL TLS key/certificate paths.
+    home = artifacts / "empty-home"
+    home.mkdir(mode=0o700)
+    rt.private_dir(home)
+    rt.require(not any(home.iterdir()), "credential home must be empty")
+    return {"HOME": str(home), "PYTHON_DOTENV_DISABLED": "1", "PATH": os.defpath, "LANG": "en_US.UTF-8"}
+
+
 def execute(plan_path, expected_sha, approval_path, approval_sha):
     document = rt.load(plan_path, expected_digest=expected_sha)
     rt.require(document["schema"] == SCHEMA and document["mode"] in ("capture", "evaluate"), "wrong operation")
@@ -307,10 +317,11 @@ def execute(plan_path, expected_sha, approval_path, approval_sha):
     rt.require(not (artifacts / "disabled.pgpass").exists(), "disabled passfile path must not exist")
     reservation = Path(document["reservation"])
     rt.private_dir(reservation.parent)
+    env = isolated_environment(artifacts)
     rt.save_new(reservation, {"plan_sha256": expected_sha, "approval": approval, "automatic_retries": 0})
     # Clear ambient credentials and host bindings before any application import.
     os.environ.clear()
-    os.environ.update(PYTHON_DOTENV_DISABLED="1", PATH=os.defpath, LANG="en_US.UTF-8")
+    os.environ.update(env)
     sys.path[:] = [*document["stdlib_path"], document["site"]]
     finder = rt.OriginFinder(document["files"])
     sys.meta_path[:] = [importlib.machinery.BuiltinImporter, importlib.machinery.FrozenImporter, finder]
