@@ -41,12 +41,12 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`REPO_SCOPE.md`](REPO_SCOPE.md)** — what belongs in this repository and what belongs in an operator's own deployment repository.
 - **[`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md)** — versioned, transport-neutral capability names and the boundary between tool reachability and host lifecycle integration.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
-- **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
+- **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and the threat model with its open research questions.
 - **[`DEPLOYMENT_SECURITY.md`](DEPLOYMENT_SECURITY.md)** — the current Compose security posture: deployment profiles, default controls, exposure requirements, verification, and known limitations.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named cross-operator blocker. The root README and the public landing page link here rather than summarizing it.
 - **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
-- **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
+- **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, where each guarantee ends, and how failures are reported.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
 ### Subsystem guides

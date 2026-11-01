@@ -41,8 +41,8 @@ owns the instrument.
 ## Layered architecture
 
 The system as a set of layers, top-down. Each layer below states what it is,
-its key modules, and its **honest current maturity** (not a roadmap
-aspiration). Where a layer has a known limit, it is named here, not buried.
+its key modules, and its **current maturity**. Where a layer has a known limit,
+it is named here.
 
 UNITARES Core does not own the agent execution loop. Agent harnesses, custom
 clients, and reference residents sit above the public interfaces and remain
@@ -75,7 +75,7 @@ deployed Core component.
 
 ### Maturity at a glance
 
-| Layer | Status | One-line honest read |
+| Layer | Status | One-line status |
 |---|---|---|
 | Identity & lineage | **Mature** | Load-bearing; strict write gate live; anchors everything |
 | Findings & knowledge graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |

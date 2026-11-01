@@ -216,7 +216,7 @@ refuting the underlying capability. The
 sets the requirements for scientific refutation: target, counterfactual,
 independent unit, power, decision rule, and read protocol.
 
-### Pause delivery and incident prevention
+### Pause delivery
 
 Governed pauses are delivered. The audit log holds 370+ `lifecycle_paused`
 events since April 2026, every one triggered by governance (energy-integrity
@@ -228,9 +228,8 @@ accounts for 41% of the events (queried 2026-10-21; retention starts
 of 218 recorded pause decisions (89.4%) before delivery; the current rate has
 not been re-measured. See
 [ledger rows 24, 27, and 28](ontology/eisv-proprioception-contract.md).
-Incident prevention and benefit from pausing remain untested: no
-governed-versus-ungoverned comparison has shown an incident prevented or an
-outcome improved by pausing.
+Whether pausing changes outcomes is an open research question; answering it
+takes a governed-versus-ungoverned comparison.
 
 ### Local control and cross-operator trust
 
