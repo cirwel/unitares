@@ -485,6 +485,8 @@ class GovernanceClient:
         force_new: bool = False,
         parent_agent_id: str | None = None,
         spawn_reason: str | None = None,
+        *,
+        retry: bool = True,
         **kwargs: Any,
     ) -> OnboardResult:
         """Register with governance. Maps to server tool: onboard.
@@ -492,6 +494,10 @@ class GovernanceClient:
         parent_agent_id/spawn_reason: opt-in lineage tracking. When provided,
         the server persists a parent link in core.identities so spawned agents
         are distinguishable from root agents with otherwise-similar signals.
+
+        Set retry=False for a single attempt. On an ambiguous timeout, stop
+        and reconcile with the host/server; do not blindly mint again. This
+        option controls transport retries, not a server tool argument.
         """
         args: dict[str, Any] = {
             "name": name,
@@ -506,7 +512,9 @@ class GovernanceClient:
             args["spawn_reason"] = spawn_reason
         args.update(kwargs)
 
-        raw = await self.call_tool("onboard", args)
+        # A timed-out force_new may already have minted an identity. Hosts
+        # without an idempotent recovery contract can disable retransmission.
+        raw = await self.call_tool("onboard", args, retry=retry)
         _raise_if_guidance("onboard", raw)
         self._capture_identity(raw)
         # Kept off the model so callers that never look still get it verbatim;

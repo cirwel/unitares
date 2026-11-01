@@ -195,6 +195,15 @@ Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
    `IdentityBootstrapRefused` — the operator must explicitly set
    `UNITARES_FIRST_RUN=1` once to mint a new one.
 
+## Hosted ordinary executions (not resident anchors)
+
+For an execution whose start is verified by its host, see the
+[tested hosted-execution example and failure contract](https://github.com/cirwel/unitares/blob/master/agents/sdk/examples/HOSTED_EXECUTION.md).
+It uses this SDK's automatic session threading and `onboard(retry=False)` to
+avoid automatic retransmission of an uncertain fresh mint. It does not install
+host callbacks or establish hosted-dot execution boundaries; unknown boundaries
+must not onboard. Resident registration is a separate operator action.
+
 ## Identity-bound lease calls
 
 `LeasePlaneClient` accepts `identity_proof=<continuity_token>` on `acquire`,
