@@ -38,7 +38,9 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "read-specific power" in ledger_text
     assert "inconclusive, not a demonstrated negative" in ledger_text
     assert "Agent work fragments when a process restarts" in landing_text
-    assert "Do not install UNITARES merely because you use an agent." in landing_text
+    assert "Built for operators running multiple or long-lived AI agents" in landing_text
+    assert "works alongside Git, GitHub issues, and session handoff notes" in landing_text
+    assert "Do not install UNITARES" not in landing_text
     assert "observational by default" in landing_text
     assert "cannot pause an identity or block writes" in landing_text
     assert "Policy and recovery" not in landing_text
@@ -103,12 +105,12 @@ def test_build_renders_readonly_demo_from_journey_fixture(tmp_path):
     for edge in fixture["oracle"]["edges"]:
         assert f"<code>{edge['relation']}</code>" in demo
     assert "{{" not in demo and "{fixture_blob}" not in demo
-    # The page shows the mechanism and says plainly it is not a win over git.
+    # The page shows how the record fits alongside Git, GitHub, and handoffs, and links the evidence.
+    assert "works alongside repository history, pull requests, and session handoff notes" in demo_text
     assert "docs/evaluations/accountability-journey/result-v0.md" in demo
-    assert "both scored 1.000" in demo_text
-    assert "ordinary repository artifacts recovered the incident facts and UNITARES did not" in demo_text
-    assert "capture-stage-2168-v0.md" in demo
-    assert "Should you install it?" in demo_text
+    assert "docs/EVIDENCE_AND_LIMITS.md" in demo
+    assert "docs/guides/AGENT_SESSION_WALKTHROUGH.md" in demo
+    assert "Probably not if one repository" not in demo_text
     # Reachable from the landing hero and the nav.
     assert 'class="primary" href="demo.html"' in landing
     # The viewer has its own nav template; it links the demo too.
