@@ -1,6 +1,6 @@
 {
   "baseImage": "debian:trixie-slim",
-  "pythonVersion": "3.14",
+  "pythonVersion": "3.15",
   "nodeVersion": "24",
   "buildSteps": [
     "bash docker/glama/install.sh"

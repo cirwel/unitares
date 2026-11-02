@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Validate the interpreter contract: pyproject floor, constraints.txt production
-marker, container base images, ops LaunchAgent templates, and the CI matrix.
+marker, container interpreters, ops LaunchAgent templates, and the CI matrix.
 
 The runtime declarations must agree, and the CI matrix must exercise them:
 
@@ -12,6 +12,8 @@ The runtime declarations must agree, and the CI matrix must exercise them:
 * the Dockerfile and Dockerfile.glama base images (``FROM python:X.Y-…``)
   declare the container interpreters; both must equal the marker, so a
   base-image bump cannot drift away from the declaration.
+* the hosted Glama build spec (``docker/glama/build-spec.json``) declares its
+  Python interpreter through ``pythonVersion`` and must equal the marker.
 * any LaunchAgent template under scripts/ops that hardcodes a framework
   interpreter (``/Library/Frameworks/Python.framework/Versions/X.Y/…``) must
   equal the marker as well.
@@ -33,6 +35,7 @@ on 3.14.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -49,6 +52,7 @@ CONSTRAINTS_PATH = PROJECT_ROOT / "constraints.txt"
 TEST_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "tests.yml"
 DOCKERFILE_PATH = PROJECT_ROOT / "Dockerfile"
 GLAMA_DOCKERFILE_PATH = PROJECT_ROOT / "Dockerfile.glama"
+GLAMA_BUILD_SPEC_PATH = PROJECT_ROOT / "docker" / "glama" / "build-spec.json"
 OPS_TEMPLATES_DIR = PROJECT_ROOT / "scripts" / "ops"
 
 SHARD_JOB_ID = "test_shard"
@@ -120,6 +124,20 @@ def _read_dockerfile_python() -> Version:
     return _read_python_base_image(DOCKERFILE_PATH)
 
 
+
+def _read_glama_build_spec_python() -> Version:
+    """Read the interpreter selected by Glama's hosted build configuration."""
+    spec = json.loads(GLAMA_BUILD_SPEC_PATH.read_text())
+    if not isinstance(spec, dict):
+        raise ContractError(f"{GLAMA_BUILD_SPEC_PATH.name} must be a JSON object")
+    version = spec.get("pythonVersion")
+    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+", version):
+        raise ContractError(
+            f"{GLAMA_BUILD_SPEC_PATH.name} pythonVersion must be a string in X.Y form"
+        )
+    return _parse_version_tuple(version)
+
+
 def _read_template_pythons() -> dict[str, Version]:
     """Framework interpreters hardcoded in ops LaunchAgent templates, by file."""
     versions: dict[str, Version] = {}
@@ -184,6 +202,7 @@ def main() -> int:
             DOCKERFILE_PATH.name: _read_dockerfile_python(),
             GLAMA_DOCKERFILE_PATH.name: _read_python_base_image(GLAMA_DOCKERFILE_PATH),
         }
+        glama_build_python = _read_glama_build_spec_python()
         templates = _read_template_pythons()
         ci_versions = _read_ci_matrix_versions()
     except (ContractError, ImportError, KeyError, OSError, ValueError) as exc:
@@ -223,6 +242,14 @@ def main() -> int:
             )
             return 1
 
+    if glama_build_python != production:
+        print(
+            f"❌ docker/glama/build-spec.json pythonVersion is {_render(glama_build_python)} "
+            f"but constraints.txt declares production-python {_render(production)}; "
+            "move them together, with the deploy"
+        )
+        return 1
+
     mismatched = {name: v for name, v in templates.items() if v != production}
     if mismatched:
         rendered = ", ".join(f"{name}={_render(v)}" for name, v in sorted(mismatched.items()))
@@ -243,7 +270,8 @@ def main() -> int:
     print(
         "✅ Interpreter contract holds: "
         f"floor {_render(required_min)}, production {_render(production)} "
-        f"(constraints, {len(dockerfiles)} Dockerfiles, {len(templates)} ops template(s)), "
+        f"(constraints, {len(dockerfiles)} Dockerfiles, Glama build spec, "
+        f"{len(templates)} ops template(s)), "
         f"CI matrix [{rendered}] consumed by setup-python"
     )
     return 0

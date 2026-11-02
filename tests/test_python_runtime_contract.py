@@ -1,6 +1,7 @@
-"""Interpreter transitions must keep the admitted floor and both images covered."""
+"""Interpreter transitions must keep the floor and all container runtimes covered."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ def runtime_contract(tmp_path, monkeypatch):
         "CONSTRAINTS_PATH": tmp_path / "constraints.txt",
         "DOCKERFILE_PATH": tmp_path / "Dockerfile",
         "GLAMA_DOCKERFILE_PATH": tmp_path / "Dockerfile.glama",
+        "GLAMA_BUILD_SPEC_PATH": tmp_path / "build-spec.json",
         "TEST_WORKFLOW_PATH": tmp_path / "tests.yml",
         "OPS_TEMPLATES_DIR": tmp_path / "ops",
     }
@@ -33,6 +35,7 @@ def runtime_contract(tmp_path, monkeypatch):
         monkeypatch.setattr(checker, attribute, path)
     checker.PYPROJECT_PATH.write_text('[project]\nrequires-python = ">=3.14"\n')
     checker.CONSTRAINTS_PATH.write_text("# production-python: 3.15\n")
+    checker.GLAMA_BUILD_SPEC_PATH.write_text(json.dumps({"pythonVersion": "3.15"}))
     for image in (checker.DOCKERFILE_PATH, checker.GLAMA_DOCKERFILE_PATH):
         image.write_text("FROM python:3.15-slim@sha256:fixture\n")
     checker.OPS_TEMPLATES_DIR.mkdir()
@@ -113,3 +116,47 @@ def test_glama_stages_cannot_name_different_interpreters(runtime_contract, capsy
         "Dockerfile.glama names more than one python base image"
         in capsys.readouterr().out
     )
+
+
+def test_hosted_glama_only_interpreter_drift_is_rejected(runtime_contract, capsys):
+    runtime_contract.GLAMA_BUILD_SPEC_PATH.write_text(
+        json.dumps({"pythonVersion": "3.14"})
+    )
+    assert runtime_contract._read_dockerfile_python() == (3, 15)
+    assert runtime_contract._read_python_base_image(
+        runtime_contract.GLAMA_DOCKERFILE_PATH
+    ) == (3, 15)
+
+    assert runtime_contract.main() == 1
+    assert "build-spec.json pythonVersion is 3.14" in capsys.readouterr().out
+
+
+def test_missing_hosted_glama_build_spec_fails_closed(runtime_contract, capsys):
+    runtime_contract.GLAMA_BUILD_SPEC_PATH.unlink()
+
+    assert runtime_contract.main() == 1
+    output = capsys.readouterr().out
+    assert "Could not read the interpreter contract" in output
+    assert "build-spec.json" in output
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not json",
+        "[]",
+        "{}",
+        '{"pythonVersion": null}',
+        '{"pythonVersion": 3.15}',
+        '{"pythonVersion": true}',
+        '{"pythonVersion": "3.15.0"}',
+        '{"pythonVersion": "latest"}',
+    ],
+)
+def test_invalid_hosted_glama_python_declaration_fails_closed(
+    runtime_contract, capsys, payload
+):
+    runtime_contract.GLAMA_BUILD_SPEC_PATH.write_text(payload)
+
+    assert runtime_contract.main() == 1
+    assert "Could not read the interpreter contract" in capsys.readouterr().out

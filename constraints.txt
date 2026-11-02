@@ -19,8 +19,9 @@
 # The marker line above is the operator's declaration of the interpreter
 # production runs. scripts/diagnostics/check_ci_python_matrix_sync.py (the
 # CI smoke job, and tests/test_ci_test_gate.py) holds the deployment surfaces
-# to it: both Dockerfile base images, any framework interpreter hardcoded in
-# a scripts/ops LaunchAgent template, and the tests.yml matrix, which must
+# to it: both Dockerfile base images, the hosted Glama build spec, any
+# framework interpreter hardcoded in a scripts/ops LaunchAgent template, and
+# the tests.yml matrix, which must
 # include it so the suite runs on what production runs and not only on the
 # .python-version dev default. A Dependabot bump of the Dockerfile base
 # therefore fails CI until this line moves with it. Move it in the same PR
