@@ -117,8 +117,8 @@ Existing complementary coverage:
 - `test_policy_actuation_posture.py`, `test_update_response_service.py`:
   actuation distinction and serializer fallback.
 - `test_outcome_prediction_idempotency.py`,
-  `db/test_outcome_prediction_binding_postgres.py`,
-  `test_calibration_delivery.py`, `db/test_calibration_delivery_postgres.py`:
+  `tests/db/test_outcome_prediction_binding_postgres.py`,
+  `test_calibration_delivery.py`, `tests/db/test_calibration_delivery_postgres.py`:
   bound-outcome replay/conflict and calibration delivery persistence.
 
 Full middleware-to-database trace, restart, simultaneous check-ins, mixed
