@@ -4,7 +4,8 @@ These tests run the real workflow, phase bodies, grounding, enrichments and
 response serializer. The existing workflow harness replaces the estimator,
 storage, baseline/profile and context edges. Thus these assertions characterize
 the orchestration contract, not database atomicity or estimator mathematics.
-In particular, successful responses below are NOT durable-write receipts.
+Top-level success still does not prove persistence. A separate call-local
+receipt records only a positive acknowledgement from the state writer.
 """
 
 import asyncio
@@ -16,6 +17,10 @@ import pytest
 
 from src.services.update_workflow_service import run_process_update_workflow
 from src.mcp_handlers.updates.context import UpdateContext
+from src.state_persistence import (
+    STATE_PERSISTENCE_UNCONFIRMED_WARNING,
+    StatePersistenceReceipt,
+)
 from tests.helpers import parse_result
 from tests.test_update_workflow_service import (
     _make_real_spine_harness,
@@ -53,6 +58,7 @@ def checkin(monkeypatch):
     async def persist(**kwargs):
         assert not harness.lock_held
         harness.events.append("state_write")
+        return 123
 
     async def outcome(**kwargs):
         assert not harness.lock_held
@@ -114,6 +120,9 @@ async def test_checkin_record_and_outcome_follow_lock_release(checkin):
     assert outcome["session_id"] == checkin.session_key
     # This automatic result is not bound to the returned prediction ID.
     assert outcome.get("prediction_id") is None
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt(123)
+    assert data["state_persistence"] == StatePersistenceReceipt(123).to_dict()
+    assert STATE_PERSISTENCE_UNCONFIRMED_WARNING not in checkin.ctx.warnings
 
 
 @pytest.mark.asyncio
@@ -133,6 +142,7 @@ async def test_estimator_failure_releases_lock_without_post_update_writes(checki
     assert checkin.events == ["lock_acquired", "lock_released"]
     checkin.storage.record_agent_state.assert_not_awaited()
     checkin.db.record_outcome_event.assert_not_awaited()
+    assert checkin.ctx.state_persistence is None
 
 
 @pytest.mark.asyncio
@@ -155,12 +165,86 @@ async def test_state_write_failure_has_asymmetric_outcome_behavior(checkin, fail
     assert data["success"] is True
     assert data["prediction_id"] == "pred-123"
     assert not checkin.lock_held
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+    assert data["state_persistence"] == StatePersistenceReceipt().to_dict()
+    assert checkin.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == 1
     if outcome_expected:
         checkin.db.record_outcome_event.assert_awaited_once()
         assert data["outcome_event"]["outcome_id"] == "outcome-123"
     else:
         checkin.db.record_outcome_event.assert_not_awaited()
         assert "outcome_event" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "acknowledgement",
+    [None, False, True, 0, -1, 1.5, "123", {"state_id": 123}, object()],
+    ids=["absent", "false", "true", "zero", "negative", "float", "text", "mapping", "object"],
+)
+async def test_unknown_writer_acknowledgement_is_unconfirmed(checkin, acknowledgement):
+    checkin.storage.record_agent_state.side_effect = None
+    checkin.storage.record_agent_state.return_value = acknowledgement
+
+    data = parse_result(await run_process_update_workflow(checkin.ctx))
+
+    assert data["success"] is True
+    checkin.storage.record_agent_state.assert_awaited_once()
+    checkin.db.record_outcome_event.assert_awaited_once()
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+    assert data["state_persistence"] == StatePersistenceReceipt().to_dict()
+    assert checkin.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [RuntimeError, ValueError])
+async def test_lost_state_acknowledgement_does_not_claim_no_row(checkin, failure_type):
+    committed_rows = []
+
+    async def persist_then_lose_acknowledgement(**kwargs):
+        committed_rows.append(kwargs)
+        raise failure_type("connection lost after commit")
+
+    checkin.storage.record_agent_state.side_effect = persist_then_lose_acknowledgement
+
+    data = parse_result(await run_process_update_workflow(checkin.ctx))
+
+    assert data["success"] is True
+    assert len(committed_rows) == 1
+    checkin.storage.record_agent_state.assert_awaited_once()
+    checkin.storage.create_agent.assert_not_awaited()
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+    assert data["state_persistence"] == StatePersistenceReceipt().to_dict()
+    assert checkin.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == 1
+    # Keep the legacy strict-ValueError short circuit, even if a row committed.
+    assert checkin.db.record_outcome_event.await_count == int(failure_type is RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_state_write_cancellation_propagates_with_unconfirmed_receipt(checkin):
+    write_entered = asyncio.Event()
+
+    async def pending_write(**kwargs):
+        write_entered.set()
+        await asyncio.Future()
+
+    checkin.storage.record_agent_state.side_effect = pending_write
+    task = asyncio.create_task(run_process_update_workflow(checkin.ctx))
+    try:
+        await asyncio.wait_for(write_entered.wait(), timeout=5)
+        assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+    assert checkin.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == 1
+    checkin.storage.create_agent.assert_not_awaited()
+    checkin.db.record_outcome_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -175,6 +259,9 @@ async def test_auto_outcome_failure_preserves_response_and_prior_state_write(che
     assert data["agent_id"] == checkin.agent_id
     assert data["prediction_id"] == "pred-123"
     assert "outcome_event" not in data
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt(123)
+    assert data["state_persistence"] == StatePersistenceReceipt(123).to_dict()
+    assert STATE_PERSISTENCE_UNCONFIRMED_WARNING not in checkin.ctx.warnings
 
 
 @pytest.mark.asyncio
@@ -197,6 +284,8 @@ async def test_unexpired_pause_refuses_before_lazy_persistence_or_lock(checkin):
     checkin.server.process_update_authenticated_async.assert_not_awaited()
     checkin.storage.record_agent_state.assert_not_awaited()
     checkin.db.record_outcome_event.assert_not_awaited()
+    assert checkin.ctx.state_persistence is None
+    assert "state_persistence" not in data
 
 
 @pytest.mark.asyncio
@@ -232,6 +321,7 @@ async def test_second_checkin_can_finish_while_first_state_write_is_pending(chec
             first_write_entered.set()
             await release_first_write.wait()
         completion_order.append(this_write)
+        return 100 + this_write
 
     checkin.server.lock_manager.acquire_agent_lock_async.side_effect = lock
     checkin.server.process_update_authenticated_async.side_effect = estimate
@@ -242,12 +332,17 @@ async def test_second_checkin_can_finish_while_first_state_write_is_pending(chec
     tasks = [asyncio.create_task(run_process_update_workflow(checkin.ctx))]
     try:
         await asyncio.wait_for(first_write_entered.wait(), timeout=5)
+        assert checkin.ctx.state_persistence == StatePersistenceReceipt()
+        assert second_ctx.state_persistence is None
         tasks.append(asyncio.create_task(run_process_update_workflow(second_ctx)))
         second_result = await asyncio.wait_for(tasks[1], timeout=5)
         assert parse_result(second_result)["success"] is True
+        assert parse_result(second_result)["state_persistence"] == StatePersistenceReceipt(102).to_dict()
         assert estimation_count == 2
         assert completion_order == [2]
         assert not tasks[0].done()
+        assert second_ctx.state_persistence == StatePersistenceReceipt(102)
+        assert checkin.ctx.state_persistence == StatePersistenceReceipt()
     finally:
         release_first_write.set()
         # Bound cleanup too: a failing assertion must not leave a test task
@@ -263,5 +358,51 @@ async def test_second_checkin_can_finish_while_first_state_write_is_pending(chec
             await asyncio.gather(*tasks, return_exceptions=True)
 
     assert parse_result(results[0])["success"] is True
+    assert parse_result(results[0])["state_persistence"] == StatePersistenceReceipt(101).to_dict()
     assert completion_order == [2, 1]
     assert checkin.db.record_outcome_event.await_count == 2
+    assert checkin.ctx.state_persistence == StatePersistenceReceipt(101)
+    assert second_ctx.state_persistence == StatePersistenceReceipt(102)
+    assert STATE_PERSISTENCE_UNCONFIRMED_WARNING not in checkin.ctx.warnings
+    assert STATE_PERSISTENCE_UNCONFIRMED_WARNING not in second_ctx.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lose_acknowledgement", [False, True])
+async def test_receipt_matches_live_postgres_acknowledgement(
+    checkin, live_postgres_backend, lose_acknowledgement,
+):
+    """A real state row may exist with either a received or lost acknowledgement."""
+    from src import agent_storage
+
+    backend = live_postgres_backend
+    await backend.upsert_agent(checkin.agent_id, "test-state-receipt-key")
+    await backend.upsert_identity(checkin.agent_id, "test-state-receipt-key-hash")
+    state_ids = []
+
+    async def persist(**kwargs):
+        state_id = await agent_storage.record_agent_state(**kwargs)
+        state_ids.append(state_id)
+        if lose_acknowledgement:
+            raise RuntimeError("acknowledgement lost after real PostgreSQL write")
+        return state_id
+
+    checkin.storage.record_agent_state.side_effect = persist
+    with patch("src.agent_storage.get_db", return_value=backend):
+        data = parse_result(await run_process_update_workflow(checkin.ctx))
+
+    assert data["success"] is True
+    assert len(state_ids) == 1
+    # A separate acquisition observes the committed row, after the writer exited.
+    async with backend.acquire() as conn:
+        state_id = await conn.fetchval(
+            "SELECT state_id FROM core.agent_state WHERE state_id = $1",
+            state_ids[0],
+        )
+    assert state_id == state_ids[0]
+    expected = StatePersistenceReceipt(None if lose_acknowledgement else state_id)
+    assert checkin.ctx.state_persistence == expected
+    assert data["state_persistence"] == expected.to_dict()
+    assert checkin.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == int(
+        lose_acknowledgement
+    )

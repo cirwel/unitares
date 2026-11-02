@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
+from src.state_persistence import project_state_persistence
 logger = get_logger(__name__)
 
 # Margin enum values worth surfacing in mirror mode. `compute_margin`
@@ -470,6 +471,12 @@ def format_response(
     Returns:
         Filtered response_data dict
     """
+    # Keep only the bounded receipt contract, then restore it after builders
+    # replace the payload. Full/verbose normalize it before their early return.
+    persistence = project_state_persistence(response_data.pop("state_persistence", None))
+    if persistence is not None:
+        response_data["state_persistence"] = persistence
+
     # Check agent preferences
     agent_verbosity_pref = None
     if meta and hasattr(meta, 'preferences') and meta.preferences:
@@ -552,6 +559,9 @@ def format_response(
     # so the key promoted above does not survive them on its own.
     if review_nudge is not None and isinstance(response_data, dict):
         response_data.setdefault("review_suggested", review_nudge)
+
+    if persistence is not None:
+        response_data["state_persistence"] = persistence
 
     return response_data
 
