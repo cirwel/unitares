@@ -105,6 +105,8 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
     "audit": ("src/db/mixins/audit.py", "src/audit_db.py"),
     "outcomes": (
         "src/outcomes.py",
+        "src/monitor_prediction.py",
+        "src/calibration_delivery.py",
         "src/mcp_handlers/observability/outcome_events.py",
         "src/db/mixins/tool_usage.py",
     ),
@@ -135,6 +137,8 @@ TABLE_OWNERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     ),
     "audit.events": (COMPONENTS["audit"], ()),
     "audit.outcome_events": (COMPONENTS["outcomes"], ()),
+    "audit.outcome_prediction_bindings": (COMPONENTS["outcomes"], ()),
+    "audit.outcome_calibration_deliveries": (COMPONENTS["outcomes"], ()),
     "lease_plane.surface_leases": (COMPONENTS["lease_plane"], ()),
 }
 

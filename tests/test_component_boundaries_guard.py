@@ -212,6 +212,29 @@ def test_b4_foreign_sql_fails_and_owner_sql_passes(root: Path):
     assert any("new B4 violation in src/http_routes/overview.py" in p for p in _problems(root))
 
 
+def test_b4_outcome_binding_and_calibration_tables_belong_to_outcomes(root: Path):
+    _write(
+        root,
+        "src/calibration_delivery.py",
+        'Q = "SELECT * FROM audit.outcome_calibration_deliveries"\n',
+    )
+    _write(
+        root,
+        "src/db/mixins/tool_usage.py",
+        'Q = "SELECT * FROM audit.outcome_prediction_bindings"\n',
+    )
+    assert _problems(root) == []
+
+    _write(
+        root,
+        "src/http_routes/overview.py",
+        'Q = "SELECT * FROM audit.outcome_prediction_bindings"\n',
+    )
+    assert any(
+        "new B4 violation in src/http_routes/overview.py" in p for p in _problems(root)
+    )
+
+
 def test_b4_elixir_writer_needs_a_declared_co_owner(root: Path):
     sql = 'Repo.query!("INSERT INTO core.dialectic_sessions (id) VALUES ($1)")\n'
     _write(root, "elixir/lease_plane/lib/unitares_lease_plane/dialectic_saga.ex", sql)
