@@ -6,6 +6,45 @@ The measured speedup is useful evidence for retaining the optimization.
 Full-suite tracer equivalence has not been established by the published CI
 comparison. This note corrects the original #2101 interpretation.
 
+## Python 3.15 transition
+
+The full suite runs the same four file partitions on Python 3.14 and 3.15.
+3.14 remains the server support floor and the only source of combined coverage;
+3.15 exercises the production runtime. The SDK's separate package job still
+checks its 3.12 floor. Native bootstrap acceptance, installed server-wheel
+imports, newest admitted MCP, and macOS platform tests also run on 3.15.
+
+This adds four database-backed jobs per run. Retaining one selector avoids
+creating a second test inventory or one long unsharded job. The workflow
+cancels superseded revisions. Revisit the layout if measured queue pressure
+warrants it; the 75% floor and complete file partition stay unchanged.
+
+The aggregate gate compares exact interpreter/shard job names with the expanded
+matrix. Missing, duplicate, unexpected, skipped, cancelled and failed legs
+cannot count as complete evidence. API lag and failed reads retain a bounded
+retry budget, including partial reruns across attempts.
+
+The existing MCP transport and NumPy/SciPy tests provide runtime evidence;
+`test_eisv_instrument_preservation.py` must pass its registered golden unchanged.
+Docker Quickstart and Glama Bundle build the two promoted images; native
+acceptance exercises fresh installation and interrupted migration recovery
+against disposable PostgreSQL and Redis services. Release promotion selects
+the interpreter from the exact release tag's production marker, so an older
+release is not silently tested with the current development default. Ordinary sharded CI still
+does not close the opt-in AGE singleton gap documented below.
+
+For local compatibility work, use an isolated 3.15 environment and select tests
+that do not request `live_postgres_backend`. The local `governance_test` database
+is shared across worktrees and its fixture truncates tables. Run complete write
+paths in CI's disposable services. Optional embeddings need a separate CPU-only
+install/import check; Quickstart's Compose-config check does not exercise them.
+
+Promoting repository images does not replace a running native environment.
+Native deployment uses its owning deployment command, with a fresh 3.15 venv;
+retain the prior 3.14 environment and image for rollback until the new process
+passes readiness. Do not copy a venv across minor versions or edit a managed
+deployment checkout.
+
 ## Four-shard rebalance, 2026-10-20
 
 The alphabetical boundaries are now `a-d`, `e-k`, `l-r`, and `s-z` with

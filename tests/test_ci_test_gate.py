@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -143,9 +144,10 @@ def test_local_test_entrypoints_keep_realistic_coverage_floor() -> None:
 # in constraints.txt, the Dockerfile, the scripts/ops templates, and the
 # test_shard matrix, and they sabotage copies of each input to prove the
 # checker that enforces it in the smoke job fails closed rather than passing
-# while proving nothing. Since 2026-09-17 the floor IS the production
-# interpreter (3.14), so the matrix is one leg; the sabotage cases below use an
-# interpreter that is neither, so they cannot pass by coinciding with it.
+# while proving nothing. The 3.14 floor keeps the coverage leg as newer
+# interpreters join the compatibility matrix. The sabotage cases below use an
+# interpreter that is neither floor nor production, so they cannot pass by
+# coinciding with one of them.
 
 OTHER_INTERPRETER = "3.13"
 
@@ -242,13 +244,14 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
         }
         for version in matrix["python-version"]
     }
-    assert legs_by_version == {
-        floor: {"tests-a-d", "tests-e-k", "tests-l-r", "tests-s-z-and-agents"}
-    }
-    expected_legs = len(expanded)
-    assert expected_legs == 4
+    assert floor in legs_by_version
+    assert all(shards == set(matrix["shard"]) for shards in legs_by_version.values())
+    assert len(expanded) == len(matrix["python-version"]) * len(matrix["shard"])
+    expected_names = sorted(
+        f"test shard ({leg['python-version']}, {leg['shard']})" for leg in expanded
+    )
     test_job = workflow["jobs"]["test"]
-    assert test_job["env"]["EXPECTED_SHARD_LEGS"] == str(expected_legs)
+    assert sorted(test_job["env"]["EXPECTED_SHARD_LEGS"].splitlines()) == expected_names
     assert test_job["permissions"]["actions"] == "read"
     api_steps = [
         step for step in test_job["steps"]
@@ -263,52 +266,80 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     assert "sleep 5" in api_script
 
 
-_SUCCESSFUL_SHARDS = "".join(
-    f"success\ttest shard (3.14, {shard})\n"
-    for shard in ("tests-a-d", "tests-e-k", "tests-l-r", "tests-s-z-and-agents")
-)
-_MISSING_SHARD = _SUCCESSFUL_SHARDS.rsplit("success", 1)[0]
-_FAILED_SHARD = _SUCCESSFUL_SHARDS.replace("success", "failure", 1)
-# A finished leg the jobs API has not caught up with yet (2026-10-22).
-_LAGGING_SHARD = _SUCCESSFUL_SHARDS.replace("success", "null", 1)
-_LAGGING_AND_FAILED = _LAGGING_SHARD.replace("success", "cancelled", 1)
+_GATE_SHARDS = ("tests-a-d", "tests-e-k", "tests-l-r", "tests-s-z-and-agents")
 
 
+def _gate_responses(versions, case):
+    rows = [
+        f"success\ttest shard ({version}, {shard})\n"
+        for version in versions for shard in _GATE_SHARDS
+    ]
+    # In the dual-interpreter cases, target 3.15 rather than accidentally
+    # proving only that the established coverage leg is required.
+    target = len(rows) - len(_GATE_SHARDS)
+    success = "".join(rows)
+    missing = "".join(rows[:target] + rows[target + 1:])
+    lagging_rows = rows.copy()
+    lagging_rows[target] = lagging_rows[target].replace("success", "null", 1)
+    lagging = "".join(lagging_rows)
+    if case in {"failure", "cancelled", "skipped"}:
+        failed = rows.copy()
+        failed[target] = failed[target].replace("success", case, 1)
+        return [(0, "".join(failed))]
+    if case == "lag-does-not-mask-failure":
+        lagging_rows[-1] = lagging_rows[-1].replace("success", "cancelled", 1)
+        return [(0, "".join(lagging_rows))]
+    if case == "duplicate-masks-missing":
+        return [(0, missing + rows[-1])]
+    if case == "unexpected-interpreter":
+        unexpected = rows.copy()
+        unexpected[target] = unexpected[target].replace(versions[-1], "3.99", 1)
+        return [(0, "".join(unexpected))]
+    if case == "unexpected-shard":
+        unexpected = rows.copy()
+        unexpected[target] = unexpected[target].replace("tests-a-d", "tests-unknown", 1)
+        return [(0, "".join(unexpected))]
+    return {
+        "all-pass": [(0, success)],
+        "api-recovers": [(1, ""), (0, success)],
+        "incomplete-then-api-error-then-recovery": [(0, missing), (1, ""), (0, success)],
+        # A paginated read can emit valid-looking rows before a later page fails.
+        "failed-read-with-output": [(1, success)],
+        "missing-shard": [(0, missing)],
+        "shared-retry-budget": [(0, missing), (1, "")],
+        # More than the old twelve-read lag budget, then the complete truth.
+        "api-lag-then-success": [(0, lagging)] * 20 + [(0, success)],
+        "lag-never-clears": [(0, lagging)],
+        # filter=latest includes previously completed legs beside the one that
+        # was just rerun. Their order and original attempt do not affect success.
+        "partial-rerun-latest": [(0, "".join(reversed(rows)))],
+    }[case]
+
+
+@pytest.mark.parametrize("versions", [("3.14",), ("3.14", "3.15")], ids=["floor", "floor-and-new"])
 @pytest.mark.parametrize(
-    ("responses", "passes", "attempts"),
+    ("case", "passes", "attempts"),
     [
-        pytest.param([(0, _SUCCESSFUL_SHARDS)], True, 1, id="all-pass"),
-        pytest.param([(1, ""), (0, _SUCCESSFUL_SHARDS)], True, 2, id="api-recovers"),
-        pytest.param(
-            [(0, _MISSING_SHARD), (1, ""), (0, _SUCCESSFUL_SHARDS)],
-            True,
-            3,
-            id="incomplete-then-api-error-then-recovery",
-        ),
-        # A paginated command can emit matching rows before a later page fails.
-        # Even four successful rows cannot authorize passing on a failed read.
-        pytest.param(
-            [(1, _SUCCESSFUL_SHARDS)], False, 36, id="failed-read-with-output"
-        ),
-        # A finished failure is final: no retry budget is spent on it.
-        pytest.param([(0, _FAILED_SHARD)], False, 1, id="failed-shard"),
-        pytest.param([(0, _LAGGING_AND_FAILED)], False, 1, id="lag-does-not-mask-failure"),
-        pytest.param([(0, _MISSING_SHARD)], False, 36, id="missing-shard"),
-        pytest.param(
-            [(0, _MISSING_SHARD), (1, "")], False, 36, id="shared-retry-budget"
-        ),
-        # More than the old 12-read budget of API lag, then the truth.
-        pytest.param(
-            [(0, _LAGGING_SHARD)] * 20 + [(0, _SUCCESSFUL_SHARDS)],
-            True,
-            21,
-            id="api-lag-then-success",
-        ),
-        pytest.param([(0, _LAGGING_SHARD)], False, 36, id="lag-never-clears"),
+        ("all-pass", True, 1),
+        ("api-recovers", True, 2),
+        ("incomplete-then-api-error-then-recovery", True, 3),
+        ("failed-read-with-output", False, 36),
+        ("failure", False, 1),
+        ("cancelled", False, 1),
+        ("skipped", False, 1),
+        ("lag-does-not-mask-failure", False, 1),
+        ("missing-shard", False, 36),
+        ("shared-retry-budget", False, 36),
+        ("api-lag-then-success", True, 21),
+        ("lag-never-clears", False, 36),
+        ("duplicate-masks-missing", False, 1),
+        ("unexpected-interpreter", False, 1),
+        ("unexpected-shard", False, 1),
+        ("partial-rerun-latest", True, 1),
     ],
 )
 def test_shard_gate_retries_without_accepting_failed_reads(
-    tmp_path, responses, passes, attempts
+    tmp_path, versions, case, passes, attempts
 ):
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text())
     step = next(
@@ -319,18 +350,21 @@ def test_shard_gate_retries_without_accepting_failed_reads(
     script = step["run"].replace("${{ github.repository }}", "test/repo")
     script = script.replace("${{ github.run_id }}", "123")
     responses_file = tmp_path / "responses.json"
-    responses_file.write_text(json.dumps(responses))
+    responses_file.write_text(json.dumps(_gate_responses(versions, case)))
     attempts_file = tmp_path / "attempts"
     sleeps_file = tmp_path / "sleeps"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
-    gh.write_text("""#!/usr/bin/env python3
-import json
+    gh.write_text(f"#!{sys.executable}\n" + """import json
 import os
 import sys
 from pathlib import Path
 
+# A partial rerun must query each job's latest execution across attempts.
+assert sys.argv[1:3] == ["api", "--paginate"]
+assert sys.argv[3] == "repos/test/repo/actions/runs/123/jobs?filter=latest&per_page=100"
+assert "run_attempt" not in " ".join(sys.argv)
 counter = Path(os.environ["GATE_TEST_ATTEMPTS"])
 attempt = int(counter.read_text()) if counter.exists() else 0
 responses = json.loads(Path(os.environ["GATE_TEST_RESPONSES"]).read_text())
@@ -348,7 +382,11 @@ sys.exit(status)
     env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        "EXPECTED_SHARD_LEGS": "4",
+        # Match the trailing newline retained by YAML's block scalar.
+        "EXPECTED_SHARD_LEGS": "\n".join(
+            f"test shard ({version}, {shard})"
+            for version in versions for shard in _GATE_SHARDS
+        ) + "\n",
         "GATE_TEST_RESPONSES": str(responses_file),
         "GATE_TEST_ATTEMPTS": str(attempts_file),
         "GATE_TEST_SLEEPS": str(sleeps_file),

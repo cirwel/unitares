@@ -61,6 +61,7 @@ jobs:
       # Empty when the tagged Compose file does not pull a database image.
       postgres_digest: ${{ steps.postgres.outputs.digest }}
       native_bootstrap_postgres_image: ${{ steps.native_bootstrap_image.outputs.image }}
+      native_bootstrap_python_version: ${{ steps.native_bootstrap_python.outputs.python-version }}
     steps:
       - name: Validate the requested tag
         id: tag
@@ -121,6 +122,36 @@ jobs:
             exit 1
           fi
           echo "source_sha=$(git rev-list -n 1 "$RELEASE_TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Select the native-bootstrap Python interpreter from the release tag
+        id: native_bootstrap_python
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import re
+          import subprocess
+
+          tag = os.environ["RELEASE_TAG"]
+          constraints = subprocess.check_output(
+              ["git", "show", f"refs/tags/{tag}:constraints.txt"], text=True
+          )
+          markers = [
+              line for line in constraints.splitlines()
+              if re.match(r"^#\s*production-python:", line)
+          ]
+          match = re.fullmatch(
+              r"#\s*production-python:\s*(\d+\.\d+)(?:\s+#.*)?\s*", markers[0]
+          ) if len(markers) == 1 else None
+          if match is None:
+              raise SystemExit(
+                  f"constraints.txt at {tag} must declare exactly one valid "
+                  "'# production-python: X.Y' marker"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"python-version={match.group(1)}\n")
+          PYTHON
 
       - name: Require a published release page
         env:
@@ -347,6 +378,7 @@ jobs:
     uses: ./.github/workflows/native-bootstrap.yml
     with:
       source-ref: ${{ needs.verify.outputs.source_sha }}
+      python-version: ${{ needs.verify.outputs.native_bootstrap_python_version }}
       postgres-image: ${{ needs.verify.outputs.native_bootstrap_postgres_image }}
 
   promote:

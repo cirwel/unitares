@@ -9,11 +9,11 @@
       __UNITARES_ROOT__  → absolute path to the deploy worktree
                            (the runner imports src/ + governance_core/)
       __PYTHON3__        → absolute python3 with asyncpg installed
-                           (e.g. /Library/Frameworks/Python.framework/Versions/3.14/bin/python3)
+                           (e.g. /Library/Frameworks/Python.framework/Versions/3.15/bin/python3)
 
     Example:
       sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
-          -e "s|__PYTHON3__|/Library/Frameworks/Python.framework/Versions/3.14/bin/python3|g" \
+          -e "s|__PYTHON3__|/Library/Frameworks/Python.framework/Versions/3.15/bin/python3|g" \
           scripts/ops/com.unitares.wave3-shadow-divergence-check.plist.template \
           > ~/Library/LaunchAgents/com.unitares.wave3-shadow-divergence-check.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.wave3-shadow-divergence-check.plist

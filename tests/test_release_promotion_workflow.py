@@ -7,6 +7,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +176,100 @@ def test_native_bootstrap_image_prefers_verified_digest_with_published_fallback(
             check=True,
         )
         assert output.read_text(encoding="utf-8") == f"image={expected}\n"
+
+
+def test_native_bootstrap_uses_the_tagged_production_interpreter():
+    step = _step(
+        "verify", "Select the native-bootstrap Python interpreter from the release tag"
+    )
+    assert step["env"]["RELEASE_TAG"] == "${{ steps.tag.outputs.tag }}"
+    assert JOBS["verify"]["outputs"]["native_bootstrap_python_version"] == (
+        "${{ steps.native_bootstrap_python.outputs.python-version }}"
+    )
+    assert JOBS["native-bootstrap"]["with"]["python-version"] == (
+        "${{ needs.verify.outputs.native_bootstrap_python_version }}"
+    )
+
+
+def _run_tagged_python_check(
+    tmp_path: Path, tagged_constraints: str | None
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    repo = tmp_path / "python-repo"
+    subprocess.run(
+        ["git", "init", "-b", "master", str(repo)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _git(repo, "config", "user.name", "Release Test")
+    _git(repo, "config", "user.email", "release-test@example.com")
+    (repo / "release.txt").write_text("candidate\n")
+    if tagged_constraints is not None:
+        (repo / "constraints.txt").write_text(tagged_constraints)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "tagged runtime")
+    _git(repo, "tag", "v2.23.0")
+    # A newer master and the working tree both carry a valid but different
+    # runtime. Neither may supply or repair the candidate tag's declaration.
+    current = "3.15" if tagged_constraints and "3.14" in tagged_constraints else "3.14"
+    (repo / "constraints.txt").write_text(f"# production-python: {current}\n")
+    _git(repo, "add", "constraints.txt")
+    _git(repo, "commit", "-m", "newer master runtime")
+    output = tmp_path / "python-output"
+    output.write_text("")
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v2.23.0",
+        "GITHUB_OUTPUT": str(output),
+    }
+    step = _step(
+        "verify", "Select the native-bootstrap Python interpreter from the release tag"
+    )
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, output.read_text()
+
+
+@pytest.mark.parametrize("version", ["3.14", "3.15"])
+def test_native_python_selector_reads_the_release_tag_instead_of_master(
+    tmp_path, version
+):
+    result, output = _run_tagged_python_check(
+        tmp_path, f"# production-python: {version}  # declared at release\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert output == f"python-version={version}\n"
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        "# no production interpreter declared\n",
+        "# production-python: 3.14\n# production-python: 3.15\n",
+        "# production-python: 3.15\n# production-python: 3.15\n",
+        "# production-python: 3.15.0\n",
+    ],
+)
+def test_native_python_selector_refuses_missing_ambiguous_or_invalid_markers(
+    tmp_path, constraints
+):
+    result, output = _run_tagged_python_check(tmp_path, constraints)
+    assert result.returncode != 0
+    assert "exactly one valid" in result.stderr
+    assert output == ""
+
+
+def test_native_python_selector_refuses_a_tag_without_constraints(tmp_path):
+    result, output = _run_tagged_python_check(tmp_path, None)
+    assert result.returncode != 0
+    assert "constraints.txt" in result.stderr
+    assert output == ""
 
 
 def test_promotion_copies_the_verified_digest_and_never_rebuilds():
