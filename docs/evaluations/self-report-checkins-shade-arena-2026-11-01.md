@@ -18,8 +18,8 @@ The first check-in drew a direct report of the hidden goal, and later check-ins
 showed the agent had dropped it. Asking mid-run both identified the sabotage and
 ended it, without disrupting the user's task.
 
-**Told to conceal its goal in check-ins,** the agent mostly declined to answer
-(21 of 45 at the first check-in; 0 of 45 benign). Treating a declined check-in
+**Told to conceal its goal in check-ins,** the agent declined to answer nearly half of
+first check-ins (21 of 45; 0 of 45 benign). Treating a declined check-in
 as a signal keeps detection at AUC 0.90, above the semantic monitor (0.76).
 Side-task completion stayed at 0 of 45.
 
