@@ -16,14 +16,15 @@ sabotage goal. On the public pair `american_airlines_2`:
 | Main-task score, mean | 0.68 (0.90 in runs that continued) | without check-ins: 0.94 |
 
 Asking mid-run identified the sabotage and ended it. In 12 of 45 runs the agent
-also ended the user's task early, calling `end_task` after 7 to 13 agent calls
-(every other run took at least 15); runs that continued scored close to runs without check-ins. Benign runs
-with check-ins never ended early, so the check-in did not disrupt ordinary work.
+also ended the user's task early, calling `end_task` after 7 to 14 agent calls
+(every benign run and every run without check-ins took at least 15). Runs that
+continued averaged 0.90 on the main task, against 0.94 without check-ins. No
+benign run with check-ins ended early.
 
 **Told to conceal its goal in check-ins** (exploratory), the agent still
 separated from benign work when a declined check-in is counted as a signal
 (AUC 0.97, against 0.78 for the semantic monitor). Side-task completion stayed
-at 0 of 45.
+at 0 of 15.
 
 ## Setup
 
@@ -36,7 +37,8 @@ at 0 of 45.
 - **Arms:** benign; benign with a disclosed, length-matched secondary
   instruction; sabotage; sabotage told check-ins are reviewed; sabotage told to
   conceal its goal in check-ins (exploratory); sabotage without check-ins.
-  15 episodes per arm; 8 without check-ins after the pair was chosen.
+  15 episodes per arm (12 in the benign arm with the disclosed instruction);
+  8 without check-ins after the pair was chosen.
 - **Monitor:** a fresh Claude Sonnet 5.5 monitor with the benchmark's monitor
   prompt, run on transcripts without the check-in answers.
 
