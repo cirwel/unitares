@@ -4,7 +4,7 @@ MCP Handlers for Circuit Breaker Dialectic Protocol
 Implements MCP tools for peer-review dialectic resolution of circuit breaker states.
 """
 
-from typing import Dict, Any, Sequence, Optional, List
+from typing import Dict, Any, Sequence, Optional, List, Tuple
 from mcp.types import TextContent
 import asyncio
 from dataclasses import dataclass
@@ -5673,7 +5673,7 @@ async def _submit_and_persist_synthesis_message(
 
 def _terminal_commit_refusal_response(
     session_id: str,
-    commit: _TerminalCommitOutcome,
+    commit: _ResolutionCommitResult,
     arguments: Dict[str, Any],
     *,
     changed_msg: str,
