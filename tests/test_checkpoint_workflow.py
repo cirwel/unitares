@@ -473,3 +473,30 @@ def test_capture_rejects_blank_key_and_freezes_before_context_mutation():
     ctx.arguments["complexity"] = 0.2
     assert ctx.checkpoint_request == original
     assert json.loads(original)["submitted"]["response_text"] == "original"
+
+
+@pytest.mark.asyncio
+async def test_unlocked_outcome_history_stays_call_local_until_assessment():
+    ledger = _CheckpointLedger()
+    first = _harness(ledger, sensor_data=None)
+    first.monitor.state.decision_history = ["proceed", "proceed", "proceed"]
+    first.monitor._cached_outcome_history = None
+    outcomes = [{"outcome_type": "task_completed", "is_bad": False}]
+    first.db.get_recent_outcomes = AsyncMock(return_value=outcomes)
+
+    accepted = await _run(first)
+    assert accepted["checkpoint"]["status"] == "accepted"
+    assert first.monitor._cached_outcome_history is None
+    assessed_state = first.assess.await_args.kwargs["agent_state"]
+    assert assessed_state["_outcome_history"] == outcomes
+
+    retry = _harness(ledger, sensor_data=None)
+    retry.monitor.state.decision_history = ["proceed", "proceed", "proceed"]
+    retry.monitor._cached_outcome_history = None
+    retry.db.get_recent_outcomes = AsyncMock(
+        return_value=[{"outcome_type": "test_failed", "is_bad": True}]
+    )
+    replay = await _run(retry)
+    assert replay["checkpoint"]["idempotent_replay"] is True
+    assert retry.monitor._cached_outcome_history is None
+    retry.assess.assert_not_awaited()

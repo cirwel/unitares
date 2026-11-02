@@ -85,8 +85,9 @@ graph. Search the owners and their callers again before each migration.
 | Audit: `audit_db.py`, `AuditMixin`, `AuditLogger` | Enrichments, monitor/policy paths and lifecycle operations emit records; resident/Elixir observers and operator scripts read them. Preserve the distinction between local logging and durable DB receipt. |
 
 [`check_component_boundaries.py`](../../scripts/dev/check_component_boundaries.py)
-already ratchets baselined imports/SQL. Its `TABLE_OWNERS` is a finite list:
-prediction-binding and calibration-delivery tables are not currently included.
+already ratchets baselined imports/SQL. Its `TABLE_OWNERS` is a finite list
+(including `audit.outcome_prediction_bindings` and
+`audit.outcome_calibration_deliveries` under `outcomes`).
 B4 scans server and Elixir library source; general analysis/operations scripts
 are not all covered (B1/B2 separately follow resident-launched scripts). A green
 ratchet does not establish complete ownership or portability.
@@ -214,11 +215,12 @@ gates does not mint an accepted checkpoint. An early refusal can still follow
 identity, metadata or cooldown writes; it is not a promise that the entire
 request had no effects. This increment does not provide a complete durable
 ledger of refused, deferred, cancelled or unauthenticated attempts.
-Legacy preparation also computes behavioral inputs and can prime monitor
-outcome-history caches before acceptance. The new boundary precedes monitor
-creation/advancement in the authenticated service and the later check-in
-effects; it does not yet move every assessment-related read or cache mutation
-behind capture.
+Legacy preparation also computes behavioral inputs and passes call-local
+`_outcome_history` in `ctx.agent_state` before acceptance without mutating
+`monitor._cached_outcome_history` on the shared monitor until assessment runs.
+The new boundary precedes monitor creation/advancement in the authenticated
+service and the later check-in effects; it does not yet move every
+assessment-related read behind capture.
 
 An explicit `idempotency_key` (a nonblank string of at most 200 characters) is
 scoped to the resolved identity. Reusing it with the same canonical submitted
