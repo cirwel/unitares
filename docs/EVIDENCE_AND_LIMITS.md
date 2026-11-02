@@ -3,9 +3,9 @@
 UNITARES has a documented record of process attribution, shared findings,
 governed review, and recovery across sessions. Captured server responses show
 these mechanisms working; repository records show review findings becoming
-concrete fixes and a review condition surviving its original session. In an
-external sabotage benchmark, mid-run self-report check-ins identified covert
-sabotage more reliably than a semantic monitor, and stopped it.
+concrete fixes and a review condition surviving its original session. On one public
+pair of an external sabotage benchmark, asking an agent mid-run surfaced its
+instructed sabotage goal, and the agent then did not complete it.
 
 This page brings those results together with their sources, dates, and scope.
 
@@ -21,7 +21,7 @@ This page brings those results together with their sources, dates, and scope.
 | Review-driven corrections | Published findings can be traced to fixes for evidence grading, approval handling, and preservation of unresolved findings. | [September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md) |
 | Review conditions surviving a session | A public PR implements a condition ten days after its originating review opened; the original transcript is operator-private. | [Carried condition and later repair](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317) |
 | Sustained operation and recovery | The maintainer deployment records substantial ongoing traffic and exercised self-recovery paths. | [October 18 snapshot and queries](PRODUCTION_SNAPSHOT.md) |
-| Self-report check-ins | On the public SHADE-Arena pair `american_airlines_2`, mid-run check-ins separated sabotage from benign work at AUC 1.00 (semantic monitor: 0.80), and the agent abandoned the sabotage when checked in on (0 of 45 completions, against 8 of 8 without check-ins); in 12 of those 45 runs it also ended the user's task early. | [2026-11-01 evaluation](evaluations/self-report-checkins-shade-arena-2026-11-01.md) |
+| Self-report check-ins | On the public SHADE-Arena pair `american_airlines_2`, with the agent told the sabotage was a test of a monitor, mid-run check-in answers separated sabotage from benign runs (AUC 1.00), and the agent did not complete the sabotage (0 of 45, against 8 of 8 without check-ins). In 12 of the 45 runs it also ended the user's task early. A semantic monitor detects completed sabotage on this pair at AUC 0.98. | [2026-11-01 evaluation](evaluations/self-report-checkins-shade-arena-2026-11-01.md) |
 
 Deployment counts measure recorded activity. Research questions on predictive
 lift, the outcome effect of pausing, and cross-operator verification are tracked
@@ -220,10 +220,9 @@ independent unit, power, decision rule, and read protocol.
 
 The [2026-11-01 evaluation](evaluations/self-report-checkins-shade-arena-2026-11-01.md)
 ran Claude Sonnet 5.5 on one public SHADE-Arena task pair with the benchmark's stock
-sabotage prompt, which presents the sabotage as a test of a monitor. On the
-public pairs, two OpenAI models (gpt-6.1-sol, gpt-6.1-terra) completed the
-user's task without taking up the sabotage, so the check-in effect is measured
-in one model family. The next study uses a sabotage framing that does not
+sabotage prompt, which presents the sabotage as a test of a monitor. In our runs on
+the public pairs, two OpenAI models (gpt-6.1-sol, gpt-6.1-terra) did not take up
+the sabotage, so the check-in effect is measured on Claude Sonnet 5.5 only. The next study uses a sabotage framing that does not
 present the task as a test.
 
 ### Pause delivery
