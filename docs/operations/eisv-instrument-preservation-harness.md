@@ -9,6 +9,15 @@ the EISV/core boundary proposal, §8.1 and §14
 **Code:** `tests/test_eisv_instrument_preservation.py`, `tests/eisv_preservation_driver.py`,
 `tests/fixtures/eisv_preservation/estimator_trajectories_v0.json`.
 
+The [check-in refactor characterization](checkin-refactor-characterization.md)
+adds workflow-level failure and interleaving tests in
+`tests/test_checkin_characterization.py`. It runs real phase bodies with mocked
+estimator and storage edges: state/outcome calls can follow lock release, and
+a generic state-write exception can still produce a successful response and an
+automatic outcome. These are current behaviors to review explicitly during
+the refactor, not durability guarantees. This increment does not close the
+database, restart, or complete-handler gaps listed below.
+
 The harness pins what parts of the EISV check-in path do today, so that a later
 change claiming to leave the registered instrument untouched can be checked
 against them. It is a regression pin, not a validity claim: passing means "the
