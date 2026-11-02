@@ -33,6 +33,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
+  - unitares/src/outcomes.py
 ---
 
 # Governance Fundamentals

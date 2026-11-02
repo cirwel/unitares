@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 # late. Add to this list when a module is found to need an import-order anchor —
 # the anchor is the bug, not the fix.
 FIRST_IMPORT_SAFE = [
+    "src.outcomes",
     "src.services.runtime_queries",
     "src.mcp_handlers.observability.outcome_events",
 ]

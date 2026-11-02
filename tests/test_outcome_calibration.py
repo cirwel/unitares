@@ -299,11 +299,11 @@ class TestExplicitOutcomeEventCalibration:
         mock_monitor.get_primary_eisv.return_value = (0.51, 0.68, 0.22, -0.11)
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-split'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value='agent-split-123'):
 
-            mock_server.monitors = {'agent-split': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-split': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -347,7 +347,7 @@ class TestExplicitOutcomeEventCalibration:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-test'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
@@ -413,12 +413,12 @@ class TestExplicitOutcomeEventCalibration:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-mon'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {'agent-mon': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-mon': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -467,12 +467,12 @@ class TestExplicitOutcomeEventCalibration:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-no-conf'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {}  # No monitor for this agent
+            mock_runtime.return_value.monitors = {}  # No monitor for this agent
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -499,12 +499,12 @@ class TestExplicitOutcomeEventCalibration:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-rest'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {}  # No monitor — REST caller
+            mock_runtime.return_value.monitors = {}  # No monitor — REST caller
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -550,12 +550,12 @@ class TestExplicitOutcomeEventCalibration:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-tf'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -665,12 +665,12 @@ class TestPredictionIdLookup:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-pid'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {'agent-pid': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-pid': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -724,12 +724,12 @@ class TestPredictionIdLookup:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-unknown-pid'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker):
 
-            mock_server.monitors = {'agent-unknown-pid': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-unknown-pid': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -844,11 +844,11 @@ class TestPredictionBindingEcho:
         mock_monitor._behavioral_state = None
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-binding-reg'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {'agent-binding-reg': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-binding-reg': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -883,17 +883,17 @@ class TestPredictionBindingEcho:
         )
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-after-restart'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             def _load(agent_id):
-                mock_server.monitors[agent_id] = mock_monitor
+                mock_runtime.return_value.monitors[agent_id] = mock_monitor
                 return mock_monitor
 
-            mock_server.get_or_create_monitor.side_effect = _load
+            mock_runtime.return_value.get_or_create_monitor.side_effect = _load
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -903,7 +903,7 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'registry'
-        mock_server.get_or_create_monitor.assert_called_once_with('agent-after-restart')
+        mock_runtime.return_value.get_or_create_monitor.assert_called_once_with('agent-after-restart')
         # The outcome snapshots the restored monitor's state, not a fallback.
         _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail'].get('behavioral_eisv', {}).get('E') == 0.61
@@ -922,11 +922,11 @@ class TestPredictionBindingEcho:
         mock_monitor._behavioral_state = None
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-binding-miss'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {'agent-binding-miss': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-binding-miss': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -959,11 +959,11 @@ class TestPredictionBindingEcho:
         mock_monitor._behavioral_state = None
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-binding-ttl'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {'agent-binding-ttl': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-binding-ttl': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -991,11 +991,11 @@ class TestPredictionBindingEcho:
         mock_monitor._behavioral_state = None
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-binding-arg'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {'agent-binding-arg': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-binding-arg': mock_monitor}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -1016,11 +1016,11 @@ class TestPredictionBindingEcho:
         mock_db.get_latest_confidence_before = AsyncMock(return_value=None)
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-binding-none'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {}  # No monitor
+            mock_runtime.return_value.monitors = {}  # No monitor
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
@@ -1066,11 +1066,11 @@ class TestPredictionBindingConcurrencyCanary:
         from src.mcp_handlers.observability.outcome_events import handle_outcome_event
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-canary'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
 
-            mock_server.monitors = {'agent-canary': mock_monitor}
+            mock_runtime.return_value.monitors = {'agent-canary': mock_monitor}
 
             results = await asyncio.gather(
                 handle_outcome_event({
@@ -1123,11 +1123,11 @@ class TestVerificationSourceRoundTrip:
         mock_db = self._make_mock_db("oe-vs-default")
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-vs-1'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value='sess-vs-1'):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             # Simulate post-Pydantic arguments dict: params_step fills schema defaults
@@ -1161,11 +1161,11 @@ class TestVerificationSourceRoundTrip:
         mock_db = self._make_mock_db("oe-vs-server")
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-vs-2'), \
              patch('src.mcp_handlers.context.get_context_client_session_id', return_value='sess-vs-2'):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({

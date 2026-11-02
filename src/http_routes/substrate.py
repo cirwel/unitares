@@ -401,14 +401,14 @@ async def http_harness_outcome(request):
         args["session_id"] = session_id
 
     try:
-        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        from src.outcomes import record_outcome
         # Operator-gated route: vouched ingestion, so the ceiling comes
         # from the recorded provenance rather than the flat agent cap. Vouched
         # is not unlimited -- the provenance still bounds what the payload can
         # claim, which matters here because this route accepts an arbitrary
         # caller-supplied `detail`.
         args["_trusted_ingestion"] = True
-        payload = await _record_outcome_event_inline(args)
+        payload = await record_outcome(args)
         if "error" in payload:
             return JSONResponse(
                 {"success": False, "error": payload["error"]}, status_code=500

@@ -22,6 +22,7 @@ source_files:
   # `confidence` guidance survived several freshness cycles — the field it was
   # wrong about lives in phases.py, which nobody was checking.
   - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/outcomes.py
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py

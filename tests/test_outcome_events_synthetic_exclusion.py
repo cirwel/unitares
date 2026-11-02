@@ -9,7 +9,7 @@ The detail flag alone is a forensic breadcrumb; this guard makes it functional.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+from src.outcomes import record_outcome
 
 
 def _mock_db():
@@ -34,7 +34,7 @@ async def _run(extra_detail):
     }
     with patch("src.db.get_db", return_value=db), \
          patch("src.calibration.calibration_checker", checker):
-        payload = await _record_outcome_event_inline(args)
+        payload = await record_outcome(args)
     persisted = db.record_outcome_event.await_args.kwargs["detail"]
     return payload, persisted, checker, db
 
