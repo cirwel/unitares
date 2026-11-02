@@ -1321,6 +1321,13 @@ class UNITARESMonitor:
         # easy to misread as "the physical sensor is cut", so record which
         # source actually fed these observations rather than leaving it to be
         # inferred from raw_obs magnitudes.
+        if "_outcome_history" in agent_state:
+            call_outcome_history = agent_state.get("_outcome_history")
+            if call_outcome_history is not None:
+                self._cached_outcome_history = call_outcome_history
+        else:
+            call_outcome_history = self._cached_outcome_history
+
         sensor_eisv = agent_state.get('sensor_eisv')
         if sensor_eisv:
             # Use externally supplied sensor EISV directly when available
@@ -1330,12 +1337,6 @@ class UNITARESMonitor:
             beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
         else:
             # Non-embodied agents: compute from behavioral_sensor
-            if "_outcome_history" in agent_state:
-                call_outcome_history = agent_state.get("_outcome_history")
-                if call_outcome_history is not None:
-                    self._cached_outcome_history = call_outcome_history
-            else:
-                call_outcome_history = self._cached_outcome_history
             beh_sensor = compute_behavioral_sensor_eisv(
                 decision_history=self.state.decision_history,
                 coherence_history=self.state.coherence_history,

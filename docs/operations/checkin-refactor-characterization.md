@@ -217,7 +217,9 @@ request had no effects. This increment does not provide a complete durable
 ledger of refused, deferred, cancelled or unauthenticated attempts.
 Legacy preparation also computes behavioral inputs and passes call-local
 `_outcome_history` in `ctx.agent_state` before acceptance without mutating
-`monitor._cached_outcome_history` on the shared monitor until assessment runs.
+`monitor._cached_outcome_history` on the shared monitor until assessment runs
+(at which point `GovernanceMonitor.process_update` refreshes
+`monitor._cached_outcome_history` for fallback use on later check-ins).
 The new boundary precedes monitor creation/advancement in the authenticated
 service and the later check-in effects; it does not yet move every
 assessment-related read behind capture.

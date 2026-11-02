@@ -500,3 +500,63 @@ async def test_unlocked_outcome_history_stays_call_local_until_assessment():
     assert replay["checkpoint"]["idempotent_replay"] is True
     assert retry.monitor._cached_outcome_history is None
     retry.assess.assert_not_awaited()
+
+
+def test_monitor_process_update_refreshes_and_reads_outcome_history_cache(monkeypatch):
+    from src.behavioral_sensor import compute_behavioral_sensor_eisv as real_sensor
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor(agent_id="agent-outcome-cache-test")
+    assert monitor._cached_outcome_history is None
+
+    # 1. Even when sensor_eisv is supplied (the normal phases.py path after >=3 decisions),
+    # process_update refreshes _cached_outcome_history from call-local _outcome_history.
+    outcomes_1 = [{"outcome_type": "task_completed", "is_bad": False}]
+    monitor.process_update(
+        {
+            "parameters": [0.5, 0.5, 0.2, 0.0],
+            "ethical_drift": [0.0, 0.0, 0.0],
+            "response_text": "first",
+            "complexity": 0.4,
+            "sensor_eisv": {"E": 0.72, "I": 0.81, "S": 0.14, "V": 0.0},
+            "_outcome_history": outcomes_1,
+        }
+    )
+    assert monitor._cached_outcome_history == outcomes_1
+
+    # 2. When sensor_eisv is absent and _outcome_history is omitted (e.g. prep fetch failed),
+    # the fallback behavioral sensor branch reads the refreshed _cached_outcome_history.
+    seen_outcome_histories = []
+
+    def _spy_behavioral_sensor(**kwargs):
+        seen_outcome_histories.append(kwargs.get("outcome_history"))
+        return real_sensor(**kwargs)
+
+    monkeypatch.setattr(
+        "src.governance_monitor.compute_behavioral_sensor_eisv",
+        _spy_behavioral_sensor,
+    )
+    monitor.process_update(
+        {
+            "parameters": [0.5, 0.5, 0.2, 0.0],
+            "ethical_drift": [0.0, 0.0, 0.0],
+            "response_text": "second",
+            "complexity": 0.4,
+        }
+    )
+    assert seen_outcome_histories == [outcomes_1]
+
+    # 3. When sensor_eisv is absent and _outcome_history is provided, the fallback branch
+    # both uses the new call-local list and updates _cached_outcome_history.
+    outcomes_2 = [{"outcome_type": "test_passed", "is_bad": False}]
+    monitor.process_update(
+        {
+            "parameters": [0.5, 0.5, 0.2, 0.0],
+            "ethical_drift": [0.0, 0.0, 0.0],
+            "response_text": "third",
+            "complexity": 0.4,
+            "_outcome_history": outcomes_2,
+        }
+    )
+    assert seen_outcome_histories[-1] == outcomes_2
+    assert monitor._cached_outcome_history == outcomes_2
