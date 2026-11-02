@@ -46,6 +46,7 @@ jobs:
     uses: ./.github/workflows/native-bootstrap.yml
     with:
       postgres-image: ${{ needs.resolve-native-bootstrap-image.outputs.postgres-image }}
+      python-version: '3.15'
 
   smoke:
     runs-on: ubuntu-latest
@@ -58,10 +59,10 @@ jobs:
         # as a 401-eliciting auth header and falls back to a no-TTY prompt.
         persist-credentials: false
 
-    - name: Set up Python 3.14
+    - name: Set up Python 3.15
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: '3.14'
+        python-version: '3.15'
 
     - name: Install dependencies
       # -c constraints.txt pins drift-bitten deps to the production resolution;
@@ -198,21 +199,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One interpreter. 3.14 is the requires-python floor AND the production
-        # interpreter (constraints.txt `# production-python:`, the Dockerfile
-        # base image, the ops LaunchAgent templates); check_ci_python_matrix_sync.py
-        # holds all of those and this list to one value, and checks that the
-        # setup-python step below consumes the matrix.
-        #
-        # From 2026-09-02 to 2026-09-17 the matrix also ran a 3.12 floor leg
-        # (eight coverage shards) beside four 3.14 shards: 18 jobs per run on a
-        # GitHub Free account capped at 20 concurrent jobs across every run. With
-        # several PRs open, shards waited 6-15 minutes for a runner (run
-        # 35190809793: 152 job-minutes queued, 63 running, 23.8 min wall clock).
-        # Nothing deployed ran 3.12, so the server floor moved to 3.14. The SDK
-        # keeps its own >=3.12 floor, exercised by the sdk-package job below.
-        # Re-adding an interpreter is one matrix entry, but price the queue first.
-        python-version: ['3.14']
+        # Exercise both the server support floor and the production interpreter.
+        # Only the floor collects coverage, so promotion preserves the meaning
+        # of the 75% gate. Both versions use the same selector and disposable DBs.
+        # Eight jobs trade runner capacity for bounded full-suite latency; see
+        # docs/operations/ci-coverage-validation.md. Superseded runs are cancelled.
+        python-version: ['3.14', '3.15']
         # Top-level tests are split by filename. Nested tests and agents ride with
         # the smallest letter group. Each job gets its own DB and filesystem,
         # avoiding the shared-state hazards of pytest-xdist.
@@ -344,7 +336,7 @@ jobs:
     # leg cannot turn this required check into a harmless skip. The context
     # name is fixed by branch protection; it gates every leg of the matrix,
     # and the per-leg step below names the leg that failed. The "(3.12)" is
-    # historical: the suite runs on 3.14 only since 2026-09-17. Renaming the
+    # historical; the matrix now runs both 3.14 and 3.15. Renaming the
     # context means updating the protection rule in the same change, and every
     # open PR whose last run reported the old name then needs a fresh run.
     name: test (3.12)
@@ -359,9 +351,17 @@ jobs:
       actions: read   # list this run's jobs (the per-leg check below)
     env:
       COVERAGE_LEG: '3.14'
-      # Expanded matrix legs after exclude/include; tests/test_ci_test_gate.py
-      # recomputes this value from the matrix so the two cannot drift.
-      EXPECTED_SHARD_LEGS: '4'
+      # Exact expanded matrix identities; test_ci_test_gate.py verifies parity.
+      # A row count alone lets a duplicate hide a missing interpreter/shard.
+      EXPECTED_SHARD_LEGS: |
+        test shard (3.14, tests-a-d)
+        test shard (3.14, tests-e-k)
+        test shard (3.14, tests-l-r)
+        test shard (3.14, tests-s-z-and-agents)
+        test shard (3.15, tests-a-d)
+        test shard (3.15, tests-e-k)
+        test shard (3.15, tests-l-r)
+        test shard (3.15, tests-s-z-and-agents)
 
     steps:
     - name: Require native bootstrap and recovery acceptance to pass
@@ -408,6 +408,12 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
+        printf '%s' "$EXPECTED_SHARD_LEGS" | LC_ALL=C sort > expected-shard-legs.txt
+        if [ ! -s expected-shard-legs.txt ]; then
+          echo "no expected shard identities were configured" >&2
+          exit 1
+        fi
+        expected_legs=$(wc -l < expected-shard-legs.txt | tr -d ' ')
         max_attempts=36
         attempt=1
         while true; do
@@ -418,24 +424,36 @@ jobs:
             --jq '.jobs[] | select(.name | startswith("test shard (")) | "\(.conclusion)\t\(.name)"' \
             > shard-legs.tsv; then
             cat shard-legs.tsv
-            legs=$(wc -l < shard-legs.tsv | tr -d ' ')
-            bad=$(grep -vc '^success' shard-legs.tsv || true)
-            pending=$(grep -c '^null' shard-legs.tsv || true)
-            if [ "$legs" = "$EXPECTED_SHARD_LEGS" ] && [ "$bad" = "0" ]; then
-              break
-            fi
-            if [ "$bad" != "$pending" ]; then
-              echo "a shard leg finished without success:" >&2
-              grep -v -e '^success' -e '^null' shard-legs.tsv >&2
+            cut -f2- shard-legs.tsv | LC_ALL=C sort > actual-shard-legs.txt
+            if [ -n "$(uniq -d actual-shard-legs.txt)" ]; then
+              echo "Actions returned duplicate shard identities:" >&2
+              uniq -d actual-shard-legs.txt >&2
               exit 1
             fi
-            failure_reason="Actions job list is not complete yet ($legs/$EXPECTED_SHARD_LEGS, $bad not successful)"
+            LC_ALL=C comm -13 expected-shard-legs.txt actual-shard-legs.txt > unexpected-shard-legs.txt
+            if [ -s unexpected-shard-legs.txt ]; then
+              echo "Actions returned unexpected shard identities:" >&2
+              cat unexpected-shard-legs.txt >&2
+              exit 1
+            fi
+            legs=$(wc -l < shard-legs.tsv | tr -d ' ')
+            bad=$(grep -vc $'^success\t' shard-legs.tsv || true)
+            pending=$(grep -c $'^null\t' shard-legs.tsv || true)
+            if [ "$bad" != "$pending" ]; then
+              echo "a shard leg finished without success:" >&2
+              grep -v -e $'^success\t' -e $'^null\t' shard-legs.tsv >&2
+              exit 1
+            fi
+            if cmp -s expected-shard-legs.txt actual-shard-legs.txt && [ "$pending" = "0" ]; then
+              break
+            fi
+            failure_reason="Actions job list is not complete yet ($legs/$expected_legs, $pending pending)"
           else
             api_status=$?
             failure_reason="Actions job list request failed (exit $api_status)"
           fi
           if [ "$attempt" -ge "$max_attempts" ]; then
-            echo "failed to verify $EXPECTED_SHARD_LEGS successful shard legs after $attempt API reads: $failure_reason" >&2
+            echo "failed to verify $expected_legs expected shard identities after $attempt API reads: $failure_reason" >&2
             exit 1
           fi
           echo "$failure_reason; retrying ($attempt/$max_attempts)" >&2
@@ -555,10 +573,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.14
+    - name: Set up Python 3.15
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: '3.14'
+        python-version: '3.15'
 
     - name: Build and install the server package
       run: |
@@ -702,10 +720,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.14
+    - name: Set up Python 3.15
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: '3.14'
+        python-version: '3.15'
 
     - name: Install newest in-range dependencies (no constraints, on purpose)
       # A fresh unconstrained resolve of requirements-full.txt already picks
@@ -749,10 +767,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.14
+    - name: Set up Python 3.15
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: '3.14'
+        python-version: '3.15'
 
     - name: Install dependencies
       run: |
