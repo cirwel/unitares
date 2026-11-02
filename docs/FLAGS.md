@@ -52,7 +52,7 @@ additions merge cleanly. -->
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
 | `UNITARES_BIND_ALL_INTERFACES` | `False (via env_truthy)` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_BUILD_SHA` | `''` | The git commit of the checkout this process runs from, and how it was known | src/mcp_handlers/dialectic/events.py, src/versioning.py |
-| `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
+| `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Record a validated outcome and return its canonical acknowledgement | src/outcomes.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py, src/calibration_delivery.py |
 | `UNITARES_CALIBRATION_INSTRUMENT_ID` | `None (no reader fallback)` | read by delivery_target() | src/calibration_delivery.py |
 | `UNITARES_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/calibration.py |
