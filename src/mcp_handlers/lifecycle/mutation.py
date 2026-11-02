@@ -569,7 +569,18 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         except Exception as e:
             logger.warning(f"Could not backup agent before deletion: {e}")
 
-    # Delete agent
+    # Persist-first: PostgreSQL is the source of truth, so a failed delete must
+    # leave in-memory state untouched and report the failure, as archive does.
+    try:
+        await agent_storage.delete_agent(agent_id)
+        logger.debug("PostgreSQL: Deleted agent")
+    except Exception as e:
+        logger.warning(f"PostgreSQL delete_agent failed: {e}", exc_info=True)
+        return [error_response(
+            f"Failed to persist deletion for '{agent_id}' — database write failed",
+            error_code="DELETE_PERSIST_FAILED",
+        )]
+
     meta.status = "deleted"
     meta.add_lifecycle_event("deleted", "Manual deletion")
 
@@ -577,14 +588,7 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     if agent_id in mcp_server.monitors:
         del mcp_server.monitors[agent_id]
 
-    # PostgreSQL: Delete agent (single source of truth)
-    try:
-        await agent_storage.delete_agent(agent_id)
-        logger.debug("PostgreSQL: Deleted agent")
-
-        await _invalidate_agent_cache(agent_id)
-    except Exception as e:
-        logger.warning(f"PostgreSQL delete_agent failed: {e}", exc_info=True)
+    await _invalidate_agent_cache(agent_id)
 
     # Audit trail for delete operation
     try:
