@@ -53,7 +53,7 @@ dependencies in one build, not the cause of every count discrepancy.
 PR #2112 merged at 17:53:23 UTC. The later Glama test
 `01a082c2-1edf-71b7-a398-b0df62e990e0` reports success for discovery at commit
 `1a336c469fca99606a58ebc787be5c15f5d0dc9f`. Its actual spec is Debian trixie,
-Python 3.14, `uv sync`, and
+Python 3.15, `uv sync`, and
 `mcp-proxy -- uv run python src/mcp_server_std.py`. The placeholder configuration
 sets `DB_BACKEND`, `DB_POSTGRES_URL` (loopback dummy database), `DB_AGE_GRAPH`, and
 `UNITARES_KNOWLEDGE_BACKEND=age`; it starts no backing services.

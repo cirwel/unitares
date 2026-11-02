@@ -81,7 +81,24 @@ def test_native_workflow_runs_both_scenarios_on_candidate_artifact():
     events = workflow.get("on", workflow.get(True))
     postgres_input = events["workflow_call"]["inputs"]["postgres-image"]
     assert postgres_input == {"type": "string", "required": True}
+    python_input = events["workflow_call"]["inputs"]["python-version"]
+    # Release promotion can omit the new input and retain its existing floor.
+    assert python_input == {"type": "string", "default": "3.14"}
     job = workflow["jobs"]["acceptance"]
+    setup_python = next(
+        step for step in job["steps"] if step.get("name") == "Set up Python"
+    )
+    assert setup_python["with"]["python-version"] == "${{ inputs.python-version }}"
+    evidence = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Preserve acceptance evidence on success or failure"
+    )
+    assert evidence["if"] == "always()"
+    assert (
+        evidence["with"]["name"]
+        == "native-bootstrap-evidence-${{ inputs.python-version }}"
+    )
     assert "postgres" in job["services"]
     assert "redis" in job["services"]
     assert job["services"]["postgres"]["image"] == "${{ inputs.postgres-image }}"

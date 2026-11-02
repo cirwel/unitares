@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
 Validate the interpreter contract: pyproject floor, constraints.txt production
-marker, Dockerfile base image, ops LaunchAgent templates, and the CI matrix.
+marker, container base images, ops LaunchAgent templates, and the CI matrix.
 
-Four facts have to agree, and the CI matrix has to exercise them:
+The runtime declarations must agree, and the CI matrix must exercise them:
 
 * ``requires-python`` in pyproject.toml is the floor the package admits.
 * ``# production-python: X.Y`` in constraints.txt is the operator's declaration
   of the interpreter production runs. It moves only with a deploy, the same
   rule as the pins in that file.
-* the Dockerfile base image (``FROM python:X.Y-…``) is the container
-  deployment's interpreter and is Dependabot-maintained; it must equal the
-  marker, so a base-image bump cannot drift away from the declaration.
+* the Dockerfile and Dockerfile.glama base images (``FROM python:X.Y-…``)
+  declare the container interpreters; both must equal the marker, so a
+  base-image bump cannot drift away from the declaration.
 * any LaunchAgent template under scripts/ops that hardcodes a framework
   interpreter (``/Library/Frameworks/Python.framework/Versions/X.Y/…``) must
   equal the marker as well.
@@ -22,7 +22,7 @@ Four facts have to agree, and the CI matrix has to exercise them:
   on one interpreter while the matrix still reads as covered).
 
 Every comparison is on the minor series (major.minor): the LaunchAgent, the
-Docker digest and setup-python each resolve their own 3.14.x patch, so
+Docker digest and setup-python each resolve their own patch release, so
 patch-level parity is neither checked nor claimed.
 
 Every read failure is a failed check, never a passed one. Until 2026-09-02 only
@@ -48,6 +48,7 @@ PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 CONSTRAINTS_PATH = PROJECT_ROOT / "constraints.txt"
 TEST_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "tests.yml"
 DOCKERFILE_PATH = PROJECT_ROOT / "Dockerfile"
+GLAMA_DOCKERFILE_PATH = PROJECT_ROOT / "Dockerfile.glama"
 OPS_TEMPLATES_DIR = PROJECT_ROOT / "scripts" / "ops"
 
 SHARD_JOB_ID = "test_shard"
@@ -101,17 +102,22 @@ def _read_production_python() -> Version:
     return _parse_version_tuple(matches[0])
 
 
-def _read_dockerfile_python() -> Version:
-    """The base-image interpreter, from every python FROM line (they must agree)."""
-    found = {_parse_version_tuple(m) for m in DOCKER_FROM_RE.findall(DOCKERFILE_PATH.read_text())}
+def _read_python_base_image(path: Path) -> Version:
+    """Read every Python FROM line in one image; all stages must agree."""
+    found = {_parse_version_tuple(m) for m in DOCKER_FROM_RE.findall(path.read_text())}
     if not found:
-        raise ContractError(f"{DOCKERFILE_PATH.name} has no 'FROM python:X.Y…' line")
+        raise ContractError(f"{path.name} has no 'FROM python:X.Y…' line")
     if len(found) > 1:
         raise ContractError(
-            f"{DOCKERFILE_PATH.name} names more than one python base image: "
+            f"{path.name} names more than one python base image: "
             f"{sorted(_render(v) for v in found)}"
         )
     return found.pop()
+
+
+def _read_dockerfile_python() -> Version:
+    """Read the standard image, retaining the existing checker interface."""
+    return _read_python_base_image(DOCKERFILE_PATH)
 
 
 def _read_template_pythons() -> dict[str, Version]:
@@ -174,7 +180,10 @@ def main() -> int:
     try:
         required_min = _read_requires_python()
         production = _read_production_python()
-        dockerfile = _read_dockerfile_python()
+        dockerfiles = {
+            DOCKERFILE_PATH.name: _read_dockerfile_python(),
+            GLAMA_DOCKERFILE_PATH.name: _read_python_base_image(GLAMA_DOCKERFILE_PATH),
+        }
         templates = _read_template_pythons()
         ci_versions = _read_ci_matrix_versions()
     except (ContractError, ImportError, KeyError, OSError, ValueError) as exc:
@@ -205,13 +214,14 @@ def main() -> int:
         )
         return 1
 
-    if dockerfile != production:
-        print(
-            f"❌ Dockerfile base image is python:{_render(dockerfile)} but constraints.txt "
-            f"declares production-python {_render(production)}; move them together, "
-            "with the deploy"
-        )
-        return 1
+    for name, version in dockerfiles.items():
+        if version != production:
+            print(
+                f"❌ {name} base image is python:{_render(version)} but constraints.txt "
+                f"declares production-python {_render(production)}; move them together, "
+                "with the deploy"
+            )
+            return 1
 
     mismatched = {name: v for name, v in templates.items() if v != production}
     if mismatched:
@@ -233,7 +243,7 @@ def main() -> int:
     print(
         "✅ Interpreter contract holds: "
         f"floor {_render(required_min)}, production {_render(production)} "
-        f"(constraints, Dockerfile, {len(templates)} ops template(s)), "
+        f"(constraints, {len(dockerfiles)} Dockerfiles, {len(templates)} ops template(s)), "
         f"CI matrix [{rendered}] consumed by setup-python"
     )
     return 0
