@@ -11,6 +11,7 @@ from .tool_usage import ToolUsageMixin
 from .knowledge_graph import KnowledgeGraphMixin
 from .baseline import BaselineMixin
 from .thread import ThreadMixin
+from .checkpoint import CheckpointMixin
 
 __all__ = [
     "IdentityMixin",
@@ -24,4 +25,5 @@ __all__ = [
     "KnowledgeGraphMixin",
     "BaselineMixin",
     "ThreadMixin",
+    "CheckpointMixin",
 ]

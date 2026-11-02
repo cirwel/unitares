@@ -18,6 +18,7 @@ source_files:
   - unitares/src/behavioral_state.py
   - unitares/src/behavioral_sensor.py
   - unitares/src/mcp_handlers/updates/context.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
   - unitares/docs/EISV_COMPUTATION.md
   - unitares/src/behavioral_assessment.py
   - unitares/src/cold_start_risk_confirmation.py
@@ -119,12 +120,14 @@ measurement distinction explicit (the compact formatter keeps `basin`,
 
 ## Verdicts
 
-Each check-in records three different things: `policy_evaluation.action` is the
+When a check-in returns an assessment, it distinguishes three things: `policy_evaluation.action` is the
 raw inferred recommendation; top-level `action` is the effective operational
 directive; and `enforcement.applied` says whether lifecycle authority actually
 crossed the boundary. The separate `verdict` field is a glossary wrapper
 (`{value, meaning, next_action, …}`), not any of those. Never read
-`verdict.value` as the action.
+`verdict.value` as the action. A receipt-only retry or failed assessment supplies
+no fresh operational decision; use `governance-lifecycle` for checkpoint
+acceptance and retry guidance.
 
 | Action | Sub-action | Meaning | What to do |
 |--------|-----------|---------|------------|

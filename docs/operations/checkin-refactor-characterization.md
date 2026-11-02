@@ -7,6 +7,11 @@ and the [component boundary proposal](../proposals/active/federation-component-b
 It changes no runtime behavior or authorization and does not certify the full
 checkpoint extraction gate.
 
+The execution trace below is the legacy baseline at that revision. The later
+[neutral acceptance increment](#neutral-checkpoint-acceptance-2026-11-02-increment)
+adds a separate commit boundary before assessment; its guarantees and remaining
+limits are stated separately rather than attributed to the legacy state insert.
+
 ## What the existing boundary actually guarantees
 
 `run_process_update_workflow` holds an agent lock around the authenticated
@@ -190,3 +195,150 @@ atomic sequence/checkpoint/outbox allocation, ambiguous-commit replay, and the
 relationship to gates that still run inside the estimator service. The partial
 preservation and replay gates above remain incomplete; this receipt does not
 fulfil them or authorize asynchronous EISV.
+
+## Neutral checkpoint acceptance (2026-11-02 increment)
+
+The operator authorized this bounded next increment after the state-persistence
+receipt. [Boundary proposal Section 13.1](../proposals/active/eisv-core-boundary-v0.md#131-bounded-neutral-acceptance-increment-2026-11-02)
+records its scope and the historical governed-review disposition. The unit of
+acceptance is now a neutral immutable checkpoint. The existing
+`state_persistence` field continues to acknowledge only the later assessment
+row, so the two receipts can truthfully report different outcomes.
+
+### Admission and replay
+
+Transport validation and identity binding, the existing lifecycle guards, and
+the authenticated service's ownership, deployment-posture, archive and
+loop-cooldown checks precede checkpoint acceptance. Refusal at one of these
+gates does not mint an accepted checkpoint. An early refusal can still follow
+identity, metadata or cooldown writes; it is not a promise that the entire
+request had no effects. This increment does not provide a complete durable
+ledger of refused, deferred, cancelled or unauthenticated attempts.
+Legacy preparation also computes behavioral inputs and can prime monitor
+outcome-history caches before acceptance. The new boundary precedes monitor
+creation/advancement in the authenticated service and the later check-in
+effects; it does not yet move every assessment-related read or cache mutation
+behind capture.
+
+An explicit `idempotency_key` (a nonblank string of at most 200 characters) is
+scoped to the resolved identity. Reusing it with the same canonical submitted
+request returns the original acceptance; reusing it
+with different semantic input is a conflict. The request digest is captured
+before estimator transformations so a later complexity cap, confidence damping
+or changed estimator state cannot redefine what the caller originally submitted.
+The versioned input allowlist in
+[`checkpoint_service.py`](../../src/services/checkpoint_service.py) includes
+submitted report, assessment/evidence inputs and descriptive provenance. It
+excludes response presentation and identity proofs; embedded credentials are
+scrubbed before hashing. This fingerprint is for request equivalence, not a
+complete assessor replay snapshot. Omitting the key allocates a new occurrence
+on every call and reports `acceptance_retry_idempotent: false`.
+Current admission requirements such as `require_strong_identity` remain gates,
+rather than fingerprint fields. The response-only `include_memory_suggestions`
+option is also excluded; submitted `trajectory_signature` and the versioned
+allowlist of descriptive provenance are included.
+
+Replay still passes the current write-admission gates. A pause, archive or
+cooldown that arose after the original acceptance can therefore refuse a retry
+until the identity is writable again. The stored receipt is evidence of a past
+acceptance, not permission to operate under a current hold. There is no separate
+read-only receipt-recovery tool in this increment. A replay that passes these
+gates returns the accepted checkpoint without rerunning its assessment or later
+workflow state/outcome/enrichment effects. Transport auditing and the handler's
+presence heartbeat can still run on a retry; this is acceptance idempotency,
+not a claim that the entire request is free of repeated effects.
+
+### Atomic record and receipt
+
+The checkpoint owner uses a PostgreSQL transaction to allocate the identity's
+next sequence and predecessor, insert the immutable checkpoint, advance its
+stream head, and insert the immutable `checkpoint.recorded.v1` event into
+`core.checkpoint_outbox`. Commit makes these records visible together; rollback
+leaves none of them accepted. Sequence establishes checkpoint order independently
+of wall-clock order. It does not establish the order in which all legacy
+post-update effects finish. New appends additionally lock and recheck the
+durable identity's active lifecycle state through the identity owner in that
+same transaction. The storage implementation is
+[`CheckpointMixin`](../../src/db/mixins/checkpoint.py); its schema is
+[`081_neutral_checkpoints.sql`](../../db/postgres/migrations/081_neutral_checkpoints.sql).
+Database triggers reject updates to checkpoint and outbox rows. No application
+deletion API or automatic pruning is introduced; deliberate administrative
+deletion remains possible, so these records are not deletion-resistant storage.
+
+`core.checkpoint_streams` holds a per-identity random digest salt. The stored
+retry-key and canonical-request digests use domain-separated HMAC-SHA256; raw
+retry keys, complete request text, API keys and session proofs are not stored
+in the checkpoint. Its report field uses the existing bounded,
+credential-scrubbed excerpt policy. Neutral provenance records the epistemic
+class, identity tier, proof origin, transport and producer version. EISV metrics,
+policy output, computed sensors and assessor-input snapshots are not part of
+the neutral event.
+
+The top-level `checkpoint` object carries this acceptance receipt:
+
+| Acceptance receipt field | Meaning |
+|---|---|
+| `schema: checkpoint.acceptance.v1`, `status: accepted` | The neutral checkpoint transaction was acknowledged. |
+| `checkpoint_id`, `event_id` | The immutable occurrence and its neutral outbox event; the event uses the checkpoint ID. |
+| `identity_id`, `seq`, `prev_checkpoint_id`, `recorded_at` | The resolved identity, durable per-identity position, predecessor and UTC record time. |
+| `accepted_attempt_id` | The attempt that first committed this checkpoint, retained on replay. |
+| `idempotent_replay` | This call recovered an already accepted checkpoint. |
+| `acceptance_retry_idempotent` | An explicit key can recover this acceptance without rerunning effects; it does not promise successful or exactly-once assessment. |
+
+A lost acknowledgement can follow a successful commit. Such an exception is
+not proof that no checkpoint exists: retrying with the same explicit key can
+recover the original acceptance once current admission permits. The client must
+retain that key. A fresh key represents a new occurrence and cannot deduplicate
+the earlier request. An unconfirmed response has `status: unconfirmed`, the
+current `attempt_id`, and `acceptance_retry_idempotent` indicating whether the
+client supplied an explicit key; it does not invent a checkpoint ID or assert
+rollback.
+
+### Synchronous assessment and incomplete delivery
+
+The first acknowledged new acceptance continues through EISV synchronously.
+Before invoking it, a separate assessor-owned `assessment.checkpoint_deliveries` record claims
+the delivery from `pending` to `started`. Assessment and the existing state,
+outcome, prediction, calibration and audit effects do not share the checkpoint
+transaction. The neutral event therefore survives estimator failure, a failed
+legacy state insert, cancellation, or response-serialization failure after
+acceptance.
+
+`completed` means the workflow reached response construction after its effects
+and enrichments, not that every legacy write committed atomically or response
+serialization succeeded. `failed` records a delivery failure; a remaining
+`started` record can mean work is still running, a process stopped, or an acknowledgement
+was lost after effects. Neither state is automatically reclaimed or rerun by a
+retry. Cancellation propagates and leaves an already started claim ambiguous.
+A delivery whose claim or completion acknowledgement is unavailable is reported
+as `unconfirmed`. The receipt's nested `assessment` object reports this execution
+state separately from checkpoint acceptance; a retry reports `not_repeated`
+without inventing a current verdict, metrics or prediction.
+
+Even an accepted checkpoint that never started assessment is receipt-only on
+retry. For example, losing the checkpoint commit acknowledgement can prevent
+the original request from claiming delivery at all. Recovering its receipt does
+not restart delivery; that needs a future explicit recovery contract. There is
+no asynchronous consumer, automatic recovery loop, or exact EISV replay promise
+in this increment.
+
+The outbox is a durable neutral event record, not proof of successful delivery
+to an assessor. Existing outcome-binding and calibration-delivery transactions
+retain their separate ownership and retry contracts. Predictions remain owned
+by the monitor; accepted checkpoints with failed assessment need not have a
+prediction or assessment row. The rest of Stage 3, including neutral prediction
+ownership, outcome rebinding, legacy-reader migration and export, remains work
+to do.
+
+### Evidence and remaining limits
+
+The required verification for this increment is real PostgreSQL commit and
+rollback behavior, identical and conflicting retries, simultaneous requests,
+restart and lost-acknowledgement recovery, plus workflow checks that admission
+refusal creates no new checkpoint and estimator failure leaves an accepted record.
+Response-mode and serializer checks must preserve the acceptance receipt even
+when no assessment receipt exists. This is narrower than the full preservation
+and replay inventory above. It does not certify production latency, mixed-version
+compatibility, external readers, complete estimator inputs, or exactly-once
+assessment. The fixed registered-read cutoff and archived inputs remain
+unchanged.

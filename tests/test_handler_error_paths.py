@@ -16,6 +16,8 @@ from pathlib import Path
 import json
 import pytest
 
+from tests.helpers.checkpoint_backend import durable_checkpoint_backend  # noqa: F401
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -123,6 +125,7 @@ async def test_invalid_parameter_values():
 
 @pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("durable_checkpoint_backend")
 async def test_authentication_failures():
     """Test session binding authentication (identity_v2)
 
@@ -142,6 +145,8 @@ async def test_authentication_failures():
     assert result is not None, "Should return result"
     response_data = json.loads(result[0].text)
     assert response_data.get("success") == True, "Should succeed with auto-binding"
+    assert response_data["checkpoint"]["status"] == "accepted"
+    assert response_data["checkpoint"]["assessment"]["status"] == "completed"
     bound_agent = response_data.get("agent_id") or response_data.get("agent_signature", {}).get("uuid")
     assert bound_agent is not None, "Should have bound agent"
     print(f"✅ Session bound to agent: {bound_agent[:8]}...")
@@ -292,6 +297,7 @@ async def test_validation_errors():
 
 @pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("durable_checkpoint_backend")
 async def test_error_response_format():
     """Test that error responses have consistent format
 
@@ -311,6 +317,7 @@ async def test_error_response_format():
     })
     assert result is not None, "Should bind via write tool"
     assert json.loads(result[0].text).get("success") == True, "Bind should succeed"
+    assert json.loads(result[0].text)["checkpoint"]["status"] == "accepted"
 
     # Bound writer requesting a DIFFERENT agent_id → structured session mismatch.
     result = await dispatch_tool("process_agent_update", {

@@ -55,7 +55,10 @@ the check-in path.
 
 ## Core Model
 
-Each check-in evaluates agent state with the **EISV** model:
+Newly accepted check-ins normally evaluate agent state with the **EISV** model;
+neutral acceptance survives assessment failure, and replaying a checkpoint
+receipt does not evaluate state again. See `governance-lifecycle` for acceptance
+and retry semantics.
 
 - `E`: effective energy / execution drive
 - `I`: information integrity / calibration
