@@ -107,3 +107,24 @@ def test_sql_is_read_only():
     assert sql.strip().startswith("SELECT")
     for verb in ("INSERT", "UPDATE", "DELETE", "ALTER", "CREATE"):
         assert verb not in sql
+
+
+def test_read_window_starts_at_the_era_not_a_rolling_window(monkeypatch):
+    era_start = datetime(2026, 10, 22, 14, 28, tzinfo=timezone.utc)
+    monkeypatch.setattr(lf.eisv_eras, "current_era_window_start", lambda: (era_start, None))
+    monkeypatch.setattr(lf.eisv_eras, "current_era_id", lambda: "RR1")
+    assert lf.read_window() == (era_start, None, "RR1")
+    assert "--days" not in SCRIPT.read_text()
+
+
+def test_reference_stays_fixed_as_rows_accumulate():
+    base = [row(i, E=0.70 + (0.01 if i % 2 else -0.01)) for i in range(30)]
+    shift = [row(30 + i, E=0.80) for i in range(200)]
+    f = lf.frame_for_agent(base + shift, instrument="behavioral")
+    assert f["axes"]["E"]["reference_median"] == pytest.approx(0.70)
+    assert f["axes"]["E"]["raw_difference"] == pytest.approx(0.10, abs=1e-6)
+
+
+def test_stamp_only_era_is_passed_to_both_window_checks():
+    text = SCRIPT.read_text()
+    assert text.count("stamp_filtered=stamped") == 2

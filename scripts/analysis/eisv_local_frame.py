@@ -37,7 +37,7 @@ import json
 import statistics
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
@@ -141,6 +141,18 @@ def frames(rows: Iterable[Mapping[str, Any]], *, instrument: str, **kw: Any) -> 
             for aid, rs in by_agent.items()}
 
 
+def read_window() -> tuple[datetime, Optional[str], str]:
+    """Where the read starts: the start of the current era, never a rolling window.
+
+    The reference is the first settled rows of an agent's instrument id, so the
+    read must reach back to where that id began. A rolling window would let old
+    reference rows expire and turn a lasting shift into the new baseline.
+    Returns (start, stamp era to filter on or None, current era id).
+    """
+    start, stamp_era = eisv_eras.current_era_window_start()
+    return start, stamp_era, eisv_eras.current_era_id()
+
+
 ROWS_SQL = """
     SELECT identity_id, recorded_at, state_json,
            (state_json->>'E')::float AS e, integrity, entropy, volatility
@@ -157,7 +169,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--db-url", default="postgresql://postgres:postgres@localhost:5432/governance")
     ap.add_argument("--instrument", required=True, choices=INSTRUMENTS)
-    ap.add_argument("--days", type=int, default=14, help="window, clipped to the current era")
     ap.add_argument("--reference", type=int, default=DEFAULT_REFERENCE)
     ap.add_argument("--recent", type=int, default=DEFAULT_RECENT)
     ap.add_argument("--floor", type=float, default=DEFAULT_FLOOR)
@@ -169,10 +180,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     from scripts.analysis import eisv_era_sql
 
     end = datetime.now(timezone.utc)
-    era_start, stamp_era = eisv_eras.current_era_window_start()
-    era_id = eisv_eras.current_era_id()
-    start = max(end - timedelta(days=args.days), era_start)
-    if eisv_eras.check_window(start, end) is None:
+    start, stamp_era, era_id = read_window()
+    stamped = stamp_era is not None
+    if eisv_eras.check_window(start, end, stamp_filtered=stamped) is None:
         return 2
     conn = psycopg2.connect(args.db_url)
     conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
@@ -182,7 +192,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         # The frame keeps each agent's latest instrument id only, so a window
         # holding several ids is reported, not refused.
         provenance = eisv_eras.check_window(
-            start, end, id_counts=id_counts, allow_cross="frames use each agent's latest instrument id only")
+            start, end, id_counts=id_counts, stamp_filtered=stamped,
+            allow_cross="frames use each agent's latest instrument id only")
         cur.execute(ROWS_SQL, (start, end, args.instrument))
         rows = [{"identity_id": iid, "recorded_at": ts, "state_json": sj if isinstance(sj, dict) else json.loads(sj),
                  "E": e, "I": i, "S": s, "V": v} for iid, ts, sj, e, i, s, v in cur.fetchall()]
