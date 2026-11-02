@@ -9,6 +9,7 @@ last_verified: "2026-10-29"
 freshness_days: 28
 source_files:
   - unitares/src/agent_loop_detection.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
   - unitares/src/dialectic_protocol.py
   - unitares/src/dialectic_db.py
   - unitares/src/dialectic_reviewed_work.py
@@ -454,8 +455,8 @@ finalized with.
   `check_working_state(client_session_id=...)` (`get_governance_metrics()`
   canonically) for the current values and inspect
   `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
-  `policy_evaluation` and `enforcement` blocks come back on your last
-  `sync_state()` check-in, not on the metrics call. EISV is proprioceptive
+  `policy_evaluation` and `enforcement` blocks come back on an assessment-bearing
+  `sync_state()` check-in, not a receipt-only retry or the metrics call. EISV is proprioceptive
   state estimation, not outcome truth; the ODE lens and legacy `C(V)` do not
   independently validate a claim.
 

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.3.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.4.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -54,7 +54,9 @@ capabilities and their normalized success/failure envelope. It guarantees the
 small stable seam a separate userland needs: successful lifecycle calls carry
 `success`, `tool`, and `next_action`; optional state, risk, recovery, memory,
 and raw-governance fields may be omitted when they have nothing to say. It does
-not freeze every diagnostic field returned by Core.
+not freeze every diagnostic field returned by Core. A checkpoint-only
+acknowledgement keeps `next_action` as neutral evidence-handling guidance; it
+does not supply a new assessment or operational policy decision.
 
 The contract deliberately does **not** imply that a
 client host installs lifecycle hooks, forwards edit or stop events, schedules
@@ -1308,3 +1310,40 @@ Only the `dialectic` input schema digest and aggregate surface digest change.
 No tool, action, identity rule, authority check or default output is removed.
 Clients may opt into compact progress reads after negotiating 2.3.0 and use
 the supplied full-read arguments before reviewing the transcript.
+
+## 2.4.0 (2026-11-02)
+
+Accept neutral durable check-in checkpoints and optional identity-scoped idempotency keys independently of assessment persistence.
+
+- **What changed:** `process_agent_update` and `sync_state` advertise an optional
+  `idempotency_key`, a nonblank string of at most 200 characters. After the
+  existing admission checks, an accepted check-in returns a
+  `checkpoint.acceptance.v1` receipt with its durable checkpoint/event identity,
+  per-identity sequence, predecessor, recorded time, accepted attempt and replay
+  status. Checkpoint capture precedes monitor advancement in synchronous assessment, so its receipt survives
+  a later assessment failure and is independent of `state_persistence`, which
+  acknowledges the assessment-state write. An acceptance whose database
+  acknowledgement was lost reports `status="unconfirmed"` without claiming a
+  durable checkpoint identity.
+- **Compatibility:** the catalog remains the same 51 capabilities; no tool or
+  action is added, removed or renamed. Existing requests need no new parameter.
+  Without a key, each admitted call creates a distinct checkpoint and a retry
+  may create another. With a key, identical submitted content returns the prior
+  receipt without repeating assessment; changed material content is refused.
+  Capture and assessment receipts add response fields, and receipt-only
+  responses carry no new action, metrics or prediction. Friendly lifecycle
+  successes retain `success`, `tool` and `next_action`; for a receipt-only reply,
+  `next_action` is neutral acknowledgement guidance. Identity, authorization,
+  lifecycle and policy admission gates retain their existing authority.
+- **Schema digests:** only `process_agent_update` and `sync_state` change their
+  `input_schema_sha256`, together with `surface_sha256`, because they gain the
+  optional key. The capability catalog and document schema family are unchanged.
+- **Client action:** no mandatory request change. Clients opting into retry-safe
+  acceptance should supply a stable key for one logical report, retain the
+  returned receipt, and retry the same submitted content with that same key.
+  They may change response mode on a retry. A replay reads the prior receipt;
+  it never supplies current operational permission or repeats assessment, even
+  when the original assessment failed or its completion is uncertain. Clients
+  consuming receipts should distinguish capture, assessment execution and the
+  independent assessment-state acknowledgement. Hash-pinning clients should
+  inspect the two updated schemas and refresh their pins.

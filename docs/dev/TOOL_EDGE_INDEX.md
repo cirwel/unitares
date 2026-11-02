@@ -71,7 +71,7 @@ note for why the raw rendering is not.
 | `search_shared_memory` | `knowledge` | 25 | — | `sha256:dc157ccf4a395b292fe2a22c53edc8b1e13d0aca350023c2b71d1f9309a09e68` |
 | `start_session` | `onboard` | 18 | — | `sha256:7c78a2eea582f11e05d2b7aa773a7de632f616302c1955feca97758de199d32b` |
 | `store_finding` | `knowledge` | 14 | — | `sha256:bf3867980e14da5530de34e4a7d85aa9ad2338bd5be2c87aeda3ffea34d20607` |
-| `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
+| `sync_state` | `process_agent_update` | 24 | — | `sha256:4698f70c6cf5d61b7287dbb20ad5718efc35428c56aceccc74dbb3de0c439498` |
 | `update_finding` | `knowledge` | 15 | — | `sha256:13943cd11bc42ecca28ab3ff275901481c8190c966e5928103d50302e62bdd26` |
 
 ## Deterministic findings

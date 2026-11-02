@@ -12,8 +12,9 @@ import re
 import json
 import time
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from uuid import uuid4
@@ -390,6 +391,14 @@ def process_update_authenticated(
 update_agent_auth = process_update_authenticated
 
 
+@dataclass(frozen=True)
+class _UpdateAdmission:
+    """Internal handoff from admission to assessment, never a wire credential."""
+
+    agent_id: str
+    posture: str
+
+
 async def process_update_authenticated_async(
     agent_id: str,
     api_key: str,
@@ -397,7 +406,9 @@ async def process_update_authenticated_async(
     auto_save: bool = True,
     confidence: Optional[float] = None,
     task_type: str = "mixed",
-    session_bound: bool = False
+    session_bound: bool = False,
+    *,
+    before_assessment: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> dict:
     """
     Process governance update with authentication enforcement (async version).
@@ -408,7 +419,36 @@ async def process_update_authenticated_async(
         PermissionError: If authentication fails
         ValueError: If agent_id is invalid
     """
-    from src.agent_lifecycle import get_or_create_monitor
+    admission = await validate_update_admission_async(
+        agent_id, api_key, session_bound=session_bound
+    )
+    # This Python-only seam cannot skip admission. The workflow uses it to
+    # commit a neutral checkpoint before any monitor is created or advanced;
+    # replay/refusal exceptions stop here without repeating assessment.
+    if before_assessment is not None:
+        await before_assessment()
+    return await execute_admitted_update_async(
+        admission,
+        agent_state,
+        auto_save=auto_save,
+        confidence=confidence,
+        task_type=task_type,
+    )
+
+
+async def validate_update_admission_async(
+    agent_id: str,
+    api_key: str,
+    session_bound: bool = False,
+) -> _UpdateAdmission:
+    """Run the existing authenticated gates without creating a monitor.
+
+    The caller retains its existing agent-lock responsibility across admission
+    and execution. This is not a pure preflight: a detected loop still records
+    its cooldown and incident before refusing. Lifecycle checks here retain
+    their legacy cache semantics; durable checkpoint acceptance owns its
+    additional transaction-local lifecycle gate.
+    """
 
     loop = asyncio.get_running_loop()
     _t0 = time.perf_counter()
@@ -515,6 +555,30 @@ async def process_update_authenticated_async(
             f"Cooldown until: {cooldown_time_str} ({cooldown_seconds}s remaining)"
             + recovery_guidance
         )
+
+    return _UpdateAdmission(agent_id=agent_id, posture=posture)
+
+
+async def execute_admitted_update_async(
+    admission: _UpdateAdmission,
+    agent_state: dict,
+    auto_save: bool = True,
+    confidence: Optional[float] = None,
+    task_type: str = "mixed",
+) -> dict:
+    """Execute assessment and existing effects after internal admission.
+
+    Admission is an in-process typed handoff, not JSON supplied by a caller.
+    The captured posture is used for the entire update, including after the
+    optional checkpoint commit await.
+    """
+    if not isinstance(admission, _UpdateAdmission):
+        raise TypeError("assessment requires an internal update admission")
+    from src.agent_lifecycle import get_or_create_monitor
+
+    agent_id = admission.agent_id
+    posture = admission.posture
+    loop = asyncio.get_running_loop()
 
     # Get or create monitor
     _t_setup = time.perf_counter()

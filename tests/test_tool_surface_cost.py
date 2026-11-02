@@ -150,7 +150,12 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # 170 B over master. It is how the record learns which vendor session an
 # identity lives in, which a hub needs to offer resume; no other path carries
 # the host's own session id to the server.
-PROGRESSIVE_SURFACE_CEILING_BYTES = 41_800
+# Raised 2026-11-02 to 42,000 B: sync_state's optional idempotency_key
+# measures 41,989 B, 198 B over the 41,791 B base. Most of the addition is
+# validation schema; the advertised description is already only 37 bytes.
+# The key lets a retry recover its original durable checkpoint without
+# repeating assessment. Omitting it preserves a new occurrence per call.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 42_000
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.
 PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000

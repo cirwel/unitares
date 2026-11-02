@@ -1,0 +1,1 @@
+- Interface contract 2.4.0: Accept neutral durable check-in checkpoints and optional identity-scoped idempotency keys independently of assessment persistence.
