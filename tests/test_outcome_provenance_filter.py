@@ -271,11 +271,11 @@ class TestServerDerivedProvenance:
     def test_internal_ingestion_path_retains_control(self):
         """external_signal / server_observation must stay reachable for
         server-controlled callers -- the operator-gated REST harness and
-        in-process emitters call _record_outcome_event_inline directly."""
+        in-process emitters call record_outcome directly."""
         import inspect
-        from src.mcp_handlers.observability import outcome_events as oe
+        from src import outcomes
 
-        inline = inspect.getsource(oe._record_outcome_event_inline)
+        inline = inspect.getsource(outcomes.record_outcome)
         # The helper still reads the caller-supplied value; it is the public
         # decorated entry point that constrains it.
         assert "verification_source" in inline
@@ -298,7 +298,7 @@ class TestCappingIsTheDefault:
     def _ceiling_seen(args):
         """Run the real write path far enough to capture the grader call."""
         from unittest.mock import patch
-        from src.mcp_handlers.observability import outcome_events as oe
+        from src import outcomes
 
         class _Stop(Exception):
             pass
@@ -309,9 +309,9 @@ class TestCappingIsTheDefault:
             seen["ceiling"] = ceiling
             raise _Stop()
 
-        with patch.object(oe, "enrich_detail_with_corroboration", _spy):
+        with patch.object(outcomes, "enrich_detail_with_corroboration", _spy):
             try:
-                _run(oe._record_outcome_event_inline(dict(args)))
+                _run(outcomes.record_outcome(dict(args)))
             except _Stop:
                 pass
         return seen.get("ceiling", "NEVER_CALLED")
@@ -420,7 +420,7 @@ class TestCappingIsTheDefault:
         # The other control, asserted here so removing EITHER is visible.
         assert seen["args"].get("verification_source") == "agent_reported_tool_result"
 
-    def test_trusted_call_sites_are_the_expected_four(self):
+    def test_trusted_call_sites_are_the_expected_boundaries(self):
         """A new trust grant should be a deliberate, reviewable act -- not
         something that accretes.
 
@@ -451,10 +451,11 @@ class TestCappingIsTheDefault:
                     vouched.add(str(f.relative_to(root)))
 
         assert vouched == {
-            # Where the key is DEFINED and where it is stripped off the public
-            # path -- the boundary itself, not a grant.
+            # The owner defines the key; the adapter strips it off the public
+            # path. Neither is a trust grant.
+            "src/outcomes.py",
             "src/mcp_handlers/observability/outcome_events.py",
-            # The four grants.
+            # The three grants.
             # src/http_routes/sentinel.py left 2026-09-27 with operator adjudication.
             "src/http_routes/substrate.py",
             "src/mcp_handlers/dialectic/resolution.py",
@@ -490,7 +491,7 @@ class TestEveryWritePathIsAccountedFor:
                 if isinstance(node, ast.Call):
                     fn = node.func
                     name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                    if name == "_record_outcome_event_inline":
+                    if name in {"_record_outcome_event_inline", "record_outcome"}:
                         found.add(str(f.relative_to(root)))
         return found
 
@@ -550,7 +551,7 @@ class TestEveryWritePathIsAccountedFor:
         # matches imports and references, not a `def`, so `tool_usage.py` --
         # which declares the method and never calls it -- does not appear.
         assert callers == {
-            "src/mcp_handlers/observability/outcome_events.py",
+            "src/outcomes.py",
             # FOUR direct writers here bypass _record_outcome_event_inline
             # entirely. The enumeration below never saw them, which is why the
             # cap had to move into the shared write path itself.
@@ -699,7 +700,7 @@ class TestEveryWritePathIsAccountedFor:
         assert ceiling_for_verification_source("server_observation") == "substrate_observed"
 
     def test_the_write_path_has_exactly_these_callers(self):
-        assert self._call_sites() == {
+        expected = {
             # The public MCP entrypoint. Unvouched, and it pops the trust key
             # so a caller cannot vouch for itself.
             "src/mcp_handlers/observability/outcome_events.py",
@@ -708,11 +709,22 @@ class TestEveryWritePathIsAccountedFor:
             "src/mcp_handlers/dialectic/resolution.py",
             "src/http_routes/substrate.py",
             # src/http_routes/sentinel.py left 2026-09-27 with operator adjudication.
-        }, (
+        }
+        assert self._call_sites() == expected, (
             "a new outcome write path appeared. It is capped by default, so this "
             "is not a vulnerability -- but confirm it should not be vouched, and "
             "add it here deliberately."
         )
+        # The old adapter name and the new owner API both remain callable.
+        # Inspect imports and value references as well as direct calls, so an
+        # aliased import or passing either recorder as a callback is visible.
+        references = self._referencing_modules("_record_outcome_event_inline")
+        references |= self._referencing_modules("record_outcome")
+        # This existing boolean option shares the public API's spelling but
+        # does not call the recorder. Keep scanning every import/reference,
+        # including imports through reexports, instead of weakening detection
+        # to silence the name collision. Direct calls remain the four above.
+        assert references == expected | {"src/mcp_handlers/dialectic/handlers.py"}, references
 
     def test_no_unvouched_caller_can_reach_the_top_two_grades(self):
         """Ties the enumeration to the invariant: for every call site that does

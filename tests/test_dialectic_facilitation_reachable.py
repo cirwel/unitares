@@ -365,7 +365,7 @@ async def test_the_transition_owner_leaves_independent_resumes_alone():
          patch.object(res, "parse_condition", side_effect=lambda c: c), \
          patch.object(res, "apply_condition", new_callable=AsyncMock,
                       return_value={"status": "applied"}), \
-         patch.object(res, "_record_outcome_event_inline", new_callable=AsyncMock):
+         patch.object(res, "record_outcome", new_callable=AsyncMock):
         out = await res.execute_resolution(
             session,
             SimpleNamespace(conditions=[], root_cause="rc", hash=lambda: "sha-test"),

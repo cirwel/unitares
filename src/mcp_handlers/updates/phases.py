@@ -2386,7 +2386,7 @@ async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
     # Evidence arrives as plain dicts (model_dump() flattens Pydantic models).
     evidence_mode = os.environ.get("UNITARES_PHASE5_EVIDENCE_WRITE", "").lower()
     if ctx.recent_tool_results and evidence_mode in ("shadow", "1", "enable"):
-        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        from src.outcomes import record_outcome
         # #1320: disclose what happens to the evidence. "recorded" rows still
         # carry verification_source="agent_reported_tool_result" downstream —
         # recorded means graded-and-stored, not independently verified.
@@ -2405,7 +2405,7 @@ async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
                 }
                 if evidence_mode == "shadow":
                     detail["shadow_write"] = True
-                await _record_outcome_event_inline({
+                await record_outcome({
                     # In-process emitter: vouched, but its ceiling still comes
                     # from the provenance below, so these agent-attested rows
                     # stay capped exactly as the public path's do.

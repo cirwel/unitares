@@ -19,12 +19,10 @@
 2 B3 src/dialectic_receipt.py
 1 B3 src/effect_grant.py
 1 B3 src/http_routes/access.py
-1 B3 src/http_routes/substrate.py
 1 B3 src/identity/trajectory_continuity.py
 3 B3 src/mcp_handlers/admin/handlers.py
 1 B3 src/mcp_handlers/core.py
 1 B3 src/mcp_handlers/dialectic/auth.py
-1 B3 src/mcp_handlers/dialectic/resolution.py
 1 B3 src/mcp_handlers/identity/handlers.py
 2 B3 src/mcp_handlers/introspection/tool_introspection.py
 1 B3 src/mcp_handlers/knowledge/handlers.py
@@ -34,9 +32,7 @@
 1 B3 src/mcp_handlers/middleware/params_step.py
 1 B3 src/mcp_handlers/middleware/rate_limit_step.py
 1 B3 src/mcp_handlers/observability/handlers.py
-1 B3 src/mcp_handlers/observability/outcome_events.py
 1 B3 src/mcp_handlers/support/host_availability.py
-1 B3 src/mcp_handlers/updates/phases.py
 1 B3 src/mcp_handlers/utils.py
 1 B3 src/services/http_tool_service.py
 3 B3 src/tool_schemas.py

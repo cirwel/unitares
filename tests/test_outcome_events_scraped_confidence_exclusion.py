@@ -28,7 +28,7 @@ confidence distribution, it is a handful of sticky per-agent defaults. See
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+from src.outcomes import record_outcome
 
 
 def _mock_db(latest_confidence=None):
@@ -72,14 +72,14 @@ async def _run(args_extra, *, latest_confidence=None, monitor=None, env=None):
         server = MagicMock()
         server.monitors = {"agent-1": monitor}
         patches.append(
-            patch("src.mcp_handlers.observability.outcome_events.mcp_server", server)
+            patch("src.outcomes._get_monitor_runtime", return_value=server)
         )
     if env is not None:
         patches.append(patch.dict("os.environ", env, clear=False))
     for p in patches:
         p.start()
     try:
-        await _record_outcome_event_inline(args)
+        await record_outcome(args)
     finally:
         for p in reversed(patches):
             p.stop()

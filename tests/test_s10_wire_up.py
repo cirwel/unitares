@@ -43,13 +43,13 @@ class TestOutcomeEventsClassTagWireUp:
         cached_meta = SimpleNamespace(tags=['engaged_ephemeral'], label='alice')
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-engaged'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker), \
              patch.dict('src.agent_metadata_model.agent_metadata', {'agent-engaged': cached_meta}, clear=False):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             await handle_outcome_event({
@@ -83,13 +83,13 @@ class TestOutcomeEventsClassTagWireUp:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-missing'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker), \
              patch.dict('src.agent_metadata_model.agent_metadata', {}, clear=True):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             await handle_outcome_event({
@@ -122,14 +122,14 @@ class TestOutcomeEventsClassTagWireUp:
         mock_seq_tracker = MagicMock()
 
         with patch('src.db.get_db', return_value=mock_db), \
-             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.outcomes._get_monitor_runtime') as mock_runtime, \
              patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-raise'), \
              patch('src.calibration.calibration_checker', mock_checker), \
              patch('src.sequential_calibration.sequential_calibration_tracker', mock_seq_tracker), \
              patch('src.grounding.class_indicator.classify_agent',
                    side_effect=RuntimeError("boom")):
 
-            mock_server.monitors = {}
+            mock_runtime.return_value.monitors = {}
 
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             await handle_outcome_event({

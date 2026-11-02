@@ -135,9 +135,7 @@ def make_monitor(confidence: float = 0.83):
 
 
 async def submit(db, monitors, prediction_id, **overrides):
-    from src.mcp_handlers.observability.outcome_events import (
-        _record_outcome_event_inline,
-    )
+    from src.outcomes import record_outcome
 
     arguments = {
         "agent_id": "agent-idempotent",
@@ -152,15 +150,15 @@ async def submit(db, monitors, prediction_id, **overrides):
     with (
         patch("src.db.get_db", return_value=db),
         patch(
-            "src.mcp_handlers.observability.outcome_events.mcp_server",
-            server,
+            "src.outcomes._get_monitor_runtime",
+            return_value=server,
         ),
         patch(
             "src.mcp_handlers.context.get_context_client_session_id",
             return_value=None,
         ),
     ):
-        return await _record_outcome_event_inline(arguments)
+        return await record_outcome(arguments)
 
 
 async def public_submit(db, monitor, prediction_id, outcome_type):
@@ -171,8 +169,8 @@ async def public_submit(db, monitor, prediction_id, outcome_type):
     with (
         patch("src.db.get_db", return_value=db),
         patch(
-            "src.mcp_handlers.observability.outcome_events.mcp_server",
-            server,
+            "src.outcomes._get_monitor_runtime",
+            return_value=server,
         ),
         patch(
             "src.mcp_handlers.context.get_context_agent_id",

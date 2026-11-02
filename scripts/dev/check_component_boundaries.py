@@ -102,7 +102,11 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
     ),
     "dialectic": ("src/mcp_handlers/dialectic/", "src/dialectic_db.py"),
     "audit": ("src/db/mixins/audit.py", "src/audit_db.py"),
-    "outcomes": ("src/mcp_handlers/observability/outcome_events.py", "src/db/mixins/tool_usage.py"),
+    "outcomes": (
+        "src/outcomes.py",
+        "src/mcp_handlers/observability/outcome_events.py",
+        "src/db/mixins/tool_usage.py",
+    ),
     "lease_plane": ("src/lease_plane/", "elixir/lease_plane/"),
     # src/http_api.py is the declared re-export facade over src/http_routes/.
     "http": ("src/http_api.py", "src/http_routes/"),
