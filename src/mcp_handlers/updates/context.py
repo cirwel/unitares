@@ -7,6 +7,10 @@ Each phase reads/writes fields on this dataclass instead of relying on closure s
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from src.state_persistence import StatePersistenceReceipt
+
+
 @dataclass
 class UpdateContext:
     """Carries state between extracted update phases and enrichments."""
@@ -65,6 +69,8 @@ class UpdateContext:
     cirs_alert: Optional[Dict] = None
     cirs_state_announce: Optional[Dict] = None
     outcome_event_id: Optional[str] = None
+    # Acknowledgement of this call's state write, independent of later effects.
+    state_persistence: StatePersistenceReceipt | None = None
 
     # ── Response accumulator (Phase 6) ─────────────────────────────
     response_data: Dict[str, Any] = field(default_factory=dict)

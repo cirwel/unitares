@@ -24,6 +24,27 @@ from src.mcp_handlers.response_formatter import (
     _strip_context,
     _emit_mirror_signal_records,
 )
+from src.state_persistence import StatePersistenceReceipt, STATE_PERSISTENCE_UNCONFIRMED_WARNING
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "mirror", "standard", "minimal", "lite", "verbose", "interpreted", "auto"])
+@pytest.mark.parametrize("state_id", [41, None])
+def test_persistence_receipt_survives_every_public_response_mode(mode, state_id):
+    receipt = StatePersistenceReceipt(state_id)
+    source = _sample_response()
+    source["state_persistence"] = {**receipt.to_dict(), "private_extra": "must not propagate"}
+    if state_id is None:
+        source["warnings"] = [STATE_PERSISTENCE_UNCONFIRMED_WARNING]
+    formatted = format_response(source, {"response_mode": mode})
+    assert formatted["state_persistence"] == receipt.to_dict()
+    if state_id is None:
+        assert STATE_PERSISTENCE_UNCONFIRMED_WARNING in formatted["warnings"]
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "minimal", "auto"])
+def test_response_modes_do_not_invent_a_persistence_receipt(mode):
+    formatted = format_response(_sample_response(), {"response_mode": mode})
+    assert "state_persistence" not in formatted
 
 
 # ============================================================================
