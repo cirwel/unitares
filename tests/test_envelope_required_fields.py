@@ -32,6 +32,7 @@ import pytest
 
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 from src.mcp_handlers.response_formatter import format_response
+from src.state_persistence import StatePersistenceReceipt, STATE_PERSISTENCE_UNCONFIRMED_WARNING
 from tests.helpers import metrics_producer, onboard_producer
 
 # alias -> {field: path in the envelope}. "*" maps over a list.
@@ -49,6 +50,7 @@ REQUIRED: Dict[str, Dict[str, Tuple[str, ...]]] = {
     "sync_state": {
         "prediction_id": ("prediction_id",),
         "warnings": ("warnings",),
+        "state_persistence": ("state_persistence",),
     },
     # The strict-identity contract confirms threading by reading agent_uuid
     # off check_working_state(client_session_id=...).
@@ -137,13 +139,16 @@ _WARNINGS = [
 
 def _sync_case(mode: str) -> Callable[[], Tuple[Dict[str, Any], Dict[str, Any]]]:
     def build():
-        source = _sync_source(warnings=list(_WARNINGS))
+        source = _sync_source(warnings=list(_WARNINGS), state_persistence=StatePersistenceReceipt(41).to_dict())
         arguments = {"response_mode": mode}
         formatted = format_response(deepcopy(source), dict(arguments))
         env = build_experience_envelope(
             "sync_state", "process_agent_update", formatted, arguments
         )
-        return env, {"prediction_id": source["prediction_id"], "warnings": _WARNINGS}
+        return env, {
+            "prediction_id": source["prediction_id"], "warnings": _WARNINGS,
+            "state_persistence": source["state_persistence"],
+        }
     return build
 
 
@@ -362,6 +367,67 @@ def test_full_mode_sync_state_keeps_warnings_in_raw_only():
     )
     assert env["raw_governance"]["warnings"] == _WARNINGS
     assert "warnings" not in env
+
+
+@pytest.mark.parametrize("mode", ["auto", "compact", "mirror", "standard", "minimal", "full", "lite", "interpreted", "verbose"])
+@pytest.mark.parametrize("state_id", [41, None])
+def test_sync_state_preserves_receipt_in_every_mode(mode, state_id):
+    receipt = StatePersistenceReceipt(state_id)
+    source = _sync_source(state_persistence=receipt.to_dict())
+    if state_id is None:
+        source["warnings"] = [STATE_PERSISTENCE_UNCONFIRMED_WARNING]
+    args = {"response_mode": mode}
+    formatted = format_response(source, args)
+    env = build_experience_envelope("sync_state", "process_agent_update", formatted, args)
+    assert env["state_persistence"] == receipt.to_dict()
+    if mode in {"full", "verbose"}:
+        assert env["raw_governance"]["state_persistence"] == receipt.to_dict()
+    else:
+        assert "raw_governance" not in env
+    if state_id is None:
+        warning_payload = env.get("raw_governance", env)
+        assert STATE_PERSISTENCE_UNCONFIRMED_WARNING in warning_payload["warnings"]
+
+
+def test_sync_receipt_survives_routine_trimming_and_budget_pressure(monkeypatch):
+    from src.mcp_handlers.middleware import envelope_step
+
+    receipt = StatePersistenceReceipt(41)
+    args = {"response_mode": "compact"}
+    formatted = format_response(_sync_source(state_persistence=receipt.to_dict()), args)
+    routine = build_experience_envelope("sync_state", "process_agent_update", formatted, args)
+    assert routine["response_shape"] == "routine"
+    assert routine["state_persistence"] == receipt.to_dict()
+    assert len(json.dumps(routine, ensure_ascii=False).encode("utf-8")) <= envelope_step._SYNC_ROUTINE_BUDGET_BYTES
+    monkeypatch.setattr(envelope_step, "_SYNC_ROUTINE_BUDGET_BYTES", 1)
+    pressured = build_experience_envelope("sync_state", "process_agent_update", formatted, args)
+    assert "_response_size" in pressured
+    assert pressured["state_persistence"] == receipt.to_dict()
+
+
+@pytest.mark.parametrize("mode", ["compact", "full"])
+def test_canonical_receipt_and_warning_take_precedence_over_outer_copy(mode):
+    receipt = StatePersistenceReceipt()
+    source = _sync_source(state_persistence={**receipt.to_dict(), "private_extra": "must not lift"},
+                          warnings=[STATE_PERSISTENCE_UNCONFIRMED_WARNING])
+    payload = {"raw_governance": source, "state_persistence": StatePersistenceReceipt(999).to_dict(),
+               "warnings": ["stale outer warning"]}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload, {"response_mode": mode})
+    assert env["state_persistence"] == receipt.to_dict()
+    if mode == "compact":
+        assert env["warnings"] == [STATE_PERSISTENCE_UNCONFIRMED_WARNING]
+
+
+def test_no_canonical_receipt_does_not_resurrect_outer_receipt():
+    payload = {"raw_governance": _sync_source(), "state_persistence": StatePersistenceReceipt(999).to_dict()}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload, {"response_mode": "compact"})
+    assert "state_persistence" not in env
+
+
+def test_unrelated_tool_does_not_lift_checkin_receipt():
+    payload = {"success": True, "state_persistence": StatePersistenceReceipt(41).to_dict()}
+    env = build_experience_envelope("record_result", "outcome_event", payload, {})
+    assert "state_persistence" not in env
 
 
 def test_an_unclamped_search_carries_no_limit_clamped_from():

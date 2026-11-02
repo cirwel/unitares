@@ -122,6 +122,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             identity_assurance=ctx.identity_assurance,
             monitor=ctx.monitor,
             ctx_warnings=getattr(ctx, "warnings", ()),
+            state_persistence=ctx.state_persistence,
         )
         _tick("build_response")
 
@@ -154,6 +155,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             arguments=ctx.arguments,
             fallback_result=ctx.result,
             serializer=serializer,
+            state_persistence=ctx.state_persistence,
         )
         _tick("serialize")
         return result

@@ -7,6 +7,10 @@ import pytest
 from src.mcp_handlers.updates.context import UpdateContext
 from src.services.update_workflow_service import run_process_update_workflow
 from src.state_locking import LockTimeoutError
+from src.state_persistence import (
+    STATE_PERSISTENCE_UNCONFIRMED_WARNING,
+    StatePersistenceReceipt,
+)
 from tests.helpers import make_agent_meta, make_mock_server, make_monitor, parse_result
 
 
@@ -58,7 +62,7 @@ def _make_real_spine_harness(*, response_text, storage=None):
     if storage is None:
         storage = MagicMock(
             get_agent=AsyncMock(return_value=SimpleNamespace(api_key="stored-key")),
-            record_agent_state=AsyncMock(),
+            record_agent_state=AsyncMock(return_value=123),
             create_agent=AsyncMock(),
             update_agent=AsyncMock(),
         )
@@ -122,6 +126,7 @@ def _patch_real_spine_edges(harness):
 @pytest.mark.asyncio
 async def test_run_process_update_workflow_happy_path():
     ctx = SimpleNamespace(
+        state_persistence=None,
         mcp_server=MagicMock(),
         agent_id="agent-123",
         agent_uuid="uuid-123",
@@ -254,6 +259,7 @@ async def test_enrichment_runs_outside_lock():
             return False
 
     ctx = SimpleNamespace(
+        state_persistence=None,
         mcp_server=MagicMock(),
         agent_id="agent-123",
         agent_uuid="uuid-123",
@@ -304,6 +310,7 @@ async def test_post_update_effects_run_outside_lock():
             return False
 
     ctx = SimpleNamespace(
+        state_persistence=None,
         mcp_server=MagicMock(),
         agent_id="agent-123",
         agent_uuid="uuid-123",
@@ -405,7 +412,12 @@ async def test_process_update_records_s22_provenance_context():
 
 @pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
-async def test_run_process_update_workflow_real_spine_retries_record_state_after_create():
+@pytest.mark.parametrize(
+    "second_result",
+    [456, None, RuntimeError("second state-write acknowledgement lost")],
+    ids=["acknowledged", "missing-acknowledgement", "second-write-error"],
+)
+async def test_run_process_update_workflow_real_spine_retries_record_state_after_create(second_result):
     """Post-update state persistence should recover by creating the agent and retrying."""
     attempts = {"count": 0}
 
@@ -413,7 +425,9 @@ async def test_run_process_update_workflow_real_spine_retries_record_state_after
         attempts["count"] += 1
         if attempts["count"] == 1:
             raise ValueError("Agent not found in database")
-        return None
+        if isinstance(second_result, Exception):
+            raise second_result
+        return second_result
 
     storage = MagicMock(
         get_agent=AsyncMock(return_value=SimpleNamespace(api_key="stored-key")),
@@ -435,6 +449,12 @@ async def test_run_process_update_workflow_real_spine_retries_record_state_after
     assert data["outcome_event"]["outcome_id"] == "outcome-123"
     harness.storage.create_agent.assert_awaited_once()
     assert harness.storage.record_agent_state.await_count == 2
+    expected = StatePersistenceReceipt.from_acknowledgement(second_result)
+    assert harness.ctx.state_persistence == expected
+    assert data["state_persistence"] == expected.to_dict()
+    assert harness.ctx.warnings.count(STATE_PERSISTENCE_UNCONFIRMED_WARNING) == int(
+        not expected.confirmed
+    )
 
 
 @pytest.mark.asyncio
