@@ -23,6 +23,8 @@ source_files:
   # wrong about lives in phases.py, which nobody was checking.
   - unitares/src/mcp_handlers/updates/phases.py
   - unitares/src/outcomes.py
+  - unitares/src/state_persistence.py
+  - unitares/src/services/update_response_service.py
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
@@ -239,6 +241,18 @@ same call.
 Cold-start action summaries carry a provisional headline. A `proceed` action
 before the behavioral baseline forms is permission to continue under the current
 policy, not a validated all-clear. The default state read preserves the verdict.
+
+On completed check-ins that reach the state writer, `state_persistence`
+describes the assessment-row acknowledgement. `status: recorded` and a positive
+`state_id` confirm that the writer acknowledged that row; they do not confirm
+every other check-in effect. `status: unconfirmed` and `state_id: null` mean no
+valid acknowledgement arrived. The row may still exist if the commit completed
+before the connection failed. Read this receipt separately from top-level
+`success`. `checkin_retry_idempotent: false` means repeating the full check-in
+can duplicate estimator updates and effects; do not automatically repeat it to
+recover a missing acknowledgement. Early refusals and older servers can omit
+the receipt; absence does not establish that nothing was written. This is an
+assessment-write receipt, not a neutral checkpoint ID.
 
 If you supplied a genuine `confidence`, the response may mint a concrete
 `prediction_id`. Preserve that identifier and pass it to

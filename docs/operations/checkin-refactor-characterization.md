@@ -154,3 +154,39 @@ The target remains an accountability record that survives optional assessment
 failure. The current successful-response-without-state behavior is recorded
 here so a future correction is deliberate and tested, rather than disguised
 as a behavior-preserving extraction.
+
+## Legacy state-write acknowledgement (2026-11-02 increment)
+
+The next increment exposes `state_persistence` on completed check-in responses,
+including bounded `sync_state` replies and serialization fallbacks. This is a
+call-local receipt for the existing `core.agent_state` assessment insert:
+
+| Field | Meaning |
+|---|---|
+| `schema: agent_state.persistence.v1` | Identifies this assessment-write receipt, not a neutral checkpoint. |
+| `status: recorded` with a positive integer `state_id` | The awaited writer returned that row ID. The acknowledgement covers this state insert only. |
+| `status: unconfirmed` with `state_id: null` | No valid acknowledgement reached the workflow. The row may or may not exist; a connection failure can follow commit. |
+| `checkin_retry_idempotent: false` | Repeating the full check-in can repeat estimator updates and other effects. No automatic retry or deduplication is added. |
+
+The immutable receipt is separate from the existing Phase-5 continuation
+boolean. Generic write errors still allow later effects; strict-mode
+`ValueError` still stops them. Both yield unconfirmed persistence, because the
+broad exception class does not prove a pre-write refusal. The legacy
+create-and-retry branch confirms a row only if its second write returns a valid
+ID. Missing or malformed writer acknowledgements are also unconfirmed.
+Cancellation still propagates. Early gates that never reach the state writer
+do not acquire a receipt.
+
+Unconfirmed responses carry a fixed warning describing the ambiguous commit
+and non-idempotent retry. Top-level `success` retains its existing workflow
+meaning; it is not a persistence acknowledgement. A confirmed receipt remains
+valid if a later outcome or response-serialization step fails. It does not
+certify those other writes, a whole-check-in transaction, durable per-agent
+ordering, or acceptance independently of EISV.
+
+This is a prerequisite for a neutral checkpoint ledger. Its later contract
+must define identity-scoped idempotency/conflicts, immutable neutral inputs,
+atomic sequence/checkpoint/outbox allocation, ambiguous-commit replay, and the
+relationship to gates that still run inside the estimator service. The partial
+preservation and replay gates above remain incomplete; this receipt does not
+fulfil them or authorize asynchronous EISV.

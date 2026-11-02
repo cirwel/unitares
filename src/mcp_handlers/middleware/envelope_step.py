@@ -61,6 +61,7 @@ from mcp.types import TextContent
 
 from config.governance_config import GovernanceConfig
 from src.logging_utils import get_logger
+from src.state_persistence import project_state_persistence
 from src.tool_modes import progressive_aware_hint
 from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
@@ -3005,7 +3006,7 @@ def build_experience_envelope(
         # mirror, every bounded formatter passes them through, and no later
         # read returns them, so a bounded shape lifts them; full mode carries
         # them under raw_governance (#2125).
-        warnings = payload.get("warnings")
+        warnings = source_payload.get("warnings")
         if isinstance(warnings, list) and warnings and not include_raw:
             envelope["warnings"] = list(warnings)
         if state_summary.get("action") == "pause":
@@ -3417,6 +3418,12 @@ def build_experience_envelope(
     # The prose stays — it tells the agent what the id is for (#2123).
     if prediction_id and canonical_name == "process_agent_update":
         envelope["prediction_id"] = prediction_id
+    if canonical_name == "process_agent_update":
+        # A nested canonical payload owns the acknowledgement. Do not revive
+        # an outer stale receipt when that payload contains no valid receipt.
+        persistence = project_state_persistence(source_payload.get("state_persistence"))
+        if persistence is not None:
+            envelope["state_persistence"] = persistence
     if state_summary:
         # state_summary can carry glossary coaching (e.g. an uninitialized
         # verdict's "Submit one process_agent_update...") — translate it like
