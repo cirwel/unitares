@@ -46,6 +46,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named cross-operator blocker. The root README and the public landing page link here rather than summarizing it.
 - **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
+- **[`evaluations/interrupted-agent-reconstruction-2026-10-30.md`](evaluations/interrupted-agent-reconstruction-2026-10-30.md)** — a successor agent finds an interrupted agent's work through declared lineage, the timeline, and a session pointer; one bounded case.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, where each guarantee ends, and how failures are reported.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
