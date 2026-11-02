@@ -13,6 +13,8 @@ import asyncio
 from pathlib import Path
 import json
 
+from tests.helpers.checkpoint_backend import durable_checkpoint_backend  # noqa: F401
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -55,6 +57,7 @@ async def test_get_governance_metrics():
 
 @pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("durable_checkpoint_backend")
 async def test_process_agent_update():
     """Test process_agent_update handler
 
@@ -74,6 +77,8 @@ async def test_process_agent_update():
     assert result is not None, "Should return result"
     response_data = json.loads(result[0].text)
     assert response_data.get("success") == True, "Should succeed"
+    assert response_data["checkpoint"]["status"] == "accepted"
+    assert response_data["checkpoint"]["assessment"]["status"] == "completed"
     # Action location depends on response mode: minimal → top-level, compact → under decision, mirror → verdict
     has_action = (
         "action" in response_data

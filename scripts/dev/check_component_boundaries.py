@@ -91,6 +91,7 @@ PACK_ALLOWED_MODULES = frozenset({
 
 # Component -> path prefixes (a prefix ending in "/" is a directory). Used by B3.
 COMPONENTS: dict[str, tuple[str, ...]] = {
+    "checkpoints": ("src/checkpoints.py", "src/db/mixins/checkpoint.py"),
     "identity": ("src/mcp_handlers/identity/", "src/identity/", "src/db/mixins/identity.py"),
     "eisv": ("governance_core/", "src/db/mixins/state.py", "src/agent_monitor_state.py"),
     "knowledge": (
@@ -115,6 +116,10 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
 # Table -> (owner prefixes, declared co-owner prefixes). Used by B4. The tables
 # are the ones the proposal's Section 2.4 names.
 TABLE_OWNERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "core.checkpoints": (COMPONENTS["checkpoints"], ()),
+    "core.checkpoint_streams": (COMPONENTS["checkpoints"], ()),
+    "core.checkpoint_outbox": (COMPONENTS["checkpoints"], ()),
+    "assessment.checkpoint_deliveries": (COMPONENTS["checkpoints"], ()),
     "core.identities": (COMPONENTS["identity"], ()),
     "core.agent_state": (COMPONENTS["eisv"], ()),
     "knowledge.discoveries": (COMPONENTS["knowledge"], ()),

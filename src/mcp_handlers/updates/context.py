@@ -71,6 +71,14 @@ class UpdateContext:
     outcome_event_id: Optional[str] = None
     # Acknowledgement of this call's state write, independent of later effects.
     state_persistence: StatePersistenceReceipt | None = None
+    # Neutral acceptance is distinct from the later EISV state-row write.
+    checkpoint_request: bytes | None = None
+    checkpoint_key: str | None = None
+    checkpoint_attempt_id: str | None = None
+    checkpoint_receipt: Any = None
+    checkpoint_unconfirmed: bool = False
+    checkpoint_assessment: Any = None
+    checkpoint_assessment_status: str | None = None
 
     # ── Response accumulator (Phase 6) ─────────────────────────────
     response_data: Dict[str, Any] = field(default_factory=dict)

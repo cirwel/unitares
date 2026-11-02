@@ -81,6 +81,42 @@ def serialize_process_update_response(
     fallback_result: Dict[str, Any],
     serializer=None,
     state_persistence: StatePersistenceReceipt | None = None,
+    checkpoint: Dict[str, Any] | None = None,
+) -> Sequence[TextContent]:
+    """Preserve the neutral receipt independently of legacy state persistence."""
+    response_data = dict(response_data)
+    response_data.pop("checkpoint", None)
+    result = _serialize_process_update_response(
+        response_data=response_data, agent_uuid=agent_uuid, arguments=arguments,
+        fallback_result=fallback_result, serializer=serializer,
+        state_persistence=state_persistence,
+    )
+    if checkpoint is None:
+        return result
+    try:
+        result = list(result)
+        payload = json.loads(result[0].text)
+        if not isinstance(payload, dict):
+            raise ValueError("Check-in serializer did not return an object")
+        payload["checkpoint"] = checkpoint
+        result[0] = result[0].model_copy(update={"text": json.JSONEncoder(ensure_ascii=False).encode(payload)})
+        return result
+    except Exception:
+        # Even a malformed custom serializer cannot erase accepted evidence.
+        return [TextContent(type="text", text=json.JSONEncoder(ensure_ascii=False).encode({
+            "success": False, "error": "Response serialization failed",
+            "checkpoint": checkpoint,
+        }))]
+
+
+def _serialize_process_update_response(
+    *,
+    response_data: Dict[str, Any],
+    agent_uuid: str,
+    arguments: Dict[str, Any],
+    fallback_result: Dict[str, Any],
+    serializer=None,
+    state_persistence: StatePersistenceReceipt | None = None,
 ) -> Sequence[TextContent]:
     """Serialize the final process_agent_update payload with a safe fallback."""
     # The shared serializer may return a serialization-error payload without

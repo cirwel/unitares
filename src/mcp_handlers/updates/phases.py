@@ -1585,6 +1585,11 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     ctx.agent_state["task_type"] = ctx.task_type
 
     _ode_start = time.perf_counter()
+    from src.services.checkpoint_service import accept_before_assessment
+
+    async def _accept_checkpoint():
+        await accept_before_assessment(ctx)
+
     try:
         ctx.result = await mcp_server.process_update_authenticated_async(
             agent_id=ctx.agent_id,
@@ -1592,7 +1597,8 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             agent_state=ctx.agent_state,
             auto_save=True,
             confidence=ctx.confidence,
-            session_bound=True
+            session_bound=True,
+            before_assessment=_accept_checkpoint,
         )
     except PermissionError:
         raise
