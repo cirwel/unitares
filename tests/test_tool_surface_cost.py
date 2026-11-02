@@ -152,7 +152,7 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # the host's own session id to the server.
 # Raised 2026-11-02 to 42,000 B: sync_state's optional idempotency_key
 # measures 41,989 B, 198 B over the 41,791 B base. Most of the addition is
-# validation schema; the advertised description is already only 37 bytes.
+# validation schema; the advertised description is already only 38 bytes.
 # The key lets a retry recover its original durable checkpoint without
 # repeating assessment. Omitting it preserves a new occurrence per call.
 PROGRESSIVE_SURFACE_CEILING_BYTES = 42_000
