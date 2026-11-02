@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.lifecycle_auth import operator_caller
 from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 
 
@@ -232,6 +233,14 @@ class TestManualArchiveGuard:
 
 
 class TestArchiveOldTestAgentsPreviewDefault:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
     @pytest.mark.asyncio
     async def test_defaults_to_dry_run_when_not_specified(self):
         agent_uuid = "real_001"

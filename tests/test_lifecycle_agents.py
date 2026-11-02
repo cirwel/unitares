@@ -1285,6 +1285,14 @@ class TestDeleteAgent:
 
 class TestArchiveOldTestAgents:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
+
     @pytest.fixture
     def server(self):
         return make_mock_server()
@@ -1399,6 +1407,14 @@ class TestArchiveOldTestAgents:
 # ============================================================================
 
 class TestArchiveOrphanAgents:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
 
     @pytest.fixture
     def server(self):
@@ -2577,6 +2593,14 @@ class TestDeleteAgentEdgeCases:
 
 class TestArchiveOldTestAgentsEdgeCases:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
+
     @pytest.fixture
     def server(self):
         return make_mock_server()
@@ -2643,6 +2667,14 @@ class TestArchiveOldTestAgentsEdgeCases:
 # ============================================================================
 
 class TestArchiveOrphanAgentsEdgeCases:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        # Fleet-wide sweeps archive other agents and list their ids, so they
+        # run as an operator; the non-operator refusal and redaction are
+        # covered in tests/test_archival_sweep_operator_gate.py.
+        with operator_caller():
+            yield
 
     @pytest.fixture
     def server(self):
