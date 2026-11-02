@@ -22,6 +22,10 @@ from src.logging_utils import get_logger
 from src import agent_storage
 from src.perf_monitor import record_ms as _perf_record_ms
 from src.report_excerpt import make_report_excerpt
+from src.state_persistence import (
+    STATE_PERSISTENCE_UNCONFIRMED_WARNING,
+    StatePersistenceReceipt,
+)
 
 from .context import UpdateContext
 from ..identity_bootstrap import (
@@ -2052,8 +2056,11 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
     report_excerpt = make_report_excerpt(ctx.response_text)
 
     # PostgreSQL: Record EISV state
+    # Failure to receive an acknowledgement does not establish that no row
+    # committed. Keep this call-local, including while the writer is awaiting.
+    ctx.state_persistence = StatePersistenceReceipt()
     try:
-        await agent_storage.record_agent_state(
+        state_id = await agent_storage.record_agent_state(
             agent_id=agent_id,
             E=ctx.metrics_dict.get('E', 0.7),
             I=ctx.metrics_dict.get('I', 0.8),
@@ -2076,6 +2083,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             eisv_instrument=_eisv_instrument_stamp(monitor),
             report_excerpt=report_excerpt,
         )
+        ctx.state_persistence = StatePersistenceReceipt.from_acknowledgement(state_id)
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
         # #425 Path D: when STRICT_IDENTITY_REQUIRED is on, do NOT auto-
@@ -2089,8 +2097,8 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             logger.warning(
                 "[PROCESS_UPDATE] STRICT_IDENTITY_REQUIRED=true and "
                 "agent %s... missing from PG at record_agent_state — "
-                "skipping self-create (#425 Path D); state for this "
-                "update will not be recorded.",
+                "skipping self-create (#425 Path D); state persistence "
+                "is unconfirmed.",
                 (agent_id or "")[:12],
             )
             return False
@@ -2140,7 +2148,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                     f"{agent_id[:8]}... (agent will be misclassified until "
                     f"next stamp): {stamp_err}"
                 )
-            await agent_storage.record_agent_state(
+            state_id = await agent_storage.record_agent_state(
                 agent_id=agent_id,
                 E=ctx.metrics_dict.get('E', 0.7),
                 I=ctx.metrics_dict.get('I', 0.8),
@@ -2163,11 +2171,18 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 eisv_instrument=_eisv_instrument_stamp(monitor),
                 report_excerpt=report_excerpt,
             )
+            ctx.state_persistence = StatePersistenceReceipt.from_acknowledgement(state_id)
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:
             logger.warning(f"PostgreSQL create+record failed: {create_error}", exc_info=True)
     except Exception as e:
         logger.warning(f"PostgreSQL record_agent_state failed: {e}", exc_info=True)
+    finally:
+        if (
+            not ctx.state_persistence.confirmed
+            and STATE_PERSISTENCE_UNCONFIRMED_WARNING not in ctx.warnings
+        ):
+            ctx.warnings.append(STATE_PERSISTENCE_UNCONFIRMED_WARNING)
     return True
 
 

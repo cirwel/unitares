@@ -254,6 +254,15 @@ Proposed taxonomy for attempt `kind`:
 | `deferred` | Accepted for later handling rather than now | none known today; listed so it is not invented later |
 | `failed` | Validation, authentication, identity, cancellation, or infrastructure failure | identity refusal contracts, schema validation, estimator exception |
 
+**Implementation clarification, 2026-11-02:** normal post-update completion
+does not establish the recording part of `accepted`. The
+[check-in characterization](../../operations/checkin-refactor-characterization.md)
+shows that the legacy path can finish successfully after a state-write
+exception. Its `state_persistence` acknowledgement distinguishes a confirmed
+`core.agent_state` row from unconfirmed persistence. That receipt covers an
+assessment row only; it is not a neutral checkpoint, attempt classification,
+idempotency key, or completion of the Stage 3 acceptance contract.
+
 `failed` carries a sub-class from exactly that list. An attempt that fails
 before an identity is resolved has no identity; it is recorded without one, not
 attributed to a guessed identity.
