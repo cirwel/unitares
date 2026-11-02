@@ -1,6 +1,6 @@
 # KG matched-corpus feasibility v1
 
-**Status:** prospective proposal; no model-assisted study enrolled or authorized
+**Status:** read-only retrieval feasibility completed; no model-assisted study enrolled or authorized
 
 **Scope:** prepare a descriptive comparison of native KG PostgreSQL FTS and a lexical substitute over the same
 actual records. This proposal does not reopen the stopped v0 enrollment.
@@ -46,10 +46,13 @@ copyable artifact directory and is durably created before any connection.
 
 The runner requires a dedicated non-superuser SELECT-only login with no role
 memberships or table ownership/write privileges. Provisioning that login changes
-access control and requires explicit operator approval. No role has been created.
+access control and requires explicit operator approval. The operator approved the
+prepared SELECT-only role on 2026-11-02; provisioning and read-only privilege
+verification completed on the existing instance. Exact capture and evaluation
+permissions remain separate from that access-control approval.
 The runner opens one native asyncpg connection with read-only defaults, UTC,
-UTF-8, fixed search path, finite statement/lock/idle timeouts and a 45-second total
-timeout. It checks a physical table with no row-level filtering, enters a
+UTF-8, fixed search path, finite statement/lock/idle timeouts and a 45-second
+connection/database-operation timeout (preflight hashing is outside that timer). It checks a physical table with no row-level filtering, enters a
 read-only repeatable-read transaction, and uses a connection-bound adapter for
 the existing FTS method. It never initializes the normal application, a pool,
 MCP, identity, audit infrastructure or model client. No intentional application,
@@ -131,6 +134,14 @@ Retrieval misses remain visible diagnostic results. They do not turn the old
 v0 preflight into a pass, establish a benefit, or authorize a model phase.
 No replacement questions, query tuning, tag changes or repeated attempts are
 allowed within a frozen enrollment.
+
+## Completed descriptive check
+
+The [2026-11-02 feasibility record](../../evaluations/kg-agent-adoption/matched-corpus-feasibility-v1.md)
+reports one separately approved capture and evaluation: six complete records,
+three frozen queries per arm, identical corpus fingerprints, and all six
+material-source checks present in each arm. Rankings differed. The record
+preserves the small-corpus, fixed-order and behavioral-evidence limits.
 
 ## Later model-assisted enrollment
 
