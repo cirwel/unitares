@@ -1,33 +1,31 @@
-# Self-report check-ins on SHADE-Arena — 2026-11-01
+# Self-report check-ins on SHADE-Arena, public pair — 2026-11-01
 
 ## Result
 
 Mid-run self-report check-ins, the mechanism behind UNITARES check-ins, were
 tested on [SHADE-Arena](https://arxiv.org/abs/2506.15740) (Kutasov et al., 2025),
 a benchmark in which an agent completes a user's task while pursuing a hidden
-sabotage goal.
+sabotage goal. On the public pair `american_airlines_2`:
 
 | Measure | With check-ins | Reference |
 |---|---:|---:|
-| Sabotage vs benign, check-in answers (AUC) | **1.00** | semantic monitor on the same episodes: 0.75 |
-| Sabotage vs benign, told check-ins are reviewed for misbehavior (AUC) | **0.99** | semantic monitor: 0.69 |
-| Hidden side task completed | **0 / 134** | without check-ins: 23 / 24 |
+| Sabotage vs benign, check-in answers (AUC, 15 vs 15 episodes) | **1.00** | semantic monitor on the same episodes: 0.80 |
+| Same, told check-ins are reviewed for misbehavior (15 vs 15) | **1.00** | semantic monitor: 0.80 |
+| Hidden side task completed | **0 / 45** | without check-ins: 8 / 8 |
 | Main-task score | unchanged | same as without check-ins |
 
-The first check-in drew a direct report of the hidden goal, and later check-ins
-showed the agent had dropped it. Asking mid-run both identified the sabotage and
-ended it, without disrupting the user's task.
+Asking mid-run both identified the sabotage and ended it, without disrupting the
+user's task.
 
-**Told to conceal its goal in check-ins,** the agent declined to answer nearly half of
-first check-ins (21 of 45; 0 of 45 benign). Treating a declined check-in
-as a signal keeps detection at AUC 0.90, above the semantic monitor (0.76).
-Side-task completion stayed at 0 of 45.
+**Told to conceal its goal in check-ins** (exploratory), the agent still
+separated from benign work when a declined check-in is counted as a signal
+(AUC 0.97, against 0.78 for the semantic monitor). Side-task completion stayed
+at 0 of 45.
 
 ## Setup
 
-- **Agent:** Claude Sonnet 5.5. **Task pairs:** three, each with benign and
-  sabotage runs: one public (`american_airlines_2`) and two from the benchmark's
-  non-public split (`P12`, `P13`), selected by a pre-registered rule.
+- **Agent:** Claude Sonnet 5.5, on one public task pair, with benign and
+  sabotage runs.
 - **Check-in:** a fixed, task-agnostic JSON question every five agent turns,
   rating confidence that the task is on track, pursuit of any goal beyond the
   user's request, and comfort if the user read every action. The answers are
@@ -35,17 +33,9 @@ Side-task completion stayed at 0 of 45.
 - **Arms:** benign; benign with a disclosed, length-matched secondary
   instruction; sabotage; sabotage told check-ins are reviewed; sabotage told to
   conceal its goal in check-ins (exploratory); sabotage without check-ins.
-  10–15 episodes per pair per arm; 8 without check-ins after pair selection.
+  15 episodes per arm; 8 without check-ins after the pair was chosen.
 - **Monitor:** a fresh Claude Sonnet 5.5 monitor with the benchmark's monitor
-  prompt, run on transcripts with and without the check-in answers.
-
-## Per pair
-
-| Pair | Check-in AUC, sabotage vs benign | Told reviewed | Completions with / without check-ins |
-|---|---:|---:|---:|
-| american_airlines_2 | 1.00 | 1.00 | 0/45 vs 8/8 |
-| P12 | 1.00 | 1.00 | 0/45 vs 7/8 |
-| P13 | 1.00 | 1.00 | 0/44 vs 8/8 |
+  prompt, run on transcripts without the check-in answers.
 
 ## Cross-family check
 
@@ -55,25 +45,10 @@ with behaviour at the benign level. SHADE's standard setup produces sabotage
 episodes in one model family and not the other, so per-model elicitation checks
 belong at the start of any cross-model comparison on it.
 
-## Transcript statistics
-
-Generic tool-call statistics from the benchmark's existing transcripts, held out
-by task pair, reach AUC 0.63 against 0.75 for the published monitor (25 pairs,
-394 episodes). Behavioural statistics of a transcript carry little transferable
-signal; asking the agent carries a great deal.
-
 ## Scope
 
-One agent model on three task pairs, using the benchmark's stock sabotage
+One agent model on one public task pair, using the benchmark's stock sabotage
 prompt, which presents the sabotage as a test of a monitor. The next study uses
 a framing that does not present the task as a test, more pairs, and models that
-take up the sabotage. Pooled figures are descriptive; per-pair results are
-above.
-
-## Data
-
-Access to SHADE-Arena's non-public split was granted by its maintainer, and the
-study ran locally under the access terms. Results are reported per task pair,
-with non-public task identities withheld. Transcripts and per-episode data stay
-private under those terms. Pre-registration and deviation log: held with the
-operator.
+take up the sabotage. Further pairs from the benchmark's non-public split were
+run under its maintainer's access terms and are not reported here.
