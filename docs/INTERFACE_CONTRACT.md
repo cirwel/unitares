@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.3.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.4.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1308,3 +1308,10 @@ Only the `dialectic` input schema digest and aggregate surface digest change.
 No tool, action, identity rule, authority check or default output is removed.
 Clients may opt into compact progress reads after negotiating 2.3.0 and use
 the supplied full-read arguments before reviewing the transcript.
+
+## 2.4.0 (2026-11-02)
+
+Accept neutral durable check-in checkpoints and optional identity-scoped idempotency keys independently of assessment persistence.
+
+<!-- Complete before readiness: affected outputs/descriptions, compatibility,
+     changed schema digests (or why none move), and client action. -->
