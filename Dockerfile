@@ -18,7 +18,7 @@
 # configured to bump this digest with the Docker Quickstart job validating each
 # bump (see .github/dependabot.yml). This is the reproducibility *bridge* — the
 # robustness fix is continuous verdict blending (docs/proposals/archive/continuous-verdict-blending-v0.md).
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+FROM python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
 
 WORKDIR /app
 
