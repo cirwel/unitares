@@ -2,9 +2,10 @@
 
 Mints per-check-in prediction IDs so outcome_event can reference a specific
 (confidence, timestamp) pair exactly instead of relying on temporal proxy.
-The registry lives on the monitor and travels with its state snapshot
-(serialize/restore below), so an open forecast survives a server restart;
-orphaned entries are expired by TTL.
+Monitor-backed registries live on the monitor and travel with its state
+snapshot (serialize/restore below), surviving a server restart; predictions
+minted on the monitor-free fallback path live in `_NEUTRAL_PREDICTIONS` in
+process memory until adopted by a monitor or expired by TTL.
 """
 
 import math
@@ -23,24 +24,33 @@ _NEUTRAL_PREDICTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {}
 def prune_agent_predictions(
     ttl_seconds: float = DEFAULT_PREDICTION_TTL_SECONDS,
 ) -> int:
-    """Expire stale entries across `_AGENT_PREDICTIONS` and `_NEUTRAL_PREDICTIONS`."""
+    """Expire stale entries in `_NEUTRAL_PREDICTIONS` and drop empty registries.
+
+    Never mutates another agent's monitor-owned `_open_predictions` dict, so
+    a no-monitor mint cannot race a concurrent `monitor.process_update` running
+    on the executor thread.
+    """
     removed_agents = 0
-    for store in (_AGENT_PREDICTIONS, _NEUTRAL_PREDICTIONS):
-        for aid, preds in list(store.items()):
-            if not isinstance(preds, dict):
-                store.pop(aid, None)
-                removed_agents += 1
-                continue
-            expire_old_predictions(preds, ttl_seconds)
-            if store is _NEUTRAL_PREDICTIONS:
-                consumed_ids = [
-                    pid for pid, rec in preds.items() if rec.get("consumed")
-                ]
-                for pid in consumed_ids:
-                    preds.pop(pid, None)
-            if not preds:
-                store.pop(aid, None)
-                removed_agents += 1
+    for aid, preds in list(_NEUTRAL_PREDICTIONS.items()):
+        if not isinstance(preds, dict):
+            _NEUTRAL_PREDICTIONS.pop(aid, None)
+            removed_agents += 1
+            continue
+        expire_old_predictions(preds, ttl_seconds)
+        consumed_ids = [
+            pid for pid, rec in list(preds.items()) if rec.get("consumed")
+        ]
+        for pid in consumed_ids:
+            preds.pop(pid, None)
+        if not preds:
+            _NEUTRAL_PREDICTIONS.pop(aid, None)
+            if _AGENT_PREDICTIONS.get(aid) is preds:
+                _AGENT_PREDICTIONS.pop(aid, None)
+            removed_agents += 1
+    for aid, preds in list(_AGENT_PREDICTIONS.items()):
+        if not isinstance(preds, dict) or not preds:
+            _AGENT_PREDICTIONS.pop(aid, None)
+            removed_agents += 1
     return removed_agents
 
 
@@ -50,6 +60,7 @@ def bind_agent_predictions(
     *,
     merge_existing: bool = True,
     clear_if_empty: bool = False,
+    overwrite_existing: bool = True,
 ) -> Dict[str, Dict[str, Any]]:
     """Bind `open_predictions` as the shared prediction registry for `agent_id`.
 
@@ -60,6 +71,7 @@ def bind_agent_predictions(
     inherit predictions from prior monitor instances.
     """
     if isinstance(agent_id, str) and agent_id and isinstance(open_predictions, dict):
+        existing = _AGENT_PREDICTIONS.get(agent_id)
         if merge_existing:
             neutral = _NEUTRAL_PREDICTIONS.get(agent_id)
             if isinstance(neutral, dict):
@@ -71,8 +83,15 @@ def bind_agent_predictions(
                 if not neutral:
                     _NEUTRAL_PREDICTIONS.pop(agent_id, None)
         if open_predictions:
+            if (
+                not overwrite_existing
+                and isinstance(existing, dict)
+                and existing is not open_predictions
+            ):
+                for pid, rec in list(existing.items()):
+                    open_predictions.setdefault(pid, rec)
             _AGENT_PREDICTIONS[agent_id] = open_predictions
-        elif clear_if_empty and _AGENT_PREDICTIONS.get(agent_id) is open_predictions:
+        elif clear_if_empty and existing is open_predictions:
             _AGENT_PREDICTIONS.pop(agent_id, None)
     return open_predictions
 

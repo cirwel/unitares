@@ -282,7 +282,7 @@ class UNITARESMonitor:
         # pre-floor verdict/risk pair still exists) and emitted once the decision
         # is known. Rebuilt or cleared at the top of every update.
         self._pending_verification_shadow_row: Optional[Dict[str, Any]] = None
-        self._cached_outcome_history: Optional[list] = None  # Populated by Phase 5, used by process_update
+        self._cached_outcome_history: Optional[list] = None  # Updated from call-local _outcome_history in process_update
 
         # Continuous self-validation: track previous verdict for trajectory comparison
         self._prev_verdict_action: Optional[str] = None   # 'proceed', 'pause', etc.
@@ -320,7 +320,7 @@ class UNITARESMonitor:
         # when the agent echoes the id back on outcome_event. See
         # src/sequential_calibration.py module docstring for the null it serves.
         self._open_predictions: Dict[str, Dict[str, Any]] = _bind_agent_predictions(
-            self.agent_id, {}
+            self.agent_id, {}, overwrite_existing=bool(load_state)
         )
         self._last_prediction_id: Optional[str] = None
         self._prediction_ttl_seconds: float = 3600.0  # orphan cleanup threshold
@@ -1325,6 +1325,13 @@ class UNITARESMonitor:
         # easy to misread as "the physical sensor is cut", so record which
         # source actually fed these observations rather than leaving it to be
         # inferred from raw_obs magnitudes.
+        if "_outcome_history" in agent_state:
+            call_outcome_history = agent_state.get("_outcome_history")
+            if call_outcome_history is not None:
+                self._cached_outcome_history = call_outcome_history
+        else:
+            call_outcome_history = self._cached_outcome_history
+
         sensor_eisv = agent_state.get('sensor_eisv')
         if sensor_eisv:
             # Use externally supplied sensor EISV directly when available
@@ -1348,7 +1355,7 @@ class UNITARESMonitor:
                 continuity_E_input=continuity_metrics.E_input,
                 continuity_I_input=continuity_metrics.I_input,
                 continuity_S_input=continuity_metrics.S_input,
-                outcome_history=self._cached_outcome_history,
+                outcome_history=call_outcome_history,
                 tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
             )
             if beh_sensor:
