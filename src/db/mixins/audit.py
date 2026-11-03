@@ -346,3 +346,32 @@ def _audit_session_ref(session_id):
     from src.mcp_handlers.identity.stable_session import audit_reference
 
     return audit_reference(session_id)
+
+
+async def count_eisv_sync_events_by_agents(
+    conn, resident_uuids: List[str], window
+) -> list:
+    """Count `eisv_sync` audit.events rows per agent_id within `window`."""
+    if not resident_uuids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT agent_id::text AS uuid, count(*) AS n
+        FROM audit.events
+        WHERE event_type = 'eisv_sync'
+          AND agent_id = ANY($1::text[])
+          AND ts > now() - $2::interval
+        GROUP BY agent_id
+        """,
+        resident_uuids,
+        window,
+    )
+
+
+async def count_lifecycle_pauses_since(conn, epoch_started_at) -> int:
+    """Count `lifecycle_paused` audit events since `epoch_started_at`."""
+    pause_sql = """
+        SELECT count(*)::int FROM audit.events
+        WHERE ts >= $1 AND event_type = 'lifecycle_paused'
+    """
+    return int((await conn.fetchval(pause_sql, epoch_started_at)) or 0)

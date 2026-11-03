@@ -175,34 +175,19 @@ async def _durable_latest_eisv_for_agent(
     """
     try:
         from src.db import get_db
+        from src.db.mixins.identity import resolve_identity_ids_for_agent_handle
+        from src.db.mixins.state import fetch_latest_durable_eisv_for_identities
+
         db = get_db()
         async with db.acquire() as conn:
             # Identity resolution mirrors http_agent_history: history is keyed by
             # the agent's UUID identity, but the resident row may carry the
             # structured id (mcp_DATE_<8hex>) whose suffix is that UUID's prefix.
-            row = await conn.fetchrow(
-                """
-                WITH ids AS (
-                    SELECT identity_id FROM core.identities WHERE agent_id = $1
-                    UNION
-                    SELECT identity_id FROM core.identities
-                     WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
-                       AND agent_id ~ '^[0-9a-f]{8}-'
-                       AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
-                )
-                SELECT s.recorded_at,
-                       (s.state_json->>'E')::real AS e,
-                       s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
-                       s.coherence, s.risk_score,
-                       s.state_json->>'verdict' AS verdict,
-                       s.state_json->>'action'  AS action
-                FROM core.agent_state s
-                WHERE s.identity_id IN (SELECT identity_id FROM ids)
-                  AND s.synthetic = false
-                ORDER BY s.recorded_at DESC
-                LIMIT 1
-                """,
-                agent_id,
+            identity_ids = await resolve_identity_ids_for_agent_handle(
+                conn, agent_id
+            )
+            row = await fetch_latest_durable_eisv_for_identities(
+                conn, identity_ids
             )
         if not row:
             return None

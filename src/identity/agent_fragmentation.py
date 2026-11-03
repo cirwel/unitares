@@ -91,18 +91,7 @@ WHERE ($1::TIMESTAMPTZ IS NULL OR created_at >= $1::TIMESTAMPTZ)
 ORDER BY created_at DESC
 """
 
-
-SYNTHETIC_STATE_SQL = """
-SELECT
-    synthetic,
-    COUNT(*) AS rows,
-    COUNT(DISTINCT identity_id) AS identities,
-    MIN(recorded_at) AS first_seen,
-    MAX(recorded_at) AS last_seen
-FROM core.agent_state
-GROUP BY synthetic
-ORDER BY synthetic
-"""
+from src.db.mixins.state import SYNTHETIC_STATE_SQL
 
 
 async def collect_agent_fragmentation(

@@ -459,3 +459,94 @@ async def test_residents_durable_eisv_not_consulted_when_ring_has_event():
     vigil = next(r for r in data["residents"] if r["label"] == "Vigil")
     assert vigil["last_checkin_source"] == "broadcaster_eisv"
     durable_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_durable_latest_eisv_for_agent_resolves_identity_and_state():
+    """_durable_latest_eisv_for_agent resolves identity_ids via IdentityMixin
+    and fetches the newest durable EISV row via StateMixin."""
+    from datetime import datetime, timezone
+    from src.http_routes.residents import _durable_latest_eisv_for_agent
+
+    recorded_at = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+    fake_conn = SimpleNamespace(
+        fetch=AsyncMock(return_value=[{"identity_id": 2**32 + 42}]),
+        fetchrow=AsyncMock(
+            return_value={
+                "recorded_at": recorded_at,
+                "e": 0.75,
+                "i": 0.82,
+                "s_entropy": 0.14,
+                "v": 0.02,
+                "coherence": 0.51,
+                "risk_score": 0.12,
+                "verdict": "safe",
+                "action": "proceed",
+            }
+        ),
+    )
+
+    class _Acquire:
+        async def __aenter__(self):
+            return fake_conn
+
+        async def __aexit__(self, *args):
+            return False
+
+    fake_db = SimpleNamespace(acquire=lambda: _Acquire())
+    with patch("src.db.get_db", return_value=fake_db):
+        result = await _durable_latest_eisv_for_agent("uuid-chronicler", "Chronicler")
+
+    assert result is not None
+    assert result["agent_id"] == "uuid-chronicler"
+    assert result["agent_name"] == "Chronicler"
+    assert result["eisv"] == {"E": 0.75, "I": 0.82, "S": 0.14, "V": 0.02}
+    assert result["coherence"] == 0.51
+    assert result["metrics"] == {"risk_score": 0.12, "verdict": "safe"}
+    assert result["decision"] == {"action": "proceed"}
+    fake_conn.fetch.assert_awaited_once()
+    fake_conn.fetchrow.assert_awaited_once()
+    assert "ANY($1::bigint[])" in fake_conn.fetchrow.await_args.args[0]
+    assert fake_conn.fetchrow.await_args.args[1] == [2**32 + 42]
+
+
+@pytest.mark.asyncio
+async def test_http_tier_distribution_aggregates_via_identity_mixin():
+    """http_tier_distribution delegates its core.identities query to IdentityMixin."""
+    from src.http_routes.overview import http_tier_distribution
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/agents/tier_distribution"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    fake_conn = SimpleNamespace(
+        fetch=AsyncMock(
+            return_value=[
+                {"tier": "verified", "n": 2},
+                {"tier": "established", "n": 3},
+                {"tier": "unknown", "n": 5},
+            ]
+        )
+    )
+
+    class _Acquire:
+        async def __aenter__(self):
+            return fake_conn
+
+        async def __aexit__(self, *args):
+            return False
+
+    fake_db = SimpleNamespace(acquire=lambda: _Acquire())
+    with patch("src.db.get_db", return_value=fake_db):
+        resp = await http_tier_distribution(request)
+
+    data = json.loads(resp.body.decode())
+    assert data["success"] is True
+    assert data["tiers"]["verified"] == 2
+    assert data["tiers"]["established"] == 3
+    assert data["tiers"]["unknown"] == 5
+    assert data["total"] == 10
+    assert data["earned"] == 5
+    fake_conn.fetch.assert_awaited_once()
