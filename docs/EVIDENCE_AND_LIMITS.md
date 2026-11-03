@@ -208,9 +208,10 @@ eligible as a result. The cluster threshold is not lowered, so a shortfall
 closes the read as inconclusive, not as a measured null.
 
 The read ran on 2026-11-03, after a second, run-date amendment, and took that
-branch. It met none of the four conditions, and the support condition failed
-(29 and 28 bad clusters against 150). So outcome-grounding is closed for
-insufficient eligible evidence. Whether EISV adds predictive signal for bad
+branch. The registered fixture rule removed 4,649 of the 4,876 trusted
+outcomes in the window as test traffic, so the support condition failed (29
+and 28 bad clusters against 150), and the read closed for insufficient eligible
+evidence without testing EISV. Whether EISV adds predictive signal for bad
 outcomes **remains untested, not disproved**. See the
 [result](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
 

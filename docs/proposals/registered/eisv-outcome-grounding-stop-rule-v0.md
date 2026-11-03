@@ -7,8 +7,9 @@ merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
 and its pre-data narrowing correction, 2026-09-25, effective at merge;
 data-boundary amendment (operator), 2026-10-15, effective at merge;
 run-date amendment (operator), 2026-11-03, effective at merge;
-**read run 2026-11-03: FAIL on all four conditions, closure for insufficient
-eligible evidence, scientific inference `INCONCLUSIVE`** ([result](#result-2026-11-03))
+**read run 2026-11-03: EISV was not tested. The registered fixture rule
+removed 4,649 of 4,876 trusted outcomes, so this is closure for insufficient
+eligible evidence; the inference is `INCONCLUSIVE`** ([result](#result-2026-11-03))
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -1064,6 +1065,18 @@ hold's own conditions change.
 
 ## Result 2026-11-03
 
+**In one line: the read did not get to test EISV.** In its window there were
+4,876 trusted task outcomes. The registered fixture rule counted 4,649 of them
+as test traffic and removed them: 2 before 2026-08-02 and 4,647 after. The
+reason is that the server stamps `calibration_excluded` (a scraped confidence)
+on nearly every trusted outcome after 2026-08-02, and the registered rule reads
+that stamp as a fixture marker. The 227 rows that remained span 2026-06-26 to
+2026-08-02. That left too few clusters for the support condition, and the
+rule's own reading of that is closure for insufficient eligible evidence. The
+corrected rule, which has been the instruments' default since 2026-09-02,
+keeps these rows. The run under that rule, pre-declared on 2026-09-02, is
+reported separately (see "Pre-declared sensitivity cohort").
+
 The registered read ran once: read id `eisv-outcome-grounding-2026-12-01`,
 fired 2026-11-03T16:05:06Z from `master@12703e019`, anchor scope `trusted`,
 `beam` excluded, registered data boundary `2026-11-03T16:00:00Z`, effective
@@ -1091,10 +1104,10 @@ At lead 30, Brier perm p is 0.027 and `Beats both?` is yes on both slices. Brier
 perm p tests Brier only, not the selected AUC delta, and it does not enter any
 condition.
 
-**Verdict.** This is an operational `FAIL`. Outcome-grounding is closed: there
-are no further scheduled outcome-prediction reads and no Stage B. Because
-condition 3 failed, this is **closure for insufficient eligible evidence**, not
-a measured null or a disproof. The scientific inference is `INCONCLUSIVE`, by
+**Verdict.** The support condition failed, so this is **closure for
+insufficient eligible evidence**. It is not a measured null and not a
+disproof. Under the gate's rules this closes the scheduled read track: there
+are no further scheduled outcome-prediction reads and no Stage B. The scientific inference is `INCONCLUSIVE`, by
 declaration, because the smallest-relevant-effect slot is unfilled. Reopening
 requires a new premise, as stated above. This result does not retire EISV
 (see "What continues regardless").
@@ -1143,12 +1156,15 @@ therefore the frozen pre-T record.
 
   **The nominal 365-day window delivered about five and a half weeks of
   admitted evidence**, from 2026-06-26 to 2026-08-02. No trusted task outcome
-  after 2026-08-02 was admitted, although the boundary is 2026-10-15. This
-  report does not establish why. Candidate causes include the anchor
-  predicate, the label-generator change disclosed above, and the fixture rule,
-  and none of them is tested here. Whatever the cause, this is a fact about
-  the eligible evidence, not about EISV. It supports the
-  insufficient-eligible-evidence reading.
+  after 2026-08-02 was admitted, although the boundary is 2026-10-15.
+
+  The cause is the registered fixture rule. A second coverage-only pass, using
+  the same selection with fixtures retained, counted 4,876 trusted task
+  outcomes before T. The rule classified 4,649 of them as fixtures: 2 in June,
+  1,090 in August, 2,891 in September and 666 in October. The corrected rule
+  classifies none of the post-June rows as fixtures. The anchor predicate is
+  not the cause: trusted `external_signal` task outcomes continue through
+  October. This is a fact about the instrument's filter, not about EISV.
 - *Self-retirement.* The wrapper ran `launchctl unload` on its own job before
   moving the plist, so launchd stopped the script before the move. The job was
   unloaded, but the plist stayed in `~/Library/LaunchAgents`. It was moved to

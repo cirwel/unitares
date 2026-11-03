@@ -988,9 +988,10 @@ lands before 2026-12-01, and the read is described as amended after interim
 exposure, not as an untouched confirmatory read.
 
 *Result 2026-11-03.* The registered read ran on 2026-11-03 under the run-date
-amendment. It met none of the four PASS conditions, so outcome-grounding is
-**closed for insufficient eligible evidence** (29 and 28 bad clusters against
-150). The scientific inference is `INCONCLUSIVE`. This claim therefore stays
+amendment. Its registered fixture rule removed 4,649 of the 4,876 trusted
+outcomes in the window as test traffic. The read therefore did not test EISV,
+and it **closed for insufficient eligible evidence** (29 and 28 bad clusters
+against 150). The scientific inference is `INCONCLUSIVE`. This claim therefore stays
 **untested, not negative**. Reopening requires a new premise: a different
 label channel or measurement process. See the
 [result](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).

@@ -99,11 +99,14 @@ first deployed change to the live EISV update path
 
 **Result, 2026-11-03.** The registered read ran once, on 2026-11-03 under the
 [run-date amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-11-03-run-date).
-It met none of the four PASS conditions, so outcome-grounding is closed
-operationally: there are no further scheduled outcome-prediction reads and no
-Stage B. Condition 3 failed (29 and 28 bad clusters at leads 0 and 30, against
-150), so this is closure for insufficient eligible evidence. The scientific
+It did not get to test EISV. The registered fixture rule removed 4,649 of the
+4,876 trusted outcomes in the window as test traffic, because nearly every
+trusted outcome after 2026-08-02 carries a scraped-confidence stamp. Only 227
+rows remained, which gave 29 and 28 bad clusters at leads 0 and 30, against a
+threshold of 150. This is closure for insufficient eligible evidence, and the
 inference is `INCONCLUSIVE`; it is not a measured null and not a refutation.
+The scheduled read track closes. The corrected-rule sensitivity run declared
+on 2026-09-02 is reported separately.
 Reopening requires a new premise. The full table, the power probe and the
 reconciliation are in the
 [stop rule's result section](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03)
