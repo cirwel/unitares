@@ -561,7 +561,7 @@ async def count_measured_checkins_by_identity_ids(
         """
         SELECT identity_id, count(*) AS n
           FROM core.agent_state
-         WHERE identity_id = ANY($1::int[])
+         WHERE identity_id = ANY($1::bigint[])
            AND recorded_at > now() - $2::interval
            AND synthetic IS NOT TRUE
          GROUP BY identity_id
@@ -586,7 +586,7 @@ async def fetch_latest_durable_eisv_for_identities(
                s.state_json->>'verdict' AS verdict,
                s.state_json->>'action'  AS action
         FROM core.agent_state s
-        WHERE s.identity_id = ANY($1::int[])
+        WHERE s.identity_id = ANY($1::bigint[])
           AND s.synthetic = false
         ORDER BY s.recorded_at DESC
         LIMIT 1

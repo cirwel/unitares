@@ -470,7 +470,7 @@ async def test_durable_latest_eisv_for_agent_resolves_identity_and_state():
 
     recorded_at = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
     fake_conn = SimpleNamespace(
-        fetch=AsyncMock(return_value=[{"identity_id": 42}]),
+        fetch=AsyncMock(return_value=[{"identity_id": 2**32 + 42}]),
         fetchrow=AsyncMock(
             return_value={
                 "recorded_at": recorded_at,
@@ -506,6 +506,8 @@ async def test_durable_latest_eisv_for_agent_resolves_identity_and_state():
     assert result["decision"] == {"action": "proceed"}
     fake_conn.fetch.assert_awaited_once()
     fake_conn.fetchrow.assert_awaited_once()
+    assert "ANY($1::bigint[])" in fake_conn.fetchrow.await_args.args[0]
+    assert fake_conn.fetchrow.await_args.args[1] == [2**32 + 42]
 
 
 @pytest.mark.asyncio
