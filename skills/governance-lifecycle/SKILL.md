@@ -9,6 +9,7 @@ freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
   - unitares/src/agent_loop_detection.py
+  - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py

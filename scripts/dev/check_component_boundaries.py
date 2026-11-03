@@ -93,7 +93,10 @@ PACK_ALLOWED_MODULES = frozenset({
 COMPONENTS: dict[str, tuple[str, ...]] = {
     "checkpoints": ("src/checkpoints.py", "src/db/mixins/checkpoint.py"),
     "identity": ("src/mcp_handlers/identity/", "src/identity/", "src/db/mixins/identity.py"),
-    "eisv": ("governance_core/", "src/db/mixins/state.py", "src/agent_monitor_state.py"),
+    "eisv": (
+        "governance_core/", "src/db/mixins/state.py",
+        "src/agent_monitor_state.py", "src/eisv/adapter.py",
+    ),
     "knowledge": (
         "src/mcp_handlers/knowledge/",
         "src/storage/knowledge_graph_age.py",

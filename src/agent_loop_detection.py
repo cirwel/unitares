@@ -16,7 +16,6 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from functools import partial
 from uuid import uuid4
 
 from src.logging_utils import get_logger
@@ -574,40 +573,19 @@ async def execute_admitted_update_async(
     """
     if not isinstance(admission, _UpdateAdmission):
         raise TypeError("assessment requires an internal update admission")
-    from src.agent_lifecycle import get_or_create_monitor
+    from src.eisv.adapter import EisvRequest, assess_eisv
 
     agent_id = admission.agent_id
     posture = admission.posture
     loop = asyncio.get_running_loop()
 
-    # Get or create monitor
-    _t_setup = time.perf_counter()
-    monitor = await loop.run_in_executor(None, get_or_create_monitor, agent_id)
-    # Heal the DB ↔ file persistence split: if the on-disk state file is
-    # missing but core.agent_state has history, hydrate update_count +
-    # rolling histories from DB so this check-in continues from real state
-    # rather than from a fresh zero.
-    from src.agent_monitor_state import hydrate_from_db_if_fresh
-    await hydrate_from_db_if_fresh(monitor, agent_id)
-    _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
-
-    task_type = agent_state.get("task_type", "mixed")
-
-    # Numpy ODE step — `monitor.process_update` dispatched via the default
-    # executor pool. v0.3 RESOLUTION's "load-bearing unknown" was "what's
-    # in the 7s ODE remainder?"; this timer answers that. Named
-    # `ode.numpy_step_ms` (not `compute_ms`) because the wall-clock here
-    # includes executor queue-wait time as well as the numpy work — under
-    # concurrent load on a saturated default pool, queue-wait can dominate
-    # numpy compute. Disambiguating "numpy slow" from "executor saturated"
-    # requires looking at executor queue depth alongside, which is out of
-    # scope for this branch; called out in the eval doc's falsifier matrix.
-    _t_numpy = time.perf_counter()
-    result = await loop.run_in_executor(
-        None,
-        partial(monitor.process_update, agent_state, confidence=confidence, task_type=task_type)
+    # Construct this handoff after the optional acceptance callback has added
+    # checkpoint provenance. Preserve the original call-local state mapping.
+    assessment = await assess_eisv(
+        EisvRequest(agent_id=agent_id, agent_state=agent_state, confidence=confidence)
     )
-    _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
+    result = assessment.result
+    monitor = assessment.monitor
 
     policy_actuation_authorized = apply_policy_actuation_posture(
         result, posture=posture
