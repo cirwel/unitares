@@ -97,6 +97,18 @@ first deployed change to the live EISV update path
 (`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
 2026-12-01; the read is described as amended after interim exposure.
 
+**Result, 2026-11-03.** The registered read ran once, on 2026-11-03 under the
+[run-date amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-11-03-run-date).
+It met none of the four PASS conditions, so outcome-grounding is closed
+operationally: there are no further scheduled outcome-prediction reads and no
+Stage B. Condition 3 failed (29 and 28 bad clusters at leads 0 and 30, against
+150), so this is closure for insufficient eligible evidence. The scientific
+inference is `INCONCLUSIVE`; it is not a measured null and not a refutation.
+Reopening requires a new premise. The full table, the power probe and the
+reconciliation are in the
+[stop rule's result section](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03)
+and on [#1425](https://github.com/cirwel/unitares/issues/1425).
+
 *Reading note, 2026-10-16. Non-normative; it changes no condition, threshold,
 cutoff, cohort, kill criterion or reopening rule, and the registered file is
 untouched.* Under the shipped estimator, PASS condition 1 (`selective p ≤

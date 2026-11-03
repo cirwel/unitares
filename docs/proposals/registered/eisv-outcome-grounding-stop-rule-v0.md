@@ -6,7 +6,9 @@ and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
 merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
 and its pre-data narrowing correction, 2026-09-25, effective at merge;
 data-boundary amendment (operator), 2026-10-15, effective at merge;
-run-date amendment (operator), 2026-11-03, effective at merge
+run-date amendment (operator), 2026-11-03, effective at merge;
+**read run 2026-11-03: FAIL on all four conditions, closure for insufficient
+eligible evidence, scientific inference `INCONCLUSIVE`** ([result](#result-2026-11-03))
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -1059,6 +1061,72 @@ an untouched confirmatory read, and its report names this amendment beside the
 rather than on 2026-12-01: the #2610 E/I formula work, and the #2608
 (ablation protocol 0.3.1) hold on publishing a Phase I primary result. Neither
 hold's own conditions change.
+
+## Result 2026-11-03
+
+The registered read ran once: read id `eisv-outcome-grounding-2026-12-01`,
+fired 2026-11-03T16:05:06Z from `master@12703e019`, anchor scope `trusted`,
+`beam` excluded, registered data boundary `2026-11-03T16:00:00Z`, effective
+boundary `2026-10-15T13:44:59.999999Z`. One receipt was written and no retry
+was made. The result was posted on
+[#1425](https://github.com/cirwel/unitares/issues/1425). It is a read **amended
+after interim exposure**, under the 2026-10-15 data-boundary amendment and the
+2026-11-03 run-date amendment.
+
+| task / 365 d | Rows | Bad | Bad clusters | Null clusters | Agents | Best EISV/prior model | AUC delta | Null max p95 | Selective p | Inference class |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lead 0 | 227 | 53 | 29 | 79 | 25 | `prior_risk_binned` | 0.147 | 0.313 | 0.499 | `NON_DETECTION` |
+| lead 30 | 227 | 53 | 28 | 67 | 25 | `prior_s_binned` | 0.343 | 0.373 | 0.085 | `NON_DETECTION` |
+
+**Failed conditions: all four.**
+
+1. Unmet. Both slices are `NON_DETECTION`, so neither reaches selective p ≤ 0.05.
+2. Unmet. The AUC delta is below the null p95 on both slices. As the reading
+   note in `docs/EVALUATION_INDEX.md` records, this is not independent of
+   condition 1.
+3. Unmet. There are 29 and 28 bad clusters, against 150.
+4. Unmet. The winner cells differ (`prior_risk_binned` against `prior_s_binned`).
+
+**Verdict.** This is an operational `FAIL`. Outcome-grounding is closed: there
+are no further scheduled outcome-prediction reads and no Stage B. Because
+condition 3 failed, this is **closure for insufficient eligible evidence**, not
+a measured null or a disproof. The scientific inference is `INCONCLUSIVE`, by
+declaration, because the smallest-relevant-effect slot is unfilled. Reopening
+requires a new premise, as stated above. This result does not retire EISV
+(see "What continues regardless").
+
+**Power.** The database-free probe ran at the lead-0 shape (`--rows 227 --bad
+53 --clusters 79 --agents 25 --trials 100 --resamples 400 --seed 0`). It is
+reported descriptively, since no effect is declared. Power to reach selective
+p ≤ 0.05 was:
+
+- 0.33 [0.25, 0.43] at a planted true AUC of about 0.64;
+- 0.49 [0.39, 0.59] at about 0.68;
+- 0.71 [0.61, 0.79] at about 0.74;
+- 0.90 [0.83, 0.94] only at about 0.82.
+
+The type-I row was 0.09 [0.05, 0.16], which is compatible with α. The probe is
+an optimistic scenario. Its null max p95 was about 0.12–0.16, against the real
+slice's 0.313, so the real read's power is lower again. At this shape the read
+could detect only a large effect.
+
+**Reconciliation.** `eisv_read_input_snapshot.py reconcile` against the
+snapshot with sha `4988e170…` reported, for all three tables, zero changed rows,
+zero live-only backfills and zero snapshot-only removals. The read's inputs are
+therefore the frozen pre-T record.
+
+**Disclosures.**
+
+- *Coverage.* The 2026-10-15 amendment asks the report to state its coverage:
+  the earliest admitted outcome, the earliest joined prior state, and the counts
+  per month. The matrix and wrapper do not produce these, so the report omits
+  them. Producing them would take another pass over the outcome data. That is
+  left as an open item, not done ad hoc.
+- *Self-retirement.* The wrapper ran `launchctl unload` on its own job before
+  moving the plist, so launchd stopped the script before the move. The job was
+  unloaded, but the plist stayed in `~/Library/LaunchAgents`. It was moved to
+  `retired-plists/` by hand at 16:58Z. A second read could not have run, because
+  the receipt refuses reuse of the read id.
 
 ## What continues regardless
 
