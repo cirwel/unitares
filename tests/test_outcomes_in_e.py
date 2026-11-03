@@ -220,3 +220,27 @@ def test_enrichment_marks_change_per_monitor():
     ctx = SimpleNamespace(agent_state={}, monitor=monitor, response_data={})
     enrich_outcomes_in_e(ctx)
     assert "outcomes_in_e" not in ctx.response_data
+
+
+def test_self_referential_trajectory_outcomes_do_not_enter_e_or_account():
+    """#2610 / Invariant 4: trajectory_validated and cirs_resonance echoes are excluded from E, I, and outcomes_in_e."""
+    echo_only = [
+        {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.25},
+        {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.30},
+        {"outcome_type": "cirs_resonance", "is_bad": True, "outcome_score": 0.0},
+        {"outcome_type": "trajectory_validated", "is_bad": False, "outcome_score": 0.80},
+    ]
+    assert _evidence(echo_only) is None
+    assert compute_behavioral_sensor_eisv(**_inputs(echo_only)) == compute_behavioral_sensor_eisv(
+        **_inputs(None)
+    )
+
+    mixed = _outcomes(4, 1) + echo_only
+    evidence = _evidence(mixed)
+    assert evidence["counted"] == 4
+    assert evidence["adverse"] == 1
+    assert evidence["adverse_by_type"] == {"test_failed": 1}
+    assert compute_behavioral_sensor_eisv(**_inputs(mixed)) == compute_behavioral_sensor_eisv(
+        **_inputs(_outcomes(4, 1))
+    )
+

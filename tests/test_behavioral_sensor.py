@@ -1285,3 +1285,145 @@ class TestNeutralizeSensorSelfLoops:
         baseline_after = get_agent_baseline("agent-auto-2418")
         assert baseline_after.update_count == initial_count + 1
         assert baseline_after.baseline_complexity == pytest.approx(initial_complexity)
+
+
+class TestOutcomeEchoExclusionAndPerAgentICalibration:
+    """#2610 & #2818: exclude trajectory_validated/cirs_resonance echoes and support per-agent I calibration."""
+
+    def test_self_referential_outcomes_excluded_from_e_and_i(self):
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_components,
+            filter_behavioral_outcomes,
+            is_self_referential_outcome,
+        )
+
+        echo_rows = [
+            {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.20},
+            {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.15},
+            {"outcome_type": "cirs_resonance", "is_bad": True, "outcome_score": 0.00},
+            {"outcome_type": "trajectory_validated", "is_bad": False, "outcome_score": 0.85},
+        ]
+        real_rows = [
+            {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 1.0},
+            {"outcome_type": "task_completed", "is_bad": False, "outcome_score": 0.95},
+            {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 0.90},
+        ]
+        assert all(is_self_referential_outcome(r) for r in echo_rows)
+        assert not any(is_self_referential_outcome(r) for r in real_rows)
+        assert filter_behavioral_outcomes(echo_rows + real_rows) == real_rows
+
+        h = make_histories(n=6)
+        comp_echo_only = compute_behavioral_sensor_components(**h, outcome_history=echo_rows)
+        comp_none = compute_behavioral_sensor_components(**h, outcome_history=None)
+        assert comp_echo_only == comp_none
+
+        comp_mixed = compute_behavioral_sensor_components(
+            **h, outcome_history=echo_rows + real_rows
+        )
+        comp_real = compute_behavioral_sensor_components(
+            **h, outcome_history=real_rows
+        )
+        assert comp_mixed == comp_real
+
+    @pytest.mark.asyncio
+    async def test_prepare_unlocked_inputs_retains_real_outcomes_past_trajectory_echoes(self):
+        """prepare_unlocked_inputs fetches up to 100 rows and filters out trajectory_validated before slicing to 20."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+
+        helper = TestPrepareUnlockedInputsContract()
+        monitor = helper._make_mock_monitor(n=6)
+        ctx = helper._make_ctx(monitor=monitor)
+
+        # 25 newest trajectory_validated rows followed by 5 genuine task_completed rows
+        db_rows = (
+            [{"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.2}] * 25
+            + [{"outcome_type": "task_completed", "is_bad": False, "outcome_score": 0.95}] * 5
+        )
+        mock_db = MagicMock()
+        mock_db.get_recent_outcomes = AsyncMock(return_value=db_rows)
+
+        with patch("src.db.get_db", return_value=mock_db), \
+             patch("src.tool_usage_tracker.get_tool_usage_tracker",
+                   return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))):
+            await prepare_unlocked_inputs(ctx)
+
+        mock_db.get_recent_outcomes.assert_awaited_once_with(
+            agent_id="test-agent", limit=100, since_hours=24.0
+        )
+        assert len(ctx.agent_state["_outcome_history"]) == 5
+        assert all(
+            r["outcome_type"] == "task_completed"
+            for r in ctx.agent_state["_outcome_history"]
+        )
+
+    def test_per_agent_i_calibration_pools_when_verified_pairs_exist(self, monkeypatch):
+        """#2818 §3.1: when UNITARES_PER_AGENT_I_CALIBRATION=1 and n_verified_pairs >= 1, I uses partial-pooled per-agent ECE."""
+        from src.behavioral_sensor import (
+            AGENT_CALIBRATION_POOLING_K,
+            AGENT_CALIBRATION_PRIOR_ERROR,
+            compute_behavioral_sensor_components,
+        )
+        from src.eisv_telemetry import build_behavioral_derivation
+
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "1")
+        h = make_histories(n=6, coherence=0.5)
+        channel = {
+            "evidence_status": "available",
+            "n_verified_pairs": 10,
+            "calibration_error": 0.04,
+            "value": 0.96,
+        }
+        record = compute_behavioral_sensor_components(
+            **h,
+            calibration_error=0.35,  # fleet scalar ignored in favor of pooled agent channel
+            agent_calibration_channel=channel,
+        )
+        i_comps = {c["name"]: c for c in record["dimensions"]["I"]["components"]}
+        w = 10.0 / (10.0 + AGENT_CALIBRATION_POOLING_K)
+        expected_e_pool = (1.0 - w) * AGENT_CALIBRATION_PRIOR_ERROR + w * 0.04
+        expected_cal_i = 1.0 - expected_e_pool
+
+        assert i_comps["calibration_accuracy"]["source"] == "agent_calibration_pooled"
+        assert i_comps["calibration_accuracy"]["observed"] is True
+        assert i_comps["calibration_accuracy"]["value"] == pytest.approx(expected_cal_i)
+
+        derivation = build_behavioral_derivation(
+            **h,
+            calibration_error=0.35,
+            calibration_signal={"agent_channel": channel},
+        )
+        assert derivation["components"]["dimensions"]["I"] == record["dimensions"]["I"]
+
+    def test_per_agent_i_calibration_falls_back_to_arm_f_when_no_pairs(self, monkeypatch):
+        """#2818 §3.2 Rule 1: when UNITARES_PER_AGENT_I_CALIBRATION=1 and n_verified_pairs == 0, no prior enters I (uses Arm F)."""
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_components,
+            compute_behavioral_sensor_eisv,
+        )
+
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "1")
+        h = make_histories(n=6, coherence=0.5)
+        empty_channel = {
+            "evidence_status": "unavailable",
+            "n_verified_pairs": 0,
+            "calibration_error": None,
+            "value": None,
+            "default_reason": "no_verified_agent_pairs",
+        }
+        record = compute_behavioral_sensor_components(
+            **h,
+            calibration_error=0.35,
+            agent_calibration_channel=empty_channel,
+        )
+        i_names = [c["name"] for c in record["dimensions"]["I"]["components"]]
+        assert "calibration_accuracy" not in i_names
+        assert i_names == ["legacy_coherence_trend"]
+
+        arm_f = compute_behavioral_sensor_eisv(
+            **h,
+            calibration_error=0.35,
+            calibration_free_i=True,
+            per_agent_i_calibration=False,
+        )
+        assert record["dimensions"]["I"]["value"] == pytest.approx(arm_f["I"])
+
