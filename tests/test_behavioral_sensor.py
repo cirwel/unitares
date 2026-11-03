@@ -1192,9 +1192,47 @@ class TestNeutralizeSensorSelfLoops:
         assert s_by_name["regime_instability"]["observed"] is False
         assert s_by_name["regime_instability"]["default_reason"] == "self_loop_neutralized"
 
+    def test_shadow_loop_ablations_preserve_single_loop_semantics_when_neutralize_enabled(self, monkeypatch):
+        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, shadow loop ablations still compare single-loop removal against raw deployed."""
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_eisv,
+            compute_legacy_coherence_dependency_shadow,
+            compute_decision_self_loop_shadow,
+            compute_regime_self_loop_shadow,
+        )
+
+        inputs = dict(
+            decision_history=["risk_pause"] * 6,
+            coherence_history=[0.35, 0.35, 0.35, 0.65, 0.65, 0.65],
+            regime_history=_FLAPPING,
+            E_history=[0.6] * 6,
+            I_history=[0.7] * 6,
+            S_history=[0.3] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.1,
+            drift_norm=0.2,
+            complexity_divergence=0.1,
+        )
+
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+        raw_deployed = compute_behavioral_sensor_eisv(**inputs)
+        coh_off = compute_legacy_coherence_dependency_shadow(**inputs, deployed_observation=raw_deployed)
+        dec_off = compute_decision_self_loop_shadow(**inputs, deployed_observation=raw_deployed)
+        reg_off = compute_regime_self_loop_shadow(**inputs, deployed_observation=raw_deployed)
+
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        neutralized_deployed = compute_behavioral_sensor_eisv(**inputs)
+        coh_on = compute_legacy_coherence_dependency_shadow(**inputs, deployed_observation=neutralized_deployed)
+        dec_on = compute_decision_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
+        reg_on = compute_regime_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
+
+        assert coh_on["candidate_minus_deployed"] == coh_off["candidate_minus_deployed"]
+        assert dec_on["candidate_minus_deployed"] == dec_off["candidate_minus_deployed"]
+        assert reg_on["candidate_minus_deployed"] == reg_off["candidate_minus_deployed"]
+
     @pytest.mark.asyncio
     async def test_automatic_degenerate_checkin_excludes_template_divergence(self):
-        """#2418 Fix 1: automatic/rollup check-in with continuity_degenerate=True excludes comp_div/cont_I/cont_S."""
+        """#2418 Fix 1: _last_continuity_metrics with template_divergence_excluded=True excludes comp_div/cont_I/cont_S even on authored follow-up."""
         from types import SimpleNamespace
         from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
         helper = TestPrepareUnlockedInputsContract()
@@ -1207,9 +1245,10 @@ class TestNeutralizeSensorSelfLoops:
             self_complexity_defaulted=False,
             E_input_clipped=True,
             continuity_degenerate=True,
+            template_divergence_excluded=True,
         )
         ctx = helper._make_ctx(monitor=monitor)
-        ctx.response_text = "5 tool calls completed: read_file, edit_file, bash"
+        ctx.response_text = "Authored follow-up check-in after automatic hook rollup"
         ctx.epistemic_class = "agent_report"
 
         with patch("src.db.get_db", return_value=None), \
@@ -1239,5 +1278,6 @@ class TestNeutralizeSensorSelfLoops:
         )
         assert res["status"] == "healthy"
         assert mon._last_continuity_metrics.continuity_degenerate is True
+        assert mon._last_continuity_metrics.template_divergence_excluded is True
         assert mon._last_continuity_metrics.complexity_divergence > 0.3
         assert mon._last_drift_vector.complexity_divergence == pytest.approx(0.0)

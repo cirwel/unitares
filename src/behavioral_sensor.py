@@ -306,25 +306,29 @@ def compute_legacy_coherence_dependency_shadow(
             "candidate_minus_deployed": None,
         }
 
-    deployed = deployed_observation or compute_behavioral_sensor_eisv(
-        decision_history=decision_history,
-        coherence_history=coherence_history,
-        regime_history=regime_history,
-        E_history=E_history,
-        I_history=I_history,
-        S_history=S_history,
-        V_history=V_history,
-        calibration_error=calibration_error,
-        drift_norm=drift_norm,
-        complexity_divergence=complexity_divergence,
-        continuity_E_input=continuity_E_input,
-        continuity_I_input=continuity_I_input,
-        continuity_S_input=continuity_S_input,
-        outcome_history=outcome_history,
-        tool_error_rate=tool_error_rate,
-        tool_call_velocity=tool_call_velocity,
-        unique_tools_ratio=unique_tools_ratio,
-        neutralize_self_loops=False,
+    deployed = (
+        deployed_observation
+        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
+        else compute_behavioral_sensor_eisv(
+            decision_history=decision_history,
+            coherence_history=coherence_history,
+            regime_history=regime_history,
+            E_history=E_history,
+            I_history=I_history,
+            S_history=S_history,
+            V_history=V_history,
+            calibration_error=calibration_error,
+            drift_norm=drift_norm,
+            complexity_divergence=complexity_divergence,
+            continuity_E_input=continuity_E_input,
+            continuity_I_input=continuity_I_input,
+            continuity_S_input=continuity_S_input,
+            outcome_history=outcome_history,
+            tool_error_rate=tool_error_rate,
+            tool_call_velocity=tool_call_velocity,
+            unique_tools_ratio=unique_tools_ratio,
+            neutralize_self_loops=False,
+        )
     )
     neutral_history = [LEGACY_COHERENCE_NEUTRAL_VALUE] * min(
         len(coherence_history), 10
@@ -491,8 +495,12 @@ def compute_decision_self_loop_shadow(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
     )
-    deployed = deployed_observation or compute_behavioral_sensor_eisv(
-        decision_history=decision_history, neutralize_self_loops=False, **shared
+    deployed = (
+        deployed_observation
+        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
+        else compute_behavioral_sensor_eisv(
+            decision_history=decision_history, neutralize_self_loops=False, **shared
+        )
     )
     # A sentinel the score table maps to DECISION_NEUTRAL_SCORE, so the EWA sees
     # a flat series. Substituting the numeric score directly would not work:
@@ -616,8 +624,12 @@ def compute_regime_self_loop_shadow(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
     )
-    deployed = deployed_observation or compute_behavioral_sensor_eisv(
-        **inputs, neutralize_self_loops=False
+    deployed = (
+        deployed_observation
+        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
+        else compute_behavioral_sensor_eisv(
+            **inputs, neutralize_self_loops=False
+        )
     )
     candidate = compute_behavioral_sensor_eisv(
         **inputs,

@@ -1281,6 +1281,7 @@ class UNITARESMonitor:
             client_session_id=client_session_id,
             task_type=task_type,
             tool_usage_stats=tu_stats,
+            epistemic_class=agent_state.get("epistemic_class"),
         )
         
         # Store for response and downstream use
@@ -1377,14 +1378,21 @@ class UNITARESMonitor:
                 beh_S_obs = beh_sensor['S']
                 beh_obs_source = 'behavioral_sensor'
             else:
-                # Insufficient history — use continuity layer inputs as fallback
+                # Insufficient history — use continuity layer inputs as fallback.
+                # When template divergence is excluded (#2418), I_input and
+                # S_input are treated as absent and use the same 0.5 / 0.2
+                # missing-input defaults as None.
                 beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                if exclude_template_div:
-                    beh_I_obs = 0.8
-                    beh_S_obs = 0.2
-                else:
-                    beh_I_obs = continuity_metrics.I_input if continuity_metrics.I_input is not None else 0.5
-                    beh_S_obs = continuity_metrics.S_input if continuity_metrics.S_input is not None else 0.2
+                beh_I_obs = (
+                    0.5
+                    if exclude_template_div or continuity_metrics.I_input is None
+                    else continuity_metrics.I_input
+                )
+                beh_S_obs = (
+                    0.2
+                    if exclude_template_div or continuity_metrics.S_input is None
+                    else continuity_metrics.S_input
+                )
                 beh_obs_source = 'continuity_fallback'
 
         # Provenance for the authoritative vector: which source produced the

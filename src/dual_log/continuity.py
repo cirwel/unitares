@@ -55,6 +55,7 @@ class ContinuityMetrics:
     self_complexity_defaulted: bool = False   # divergence used the 0.2 stand-in
     E_input_clipped: bool = False             # E_input hit a clip bound, carries no signal
     continuity_degenerate: bool = False       # text features can't move for this caller
+    template_divergence_excluded: bool = False  # degenerate automatic/rollup divergence excluded (#2418)
 
     def to_dict(self) -> dict:
         """Serialize for storage and API responses."""
@@ -73,6 +74,7 @@ class ContinuityMetrics:
             'self_complexity_defaulted': self.self_complexity_defaulted,
             'E_input_clipped': self.E_input_clipped,
             'continuity_degenerate': self.continuity_degenerate,
+            'template_divergence_excluded': self.template_divergence_excluded,
         }
 
 
@@ -304,14 +306,25 @@ def should_exclude_template_divergence(
     when BOTH:
     1. ``continuity_metrics.continuity_degenerate`` is True (no code blocks,
        list items, multi-paragraph structure, questions, or tool mentions), and
-    2. the check-in is an automatic/non-authored check-in or a runtime tool-count
-       rollup (`is_automatic_or_rollup_checkin`).
+    2. the check-in that produced ``continuity_metrics`` is an automatic/non-authored
+       check-in or a runtime tool-count rollup (`is_automatic_or_rollup_checkin`).
+
+    When ``response_text`` and ``epistemic_class`` are omitted (e.g. when reading
+    ``monitor._last_continuity_metrics`` from a prior check-in in
+    ``prepare_unlocked_inputs`` or pre-ODE anomaly scoring), reads the stamped
+    ``continuity_metrics.template_divergence_excluded`` flag recorded when that
+    ``ContinuityMetrics`` instance was created so alternating authored and
+    automatic check-ins never cross-contaminate.
 
     Raw ``ContinuityMetrics`` stay intact on ``monitor._last_continuity_metrics``
     and dual-log storage for auditability.
     """
     if continuity_metrics is None:
         return False
+    if response_text is None and epistemic_class is None:
+        if isinstance(continuity_metrics, dict):
+            return bool(continuity_metrics.get("template_divergence_excluded", False))
+        return bool(getattr(continuity_metrics, "template_divergence_excluded", False))
     if isinstance(continuity_metrics, dict):
         degenerate = bool(continuity_metrics.get("continuity_degenerate", False))
     else:
@@ -451,6 +464,7 @@ class ContinuityLayer:
         task_type: Optional[str] = None,
         calibration_weight: float = 0.5,
         tool_usage_stats: Optional[Dict[str, Any]] = None,
+        epistemic_class: Optional[str] = None,
     ) -> ContinuityMetrics:
         """
         Process an agent update through dual-log architecture.
@@ -522,6 +536,12 @@ class ContinuityLayer:
             complexity_roc = min(1.0, abs(metrics.derived_complexity - self._prev_derived_complexity))
             metrics.complexity_divergence = complexity_roc
         self._prev_derived_complexity = metrics.derived_complexity
+
+        metrics.template_divergence_excluded = should_exclude_template_divergence(
+            metrics,
+            response_text=response_text,
+            epistemic_class=epistemic_class,
+        )
 
         # 4. Store entries
         self._store_operational(op_entry)

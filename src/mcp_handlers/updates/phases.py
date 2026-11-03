@@ -987,11 +987,10 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 substrate_canaries = {}
                 cm = getattr(monitor, '_last_continuity_metrics', None)
                 if cm is not None:
-                    exclude_template_div = should_exclude_template_divergence(
-                        cm,
-                        response_text=ctx.response_text,
-                        epistemic_class=ctx.epistemic_class,
-                    )
+                    # cm is the previous check-in's ContinuityMetrics, so read
+                    # the exclusion flag stamped when cm was created rather than
+                    # mixing cm with the current check-in's text/epistemic_class.
+                    exclude_template_div = should_exclude_template_divergence(cm)
                     cont_E = getattr(cm, 'E_input', None)
                     if not exclude_template_div:
                         comp_div = getattr(cm, 'complexity_divergence', None)
@@ -1616,18 +1615,14 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
 
         _mon = mcp_server.monitors.get(ctx.agent_id)
 
-        # Complexity divergence from continuity metrics
+        # Complexity divergence from continuity metrics (previous check-in's cm)
         if _mon:
             from src.dual_log.continuity import should_exclude_template_divergence
             _cm = getattr(_mon, '_last_continuity_metrics', None)
             if (
                 _cm
                 and hasattr(_cm, 'complexity_divergence')
-                and not should_exclude_template_divergence(
-                    _cm,
-                    response_text=ctx.response_text,
-                    epistemic_class=ctx.epistemic_class,
-                )
+                and not should_exclude_template_divergence(_cm)
             ):
                 anomaly_signals["complexity_divergence"] = _cm.complexity_divergence
 
@@ -1844,7 +1839,7 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
                 baseline.update("tool_call_velocity", _tu_total / 60.0)
         except Exception:
             pass
-        # Complexity divergence
+        # Complexity divergence (post-ODE: cm is the current check-in's ContinuityMetrics)
         monitor = mcp_server.monitors.get(agent_id)
         if monitor:
             from src.dual_log.continuity import should_exclude_template_divergence
@@ -1852,11 +1847,7 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
             if (
                 cm
                 and hasattr(cm, 'complexity_divergence')
-                and not should_exclude_template_divergence(
-                    cm,
-                    response_text=ctx.response_text,
-                    epistemic_class=ctx.epistemic_class,
-                )
+                and not should_exclude_template_divergence(cm)
             ):
                 baseline.update("complexity_divergence", cm.complexity_divergence)
         # Fire-and-forget persist to PostgreSQL
