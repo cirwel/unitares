@@ -173,7 +173,12 @@ async def test_collector_joins_children_and_audit_aggregates(monkeypatch):
         ["runtime_observation.context_compaction"],
         ["runtime_observation.context_compaction_probe"],
     ]
-    assert set(seen["aggregate_types"]) == {"auto_attest", "knowledge_write", "consultation"}
+    assert set(seen["aggregate_types"]) == {
+        "auto_attest",
+        "knowledge_write",
+        "consultation",
+        "inference_call",
+    }
     assert report["complete"] is True
     assert seen["children_args"][0] == sorted([PARENT, kept_agent, quiet_agent])
     by_event = {row["event_id"]: row for row in report["rows"]}
