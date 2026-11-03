@@ -1281,6 +1281,7 @@ class UNITARESMonitor:
             client_session_id=client_session_id,
             task_type=task_type,
             tool_usage_stats=tu_stats,
+            epistemic_class=agent_state.get("epistemic_class"),
         )
         
         # Store for response and downstream use
@@ -1340,6 +1341,13 @@ class UNITARESMonitor:
             beh_S_obs = float(sensor_eisv.get('S', 0.2))
             beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
         else:
+            from src.dual_log.continuity import should_exclude_template_divergence
+
+            exclude_template_div = should_exclude_template_divergence(
+                continuity_metrics,
+                response_text=response_text,
+                epistemic_class=agent_state.get('epistemic_class'),
+            )
             # Non-embodied agents: compute from behavioral_sensor
             beh_sensor = compute_behavioral_sensor_eisv(
                 decision_history=self.state.decision_history,
@@ -1351,10 +1359,16 @@ class UNITARESMonitor:
                 V_history=self.state.V_history,
                 calibration_error=getattr(drift_vector, 'calibration_deviation', None),
                 drift_norm=getattr(drift_vector, 'norm', None),
-                complexity_divergence=continuity_metrics.complexity_divergence,
+                complexity_divergence=(
+                    None if exclude_template_div else continuity_metrics.complexity_divergence
+                ),
                 continuity_E_input=continuity_metrics.E_input,
-                continuity_I_input=continuity_metrics.I_input,
-                continuity_S_input=continuity_metrics.S_input,
+                continuity_I_input=(
+                    None if exclude_template_div else continuity_metrics.I_input
+                ),
+                continuity_S_input=(
+                    None if exclude_template_div else continuity_metrics.S_input
+                ),
                 outcome_history=call_outcome_history,
                 tool_error_rate=tu_stats.get('error_rate') if tu_stats else None,
             )
@@ -1364,10 +1378,21 @@ class UNITARESMonitor:
                 beh_S_obs = beh_sensor['S']
                 beh_obs_source = 'behavioral_sensor'
             else:
-                # Insufficient history — use continuity layer inputs as fallback
+                # Insufficient history — use continuity layer inputs as fallback.
+                # When template divergence is excluded (#2418), I_input and
+                # S_input are treated as absent and use the same 0.5 / 0.2
+                # missing-input defaults as None.
                 beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
-                beh_I_obs = continuity_metrics.I_input if continuity_metrics.I_input is not None else 0.5
-                beh_S_obs = continuity_metrics.S_input if continuity_metrics.S_input is not None else 0.2
+                beh_I_obs = (
+                    0.5
+                    if exclude_template_div or continuity_metrics.I_input is None
+                    else continuity_metrics.I_input
+                )
+                beh_S_obs = (
+                    0.2
+                    if exclude_template_div or continuity_metrics.S_input is None
+                    else continuity_metrics.S_input
+                )
                 beh_obs_source = 'continuity_fallback'
 
         # Provenance for the authoritative vector: which source produced the

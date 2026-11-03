@@ -10,8 +10,8 @@ already exist:
   ``spawn_reason="compaction"`` was created at or after the compaction and
   before this identity's next recorded compaction.
 - ``kept``: no such child, and this identity acted again after the
-  compaction: a check-in, a knowledge write or a consult
-  (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
+  compaction: a check-in, a knowledge write, a consult or a direct inference
+  call (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
   against an identity, such as ``agent_archived`` or
   ``identity_hijack_suspected``, do not count; nor does ``knowledge_read``,
   which a reader listing this identity's knowledge can log against it.
@@ -59,9 +59,15 @@ OUTCOMES = ("minted", "kept", "no_later_activity")
 # is not accuracy: see the module docstring on what produces ``kept``.
 CONSISTENT_ANSWER = {"kept": "same_process", "minted": "new_process"}
 # Audit rows written for an identity's own action: one ``auto_attest`` per
-# check-in (the agent checking in), ``knowledge_write`` (the author) and
-# ``consultation`` (the requester).
-SELF_ACTIVITY_EVENT_TYPES = ("auto_attest", "knowledge_write", "consultation")
+# check-in (the agent checking in), ``knowledge_write`` (the author),
+# ``consultation`` (the consult requester) and ``inference_call`` (a direct
+# call_model or delegate_inference call after #2484).
+SELF_ACTIVITY_EVENT_TYPES = (
+    "auto_attest",
+    "knowledge_write",
+    "consultation",
+    "inference_call",
+)
 PAGE_SIZE = 5000
 MAX_PAGES = 20
 

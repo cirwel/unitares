@@ -11,6 +11,24 @@ distribution and downstream baselines first.
 """
 
 import math
+import os
+
+
+NEUTRALIZE_SENSOR_SELF_LOOPS_ENV = "UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS"
+
+
+def neutralize_sensor_self_loops_enabled() -> bool:
+    """Return True when controller self-loops in the behavioral sensor are neutralized.
+
+    Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
+    enabled, the three self-referential controller terms inside the behavioral
+    sensor are replaced with their neutral constants:
+    - ``decision_history`` in E -> observed fleet-level ``DECISION_NEUTRAL_SCORE`` (0.84)
+    - ``coherence_history`` in E and I -> nominal neutral ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60, mapped from ``LEGACY_COHERENCE_NEUTRAL_VALUE = 0.50``)
+    - ``regime_instability`` in S -> observed fleet-level ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
+    """
+    raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
@@ -19,6 +37,7 @@ LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
 
 DECISION_SELF_LOOP_ABLATION_SCHEMA = "decision_self_loop_ablation.v1"
 BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA = "behavioral_sensor.components.v1"
+CALIBRATION_FREE_I_ABLATION_SCHEMA = "calibration_free_i_ablation.v1"
 # The neutral stand-in is the OBSERVED level, not the score table's midpoint.
 # Measured 2026-08-20 over 30d (n=33,379 non-synthetic): guide 52.7% -> 0.7,
 # approve 47.2% -> 1.0, and the 0.0-scored pause vocabulary is 0.12% of rows.
@@ -63,6 +82,8 @@ def compute_behavioral_sensor_eisv(
     unique_tools_ratio: float | None = None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool | None = None,
+    calibration_free_i: bool = False,
 ) -> dict | None:
     """Compute the deployed mixed-provenance EISV observation.
 
@@ -87,6 +108,8 @@ def compute_behavioral_sensor_eisv(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
         regime_instability_override=regime_instability_override,
+        neutralize_self_loops=neutralize_self_loops,
+        calibration_free_i=calibration_free_i,
     )
     if components is None:
         return None
@@ -116,6 +139,8 @@ def compute_behavioral_sensor_components(
     unique_tools_ratio: float | None = None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool | None = None,
+    calibration_free_i: bool = False,
 ) -> dict | None:
     """Explain the exact deployed behavioral observation without changing it.
 
@@ -128,23 +153,33 @@ def compute_behavioral_sensor_components(
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return None
 
+    active_neutralize = (
+        neutralize_sensor_self_loops_enabled()
+        if neutralize_self_loops is None
+        else bool(neutralize_self_loops)
+    )
+
     dimensions = {
         "E": _compute_E_components(
             decision_history,
             coherence_history,
             complexity_divergence,
             outcome_history,
+            neutralize_self_loops=active_neutralize,
         ),
         "I": _compute_I_components(
             coherence_history,
             calibration_error,
             outcome_history,
+            neutralize_self_loops=active_neutralize,
+            calibration_free_i=calibration_free_i,
         ),
         "S": _compute_S_components(
             drift_norm,
             regime_history,
             complexity_divergence,
             regime_instability_override=regime_instability_override,
+            neutralize_self_loops=active_neutralize,
         ),
         "V": _compute_V_components(E_history, I_history),
     }
@@ -261,6 +296,15 @@ def compute_legacy_coherence_dependency_shadow(
             "future_outcomes",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -426,6 +470,15 @@ def compute_decision_self_loop_shadow(
             "basin_boundary_flip_counterfactual",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3:
         return {
             **base,
@@ -551,6 +604,15 @@ def compute_regime_self_loop_shadow(
             "the fleet stand-in"
         ),
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -581,7 +643,8 @@ def compute_regime_self_loop_shadow(
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
     candidate = compute_behavioral_sensor_eisv(
-        **inputs, regime_instability_override=REGIME_NEUTRAL_INSTABILITY
+        **inputs,
+        regime_instability_override=REGIME_NEUTRAL_INSTABILITY,
     )
     if deployed is None or candidate is None:
         return {
@@ -602,6 +665,115 @@ def compute_regime_self_loop_shadow(
         "candidate": {"S": candidate_s},
         "candidate_minus_deployed": {"S": candidate_s - deployed_s},
         "deployed_regime_instability": _regime_instability(regime_history),
+    }
+
+
+def compute_calibration_free_i_shadow(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+    deployed_observation: dict | None = None,
+) -> dict:
+    """Shadow the behavioral I reading with the global calibration slot removed (Arm F).
+
+    Implements Arm F of ``docs/proposals/active/eisv-per-agent-i-calibration-v0.md``
+    §6.4 (#2818): removes ``calibration_accuracy`` from the base ``I`` formula
+    and renormalizes the remaining base terms to sum to 1.0 before the standard
+    post-base adjustments (``continuity_I_input`` at 0.20, ``unique_tools_ratio``
+    at 0.10):
+    - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
+    - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
+
+    Measurement-only: the live observation is never modified and no policy reads
+    this shadow.
+    """
+    base = {
+        "schema": CALIBRATION_FREE_I_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "intervention": {
+            "field": "calibration_error",
+            "source": "fleet_calibration",
+            "role": "global_calibration_term_in_I",
+            "operation": "remove_slot_and_renormalize_base_weights",
+            "weights_with_outcomes": {
+                "legacy_coherence_trend": 0.60,
+                "outcome_score_consistency": 0.40,
+            },
+            "weights_without_outcomes": {
+                "legacy_coherence_trend": 1.00,
+            },
+        },
+        "not_modeled": [
+            "recursive_E_I_history_replay",
+            "behavioral_ema_replay",
+            "V_counterfactual",
+            "policy_effect",
+            "future_outcomes",
+        ],
+    }
+    if len(decision_history) < 3 or len(coherence_history) < 3:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_behavioral_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    inputs = dict(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
+    candidate = compute_behavioral_sensor_eisv(**inputs, calibration_free_i=True)
+    if deployed is None or candidate is None:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "behavioral_sensor_unavailable",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    deployed_i = float(deployed["I"])
+    candidate_i = float(candidate["I"])
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": {"I": deployed_i},
+        "candidate": {"I": candidate_i},
+        "candidate_minus_deployed": {"I": candidate_i - deployed_i},
     }
 
 # --- E: Decision success rate, exponentially weighted ---
@@ -689,11 +861,19 @@ def _compute_E_components(
     coherence_history: list | None = None,
     complexity_divergence: float | None = None,
     outcome_history: list | None = None,
+    *,
+    neutralize_self_loops: bool = False,
 ) -> dict:
     # Decision success — exponentially weighted
     window = decision_history[-10:]
-    if not window:
+    if neutralize_self_loops:
+        decision_e = DECISION_NEUTRAL_SCORE
+        decision_observed = False
+        decision_default_reason = "self_loop_neutralized"
+    elif not window:
         decision_e = 0.65
+        decision_observed = False
+        decision_default_reason = "no_decision_history"
     else:
         n = len(window)
         alpha = 0.3
@@ -703,16 +883,26 @@ def _compute_E_components(
             w * _DECISION_SCORES.get(str(d).lower(), 0.5)
             for w, d in zip(weights, window)
         ) / total_w
+        decision_observed = True
+        decision_default_reason = None
 
     # Legacy C(V_ODE) controller level — map [0.35, 0.65] → [0.3, 0.9].
     # ``coherence_history`` is retained as the compatibility parameter name.
-    if coherence_history and len(coherence_history) >= 3:
+    if neutralize_self_loops:
+        coh_e = LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        coh_observed = False
+        coh_default_reason = "self_loop_neutralized"
+    elif coherence_history and len(coherence_history) >= 3:
         recent_coh = coherence_history[-10:]
         mean_coh = sum(recent_coh) / len(recent_coh)
         coh_e = 0.3 + (mean_coh - 0.35) * 2.0  # 0.35→0.3, 0.65→0.9
         coh_e = max(0.3, min(0.9, coh_e))
+        coh_observed = True
+        coh_default_reason = None
     else:
         coh_e = 0.6
+        coh_observed = False
+        coh_default_reason = "insufficient_coherence_history"
 
     # Complexity calibration — low divergence = high capacity awareness
     cd = complexity_divergence if complexity_divergence is not None else 0.15
@@ -727,17 +917,14 @@ def _compute_E_components(
         components = [
             _component(
                 "decision_history", "governance_decisions", decision_e, 0.35,
-                observed=bool(window),
-                default_reason=None if window else "no_decision_history",
+                observed=decision_observed,
+                default_reason=decision_default_reason,
                 health_evidence=False,
             ),
             _component(
                 "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.25,
-                observed=bool(coherence_history and len(coherence_history) >= 3),
-                default_reason=(
-                    None if coherence_history and len(coherence_history) >= 3
-                    else "insufficient_coherence_history"
-                ),
+                observed=coh_observed,
+                default_reason=coh_default_reason,
                 health_evidence=False,
             ),
             _component(
@@ -758,17 +945,14 @@ def _compute_E_components(
         components = [
             _component(
                 "decision_history", "governance_decisions", decision_e, 0.40,
-                observed=bool(window),
-                default_reason=None if window else "no_decision_history",
+                observed=decision_observed,
+                default_reason=decision_default_reason,
                 health_evidence=False,
             ),
             _component(
                 "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.30,
-                observed=bool(coherence_history and len(coherence_history) >= 3),
-                default_reason=(
-                    None if coherence_history and len(coherence_history) >= 3
-                    else "insufficient_coherence_history"
-                ),
+                observed=coh_observed,
+                default_reason=coh_default_reason,
                 health_evidence=False,
             ),
             _component(
@@ -823,11 +1007,24 @@ def _compute_I_components(
     coherence_history: list,
     calibration_error: float | None,
     outcome_history: list | None = None,
+    *,
+    neutralize_self_loops: bool = False,
+    calibration_free_i: bool = False,
 ) -> dict:
     cal_I = 1.0 - calibration_error if calibration_error is not None else 0.75
     cal_I = max(0.0, min(1.0, cal_I))
 
-    coh_I = _coherence_trend(coherence_history)
+    if neutralize_self_loops:
+        coh_I = LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        coh_observed = False
+        coh_default_reason = "self_loop_neutralized"
+    else:
+        coh_I = _coherence_trend(coherence_history)
+        coh_observed = len(coherence_history) >= 4
+        coh_default_reason = (
+            None if len(coherence_history) >= 4
+            else "insufficient_coherence_history"
+        )
 
     # Outcome consistency — consistent scores indicate information integrity
     if outcome_history and len(outcome_history) >= 3:
@@ -838,36 +1035,52 @@ def _compute_I_components(
             mean_s = sum(scores) / len(scores)
             score_var = sum((s - mean_s) ** 2 for s in scores) / len(scores)
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
-            # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
-            components = [
-                _component(
-                    "calibration_accuracy", "fleet_calibration", cal_I, 0.50,
-                    observed=calibration_error is not None,
-                    default_reason=(
-                        None if calibration_error is not None
-                        else "default_calibration_accuracy_0.75"
+            if calibration_free_i:
+                components = [
+                    _component(
+                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.60,
+                        observed=coh_observed,
+                        default_reason=coh_default_reason,
+                        health_evidence=False,
                     ),
-                ),
-                _component(
-                    "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
-                    observed=len(coherence_history) >= 4,
-                    default_reason=(
-                        None if len(coherence_history) >= 4
-                        else "insufficient_coherence_history"
+                    _component(
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.40,
+                        observed=True,
+                        health_evidence=False,
                     ),
-                    health_evidence=False,
-                ),
-                _component(
-                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
-                    observed=True,
-                    health_evidence=False,
-                ),
-            ]
-            raw = (
-                components[0]["weighted_contribution"]
-                + components[1]["weighted_contribution"]
-                + components[2]["weighted_contribution"]
-            )
+                ]
+                raw = (
+                    components[0]["weighted_contribution"]
+                    + components[1]["weighted_contribution"]
+                )
+            else:
+                # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
+                components = [
+                    _component(
+                        "calibration_accuracy", "fleet_calibration", cal_I, 0.50,
+                        observed=calibration_error is not None,
+                        default_reason=(
+                            None if calibration_error is not None
+                            else "default_calibration_accuracy_0.75"
+                        ),
+                    ),
+                    _component(
+                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
+                        observed=coh_observed,
+                        default_reason=coh_default_reason,
+                        health_evidence=False,
+                    ),
+                    _component(
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
+                        observed=True,
+                        health_evidence=False,
+                    ),
+                ]
+                raw = (
+                    components[0]["weighted_contribution"]
+                    + components[1]["weighted_contribution"]
+                    + components[2]["weighted_contribution"]
+                )
             value = max(0.0, min(1.0, raw))
             return {
                 "value": value,
@@ -876,29 +1089,37 @@ def _compute_I_components(
                 "adjustments": [],
             }
 
-    components = [
-        _component(
-            "calibration_accuracy", "fleet_calibration", cal_I, 0.60,
-            observed=calibration_error is not None,
-            default_reason=(
-                None if calibration_error is not None
-                else "default_calibration_accuracy_0.75"
+    if calibration_free_i:
+        components = [
+            _component(
+                "legacy_coherence_trend", "legacy_tanh_v", coh_I, 1.00,
+                observed=coh_observed,
+                default_reason=coh_default_reason,
+                health_evidence=False,
             ),
-        ),
-        _component(
-            "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
-            observed=len(coherence_history) >= 4,
-            default_reason=(
-                None if len(coherence_history) >= 4
-                else "insufficient_coherence_history"
+        ]
+        raw = components[0]["weighted_contribution"]
+    else:
+        components = [
+            _component(
+                "calibration_accuracy", "fleet_calibration", cal_I, 0.60,
+                observed=calibration_error is not None,
+                default_reason=(
+                    None if calibration_error is not None
+                    else "default_calibration_accuracy_0.75"
+                ),
             ),
-            health_evidence=False,
-        ),
-    ]
-    raw = (
-        components[0]["weighted_contribution"]
-        + components[1]["weighted_contribution"]
-    )
+            _component(
+                "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
+                observed=coh_observed,
+                default_reason=coh_default_reason,
+                health_evidence=False,
+            ),
+        ]
+        raw = (
+            components[0]["weighted_contribution"]
+            + components[1]["weighted_contribution"]
+        )
     value = max(0.0, min(1.0, raw))
     return {
         "value": value,
@@ -945,6 +1166,7 @@ def _compute_S_components(
     complexity_divergence: float | None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool = False,
 ) -> dict:
     # Drift component (40%)
     dn = drift_norm if drift_norm is not None else 0.2
@@ -953,8 +1175,21 @@ def _compute_S_components(
     # Regime instability (35%): count transitions / window. The override exists
     # only for compute_regime_self_loop_shadow; the deployed path never sets it.
     regime_overridden = regime_instability_override is not None
-    regime_s = (float(regime_instability_override) if regime_overridden
-                else _regime_instability(regime_history))
+    if regime_overridden:
+        regime_s = float(regime_instability_override)
+        regime_observed = False
+        regime_default_reason = "ablation_override"
+    elif neutralize_self_loops:
+        regime_s = REGIME_NEUTRAL_INSTABILITY
+        regime_observed = False
+        regime_default_reason = "self_loop_neutralized"
+    else:
+        regime_s = _regime_instability(regime_history)
+        regime_observed = len(regime_history) >= 2
+        regime_default_reason = (
+            None if len(regime_history) >= 2
+            else "insufficient_regime_history"
+        )
 
     # Complexity divergence (25%)
     cd = complexity_divergence if complexity_divergence is not None else 0.1
@@ -968,12 +1203,8 @@ def _compute_S_components(
         ),
         _component(
             "regime_instability", "regime_history", regime_s, 0.35,
-            observed=len(regime_history) >= 2 and not regime_overridden,
-            default_reason=(
-                "ablation_override" if regime_overridden
-                else None if len(regime_history) >= 2
-                else "insufficient_regime_history"
-            ),
+            observed=regime_observed,
+            default_reason=regime_default_reason,
         ),
         _component(
             "complexity_divergence", "continuity_metrics", cd_s, 0.25,

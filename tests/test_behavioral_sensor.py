@@ -711,6 +711,8 @@ class TestPrepareUnlockedInputsContract:
          "decision_self_loop_ablation.v1"),
         ("compute_regime_self_loop_shadow", "regime_self_loop_neutralized",
          "regime_self_loop_ablation.v1"),
+        ("compute_calibration_free_i_shadow", "calibration_free_i",
+         "calibration_free_i_ablation.v1"),
     ])
     async def test_a_failing_shadow_cannot_interrupt_the_deployed_handoff(
         self, function, candidate, schema
@@ -736,7 +738,7 @@ class TestPrepareUnlockedInputsContract:
             "eligible": False, "eligibility_reason": "shadow_error:RuntimeError",
             "deployed": None, "candidate": None, "candidate_minus_deployed": None,
         }
-        assert len(shadows) == 3
+        assert len(shadows) == 4
         for name, sibling in shadows.items():
             if name != candidate:
                 assert not str(sibling["behavioral_sensor"].get("eligibility_reason") or "").startswith("shadow_error")
@@ -1077,3 +1079,209 @@ class TestRegimeSelfLoopShadow:
         assert r["eligible"] is False
         assert r["candidate_minus_deployed"] is None
         assert "regime_label_counterfactual" in r["not_modeled"]
+
+
+class TestCalibrationFreeIShadow:
+    """Arm F of #2818 §6.4: remove global calibration slot from I and renormalize."""
+
+    def test_without_outcomes_renormalizes_coherence_trend_to_unity(self):
+        from src.behavioral_sensor import compute_calibration_free_i_shadow
+        inputs = dict(
+            decision_history=["proceed"] * 6,
+            coherence_history=[0.40, 0.42, 0.44, 0.50, 0.52, 0.54],
+            regime_history=["CONVERGENCE"] * 6,
+            E_history=[0.7] * 6,
+            I_history=[0.8] * 6,
+            S_history=[0.2] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.30,
+        )
+        r = compute_calibration_free_i_shadow(**inputs)
+        assert r["eligible"] is True
+        assert r["mode"] == "measurement_only"
+        assert r["policy_applied"] is False
+        assert r["candidate"]["I"] != r["deployed"]["I"]
+        assert r["candidate_minus_deployed"]["I"] == pytest.approx(
+            r["candidate"]["I"] - r["deployed"]["I"]
+        )
+
+    def test_with_outcomes_renormalizes_to_60_40(self):
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_components,
+            compute_calibration_free_i_shadow,
+        )
+        outcomes = [
+            {"outcome_score": 0.9, "is_bad": False},
+            {"outcome_score": 0.8, "is_bad": False},
+            {"outcome_score": 0.85, "is_bad": False},
+        ]
+        inputs = dict(
+            decision_history=["proceed"] * 6,
+            coherence_history=[0.45, 0.45, 0.45, 0.50, 0.50, 0.50],
+            regime_history=["CONVERGENCE"] * 6,
+            E_history=[0.7] * 6,
+            I_history=[0.8] * 6,
+            S_history=[0.2] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.40,
+            outcome_history=outcomes,
+        )
+        comps = compute_behavioral_sensor_components(**inputs, calibration_free_i=True)
+        i_comps = comps["dimensions"]["I"]["components"]
+        assert [c["name"] for c in i_comps] == [
+            "legacy_coherence_trend",
+            "outcome_score_consistency",
+        ]
+        assert [c["weight"] for c in i_comps] == [0.60, 0.40]
+        r = compute_calibration_free_i_shadow(**inputs)
+        assert r["candidate"]["I"] == pytest.approx(comps["dimensions"]["I"]["value"])
+
+
+class TestNeutralizeSensorSelfLoops:
+    """UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS switch neutralizes the 3 self-loops."""
+
+    def test_env_switch_replaces_all_three_self_referential_terms(self, monkeypatch):
+        from src.behavioral_sensor import (
+            DECISION_NEUTRAL_SCORE,
+            LEGACY_COHERENCE_NEUTRAL_COMPONENT,
+            REGIME_NEUTRAL_INSTABILITY,
+            compute_behavioral_sensor_components,
+            compute_behavioral_sensor_eisv,
+        )
+        inputs = dict(
+            decision_history=["risk_pause"] * 6,
+            coherence_history=[0.35, 0.35, 0.35, 0.65, 0.65, 0.65],
+            regime_history=_FLAPPING,
+            E_history=[0.6] * 6,
+            I_history=[0.7] * 6,
+            S_history=[0.3] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.1,
+            drift_norm=0.2,
+            complexity_divergence=0.1,
+        )
+        baseline = compute_behavioral_sensor_eisv(**inputs)
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        neutralized = compute_behavioral_sensor_eisv(**inputs)
+        assert neutralized != baseline
+
+        comps = compute_behavioral_sensor_components(**inputs)
+        e_by_name = {c["name"]: c for c in comps["dimensions"]["E"]["components"]}
+        i_by_name = {c["name"]: c for c in comps["dimensions"]["I"]["components"]}
+        s_by_name = {c["name"]: c for c in comps["dimensions"]["S"]["components"]}
+
+        assert e_by_name["decision_history"]["value"] == pytest.approx(DECISION_NEUTRAL_SCORE)
+        assert e_by_name["decision_history"]["observed"] is False
+        assert e_by_name["decision_history"]["default_reason"] == "self_loop_neutralized"
+
+        assert e_by_name["legacy_coherence_level"]["value"] == pytest.approx(
+            LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        )
+        assert e_by_name["legacy_coherence_level"]["observed"] is False
+        assert e_by_name["legacy_coherence_level"]["default_reason"] == "self_loop_neutralized"
+
+        assert i_by_name["legacy_coherence_trend"]["value"] == pytest.approx(
+            LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        )
+        assert i_by_name["legacy_coherence_trend"]["observed"] is False
+        assert i_by_name["legacy_coherence_trend"]["default_reason"] == "self_loop_neutralized"
+
+        assert s_by_name["regime_instability"]["value"] == pytest.approx(
+            REGIME_NEUTRAL_INSTABILITY
+        )
+        assert s_by_name["regime_instability"]["observed"] is False
+        assert s_by_name["regime_instability"]["default_reason"] == "self_loop_neutralized"
+
+    def test_shadow_loop_ablations_report_ineligible_when_neutralize_enabled(self, monkeypatch):
+        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, the three self-loop shadows report eligible=False with reason 'self_loop_already_neutralized'."""
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_eisv,
+            compute_legacy_coherence_dependency_shadow,
+            compute_decision_self_loop_shadow,
+            compute_regime_self_loop_shadow,
+        )
+
+        inputs = dict(
+            decision_history=["risk_pause"] * 6,
+            coherence_history=[0.35, 0.35, 0.35, 0.65, 0.65, 0.65],
+            regime_history=_FLAPPING,
+            E_history=[0.6] * 6,
+            I_history=[0.7] * 6,
+            S_history=[0.3] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.1,
+            drift_norm=0.2,
+            complexity_divergence=0.1,
+        )
+
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        neutralized_deployed = compute_behavioral_sensor_eisv(**inputs)
+        coh_on = compute_legacy_coherence_dependency_shadow(**inputs, deployed_observation=neutralized_deployed)
+        dec_on = compute_decision_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
+        reg_on = compute_regime_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
+
+        for shadow in (coh_on, dec_on, reg_on):
+            assert shadow["eligible"] is False
+            assert shadow["eligibility_reason"] == "self_loop_already_neutralized"
+            assert shadow["deployed"] is None
+            assert shadow["candidate"] is None
+            assert shadow["candidate_minus_deployed"] is None
+
+    @pytest.mark.asyncio
+    async def test_automatic_degenerate_checkin_excludes_template_divergence(self):
+        """#2418 Fix 1: _last_continuity_metrics with template_divergence_excluded=True excludes comp_div/cont_I/cont_S even on authored follow-up."""
+        from types import SimpleNamespace
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        helper = TestPrepareUnlockedInputsContract()
+        monitor = helper._make_mock_monitor(n=6)
+        monitor._last_continuity_metrics = SimpleNamespace(
+            complexity_divergence=0.45,
+            E_input=0.30,
+            I_input=0.55,
+            S_input=0.425,
+            self_complexity_defaulted=False,
+            E_input_clipped=True,
+            continuity_degenerate=True,
+            template_divergence_excluded=True,
+        )
+        ctx = helper._make_ctx(monitor=monitor)
+        ctx.response_text = "Authored follow-up check-in after automatic hook rollup"
+        ctx.epistemic_class = "agent_report"
+
+        with patch("src.db.get_db", return_value=None), \
+             patch("src.tool_usage_tracker.get_tool_usage_tracker",
+                   return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))):
+            await prepare_unlocked_inputs(ctx)
+
+        derivation = ctx.agent_state["_eisv_derivation"]
+        assert derivation["substrate_canaries"]["template_divergence_excluded"] is True
+        assert derivation["inputs"]["features"]["complexity_divergence"] is None
+        assert derivation["inputs"]["features"]["continuity_I_input"] is None
+        assert derivation["inputs"]["features"]["continuity_S_input"] is None
+        assert derivation["inputs"]["features"]["continuity_E_input"] == pytest.approx(0.30)
+
+    def test_monitor_process_update_excludes_template_divergence_for_automatic_checkin(self):
+        """#2418 Fix 1: GovernanceMonitor.process_update zeroes ethical-drift complexity_divergence and skips baseline update on degenerate automatic check-ins."""
+        from governance_core.ethical_drift import get_agent_baseline
+        from src.governance_monitor import UNITARESMonitor
+
+        mon = UNITARESMonitor("agent-auto-2418", load_state=False)
+        baseline_before = get_agent_baseline("agent-auto-2418")
+        initial_count = baseline_before.update_count
+        initial_complexity = baseline_before.baseline_complexity
+        res = mon.process_update(
+            {
+                "response_text": "8 tool calls completed: read_file, edit_file, bash",
+                "complexity": 0.85,
+                "confidence": 0.80,
+                "epistemic_class": "agent_report",
+            }
+        )
+        assert res["status"] == "healthy"
+        assert mon._last_continuity_metrics.continuity_degenerate is True
+        assert mon._last_continuity_metrics.template_divergence_excluded is True
+        assert mon._last_continuity_metrics.complexity_divergence > 0.3
+        assert mon._last_drift_vector.complexity_divergence == pytest.approx(0.0)
+        baseline_after = get_agent_baseline("agent-auto-2418")
+        assert baseline_after.update_count == initial_count + 1
+        assert baseline_after.baseline_complexity == pytest.approx(initial_complexity)
