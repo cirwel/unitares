@@ -424,6 +424,16 @@ def build_eisv_telemetry_envelope(
         "missing_inputs": ["derivation_trace"],
         "computed_observation": None,
     }
+    cal_sig = (
+        derivation.get("calibration_signal")
+        if isinstance(derivation, Mapping)
+        else None
+    )
+    agent_cal = (
+        cal_sig.get("agent_channel")
+        if isinstance(cal_sig, Mapping)
+        else None
+    )
 
     return {
         "schema": EISV_TELEMETRY_SCHEMA,
@@ -439,6 +449,11 @@ def build_eisv_telemetry_envelope(
                 "source": metrics.get("coherence_source") or "unknown",
                 "role": metrics.get("coherence_role") or "unknown",
             },
+            "agent_calibration": (
+                _json_safe(agent_cal)
+                if isinstance(agent_cal, Mapping)
+                else None
+            ),
             "behavioral": behavioral,
             "ode": {
                 "source": "ode_diagnostic",

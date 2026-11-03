@@ -975,3 +975,50 @@ class TestContinuityLayerToolUsage:
         )
         # Cross-validation should strengthen divergence when both signals disagree
         assert m.complexity_divergence >= m2.complexity_divergence
+
+
+class TestAutomaticAndRollupCheckinGating:
+    """#2418: automatic/non-authored check-ins and tool-count rollups do not inflate divergence."""
+
+    def test_identifies_non_authored_epistemic_classes_and_rollups(self):
+        from src.dual_log.continuity import (
+            is_automatic_or_rollup_checkin,
+            should_exclude_template_divergence,
+        )
+
+        assert is_automatic_or_rollup_checkin("Normal prose.", "substrate_observation") is True
+        assert is_automatic_or_rollup_checkin("Normal prose.", "substrate_interpretation") is True
+        assert is_automatic_or_rollup_checkin("8 tool calls completed: bash, edit", "agent_report") is True
+        assert is_automatic_or_rollup_checkin("1 tool call completed", "agent_report") is True
+        assert is_automatic_or_rollup_checkin("Implemented the fix and ran tests.", "agent_report") is False
+
+        op_deg = create_operational_entry(
+            "lumen",
+            "Anima state: calm. Warmth: 0.62. Clarity: 0.71.",
+            "s1",
+        )
+        m_deg = compute_continuity_metrics(op_deg, create_reflective_entry("lumen", complexity=0.45))
+        assert m_deg.continuity_degenerate is True
+        assert should_exclude_template_divergence(
+            m_deg,
+            response_text="Anima state: calm. Warmth: 0.62. Clarity: 0.71.",
+            epistemic_class="substrate_observation",
+        ) is True
+        assert should_exclude_template_divergence(
+            m_deg,
+            response_text="Anima state: calm. Warmth: 0.62. Clarity: 0.71.",
+            epistemic_class="agent_report",
+        ) is False
+
+        op_rich = create_operational_entry(
+            "codex",
+            "3 tool calls completed:\n- first\n- second\n- third\n- fourth",
+            "s1",
+        )
+        m_rich = compute_continuity_metrics(op_rich, create_reflective_entry("codex", complexity=0.5))
+        assert m_rich.continuity_degenerate is False
+        assert should_exclude_template_divergence(
+            m_rich,
+            response_text="3 tool calls completed:\n- first\n- second\n- third\n- fourth",
+            epistemic_class="agent_report",
+        ) is False
