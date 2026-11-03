@@ -1109,10 +1109,12 @@ p ≤ 0.05 was:
 - 0.71 [0.61, 0.79] at about 0.74;
 - 0.90 [0.83, 0.94] only at about 0.82.
 
-The type-I row was 0.09 [0.05, 0.16], which is compatible with α. The probe is
-an optimistic scenario. Its null max p95 was about 0.12–0.16, against the real
-slice's 0.313, so the real read's power is lower again. At this shape the read
-could detect only a large effect.
+The type-I row was 0.09 [0.05, 0.16], which is compatible with α. Even in this
+optimistic synthetic scenario, power reached 0.8 only for a large effect. The
+real slice's null was wider: its null max p95 was 0.313, against about
+0.12–0.16 in the probe. As the probe notes, null width alone does not establish
+a power ordering. These figures therefore describe the probe; they are not a
+bound on the real read's power.
 
 **Reconciliation.** `eisv_read_input_snapshot.py reconcile` against the
 snapshot with sha `4988e170…` reported, for all three tables, zero changed rows,
@@ -1121,11 +1123,32 @@ therefore the frozen pre-T record.
 
 **Disclosures.**
 
-- *Coverage.* The 2026-10-15 amendment asks the report to state its coverage:
-  the earliest admitted outcome, the earliest joined prior state, and the counts
-  per month. The matrix and wrapper do not produce these, so the report omits
-  them. Producing them would take another pass over the outcome data. That is
-  left as an open item, not done ad hoc.
+- *Coverage.* The 2026-10-15 amendment requires these figures. The matrix
+  and wrapper do not emit them, so they were produced at 2026-11-03T17:59Z by a
+  separate, coverage-only pass. That pass ran the read's own row selection
+  (`fetch_rows` and `filter_rows_for_validation`) with the registered
+  parameters and `as_of` at the effective boundary. It printed only dates and
+  row counts; it computed no discrimination, Brier, null or label statistic. Its
+  row counts match the matrix: 227 admitted rows, with 227 joined prior states
+  at lead 0 and 191 at lead 30.
+
+  | | Lead 0 | Lead 30 |
+  |---|---|---|
+  | Earliest admitted outcome | 2026-06-26T07:11:51Z | 2026-06-26T07:11:51Z |
+  | Latest admitted outcome | 2026-08-02T17:48:36Z | 2026-08-02T17:48:36Z |
+  | Earliest joined prior state | 2026-06-26T07:11:31Z | 2026-07-26T13:55:09Z |
+  | 2026-06 (outcomes / with prior state) | 1 / 1 | 1 / 0 |
+  | 2026-07 | 201 / 201 | 201 / 180 |
+  | 2026-08 | 25 / 25 | 25 / 11 |
+
+  **The nominal 365-day window delivered about five and a half weeks of
+  admitted evidence**, from 2026-06-26 to 2026-08-02. No trusted task outcome
+  after 2026-08-02 was admitted, although the boundary is 2026-10-15. This
+  report does not establish why. Candidate causes include the anchor
+  predicate, the label-generator change disclosed above, and the fixture rule,
+  and none of them is tested here. Whatever the cause, this is a fact about
+  the eligible evidence, not about EISV. It supports the
+  insufficient-eligible-evidence reading.
 - *Self-retirement.* The wrapper ran `launchctl unload` on its own job before
   moving the plist, so launchd stopped the script before the move. The job was
   unloaded, but the plist stayed in `~/Library/LaunchAgents`. It was moved to
