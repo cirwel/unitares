@@ -1,1 +1,1 @@
-"""EISV formatting and response-validation contracts."""
+"""EISV invocation, formatting and response-validation contracts."""

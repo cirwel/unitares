@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -9,11 +10,13 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from src.db.mixins.identity import CheckpointIdentityRefused, IdentityMixin
+from src.services.checkpoint_service import CheckpointBoundaryStop
 
 
 @pytest.fixture
 def update_edges(monkeypatch):
     from src import agent_lifecycle, agent_loop_detection as ald, agent_monitor_state
+    from src.eisv import adapter
 
     events = []
     meta = SimpleNamespace(
@@ -43,10 +46,13 @@ def update_edges(monkeypatch):
     monkeypatch.setattr(ald, "save_monitor_state_async", save)
     monkeypatch.setattr(agent_lifecycle, "get_or_create_monitor", get_monitor)
     monkeypatch.setattr(agent_monitor_state, "hydrate_from_db_if_fresh", hydrate)
+    # Observe delegation while retaining the real adapter and its executor work.
+    assess = AsyncMock(wraps=adapter.assess_eisv)
+    monkeypatch.setattr(adapter, "assess_eisv", assess)
     return SimpleNamespace(
         ald=ald, meta=meta, monitor=monitor, events=events,
         ownership=ownership, loop_check=loop_check,
-        get_monitor=get_monitor, hydrate=hydrate, save=save,
+        get_monitor=get_monitor, hydrate=hydrate, save=save, assess=assess,
     )
 
 
@@ -78,6 +84,11 @@ async def test_wrapper_and_split_preserve_assessment_behavior(update_edges, spli
     edge.monitor.process_update.assert_called_once_with(
         state, confidence=0.7, task_type="convergent",
     )
+    edge.assess.assert_awaited_once()
+    request = edge.assess.await_args.args[0]
+    assert request.agent_id == "checkpoint-agent"
+    assert request.agent_state is state
+    assert request.confidence == 0.7
     assert result["decision"]["action"] == "proceed"
     assert result["decision"]["recommended_action"] == "pause"
     assert result["enforcement"]["posture"] == "observe"
@@ -101,6 +112,43 @@ async def test_callback_follows_admission_and_captured_posture(update_edges, mon
     assert edge.events == ["auth", "loop", "checkpoint", "monitor", "hydrate", "update"]
     assert result["enforcement"]["posture"] == "observe"
     assert result["decision"]["action"] == "proceed"
+
+
+@pytest.mark.asyncio
+async def test_request_is_constructed_after_checkpoint_and_passed_to_real_adapter(update_edges, monkeypatch):
+    from src.eisv import adapter
+
+    edge = update_edges
+    request_class = adapter.EisvRequest
+    state = {"_outcome_history": []}
+    raw_result = {"decision": {"action": "pause", "reason": "measured risk"}}
+
+    def request(*args, **kwargs):
+        edge.events.append("request")
+        assert kwargs["agent_state"]["_checkpoint_id"] == "accepted-checkpoint"
+        return request_class(*args, **kwargs)
+
+    def update(*args, **kwargs):
+        edge.events.append("update")
+        assert args[0] is state
+        return raw_result
+
+    async def accept():
+        edge.events.append("checkpoint")
+        state["_checkpoint_id"] = "accepted-checkpoint"
+
+    monkeypatch.setattr(adapter, "EisvRequest", request)
+    edge.monitor.process_update.side_effect = update
+    result = await edge.ald.process_update_authenticated_async(
+        "checkpoint-agent", "test-key", state,
+        auto_save=False, before_assessment=accept,
+    )
+
+    assert edge.events == ["auth", "loop", "checkpoint", "request", "monitor", "hydrate", "update"]
+    assert result is raw_result
+    assert result["decision"]["action"] == "proceed"
+    assert result["decision"]["recommended_action"] == "pause"
+    edge.save.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -140,6 +188,7 @@ async def test_admission_refusal_never_calls_checkpoint_or_monitor(
     edge.hydrate.assert_not_awaited()
     edge.monitor.process_update.assert_not_called()
     edge.save.assert_not_awaited()
+    edge.assess.assert_not_awaited()
     if refusal != "cooldown":
         edge.loop_check.assert_not_called()
 
@@ -166,15 +215,21 @@ async def test_new_loop_refusal_keeps_existing_cooldown_effects(update_edges):
     )
     commit_checkpoint.assert_not_awaited()
     edge.get_monitor.assert_not_called()
+    edge.assess.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_exception_stops_before_monitor_setup(update_edges):
+@pytest.mark.parametrize("rejection", [
+    RuntimeError("checkpoint write unconfirmed"),
+    CheckpointBoundaryStop("CHECKPOINT_REPLAY", "existing checkpoint", replay=True),
+    CheckpointBoundaryStop("CHECKPOINT_KEY_CONFLICT", "conflicting content"),
+    asyncio.CancelledError(),
+])
+async def test_checkpoint_exception_stops_before_monitor_setup(update_edges, rejection):
     edge = update_edges
-    rejection = RuntimeError("checkpoint write unconfirmed")
     commit_checkpoint = AsyncMock(side_effect=rejection)
 
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(type(rejection)) as caught:
         await edge.ald.process_update_authenticated_async(
             "checkpoint-agent", "test-key", {},
             before_assessment=commit_checkpoint,
@@ -185,6 +240,7 @@ async def test_checkpoint_exception_stops_before_monitor_setup(update_edges):
     assert edge.events == ["auth", "loop"]
     edge.get_monitor.assert_not_called()
     edge.monitor.process_update.assert_not_called()
+    edge.assess.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -200,6 +256,7 @@ async def test_admission_is_frozen_and_mapping_cannot_bypass_it(update_edges):
             {"agent_id": "checkpoint-agent", "posture": "observe"}, {},
         )
     edge.get_monitor.assert_not_called()
+    edge.assess.assert_not_awaited()
 
 
 @pytest.mark.asyncio
