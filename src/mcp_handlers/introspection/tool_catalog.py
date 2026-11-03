@@ -56,9 +56,10 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # designs it (it rejects raw controls), and local model choice is
     # operator configuration (UNITARES_MODEL_ID, which consult's standard lane
     # resolves through default_local_model()), not a per-call knob.
-    # Removal is not before 2026-12-02: the pre-registered 2026-12-01 read
-    # must not see call_model's route change mid-window, and #2484 rewrites
-    # that route on the same date. The internal callers already moved
+    # Removal is not before 2026-12-02 (the feedback window advertised in the
+    # migration notice below). #2484 removed the synthetic Energy-accounting
+    # update and added event_type='inference_call' on 2026-11-03 after the
+    # pre-registered #1425 read. The internal callers already moved
     # (#2849, #2851). Until then the handler stays callable.
     "call_model": {
         "deprecated_since": "2026-10-16",

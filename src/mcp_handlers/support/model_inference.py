@@ -7,7 +7,8 @@ Supports two providers:
   HF_TOKEN
 
 Agents call models for reasoning, generation, or analysis.
-Usage tracked in EISV (Energy consumption) for self-regulation.
+Direct calls are recorded in audit.events (event_type="inference_call")
+without running a synthetic governance update on caller EISV state (#2484).
 """
 
 from typing import Dict, Any, Sequence
@@ -46,8 +47,7 @@ from src.local_inference_env import (
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-from .inference_outcome import InferenceOutcome
+from .inference_outcome import InferenceOutcome, record_inference_call
 logger = get_logger(__name__)
 
 # Check if OpenAI SDK available (Ollama and HF Inference Providers expose
@@ -134,9 +134,9 @@ def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
     Both discovery tools serve ``pre_onboard``; ``call_model`` does not. So an
     unbound caller can enumerate every host and then fail on all of them — the
     same discoverable-but-not-usable shape that ``accepts_host_id_from`` exists
-    to kill, one level up. The gate itself is worth keeping: model calls consume
-    Energy in EISV, and unattributed consumption is exactly what that accounting
-    is for. What is not worth keeping is finding out only at the call.
+    to kill, one level up. The gate itself is worth keeping: model calls are
+    attributed in ``audit.events`` and return caller-bound evidence. What is
+    not worth keeping is finding out only at the call.
 
     Derived from the decorator rather than restated, so relaxing or tightening
     the gate cannot leave this text behind claiming the old rule.
@@ -182,7 +182,7 @@ def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
         gate["note"] = (
             "Listing hosts serves unbound callers; calling one does not. "
             "Bind first with start_session(force_new=true) — inference calls "
-            "are attributed as Energy consumption and evidence."
+            "are attributed in audit.events and returned as caller-bound evidence."
         )
     return gate
 
@@ -734,38 +734,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         else:
             energy_cost = 0.03  # Default estimate
         
-        # Track usage and update Energy in governance monitor
+        # Wire-compatible estimate field (no synthetic governance update; #2484)
         logger.info(f"Model inference: model={model_used}, tokens={tokens_used}, energy_cost={energy_cost}")
-        
-        # Update Energy in governance monitor (if agent_id available)
-        agent_id = request.requesting_agent_uuid
-        if agent_id:
-            try:
-                monitor = mcp_server.get_or_create_monitor(agent_id)
-                from src.agent_monitor_state import ensure_hydrated
-                await ensure_hydrated(monitor, agent_id)
 
-                # Update Energy through a lightweight process_update
-                # Model inference consumes Energy - reflect this in EISV dynamics
-                # Use low complexity (0.1-0.2) since inference is a tool, not core work
-                # The energy_cost affects how much Energy is consumed
-                inference_complexity = min(0.1 + energy_cost * 2, 0.3)  # Scale energy_cost to complexity
-                
-                # Create a lightweight update that reflects model inference usage
-                # This flows through normal EISV dynamics, updating Energy appropriately
-                monitor.process_update({
-                    "response_text": f"Model inference: {task_type} via {model_used} ({tokens_used} tokens)",
-                    "complexity": inference_complexity,
-                    "confidence": 0.8  # Model inference is generally reliable
-                })
-                
-                logger.debug(f"Updated Energy for agent {agent_id}: model inference tracked (cost={energy_cost}, complexity={inference_complexity})")
-            except Exception as e:
-                # Non-critical: if Energy tracking fails, still return the inference result
-                logger.warning(f"Could not update Energy for model inference: {e}")
-        else:
-            logger.debug("No agent_id available for Energy tracking (model inference still successful)")
-        
         # Determine routing method by the resolved provider, not by substring
         # matching on the URL — UNITARES_MODEL_BASE_URL may point at a non-local
         # host and the route is still Ollama.
@@ -948,10 +919,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
 
 
 # Deprecated 2026-10-16 in favour of consult(effort='standard'), which reaches
-# the same local host through run_model_inference. Only the public name is
-# deprecated: the gateway intent classifier (max_tokens=10, which consult
-# does not take) and the KG stale-entry check still call this handler, and
-# both must move before the name can be removed.
+# the same local host through run_model_inference. The internal callers moved in
+# #2849 and #2851; the public name stays callable through the deprecation window
+# (no earlier than 2026-12-02).
 @mcp_tool(
     "call_model",
     timeout=_call_model_timeout(),
@@ -980,6 +950,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         timeout_s=_provider_timeout_s(),
     )
     outcome = await run_model_inference(request)
+    record_inference_call("call_model", requesting_agent_uuid, outcome)
     if not outcome.ok:
         failure = outcome.failure
         assert failure is not None

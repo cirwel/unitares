@@ -10,7 +10,6 @@ from typing import Any, Dict, Sequence
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
@@ -32,7 +31,7 @@ from .host_adapter import (
     invoke_host_adapter,
 )
 from .inference_registry import get_inference_host, list_inference_hosts, sha256_text as _sha256_text
-from .inference_outcome import InferenceOutcome
+from .inference_outcome import InferenceOutcome, record_inference_call
 
 logger = get_logger(__name__)
 
@@ -47,35 +46,6 @@ class DelegatedInferenceRequest:
     model: str | None = None
     task_type: str = "reasoning"
     timeout_s: int = DELEGATE_INFERENCE_DEFAULT_TIMEOUT_S
-
-
-async def _track_energy(
-    agent_uuid: str | None,
-    *,
-    host_id: str,
-    models_used: list[str],
-    tokens_used: int,
-    energy_cost: float,
-) -> None:
-    """Best-effort EISV accounting; inference still succeeds if tracking fails."""
-    if not agent_uuid:
-        return
-    try:
-        monitor = mcp_server.get_or_create_monitor(agent_uuid)
-        from src.agent_monitor_state import ensure_hydrated
-
-        await ensure_hydrated(monitor, agent_uuid)
-        model_text = ",".join(models_used) if models_used else "provider_unreported"
-        monitor.process_update({
-            "response_text": (
-                f"Delegated inference via {host_id}: models={model_text} "
-                f"tokens={tokens_used}"
-            ),
-            "complexity": min(0.1 + energy_cost * 2, 0.3),
-            "confidence": 0.8,
-        })
-    except Exception as exc:  # noqa: BLE001 - accounting is intentionally non-fatal
-        logger.warning("Could not track delegated-inference Energy: %s", exc)
 
 
 # Bookkeeping that outlived its call's deadline, held so it is not garbage
@@ -599,22 +569,9 @@ async def run_delegated_inference(
         str(value) for value in (adapter_provenance.get("models_used") or [])
     ]
     tokens_used = int(adapter_provenance.get("tokens_used") or 0)
-    # Strong external consultation gets a deliberately modest, fixed accounting
-    # increment. Dollar cost remains provider-reported metadata, not an EISV proxy.
+    # Wire-compatible estimate field (no synthetic governance update; #2484).
+    # Dollar cost remains provider-reported metadata, not an EISV proxy.
     energy_cost = 0.05
-    finished, _ = await _finish_by_deadline(
-        _track_energy(
-            request.requesting_agent_uuid,
-            host_id=host_id,
-            models_used=models_used,
-            tokens_used=tokens_used,
-            energy_cost=energy_cost,
-        ),
-        deadline,
-        step="energy",
-    )
-    if not finished:
-        accounting_deferred.append("energy")
 
     inference = {
         "schema": "unitares.inference_result.v0",
@@ -693,6 +650,7 @@ async def handle_delegate_inference(
         ),
     )
     outcome = await run_delegated_inference(request)
+    record_inference_call("delegate_inference", requesting_agent_uuid, outcome)
     if not outcome.ok:
         failure = outcome.failure
         assert failure is not None

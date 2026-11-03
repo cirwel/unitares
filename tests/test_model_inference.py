@@ -1743,70 +1743,137 @@ class TestRoutingViaDetection:
 
 
 # =============================================================================
-# Tests: EISV Energy tracking
+# Tests: No synthetic EISV update & route-level inference_call audit (#2484)
 # =============================================================================
 
-class TestEnergyTracking:
-    """Tests for EISV Energy consumption tracking."""
+class TestInferenceAuditAndNoSyntheticUpdate:
+    """#2484: call_model does not run monitor.process_update and logs inference_call."""
 
     @pytest.mark.asyncio
-    async def test_energy_tracking_with_agent_id(self):
-        """When agent_id is provided, Energy tracking is attempted."""
+    async def test_call_model_does_not_mutate_monitor_and_logs_inference_call(self, monkeypatch):
+        """When agent_id is provided, monitor.process_update is NOT called and
+        one Postgres-only inference_call row is written with confidence=0.0."""
+        import asyncio
+        from src import audit_db, audit_log
+
         mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.return_value = _make_mock_response()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            content="SECRET-RESPONSE-TEXT", tokens=42, model="gemma4:latest"
+        )
 
         mock_monitor = MagicMock()
         mock_mcp_server = MagicMock()
         mock_mcp_server.get_or_create_monitor.return_value = mock_monitor
+
+        pg_entries = []
+
+        async def _capture(entry, raw_hash=None):
+            pg_entries.append(entry)
+            return True
+
+        monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
+        log_file = audit_log.audit_logger.log_file
+        offset = log_file.stat().st_size if log_file.exists() else 0
 
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
              patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_mcp_server):
             from src.mcp_handlers.support.model_inference import handle_call_model
             result = await handle_call_model({
-                "prompt": "test",
+                "prompt": "SECRET-PROMPT-TEXT",
                 "provider": "ollama",
                 "agent_id": "test-agent-123",
             })
 
+        pending = list(audit_log._inflight_pg_audit_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+
         parsed = _parse_text_content(result)
         assert parsed["success"] is True
-        # Monitor should have been called
-        mock_mcp_server.get_or_create_monitor.assert_called_once_with("test-agent-123")
-        mock_monitor.process_update.assert_called_once()
+        # No synthetic governance update
+        mock_mcp_server.get_or_create_monitor.assert_not_called()
+        mock_monitor.process_update.assert_not_called()
+
+        # Route-level audit row in Postgres only, confidence=0.0, no text
+        if log_file.exists():
+            with open(log_file) as fh:
+                fh.seek(offset)
+                assert "inference_call" not in fh.read()
+        rows = [e for e in pg_entries if e["event_type"] == "inference_call"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["agent_id"] == "test-agent-123"
+        assert row["confidence"] == 0.0
+        serialized = json.dumps(row)
+        assert "SECRET-PROMPT-TEXT" not in serialized
+        assert "SECRET-RESPONSE-TEXT" not in serialized
+        details = row["details"]
+        assert details["schema"] == "unitares.inference_call.v1"
+        assert details["tool"] == "call_model"
+        assert details["status"] == "completed"
+        assert details["privacy_class"] == "local"
+        assert details["route"]["host_id"] == "ollama:local"
+        assert details["route"]["model_used"] == "gemma4:latest"
+        assert details["route"]["tokens_used"] == 42
 
     @pytest.mark.asyncio
-    async def test_energy_tracking_failure_non_blocking(self):
-        """Energy tracking failure does not block the response."""
+    async def test_failed_call_model_logs_failed_inference_call_without_base_url(self, monkeypatch):
+        """A failed provider call records status='failed' and route facts, never raw base_url."""
+        import asyncio
+        from src import audit_db, audit_log
+
         mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.return_value = _make_mock_response()
+        mock_client_instance.chat.completions.create.side_effect = ConnectionError(
+            "Connection refused to SECRET-PROMPT-TEXT"
+        )
+        pg_entries = []
 
-        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \
-             patch("src.mcp_handlers.shared.get_mcp_server", side_effect=Exception("server not ready")):
-            from src.mcp_handlers.support.model_inference import handle_call_model
-            result = await handle_call_model({
-                "prompt": "test",
-                "provider": "ollama",
-                "agent_id": "test-agent-123",
-            })
+        async def _capture(entry, raw_hash=None):
+            pg_entries.append(entry)
+            return True
 
-        # Should still succeed despite tracking failure
-        parsed = _parse_text_content(result)
-        assert parsed["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_no_energy_tracking_without_agent_id(self):
-        """When no agent_id, Energy tracking is skipped gracefully."""
-        mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.return_value = _make_mock_response()
+        monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
 
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
              patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
             from src.mcp_handlers.support.model_inference import handle_call_model
             result = await handle_call_model({
+                "prompt": "SECRET-PROMPT-TEXT",
+                "provider": "ollama",
+                "agent_id": "test-agent-123",
+            })
+
+        pending = list(audit_log._inflight_pg_audit_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        rows = [e for e in pg_entries if e["event_type"] == "inference_call"]
+        assert len(rows) == 1
+        details = rows[0]["details"]
+        assert details["status"] == "failed"
+        assert details["failure"]["code"] == "MODEL_PROVIDER_UNAVAILABLE"
+        assert details["route"]["host_id"] == "ollama:local"
+        assert details["privacy_class"] == "local"
+        assert "base_url" not in json.dumps(rows[0])
+        assert "SECRET-PROMPT-TEXT" not in json.dumps(rows[0])
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_non_blocking(self):
+        """Audit logging failure does not block the response."""
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response()
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \
+             patch("src.audit_log.audit_logger.log_inference_call", side_effect=RuntimeError("audit down")):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
                 "prompt": "test",
                 "provider": "ollama",
+                "agent_id": "test-agent-123",
             })
 
         parsed = _parse_text_content(result)

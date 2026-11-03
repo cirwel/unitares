@@ -13,13 +13,8 @@ Expose two primary verbs for model-mediated help:
 
 - `consult` returns advisory model evidence and never creates a governance record.
 
-> **Amended 2026-09-26.** Two qualifications. First, "no governance record"
-> was already inexact before this amendment: the inference layers' Energy
-> accounting runs a synthetic `process_update` on every successful call,
-> which writes an `auto_attest` decision row that does not say a
-> consultation produced it (the same holds for `call_model` and
-> `delegate_inference`). Second, every consultation that reaches the router
-> now also writes an `audit.events` row, `event_type='consultation'`
+> **Amended 2026-09-26 (updated 2026-11-03, #2484).** Every consultation that
+> reaches the router writes an `audit.events` row, `event_type='consultation'`
 > (`unitares.consultation_record.v1`): requester, policy, outcome, the route
 > whenever a well-formed inference result came back, and HMAC hashes of the
 > brief, prompt and advice under a key returned only to the caller. A failed
@@ -37,10 +32,13 @@ Expose two primary verbs for model-mediated help:
 > `consultation_id` today; if an outcome, finding or review record starts to,
 > consultation rows need a store that lives at least as long as it.
 >
-> The synthetic Energy-accounting update is scheduled for removal, together
-> with a route-level record for `call_model` and `delegate_inference`, after
-> the pre-registered 2026-12-01 read, so that read's inputs do not change
-> mid-window.
+> As of 2026-11-03 (#2484, after the pre-registered #1425 read executed under
+> #3180), the synthetic Energy-accounting `process_update` in the inference
+> services is removed: `consult`, `call_model`, and `delegate_inference` no
+> longer mutate caller EISV state or write `auto_attest` rows. Direct
+> `call_model` and `delegate_inference` calls instead write a route-level
+> `audit.events` row (`event_type='inference_call'`,
+> `unitares.inference_call.v1`) carrying route, privacy class and outcome.
 - `request_review` requests governed, on-record judgment with actual reviewer provenance.
 
 `call_model`, `delegate_inference`, and raw `dialectic` remain compatible route or
@@ -91,9 +89,10 @@ deprecated in favour of `consult(effort='standard')` (#2847), and its model,
 temperature and token-limit controls for HTTP hosts retire with it rather than
 moving onto `consult`. Local model choice is operator configuration
 (`UNITARES_MODEL_ID`, which the standard lane resolves through
-`default_local_model()`), not a per-call knob. Removal is not before 2026-12-02,
-so the pre-registered 2026-12-01 read does not see `call_model`'s route change
-mid-window; #2484 changes that route on the same date. `delegate_inference`
+`default_local_model()`), not a per-call knob. Removal is not before 2026-12-02
+(the advertised deprecation feedback window); #2484 removed the synthetic
+Energy-accounting update and added `event_type='inference_call'` on 2026-11-03
+after the #1425 read. `delegate_inference`
 keeps its model and timeout controls for the CLI hosts.
 
 The lower-overhead effort is named `standard`, not `fast`: neither its HTTP

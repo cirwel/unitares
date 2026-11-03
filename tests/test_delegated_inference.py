@@ -86,13 +86,17 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
             },
         }
 
-    tracked = {}
+    import asyncio
+    from src import audit_db, audit_log
 
-    async def fake_track(agent_uuid, **kwargs):
-        tracked.update({"agent_uuid": agent_uuid, **kwargs})
+    pg_entries = []
 
+    async def _capture(entry, raw_hash=None):
+        pg_entries.append(entry)
+        return True
+
+    monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
     monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
-    monkeypatch.setattr(di, "_track_energy", fake_track)
 
     result = await di.handle_delegate_inference({
         "prompt": "challenge this thesis",
@@ -100,6 +104,9 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
         "task_type": "review",
         "timeout_s": 90,
     })
+    pending = list(audit_log._inflight_pg_audit_tasks)
+    if pending:
+        await asyncio.gather(*pending)
     parsed = _payload(result)
 
     assert parsed["success"] is True
@@ -129,8 +136,18 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
         "schema": "unitares.terminal_answer.v1",
         "status": "complete",
     }
-    assert tracked["agent_uuid"] == "uuid-requester"
-    assert tracked["tokens_used"] == 41
+    rows = [e for e in pg_entries if e["event_type"] == "inference_call"]
+    assert len(rows) == 1
+    assert rows[0]["agent_id"] == "uuid-requester"
+    assert rows[0]["confidence"] == 0.0
+    assert rows[0]["details"]["schema"] == "unitares.inference_call.v1"
+    assert rows[0]["details"]["tool"] == "delegate_inference"
+    assert rows[0]["details"]["status"] == "completed"
+    assert rows[0]["details"]["privacy_class"] == "operator_authorized_external"
+    assert rows[0]["details"]["route"]["host_id"] == "claude:host-adapter"
+    assert rows[0]["details"]["route"]["tokens_used"] == 41
+    assert "challenge this thesis" not in json.dumps(rows[0])
+    assert "careful answer" not in json.dumps(rows[0])
 
 
 @pytest.mark.asyncio
@@ -392,11 +409,7 @@ async def test_delegate_inference_routes_to_codex(monkeypatch):
             },
         }
 
-    async def fake_track(agent_uuid, **kwargs):
-        return None
-
     monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
-    monkeypatch.setattr(di, "_track_energy", fake_track)
 
     parsed = _payload(await di.handle_delegate_inference({
         "prompt": "review this diff",
@@ -710,11 +723,7 @@ async def test_delegate_inference_carries_model_reporting_status_and_reroutes(mo
             },
         }
 
-    async def fake_track(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
-    monkeypatch.setattr(di, "_track_energy", fake_track)
 
     parsed = _payload(await di.handle_delegate_inference({
         "prompt": "question",
@@ -827,12 +836,8 @@ async def test_a_success_clears_the_cooldown(monkeypatch):
                 "execution_id": "ex", "provenance": {"terminal_answer": {
                     "schema": "unitares.terminal_answer.v1", "status": "complete"}}}
 
-    async def no_track(*a, **k):
-        return None
-
     monkeypatch.setattr(di, "get_inference_host", lambda _h: _claude_host())
     monkeypatch.setattr(di, "invoke_host_adapter", ok_invoke)
-    monkeypatch.setattr(di, "_track_energy", no_track)
     outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
         prompt="hi", requesting_agent_uuid=None))
     assert outcome.ok
@@ -1200,10 +1205,13 @@ async def _cancel_deferred_bookkeeping():
 @pytest.mark.asyncio
 async def test_hung_accounting_after_a_late_answer_does_not_cost_the_answer(monkeypatch):
     """#2285 review: an answer that arrives near the deadline is returned by
-    the deadline, with its execution id, even when Energy accounting hangs;
-    the accounting is deferred to a tracked task and the response says so."""
+    the deadline, with its execution id, even when post-answer bookkeeping
+    (cooldown_clear) hangs; it is deferred to a tracked task and the response
+    says so."""
     import asyncio
     import time
+
+    from src.mcp_handlers.support import host_availability
 
     monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
     monkeypatch.setattr(di, "DELEGATE_INFERENCE_OVERHEAD_S", _SCALED_OVERHEAD_S)
@@ -1223,12 +1231,12 @@ async def test_hung_accounting_after_a_late_answer_does_not_cost_the_answer(monk
             }},
         }
 
-    async def hung_accounting(*_args, **_kwargs):
+    async def hung_clear(*_args, **_kwargs):
         accounting_started.set()
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(di, "invoke_host_adapter", late_answer)
-    monkeypatch.setattr(di, "_track_energy", hung_accounting)
+    monkeypatch.setattr(host_availability, "clear_async", hung_clear)
 
     started = time.monotonic()
     try:
@@ -1242,7 +1250,7 @@ async def test_hung_accounting_after_a_late_answer_does_not_cost_the_answer(monk
         assert parsed["success"] is True
         assert parsed["response"] == "late but complete"
         assert parsed["inference"]["orchestrator_execution_id"] == "ex-late"
-        assert parsed["inference"]["accounting_deferred"] == ["energy"]
+        assert parsed["inference"]["accounting_deferred"] == ["cooldown_clear"]
         # Still running, and held, not dropped.
         assert accounting_started.is_set()
         assert len(di._background_tasks) == 1
@@ -1257,12 +1265,8 @@ async def test_prompt_accounting_is_not_reported_deferred(monkeypatch):
                 "execution_id": "ex", "provenance": {"terminal_answer": {
                     "schema": "unitares.terminal_answer.v1", "status": "complete"}}}
 
-    async def quick_track(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
     monkeypatch.setattr(di, "invoke_host_adapter", ok_invoke)
-    monkeypatch.setattr(di, "_track_energy", quick_track)
     outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
         prompt="hi", requesting_agent_uuid="requester"))
 
