@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-11-03T23:31:55Z",
+  "verified_at": "2026-11-03T23:36:36Z",
   "verified_date": "2026-11-03",
   "verifier": "Kenny Wang",
   "source_digests": {
@@ -12,7 +12,7 @@
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
     "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
     "unitares/src/behavioral_assessment.py": "2e48d09ae5a6d31a",
-    "unitares/src/behavioral_sensor.py": "fc3088e3fe008974",
+    "unitares/src/behavioral_sensor.py": "542ce4764b76b5f9",
     "unitares/src/behavioral_state.py": "e214a51c1d7763c7",
     "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
     "unitares/src/cold_start_risk_confirmation.py": "2f75a1a0ef3a7a99",
@@ -37,10 +37,10 @@
   "skill_digest": "a22cff879e00a38d",
   "superseded_digests": {
     "unitares/src/behavioral_sensor.py": [
-      "6cf5e58a3c20ef8d"
+      "049acd128198f3d4"
     ],
     "unitares/src/eisv_telemetry.py": [
-      "80977b3d95e83c55"
+      "7db08d2b241eb2ef"
     ]
   }
 }

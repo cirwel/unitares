@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-11-03T23:31:55Z",
+  "verified_at": "2026-11-03T23:36:36Z",
   "verified_date": "2026-11-03",
   "verifier": "Kenny Wang",
   "source_digests": {
@@ -41,7 +41,7 @@
   "skill_digest": "4c8e78916212f93e",
   "superseded_digests": {
     "unitares/src/mcp_handlers/updates/phases.py": [
-      "58c71519ba682bfc"
+      "43ba243f527f518f"
     ]
   }
 }

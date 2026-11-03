@@ -36,12 +36,11 @@ def is_self_referential_outcome(outcome: object) -> bool:
     own drift and oscillation state back into ``E`` (``outcome_success``), ``I``
     (``outcome_score_consistency``), and ``outcomes_in_e`` (#2610, Invariant 4).
 
-    When ``verification_source`` is present on the row, only
-    ``"server_observation"`` rows are treated as self-referential echoes so
-    caller-submitted ``trajectory_validated`` rows (which carry
-    ``"agent_reported_tool_result"``) are preserved. When ``verification_source``
-    is absent (the default ``get_recent_outcomes`` query selects
-    ``outcome_type, is_bad, outcome_score, ts``), ``outcome_type`` is used.
+    On the live ``get_recent_outcomes`` path (where ``verification_source`` is
+    not selected when ``UNITARES_OUTCOME_PROVENANCE_FILTER=off``), rows matching
+    ``SELF_REFERENTIAL_OUTCOME_TYPES`` are excluded by ``outcome_type``. When
+    ``verification_source`` is present on a caller-supplied row (e.g. in replay
+    or direct unit calls), only ``"server_observation"`` rows are excluded.
 
     In the behavioral sensor, filtering these rows is coupled to
     ``neutralize_self_loops`` (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS``) so
@@ -82,7 +81,7 @@ def per_agent_i_calibration_enabled() -> bool:
     Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default off). When
     enabled (#2818 §3.1 & §3.2):
     - Requires ``agent_calibration_channel`` with ``evidence_status == "available"``
-      and ``freshness_status != "stale"``.
+      and ``freshness_status == "recent"`` (rejecting ``"stale"`` and ``"unknown"``).
     - If a frozen reference-cohort ``prior_error`` in ``(0, 1)`` is supplied on
       the channel (§3.2(3)) and ``n_verified_pairs >= 1``, ``calibration_accuracy``
       uses partial-pooled error ``e_pool = (1 - w) * prior_error + w * e_agent``
@@ -91,9 +90,9 @@ def per_agent_i_calibration_enabled() -> bool:
       never substituting zero error or the legacy 0.1474 fleet scalar) and
       ``n_verified_pairs >= 5``, uses the agent's own sample-weighted binned ECE
       ``1.0 - e_agent`` (``source="agent_tactical_calibration"``).
-    - Otherwise (``n_verified_pairs == 0``, stale evidence, or ``n < 5`` without
-      a reference prior), no shared prior enters ``I`` (§3.2 Rule 1); base ``I``
-      uses the calibration-free renormalization (Arm F, §6.4).
+    - Otherwise (``n_verified_pairs == 0``, stale/unknown freshness, or ``n < 5``
+      without a reference prior), no shared prior enters ``I`` (§3.2 Rule 1);
+      base ``I`` uses the calibration-free renormalization (Arm F, §6.4).
     """
     raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
@@ -1148,7 +1147,7 @@ def _compute_I_components(
             prior_err = agent_calibration_channel.get("prior_error")
             if (
                 status == "available"
-                and freshness != "stale"
+                and freshness == "recent"
                 and isinstance(n_pairs, int)
                 and not isinstance(n_pairs, bool)
                 and n_pairs >= 1

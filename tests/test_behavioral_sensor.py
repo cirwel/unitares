@@ -1398,7 +1398,7 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
         # 1. With explicit reference-cohort prior_error (§3.2(3)): partial pooling
         pooled_channel = {
             "evidence_status": "available",
-            "freshness_status": "fresh",
+            "freshness_status": "recent",
             "n_verified_pairs": 10,
             "calibration_error": 0.04,
             "prior_error": 0.12,
@@ -1426,7 +1426,7 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
         # 2. Without prior_error and n_verified_pairs >= 5: unpooled per-agent ECE, never fleet scalar
         unpooled_channel = {
             "evidence_status": "available",
-            "freshness_status": "fresh",
+            "freshness_status": "recent",
             "n_verified_pairs": 6,
             "calibration_error": 0.08,
             "value": 0.92,
@@ -1444,7 +1444,7 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
     def test_per_agent_i_calibration_falls_back_to_arm_f_when_no_pairs_or_stale_or_sparse_without_prior(
         self, monkeypatch
     ):
-        """#2818 §3.2 Rule 1 & Rule 3: when n == 0, stale, or n < 5 without reference prior, no prior enters I (uses Arm F)."""
+        """#2818 §3.2 Rule 1 & Rule 3: when n == 0, stale/unknown freshness, or n < 5 without reference prior, no prior enters I (uses Arm F)."""
         from src.behavioral_sensor import (
             compute_behavioral_sensor_components,
             compute_behavioral_sensor_eisv,
@@ -1476,7 +1476,14 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
             },
             {
                 "evidence_status": "available",
-                "freshness_status": "fresh",
+                "freshness_status": "unknown",
+                "n_verified_pairs": 12,
+                "calibration_error": 0.05,
+                "value": 0.95,
+            },
+            {
+                "evidence_status": "available",
+                "freshness_status": "recent",
                 "n_verified_pairs": 2,
                 "calibration_error": 0.05,
                 "value": 0.95,
