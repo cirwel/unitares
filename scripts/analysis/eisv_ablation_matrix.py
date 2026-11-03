@@ -239,7 +239,8 @@ def effective_data_boundary(args: argparse.Namespace) -> DataBoundary:
     """The data boundary a read runs under.
 
     The registered boundary is ``--as-of`` (for the stop-rule read, the
-    fleet-ops wrapper passes ``READ_CUTOFF=2026-12-01T16:00:00Z``). For a
+    fleet-ops wrapper passes ``READ_CUTOFF=2026-11-03T16:00:00Z`` since the
+    2026-11-03 run-date amendment). For a
     registered read whose protocol records ``instrument_change_at`` T, the
     effective boundary is ``min(--as-of, T - 1 microsecond)``: every admitted
     outcome is strictly before T, and since the outcome is the anchor of each
