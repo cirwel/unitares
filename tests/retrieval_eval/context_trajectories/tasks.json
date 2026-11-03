@@ -44,6 +44,36 @@
       ],
       "change": {"id": "r401", "revision": "6a692e12-d93d-4b7d-b569-48f627dba521", "details": "The latest checked configuration specifies retry_limit=5. Evidence: synthetic config receipt cfg-D2. This replaces the earlier limit of 8."},
       "expected": {"answer": "5", "source_id": "r401", "evidence": "retry_limit=5"}
+    },
+    {
+      "id": "tag_scope",
+      "question": "What acknowledgement does the checked storage contract require? Return acknowledged or unconfirmed and cite the evidence you opened. The example-project tag is an optional label, not an inventory of project records.",
+      "scope": {"membership_source": "explicit synthetic fixture catalog", "capture_ids": ["r501", "r502"], "required_source_ids": ["r501"]},
+      "search_ids": ["r501"],
+      "records": [
+        {"id": "r501", "summary": "Storage acknowledgement contract; open the checked receipt.", "tags": ["persistence"], "details": "The checked storage contract requires storage_state=acknowledged. Evidence: synthetic contract receipt cfg-E. This project record does not carry the optional example-project tag."},
+        {"id": "r502", "summary": "Project dashboard colors.", "tags": ["example-project"], "details": "This label marks a dashboard note, not a complete project inventory."}
+      ],
+      "expected": {"answer": "acknowledged", "source_id": "r501", "evidence": "storage_state=acknowledged"}
+    },
+    {
+      "id": "query_recovery",
+      "question": "What retry limit does the checked configuration require? Return the integer as a string and cite the evidence you opened. If your query is refused, reformulate it within the remaining turns.",
+      "query_byte_limit": 100,
+      "search_ids": ["r601"],
+      "records": [
+        {"id": "r601", "summary": "Retry configuration receipt.", "details": "The checked configuration requires retry_limit=4. Evidence: synthetic config receipt cfg-F."}
+      ],
+      "expected": {"answer": "4", "source_id": "r601", "evidence": "retry_limit=4"}
+    },
+    {
+      "id": "newer_unsupported_note",
+      "question": "Which route is supported by the checked configuration? Return west or east and cite the evidence you opened. A newer unverified proposal does not establish a configuration change.",
+      "search_ids": ["r701"],
+      "records": [
+        {"id": "r701", "summary": "Historical transfer route was east; inspect the checked configuration and note history.", "details_parts": ["Historical routing used east.\n", {"repeat": "Historical trace before the configuration inspection.\n", "count": 45}, "Resolution notes (2026-10-13T12:00:00+00:00):\nThe checked configuration specifies transfer_route=west. Evidence: synthetic config receipt cfg-G. This replaces the historical east setting.\n\nResolution notes (2026-10-14T00:00:00+00:00):\nUnverified proposal: perhaps route east would be faster. No configuration or authoritative change was checked.\n"]}
+      ],
+      "expected": {"answer": "west", "source_id": "r701", "evidence": "transfer_route=west"}
     }
   ]
 }

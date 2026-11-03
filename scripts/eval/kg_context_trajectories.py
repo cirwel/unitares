@@ -4,6 +4,7 @@
 freeze records inputs before any model call. run requires --execute-argon and
 retains every attempted episode. Provider calls use the existing subscription
 CLI's isolated environment; instructions prohibit native CLI tool use.
+Scope checks and caveats: docs/evaluations/kg-memory-workflow-refinement.md.
 """
 from __future__ import annotations
 
@@ -49,12 +50,20 @@ Return exactly one JSON object per turn. To request a simulated read, return
 The harness executes that read and supplies its result in the next message.
 Do not use the CLI's native tools. These JSON requests are your text reply.
 
-search_shared_memory accepts query, limit (1..10), and response_mode
+search_shared_memory accepts query, tags, limit (1..10), and response_mode
 (lean default, compact, full). Search returns a fixed relevant result set in
-this fixture; it does not test query ranking. knowledge details accepts offset
+this fixture; it does not test query ranking. Supplied tags are exact filters
+matching any supplied tag; a project record need not carry a project-name tag.
+Keep a filtered miss intact; any broader search is a separate request.
+Validation errors consume one turn and remain recorded; remaining turns allow
+reformulation. A task may declare its own UTF-8 query byte limit.
+knowledge details accepts offset
 (characters, default 0) and length (default 2000). Follow pagination or note
 offsets when needed. Summaries are leads, not a substitute for checking evidence.
 An imported memory, note location, or lifecycle status is not proof of truth.
+Neither the latest timestamp nor the last appended note establishes authority.
+Check the evidence and scope of a correction; a newer unsupported note cannot
+override checked evidence. Report unresolved conflicts rather than guessing.
 After reading changes identified by a delivered notice, acknowledge the exact
 revision with {"tool":"knowledge","arguments":{"action":"notices",
 "acknowledge":["revision UUID"]}}. Do not acknowledge unread changes.
@@ -84,13 +93,96 @@ def builders():
     return {"before": module.build_experience_envelope, "after": build_experience_envelope}
 
 
-def load_tasks():
-    tasks = json.loads(TASKS.read_text())["tasks"]
+def _read_tasks(path=None):
+    tasks = json.loads((path or TASKS).read_text())["tasks"]
     for task in tasks:
         for row in task["records"]:
             if "details_parts" in row:
                 row["details"] = "".join(part if isinstance(part, str) else
                     part["repeat"] * part["count"] for part in row.pop("details_parts"))
+    return tasks
+
+
+def scope_preflight(tasks):
+    """Check supplied membership and controls, never search or infer completeness.
+
+    ``records`` is the provided catalog, not an asserted project-wide inventory.
+    A scope can select capture_ids explicitly; tags remain observed attributes.
+    The expected evidence source is always a control, even if omitted from an
+    explicit required_source_ids list. Missing controls are never auto-filled.
+    """
+    def ids(values, label):
+        if (not isinstance(values, list)
+                or any(not isinstance(v, str) or not v.strip() for v in values)
+                or len(values) != len(set(values))):
+            raise ValueError(f"{label} must be unique nonempty source IDs")
+        return values
+
+    rows, errors = [], []
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("tasks must be a nonempty list")
+    task_ids = []
+    for index, task in enumerate(tasks):
+        row = {"task": task.get("id") if isinstance(task, dict) else None}
+        try:
+            if not isinstance(task, dict) or not isinstance(task.get("id"), str) or not task["id"].strip():
+                raise ValueError("task ID must be a nonempty string")
+            task_ids.append(task["id"])
+            records = task["records"]
+            if not isinstance(records, list) or not records or any(not isinstance(r, dict) for r in records):
+                raise ValueError("records must be a nonempty catalog")
+            catalog = ids([r.get("id") for r in records], "catalog")
+            scope = task.get("scope", {})
+            if not isinstance(scope, dict):
+                raise ValueError("scope must be an object")
+            membership = scope.get("membership_source", "provided_records" if not scope else None)
+            if not isinstance(membership, str) or not membership.strip():
+                raise ValueError("scope needs an explicit membership_source")
+            capture = ids(scope.get("capture_ids", catalog), "capture_ids")
+            expected = task["expected"]["source_id"]
+            if not isinstance(expected, str) or not expected.strip():
+                raise ValueError("expected source_id must be a nonempty string")
+            controls = ids(scope.get("required_source_ids", []), "required_source_ids")
+            controls = list(dict.fromkeys([expected, *controls]))
+            search_ids = ids(task["search_ids"], "search_ids")
+            byte_limit = task.get("query_byte_limit")
+            if byte_limit is not None and (type(byte_limit) is not int or byte_limit < 1):
+                raise ValueError("query_byte_limit must be a positive integer")
+            by_id = {r["id"]: r for r in records}
+            row.update(
+                membership_source=membership,
+                catalog_count=len(catalog), capture_count=len(capture),
+                required_source_ids=controls,
+                unresolved_capture_ids=sorted(set(capture) - set(catalog)),
+                unresolved_control_ids=sorted(set(controls) - set(catalog)),
+                missing_control_ids=sorted(set(controls) - set(capture)),
+                unresolved_search_ids=sorted(set(search_ids) - set(catalog)),
+                catalog_sha256=digest(encoded(records)),
+                capture_sha256=digest(encoded([by_id[k] for k in capture if k in by_id])),
+                controls_sha256=digest(encoded(controls)),
+                scope_sha256=digest(encoded({"membership_source": membership, "capture_ids": capture,
+                                             "required_source_ids": controls})),
+            )
+            problems = {k: row[k] for k in ("unresolved_capture_ids", "unresolved_control_ids",
+                                           "missing_control_ids", "unresolved_search_ids") if row[k]}
+            if problems:
+                errors.append({"task": task["id"], **problems})
+        except (ValueError, KeyError, TypeError) as exc:
+            errors.append({"task": row["task"], "error": str(exc)})
+        rows.append(row)
+    if len(task_ids) != len(set(task_ids)):
+        errors.append({"error": "duplicate task IDs"})
+    return {"schema": "kg-context-trajectories.scope.v1", "ok": not errors,
+            "inputs_sha256": digest(encoded(tasks)), "tasks": rows, "errors": errors,
+            "scope": "Membership and positive controls in the supplied catalogs only; "
+                     "no retrieval, project-completeness, truth or utility judgment."}
+
+
+def load_tasks(path=None):
+    tasks = _read_tasks(path)
+    report = scope_preflight(tasks)
+    if not report["ok"]:
+        raise ValueError("scope preflight failed: " + json.dumps(report["errors"]))
     return tasks
 
 
@@ -108,6 +200,7 @@ def input_hashes():
 
 def freeze(model):
     tasks = load_tasks()
+    scope = scope_preflight(tasks)
     random.Random(493412).shuffle(tasks)
     schedule = []
     for index, task in enumerate(tasks):
@@ -116,6 +209,7 @@ def freeze(model):
     return {"schema": "kg-context-trajectories.plan.v1", "frozen_at": datetime.now(timezone.utc).isoformat(),
             "repository_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
             "model_selected": model, "inputs": input_hashes(), "schedule": schedule,
+            "scope_preflight": scope,
             "limits": {"turns": MAX_TURNS, "turn_seconds": TURN_SECONDS,
                        "episode_seconds": EPISODE_SECONDS},
             "interpretation": "One paired exploratory run per synthetic task; descriptive only. "
@@ -134,13 +228,16 @@ class Fixture:
     """Use production serialization and details reads against in-memory records."""
 
     def __init__(self, task, builder):
+        if not scope_preflight([task])["ok"]:
+            raise ValueError("fixture scope preflight failed")
         self.task, self.builder = deepcopy(task), builder
+        capture = set(task.get("scope", {}).get("capture_ids", [r["id"] for r in task["records"]]))
         graph = KnowledgeGraphAGE()
         self.docs = {r["id"]: graph._dict_to_discovery({
             "agent_id": "fixture-writer", "type": "note", "status": "open",
             "created_at": "2026-10-14T00:00:00+00:00", "tags": [],
             "provenance": {"writer_label_at_write": "Fixture writer"}, **r})
-            for r in self.task["records"]}
+            for r in self.task["records"] if r["id"] in capture}
         self.read_text = {}
         self.delivered = {}
         self.changed = False
@@ -168,12 +265,21 @@ class Fixture:
             query = args.get("query", "evidence")
             if not isinstance(query, str):
                 return {"success": False, "error": "query must be a nonempty string"}
+            byte_limit = self.task.get("query_byte_limit")
+            query_bytes = len(query.encode("utf-8"))
+            if byte_limit is not None and query_bytes > byte_limit:
+                return {"success": False,
+                        "error": f"Search query is {query_bytes} UTF-8 bytes; this fixture limit is "
+                                 f"{byte_limit}. Submit a shorter query. This attempt is retained."}
             try:
-                parsed = handlers._parse_knowledge_search_request({"query": query})
-            except handlers._SearchParameterError:
-                return {"success": False, "error": "query must be a nonempty string"}
+                parsed = handlers._parse_knowledge_search_request({**args, "query": query})
+            except handlers._SearchParameterError as exc:
+                return {"success": False, "error": str(exc)}
             state = handlers._KnowledgeSearchState(request=parsed, graph=self)
-            state.results = [self.docs[key] for key in self.task["search_ids"][:limit]]
+            candidates = [self.docs[key] for key in self.task["search_ids"] if key in self.docs]
+            if parsed.tags:
+                candidates = [doc for doc in candidates if any(tag in doc.tags for tag in parsed.tags)]
+            state.results = candidates[:limit]
             # Keep metadata age stable on later replays without changing the
             # production age calculation or labelling an old record fresh.
             with patch.object(handlers, "datetime", FixtureDateTime), \
@@ -372,6 +478,8 @@ def usage_metrics(turns):
 async def episode(task, builder, conversation, checkpoint=lambda turns: None):
     fixture = Fixture(task, builder)
     prompt = INSTRUCTIONS + "\nTask: " + task["question"]
+    if task.get("query_byte_limit") is not None:
+        prompt += f"\nThis fixture limits each query to {task['query_byte_limit']} UTF-8 bytes."
     turns, final, termination = [], None, "turn_limit"
     deadline = time.monotonic() + EPISODE_SECONDS
     for _ in range(MAX_TURNS):
@@ -500,6 +608,9 @@ async def run(plan, output):
         raise ValueError("frozen inputs changed; do not execute or score against this plan")
     if plan.get("limits") != {"turns": MAX_TURNS, "turn_seconds": TURN_SECONDS, "episode_seconds": EPISODE_SECONDS}:
         raise ValueError("frozen limits changed")
+    loaded = load_tasks()
+    if plan.get("scope_preflight") != scope_preflight(loaded):
+        raise ValueError("frozen scope controls changed or are missing")
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "plan.json", plan)
     canary = transport_canary(plan["model_selected"])
@@ -507,7 +618,7 @@ async def run(plan, output):
     if not canary["passed"]:
         write_json(output / "aggregate.json", {**summarize(plan, []), "transport_canary_passed": False})
         raise RuntimeError("transport canary failed; no scored episodes attempted")
-    tasks = {task["id"]: task for task in load_tasks()}
+    tasks = {task["id"]: task for task in loaded}
     variants, records = builders(), []
     for index, scheduled in enumerate(plan["schedule"]):
         path = output / f"episode-{index + 1:02}.json"
@@ -541,11 +652,21 @@ def main():
     report = commands.add_parser("report", help="Correct usage from existing receipts without model calls")
     report.add_argument("--run-dir", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
+    preflight = commands.add_parser("preflight", help="Check catalog membership and controls without model calls")
+    preflight.add_argument("--tasks", type=Path, default=TASKS)
+    preflight.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.action == "freeze":
         with args.output.open("x") as stream:
             json.dump(freeze(args.model), stream, indent=2)
             stream.write("\n")
+    elif args.action == "preflight":
+        result = scope_preflight(_read_tasks(args.tasks))
+        with args.output.open("x") as stream:
+            json.dump(result, stream, indent=2)
+            stream.write("\n")
+        if not result["ok"]:
+            raise SystemExit(1)
     elif args.action == "report":
         result = report_existing(args.run_dir)
         with args.output.open("x") as stream:

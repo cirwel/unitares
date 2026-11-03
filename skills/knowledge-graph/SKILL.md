@@ -56,6 +56,11 @@ same handler (`knowledge(action="search")`), but it defaults `response_mode` to
 router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
+Tags are exact filters matching any supplied tag, not a complete project
+inventory. When tags were your own narrowing choice, a separate query without
+them can diagnose a suspected miss. Keep explicit user/task filters intact;
+never silently widen a filtered request or retag records to rescue an evaluation.
+
 The `lean` and `compact` tiers show three digests whatever `limit` asked for.
 The same response lists the results after those three under `more_results`,
 one row each (`discovery_id`, `type`, `status`, a short summary), up to 17
@@ -82,7 +87,14 @@ For a small working context, search first, open the few relevant records by ID,
 and use their note offsets or pagination when needed. Keep the decision, its
 scope and caveats, and evidence IDs in the working summary; retrieve the original
 record when the evidence must be checked. A summary is not a replacement for
-its source. After processing delivered change notices, acknowledge their exact
+its source. Before using a finding as an operating rule, open the evidence and
+inspect its supersession and appended-note pointers. Check the applicable scope,
+canonical artifact and authority of a claimed policy correction. A newer note,
+an `open` status or an updated timestamp is not verification; the last note may
+be speculation or an administrative update. Surface conflicts between a headline
+and checked evidence rather than silently choosing one.
+
+After processing delivered change notices, acknowledge their exact
 revision IDs through `knowledge(action="notices", acknowledge=[...])` so the
 same receipts stop repeating. Do not acknowledge unseen revisions or mute
 delivery merely to reduce context.
@@ -161,6 +173,13 @@ Queryless listings and searches with a `status` filter never get the second
 pass.
 
 ## Quick Contribution
+
+When checked evidence changes an existing finding's conclusion, update its
+`summary` to the current supported claim and scope, with the canonical evidence
+reference. Keep the earlier claim and its history in `details`; a summary-only
+update preserves them. Appending `resolution_notes` alone leaves the old headline
+in search results. Do not rewrite a historical or superseded record into a new
+claim; use its replacement link, and keep unresolved conflicts visible.
 
 For low-friction contributions, use the unified note action:
 
