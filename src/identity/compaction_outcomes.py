@@ -10,8 +10,8 @@ already exist:
   ``spawn_reason="compaction"`` was created at or after the compaction and
   before this identity's next recorded compaction.
 - ``kept``: no such child, and this identity acted again after the
-  compaction: a check-in, a knowledge write or a consult
-  (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
+  compaction: a check-in, a knowledge write, a consult or a direct inference
+  call (``SELF_ACTIVITY_EVENT_TYPES``). Rows other callers or detectors write
   against an identity, such as ``agent_archived`` or
   ``identity_hijack_suspected``, do not count; nor does ``knowledge_read``,
   which a reader listing this identity's knowledge can log against it.
