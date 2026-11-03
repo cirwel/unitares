@@ -765,6 +765,40 @@ change to the golden trajectories without one fails
 identity count and p50. A recomputation of older rows under current maths is a
 labelled estimate, not extra sample.
 
+### Reference frame, chart and metric (2026-11-02)
+
+Three things are easy to call "coordinates", and UNITARES has them to different
+degrees.
+
+- **Reference frame: the record.** Identity with declared lineage, claims and
+  their supersession links, reviews, outcomes and time locate every piece of
+  work. They give addresses and order, not distances. Declared lineage is an
+  attributed assertion, and full supersession traversal needs the AGE backend.
+- **Chart: EISV's shared axes.** The v6 paper places every agent on one state
+  space, $\mathcal{X} = [0,1]^3 \times [-1,1]$, and treats class as an affine
+  rescaling of that shared coordinate system. The chart is declared, not
+  validated.
+- **Metric: comparable distances.** None is validated. A difference between two
+  EISV points is comparable only within one instrument (`sensor_eisv_source`) and
+  one instrument id (era and configuration, see the section above), and even
+  there it is descriptive, not outcome evidence. The two sensor classes sit at
+  different levels on the same axes (§Sensory class split), and the registry
+  lists many changes of scale.
+
+What an agent is compared against is a fourth thing. During warmup it is the
+universal thresholds; after warmup, the expanding per-agent baselines. Those
+baselines filter on `epoch`, not on instrument, so today "its own normal" spans
+every instrument change since 2026-04-27.
+
+A shared metric for one sensor class would need, fixed before the data are read:
+the maths unchanged for at least eight weeks; agreement between per-agent levels
+in adjacent non-overlapping windows; instrument and era not recoverable from the
+shared values; a predictive gain on held-out agents over a baseline of agent
+age, task type, model and instrument; and a gain over per-agent frames on a
+named task. A new label channel makes such a test possible; it is not a result.
+A PASS of the registered 12-01 read does not supply this, because between-agent
+level differences alone can clear its first two conditions.
+
 ### Named validation and falsification paths (2026-10-16)
 
 The canonical doctrine above makes comparative decision value against simpler
@@ -2026,6 +2060,14 @@ Avoid:
   "untested as deployed" and cite the instrument's power
 - "rolling" for the Welford per-agent baselines — they are expanding, and the
   difference changes how a fixed z-threshold behaves over an agent's lifetime
+- "coordinate system" for the record — say "reference frame"; it has addresses
+  and order, not distances
+- EISV distances, rankings or "closer to healthy" comparisons across sensor
+  classes or instrument eras — the chart is shared, the metric is not validated
+  (§Reference frame, chart and metric)
+- trajectory similarity (`lineage_similarity`) as evidence of identity — identity
+  is declared in the record; the score tracks identity age (ledger, trajectory
+  identity)
 
 ## What ablations should say
 
