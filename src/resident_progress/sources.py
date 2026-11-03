@@ -54,17 +54,11 @@ class KnowledgeDiscoverySource:
     async def fetch(self, resident_uuids: list[str], window: timedelta) -> dict[str, int]:
         if not resident_uuids:
             return {}
+        from src.db.mixins.knowledge_graph import count_knowledge_discoveries_by_agents
+
         async with self._db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT agent_id::text AS uuid, count(*) AS n
-                FROM knowledge.discoveries
-                WHERE agent_id = ANY($1::text[])
-                  AND created_at > now() - $2::interval
-                GROUP BY agent_id
-                """,
-                resident_uuids,
-                window,
+            rows = await count_knowledge_discoveries_by_agents(
+                conn, resident_uuids, window
             )
         counts = {r["uuid"]: int(r["n"]) for r in rows}
         return {u: counts.get(u, 0) for u in resident_uuids}
@@ -113,18 +107,11 @@ class EISVSyncSource:
     async def fetch(self, resident_uuids: list[str], window: timedelta) -> dict[str, int]:
         if not resident_uuids:
             return {}
+        from src.db.mixins.audit import count_eisv_sync_events_by_agents
+
         async with self._db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT agent_id::text AS uuid, count(*) AS n
-                FROM audit.events
-                WHERE event_type = 'eisv_sync'
-                  AND agent_id = ANY($1::text[])
-                  AND ts > now() - $2::interval
-                GROUP BY agent_id
-                """,
-                resident_uuids,
-                window,
+            rows = await count_eisv_sync_events_by_agents(
+                conn, resident_uuids, window
             )
         counts = {r["uuid"]: int(r["n"]) for r in rows}
         return {u: counts.get(u, 0) for u in resident_uuids}
@@ -189,19 +176,20 @@ class CheckinSource:
     async def fetch(self, resident_uuids: list[str], window: timedelta) -> dict[str, int]:
         if not resident_uuids:
             return {}
+        from src.db.mixins.identity import fetch_identity_ids_for_resident_uuids
+        from src.db.mixins.state import count_measured_checkins_by_identity_ids
+
         async with self._db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT i.agent_id::text AS uuid, count(*) AS n
-                FROM core.agent_state s
-                JOIN core.identities i ON i.identity_id = s.identity_id
-                WHERE i.agent_id = ANY($1::text[])
-                  AND s.recorded_at > now() - $2::interval
-                  AND s.synthetic IS NOT TRUE
-                GROUP BY i.agent_id
-                """,
-                resident_uuids,
-                window,
+            id_rows = await fetch_identity_ids_for_resident_uuids(
+                conn, resident_uuids
             )
-        counts = {r["uuid"]: int(r["n"]) for r in rows}
+            id_to_uuid = {int(r["identity_id"]): r["uuid"] for r in id_rows}
+            state_rows = await count_measured_checkins_by_identity_ids(
+                conn, list(id_to_uuid.keys()), window
+            )
+        counts: dict[str, int] = {}
+        for r in state_rows:
+            uuid = id_to_uuid.get(int(r["identity_id"]))
+            if uuid is not None:
+                counts[uuid] = counts.get(uuid, 0) + int(r["n"])
         return {u: counts.get(u, 0) for u in resident_uuids}

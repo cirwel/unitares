@@ -319,16 +319,11 @@ async def http_tier_distribution(request):
         return access._http_unauthorized()
     try:
         from src.db import get_db
+        from src.db.mixins.identity import fetch_identity_tier_counts
+
         db = get_db()
         async with db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT COALESCE(NULLIF(metadata->'trust_tier'->>'name', ''), 'unknown') AS tier,
-                       count(*) AS n
-                FROM core.identities
-                GROUP BY 1
-                """
-            )
+            rows = await fetch_identity_tier_counts(conn)
         order = ["verified", "established", "emerging", "provisional", "unknown"]
         tiers = {t: 0 for t in order}
         for r in rows:

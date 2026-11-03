@@ -717,3 +717,121 @@ async def fetch_timeline_outcomes(
         """,
         start, agent_id, exclude_type, limit,
     )
+
+
+async def fetch_outcomes_for_correlation(
+    conn, *, agent_id: Optional[str], since_hours: float
+) -> list:
+    """Fetch outcome events with EISV snapshots within `since_hours`."""
+    if agent_id:
+        return await conn.fetch(
+            """
+            SELECT outcome_type, is_bad, outcome_score,
+                   eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi,
+                   eisv_verdict, eisv_coherence, eisv_regime,
+                   detail, ts, agent_id
+            FROM audit.outcome_events
+            WHERE agent_id = $1
+              AND ts >= now() - make_interval(hours => $2)
+            ORDER BY ts ASC
+            """,
+            agent_id,
+            since_hours,
+        )
+    return await conn.fetch(
+        """
+        SELECT outcome_type, is_bad, outcome_score,
+               eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi,
+               eisv_verdict, eisv_coherence, eisv_regime,
+               detail, ts, agent_id
+        FROM audit.outcome_events
+        WHERE ts >= now() - make_interval(hours => $1)
+        ORDER BY ts ASC
+        """,
+        since_hours,
+    )
+
+
+async def count_trajectory_validated_outcomes_for_epoch(
+    conn, current_epoch: int
+) -> int:
+    """Count `trajectory_validated` outcome events for `current_epoch`."""
+    proceed_sql = """
+        SELECT count(*)::int FROM audit.outcome_events
+        WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
+    """
+    return int((await conn.fetchval(proceed_sql, current_epoch)) or 0)
+
+
+async def fetch_outcome_evidence_page(
+    conn,
+    *,
+    start_dt,
+    end_dt,
+    target_agent_id: Optional[str],
+    outcome_type: Optional[str],
+    limit: int,
+) -> list:
+    """Fetch the bounded page of outcome events for `outcome_evidence_query`."""
+    return await conn.fetch(
+        """
+        SELECT
+          outcome_id::text AS outcome_id,
+          ts,
+          agent_id,
+          session_id,
+          outcome_type,
+          outcome_score,
+          is_bad,
+          verification_source,
+          detail
+        FROM audit.outcome_events
+        WHERE ts >= $1
+          AND ts <= $2
+          AND ($3::text IS NULL OR agent_id = $3)
+          AND ($4::text IS NULL OR outcome_type = $4)
+        ORDER BY ts DESC
+        LIMIT $5
+        """,
+        start_dt,
+        end_dt,
+        target_agent_id,
+        outcome_type,
+        limit,
+    )
+
+
+async def fetch_outcome_evidence_aggregate_batch(
+    conn,
+    *,
+    start_dt,
+    end_dt,
+    target_agent_id: Optional[str],
+    outcome_type: Optional[str],
+    cursor_ts,
+    cursor_id,
+    batch_size: int,
+) -> list:
+    """Fetch one keyset-paginated batch of outcome events for window aggregation."""
+    return await conn.fetch(
+        """
+        SELECT ts, outcome_id, agent_id, outcome_type,
+               verification_source, detail
+        FROM audit.outcome_events
+        WHERE ts >= $1
+          AND ts <= $2
+          AND ($3::text IS NULL OR agent_id = $3)
+          AND ($4::text IS NULL OR outcome_type = $4)
+          AND ($5::timestamptz IS NULL
+               OR (ts, outcome_id) < ($5::timestamptz, $6::uuid))
+        ORDER BY ts DESC, outcome_id DESC
+        LIMIT $7
+        """,
+        start_dt,
+        end_dt,
+        target_agent_id,
+        outcome_type,
+        cursor_ts,
+        cursor_id,
+        batch_size,
+    )
