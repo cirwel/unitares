@@ -79,7 +79,10 @@ def _static_config() -> Dict[str, Any]:
         sensor_coupling_mode,
     )
     from src.behavioral_assessment import floor_breach_caution_apply_enabled
-    from src.behavioral_sensor import neutralize_sensor_self_loops_enabled
+    from src.behavioral_sensor import (
+        neutralize_sensor_self_loops_enabled,
+        per_agent_i_calibration_enabled,
+    )
     from src.grounding.class_indicator import load_resident_labels
 
     cfg: Dict[str, Any] = {
@@ -98,6 +101,8 @@ def _static_config() -> Dict[str, Any]:
     }
     if neutralize_sensor_self_loops_enabled():
         cfg["neutralize_sensor_self_loops"] = True
+    if per_agent_i_calibration_enabled():
+        cfg["per_agent_i_calibration"] = True
     return cfg
 
 

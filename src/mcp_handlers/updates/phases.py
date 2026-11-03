@@ -964,6 +964,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     compute_decision_self_loop_shadow,
                     compute_legacy_coherence_dependency_shadow,
                     compute_regime_self_loop_shadow,
+                    filter_behavioral_outcomes,
                 )
                 from src.coherence_provenance import (
                     LEGACY_COHERENCE_SOURCE,
@@ -1035,11 +1036,14 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     from src.db import get_db
                     _db = get_db()
                     if _db and hasattr(_db, 'get_recent_outcomes'):
-                        outcome_hist = await _db.get_recent_outcomes(
+                        raw_outcomes = await _db.get_recent_outcomes(
                             agent_id=ctx.agent_id,
-                            limit=20,
+                            limit=100,
                             since_hours=24.0,
                         )
+                        if raw_outcomes is not None:
+                            filtered = filter_behavioral_outcomes(raw_outcomes)
+                            outcome_hist = filtered[:20] if filtered is not None else None
                 except Exception as e:
                     logger.debug(f"Outcome history unavailable for {ctx.agent_id}: {e}")
 
@@ -1048,6 +1052,12 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # acquisition and checkpoint acceptance.
                 if outcome_hist is not None:
                     ctx.agent_state["_outcome_history"] = outcome_hist
+
+                agent_cal_channel = (
+                    ctx._calibration_signal.get("agent_channel")
+                    if isinstance(ctx._calibration_signal, dict)
+                    else None
+                )
 
                 decision_history = list(monitor.state.decision_history)
                 coherence_history = list(monitor.state.coherence_history)
@@ -1074,6 +1084,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     tool_error_rate=tool_err,
                     tool_call_velocity=tool_vel,
                     unique_tools_ratio=tool_div,
+                    agent_calibration_channel=agent_cal_channel,
                 )
                 behavioral_eisv = compute_behavioral_sensor_eisv(
                     **behavioral_sensor_inputs

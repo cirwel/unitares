@@ -10,11 +10,73 @@ in telemetry and do not replace/reweight it without shadowing the resulting E/I
 distribution and downstream baselines first.
 """
 
+from collections.abc import Mapping
 import math
 import os
 
 
 NEUTRALIZE_SENSOR_SELF_LOOPS_ENV = "UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS"
+PER_AGENT_I_CALIBRATION_ENV = "UNITARES_PER_AGENT_I_CALIBRATION"
+
+SELF_REFERENTIAL_OUTCOME_TYPES = frozenset({"trajectory_validated", "cirs_resonance"})
+
+AGENT_CALIBRATION_POOLING_K = 10.0
+# Frozen reference cohort equal-identity mean sample-weighted binned ECE
+# (docs/proposals/active/eisv-per-agent-i-calibration-v0.md §3.2 / §6.1,
+# N_ref = 53 identities with >=1 verified pair). Used ONLY to shrink an
+# agent's observed calibration_error when n_verified_pairs >= 1; per §3.2
+# Rule 1, when n_verified_pairs == 0 no shared prior enters I.
+AGENT_CALIBRATION_PRIOR_ERROR = 0.147446577
+
+
+def is_self_referential_outcome(outcome: object) -> bool:
+    """Return True when an outcome row is a server-generated trajectory/resonance echo.
+
+    ``_post_update_trajectory`` emits ``trajectory_validated`` rows (scored as
+    ``1 / (1 + exp(-10 * (prev_drift_norm - current_drift_norm)))``) and
+    ``_post_update_cirs`` emits ``cirs_resonance`` rows from the monitor's own
+    internal state. ``trajectory_validated`` alone accounts for 80.3% of
+    unfiltered outcome rows (``docs/evaluations/eisv-ei-referent/result-v0.md``),
+    feeding the observer's own drift and oscillation state back into ``E``
+    (``outcome_success``), ``I`` (``outcome_score_consistency``), and
+    ``outcomes_in_e`` (#2610, Invariant 4). Matching on ``outcome_type`` works
+    on the default ``get_recent_outcomes`` query (which does not select
+    ``verification_source``) without excluding non-echo server observations such
+    as dialectic resolutions.
+    """
+    if isinstance(outcome, Mapping):
+        outcome_type = outcome.get("outcome_type")
+    else:
+        try:
+            outcome_type = outcome["outcome_type"]
+        except (KeyError, TypeError, IndexError):
+            outcome_type = None
+    return str(outcome_type or "").strip().lower() in SELF_REFERENTIAL_OUTCOME_TYPES
+
+
+def filter_behavioral_outcomes(outcome_history: list | None) -> list | None:
+    """Return ``outcome_history`` with self-referential trajectory/resonance rows removed."""
+    if outcome_history is None:
+        return None
+    return [row for row in outcome_history if not is_self_referential_outcome(row)]
+
+
+def per_agent_i_calibration_enabled() -> bool:
+    """Return True when per-agent tactical calibration in behavioral I is enabled.
+
+    Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default off). When
+    enabled (#2818 §3.1 & §3.2):
+    - If ``agent_calibration_channel`` carries ``evidence_status == "available"``
+      with ``n_verified_pairs >= 1`` and finite ``calibration_error``,
+      ``calibration_accuracy`` uses partial-pooled per-agent error
+      ``e_pool = (1 - w) * e_0 + w * e_agent`` with ``w = n / (n + 10)``
+      (``source="agent_calibration_pooled"``).
+    - If the agent has no verified pairs (``n_verified_pairs == 0`` or
+      unavailable), no shared fleet prior enters ``I`` (§3.2 Rule 1); base ``I``
+      uses the calibration-free renormalization (Arm F, §6.4).
+    """
+    raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def neutralize_sensor_self_loops_enabled() -> bool:
@@ -84,6 +146,8 @@ def compute_behavioral_sensor_eisv(
     regime_instability_override: float | None = None,
     neutralize_self_loops: bool | None = None,
     calibration_free_i: bool = False,
+    per_agent_i_calibration: bool | None = None,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict | None:
     """Compute the deployed mixed-provenance EISV observation.
 
@@ -110,6 +174,8 @@ def compute_behavioral_sensor_eisv(
         regime_instability_override=regime_instability_override,
         neutralize_self_loops=neutralize_self_loops,
         calibration_free_i=calibration_free_i,
+        per_agent_i_calibration=per_agent_i_calibration,
+        agent_calibration_channel=agent_calibration_channel,
     )
     if components is None:
         return None
@@ -141,6 +207,8 @@ def compute_behavioral_sensor_components(
     regime_instability_override: float | None = None,
     neutralize_self_loops: bool | None = None,
     calibration_free_i: bool = False,
+    per_agent_i_calibration: bool | None = None,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict | None:
     """Explain the exact deployed behavioral observation without changing it.
 
@@ -158,6 +226,11 @@ def compute_behavioral_sensor_components(
         if neutralize_self_loops is None
         else bool(neutralize_self_loops)
     )
+    active_per_agent_i = (
+        per_agent_i_calibration_enabled()
+        if per_agent_i_calibration is None
+        else bool(per_agent_i_calibration)
+    )
 
     dimensions = {
         "E": _compute_E_components(
@@ -173,6 +246,8 @@ def compute_behavioral_sensor_components(
             outcome_history,
             neutralize_self_loops=active_neutralize,
             calibration_free_i=calibration_free_i,
+            per_agent_i_calibration=active_per_agent_i,
+            agent_calibration_channel=agent_calibration_channel,
         ),
         "S": _compute_S_components(
             drift_norm,
@@ -261,6 +336,8 @@ def compute_legacy_coherence_dependency_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral E/I reading with legacy coherence neutralized.
 
@@ -333,6 +410,7 @@ def compute_legacy_coherence_dependency_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     neutral_history = [LEGACY_COHERENCE_NEUTRAL_VALUE] * min(
         len(coherence_history), 10
@@ -355,6 +433,7 @@ def compute_legacy_coherence_dependency_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     if deployed is None or candidate is None:
         return {
@@ -399,6 +478,8 @@ def compute_decision_self_loop_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral E/I reading with ``decision_e`` neutralized.
 
@@ -506,6 +587,7 @@ def compute_decision_self_loop_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(
         decision_history=decision_history, **shared
@@ -561,6 +643,8 @@ def compute_regime_self_loop_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral S reading with the regime-instability term neutralized.
 
@@ -640,6 +724,7 @@ def compute_regime_self_loop_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
     candidate = compute_behavioral_sensor_eisv(
@@ -687,6 +772,8 @@ def compute_calibration_free_i_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral I reading with the global calibration slot removed (Arm F).
 
@@ -753,6 +840,7 @@ def compute_calibration_free_i_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
     candidate = compute_behavioral_sensor_eisv(**inputs, calibration_free_i=True)
@@ -909,9 +997,10 @@ def _compute_E_components(
     cal_e = max(0.3, min(1.0, 1.0 - cd))
 
     # Outcome success rate — successful outcomes indicate productive energy
-    if outcome_history and len(outcome_history) >= 3:
-        good_count = sum(1 for o in outcome_history if not o.get('is_bad', False))
-        success_rate = good_count / len(outcome_history)
+    filtered_outcomes = filter_behavioral_outcomes(outcome_history)
+    if filtered_outcomes and len(filtered_outcomes) >= 3:
+        good_count = sum(1 for o in filtered_outcomes if not o.get('is_bad', False))
+        success_rate = good_count / len(filtered_outcomes)
         outcome_e = OUTCOME_E_FLOOR + success_rate * OUTCOME_E_SPAN  # [0,1] -> [0.3, 0.9]
         # Weights: 35% decision, 25% coherence, 20% calibration, 20% outcomes
         components = [
@@ -1010,9 +1099,49 @@ def _compute_I_components(
     *,
     neutralize_self_loops: bool = False,
     calibration_free_i: bool = False,
+    per_agent_i_calibration: bool = False,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
+    effective_calibration_free_i = bool(calibration_free_i)
+    cal_source = "fleet_calibration"
+    cal_observed = calibration_error is not None
+    cal_default_reason = (
+        None if calibration_error is not None
+        else "default_calibration_accuracy_0.75"
+    )
     cal_I = 1.0 - calibration_error if calibration_error is not None else 0.75
     cal_I = max(0.0, min(1.0, cal_I))
+
+    if per_agent_i_calibration and not effective_calibration_free_i:
+        pooled_cal_I: float | None = None
+        if isinstance(agent_calibration_channel, Mapping):
+            n_pairs = agent_calibration_channel.get("n_verified_pairs")
+            agent_err = agent_calibration_channel.get("calibration_error")
+            status = agent_calibration_channel.get("evidence_status")
+            if (
+                status == "available"
+                and isinstance(n_pairs, int)
+                and not isinstance(n_pairs, bool)
+                and n_pairs >= 1
+                and isinstance(agent_err, (int, float))
+                and not isinstance(agent_err, bool)
+                and math.isfinite(float(agent_err))
+            ):
+                w = float(n_pairs) / (float(n_pairs) + AGENT_CALIBRATION_POOLING_K)
+                e_pool = (
+                    (1.0 - w) * AGENT_CALIBRATION_PRIOR_ERROR
+                    + w * max(0.0, min(1.0, float(agent_err)))
+                )
+                pooled_cal_I = max(0.0, min(1.0, 1.0 - e_pool))
+        if pooled_cal_I is not None:
+            cal_I = pooled_cal_I
+            cal_source = "agent_calibration_pooled"
+            cal_observed = True
+            cal_default_reason = None
+        else:
+            # #2818 §3.2 Rule 1: with no admissible per-agent evidence, no
+            # shared prior enters I; fall back to calibration-free I (Arm F).
+            effective_calibration_free_i = True
 
     if neutralize_self_loops:
         coh_I = LEGACY_COHERENCE_NEUTRAL_COMPONENT
@@ -1027,15 +1156,17 @@ def _compute_I_components(
         )
 
     # Outcome consistency — consistent scores indicate information integrity
-    if outcome_history and len(outcome_history) >= 3:
-        scores = [s for o in outcome_history
+    filtered_outcomes = filter_behavioral_outcomes(outcome_history)
+    if filtered_outcomes and len(filtered_outcomes) >= 3:
+        scores = [s for o in filtered_outcomes
                   if (s := o.get('outcome_score')) is not None
-                  and isinstance(s, (int, float)) and math.isfinite(s)]
+                  and isinstance(s, (int, float)) and not isinstance(s, bool)
+                  and math.isfinite(s)]
         if len(scores) >= 3:
             mean_s = sum(scores) / len(scores)
             score_var = sum((s - mean_s) ** 2 for s in scores) / len(scores)
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
-            if calibration_free_i:
+            if effective_calibration_free_i:
                 components = [
                     _component(
                         "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.60,
@@ -1057,12 +1188,9 @@ def _compute_I_components(
                 # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
                 components = [
                     _component(
-                        "calibration_accuracy", "fleet_calibration", cal_I, 0.50,
-                        observed=calibration_error is not None,
-                        default_reason=(
-                            None if calibration_error is not None
-                            else "default_calibration_accuracy_0.75"
-                        ),
+                        "calibration_accuracy", cal_source, cal_I, 0.50,
+                        observed=cal_observed,
+                        default_reason=cal_default_reason,
                     ),
                     _component(
                         "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
@@ -1089,7 +1217,7 @@ def _compute_I_components(
                 "adjustments": [],
             }
 
-    if calibration_free_i:
+    if effective_calibration_free_i:
         components = [
             _component(
                 "legacy_coherence_trend", "legacy_tanh_v", coh_I, 1.00,
@@ -1102,12 +1230,9 @@ def _compute_I_components(
     else:
         components = [
             _component(
-                "calibration_accuracy", "fleet_calibration", cal_I, 0.60,
-                observed=calibration_error is not None,
-                default_reason=(
-                    None if calibration_error is not None
-                    else "default_calibration_accuracy_0.75"
-                ),
+                "calibration_accuracy", cal_source, cal_I, 0.60,
+                observed=cal_observed,
+                default_reason=cal_default_reason,
             ),
             _component(
                 "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
