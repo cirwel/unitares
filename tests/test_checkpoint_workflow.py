@@ -473,3 +473,128 @@ def test_capture_rejects_blank_key_and_freezes_before_context_mutation():
     ctx.arguments["complexity"] = 0.2
     assert ctx.checkpoint_request == original
     assert json.loads(original)["submitted"]["response_text"] == "original"
+
+
+def test_neutral_prediction_registry_preserves_checkpoint_id_and_roundtrips():
+    from src.governance_monitor import UNITARESMonitor
+    from src.monitor_prediction import (
+        get_agent_predictions,
+        lookup_prediction,
+        register_agent_prediction,
+        restore_open_predictions,
+        serialize_open_predictions,
+    )
+
+    agent_id = "agent-neutral-pred-1"
+    pid = register_agent_prediction(
+        agent_id,
+        0.84,
+        decision_action="proceed",
+        checkpoint_id="ckpt-101",
+    )
+    registry = get_agent_predictions(agent_id)
+    assert registry is not None
+    rec = lookup_prediction(registry, pid)
+    assert rec is not None
+    assert rec["confidence"] == 0.84
+    assert rec["decision_action"] == "proceed"
+    assert rec["checkpoint_id"] == "ckpt-101"
+
+    serialized = serialize_open_predictions(registry)
+    assert len(serialized) == 1
+    assert serialized[0]["checkpoint_id"] == "ckpt-101"
+
+    restored = restore_open_predictions(serialized)
+    assert restored[pid]["checkpoint_id"] == "ckpt-101"
+
+    # Monitor process_update records _checkpoint_id onto the minted prediction.
+    monitor = UNITARESMonitor(agent_id="agent-neutral-pred-2")
+    monitor.process_update(
+        {
+            "parameters": [0.5, 0.5, 0.2, 0.0],
+            "ethical_drift": [0.0, 0.0, 0.0],
+            "response_text": "check in with checkpoint",
+            "complexity": 0.4,
+            "confidence": 0.77,
+            "_checkpoint_id": "ckpt-202",
+        },
+        confidence=0.77,
+    )
+    assert monitor._last_prediction_id is not None
+    minted_rec = monitor.lookup_prediction(monitor._last_prediction_id)
+    assert minted_rec is not None
+    assert minted_rec["checkpoint_id"] == "ckpt-202"
+
+
+@pytest.mark.asyncio
+async def test_accepted_checkpoint_propagates_id_and_outcomes_bind_without_monitor(monkeypatch):
+    from src.mcp_handlers.updates.phases import _prediction_id_for_phase5_evidence
+    from src.monitor_prediction import get_agent_predictions, register_agent_prediction
+    from src.outcomes import record_outcome
+
+    ledger = _CheckpointLedger()
+    harness = _harness(ledger)
+    result = await _run(harness)
+    checkpoint_id = result["checkpoint"]["checkpoint_id"]
+    assessed_state = harness.assess.await_args.kwargs["agent_state"]
+    assert assessed_state["_checkpoint_id"] == checkpoint_id
+
+    # Phase-5 helper mints through neutral registry when monitor is absent and
+    # forwards checkpoint_id from checkpoint_receipt.
+    ctx_no_mon = SimpleNamespace(
+        agent_id="agent-phase5-neutral",
+        confidence=0.81,
+        monitor=None,
+        result={"decision": {"action": "proceed"}},
+        checkpoint_receipt=SimpleNamespace(checkpoint_id=checkpoint_id),
+    )
+    phase5_pid = _prediction_id_for_phase5_evidence(ctx_no_mon, {"kind": "test"})
+    assert phase5_pid is not None
+    phase5_reg = get_agent_predictions("agent-phase5-neutral")
+    assert phase5_reg is not None
+    assert phase5_reg[phase5_pid]["checkpoint_id"] == checkpoint_id
+
+    # record_outcome resolves a neutral prediction even when mcp_server.monitors
+    # has no monitor for the agent, and carries checkpoint_id into detail.
+    agent_id = "agent-outcome-neutral"
+    pred_id = register_agent_prediction(
+        agent_id,
+        0.88,
+        decision_action="proceed",
+        checkpoint_id="ckpt-outcome-303",
+    )
+    captured = {}
+
+    async def _fake_record_bound(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "created",
+            "outcome_id": "out-303",
+            "outcome_type": kwargs["outcome_type"],
+            "outcome_score": kwargs["outcome_score"],
+            "is_bad": kwargs["is_bad"],
+            "detail": kwargs["detail"],
+            "eisv_snapshot": kwargs.get("eisv_snapshot"),
+        }
+
+    fake_db = SimpleNamespace(
+        get_latest_eisv_by_agent_id=AsyncMock(return_value=None),
+        record_bound_outcome_event=AsyncMock(side_effect=_fake_record_bound),
+    )
+    fake_runtime = SimpleNamespace(monitors={})
+    monkeypatch.setattr("src.db.get_db", lambda: fake_db)
+    monkeypatch.setattr("src.outcomes._get_monitor_runtime", lambda: fake_runtime)
+
+    ack = await record_outcome(
+        {
+            "agent_id": agent_id,
+            "outcome_type": "test_passed",
+            "prediction_id": pred_id,
+            "detail": {"tests": [{"passed": 1}]},
+        }
+    )
+    assert ack["outcome_id"] == "out-303"
+    assert captured["detail"]["prediction_binding"] == "registry"
+    assert captured["detail"]["reported_confidence"] == 0.88
+    assert captured["detail"]["checkpoint_id"] == "ckpt-outcome-303"
+    assert get_agent_predictions(agent_id)[pred_id]["consumed"] is True

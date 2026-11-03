@@ -14,18 +14,73 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 
+_AGENT_PREDICTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def bind_agent_predictions(
+    agent_id: Optional[str],
+    open_predictions: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Bind `open_predictions` as the shared prediction registry for `agent_id`."""
+    if isinstance(agent_id, str) and agent_id and isinstance(open_predictions, dict):
+        _AGENT_PREDICTIONS[agent_id] = open_predictions
+    return open_predictions
+
+
+def get_agent_predictions(
+    agent_id: Optional[str],
+    monitor: Any = None,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Return the open-prediction registry for `agent_id`, syncing `monitor` when present."""
+    if monitor is not None:
+        mon_preds = getattr(monitor, "_open_predictions", None)
+        if isinstance(mon_preds, dict):
+            return bind_agent_predictions(agent_id, mon_preds)
+        return None
+    if isinstance(agent_id, str) and agent_id:
+        return _AGENT_PREDICTIONS.get(agent_id)
+    return None
+
+
+def register_agent_prediction(
+    agent_id: str,
+    confidence: float,
+    *,
+    decision_action: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
+    prediction_ttl_seconds: float = 600.0,
+    monitor: Any = None,
+    advertise: bool = True,
+) -> str:
+    """Mint and register a tactical prediction for `agent_id` via the neutral registry."""
+    open_predictions = get_agent_predictions(agent_id, monitor)
+    if open_predictions is None:
+        open_predictions = _AGENT_PREDICTIONS.setdefault(agent_id, {})
+    pid = register_tactical_prediction(
+        open_predictions,
+        confidence,
+        decision_action=decision_action,
+        prediction_ttl_seconds=prediction_ttl_seconds,
+        checkpoint_id=checkpoint_id,
+    )
+    if monitor is not None and advertise:
+        monitor._last_prediction_id = pid
+    return pid
+
+
 def register_tactical_prediction(
     open_predictions: Dict[str, Dict],
     confidence: float,
     *,
     decision_action: Optional[str] = None,
     prediction_ttl_seconds: float = 600.0,
+    checkpoint_id: Optional[str] = None,
 ) -> str:
     """Mint a prediction id and register it. Returns the prediction_id."""
     expire_old_predictions(open_predictions, prediction_ttl_seconds)
 
     prediction_id = str(uuid.uuid4())
-    open_predictions[prediction_id] = {
+    record: Dict[str, Any] = {
         "confidence": float(confidence),
         "decision_action": decision_action,
         "created_at": _time.monotonic(),
@@ -35,6 +90,9 @@ def register_tactical_prediction(
         "created_at_iso": datetime.now().isoformat(),
         "consumed": False,
     }
+    if checkpoint_id is not None:
+        record["checkpoint_id"] = str(checkpoint_id)
+    open_predictions[prediction_id] = record
     return prediction_id
 
 
@@ -112,13 +170,16 @@ def serialize_open_predictions(
         age = now_mono - float(rec.get("created_at", now_mono))
         if age > ttl_seconds:
             continue
-        rows.append({
+        row = {
             "prediction_id": pid,
             "confidence": rec.get("confidence"),
             "decision_action": rec.get("decision_action"),
             "created_at_epoch": rec.get("created_at_epoch", now_wall - age),
             "created_at_iso": rec.get("created_at_iso"),
-        })
+        }
+        if rec.get("checkpoint_id") is not None:
+            row["checkpoint_id"] = str(rec["checkpoint_id"])
+        rows.append(row)
     return rows
 
 
@@ -150,7 +211,7 @@ def restore_open_predictions(rows: Any, ttl_seconds: float = 3600.0) -> Dict[str
         age = max(0.0, now_wall - created_epoch)
         if age > ttl_seconds:
             continue
-        restored[pid] = {
+        rec: Dict[str, Any] = {
             "confidence": confidence,
             "decision_action": row.get("decision_action"),
             "created_at": now_mono - age,
@@ -158,4 +219,7 @@ def restore_open_predictions(rows: Any, ttl_seconds: float = 3600.0) -> Dict[str
             "created_at_iso": row.get("created_at_iso"),
             "consumed": False,
         }
+        if row.get("checkpoint_id"):
+            rec["checkpoint_id"] = str(row["checkpoint_id"])
+        restored[pid] = rec
     return restored

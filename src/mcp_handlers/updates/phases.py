@@ -267,21 +267,47 @@ def _prediction_id_for_phase5_evidence(ctx: UpdateContext, evidence: dict) -> st
         return explicit_prediction_id
     if ctx.confidence is None:
         return None
-    register_prediction = getattr(ctx.monitor, "register_tactical_prediction", None)
-    if not callable(register_prediction):
-        return None
     decision = (ctx.result or {}).get("decision") or {}
     decision_action = decision.get("action")
-    try:
-        minted = register_prediction(
-            float(ctx.confidence),
-            decision_action=decision_action,
-            advertise=False,
-        )
-        return str(minted) if minted else None
-    except Exception as exc:
-        logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
-        return None
+    checkpoint_id = getattr(
+        getattr(ctx, "checkpoint_receipt", None), "checkpoint_id", None
+    )
+    register_prediction = getattr(ctx.monitor, "register_tactical_prediction", None)
+    if callable(register_prediction):
+        try:
+            kwargs: Dict[str, Any] = {
+                "decision_action": decision_action,
+                "advertise": False,
+            }
+            if checkpoint_id is not None:
+                kwargs["checkpoint_id"] = checkpoint_id
+            try:
+                minted = register_prediction(float(ctx.confidence), **kwargs)
+            except TypeError:
+                minted = register_prediction(
+                    float(ctx.confidence),
+                    decision_action=decision_action,
+                    advertise=False,
+                )
+            return str(minted) if minted else None
+        except Exception as exc:
+            logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
+            return None
+    if getattr(ctx, "monitor", None) is None and getattr(ctx, "agent_id", None):
+        try:
+            from src.monitor_prediction import register_agent_prediction
+
+            minted = register_agent_prediction(
+                ctx.agent_id,
+                float(ctx.confidence),
+                decision_action=decision_action,
+                checkpoint_id=checkpoint_id,
+                advertise=False,
+            )
+            return str(minted) if minted else None
+        except Exception as exc:
+            logger.debug("Phase-5 neutral prediction id mint skipped: %s", exc, exc_info=True)
+    return None
 
 
 # Module-local strong-ref set for in-flight fire-and-forget persist tasks
