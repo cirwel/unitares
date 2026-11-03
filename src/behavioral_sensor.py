@@ -21,12 +21,7 @@ PER_AGENT_I_CALIBRATION_ENV = "UNITARES_PER_AGENT_I_CALIBRATION"
 SELF_REFERENTIAL_OUTCOME_TYPES = frozenset({"trajectory_validated", "cirs_resonance"})
 
 AGENT_CALIBRATION_POOLING_K = 10.0
-# Frozen reference cohort equal-identity mean sample-weighted binned ECE
-# (docs/proposals/active/eisv-per-agent-i-calibration-v0.md §3.2 / §6.1,
-# N_ref = 53 identities with >=1 verified pair). Used ONLY to shrink an
-# agent's observed calibration_error when n_verified_pairs >= 1; per §3.2
-# Rule 1, when n_verified_pairs == 0 no shared prior enters I.
-AGENT_CALIBRATION_PRIOR_ERROR = 0.147446577
+MIN_UNPOOLED_AGENT_CALIBRATION_PAIRS = 5
 
 
 def is_self_referential_outcome(outcome: object) -> bool:
@@ -35,23 +30,43 @@ def is_self_referential_outcome(outcome: object) -> bool:
     ``_post_update_trajectory`` emits ``trajectory_validated`` rows (scored as
     ``1 / (1 + exp(-10 * (prev_drift_norm - current_drift_norm)))``) and
     ``_post_update_cirs`` emits ``cirs_resonance`` rows from the monitor's own
-    internal state. ``trajectory_validated`` alone accounts for 80.3% of
-    unfiltered outcome rows (``docs/evaluations/eisv-ei-referent/result-v0.md``),
-    feeding the observer's own drift and oscillation state back into ``E``
-    (``outcome_success``), ``I`` (``outcome_score_consistency``), and
-    ``outcomes_in_e`` (#2610, Invariant 4). Matching on ``outcome_type`` works
-    on the default ``get_recent_outcomes`` query (which does not select
-    ``verification_source``) without excluding non-echo server observations such
-    as dialectic resolutions.
+    internal state, both with ``verification_source = "server_observation"``.
+    ``trajectory_validated`` alone accounts for 80.3% of unfiltered outcome rows
+    (``docs/evaluations/eisv-ei-referent/result-v0.md``), feeding the observer's
+    own drift and oscillation state back into ``E`` (``outcome_success``), ``I``
+    (``outcome_score_consistency``), and ``outcomes_in_e`` (#2610, Invariant 4).
+
+    When ``verification_source`` is present on the row, only
+    ``"server_observation"`` rows are treated as self-referential echoes so
+    caller-submitted ``trajectory_validated`` rows (which carry
+    ``"agent_reported_tool_result"``) are preserved. When ``verification_source``
+    is absent (the default ``get_recent_outcomes`` query selects
+    ``outcome_type, is_bad, outcome_score, ts``), ``outcome_type`` is used.
+
+    In the behavioral sensor, filtering these rows is coupled to
+    ``neutralize_self_loops`` (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS``) so
+    removing echo rows cannot shift weight onto active loop-derived
+    ``decision_e`` (0.35 -> 0.40) and ``legacy_coherence_level`` (0.25 -> 0.30)
+    when an agent has fewer than 3 non-echo outcomes (see
+    ``src/db/mixins/tool_usage.py:get_recent_outcomes``).
     """
     if isinstance(outcome, Mapping):
         outcome_type = outcome.get("outcome_type")
+        verification_source = outcome.get("verification_source")
     else:
         try:
             outcome_type = outcome["outcome_type"]
         except (KeyError, TypeError, IndexError):
             outcome_type = None
-    return str(outcome_type or "").strip().lower() in SELF_REFERENTIAL_OUTCOME_TYPES
+        try:
+            verification_source = outcome["verification_source"]
+        except (KeyError, TypeError, IndexError):
+            verification_source = None
+    if str(outcome_type or "").strip().lower() not in SELF_REFERENTIAL_OUTCOME_TYPES:
+        return False
+    if verification_source is not None:
+        return str(verification_source).strip().lower() == "server_observation"
+    return True
 
 
 def filter_behavioral_outcomes(outcome_history: list | None) -> list | None:
@@ -66,13 +81,18 @@ def per_agent_i_calibration_enabled() -> bool:
 
     Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default off). When
     enabled (#2818 §3.1 & §3.2):
-    - If ``agent_calibration_channel`` carries ``evidence_status == "available"``
-      with ``n_verified_pairs >= 1`` and finite ``calibration_error``,
-      ``calibration_accuracy`` uses partial-pooled per-agent error
-      ``e_pool = (1 - w) * e_0 + w * e_agent`` with ``w = n / (n + 10)``
-      (``source="agent_calibration_pooled"``).
-    - If the agent has no verified pairs (``n_verified_pairs == 0`` or
-      unavailable), no shared fleet prior enters ``I`` (§3.2 Rule 1); base ``I``
+    - Requires ``agent_calibration_channel`` with ``evidence_status == "available"``
+      and ``freshness_status != "stale"``.
+    - If a frozen reference-cohort ``prior_error`` in ``(0, 1)`` is supplied on
+      the channel (§3.2(3)) and ``n_verified_pairs >= 1``, ``calibration_accuracy``
+      uses partial-pooled error ``e_pool = (1 - w) * prior_error + w * e_agent``
+      with ``w = n / (n + 10)`` (``source="agent_calibration_pooled"``).
+    - If no reference-cohort ``prior_error`` is supplied (per §3.2(3)-(4),
+      never substituting zero error or the legacy 0.1474 fleet scalar) and
+      ``n_verified_pairs >= 5``, uses the agent's own sample-weighted binned ECE
+      ``1.0 - e_agent`` (``source="agent_tactical_calibration"``).
+    - Otherwise (``n_verified_pairs == 0``, stale evidence, or ``n < 5`` without
+      a reference prior), no shared prior enters ``I`` (§3.2 Rule 1); base ``I``
       uses the calibration-free renormalization (Arm F, §6.4).
     """
     raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "").strip().lower()
@@ -83,11 +103,12 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     """Return True when controller self-loops in the behavioral sensor are neutralized.
 
     Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
-    enabled, the three self-referential controller terms inside the behavioral
-    sensor are replaced with their neutral constants:
+    enabled, the self-referential controller terms inside the behavioral sensor
+    are neutralized:
     - ``decision_history`` in E -> observed fleet-level ``DECISION_NEUTRAL_SCORE`` (0.84)
     - ``coherence_history`` in E and I -> nominal neutral ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60, mapped from ``LEGACY_COHERENCE_NEUTRAL_VALUE = 0.50``)
     - ``regime_instability`` in S -> observed fleet-level ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
+    - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome echoes excluded from E and I
     """
     raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
@@ -997,7 +1018,11 @@ def _compute_E_components(
     cal_e = max(0.3, min(1.0, 1.0 - cd))
 
     # Outcome success rate — successful outcomes indicate productive energy
-    filtered_outcomes = filter_behavioral_outcomes(outcome_history)
+    filtered_outcomes = (
+        filter_behavioral_outcomes(outcome_history)
+        if neutralize_self_loops
+        else outcome_history
+    )
     if filtered_outcomes and len(filtered_outcomes) >= 3:
         good_count = sum(1 for o in filtered_outcomes if not o.get('is_bad', False))
         success_rate = good_count / len(filtered_outcomes)
@@ -1113,13 +1138,17 @@ def _compute_I_components(
     cal_I = max(0.0, min(1.0, cal_I))
 
     if per_agent_i_calibration and not effective_calibration_free_i:
-        pooled_cal_I: float | None = None
+        agent_cal_I: float | None = None
+        agent_cal_source: str | None = None
         if isinstance(agent_calibration_channel, Mapping):
             n_pairs = agent_calibration_channel.get("n_verified_pairs")
             agent_err = agent_calibration_channel.get("calibration_error")
             status = agent_calibration_channel.get("evidence_status")
+            freshness = agent_calibration_channel.get("freshness_status")
+            prior_err = agent_calibration_channel.get("prior_error")
             if (
                 status == "available"
+                and freshness != "stale"
                 and isinstance(n_pairs, int)
                 and not isinstance(n_pairs, bool)
                 and n_pairs >= 1
@@ -1127,20 +1156,30 @@ def _compute_I_components(
                 and not isinstance(agent_err, bool)
                 and math.isfinite(float(agent_err))
             ):
-                w = float(n_pairs) / (float(n_pairs) + AGENT_CALIBRATION_POOLING_K)
-                e_pool = (
-                    (1.0 - w) * AGENT_CALIBRATION_PRIOR_ERROR
-                    + w * max(0.0, min(1.0, float(agent_err)))
-                )
-                pooled_cal_I = max(0.0, min(1.0, 1.0 - e_pool))
-        if pooled_cal_I is not None:
-            cal_I = pooled_cal_I
-            cal_source = "agent_calibration_pooled"
+                clamped_err = max(0.0, min(1.0, float(agent_err)))
+                if (
+                    isinstance(prior_err, (int, float))
+                    and not isinstance(prior_err, bool)
+                    and math.isfinite(float(prior_err))
+                    and 0.0 < float(prior_err) < 1.0
+                ):
+                    w = float(n_pairs) / (float(n_pairs) + AGENT_CALIBRATION_POOLING_K)
+                    e_pool = (1.0 - w) * float(prior_err) + w * clamped_err
+                    agent_cal_I = max(0.0, min(1.0, 1.0 - e_pool))
+                    agent_cal_source = "agent_calibration_pooled"
+                elif n_pairs >= MIN_UNPOOLED_AGENT_CALIBRATION_PAIRS:
+                    agent_cal_I = max(0.0, min(1.0, 1.0 - clamped_err))
+                    agent_cal_source = "agent_tactical_calibration"
+        if agent_cal_I is not None and agent_cal_source is not None:
+            cal_I = agent_cal_I
+            cal_source = agent_cal_source
             cal_observed = True
             cal_default_reason = None
         else:
-            # #2818 §3.2 Rule 1: with no admissible per-agent evidence, no
-            # shared prior enters I; fall back to calibration-free I (Arm F).
+            # #2818 §3.2 Rule 1 & Rule 3: with no admissible per-agent evidence
+            # (or n < 5 without a reference-cohort prior, or stale pairs), no
+            # shared fleet scalar or invented prior enters I; fall back to
+            # calibration-free I (Arm F).
             effective_calibration_free_i = True
 
     if neutralize_self_loops:
@@ -1156,7 +1195,11 @@ def _compute_I_components(
         )
 
     # Outcome consistency — consistent scores indicate information integrity
-    filtered_outcomes = filter_behavioral_outcomes(outcome_history)
+    filtered_outcomes = (
+        filter_behavioral_outcomes(outcome_history)
+        if neutralize_self_loops
+        else outcome_history
+    )
     if filtered_outcomes and len(filtered_outcomes) >= 3:
         scores = [s for o in filtered_outcomes
                   if (s := o.get('outcome_score')) is not None

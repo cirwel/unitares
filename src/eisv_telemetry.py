@@ -298,12 +298,14 @@ def build_behavioral_derivation(
     from src.behavioral_sensor import (
         compute_behavioral_sensor_components,
         filter_behavioral_outcomes,
+        neutralize_sensor_self_loops_enabled,
     )
 
+    active_neutralize = neutralize_sensor_self_loops_enabled()
     filtered_outcomes = (
         filter_behavioral_outcomes(list(outcome_history))
-        if outcome_history is not None
-        else None
+        if (outcome_history is not None and active_neutralize)
+        else (list(outcome_history) if outcome_history is not None else None)
     )
     raw_agent_channel = (
         calibration_signal.get("agent_channel")
@@ -332,6 +334,7 @@ def build_behavioral_derivation(
         tool_error_rate=_number(tool_error_rate),
         tool_call_velocity=_number(tool_call_velocity),
         unique_tools_ratio=_number(unique_tools_ratio),
+        neutralize_self_loops=active_neutralize,
         agent_calibration_channel=agent_cal_channel,
     )
 

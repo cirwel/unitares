@@ -965,6 +965,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     compute_legacy_coherence_dependency_shadow,
                     compute_regime_self_loop_shadow,
                     filter_behavioral_outcomes,
+                    neutralize_sensor_self_loops_enabled,
                 )
                 from src.coherence_provenance import (
                     LEGACY_COHERENCE_SOURCE,
@@ -1036,14 +1037,21 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     from src.db import get_db
                     _db = get_db()
                     if _db and hasattr(_db, 'get_recent_outcomes'):
-                        raw_outcomes = await _db.get_recent_outcomes(
-                            agent_id=ctx.agent_id,
-                            limit=100,
-                            since_hours=24.0,
-                        )
-                        if raw_outcomes is not None:
-                            filtered = filter_behavioral_outcomes(raw_outcomes)
-                            outcome_hist = filtered[:20] if filtered is not None else None
+                        if neutralize_sensor_self_loops_enabled():
+                            raw_outcomes = await _db.get_recent_outcomes(
+                                agent_id=ctx.agent_id,
+                                limit=100,
+                                since_hours=24.0,
+                            )
+                            if raw_outcomes is not None:
+                                filtered = filter_behavioral_outcomes(raw_outcomes)
+                                outcome_hist = filtered[:20] if filtered is not None else None
+                        else:
+                            outcome_hist = await _db.get_recent_outcomes(
+                                agent_id=ctx.agent_id,
+                                limit=20,
+                                since_hours=24.0,
+                            )
                 except Exception as e:
                     logger.debug(f"Outcome history unavailable for {ctx.agent_id}: {e}")
 
