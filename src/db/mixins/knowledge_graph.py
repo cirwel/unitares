@@ -666,3 +666,22 @@ class KnowledgeGraphMixin:
         # inert in production while every mocked test stayed green.
         d.pop('overlap', None)
         return d
+
+
+async def count_knowledge_discoveries_by_agents(
+    conn, resident_uuids: List[str], window
+) -> list:
+    """Count knowledge discoveries per agent_id within `window`."""
+    if not resident_uuids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT agent_id::text AS uuid, count(*) AS n
+        FROM knowledge.discoveries
+        WHERE agent_id = ANY($1::text[])
+          AND created_at > now() - $2::interval
+        GROUP BY agent_id
+        """,
+        resident_uuids,
+        window,
+    )

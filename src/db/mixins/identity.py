@@ -1554,3 +1554,49 @@ async def fetch_timeline_identities(
         """,
         identity_ids, agent_ids,
     )
+
+
+async def fetch_identity_ids_for_resident_uuids(
+    conn, resident_uuids: List[str]
+) -> list:
+    """Resolve `identity_id` -> `agent_id` for a list of resident UUID strings."""
+    if not resident_uuids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT identity_id, agent_id::text AS uuid
+          FROM core.identities
+         WHERE agent_id = ANY($1::text[])
+        """,
+        resident_uuids,
+    )
+
+
+async def resolve_identity_ids_for_agent_handle(
+    conn, agent_id: str
+) -> List[int]:
+    """Resolve all `identity_id` rows matching an agent UUID or structured MCP handle."""
+    rows = await conn.fetch(
+        """
+        SELECT identity_id FROM core.identities WHERE agent_id = $1
+        UNION
+        SELECT identity_id FROM core.identities
+         WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
+           AND agent_id ~ '^[0-9a-f]{8}-'
+           AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
+        """,
+        agent_id,
+    )
+    return [int(r["identity_id"]) for r in rows]
+
+
+async def fetch_identity_tier_counts(conn) -> list:
+    """Count identities grouped by cached `trust_tier.name` in `core.identities`."""
+    return await conn.fetch(
+        """
+        SELECT COALESCE(NULLIF(metadata->'trust_tier'->>'name', ''), 'unknown') AS tier,
+               count(*) AS n
+        FROM core.identities
+        GROUP BY 1
+        """
+    )

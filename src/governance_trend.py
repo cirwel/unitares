@@ -19,26 +19,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
+from src.db.mixins.state import (
+    DAILY_GOVERNANCE_TREND_SQL as _DAILY_SQL,
+    fetch_daily_governance_trend_rows,
+)
+
 TRAILING_DAYS = 7
 MAX_WINDOW_DAYS = 60
 MIN_WINDOW_DAYS = 7
-
-# One row per UTC day: the sums the trailing windows are built from. Filters
-# match the Chronicler scrapers: non-synthetic check-ins; `guide` by name; a
-# "pause" is any recorded action other than approve/guide, so a new hard-stop
-# action folds in rather than being dropped.
-_DAILY_SQL = """
-SELECT (recorded_at AT TIME ZONE 'UTC')::date AS day,
-       sum(risk_score)   AS risk_sum,
-       count(risk_score) AS risk_n,
-       count(*) FILTER (WHERE state_json->>'action' = 'guide') AS guide,
-       count(*) FILTER (WHERE state_json->>'action' IS NOT NULL
-                          AND state_json->>'action' NOT IN ('approve', 'guide')) AS pause
-FROM core.agent_state
-WHERE recorded_at >= $1 AND synthetic = false
-GROUP BY 1
-ORDER BY 1
-"""
 
 
 def clamp_window(days: Any) -> int:
@@ -92,7 +80,7 @@ async def query_governance_trend(conn, *, window_days: int, now: datetime | None
     today = now.astimezone(timezone.utc).date()
     first = today - timedelta(days=window_days - 1 + TRAILING_DAYS - 1)
     since = datetime(first.year, first.month, first.day, tzinfo=timezone.utc)
-    rows = await conn.fetch(_DAILY_SQL, since)
+    rows = await fetch_daily_governance_trend_rows(conn, since)
     series = rolling_series([dict(r) for r in rows], window_days=window_days, today=today)
     return {
         "success": True,

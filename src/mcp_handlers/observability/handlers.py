@@ -1187,21 +1187,24 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
         # when a circuit-breaker pause decision lands). circuit_breaker_trip
         # fires 1:1 alongside; counting both would double-count.
         if epoch_started_at is not None:
-            pause_sql = """
-                SELECT count(*)::int FROM audit.events
-                WHERE ts >= $1 AND event_type = 'lifecycle_paused'
-            """
-            pauses_this_epoch = await conn.fetchval(pause_sql, epoch_started_at)
+            from src.db.mixins.audit import count_lifecycle_pauses_since
+            from src.db.mixins.tool_usage import (
+                count_trajectory_validated_outcomes_for_epoch,
+            )
+
+            pauses_this_epoch = await count_lifecycle_pauses_since(
+                conn, epoch_started_at
+            )
 
             # Proceed proxy: trajectory_validated outcomes in audit.outcome_events
             # for this epoch. Not a perfect 1:1 with "governance said proceed"
             # — there is no lifecycle_proceeded event today — but it's the
             # measured "agent kept moving" signal scoped to the same window.
-            proceed_sql = """
-                SELECT count(*)::int FROM audit.outcome_events
-                WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
-            """
-            proceed_this_epoch = await conn.fetchval(proceed_sql, current_epoch)
+            proceed_this_epoch = (
+                await count_trajectory_validated_outcomes_for_epoch(
+                    conn, current_epoch
+                )
+            )
 
             # Verdict distribution from r1 score audit, current-epoch window.
             verdict_sql = """
@@ -1421,33 +1424,20 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
     if end_dt is None:
         end_dt = datetime.now(timezone.utc)
 
+    from src.db.mixins.tool_usage import (
+        fetch_outcome_evidence_aggregate_batch,
+        fetch_outcome_evidence_page,
+    )
+
     db = get_db()
     async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-              outcome_id::text AS outcome_id,
-              ts,
-              agent_id,
-              session_id,
-              outcome_type,
-              outcome_score,
-              is_bad,
-              verification_source,
-              detail
-            FROM audit.outcome_events
-            WHERE ts >= $1
-              AND ts <= $2
-              AND ($3::text IS NULL OR agent_id = $3)
-              AND ($4::text IS NULL OR outcome_type = $4)
-            ORDER BY ts DESC
-            LIMIT $5
-            """,
-            start_dt,
-            end_dt,
-            target_agent_id,
-            outcome_type,
-            limit,
+        rows = await fetch_outcome_evidence_page(
+            conn,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            target_agent_id=target_agent_id,
+            outcome_type=outcome_type,
+            limit=limit,
         )
 
     def _row_detail(raw: Any) -> Dict[str, Any]:
@@ -1499,22 +1489,15 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
     cursor_id = None
     async with db.acquire() as conn:
         while True:
-            batch = await conn.fetch(
-                """
-                SELECT ts, outcome_id, agent_id, outcome_type,
-                       verification_source, detail
-                FROM audit.outcome_events
-                WHERE ts >= $1
-                  AND ts <= $2
-                  AND ($3::text IS NULL OR agent_id = $3)
-                  AND ($4::text IS NULL OR outcome_type = $4)
-                  AND ($5::timestamptz IS NULL
-                       OR (ts, outcome_id) < ($5::timestamptz, $6::uuid))
-                ORDER BY ts DESC, outcome_id DESC
-                LIMIT $7
-                """,
-                start_dt, end_dt, target_agent_id, outcome_type,
-                cursor_ts, cursor_id, batch_size,
+            batch = await fetch_outcome_evidence_aggregate_batch(
+                conn,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                target_agent_id=target_agent_id,
+                outcome_type=outcome_type,
+                cursor_ts=cursor_ts,
+                cursor_id=cursor_id,
+                batch_size=batch_size,
             )
             if not batch:
                 break
