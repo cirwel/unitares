@@ -58,9 +58,11 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # resolves through default_local_model()), not a per-call knob.
     # Removal is not before 2026-12-02 (the feedback window advertised in the
     # migration notice below). #2484 removed the synthetic Energy-accounting
-    # update and added event_type='inference_call' on 2026-11-03 after the
-    # pre-registered #1425 read. The internal callers already moved
-    # (#2849, #2851). Until then the handler stays callable.
+    # update and added event_type='inference_call' on 2026-11-03 (the #1425
+    # read's input window closed at 2026-10-15T13:45:00Z and its run date
+    # moved to 2026-11-03T16:00:00Z in #3180; result in #3183). The internal
+    # callers already moved (#2849, #2851). Until then the handler stays
+    # callable.
     "call_model": {
         "deprecated_since": "2026-10-16",
         "superseded_by": "consult",

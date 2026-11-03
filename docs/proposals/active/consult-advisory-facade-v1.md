@@ -32,12 +32,13 @@ Expose two primary verbs for model-mediated help:
 > `consultation_id` today; if an outcome, finding or review record starts to,
 > consultation rows need a store that lives at least as long as it.
 >
-> As of 2026-11-03 (#2484, after the pre-registered #1425 read executed under
-> #3180), the synthetic Energy-accounting `process_update` in the inference
-> services is removed: `consult`, `call_model`, and `delegate_inference` no
-> longer mutate caller EISV state or write `auto_attest` rows. Direct
-> `call_model` and `delegate_inference` calls instead write a route-level
-> `audit.events` row (`event_type='inference_call'`,
+> As of 2026-11-03 (#2484; pre-registered #1425 read window closed at
+> `2026-10-15T13:45:00Z` and run date amended to `2026-11-03T16:00:00Z` in
+> #3180, result recorded in #3183), the synthetic Energy-accounting
+> `process_update` in the inference services is removed: `consult`,
+> `call_model`, and `delegate_inference` no longer mutate caller EISV state or
+> write `auto_attest` rows. Direct `call_model` and `delegate_inference` calls
+> instead write a route-level `audit.events` row (`event_type='inference_call'`,
 > `unitares.inference_call.v1`) carrying route, privacy class and outcome.
 - `request_review` requests governed, on-record judgment with actual reviewer provenance.
 
@@ -92,8 +93,9 @@ moving onto `consult`. Local model choice is operator configuration
 `default_local_model()`), not a per-call knob. Removal is not before 2026-12-02
 (the advertised deprecation feedback window); #2484 removed the synthetic
 Energy-accounting update and added `event_type='inference_call'` on 2026-11-03
-after the #1425 read. `delegate_inference`
-keeps its model and timeout controls for the CLI hosts.
+(the #1425 read's input window closed at `2026-10-15T13:45:00Z` and its run
+date moved to `2026-11-03T16:00:00Z` in #3180; result in #3183).
+`delegate_inference` keeps its model and timeout controls for the CLI hosts.
 
 The lower-overhead effort is named `standard`, not `fast`: neither its HTTP
 provider nor the 480-second public tool boundary is a latency SLA. The internal
