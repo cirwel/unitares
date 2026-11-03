@@ -124,6 +124,8 @@ async def accept_before_assessment(ctx) -> None:
         raise CheckpointBoundaryStop(
             "CHECKPOINT_REPLAY", "Returning the original accepted checkpoint; assessment was not repeated.", replay=True,
         )
+    if isinstance(getattr(ctx, "agent_state", None), dict):
+        ctx.agent_state["_checkpoint_id"] = ctx.checkpoint_receipt.checkpoint_id
     ctx.checkpoint_assessment = await db.claim_checkpoint_assessment(
         checkpoint_id=ctx.checkpoint_receipt.checkpoint_id, assessor=ASSESSOR,
     )

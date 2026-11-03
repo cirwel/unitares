@@ -157,6 +157,7 @@ from src.monitor_cirs import run_cirs as _run_cirs_impl
 from src.monitor_calibration import run_calibration_recording as _run_calibration_recording_impl
 from src.monitor_result import build_result as _build_result_impl
 from src.monitor_prediction import (
+    bind_agent_predictions as _bind_agent_predictions,
     register_tactical_prediction as _register_prediction,
     lookup_prediction as _lookup_prediction,
     consume_prediction as _consume_prediction,
@@ -318,7 +319,9 @@ class UNITARESMonitor:
         # the id. Enables exact filtration for the sequential calibration lane
         # when the agent echoes the id back on outcome_event. See
         # src/sequential_calibration.py module docstring for the null it serves.
-        self._open_predictions: Dict[str, Dict[str, Any]] = {}
+        self._open_predictions: Dict[str, Dict[str, Any]] = _bind_agent_predictions(
+            self.agent_id, {}, overwrite_existing=bool(load_state)
+        )
         self._last_prediction_id: Optional[str] = None
         self._prediction_ttl_seconds: float = 3600.0  # orphan cleanup threshold
 
@@ -460,6 +463,7 @@ class UNITARESMonitor:
                             float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
                         )
                     )
+                    _bind_agent_predictions(self.agent_id, self._open_predictions)
                 from src.eisv_instrument import TRACK_STATE_KEY, restore_track
 
                 restore_track(self, data.pop(TRACK_STATE_KEY, None))
@@ -1679,6 +1683,11 @@ class UNITARESMonitor:
             confidence=self_confidence,
             decision=decision,
             drift_vector=drift_vector,
+            checkpoint_id=(
+                agent_state.get("_checkpoint_id")
+                if isinstance(agent_state, dict)
+                else None
+            ),
         )
 
         # Issue #1995: measure the absolute-floor geometry after the behavioral
@@ -2110,9 +2119,22 @@ class UNITARESMonitor:
         """Run CIRS oscillation detection and resonance damping."""
         return _run_cirs_impl(self, risk_score, unitares_verdict)
 
-    def _run_calibration_recording(self, confidence, decision, drift_vector):
+    def _run_calibration_recording(
+        self,
+        confidence,
+        decision,
+        drift_vector,
+        *,
+        checkpoint_id: Optional[str] = None,
+    ):
         """Retrospective trajectory validation + strategic/tactical calibration."""
-        return _run_calibration_recording_impl(self, confidence, decision, drift_vector)
+        return _run_calibration_recording_impl(
+            self,
+            confidence,
+            decision,
+            drift_vector,
+            checkpoint_id=checkpoint_id,
+        )
 
     # ------------------------------------------------------------------
     # Tactical prediction registry
@@ -2129,6 +2151,7 @@ class UNITARESMonitor:
         confidence: float,
         *,
         decision_action: Optional[str] = None,
+        checkpoint_id: Optional[str] = None,
         advertise: bool = True,
     ) -> str:
         """Mint a prediction id for this (agent, confidence) pair and register it.
@@ -2143,11 +2166,14 @@ class UNITARESMonitor:
         ``outcome_event`` is refused as PREDICTION_REUSE_CONFLICT while the
         check-in's real prediction expires unadvertised.
         """
+        _bind_agent_predictions(getattr(self, "agent_id", None), self._open_predictions)
         pid = _register_prediction(
             self._open_predictions, confidence,
             decision_action=decision_action,
             prediction_ttl_seconds=self._prediction_ttl_seconds,
+            checkpoint_id=checkpoint_id,
         )
+        _bind_agent_predictions(getattr(self, "agent_id", None), self._open_predictions)
         if advertise:
             self._last_prediction_id = pid
         return pid
@@ -2173,6 +2199,13 @@ class UNITARESMonitor:
         """Drop prediction records older than ttl_seconds. Returns count removed."""
         ttl = float(ttl_seconds if ttl_seconds is not None else self._prediction_ttl_seconds)
         removed = _expire_predictions(self._open_predictions, ttl)
+        if not self._open_predictions:
+            _bind_agent_predictions(
+                getattr(self, "agent_id", None),
+                self._open_predictions,
+                merge_existing=False,
+                clear_if_empty=True,
+            )
         if self._last_prediction_id and self._last_prediction_id not in self._open_predictions:
             self._last_prediction_id = None
         return removed
