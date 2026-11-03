@@ -525,6 +525,23 @@ def test_neutral_prediction_registry_preserves_checkpoint_id_and_roundtrips():
     assert minted_rec is not None
     assert minted_rec["checkpoint_id"] == "ckpt-202"
 
+    # Constructing a monitor for an agent that already has a neutral prediction
+    # merges rather than clobbers the existing prediction, and uses a 3600s TTL.
+    import time as _time
+    from src.monitor_prediction import DEFAULT_PREDICTION_TTL_SECONDS
+
+    assert DEFAULT_PREDICTION_TTL_SECONDS == 3600.0
+    registry[pid]["created_at"] = _time.monotonic() - 1200.0  # 20 minutes old (< 3600s)
+    pid2 = register_agent_prediction(agent_id, 0.91, checkpoint_id="ckpt-102")
+    late_monitor = UNITARESMonitor(agent_id=agent_id, load_state=False)
+    assert late_monitor.lookup_prediction(pid) is not None
+    assert late_monitor.lookup_prediction(pid2) is not None
+    assert get_agent_predictions(agent_id)[pid]["checkpoint_id"] == "ckpt-101"
+
+    # Empty monitor construction does not retain an empty entry in _AGENT_PREDICTIONS.
+    UNITARESMonitor(agent_id="agent-empty-throwaway", load_state=False)
+    assert get_agent_predictions("agent-empty-throwaway") is None
+
 
 @pytest.mark.asyncio
 async def test_accepted_checkpoint_propagates_id_and_outcomes_bind_without_monitor(monkeypatch):
@@ -555,7 +572,8 @@ async def test_accepted_checkpoint_propagates_id_and_outcomes_bind_without_monit
     assert phase5_reg[phase5_pid]["checkpoint_id"] == checkpoint_id
 
     # record_outcome resolves a neutral prediction even when mcp_server.monitors
-    # has no monitor for the agent, and carries checkpoint_id into detail.
+    # has no monitor for the agent, and carries checkpoint_id into detail while
+    # ignoring caller-supplied detail.checkpoint_id overrides.
     agent_id = "agent-outcome-neutral"
     pred_id = register_agent_prediction(
         agent_id,
@@ -590,7 +608,7 @@ async def test_accepted_checkpoint_propagates_id_and_outcomes_bind_without_monit
             "agent_id": agent_id,
             "outcome_type": "test_passed",
             "prediction_id": pred_id,
-            "detail": {"tests": [{"passed": 1}]},
+            "detail": {"tests": [{"passed": 1}], "checkpoint_id": "spoofed-ckpt"},
         }
     )
     assert ack["outcome_id"] == "out-303"

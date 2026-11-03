@@ -537,10 +537,10 @@ async def record_outcome(arguments: Dict[str, Any]) -> Dict[str, Any]:
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
+    detail.pop("checkpoint_id", None)
     if (
         prediction_record is not None
         and prediction_record.get("checkpoint_id") is not None
-        and detail.get("checkpoint_id") is None
     ):
         detail["checkpoint_id"] = prediction_record["checkpoint_id"]
 

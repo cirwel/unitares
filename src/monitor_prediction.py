@@ -14,16 +14,66 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 
+DEFAULT_PREDICTION_TTL_SECONDS: float = 3600.0
+
 _AGENT_PREDICTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_NEUTRAL_PREDICTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def prune_agent_predictions(
+    ttl_seconds: float = DEFAULT_PREDICTION_TTL_SECONDS,
+) -> int:
+    """Expire stale entries across `_AGENT_PREDICTIONS` and `_NEUTRAL_PREDICTIONS`."""
+    removed_agents = 0
+    for store in (_AGENT_PREDICTIONS, _NEUTRAL_PREDICTIONS):
+        for aid, preds in list(store.items()):
+            if not isinstance(preds, dict):
+                store.pop(aid, None)
+                removed_agents += 1
+                continue
+            expire_old_predictions(preds, ttl_seconds)
+            if store is _NEUTRAL_PREDICTIONS:
+                consumed_ids = [
+                    pid for pid, rec in preds.items() if rec.get("consumed")
+                ]
+                for pid in consumed_ids:
+                    preds.pop(pid, None)
+            if not preds:
+                store.pop(aid, None)
+                removed_agents += 1
+    return removed_agents
 
 
 def bind_agent_predictions(
     agent_id: Optional[str],
     open_predictions: Dict[str, Dict[str, Any]],
+    *,
+    merge_existing: bool = True,
+    clear_if_empty: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
-    """Bind `open_predictions` as the shared prediction registry for `agent_id`."""
+    """Bind `open_predictions` as the shared prediction registry for `agent_id`.
+
+    Merges any unconsumed predictions minted without a monitor
+    (`_NEUTRAL_PREDICTIONS`) into `open_predictions`, while ignoring empty
+    monitor initializations so a throwaway `UNITARESMonitor(..., load_state=False)`
+    cannot clobber an active registry entry and fresh test monitors do not
+    inherit predictions from prior monitor instances.
+    """
     if isinstance(agent_id, str) and agent_id and isinstance(open_predictions, dict):
-        _AGENT_PREDICTIONS[agent_id] = open_predictions
+        if merge_existing:
+            neutral = _NEUTRAL_PREDICTIONS.get(agent_id)
+            if isinstance(neutral, dict):
+                for pid, rec in list(neutral.items()):
+                    if rec.get("consumed"):
+                        neutral.pop(pid, None)
+                        continue
+                    open_predictions.setdefault(pid, rec)
+                if not neutral:
+                    _NEUTRAL_PREDICTIONS.pop(agent_id, None)
+        if open_predictions:
+            _AGENT_PREDICTIONS[agent_id] = open_predictions
+        elif clear_if_empty and _AGENT_PREDICTIONS.get(agent_id) is open_predictions:
+            _AGENT_PREDICTIONS.pop(agent_id, None)
     return open_predictions
 
 
@@ -48,14 +98,15 @@ def register_agent_prediction(
     *,
     decision_action: Optional[str] = None,
     checkpoint_id: Optional[str] = None,
-    prediction_ttl_seconds: float = 600.0,
+    prediction_ttl_seconds: float = DEFAULT_PREDICTION_TTL_SECONDS,
     monitor: Any = None,
     advertise: bool = True,
 ) -> str:
     """Mint and register a tactical prediction for `agent_id` via the neutral registry."""
+    prune_agent_predictions(prediction_ttl_seconds)
     open_predictions = get_agent_predictions(agent_id, monitor)
     if open_predictions is None:
-        open_predictions = _AGENT_PREDICTIONS.setdefault(agent_id, {})
+        open_predictions = {}
     pid = register_tactical_prediction(
         open_predictions,
         confidence,
@@ -63,6 +114,9 @@ def register_agent_prediction(
         prediction_ttl_seconds=prediction_ttl_seconds,
         checkpoint_id=checkpoint_id,
     )
+    if monitor is None and isinstance(agent_id, str) and agent_id:
+        _NEUTRAL_PREDICTIONS.setdefault(agent_id, {})[pid] = open_predictions[pid]
+    bind_agent_predictions(agent_id, open_predictions)
     if monitor is not None and advertise:
         monitor._last_prediction_id = pid
     return pid

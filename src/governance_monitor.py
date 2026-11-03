@@ -463,6 +463,7 @@ class UNITARESMonitor:
                             float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
                         )
                     )
+                    _bind_agent_predictions(self.agent_id, self._open_predictions)
                 from src.eisv_instrument import TRACK_STATE_KEY, restore_track
 
                 restore_track(self, data.pop(TRACK_STATE_KEY, None))
@@ -2165,6 +2166,7 @@ class UNITARESMonitor:
             prediction_ttl_seconds=self._prediction_ttl_seconds,
             checkpoint_id=checkpoint_id,
         )
+        _bind_agent_predictions(getattr(self, "agent_id", None), self._open_predictions)
         if advertise:
             self._last_prediction_id = pid
         return pid
@@ -2190,6 +2192,13 @@ class UNITARESMonitor:
         """Drop prediction records older than ttl_seconds. Returns count removed."""
         ttl = float(ttl_seconds if ttl_seconds is not None else self._prediction_ttl_seconds)
         removed = _expire_predictions(self._open_predictions, ttl)
+        if not self._open_predictions:
+            _bind_agent_predictions(
+                getattr(self, "agent_id", None),
+                self._open_predictions,
+                merge_existing=False,
+                clear_if_empty=True,
+            )
         if self._last_prediction_id and self._last_prediction_id not in self._open_predictions:
             self._last_prediction_id = None
         return removed
