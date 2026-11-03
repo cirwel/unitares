@@ -38,9 +38,10 @@ UNITARES is a server you run that keeps that thread. Any agent or model that spe
 | **What happened?** | **Outcome grounding**: test, build, and task results are recorded against the check-ins that predicted them. |
 | **What can a successor recover?** | **Reconstruction**: a new process can search or export prior findings, open review conditions, and outcomes before it acts. |
 
-Two optional pieces sit around the record. **Digital proprioception** returns an
-EISV estimate and retains its policy recommendation for inspection; it is
-observational by default, unless an operator enables the legacy actuator.
+**Digital proprioception** runs on today's check-in path: EISV summarizes
+observations over time and supplies feedback and a policy recommendation.
+Actuation is opt-in; separating EISV into an optional module is
+[staged architecture work](docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
 **Second opinions** let `consult` ask a connected local or orchestrated model.
 Structured dialectic is available for durable review, not required recovery.
 

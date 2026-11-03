@@ -38,14 +38,14 @@ makes mid-run state changes inspectable. Whether those changes predict a later
 incident or support effective prevention is an open evaluation question, not a
 premise of the integration.
 
-**The threshold that matters is check-in count, not wall-clock time.**
+**Scoring stages advance by check-in count, not wall-clock time.**
 With the current constants, the cold-start prior owns check-ins 1–2, behavioral
 fixed-threshold scoring owns check-ins 3–24, and self-relative scoring starts at
 check-in 25 against a 30-update baseline target. Absolute safety floors apply in
 every stage. An agent doing dozens of
-units of work — over an hour or a week — crosses it; one that does three and
-exits never does. That's the real line for "is my session long enough to
-benefit," not a duration.
+units of work — over an hour or a week — reaches self-relative scoring; one
+that does three and exits does not. This is eligibility for that scoring stage;
+whether its guidance improves a particular use remains an evaluation question.
 
 **The EISV instrument is not designed for** short-lived chatbot turns, which
 end before self-relative scoring starts at check-in 25.
@@ -56,8 +56,13 @@ Self-reported confidence is only one input. UNITARES can also consume outcomes
 such as test pass/fail, exit codes, tool results, CI labels, or operator review
 through `record_result()`. When those records come from a trusted client or
 external integration, they give calibration a stronger anchor than the agent's
-own narrative. Persistent high confidence paired with poor recorded outcomes can
-lower Integrity (I) and raise risk.
+own narrative. Confidence paired with the outcome it predicted can expose a
+calibration mismatch. Its effect on I depends on the calibration producer: the
+live check-in handler uses lifetime fleet strategic bins, while the monitor
+fallback uses tactical overconfidence. I also blends controller and consistency
+features; it is not an accuracy reading for the current claim or just this
+agent. The [computation reference](EISV_COMPUTATION.md#step-1--observations-srcbehavioral_sensorpy)
+defines those inputs and their scope.
 
 The generic API does not make an agent-authored outcome cryptographically true.
 If the monitored process controls both its confidence and every outcome record,
@@ -120,9 +125,9 @@ review, outcomes, and reconstruction. It is not an outcome oracle: it does not
 decide whether an output is correct or ethical, and it cannot detect deliberate
 concealment without independent evidence. Its EISV instrument is a state
 instrument, not a verdict on outcomes: the deployed policy path uses behavioral
-state estimation, and the mathematical formulation in the companion paper is a
-research target and parallel diagnostic path, not the deployed policy
-mechanism. "Operating layer" is likewise an architectural description and not
+state estimation and coupled ODE inputs. The information-theoretic formulation
+in the companion paper is a research target, distinct from these implemented
+indices. "Operating layer" is likewise an architectural description and not
 a claim of universal enforcement: UNITARES can refuse writes at the surfaces it
 owns, and it does not trap every action an agent can take through its host. A
 capable process can conceal or optimize behavior outside the monitored signals;
@@ -135,8 +140,8 @@ self-report, but an agent-controlled `record_result()` call is not independent
 evidence. Self-relative scoring removes one universal cut after check-in 25, but
 a patient actor may still shape or poison its own baseline. Verdicts lean toward
 `proceed`/`guide` over `pause`/`reject` by design because false-positive pauses
-are also costly. Drift (S) is a salience signal, not an ethics label; Integrity
-(I) is only as grounded as the outcome channel feeding it.
+are also costly. Drift (S) is a salience signal, not an ethics label. Interpret
+Integrity (I) with its calibration producer, input provenance and scope.
 
 **Open research question.** Robustness against a *motivated* attacker
 deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far
@@ -144,30 +149,26 @@ has been ad hoc rather than systematic or sustained, and the deployment is
 single-operator. The adversarial design is in place; the next step is
 *sustained adversarial testing*.
 
-**A named, fixture-demonstrated blind spot: calibrated capability concealment.** The
-Integrity (I) signal anchors confidence to outcomes, so it catches an agent that
-*over*-claims — including a sandbagger that suppresses its performance under
-evaluation while still reporting high confidence. It does **not** catch an agent
-that suppresses performance *and* lowers its reported confidence to match: such an
-agent stays calibrated and is indistinguishable from an honestly less-capable one.
-This is structural, not merely a tuning gap — every EISV dimension is computed in-band,
-from what the agent does and claims inside the monitored session, so concealment
-that leaves the agent's claims internally consistent leaves no in-band trace. The
-instrument that catches it is out-of-band — comparing performance across a
-monitored vs. an unmonitored framing — which is a capability-elicitation probe, a
-different tool than this runtime drift signal. An internal model-organism probe
-previously exercised this failure shape, but its implementation was removed as out
-of repository scope (see [`REPO_SCOPE.md`](REPO_SCOPE.md)). The repository now
-demonstrates the narrower load-bearing claim with [a synthetic twin
+**A named, fixture-demonstrated blind spot: calibrated capability concealment.**
+The repository demonstrates an observation boundary with [a synthetic twin
 replay](../tests/test_calibrated_capability_concealment.py): an honest 25%-capable
 fixture and a 90%-capable fixture that suppresses performance both expose the same
-25% outcome sequence and report 25% confidence. The deployed tactical-calibration,
-behavioral-sensor, EMA, and assessment path produces identical traces, while an
-overclaiming control that reports 90% confidence produces a 0.65 calibration error
-and lower I. This is reproducible evidence of observational equivalence *given the
-same in-band trace*, not evidence that a real model concealed capability. Testing
-deliberate concealment still requires an independent, cross-framing capability
-evaluation.
+25% outcome sequence and report 25% confidence. The fixture connects the deployed
+tactical-calibration, behavioral-sensor, EMA and assessment functions and produces
+identical traces, while an overclaiming control that reports 90% confidence
+produces a 0.65 calibration error
+and lower I. That control establishes sensitivity to the supplied mismatch in
+this fixture; it does not establish that the live handler detects overclaiming
+or hidden capability in general. Its calibration input differs from the
+handler's fleet-scoped producer described above.
+
+When every supplied observation is identical, hidden capability is not
+identifiable from that trace. Distinguishing it requires independent capability
+evidence, such as a cross-framing evaluation. An internal model-organism probe
+previously exercised this failure shape, but its implementation was removed as
+out of repository scope (see [`REPO_SCOPE.md`](REPO_SCOPE.md)). The retained
+fixture demonstrates observational equivalence, not a real model concealing
+capability.
 
 **A surface the boundaries above do not cover: the governor is authored by the
 governed.** Every threat considered so far is a runtime one — a monitored process

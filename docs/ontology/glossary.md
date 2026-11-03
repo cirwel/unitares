@@ -272,12 +272,13 @@ path after warmup.
 |---|---|---|
 | `drift (deviation components)` | How far have calibration, complexity, coherence and stability moved from baseline? Server-computed telemetry. | `src/governance_glossary.py` `DRIFT_COMPONENTS` |
 | `drift (ethical_drift input)` | What drift pressure does the *caller* report for this update? The three positional `ethical_drift` slots — self-attested input, not measurement. | `src/governance_glossary.py` `ETHICAL_DRIFT_VECTOR_COMPONENTS`; `src/mcp_handlers/schemas/core.py` |
-| `drift (S axis)` | How far is the work drifting from this agent's own usual pattern? The runtime description of `S` ("Entropy"). | `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
+| `drift (S axis)` | How has the smoothed blend of drift, regime instability, complexity divergence and available activity features changed? The runtime index `S` ("Entropy"). | `docs/EISV_COMPUTATION.md` (`S_obs`); `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
 
 The third row is partly part-of rather than a pure homonym: `S_obs` *consumes*
 the deviation signal (`drift_norm`, base weight 0.40 before optional-input
 reweighting — `docs/EISV_COMPUTATION.md`). S contains drift; it is not identical
-to the drift vector. It stays
+to the drift vector. S is a weighted index; assessment compares it with fixed
+thresholds and, after warmup, the agent's own baseline. It stays
 listed because readers meet the S description and the deviation components
 under the same word. The Rosetta table below uses `drift` as the `standard`
 name for the deviation signal, which is fine on public surfaces. In technical
@@ -290,7 +291,7 @@ over-read it as measurement.
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `entropy (S axis, deployed)` | How unsettled is this agent's work relative to its own normal? A heuristic blend of drift, regime instability and complexity divergence, labelled "Entropy". | `docs/EISV_COMPUTATION.md` (`S_obs`); runtime `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
+| `entropy (S axis, deployed)` | What does the smoothed blend of drift, regime instability, complexity divergence and available activity features record? A weighted index labelled "Entropy"; self-relative assessment is a later stage. | `docs/EISV_COMPUTATION.md` (`S_obs`); runtime `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
 | `entropy (target H)` | What is the entropy of the agent's response distribution? The paper's target semantics; **not computed** on the primary path. | `docs/EISV_COMPUTATION.md` — "No entropy, mutual information, or free energy is computed on the primary path" |
 
 The label "Entropy" on `S` borrows the target word for a heuristic, so this is

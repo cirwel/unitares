@@ -2,6 +2,28 @@
 
 **EISV computes a compact, time-smoothed record of runtime observations and controller history.** The behavioral path blends supplied features into E, I and S, smooths them, and derives V from the E/I observation gap. Assessment compares that state with thresholds and, after warmup, an adaptive baseline. Policy uses the assessment alongside other decision inputs.
 
+## Role, runtime and evidence
+
+EISV is a maintained instrument within UNITARES. It supplies a compact history
+of runtime observations, baseline comparisons, feedback and inferred policy
+recommendations. Its integration is operational; what a reading diagnoses and
+whether a consumer benefits from it are separate questions.
+
+| Question | Current contract | Owner |
+|---|---|---|
+| Does it run? | Successful fresh check-ins run EISV synchronously. There is no shipped no-assessor check-in setting. Keyed replay returns the accepted checkpoint without a new assessment; a later assessment failure can leave that checkpoint accepted. | [Check-in acceptance](operations/checkin-refactor-characterization.md#neutral-checkpoint-acceptance-2026-11-02-increment) |
+| Is it becoming optional? | Optional-module separation is an adopted, staged architecture direction. Default `observe` posture controls actuation; it does not disable estimation. Instrument repair and evaluation remain supported while boundaries are separated. | [Boundary proposal](proposals/active/eisv-core-boundary-v0.md), [instrument-quality plan](plans/eisv-instrument-quality-2026-10-13.md) |
+| What do the numbers mean? | The formulas measure defined blends of observations and controller history. The names carry intended interpretations; physical and information-theoretic meanings remain research targets. | The computation and producer definitions below |
+| Does it help? | Signal response, useful summarization, prediction and intervention benefit require evidence suited to each claim. Operational use or architectural dependency alone establishes none of those benefits; inconclusive outcome evidence does not establish that the signals are uninformative. | [Evidence boundaries](EVIDENCE_AND_LIMITS.md#evaluation-boundaries), [evaluation catalog](EVALUATION_INDEX.md) |
+| What may it decide? | A policy recommendation and an applied lifecycle hold are distinct. Agent-facing instructions must name the effective action and actual write gate, with their source and scope. | [Reading the policy action](manual/05-reading-the-signals.md#53-the-policy-action), [interface contract](INTERFACE_CONTRACT.md#policy-recommendation-and-actuation) |
+
+Use this section when summarizing EISV elsewhere. Describe its implemented role
+directly, link the evidence for a claimed benefit, and label roadmap work as
+staged. Basin names, `healthy` status labels and approval actions are model or
+policy classifications, not independent certification of task quality. A
+favorable change in a reading is a reason to inspect the underlying evidence,
+not sufficient evidence of improvement or recovery by itself.
+
 ## What the signals record
 
 These are operational definitions of the current behavioral path. The formulas below specify the weights, defaults and optional inputs.

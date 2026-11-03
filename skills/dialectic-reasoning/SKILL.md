@@ -8,6 +8,7 @@ description: >
 last_verified: "2026-10-29"
 freshness_days: 28
 source_files:
+  - unitares/docs/EISV_COMPUTATION.md
   - unitares/src/agent_loop_detection.py
   - unitares/src/mcp_handlers/middleware/envelope_step.py
   - unitares/src/dialectic_protocol.py
@@ -143,9 +144,16 @@ reviewer propose conditions if needed.
 
 ### Writing a Good Thesis
 
-- **Reasoning**: Explain your perspective with reference to EISV data, not feelings
-- **Root cause**: Be specific. "High entropy from complex refactoring task" is better than "I got paused for no reason"
-- **Proposed conditions**: Must be concrete and measurable. Tie them to live metrics or observable behavior, not vague intent.
+- **Reasoning**: Explain your position using the reported readings, their
+  provenance and relevant task evidence. A reading and its interpretation can
+  be disputed separately.
+- **Root cause**: State what is observed and what remains a hypothesis. For
+  example: "S rose after the task changed; the cause is not established. The
+  recorded inputs and test results support checking the complexity estimate."
+- **Proposed conditions**: Make the issue checkable, for example "rerun the
+  failing test after the fix and attach the result." If proposing a metric
+  condition, explain why its producer and threshold address this issue. A
+  favorable number alone does not establish improvement or recovery.
 
 ## Phase 2: Antithesis
 
@@ -445,25 +453,39 @@ finalized with.
 
 ## How to Participate Well
 
-- **Be honest about metrics.** The EISV data is right there. Denying it undermines your credibility.
-- **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
+- **Report readings faithfully.** Preserve the observed values and identify
+  exactly what you dispute: an input, its provenance or freshness, an
+  interpretation, or the policy response. Cite relevant external evidence and
+  an alternative hypothesis where available; mark missing evidence as unknown.
+- **Propose checkable conditions.** Tie them to the task or evidence in dispute.
+  A metric target needs a reason beyond making the displayed state favorable.
+  This guidance does not change existing recovery conditions or release an
+  applied hold; use the live recovery or resolution contract for those effects.
 - **Do not treat the instrument as a judge.** A pause recommendation is data,
   not permission or a moral verdict. Analyze it only to the extent it helps the
   work.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
-- **Look at attributed evidence, not feelings.** Call
+- **Inspect attributed evidence when interpreting a reading.** Use
   `check_working_state(client_session_id=...)` (`get_governance_metrics()`
   canonically) for the current values and inspect
   `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
   `policy_evaluation` and `enforcement` blocks come back on an assessment-bearing
   `sync_state()` check-in, not a receipt-only retry or the metrics call. EISV is proprioceptive
-  state estimation, not outcome truth; the ODE lens and legacy `C(V)` do not
-  independently validate a claim.
+  state estimation; the ODE lens and legacy `C(V)` do not independently
+  validate an outcome claim. The
+  [computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence)
+  distinguishes the instrument's operational role, interpretations and
+  evidence of benefit. These are aids to an existing review, not an additional
+  approval gate or required diagnostic sequence.
 
 ## Common Mistakes
 
-- **Ignoring the metrics**: Arguing against a pause while your entropy is near 1.0 and energy is at 0.3. The numbers matter.
-- **Proposing impossible conditions**: promising a metric target without checking the live state first.
-- **Being defensive instead of analytical**: "The system is wrong" vs. "My entropy spiked because of X, and here is how I address it."
+- **Treating a reading as conclusive**: Citing E or S alone as proof that the
+  work is sound, defective, or ready to resume. Check what the reading measures
+  and how it supports the disputed claim.
+- **Proposing unsupported conditions**: Promising a metric target without a
+  reason it would resolve the issue, or agreeing to a condition you cannot meet.
+- **Assuming causality**: Reporting a task change as the cause of a later S
+  change without checking the inputs and considering other explanations.
 - **Treating dialectic as adversarial**: It is collaborative problem-solving with structure, not a trial. Both sides benefit from honest resolution.
 - **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused leaves the reading that paused you in place, so the next check-in can pause again. An unmet condition itself only guides.
