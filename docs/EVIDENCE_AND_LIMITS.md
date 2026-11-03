@@ -207,6 +207,13 @@ interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
 eligible as a result. The cluster threshold is not lowered, so a shortfall
 closes the read as inconclusive, not as a measured null.
 
+The read ran on 2026-11-03, after a second, run-date amendment, and took that
+branch. It met none of the four conditions, and the support condition failed
+(29 and 28 bad clusters against 150). So outcome-grounding is closed for
+insufficient eligible evidence. Whether EISV adds predictive signal for bad
+outcomes **remains untested, not disproved**. See the
+[result](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
+
 An operational `FAIL` can close a scheduled line of work without scientifically
 refuting the underlying capability. The
 [inference-status contract](ontology/falsification-inference-containment-2026-08-22.md)

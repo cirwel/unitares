@@ -987,6 +987,14 @@ boundary ends at the first deployed change to the live EISV update path, if one
 lands before 2026-12-01, and the read is described as amended after interim
 exposure, not as an untouched confirmatory read.
 
+*Result 2026-11-03.* The registered read ran on 2026-11-03 under the run-date
+amendment. It met none of the four PASS conditions, so outcome-grounding is
+**closed for insufficient eligible evidence** (29 and 28 bad clusters against
+150). The scientific inference is `INCONCLUSIVE`. This claim therefore stays
+**untested, not negative**. Reopening requires a new premise: a different
+label channel or measurement process. See the
+[result](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
+
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
 CONSTRUCTION.** E/I/S are hard-clipped in `src/behavioral_state.py` and S is
 floored in `src/behavioral_sensor.py`, so boundedness is not a finding. Do not
