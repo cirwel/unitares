@@ -19,10 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
-from src.db.mixins.state import (
-    DAILY_GOVERNANCE_TREND_SQL as _DAILY_SQL,
-    fetch_daily_governance_trend_rows,
-)
+from src.db.mixins.state import fetch_daily_governance_trend_rows
 
 TRAILING_DAYS = 7
 MAX_WINDOW_DAYS = 60
