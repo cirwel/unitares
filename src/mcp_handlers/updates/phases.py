@@ -1034,9 +1034,11 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 except Exception as e:
                     logger.debug(f"Outcome history unavailable for {ctx.agent_id}: {e}")
 
-                # Cache outcome history on monitor for use in sync process_update
+                # Pass outcome history call-locally into agent_state so pre-acceptance
+                # preparation never mutates the shared monitor cache before lock
+                # acquisition and checkpoint acceptance.
                 if outcome_hist is not None:
-                    monitor._cached_outcome_history = outcome_hist
+                    ctx.agent_state["_outcome_history"] = outcome_hist
 
                 decision_history = list(monitor.state.decision_history)
                 coherence_history = list(monitor.state.coherence_history)

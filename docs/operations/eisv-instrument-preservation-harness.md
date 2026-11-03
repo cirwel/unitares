@@ -109,7 +109,7 @@ so no code outside the estimator can capture what was used (proposal §4.2).
 | One-hour tool-usage window | `get_tool_usage_tracker().get_usage_stats` | yes (`tu_stats`) | fixed empty |
 | Fleet-shared calibration metrics (S penalty; confidence calibration) | `calibration_checker`, loaded from `data/calibration_state.json` or the database | no (process-global) | empty, JSON-only checker |
 | Per-agent ethical-drift baseline | `governance_core.ethical_drift._baseline_cache`, keyed by `agent_id` | no (process-global) | reset per run |
-| Outcome history for the behavioral sensor | `monitor._cached_outcome_history`, set by `phases.py` | no | not set (none) |
+| Outcome history for the behavioral sensor | `agent_state["_outcome_history"]` from `phases.py` (fallback: `monitor._cached_outcome_history`, refreshed by `process_update`) | no | not set (none) |
 | Submitted sensor EISV and source | check-in `agent_state` | no | scenario input |
 | Configuration flags | `UNITARES_*`, `GOVERNANCE_*` via `config` | no | removed |
 
