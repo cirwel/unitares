@@ -152,12 +152,12 @@ Main tools for sharing work and getting feedback
 - **Workflow alias:** `sync_state`
 - **Related:** `simulate_update`, `get_governance_metrics`, `export(action='history')`
 
-Record a work check-in and get a governance decision: it advances and persists this agent's EISV state, returning proceed or pause. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. Neither no-write path is a parameter of this tool: get_governance_metrics reads the verdict without writing, and the separate simulate_update tool previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
+Record a work check-in. After admission, a fresh checkpoint is accepted before synchronous EISV assessment; checkpoint acceptance and later state persistence have separate receipts. A keyed replay returns the original checkpoint without repeating assessment, and an assessment failure can leave the checkpoint accepted. On an assessment-bearing response, policy_evaluation preserves the inferred recommendation, decision carries the effective action, and enforcement reports posture and applied lifecycle effects. Default observe posture leaves inferred pauses advisory; existing lifecycle holds still apply. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. Neither no-write path is a parameter of this tool: get_governance_metrics reads the verdict without writing, and the separate simulate_update tool previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 WHAT IT DOES:
-- Records your update and runs the EISV governance cycle
-- Returns a decision (proceed/pause) based on current state
-- Provides EISV metrics: Energy (E), Information Integrity (I), Entropy (S), Valence (V)
+- A fresh admitted update records a checkpoint, then runs the EISV governance cycle
+- Assessment-bearing responses return an effective decision (proceed/pause); receipt-only responses supply no new assessment
+- Provides EISV metrics: Energy (E), Information Integrity (I), Entropy (S), Valence (V). These are weighted behavioral indices; inspect their source and derivation
 - Reports coherence tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score
 
 SEE ALSO:
@@ -175,7 +175,7 @@ WHEN TO USE:
 - After making significant progress or changes
 
 ~~~text
-RETURNS:
+ASSESSMENT-BEARING RESPONSE FIELDS (shape depends on response_mode; status labels are model classifications):
 {
   "success": true,
   "agent_id": "string",
@@ -210,10 +210,11 @@ RETURNS:
 ~~~
 
 PARAMETERS (most are optional):
+- idempotency_key (string): Reuse the same explicit key and submitted content to recover an accepted checkpoint without repeating assessment
 - client_session_id (string): In-session binding identifier (from start_session() or identity()); not a continuity_token or cross-process proof
 - response_text (string): Describe what you did (optional but helpful)
 - complexity (float 0-1): How complex was your task? (default: 0.5)
-- confidence (float 0-1): How confident are you? (optional, auto-derived if omitted)
+- confidence (float 0-1): Optional explicit forecast. Omission does not mint an agent prediction; the compatibility estimator stays internal
 - task_type (string): "convergent" | "divergent" | "mixed" (default: "mixed")
 
 RELATED TOOLS:
@@ -225,7 +226,7 @@ RELATED TOOLS:
 ERROR RECOVERY:
 - "agent_id is required": Identity auto-binds on first call - just include client_session_id
 - "Authentication required": Call start_session(force_new=true) once, then pass its client_session_id on this call
-- Timeout: Retry with simpler parameters or check system resources
+- Unconfirmed checkpoint or timeout: retry the same content with the same explicit idempotency_key; without a key, a retry may create another record
 
 ~~~text
 EXAMPLE: Minimal call (identity auto-binds)
@@ -263,7 +264,7 @@ EXAMPLE RESPONSE:
     "verdict": "safe",
     "lambda1": 0.18,
     "health_status": "healthy",
-    "health_message": "Coherence 0.85, risk_score 0.23 acceptable"
+    "health_message": "Low risk (23.00%)"
   },
   "eisv_labels": {"E": "Energy", "I": "Information Integrity", "S": "Entropy", "V": "Valence"}
 }
@@ -396,7 +397,7 @@ EISV FIELD CONTRACT:
 - **Timeout:** 30s
 - **Related:** `process_agent_update`, `get_governance_metrics`
 
-Run one governance cycle as a dry run and return the decision and metrics a real check-in would have produced, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
+Run one governance cycle as a dry run and preview its decision and metrics from the current inputs, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 USE CASES:
 - Test governance decisions without persisting
@@ -429,7 +430,7 @@ RETURNS:
     "coherence_source": string, "coherence_role": string,
     "risk_score": float,  # Governance/operational risk
     "attention_score": float,  # DEPRECATED: Use risk_score instead. Kept for backward compatibility.
-    "phi": float,  # Primary physics signal
+    "phi": float,  # Φ objective; cold-start verdict input and configured policy floor
     "verdict": "safe" | "caution" | "high-risk",  # Primary governance signal
     "lambda1": float, "health_status": "healthy" | "moderate" | "critical"
   },
@@ -459,12 +460,12 @@ EXAMPLE RESPONSE:
 {
   "success": true,
   "simulation": true,
-  "decision": {"action": "approve", "reason": "Low risk (0.23)", "require_human": false},
+  "decision": {"action": "proceed", "reason": "Low risk (0.23)", "require_human": false},
   "metrics": {
     "coherence": 0.50,
     "coherence_source": "legacy_tanh_v", "coherence_role": "ode_control_feedback",
     "risk_score": 0.23,  # Governance/operational risk (primary)
-    "phi": 0.35,  # Primary physics signal
+    "phi": 0.35,  # Φ objective; cold-start verdict input and configured policy floor
     "verdict": "safe",  # Primary governance signal
     "E": 0.67, "I": 0.89, "S": 0.45, "V": -0.03
   },

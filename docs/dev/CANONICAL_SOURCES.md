@@ -1,6 +1,6 @@
 # Canonical Sources
 
-**Last Updated:** 2026-10-20 (architecture doc rebuilt record-first; EISV and policy-action owners named; all listed runtime sources and thin-doc targets resolve)
+**Last Updated:** 2026-11-03 (EISV framing ownership and current-runtime distinctions clarified)
 
 Use this page to resolve architecture disputes and doc drift.
 
@@ -8,13 +8,18 @@ Status: canonical authority map for active docs.
 
 ## Trust Order
 
-When prose and code disagree, use this order:
+For claims about current runtime behavior, use this order:
 
 1. Runtime code that computes or returns the behavior
 2. Prose docs explicitly marked live or canonical
 3. Historical docs and archived analyses
 
 This ordering exists because the codebase has accumulated multiple eras of explanation. Some older docs accurately describe earlier phases of the system but no longer describe the runtime that agents interact with today. If an agent reads archived prose before it reads runtime code, it can form a coherent but outdated model of the system. This page exists to prevent that failure mode and give both humans and agents a compact rule for resolving contradictions without guesswork.
+
+Runtime code establishes what executes; it does not establish scientific validity
+or operator authorization. Use the dated evaluation record for evidence, the
+registered protocol for its decision rule, and the adopted proposal for staged
+architecture authority.
 
 ## Contested Claims Registry
 
@@ -25,7 +30,9 @@ and grep all reader-facing docs for the old claim **in the same PR**.
 
 | Claim | Canonical wording | Owner |
 |-------|-------------------|-------|
-| EISV / core direction | The operator adopted moving EISV out of the core to an optional module on 2026-10-10. This settles the direction, not implementation authorization: the staged gates and standing governed-review conditions still apply. The estimator still derives today's check-in policy action. Retired assertion: "Whether EISV moves out of the core is an open proposal". | `docs/proposals/active/eisv-core-boundary-v0.md` (operator decision, staged authorization) · `AGENTS.md` / `CLAUDE.md` · `scripts/diagnostics/check_doc_health.py` (`_CONTESTED_CLAIMS`) |
+| EISV / core direction | The operator adopted moving EISV out of the core to an optional module on 2026-10-10. This settles the direction, not implementation authorization: the staged gates and standing governed-review conditions still apply. Successful fresh check-ins still run EISV synchronously; default observe posture controls actuation, not estimator execution. Receipt-only replay supplies no new assessment. Retired assertion: "Whether EISV moves out of the core is an open proposal". | `docs/proposals/active/eisv-core-boundary-v0.md` (operator decision, staged authorization) · `AGENTS.md` / `CLAUDE.md` · `scripts/diagnostics/check_doc_health.py` (`_CONTESTED_CLAIMS`) |
+| EISV role, runtime and evidence | The instrument records defined blends of observations and controller history and supplies feedback and inferred recommendations. Integration, interpretation, useful compression, prediction and intervention benefit are distinct claims. Neither architectural dependency nor inconclusive outcome evidence establishes usefulness. | [`EISV_COMPUTATION.md#role-runtime-and-evidence`](../EISV_COMPUTATION.md#role-runtime-and-evidence) (summary owner) · `EVIDENCE_AND_LIMITS.md` / dated evaluations (evidence) · `scripts/diagnostics/check_doc_drift.py` (selected active-surface regression checks) |
+| Agent response to EISV | Report readings faithfully, inspect their source and scope, and support challenges with attributed evidence. Model basin/status labels are classifications; changing a number alone does not demonstrate improvement or recovery. Existing applied holds and recovery rules remain authoritative. | `docs/manual/05-reading-the-signals.md` §5.3 (policy handling) · `skills/dialectic-reasoning/SKILL.md` (challenge procedure) |
 | Public product sentence | The tagline is the README's own heading, "Accountability infrastructure for long-running AI agents." The definition is the three sentences of the README's opening body paragraph, beginning "UNITARES is self-hosted accountability infrastructure for operators running multiple AI agents." — not the three short lines under the heading. "Many agents, one record." is a display headline for the site, not a definition. Every public surface copies these verbatim rather than re-deriving them. Retired, in any hyphenation and whether the noun is "AI agents" or "AI-agent fleets": "Runtime governance for heterogeneous AI-agent fleets", "Infrastructure for long-lived AI agents", "Runtime governance for long-lived AI agents", "runtime state telemetry for long-lived AI agents". Non-markdown surfaces are covered by `_CONTESTED_EXTRA_SURFACES`; the GitHub repository description is covered by `check_repo_description.py`, run weekly by the `Positioning Surfaces` workflow and pinned as wired by `tests/test_public_positioning_contract.py`. Only the social-preview PNG is still checked by hand, because the tagline is pixels there — which is why the standing rule is not to bake a sentence into an image. | `README.md` (owner) · `scripts/diagnostics/check_doc_drift.py` (`CANONICAL_TAGLINE`, `PRODUCT_CATEGORY`, and `SINGLE_OPERATOR_SCOPE` across the pinned surfaces; `ACTIVE_DOC_CHECKS` on `CLAUDE.md`, `AGENTS.md`, `skills/unitares-governance`, and `skills/governance-fundamentals`) · `scripts/diagnostics/check_doc_health.py` (`_CONTESTED_CLAIMS` and `_CONTESTED_EXTRA_SURFACES`) · `scripts/diagnostics/check_repo_description.py` · `tests/test_readme_evidence_contract.py`, `tests/test_build_public_site.py` · `scripts/dev/brand/render_social_preview.py` (`TAGLINE`) · `cirwel/cirwel-site` `EDITORIAL.md` §1. `PRODUCT_CATEGORY` (`"federation kernel"`) and `SINGLE_OPERATOR_SCOPE` (`"single-operator"`) are checked separately on the five headline surfaces (`README.md`, `docs/PRODUCT_DEFINITION.md`, `docs/CAPABILITIES_AND_DEPLOYMENT.md`, `src/tool_modes.py`, `pyproject.toml`), and `docs/deployment/glama.md` has its own literal check for `"self-hostable, single-operator federation kernel"`; each carries the scoped noun `"single-operator federation kernel"` (#2451), while the multi-authority sense is written `"cross-operator"` or `"multi-principal"` (#2451, #2454). |
 | Tool surface measurement | Catalog fingerprints describe source schemas, and the `/mcp/` registrar advertises those schemas verbatim (`tests/test_mcp_schema_parity.py`). Measure the final MCP listing for payload costs. Static hint candidates do not establish caller severity or observed failure incidence. | `src/tool_mode_listing.py` · `scripts/diagnostics/tool_surface_cost.py` · `scripts/diagnostics/hint_target_advertisement.py` |
 | Redis posture | Redis is the de-facto primary session store; the server boots without it in a degraded local-only mode (fine for the demo; sessions won't persist). It is not "optional" in production. | `docs/UNIFIED_ARCHITECTURE.md` · `docs/proposals/archive/redis-retirement-v0.md` |
@@ -39,7 +46,7 @@ and grep all reader-facing docs for the old claim **in the same PR**.
 | Raw coordinates and relative risk | With behavioral-sensor inputs, E/I/S are smoothed weighted indices and V separately smooths raw E_obs−I_obs. Assessment adds baseline-relative comparisons after warmup; raw coordinates are not z-scores. Retired wording: “Each score is self-relative after warmup”. | `src/behavioral_sensor.py` · `src/behavioral_state.py` · `src/behavioral_assessment.py` |
 | Outcome-evidence trust | `record_result()` records an outcome claim and its provenance; it does not make an agent-authored result independently true. CI-, tool-, or operator-authored evidence can be a stronger calibration anchor. If the monitored process controls both confidence and every outcome record, it can forge a consistent story. | `docs/SCOPE_AND_THREAT_MODEL.md` · `src/grounding/outcome_anchors.py` · `src/mcp_handlers/observability/outcome_events.py` |
 | Current public ablation read | The frozen 2026-08-09 trusted-anchor matrix classifies all 12 overall scope/window/lead slices `NON_DETECTION` against the best-of-candidates null (selective p = 0.070–0.567). That does not establish absence or refutation; unadjusted lift is not selection-adjusted evidence, and no prevention is demonstrated. | `docs/operations/eisv-ablation-frozen-2026-08-09.md` · `docs/REVIEWER_GUIDE.md` |
-| What that read licenses | A non-detection, not a demonstrated negative and not a ceiling on forecasting power. Predictive lift is **unresolved** pending the pre-registered 2026-12-01 read. The instrument's power on a cohort of that shape is measured, not assumed. | `docs/operations/falsifiability-power-audit-2026-08-23.md` · `scripts/analysis/ablation_power_probe.py` · `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` |
+| What that read licenses | A non-detection, not a demonstrated negative and not a ceiling on forecasting power. Predictive lift is **unresolved** in that frozen record; the registered protocol owns the current schedule and amendments. The instrument's power on a cohort of that shape is measured, not assumed. | `docs/operations/falsifiability-power-audit-2026-08-23.md` · `scripts/analysis/ablation_power_probe.py` · `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` |
 
 ## Current Architecture Truth
 
@@ -75,7 +82,7 @@ These docs should stay aligned with the runtime sources above:
 | `README.md` | live overview | Public-facing summary and top-level framing |
 | `docs/PRODUCT_DEFINITION.md` | canonical product framing | What UNITARES is: the one-sentence product, the five questions the record answers, the Core/userland boundary, and the honest limits |
 | `docs/UNIFIED_ARCHITECTURE.md` | canonical prose summary | Human-readable architecture explanation: the record's layers, the check-in and policy action, transports, and storage |
-| `docs/EISV_COMPUTATION.md` | canonical instrument reference | Owner of the EISV instrument: inputs, smoothing, warmup, risk, margin, the ODE coupling, and its evidence caveats |
+| `docs/EISV_COMPUTATION.md` | canonical instrument reference | Owner of EISV role/runtime/evidence framing and computation: inputs, smoothing, warmup, risk, margin and ODE coupling; dated evaluations own their findings |
 | `docs/manual/05-reading-the-signals.md` §5.3 | canonical agent-facing reference | Owner of agent-facing policy-action handling: what each `action` / `sub_action` asks the agent to do |
 | `docs/guides/TROUBLESHOOTING.md` | live troubleshooting guide | Failure diagnosis and practical remediation |
 | `docs/operations/OPERATOR_RUNBOOK.md` | live operator guide | Startup, health checks, and operator procedures |
@@ -131,3 +138,10 @@ Use these rules when deciding whether to edit, shrink, or add a doc:
 5. If a doc becomes historical, delete it or note its status inline. Do not preserve stale docs.
 
 The goal is not to minimize documentation at all costs. The goal is to keep the active docs set small enough that agents can form the right model quickly, while still preserving specialized references for the narrower workflows that genuinely need them.
+
+For EISV summaries, link the role/runtime/evidence section rather than copying
+a second contract. State whether a claim concerns shipped behavior, staged
+architecture, an intended interpretation or a demonstrated result. Preserve
+dated evaluation scope and do not turn a wording correction into a new runtime
+or recovery rule. Selected known regressions are checked by `check_doc_drift.py`;
+those phrase checks do not establish semantic completeness.

@@ -42,8 +42,9 @@ actuator; an EISV recommendation alone carries no authority by default.
 ## Core and Resident are different products
 
 This repository ships **UNITARES Core** and specialized reference residents.
-Core owns identity, shared knowledge, review, outcomes, audit, coordination,
-and the optional behavioral-state instrument. Agents own their reasoning and
+Core owns identity, shared knowledge, review, outcomes, audit and coordination.
+It also ships EISV on the check-in path, where the instrument maintains state
+history and supplies assessment and guidance. Agents own their reasoning and
 execution; an operator owns every authority boundary.
 
 **UNITARES Resident** is a separate first-party agent project for persistent
@@ -79,9 +80,11 @@ non-coercive guidance: it creates no lifecycle hold and blocks no write.
 Operators that still need the historical circuit breaker can opt into
 `UNITARES_POLICY_ACTUATION=enforce`. Existing durable pauses remain real state
 until their normal recovery, review, operator, or expiry path lifts them. EISV
-ships in the core path today and moves to an optional module under the
-[staged plan](proposals/active/eisv-core-boundary-v0.md). The
-[computation reference](EISV_COMPUTATION.md) defines the deployed instrument.
+continues to run in `observe`; that setting controls intervention authority.
+Its move to an optional module is the adopted direction under the
+[staged plan](proposals/active/eisv-core-boundary-v0.md), not an available runtime
+switch. The [computation reference](EISV_COMPUTATION.md#role-runtime-and-evidence)
+separates its operational role, runtime status and evidence.
 
 ## Who it is for, and what "done" looks like
 

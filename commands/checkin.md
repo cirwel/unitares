@@ -53,15 +53,41 @@ Guidelines:
 
 After the call:
 
-- report the verdict
+- report checkpoint acceptance, assessment status, and any errors or degradation
+  separately. A keyed replay acknowledges the original checkpoint without a new assessment;
+  it supplies no current verdict. Use `check_working_state` if a current state
+  read is needed rather than submitting another check-in to obtain one. For
+  partial failures or unconfirmed acceptance, follow the `governance-lifecycle`
+  skill's receipt and retry guidance
+- when an assessment is returned, distinguish the raw recommendation in
+  `policy_evaluation`, the effective action, and `enforcement.applied` when
+  those fields are present. The default `observe` posture leaves inferred
+  pauses as guidance; it does not apply a lifecycle hold
 - report identity-assurance or continuity warnings when they are surfaced
 - report margin or edge warnings when present
 - report `memory_suggestions` when present and relevant to the next step
 - report `recovery_hint` when present before proposing an invented recovery path
 - report any guidance briefly
-- report mirror signals or reflection prompts when present
-- if verdict is `pause` or `reject`, recommend `dialectic(action="request")`
-- if verdict is `guide`, summarize the guidance and adjust behavior
+- report `mirror` signals and any `reflection` when present
+- if an actual lifecycle hold is reported, stop gated work and follow its
+  surfaced recovery path. If no path is supplied, inspect `check_working_state`
+  and the `governance-lifecycle` skill; seek structured review or operator input
+  for an unresolved hold. It remains authoritative until a supported recovery,
+  review, operator, or expiry path lifts it
+- if the effective action is `pause` or `reject` but an applied hold is unclear,
+  inspect enforcement and the current `write_gate` before choosing the next
+  step. An inferred pause projected into guidance under `observe` does not
+  require dialectic recovery; review can still help resolve a disagreement
+- for `guide` or a surfaced warning, summarize relevant input changes when
+  provided, relate them to task evidence, and explain any justified adjustment.
+  Label unavailable inputs as unknown. A favorable metric change alone does
+  not establish better work or authorize bypassing an existing hold
+
+EISV currently runs synchronously on successful fresh check-ins. Its planned
+module boundary does not make assessment optional at runtime; `observe`
+controls actuation, not estimation. The server's
+[computation reference](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md)
+owns the instrument's inputs, interpretations, and evidence limits.
 
 <!-- repo-specific: keep on plugin sync -->
 For Codex, there is no client hook that automatically stamps the local cache

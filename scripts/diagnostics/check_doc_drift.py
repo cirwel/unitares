@@ -8,6 +8,7 @@ that have already caused agents to surface outdated architecture claims.
 from __future__ import annotations
 
 import re
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -274,6 +275,117 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
 }
 
 
+# A bounded regression check for contradictory summaries already found on
+# current front doors. Historical studies, registered protocols and archives
+# retain their wording; this is not a repository-wide terminology ban.
+EISV_FRAMING_OWNER = "docs/EISV_COMPUTATION.md#role-runtime-and-evidence"
+EISV_FRAMING_PUBLIC_OWNER = f"https://github.com/cirwel/unitares/blob/master/{EISV_FRAMING_OWNER}"
+EISV_FRAMING_SURFACES = (
+    "README.md",
+    "docs/PRODUCT_DEFINITION.md",
+    "docs/UNIFIED_ARCHITECTURE.md",
+    "docs/SCOPE_AND_THREAT_MODEL.md",
+    "docs/REVIEWER_GUIDE.md",
+    "docs/ontology/glossary.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "skills/dialectic-reasoning/SKILL.md",
+    "skills/governance-fundamentals/SKILL.md",
+    "skills/unitares-governance/SKILL.md",
+)
+EISV_FRAMING_LINK_SURFACES = (
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "skills/dialectic-reasoning/SKILL.md",
+    "skills/governance-fundamentals/SKILL.md",
+    "skills/unitares-governance/SKILL.md",
+)
+EISV_FRAMING_PATTERNS = (
+    ("roadmap optionality stated as current runtime", r"\btwo optional pieces sit around the record\b"),
+    ("roadmap optionality stated as current runtime", r"\boptional behavioral-state instrument\b"),
+    ("diagram implies optional execution", r"\brecommendation;\s*optional\b"),
+    ("discourages contesting instrument interpretation", r"\bdenying it undermines your credibility\b"),
+    ("metric target offered without an evidence rationale", r"\bentropy below x within y check-ins\b"),
+    (
+        "numerical reading used to dismiss a challenge",
+        r"\bignoring the metrics\s*:\s*arguing against a pause while your entropy "
+        r"is near 1\.0 and energy is at 0\.3\b",
+    ),
+)
+EISV_DESCRIPTION_KEYS = ("process_agent_update", "simulate_update")
+EISV_DESCRIPTION_PATTERNS = (
+    ("behavioral V mislabeled Void", r"\bvoid\s*\(\s*v\s*\)"),
+    ("behavioral V mislabeled Void", r"[\"']v[\"']\s*:\s*[\"']void[\"']"),
+    ("research interpretation stated as a measured signal", r"\bprimary physics signal\b"),
+)
+
+
+def _eisv_framing_text(raw: str) -> str:
+    rendered = re.sub(r"(?m)^\s*>\s?", "", raw)
+    rendered = re.sub(r"[`*_]", "", rendered)
+    return " ".join(rendered.split()).casefold()
+
+
+def eisv_framing_failures(root: Path) -> list[str]:
+    """Keep current summaries linked to their owner and catch known drift."""
+    failures: list[str] = []
+    owner_path, owner_anchor = EISV_FRAMING_OWNER.split("#", 1)
+    owner = (root / owner_path).resolve()
+    owner_text = owner.read_text(encoding="utf-8") if owner.exists() else ""
+    headings = re.findall(r"(?m)^#{1,6}\s+(.+?)\s*#*\s*$", owner_text)
+    anchors = {
+        re.sub(r"[^\w\s-]", "", heading.casefold()).strip().replace(" ", "-")
+        for heading in headings
+    }
+    if owner_anchor not in anchors:
+        failures.append(f"{EISV_FRAMING_OWNER}: missing EISV framing owner heading")
+
+    for rel_path in EISV_FRAMING_SURFACES:
+        path = root / rel_path
+        if not path.exists():
+            failures.append(f"{rel_path}: missing current EISV framing surface")
+            continue
+        raw = path.read_text(encoding="utf-8")
+        normalized = _eisv_framing_text(raw)
+        for label, pattern in EISV_FRAMING_PATTERNS:
+            if re.search(pattern, normalized):
+                failures.append(
+                    f"{rel_path}: EISV framing drift ({label}); use {EISV_FRAMING_OWNER}"
+                )
+        if rel_path in EISV_FRAMING_LINK_SURFACES:
+            links = re.findall(r"\]\(([^\s)]+)(?:\s+\"[^\"]*\")?\)", raw)
+            if rel_path.startswith("skills/"):
+                # Skills are also mirrored and served as raw Markdown over MCP.
+                linked = EISV_FRAMING_PUBLIC_OWNER in links
+                expected_owner = EISV_FRAMING_PUBLIC_OWNER
+            else:
+                linked = any(
+                    "#" in link
+                    and not link.startswith("/")
+                    and "://" not in link
+                    and link.rsplit("#", 1)[1] == owner_anchor
+                    and (path.parent / link.rsplit("#", 1)[0]).resolve() == owner
+                    for link in links
+                )
+                expected_owner = EISV_FRAMING_OWNER
+            if not linked:
+                failures.append(f"{rel_path}: missing link to EISV framing owner {expected_owner}")
+
+    descriptions_path = root / "src/tool_descriptions.json"
+    if descriptions_path.exists():
+        descriptions = json.loads(descriptions_path.read_text(encoding="utf-8"))
+        for key in EISV_DESCRIPTION_KEYS:
+            normalized = _eisv_framing_text(descriptions.get(key, ""))
+            for label, pattern in EISV_DESCRIPTION_PATTERNS:
+                if re.search(pattern, normalized):
+                    failures.append(
+                        f"src/tool_descriptions.json:{key}: EISV framing drift ({label}); "
+                        f"use {EISV_FRAMING_OWNER}"
+                    )
+    return failures
+
+
 def readme_volatility_failures(root: Path) -> list[str]:
     """Return README paragraphs that state a release version, live count, or uptime."""
     failures: list[str] = []
@@ -352,6 +464,7 @@ def main() -> int:
     failures.extend(freshness_failures(REPO_ROOT, date.today()))
     failures.extend(public_positioning_failures(REPO_ROOT))
     failures.extend(readme_volatility_failures(REPO_ROOT))
+    failures.extend(eisv_framing_failures(REPO_ROOT))
 
     if failures:
         print("Doc drift check failed:")
