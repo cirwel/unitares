@@ -1233,9 +1233,18 @@ every bad row here is a task-negative outcome.
   `NON_DETECTION` at both leads, the same winner, and Brier improvement
   −0.0010 / −0.0005. It is reported for completeness and is not the
   sensitivity analysis.
-- *Power.* A database-free synthetic probe at this shape (4,874 rows, 678 bad,
-  1,885 clusters, 313 agents) is running; its result will be added here. It is
-  descriptive only, since no effect size is declared.
+- *Power.* A database-free synthetic probe at this shape (`--rows 4874 --bad 678
+  --clusters 1885 --agents 313 --trials 40 --resamples 200 --seed 0`) gave
+  power to reach selective p ≤ 0.05 of:
+
+  - 0.78 [0.62, 0.88] at a planted true AUC of about 0.57;
+  - 1.00 [0.91, 1.00] at about 0.63, 0.70, 0.75 and 0.82.
+
+  The type-I row was 0.07 [0.03, 0.20], which is compatible with α. The real
+  slice's null max p95 (0.036) is close to the probe's (0.027–0.039). In this
+  optimistic synthetic scenario, a modest effect would usually have been
+  detected. It is reported descriptively, since no effect is declared, and is
+  not a bound on the real read's power.
 - *Whether to reopen.* The declaration leaves one question to the operator: if
   condition 3 fails on the registered cohort, is a corrected instrument and
   producer contract the "materially different measurement process" that the
