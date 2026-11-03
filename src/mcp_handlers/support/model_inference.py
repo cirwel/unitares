@@ -644,6 +644,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         if cooling is not None:
             return _hf_cooldown_failure(cooling)
 
+    execution_started = False
     try:
         started = time.monotonic()
 
@@ -669,6 +670,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         )
         try:
             async with asyncio.timeout(request.timeout_s):
+                execution_started = True
                 pending_response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
@@ -914,7 +916,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                     "4. To allow fallback, retry with privacy='auto' or privacy='cloud' and provider='hf'",
                     "5. Check server logs for details"
                 ]
-            }
+            },
+            execution_started=execution_started,
         )
 
 

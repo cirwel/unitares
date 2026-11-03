@@ -100,11 +100,9 @@ def build_inference_call_record(
         "possibly_running": bool(failure.possibly_running),
     }
     details = failure.details or {}
-    # Standard-lane failures attach route keys only inside the catch around the
-    # provider request; delegated failures attach them on preflight too, so gate
-    # delegated route attribution on execution_started (#2483 P3).
-    include_route = tool == "call_model" or bool(failure.execution_started)
-    if include_route:
+    # Route attribution applies only when the request was actually dispatched to
+    # the host; preflight/spawn_rejected failures leave execution_started False.
+    if failure.execution_started:
         failed_route = {
             name: _safe_identifier(details[name])
             for name in ("host_id", "provider_kind", "privacy_class", "task_type")

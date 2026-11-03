@@ -1855,6 +1855,7 @@ class TestInferenceAuditAndNoSyntheticUpdate:
         details = rows[0]["details"]
         assert details["status"] == "failed"
         assert details["failure"]["code"] == "MODEL_PROVIDER_UNAVAILABLE"
+        assert details["failure"]["execution_started"] is True
         assert details["route"]["host_id"] == "ollama:local"
         assert details["privacy_class"] == "local"
         assert "base_url" not in json.dumps(rows[0])
