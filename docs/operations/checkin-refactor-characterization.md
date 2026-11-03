@@ -11,6 +11,8 @@ The execution trace below is the legacy baseline at that revision. The later
 [neutral acceptance increment](#neutral-checkpoint-acceptance-2026-11-02-increment)
 adds a separate commit boundary before assessment; its guarantees and remaining
 limits are stated separately rather than attributed to the legacy state insert.
+The [synchronous invocation increment](#synchronous-eisv-invocation-2026-11-03-increment)
+records the subsequent adapter extraction and its remaining dependencies.
 
 ## What the existing boundary actually guarantees
 
@@ -215,7 +217,8 @@ gates does not mint an accepted checkpoint. An early refusal can still follow
 identity, metadata or cooldown writes; it is not a promise that the entire
 request had no effects. This increment does not provide a complete durable
 ledger of refused, deferred, cancelled or unauthenticated attempts.
-Legacy preparation also computes behavioral inputs and passes call-local
+As of [PR #3174](https://github.com/cirwel/unitares/pull/3174), merged
+2026-11-03, legacy preparation computes behavioral inputs and passes call-local
 `_outcome_history` in `ctx.agent_state` before acceptance without mutating
 `monitor._cached_outcome_history` on the shared monitor until assessment runs
 (at which point `GovernanceMonitor.process_update` refreshes
@@ -332,7 +335,8 @@ retain their separate ownership and retry contracts. Predictions remain owned
 by the monitor; accepted checkpoints with failed assessment need not have a
 prediction or assessment row. The rest of Stage 3, including neutral prediction
 ownership, outcome rebinding, legacy-reader migration and export, remains work
-to do.
+to do at this increment's boundary. The dated prediction-registry follow-up
+below records the subsequent change rather than attributing it to #3172.
 
 ### Evidence and remaining limits
 
@@ -346,3 +350,59 @@ and replay inventory above. It does not certify production latency, mixed-versio
 compatibility, external readers, complete estimator inputs, or exactly-once
 assessment. The fixed registered-read cutoff and archived inputs remain
 unchanged.
+
+## Synchronous EISV invocation (2026-11-03 increment)
+
+The next extraction follows item 3 of the staged changes above: an internal
+synchronous invocation interface in [`src/eisv/adapter.py`](../../src/eisv/adapter.py).
+`execute_admitted_update_async` delegates monitor creation, database hydration
+and `monitor.process_update` to `assess_eisv`. The caller still owns the agent
+lock, admission, checkpoint acceptance and delivery claim. It awaits the
+adapter at the same point before applying policy posture and existing effects.
+This is a behavior-preserving ownership extraction under the continued
+refactor instruction, not a new optional-runtime setting or blanket
+authorization for the rest of Stage 3 or Stage 4.
+
+`EisvRequest` carries the agent ID, confidence and exact call-local
+`agent_state` mapping. It is constructed after the checkpoint callback, so
+`_checkpoint_id` is present when that callback supplied one. The frozen
+dataclass does not copy, normalize or recursively freeze the mapping. In
+particular, missing `_outcome_history` still permits the monitor's cached
+fallback, explicit `None` supplies no history for this call without refreshing
+that cache, and a supplied list refreshes it during assessment. The existing
+`agent_state["task_type"]` value continues to take precedence over the separate
+authenticated-service argument; an absent field means `mixed`.
+
+The adapter preserves default-executor dispatch, hydration order and the
+`ode.monitor_setup_ms` / `ode.numpy_step_ms` spans. `EisvAssessment` returns the
+original result and live monitor. Those are mutable objects used by the
+caller's existing policy and persistence operations, not an immutable stored
+assessment. Errors and cancellation propagate. Cancelling the await does not
+stop a monitor update already running in an executor thread.
+
+The checkpoint service retains `eisv-sync-v1` claim and completion tracking.
+Admission refusals and checkpoint replay/conflict paths stop before adapter
+invocation. Policy actuation, monitor saves, grounding, legacy state receipts,
+outcomes and enrichments remain under their existing owners and ordering.
+The completion receipt still describes the whole synchronous workflow reaching
+its completion point; adapter return alone does not complete that delivery.
+
+Two preceding changes are relevant to this handoff. [PR #3174](https://github.com/cirwel/unitares/pull/3174)
+made outcome history call-local before acceptance. [PR #3178](https://github.com/cirwel/unitares/pull/3178),
+also merged 2026-11-03, added the per-agent prediction registry and checkpoint
+linkage in [`monitor_prediction.py`](../../src/monitor_prediction.py). Predictions
+can now be minted and resolved without a monitor; that fallback is process-local
+until adopted by a monitor or expired. Monitor-backed predictions continue to
+travel with monitor snapshots. This is not durable assessor-independent
+prediction storage or a complete outcome-schema cutover.
+
+This adapter owns invocation only. Existing input preparation still reads
+assessment state before acceptance, and the monitor still reads its clock,
+history and other internal inputs. The handoff is neither a complete replay
+snapshot nor a pure estimator. There is no asynchronous delivery, automatic
+recovery, zero-assessor public path, new schema, response/default change or
+scientific read in this increment. The registered cutoff, archived inputs and
+historical review record remain unchanged. Tests must preserve object identity,
+input key presence, admission/capture/invocation order, failure and cancellation
+behavior, policy effects and existing workflow receipts; they do not establish
+production timing equivalence or complete instrument preservation.
