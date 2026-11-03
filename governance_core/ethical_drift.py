@@ -309,11 +309,12 @@ def compute_ethical_drift(
     baseline: AgentBaseline,
     current_coherence: float,
     current_confidence: float,
-    complexity_divergence: float,
+    complexity_divergence: Optional[float],
     calibration_error: Optional[float] = None,
     decision: Optional[str] = None,
     state_velocity: Optional[float] = None,
     task_context: str = "mixed",
+    update_baseline: bool = True,
 ) -> EthicalDriftVector:
     """
     Compute concrete ethical drift vector from measurable signals.
@@ -366,8 +367,13 @@ def compute_ethical_drift(
         calibration_deviation = max(deviation_from_mean, rate_of_change)
 
     # 2. Complexity divergence (passed directly)
-    # Already computed by dual-log continuity layer
-    complexity_dev = min(1.0, abs(complexity_divergence))
+    # Already computed by dual-log continuity layer; None when excluded (e.g.
+    # degenerate automatic/rollup check-in under #2418).
+    complexity_dev = (
+        0.0
+        if complexity_divergence is None
+        else min(1.0, abs(complexity_divergence))
+    )
 
     # 3. Coherence deviation: max of deviation-from-mean and rate-of-change
     deviation_from_mean = abs(current_coherence - baseline.baseline_coherence)
@@ -405,13 +411,19 @@ def compute_ethical_drift(
         coherence_dev = max(coherence_dev, velocity_signal * 0.5)
         calibration_deviation = max(calibration_deviation, velocity_signal * 0.3)
 
-    # Update baseline with current observations
-    baseline.update(
-        coherence=current_coherence,
-        confidence=current_confidence,
-        complexity=1.0 - complexity_divergence,  # Low divergence = high complexity accuracy
-        decision=decision,
-    )
+    # Update baseline with current observations (skipped for non-authored /
+    # excluded check-ins so degenerate template values do not pollute baseline).
+    if update_baseline:
+        baseline.update(
+            coherence=current_coherence,
+            confidence=current_confidence,
+            complexity=(
+                None
+                if complexity_divergence is None
+                else 1.0 - complexity_divergence
+            ),  # Low divergence = high complexity accuracy
+            decision=decision,
+        )
 
     return EthicalDriftVector(
         calibration_deviation=calibration_deviation,

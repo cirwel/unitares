@@ -22,10 +22,10 @@ def neutralize_sensor_self_loops_enabled() -> bool:
 
     Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
     enabled, the three self-referential controller terms inside the behavioral
-    sensor are replaced with their observed fleet-neutral constants:
-    - ``decision_history`` in E -> ``DECISION_NEUTRAL_SCORE`` (0.84)
-    - ``coherence_history`` in E and I -> ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60)
-    - ``regime_instability`` in S -> ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
+    sensor are replaced with their neutral constants:
+    - ``decision_history`` in E -> observed fleet-level ``DECISION_NEUTRAL_SCORE`` (0.84)
+    - ``coherence_history`` in E and I -> nominal neutral ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60, mapped from ``LEGACY_COHERENCE_NEUTRAL_VALUE = 0.50``)
+    - ``regime_instability`` in S -> observed fleet-level ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
     """
     raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
@@ -306,29 +306,24 @@ def compute_legacy_coherence_dependency_shadow(
             "candidate_minus_deployed": None,
         }
 
-    deployed = (
-        deployed_observation
-        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
-        else compute_behavioral_sensor_eisv(
-            decision_history=decision_history,
-            coherence_history=coherence_history,
-            regime_history=regime_history,
-            E_history=E_history,
-            I_history=I_history,
-            S_history=S_history,
-            V_history=V_history,
-            calibration_error=calibration_error,
-            drift_norm=drift_norm,
-            complexity_divergence=complexity_divergence,
-            continuity_E_input=continuity_E_input,
-            continuity_I_input=continuity_I_input,
-            continuity_S_input=continuity_S_input,
-            outcome_history=outcome_history,
-            tool_error_rate=tool_error_rate,
-            tool_call_velocity=tool_call_velocity,
-            unique_tools_ratio=unique_tools_ratio,
-            neutralize_self_loops=False,
-        )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
     )
     neutral_history = [LEGACY_COHERENCE_NEUTRAL_VALUE] * min(
         len(coherence_history), 10
@@ -351,7 +346,6 @@ def compute_legacy_coherence_dependency_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
-        neutralize_self_loops=False,
     )
     if deployed is None or candidate is None:
         return {
@@ -495,19 +489,15 @@ def compute_decision_self_loop_shadow(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
     )
-    deployed = (
-        deployed_observation
-        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
-        else compute_behavioral_sensor_eisv(
-            decision_history=decision_history, neutralize_self_loops=False, **shared
-        )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(
+        decision_history=decision_history, **shared
     )
     # A sentinel the score table maps to DECISION_NEUTRAL_SCORE, so the EWA sees
     # a flat series. Substituting the numeric score directly would not work:
     # _compute_E looks decisions up by string.
     neutral_history = [_DECISION_NEUTRAL_KEY] * min(len(decision_history), 10)
     candidate = compute_behavioral_sensor_eisv(
-        decision_history=neutral_history, neutralize_self_loops=False, **shared
+        decision_history=neutral_history, **shared
     )
     if deployed is None or candidate is None:
         return {
@@ -624,17 +614,10 @@ def compute_regime_self_loop_shadow(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
     )
-    deployed = (
-        deployed_observation
-        if deployed_observation is not None and not neutralize_sensor_self_loops_enabled()
-        else compute_behavioral_sensor_eisv(
-            **inputs, neutralize_self_loops=False
-        )
-    )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
     candidate = compute_behavioral_sensor_eisv(
         **inputs,
         regime_instability_override=REGIME_NEUTRAL_INSTABILITY,
-        neutralize_self_loops=False,
     )
     if deployed is None or candidate is None:
         return {
@@ -654,7 +637,11 @@ def compute_regime_self_loop_shadow(
         "deployed": {"S": deployed_s},
         "candidate": {"S": candidate_s},
         "candidate_minus_deployed": {"S": candidate_s - deployed_s},
-        "deployed_regime_instability": _regime_instability(regime_history),
+        "deployed_regime_instability": (
+            REGIME_NEUTRAL_INSTABILITY
+            if neutralize_sensor_self_loops_enabled()
+            else _regime_instability(regime_history)
+        ),
     }
 
 

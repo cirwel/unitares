@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-11-03T21:51:02Z",
+  "verified_at": "2026-11-03T21:58:57Z",
   "verified_date": "2026-11-03",
   "verifier": "gemini-4-argon-medium: re-checked skills/governance-fundamentals/SKILL.md against behavioral_sensor.py, governance_monitor.py, context.py, and eisv_telemetry.py",
   "source_digests": {
@@ -12,7 +12,7 @@
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
     "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
     "unitares/src/behavioral_assessment.py": "2e48d09ae5a6d31a",
-    "unitares/src/behavioral_sensor.py": "71db5d0615d68fad",
+    "unitares/src/behavioral_sensor.py": "e1f81f79bbc54380",
     "unitares/src/behavioral_state.py": "e214a51c1d7763c7",
     "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
     "unitares/src/cold_start_risk_confirmation.py": "2f75a1a0ef3a7a99",
@@ -26,7 +26,7 @@
     "unitares/src/mcp_handlers/observability/outcome_events.py": "5d9d685a82328cd3",
     "unitares/src/mcp_handlers/response_formatter.py": "2564f2c86bebcdbd",
     "unitares/src/mcp_handlers/tool_stability.py": "b271b275a249db52",
-    "unitares/src/mcp_handlers/updates/context.py": "4a62b9617a5daaa0",
+    "unitares/src/mcp_handlers/updates/context.py": "bfae0beb8ed92df6",
     "unitares/src/monitor_calibration.py": "5fc4932dd6e3f598",
     "unitares/src/monitor_decision.py": "059d229f8f3a3f90",
     "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",

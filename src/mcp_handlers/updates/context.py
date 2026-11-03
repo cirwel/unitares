@@ -110,6 +110,19 @@ class UpdateContext:
     mcp_server: Optional[Any] = None # mcp_server_std module (from core.py's patched ref)
 
 
+def _unavailable_agent_channel(agent_id: Optional[str]) -> Dict[str, Any]:
+    """Fallback record when the per-agent tactical calibration estimator failed to run."""
+    return {
+        "scope": "agent",
+        "agent_id": agent_id or None,
+        "value": None,
+        "calibration_error": None,
+        "n_verified_pairs": None,
+        "evidence_status": "unavailable",
+        "default_reason": "estimator_unavailable",
+    }
+
+
 def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
     """Return the deployed fleet error and cache its observational provenance.
 
@@ -131,9 +144,12 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
         candidate = calibration_checker.compute_agent_calibration_candidate(
             ctx.agent_id
         )
-        agent_channel = calibration_checker.compute_agent_tactical_calibration_channel(
-            ctx.agent_id
-        )
+        try:
+            agent_channel = calibration_checker.compute_agent_tactical_calibration_channel(
+                ctx.agent_id
+            )
+        except Exception:
+            agent_channel = _unavailable_agent_channel(ctx.agent_id)
         ctx._calibration_signal = {
             "schema": "eisv.calibration-signal.v1",
             "mode": "measurement_only",
@@ -170,15 +186,7 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
                 "agent_id": ctx.agent_id or None,
                 "evidence_status": "unavailable",
             },
-            "agent_channel": {
-                "scope": "agent",
-                "agent_id": ctx.agent_id or None,
-                "value": None,
-                "calibration_error": None,
-                "n_verified_pairs": 0,
-                "evidence_status": "unavailable",
-                "default_reason": "no_verified_agent_pairs",
-            },
+            "agent_channel": _unavailable_agent_channel(ctx.agent_id),
         }
     ctx._cal_error_ready = True
     return ctx._cal_error

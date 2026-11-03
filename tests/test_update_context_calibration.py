@@ -142,3 +142,29 @@ def test_agent_tactical_calibration_channel_has_no_five_sample_bin_cliff():
     )
     assert envelope["measurement"]["agent_calibration"]["value"] == pytest.approx(0.6)
     assert envelope["measurement"]["agent_calibration"]["n_verified_pairs"] == 2
+
+
+def test_agent_channel_exception_reports_estimator_unavailable_and_preserves_fleet_deployed():
+    """When compute_agent_tactical_calibration_channel raises, report estimator_unavailable (not no_verified_agent_pairs) and preserve fleet deployed."""
+    ctx = UpdateContext(agent_id="agent-err")
+    candidate = {"scope": "agent", "agent_id": "agent-err", "evidence_status": "available"}
+    with patch("src.calibration.calibration_checker") as checker:
+        checker.compute_calibration_metrics.return_value = {
+            "0.8-0.9": _bin(count=8, error=0.2),
+        }
+        checker.compute_agent_calibration_candidate.return_value = candidate
+        checker.compute_agent_tactical_calibration_channel.side_effect = RuntimeError("boom")
+
+        assert get_mean_calibration_error(ctx) == 0.2
+
+    assert ctx._calibration_signal["deployed"]["calibration_error"] == 0.2
+    assert ctx._calibration_signal["agent_candidate"] == candidate
+    assert ctx._calibration_signal["agent_channel"] == {
+        "scope": "agent",
+        "agent_id": "agent-err",
+        "value": None,
+        "calibration_error": None,
+        "n_verified_pairs": None,
+        "evidence_status": "unavailable",
+        "default_reason": "estimator_unavailable",
+    }

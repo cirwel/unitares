@@ -1192,9 +1192,10 @@ class TestNeutralizeSensorSelfLoops:
         assert s_by_name["regime_instability"]["observed"] is False
         assert s_by_name["regime_instability"]["default_reason"] == "self_loop_neutralized"
 
-    def test_shadow_loop_ablations_preserve_single_loop_semantics_when_neutralize_enabled(self, monkeypatch):
-        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, shadow loop ablations still compare single-loop removal against raw deployed."""
+    def test_shadow_loop_ablations_report_deployed_observation_when_neutralize_enabled(self, monkeypatch):
+        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, shadow ablations report the actual deployed observation and zero residual loop delta."""
         from src.behavioral_sensor import (
+            REGIME_NEUTRAL_INSTABILITY,
             compute_behavioral_sensor_eisv,
             compute_legacy_coherence_dependency_shadow,
             compute_decision_self_loop_shadow,
@@ -1214,21 +1215,19 @@ class TestNeutralizeSensorSelfLoops:
             complexity_divergence=0.1,
         )
 
-        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
-        raw_deployed = compute_behavioral_sensor_eisv(**inputs)
-        coh_off = compute_legacy_coherence_dependency_shadow(**inputs, deployed_observation=raw_deployed)
-        dec_off = compute_decision_self_loop_shadow(**inputs, deployed_observation=raw_deployed)
-        reg_off = compute_regime_self_loop_shadow(**inputs, deployed_observation=raw_deployed)
-
         monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
         neutralized_deployed = compute_behavioral_sensor_eisv(**inputs)
         coh_on = compute_legacy_coherence_dependency_shadow(**inputs, deployed_observation=neutralized_deployed)
         dec_on = compute_decision_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
         reg_on = compute_regime_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
 
-        assert coh_on["candidate_minus_deployed"] == coh_off["candidate_minus_deployed"]
-        assert dec_on["candidate_minus_deployed"] == dec_off["candidate_minus_deployed"]
-        assert reg_on["candidate_minus_deployed"] == reg_off["candidate_minus_deployed"]
+        assert coh_on["deployed"] == {k: float(neutralized_deployed[k]) for k in ("E", "I")}
+        assert dec_on["deployed"] == {k: float(neutralized_deployed[k]) for k in ("E", "I")}
+        assert reg_on["deployed"] == {"S": float(neutralized_deployed["S"])}
+        assert coh_on["candidate_minus_deployed"] == {"E": pytest.approx(0.0), "I": pytest.approx(0.0)}
+        assert dec_on["candidate_minus_deployed"] == {"E": pytest.approx(0.0), "I": pytest.approx(0.0)}
+        assert reg_on["candidate_minus_deployed"] == {"S": pytest.approx(0.0)}
+        assert reg_on["deployed_regime_instability"] == pytest.approx(REGIME_NEUTRAL_INSTABILITY)
 
     @pytest.mark.asyncio
     async def test_automatic_degenerate_checkin_excludes_template_divergence(self):
@@ -1264,10 +1263,14 @@ class TestNeutralizeSensorSelfLoops:
         assert derivation["inputs"]["features"]["continuity_E_input"] == pytest.approx(0.30)
 
     def test_monitor_process_update_excludes_template_divergence_for_automatic_checkin(self):
-        """#2418 Fix 1: GovernanceMonitor.process_update zeroes ethical-drift complexity_divergence on degenerate automatic check-ins."""
+        """#2418 Fix 1: GovernanceMonitor.process_update zeroes ethical-drift complexity_divergence and skips baseline update on degenerate automatic check-ins."""
+        from governance_core.ethical_drift import get_agent_baseline
         from src.governance_monitor import UNITARESMonitor
 
         mon = UNITARESMonitor("agent-auto-2418", load_state=False)
+        baseline_before = get_agent_baseline("agent-auto-2418")
+        initial_count = baseline_before.update_count
+        initial_complexity = baseline_before.baseline_complexity
         res = mon.process_update(
             {
                 "response_text": "8 tool calls completed: read_file, edit_file, bash",
@@ -1281,3 +1284,6 @@ class TestNeutralizeSensorSelfLoops:
         assert mon._last_continuity_metrics.template_divergence_excluded is True
         assert mon._last_continuity_metrics.complexity_divergence > 0.3
         assert mon._last_drift_vector.complexity_divergence == pytest.approx(0.0)
+        baseline_after = get_agent_baseline("agent-auto-2418")
+        assert baseline_after.update_count == initial_count
+        assert baseline_after.baseline_complexity == pytest.approx(initial_complexity)

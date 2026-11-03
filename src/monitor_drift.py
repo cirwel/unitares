@@ -109,14 +109,15 @@ def compute_drift_vector(
     # Compute concrete drift vector from governance-observed signals.
     # For automatic/non-authored check-ins and runtime tool-count rollups with
     # degenerate continuity text (#2418), exclude template complexity_divergence
-    # from ethical drift by passing 0.0 (zero deviation on the complexity axis).
+    # from ethical drift and skip baseline updates so non-authored templates do
+    # not pull baseline_complexity toward 1.0 or increment update_count.
     exclude_template_div = should_exclude_template_divergence(
         continuity_metrics,
         response_text=agent_state.get("response_text"),
         epistemic_class=agent_state.get("epistemic_class"),
     )
     drift_complexity_divergence = (
-        0.0 if exclude_template_div else continuity_metrics.complexity_divergence
+        None if exclude_template_div else continuity_metrics.complexity_divergence
     )
     drift_vector = compute_ethical_drift(
         agent_id=monitor.agent_id,
@@ -128,6 +129,7 @@ def compute_drift_vector(
         decision=None,
         state_velocity=monitor._last_state_velocity,
         task_context=task_type,
+        update_baseline=not exclude_template_div,
     )
 
     # Self-reported ethical_drift is never blended into the
