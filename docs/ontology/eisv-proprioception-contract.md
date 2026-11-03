@@ -751,6 +751,10 @@ runtime read of state, history, baselines and calibration filters on
   `/v1` telemetry-health returns them under `eisv_instrument_eras`. Both are
   time-based only. Not yet wired: the class-anchor regeneration and all-time
   trajectory reads.
+  `scripts/analysis/eisv_local_frame.py` (2026-11-02) reads the current era
+  only and frames each agent against its own frozen reference within one sensor
+  instrument and one instrument id. It is advisory: it compares no agents with
+  each other and sets no verdict, action or stored value.
 
 There is no per-field exemption. A change that only touches the basin or the
 action still moves behavioral E, I and V on later check-ins, because the action
