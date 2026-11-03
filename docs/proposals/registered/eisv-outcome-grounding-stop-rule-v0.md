@@ -1018,8 +1018,8 @@ document is deleted.
 
 **Why.** Under the 2026-10-15 amendment the read admits only outcomes strictly
 before T = `2026-10-15T13:45:00Z`, and every input an admitted row uses also
-predates T. Those rows were archived the same day (instrument-change record
-above: 194,341 outcomes, 98,888 states, 4,981 identities). Waiting until
+predates T. Those rows were archived the same day, with the row counts and
+digest given in the instrument-change record above. Waiting until
 2026-12-01 therefore adds no eligible outcome. The one thing the remaining
 wait could still change is a backfill carrying a pre-T timestamp, and the
 pre-declared reconciliation against the archive reports those whenever the read
