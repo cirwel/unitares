@@ -6,7 +6,10 @@ and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
 merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
 and its pre-data narrowing correction, 2026-09-25, effective at merge;
 data-boundary amendment (operator), 2026-10-15, effective at merge;
-run-date amendment (operator), 2026-11-03, effective at merge
+run-date amendment (operator), 2026-11-03, effective at merge;
+**read run 2026-11-03: EISV was not tested. The registered fixture rule
+removed 4,649 of 4,876 trusted outcomes, so this is closure for insufficient
+eligible evidence; the inference is `INCONCLUSIVE`** ([result](#result-2026-11-03))
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -1059,6 +1062,194 @@ an untouched confirmatory read, and its report names this amendment beside the
 rather than on 2026-12-01: the #2610 E/I formula work, and the #2608
 (ablation protocol 0.3.1) hold on publishing a Phase I primary result. Neither
 hold's own conditions change.
+
+## Result 2026-11-03
+
+**In one line: the read did not get to test EISV.** In its window there were
+4,876 trusted task outcomes. The registered fixture rule counted 4,649 of them
+as test traffic and removed them: 2 before 2026-08-02 and 4,647 after. The
+reason is that the server stamps `calibration_excluded` (a scraped confidence)
+on nearly every trusted outcome after 2026-08-02, and the registered rule reads
+that stamp as a fixture marker. The 227 rows that remained span 2026-06-26 to
+2026-08-02. That left too few clusters for the support condition, and the
+rule's own reading of that is closure for insufficient eligible evidence. The
+corrected rule, which has been the instruments' default since 2026-09-02,
+keeps these rows. The run under that rule, pre-declared on 2026-09-02, is
+reported below ("Sensitivity run under the corrected rule").
+
+The registered read ran once: read id `eisv-outcome-grounding-2026-12-01`,
+fired 2026-11-03T16:05:06Z from `master@12703e019`, anchor scope `trusted`,
+`beam` excluded, registered data boundary `2026-11-03T16:00:00Z`, effective
+boundary `2026-10-15T13:44:59.999999Z`. One receipt was written and no retry
+was made. The result was posted on
+[#1425](https://github.com/cirwel/unitares/issues/1425). It is a read **amended
+after interim exposure**, under the 2026-10-15 data-boundary amendment and the
+2026-11-03 run-date amendment.
+
+| task / 365 d | Rows | Bad | Bad clusters | Null clusters | Agents | Best EISV/prior model | AUC delta | Null max p95 | Selective p | Inference class |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lead 0 | 227 | 53 | 29 | 79 | 25 | `prior_risk_binned` | 0.147 | 0.313 | 0.499 | `NON_DETECTION` |
+| lead 30 | 227 | 53 | 28 | 67 | 25 | `prior_s_binned` | 0.343 | 0.373 | 0.085 | `NON_DETECTION` |
+
+**Failed conditions: all four.**
+
+1. Unmet. Both slices are `NON_DETECTION`, so neither reaches selective p ≤ 0.05.
+2. Unmet. The AUC delta is below the null p95 on both slices. As the reading
+   note in `docs/EVALUATION_INDEX.md` records, this is not independent of
+   condition 1.
+3. Unmet. There are 29 and 28 bad clusters, against 150.
+4. `condition 4: unmet (prior_risk_binned / prior_s_binned)`.
+
+At lead 30, Brier perm p is 0.027 and `Beats both?` is yes on both slices. Brier
+perm p tests Brier only, not the selected AUC delta, and it does not enter any
+condition.
+
+**Verdict.** The support condition failed, so this is **closure for
+insufficient eligible evidence**. It is not a measured null and not a
+disproof. Under the gate's rules this closes the scheduled read track: there
+are no further scheduled outcome-prediction reads and no Stage B. The scientific inference is `INCONCLUSIVE`, by
+declaration, because the smallest-relevant-effect slot is unfilled. Reopening
+requires a new premise, as stated above. This result does not retire EISV
+(see "What continues regardless").
+
+**Power.** The database-free probe ran at the lead-0 shape (`--rows 227 --bad
+53 --clusters 79 --agents 25 --trials 100 --resamples 400 --seed 0`). It is
+reported descriptively, since no effect is declared. Power to reach selective
+p ≤ 0.05 was:
+
+- 0.33 [0.25, 0.43] at a planted true AUC of about 0.64;
+- 0.49 [0.39, 0.59] at about 0.68;
+- 0.71 [0.61, 0.79] at about 0.74;
+- 0.90 [0.83, 0.94] only at about 0.82.
+
+The type-I row was 0.09 [0.05, 0.16], which is compatible with α. Even in this
+optimistic synthetic scenario, power reached 0.8 only for a large effect. The
+real slice's null was wider: its null max p95 was 0.313, against about
+0.12–0.16 in the probe. As the probe notes, null width alone does not establish
+a power ordering. These figures therefore describe the probe; they are not a
+bound on the real read's power.
+
+**Reconciliation.** `eisv_read_input_snapshot.py reconcile` against the
+snapshot with sha `4988e170…` reported, for all three tables, zero changed rows,
+zero live-only backfills and zero snapshot-only removals. The read's inputs are
+therefore the frozen pre-T record.
+
+**Disclosures.**
+
+- *Coverage.* The 2026-10-15 amendment requires these figures. The matrix
+  and wrapper do not emit them, so they were produced at 2026-11-03T17:59Z by a
+  separate, coverage-only pass. That pass ran the read's own row selection
+  (`fetch_rows` and `filter_rows_for_validation`) with the registered
+  parameters and `as_of` at the effective boundary. It printed only dates and
+  row counts; it computed no discrimination, Brier, null or label statistic. Its
+  row counts match the matrix: 227 admitted rows, with 227 joined prior states
+  at lead 0 and 191 at lead 30.
+
+  | | Lead 0 | Lead 30 |
+  |---|---|---|
+  | Earliest admitted outcome | 2026-06-26T07:11:51Z | 2026-06-26T07:11:51Z |
+  | Latest admitted outcome | 2026-08-02T17:48:36Z | 2026-08-02T17:48:36Z |
+  | Earliest joined prior state | 2026-06-26T07:11:31Z | 2026-07-26T13:55:09Z |
+  | 2026-06 (outcomes / with prior state) | 1 / 1 | 1 / 0 |
+  | 2026-07 | 201 / 201 | 201 / 180 |
+  | 2026-08 | 25 / 25 | 25 / 11 |
+
+  **The nominal 365-day window delivered about five and a half weeks of
+  admitted evidence**, from 2026-06-26 to 2026-08-02. No trusted task outcome
+  after 2026-08-02 was admitted, although the boundary is 2026-10-15.
+
+  The cause is the registered fixture rule. A second coverage-only pass, using
+  the same selection with fixtures retained, counted 4,876 trusted task
+  outcomes before T. The rule classified 4,649 of them as fixtures: 2 in June,
+  1,090 in August, 2,891 in September and 666 in October. The corrected rule
+  classifies none of the post-June rows as fixtures. The anchor predicate is
+  not the cause: trusted `external_signal` task outcomes continue through
+  October. This is a fact about the instrument's filter, not about EISV.
+
+  Two auditors reproduced these counts independently. Each was given only the
+  database, the code and the questions: one an isolated Claude agent, the other
+  a Codex agent (openai family). Both got 4,876, 4,649 and 227, and the same
+  date range. The Codex audit also places the first flagged row at
+  2026-08-01T21:11Z. That is 56 minutes after `3b6ca351d` (#1445), which made
+  the server's outcome writer stamp scraped confidences, reached master at
+  20:15Z (its commit time); the Claude audit identified that commit. The Codex audit was stopped
+  before it finished the git-history question.
+- *Self-retirement.* The wrapper ran `launchctl unload` on its own job before
+  moving the plist, so launchd stopped the script before the move. The job was
+  unloaded, but the plist stayed in `~/Library/LaunchAgents`. It was moved to
+  `retired-plists/` by hand at 16:58Z. A second read could not have run, because
+  the receipt refuses reuse of the read id.
+
+### Sensitivity run under the corrected rule — without authority
+
+**With the filter corrected, the evidence is there: 4,874 rows and 449 bad
+clusters before T, against the 227 rows and 29 clusters the registered rule
+left.** On that cohort the narrow question the gate asks can be asked. The EISV
+and prior-state candidates added no detectable rework-prediction lift over the
+previous-outcome baseline. `NON_DETECTION` is not a refutation, and the
+scientific inference stays `INCONCLUSIVE`.
+
+This is the run declared on 2026-09-02 ("Pre-declared sensitivity cohort"), at
+the boundary the 2026-10-15 amendment (point 5) assigns it: the registered
+read's effective boundary, `2026-10-15T13:44:59.999999Z`. Read id
+`eisv-outcome-grounding-2026-12-01-sensitivity-clamped`, `--read-protocol
+reproduction` with contamination acknowledged, `--fixture-rule corrected`,
+otherwise the registered command. It ran once, at 2026-11-03T20:51Z from
+`master@12703e019`, and wrote receipt `be678f58…`. It carries no authority
+over the four conditions, which the registered result above decides.
+
+| task / 365 d | Rows | Bad | Bad clusters | Null clusters | Agents | Best EISV/prior model | AUC delta | Null max p95 | Selective p | Inference class |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lead 0 | 4,874 | 678 | 449 | 1,885 | 313 | `previous_bad_plus_prior_risk` | −0.006 | 0.036 | 0.858 | `NON_DETECTION` |
+| lead 30 | 4,874 | 678 | 406 | 1,484 | 313 | `previous_bad_plus_prior_risk` | −0.002 | 0.041 | 0.828 | `NON_DETECTION` |
+
+Read against the four conditions, for description only: condition 3 (support)
+is met on both slices, and condition 4 is met (the same winner at both leads).
+Conditions 1 and 2 are unmet. The baseline AUC is 0.536. Brier improvement is
+−0.0012 [−0.0021, −0.0003] at lead 0 and −0.0007 [−0.0013, −0.0000] at lead 30
+(Brier perm p 0.009 and 0.047). The selected candidate's probabilities are
+slightly less accurate than the baseline's. Brier enters no condition.
+
+**What it shows.** The registered result is a support failure caused by the
+filter. This run shows that, once the filter is corrected, the pre-T data meets
+support. On this estimand (rework prediction from task outcomes, against a
+previous-outcome baseline) it finds no lift. It is not a test of what EISV is
+for: state legibility, and the governance and accountability uses in "What
+continues regardless". It also cannot speak to governance badness, because
+every bad row here is a task-negative outcome.
+
+**Disclosures.**
+
+- *A first run at the wrong boundary.* At 2026-11-03T18:26Z the running agent
+  made this run under read id `eisv-outcome-grounding-2026-12-01-sensitivity`
+  (receipt `f0ce9418…`) with `--as-of` 2026-11-03T16:00Z, the raw cutoff,
+  missing the amendment's point 5. That cohort had 6,044 rows, 1,170 (19%) of
+  them after T under the changed instrument. A fresh-context reviewer caught
+  the deviation before anything was posted. The operator approved the rerun,
+  and since the receipt refuses reuse of that id, the declared run above took a
+  new one. The rerun was made after the first run's output had been seen; no
+  parameter other than `--as-of` and the read id changed. The first run agrees: 836 bad,
+  565 / 498 bad clusters, AUC delta −0.004 / −0.001, selective p 0.786 / 0.716,
+  `NON_DETECTION` at both leads, the same winner, and Brier improvement
+  −0.0010 / −0.0005. It is reported for completeness and is not the
+  sensitivity analysis.
+- *Power.* A database-free synthetic probe at this shape (`--rows 4874 --bad 678
+  --clusters 1885 --agents 313 --trials 40 --resamples 200 --seed 0`) gave
+  power to reach selective p ≤ 0.05 of:
+
+  - 0.78 [0.62, 0.88] at a planted true AUC of about 0.57;
+  - 1.00 [0.91, 1.00] at about 0.63, 0.70, 0.75 and 0.82.
+
+  The type-I row was 0.07 [0.03, 0.20], which is compatible with α. The real
+  slice's null max p95 (0.036) is close to the probe's (0.027–0.039). In this
+  optimistic synthetic scenario, a modest effect would usually have been
+  detected. It is reported descriptively, since no effect is declared, and is
+  not a bound on the real read's power.
+- *Whether to reopen.* The declaration leaves one question to the operator: if
+  condition 3 fails on the registered cohort, is a corrected instrument and
+  producer contract the "materially different measurement process" that the
+  reopening clause requires? That judgment has not been made. This run does not
+  make it.
 
 ## What continues regardless
 

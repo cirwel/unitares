@@ -207,6 +207,19 @@ interim exposure**, not as an untouched confirmatory read. Fewer outcomes are
 eligible as a result. The cluster threshold is not lowered, so a shortfall
 closes the read as inconclusive, not as a measured null.
 
+The read ran on 2026-11-03, after a second, run-date amendment, and took that
+branch. The registered fixture rule removed 4,649 of the 4,876 trusted
+outcomes in the window as test traffic, so the support condition failed (29
+and 28 bad clusters against 150), and the read closed for insufficient eligible
+evidence without testing EISV. Under the registered protocol, whether EISV
+adds predictive signal for bad outcomes **remains untested, not disproved**.
+The pre-declared corrected-rule sensitivity run, which has no authority,
+restores the data (4,874 rows and 449 bad clusters before T). It finds no detectable
+rework-prediction lift over the previous-outcome baseline (selective p 0.858
+and 0.828), and a slightly higher Brier error than the baseline (Brier improvement −0.0012
+and −0.0007). Its inference is `INCONCLUSIVE`, not refuted. See the
+[result](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
+
 An operational `FAIL` can close a scheduled line of work without scientifically
 refuting the underlying capability. The
 [inference-status contract](ontology/falsification-inference-containment-2026-08-22.md)
