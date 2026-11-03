@@ -106,7 +106,11 @@ rows remained, which gave 29 and 28 bad clusters at leads 0 and 30, against a
 threshold of 150. This is closure for insufficient eligible evidence, and the
 inference is `INCONCLUSIVE`; it is not a measured null and not a refutation.
 The scheduled read track closes. The corrected-rule sensitivity run declared
-on 2026-09-02 is reported separately.
+on 2026-09-02, which has no authority, restores the data: 4,874 rows and 449 bad
+clusters before T. On rework prediction it shows no detectable lift over the
+previous-outcome baseline (selective p 0.858 and 0.828), and its Brier error is
+slightly higher than the baseline's (−0.0012 and −0.0007). Its inference is
+`INCONCLUSIVE`, not refuted.
 Reopening requires a new premise. The full table, the power probe and the
 reconciliation are in the
 [stop rule's result section](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03)

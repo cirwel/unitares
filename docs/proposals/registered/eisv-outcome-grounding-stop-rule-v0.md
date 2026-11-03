@@ -1075,7 +1075,7 @@ that stamp as a fixture marker. The 227 rows that remained span 2026-06-26 to
 rule's own reading of that is closure for insufficient eligible evidence. The
 corrected rule, which has been the instruments' default since 2026-09-02,
 keeps these rows. The run under that rule, pre-declared on 2026-09-02, is
-reported separately (see "Pre-declared sensitivity cohort").
+reported below ("Sensitivity run under the corrected rule").
 
 The registered read ran once: read id `eisv-outcome-grounding-2026-12-01`,
 fired 2026-11-03T16:05:06Z from `master@12703e019`, anchor scope `trusted`,
@@ -1165,11 +1165,82 @@ therefore the frozen pre-T record.
   classifies none of the post-June rows as fixtures. The anchor predicate is
   not the cause: trusted `external_signal` task outcomes continue through
   October. This is a fact about the instrument's filter, not about EISV.
+
+  Two auditors reproduced these counts independently. Each was given only the
+  database, the code and the questions: one an isolated Claude agent, the other
+  a Codex agent (openai family). Both got 4,876, 4,649 and 227, and the same
+  date range. The Codex audit also places the first flagged row at
+  2026-08-01T21:11Z. That is 56 minutes after `3b6ca351d` (#1445), which made
+  the server's outcome writer stamp scraped confidences, reached master at
+  20:15Z (its commit time); the Claude audit identified that commit. The Codex audit was stopped
+  before it finished the git-history question.
 - *Self-retirement.* The wrapper ran `launchctl unload` on its own job before
   moving the plist, so launchd stopped the script before the move. The job was
   unloaded, but the plist stayed in `~/Library/LaunchAgents`. It was moved to
   `retired-plists/` by hand at 16:58Z. A second read could not have run, because
   the receipt refuses reuse of the read id.
+
+### Sensitivity run under the corrected rule — without authority
+
+**With the filter corrected, the evidence is there: 4,874 rows and 449 bad
+clusters before T, against the 227 rows and 29 clusters the registered rule
+left.** On that cohort the narrow question the gate asks can be asked. The EISV
+and prior-state candidates added no detectable rework-prediction lift over the
+previous-outcome baseline. `NON_DETECTION` is not a refutation, and the
+scientific inference stays `INCONCLUSIVE`.
+
+This is the run declared on 2026-09-02 ("Pre-declared sensitivity cohort"), at
+the boundary the 2026-10-15 amendment (point 5) assigns it: the registered
+read's effective boundary, `2026-10-15T13:44:59.999999Z`. Read id
+`eisv-outcome-grounding-2026-12-01-sensitivity-clamped`, `--read-protocol
+reproduction` with contamination acknowledged, `--fixture-rule corrected`,
+otherwise the registered command. It ran once, at 2026-11-03T20:51Z from
+`master@12703e019`, and wrote receipt `be678f58…`. It carries no authority
+over the four conditions, which the registered result above decides.
+
+| task / 365 d | Rows | Bad | Bad clusters | Null clusters | Agents | Best EISV/prior model | AUC delta | Null max p95 | Selective p | Inference class |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lead 0 | 4,874 | 678 | 449 | 1,885 | 313 | `previous_bad_plus_prior_risk` | −0.006 | 0.036 | 0.858 | `NON_DETECTION` |
+| lead 30 | 4,874 | 678 | 406 | 1,484 | 313 | `previous_bad_plus_prior_risk` | −0.002 | 0.041 | 0.828 | `NON_DETECTION` |
+
+Read against the four conditions, for description only: condition 3 (support)
+is met on both slices, and condition 4 is met (the same winner at both leads).
+Conditions 1 and 2 are unmet. The baseline AUC is 0.536. Brier improvement is
+−0.0012 [−0.0021, −0.0003] at lead 0 and −0.0007 [−0.0013, −0.0000] at lead 30
+(Brier perm p 0.009 and 0.047). The selected candidate's probabilities are
+slightly less accurate than the baseline's. Brier enters no condition.
+
+**What it shows.** The registered result is a support failure caused by the
+filter. This run shows that, once the filter is corrected, the pre-T data meets
+support. On this estimand (rework prediction from task outcomes, against a
+previous-outcome baseline) it finds no lift. It is not a test of what EISV is
+for: state legibility, and the governance and accountability uses in "What
+continues regardless". It also cannot speak to governance badness, because
+every bad row here is a task-negative outcome.
+
+**Disclosures.**
+
+- *A first run at the wrong boundary.* At 2026-11-03T18:26Z the running agent
+  made this run under read id `eisv-outcome-grounding-2026-12-01-sensitivity`
+  (receipt `f0ce9418…`) with `--as-of` 2026-11-03T16:00Z, the raw cutoff,
+  missing the amendment's point 5. That cohort had 6,044 rows, 1,170 (19%) of
+  them after T under the changed instrument. A fresh-context reviewer caught
+  the deviation before anything was posted. The operator approved the rerun,
+  and since the receipt refuses reuse of that id, the declared run above took a
+  new one. The rerun was made after the first run's output had been seen; no
+  parameter other than `--as-of` and the read id changed. The first run agrees: 836 bad,
+  565 / 498 bad clusters, AUC delta −0.004 / −0.001, selective p 0.786 / 0.716,
+  `NON_DETECTION` at both leads, the same winner, and Brier improvement
+  −0.0010 / −0.0005. It is reported for completeness and is not the
+  sensitivity analysis.
+- *Power.* A database-free synthetic probe at this shape (4,874 rows, 678 bad,
+  1,885 clusters, 313 agents) is running; its result will be added here. It is
+  descriptive only, since no effect size is declared.
+- *Whether to reopen.* The declaration leaves one question to the operator: if
+  condition 3 fails on the registered cohort, is a corrected instrument and
+  producer contract the "materially different measurement process" that the
+  reopening clause requires? That judgment has not been made. This run does not
+  make it.
 
 ## What continues regardless
 
