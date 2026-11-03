@@ -1192,10 +1192,9 @@ class TestNeutralizeSensorSelfLoops:
         assert s_by_name["regime_instability"]["observed"] is False
         assert s_by_name["regime_instability"]["default_reason"] == "self_loop_neutralized"
 
-    def test_shadow_loop_ablations_report_deployed_observation_when_neutralize_enabled(self, monkeypatch):
-        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, shadow ablations report the actual deployed observation and zero residual loop delta."""
+    def test_shadow_loop_ablations_report_ineligible_when_neutralize_enabled(self, monkeypatch):
+        """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, the three self-loop shadows report eligible=False with reason 'self_loop_already_neutralized'."""
         from src.behavioral_sensor import (
-            REGIME_NEUTRAL_INSTABILITY,
             compute_behavioral_sensor_eisv,
             compute_legacy_coherence_dependency_shadow,
             compute_decision_self_loop_shadow,
@@ -1221,13 +1220,12 @@ class TestNeutralizeSensorSelfLoops:
         dec_on = compute_decision_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
         reg_on = compute_regime_self_loop_shadow(**inputs, deployed_observation=neutralized_deployed)
 
-        assert coh_on["deployed"] == {k: float(neutralized_deployed[k]) for k in ("E", "I")}
-        assert dec_on["deployed"] == {k: float(neutralized_deployed[k]) for k in ("E", "I")}
-        assert reg_on["deployed"] == {"S": float(neutralized_deployed["S"])}
-        assert coh_on["candidate_minus_deployed"] == {"E": pytest.approx(0.0), "I": pytest.approx(0.0)}
-        assert dec_on["candidate_minus_deployed"] == {"E": pytest.approx(0.0), "I": pytest.approx(0.0)}
-        assert reg_on["candidate_minus_deployed"] == {"S": pytest.approx(0.0)}
-        assert reg_on["deployed_regime_instability"] == pytest.approx(REGIME_NEUTRAL_INSTABILITY)
+        for shadow in (coh_on, dec_on, reg_on):
+            assert shadow["eligible"] is False
+            assert shadow["eligibility_reason"] == "self_loop_already_neutralized"
+            assert shadow["deployed"] is None
+            assert shadow["candidate"] is None
+            assert shadow["candidate_minus_deployed"] is None
 
     @pytest.mark.asyncio
     async def test_automatic_degenerate_checkin_excludes_template_divergence(self):
@@ -1285,5 +1283,5 @@ class TestNeutralizeSensorSelfLoops:
         assert mon._last_continuity_metrics.complexity_divergence > 0.3
         assert mon._last_drift_vector.complexity_divergence == pytest.approx(0.0)
         baseline_after = get_agent_baseline("agent-auto-2418")
-        assert baseline_after.update_count == initial_count
+        assert baseline_after.update_count == initial_count + 1
         assert baseline_after.baseline_complexity == pytest.approx(initial_complexity)

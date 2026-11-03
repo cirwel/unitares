@@ -296,6 +296,15 @@ def compute_legacy_coherence_dependency_shadow(
             "future_outcomes",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -461,6 +470,15 @@ def compute_decision_self_loop_shadow(
             "basin_boundary_flip_counterfactual",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3:
         return {
             **base,
@@ -586,6 +604,15 @@ def compute_regime_self_loop_shadow(
             "the fleet stand-in"
         ),
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -637,11 +664,7 @@ def compute_regime_self_loop_shadow(
         "deployed": {"S": deployed_s},
         "candidate": {"S": candidate_s},
         "candidate_minus_deployed": {"S": candidate_s - deployed_s},
-        "deployed_regime_instability": (
-            REGIME_NEUTRAL_INSTABILITY
-            if neutralize_sensor_self_loops_enabled()
-            else _regime_instability(regime_history)
-        ),
+        "deployed_regime_instability": _regime_instability(regime_history),
     }
 
 

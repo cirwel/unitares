@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-lifecycle",
-  "verified_at": "2026-11-03T21:58:57Z",
+  "verified_at": "2026-11-03T22:02:52Z",
   "verified_date": "2026-11-03",
   "verifier": "gemini-4-argon-medium: re-checked skills/governance-lifecycle/SKILL.md against phases.py and governance_monitor.py",
   "source_digests": {

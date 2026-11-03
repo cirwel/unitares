@@ -314,7 +314,6 @@ def compute_ethical_drift(
     decision: Optional[str] = None,
     state_velocity: Optional[float] = None,
     task_context: str = "mixed",
-    update_baseline: bool = True,
 ) -> EthicalDriftVector:
     """
     Compute concrete ethical drift vector from measurable signals.
@@ -411,19 +410,19 @@ def compute_ethical_drift(
         coherence_dev = max(coherence_dev, velocity_signal * 0.5)
         calibration_deviation = max(calibration_deviation, velocity_signal * 0.3)
 
-    # Update baseline with current observations (skipped for non-authored /
-    # excluded check-ins so degenerate template values do not pollute baseline).
-    if update_baseline:
-        baseline.update(
-            coherence=current_coherence,
-            confidence=current_confidence,
-            complexity=(
-                None
-                if complexity_divergence is None
-                else 1.0 - complexity_divergence
-            ),  # Low divergence = high complexity accuracy
-            decision=decision,
-        )
+    # Update baseline with current observations (when complexity_divergence is
+    # None, AgentBaseline.update skips the complexity EMA while still advancing
+    # coherence, confidence, and update_count).
+    baseline.update(
+        coherence=current_coherence,
+        confidence=current_confidence,
+        complexity=(
+            None
+            if complexity_divergence is None
+            else 1.0 - complexity_divergence
+        ),  # Low divergence = high complexity accuracy
+        decision=decision,
+    )
 
     return EthicalDriftVector(
         calibration_deviation=calibration_deviation,
