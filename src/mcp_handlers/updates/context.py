@@ -131,6 +131,9 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
         candidate = calibration_checker.compute_agent_calibration_candidate(
             ctx.agent_id
         )
+        agent_channel = calibration_checker.compute_agent_tactical_calibration_channel(
+            ctx.agent_id
+        )
         ctx._calibration_signal = {
             "schema": "eisv.calibration-signal.v1",
             "mode": "measurement_only",
@@ -149,6 +152,7 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
                 "freshness_reason": "legacy_fleet_bins_have_no_timestamps",
             },
             "agent_candidate": candidate,
+            "agent_channel": agent_channel,
         }
     except Exception:
         ctx._calibration_signal = {
@@ -165,6 +169,15 @@ def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
                 "scope": "agent",
                 "agent_id": ctx.agent_id or None,
                 "evidence_status": "unavailable",
+            },
+            "agent_channel": {
+                "scope": "agent",
+                "agent_id": ctx.agent_id or None,
+                "value": None,
+                "calibration_error": None,
+                "n_verified_pairs": 0,
+                "evidence_status": "unavailable",
+                "default_reason": "no_verified_agent_pairs",
             },
         }
     ctx._cal_error_ready = True

@@ -8,6 +8,7 @@ This is THE GROUNDING MECHANISM that makes EISV meaningful.
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+import re
 import numpy as np
 import json
 
@@ -259,6 +260,67 @@ def compute_continuity_metrics(
         self_complexity_defaulted=self_complexity_defaulted,
         E_input_clipped=E_input_clipped,
         continuity_degenerate=continuity_degenerate,
+    )
+
+
+_AUTOMATIC_ROLLUP_RE = re.compile(
+    r"^\s*\d+\s+tool\s+calls?\s+completed\b",
+    re.IGNORECASE,
+)
+_NON_AUTHORED_EPISTEMIC_CLASSES = frozenset({
+    "substrate_observation",
+    "substrate_interpretation",
+})
+
+
+def is_automatic_or_rollup_checkin(
+    response_text: Optional[str] = None,
+    epistemic_class: Optional[str] = None,
+) -> bool:
+    """Return True when a check-in is an automatic substrate observation/interpretation or runtime tool-count rollup.
+
+    Automatic check-ins (e.g. Lumen sensor bridges, session/process hooks with
+    ``epistemic_class in ("substrate_observation", "substrate_interpretation")``,
+    and Codex/hook ``N tool calls completed: ...`` rollups) carry fixed-shape
+    templates rather than agent-authored reflective prose. See issue #2418.
+    """
+    if isinstance(epistemic_class, str) and epistemic_class.strip() in _NON_AUTHORED_EPISTEMIC_CLASSES:
+        return True
+    if isinstance(response_text, str) and _AUTOMATIC_ROLLUP_RE.match(response_text):
+        return True
+    return False
+
+
+def should_exclude_template_divergence(
+    continuity_metrics: Any,
+    *,
+    response_text: Optional[str] = None,
+    epistemic_class: Optional[str] = None,
+) -> bool:
+    """Return True when complexity_divergence is a degenerate template artifact (#2418).
+
+    Excludes ``complexity_divergence`` (and its derived ``I_input`` / ``S_input``)
+    from feeding live behavioral sensor, ethical drift, and baseline statistics
+    when BOTH:
+    1. ``continuity_metrics.continuity_degenerate`` is True (no code blocks,
+       list items, multi-paragraph structure, questions, or tool mentions), and
+    2. the check-in is an automatic/non-authored check-in or a runtime tool-count
+       rollup (`is_automatic_or_rollup_checkin`).
+
+    Raw ``ContinuityMetrics`` stay intact on ``monitor._last_continuity_metrics``
+    and dual-log storage for auditability.
+    """
+    if continuity_metrics is None:
+        return False
+    if isinstance(continuity_metrics, dict):
+        degenerate = bool(continuity_metrics.get("continuity_degenerate", False))
+    else:
+        degenerate = bool(getattr(continuity_metrics, "continuity_degenerate", False))
+    if not degenerate:
+        return False
+    return is_automatic_or_rollup_checkin(
+        response_text=response_text,
+        epistemic_class=epistemic_class,
     )
 
 

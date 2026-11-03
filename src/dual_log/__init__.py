@@ -41,6 +41,8 @@ from .continuity import (
     derive_complexity,
     tool_usage_complexity,
     compute_continuity_metrics,
+    is_automatic_or_rollup_checkin,
+    should_exclude_template_divergence,
 )
 
 from .restorative import (
@@ -62,6 +64,8 @@ __all__ = [
     'derive_complexity',
     'tool_usage_complexity',
     'compute_continuity_metrics',
+    'is_automatic_or_rollup_checkin',
+    'should_exclude_template_divergence',
     # Restorative
     'RestorativeStatus',
     'RestorativeBalanceMonitor',

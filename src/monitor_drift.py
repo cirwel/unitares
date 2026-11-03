@@ -8,6 +8,7 @@ from governance_core import (
 )
 from governance_core.parameters import get_active_params
 from src.calibration import calibration_checker
+from src.dual_log.continuity import should_exclude_template_divergence
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -105,13 +106,24 @@ def compute_drift_vector(
         monitor.state.V, monitor.state.unitaires_theta, active_params
     )
 
-    # Compute concrete drift vector from governance-observed signals
+    # Compute concrete drift vector from governance-observed signals.
+    # For automatic/non-authored check-ins and runtime tool-count rollups with
+    # degenerate continuity text (#2418), exclude template complexity_divergence
+    # from ethical drift by passing 0.0 (zero deviation on the complexity axis).
+    exclude_template_div = should_exclude_template_divergence(
+        continuity_metrics,
+        response_text=agent_state.get("response_text"),
+        epistemic_class=agent_state.get("epistemic_class"),
+    )
+    drift_complexity_divergence = (
+        0.0 if exclude_template_div else continuity_metrics.complexity_divergence
+    )
     drift_vector = compute_ethical_drift(
         agent_id=monitor.agent_id,
         baseline=agent_baseline,
         current_coherence=current_control_feedback,
         current_confidence=confidence if confidence is not None else 0.6,
-        complexity_divergence=continuity_metrics.complexity_divergence,
+        complexity_divergence=drift_complexity_divergence,
         calibration_error=calibration_error,
         decision=None,
         state_velocity=monitor._last_state_velocity,
