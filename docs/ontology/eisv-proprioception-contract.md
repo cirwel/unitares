@@ -996,7 +996,7 @@ against 150). The scientific inference is `INCONCLUSIVE`. This claim therefore s
 corrected-rule sensitivity run, which has no authority, restores the data
 (4,874 rows and 449 bad clusters before T). It finds no detectable rework-prediction lift
 over the previous-outcome baseline (selective p 0.858 and 0.828), and a
-slightly higher Brier error than the baseline (−0.0012 and −0.0007). Its
+slightly higher Brier error than the baseline (Brier improvement −0.0012 and −0.0007). Its
 inference is `INCONCLUSIVE`, not refuted. Reopening requires a new premise: a different
 label channel or measurement process. See the
 [result](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).

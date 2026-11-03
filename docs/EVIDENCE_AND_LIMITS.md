@@ -216,8 +216,8 @@ adds predictive signal for bad outcomes **remains untested, not disproved**.
 The pre-declared corrected-rule sensitivity run, which has no authority,
 restores the data (4,874 rows and 449 bad clusters before T). It finds no detectable
 rework-prediction lift over the previous-outcome baseline (selective p 0.858
-and 0.828), and a slightly higher Brier error than the baseline (−0.0012 and
-−0.0007). Its inference is `INCONCLUSIVE`, not refuted. See the
+and 0.828), and a slightly higher Brier error than the baseline (Brier improvement −0.0012
+and −0.0007). Its inference is `INCONCLUSIVE`, not refuted. See the
 [result](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03).
 
 An operational `FAIL` can close a scheduled line of work without scientifically

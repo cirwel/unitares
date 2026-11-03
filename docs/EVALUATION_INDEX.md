@@ -109,7 +109,7 @@ The scheduled read track closes. The corrected-rule sensitivity run declared
 on 2026-09-02, which has no authority, restores the data: 4,874 rows and 449 bad
 clusters before T. On rework prediction it shows no detectable lift over the
 previous-outcome baseline (selective p 0.858 and 0.828), and its Brier error is
-slightly higher than the baseline's (−0.0012 and −0.0007). Its inference is
+slightly higher than the baseline's (Brier improvement −0.0012 and −0.0007). Its inference is
 `INCONCLUSIVE`, not refuted.
 Reopening requires a new premise. The full table, the power probe and the
 reconciliation are in the
