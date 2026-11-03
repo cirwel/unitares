@@ -12,10 +12,10 @@ import re
 import json
 import time
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from functools import partial
 from uuid import uuid4
 
 from src.logging_utils import get_logger
@@ -390,6 +390,14 @@ def process_update_authenticated(
 update_agent_auth = process_update_authenticated
 
 
+@dataclass(frozen=True)
+class _UpdateAdmission:
+    """Internal handoff from admission to assessment, never a wire credential."""
+
+    agent_id: str
+    posture: str
+
+
 async def process_update_authenticated_async(
     agent_id: str,
     api_key: str,
@@ -397,7 +405,9 @@ async def process_update_authenticated_async(
     auto_save: bool = True,
     confidence: Optional[float] = None,
     task_type: str = "mixed",
-    session_bound: bool = False
+    session_bound: bool = False,
+    *,
+    before_assessment: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> dict:
     """
     Process governance update with authentication enforcement (async version).
@@ -408,7 +418,36 @@ async def process_update_authenticated_async(
         PermissionError: If authentication fails
         ValueError: If agent_id is invalid
     """
-    from src.agent_lifecycle import get_or_create_monitor
+    admission = await validate_update_admission_async(
+        agent_id, api_key, session_bound=session_bound
+    )
+    # This Python-only seam cannot skip admission. The workflow uses it to
+    # commit a neutral checkpoint before any monitor is created or advanced;
+    # replay/refusal exceptions stop here without repeating assessment.
+    if before_assessment is not None:
+        await before_assessment()
+    return await execute_admitted_update_async(
+        admission,
+        agent_state,
+        auto_save=auto_save,
+        confidence=confidence,
+        task_type=task_type,
+    )
+
+
+async def validate_update_admission_async(
+    agent_id: str,
+    api_key: str,
+    session_bound: bool = False,
+) -> _UpdateAdmission:
+    """Run the existing authenticated gates without creating a monitor.
+
+    The caller retains its existing agent-lock responsibility across admission
+    and execution. This is not a pure preflight: a detected loop still records
+    its cooldown and incident before refusing. Lifecycle checks here retain
+    their legacy cache semantics; durable checkpoint acceptance owns its
+    additional transaction-local lifecycle gate.
+    """
 
     loop = asyncio.get_running_loop()
     _t0 = time.perf_counter()
@@ -516,34 +555,37 @@ async def process_update_authenticated_async(
             + recovery_guidance
         )
 
-    # Get or create monitor
-    _t_setup = time.perf_counter()
-    monitor = await loop.run_in_executor(None, get_or_create_monitor, agent_id)
-    # Heal the DB ↔ file persistence split: if the on-disk state file is
-    # missing but core.agent_state has history, hydrate update_count +
-    # rolling histories from DB so this check-in continues from real state
-    # rather than from a fresh zero.
-    from src.agent_monitor_state import hydrate_from_db_if_fresh
-    await hydrate_from_db_if_fresh(monitor, agent_id)
-    _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
+    return _UpdateAdmission(agent_id=agent_id, posture=posture)
 
-    task_type = agent_state.get("task_type", "mixed")
 
-    # Numpy ODE step — `monitor.process_update` dispatched via the default
-    # executor pool. v0.3 RESOLUTION's "load-bearing unknown" was "what's
-    # in the 7s ODE remainder?"; this timer answers that. Named
-    # `ode.numpy_step_ms` (not `compute_ms`) because the wall-clock here
-    # includes executor queue-wait time as well as the numpy work — under
-    # concurrent load on a saturated default pool, queue-wait can dominate
-    # numpy compute. Disambiguating "numpy slow" from "executor saturated"
-    # requires looking at executor queue depth alongside, which is out of
-    # scope for this branch; called out in the eval doc's falsifier matrix.
-    _t_numpy = time.perf_counter()
-    result = await loop.run_in_executor(
-        None,
-        partial(monitor.process_update, agent_state, confidence=confidence, task_type=task_type)
+async def execute_admitted_update_async(
+    admission: _UpdateAdmission,
+    agent_state: dict,
+    auto_save: bool = True,
+    confidence: Optional[float] = None,
+    task_type: str = "mixed",
+) -> dict:
+    """Execute assessment and existing effects after internal admission.
+
+    Admission is an in-process typed handoff, not JSON supplied by a caller.
+    The captured posture is used for the entire update, including after the
+    optional checkpoint commit await.
+    """
+    if not isinstance(admission, _UpdateAdmission):
+        raise TypeError("assessment requires an internal update admission")
+    from src.eisv.adapter import EisvRequest, assess_eisv
+
+    agent_id = admission.agent_id
+    posture = admission.posture
+    loop = asyncio.get_running_loop()
+
+    # Construct this handoff after the optional acceptance callback has added
+    # checkpoint provenance. Preserve the original call-local state mapping.
+    assessment = await assess_eisv(
+        EisvRequest(agent_id=agent_id, agent_state=agent_state, confidence=confidence)
     )
-    _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
+    result = assessment.result
+    monitor = assessment.monitor
 
     policy_actuation_authorized = apply_policy_actuation_posture(
         result, posture=posture

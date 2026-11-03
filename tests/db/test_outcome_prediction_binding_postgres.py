@@ -265,7 +265,7 @@ async def test_lost_commit_ack_replays_canonical_through_new_connection(
 async def test_ambiguous_commit_leaves_durable_delivery_for_recovery(
     isolated_binding_agent,
 ):
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     prediction_id = str(uuid.uuid4())
     monitor = MagicMock()
@@ -297,7 +297,7 @@ async def test_ambiguous_commit_leaves_durable_delivery_for_recovery(
 
     with (
         patch("src.db.get_db", return_value=SeparateConnectionBackend(lose_commit_ack=True)),
-        patch("src.mcp_handlers.observability.outcome_events.mcp_server", server),
+        patch("src.outcomes._get_monitor_runtime", return_value=server),
         patch("src.calibration.calibration_checker", checker),
         patch("src.sequential_calibration.sequential_calibration_tracker", sequential),
         patch(
@@ -309,11 +309,11 @@ async def test_ambiguous_commit_leaves_durable_delivery_for_recovery(
             return_value=None,
         ),
     ):
-        first = await _record_outcome_event_inline(arguments)
+        first = await record_outcome(arguments)
 
     with (
         patch("src.db.get_db", return_value=SeparateConnectionBackend()),
-        patch("src.mcp_handlers.observability.outcome_events.mcp_server", server),
+        patch("src.outcomes._get_monitor_runtime", return_value=server),
         patch("src.calibration.calibration_checker", checker),
         patch("src.sequential_calibration.sequential_calibration_tracker", sequential),
         patch(
@@ -325,7 +325,7 @@ async def test_ambiguous_commit_leaves_durable_delivery_for_recovery(
             return_value=None,
         ),
     ):
-        replay = await _record_outcome_event_inline(arguments)
+        replay = await record_outcome(arguments)
 
     assert first["error_code"] == "DB_ERROR"
     assert replay["idempotent_replay"] is True
@@ -442,7 +442,7 @@ async def test_cleanup_uses_full_partitioned_outcome_key(isolated_binding_agent)
 async def test_non_exact_score_is_canonical_across_response_row_replay_and_calibration(
     isolated_binding_agent,
 ):
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     prediction_id = str(uuid.uuid4())
     monitor = MagicMock()
@@ -476,7 +476,7 @@ async def test_non_exact_score_is_canonical_across_response_row_replay_and_calib
     async def submit(backend):
         with (
             patch("src.db.get_db", return_value=backend),
-            patch("src.mcp_handlers.observability.outcome_events.mcp_server", server),
+            patch("src.outcomes._get_monitor_runtime", return_value=server),
             patch("src.calibration.calibration_checker", checker),
             patch(
                 "src.sequential_calibration.sequential_calibration_tracker",
@@ -491,7 +491,7 @@ async def test_non_exact_score_is_canonical_across_response_row_replay_and_calib
                 return_value=None,
             ),
         ):
-            return await _record_outcome_event_inline(arguments)
+            return await record_outcome(arguments)
 
     first = await submit(SeparateConnectionBackend())
     replay = await submit(SeparateConnectionBackend())

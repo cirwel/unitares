@@ -12,13 +12,13 @@
 #     -e UNITARES_BIND_ALL_INTERFACES=1 \
 #     unitares-governance
 
-# Pinned by digest, not just the floating `3.14-slim` tag: the governance core
+# Pinned by digest, not just the floating `3.15-slim` tag: the governance core
 # is a numpy ODE, and a Docker Hub rebuild of the tag (new libm/BLAS) can shift
 # float results enough to move a verdict near a threshold. Dependabot-docker is
 # configured to bump this digest with the Docker Quickstart job validating each
 # bump (see .github/dependabot.yml). This is the reproducibility *bridge* — the
 # robustness fix is continuous verdict blending (docs/proposals/archive/continuous-verdict-blending-v0.md).
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+FROM python:3.15-slim@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0
 
 WORKDIR /app
 

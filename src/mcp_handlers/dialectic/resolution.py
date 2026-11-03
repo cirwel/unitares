@@ -18,7 +18,7 @@ from ..support.condition_parser import (
     parse_condition,
 )
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+from src.outcomes import record_outcome
 logger = get_logger(__name__)
 
 async def agent_pause_is_live(agent_id: str) -> bool:
@@ -73,7 +73,7 @@ async def record_resolution_outcome(
             for condition in applied_conditions
             if isinstance(condition, dict) and condition.get("status") == "applied"
         )
-        await _record_outcome_event_inline({
+        await record_outcome({
             # In-process emitter, computed server-side from session protocol
             # state -- vouched so its server-observed provenance is honoured,
             # up to what that provenance itself asserts.

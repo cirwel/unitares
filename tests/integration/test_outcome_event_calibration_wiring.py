@@ -46,7 +46,7 @@ def _patch_handler_deps(monkeypatch, agent_id="test-agent"):
     `get_db` is imported locally inside the handler, so we patch it on `src.db`
     where it lives, not on the handler module.
     """
-    from src.mcp_handlers.observability import outcome_events as oe_mod
+    from src import outcomes as oe_mod
     from src.mcp_handlers import context as ctx_mod
     import src.db as db_mod
 
@@ -56,7 +56,7 @@ def _patch_handler_deps(monkeypatch, agent_id="test-agent"):
 
     mock_server = MagicMock()
     mock_server.monitors = {}
-    monkeypatch.setattr(oe_mod, "mcp_server", mock_server)
+    monkeypatch.setattr(oe_mod, "_get_monitor_runtime", lambda: mock_server)
 
     import src.services.runtime_queries as rq_mod
     monkeypatch.setattr(

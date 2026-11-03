@@ -44,8 +44,9 @@ and the store-time similarity snapshot are lifted into the ack itself because
 no later read returns them. A routine ``sync_state`` proceed also says each
 fact once (``_drop_routine_proceed_duplicates``); guide, pause and provisional
 responses keep their full shape.
-Error payloads (success=False / "error") pass through unchanged: the raw
-error contract carries its own recovery info.
+Error payloads (success=False / "error") generally pass through unchanged:
+the raw error contract carries its own recovery info. Checkpoint boundary
+responses use a bounded acknowledgement envelope without operational advice.
 
 The step must never break a response: any parse/build failure returns
 the original handler result untouched.
@@ -55,12 +56,16 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from mcp.types import TextContent
 
 from config.governance_config import GovernanceConfig
+from src.checkpoints import CHECKPOINT_SCHEMA
 from src.logging_utils import get_logger
+from src.state_persistence import project_state_persistence
 from src.tool_modes import progressive_aware_hint
 from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
@@ -277,6 +282,131 @@ def _harvest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Use nested canonical payloads when a caller hands us an envelope."""
     raw = payload.get("raw_governance")
     return raw if isinstance(raw, dict) else payload
+
+
+def _checkpoint_uuid(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    try:
+        return str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
+def _project_checkpoint_receipt(value: Any) -> Optional[Dict[str, Any]]:
+    """Lift only the bounded, internally consistent checkpoint wire contract."""
+    if not isinstance(value, dict) or value.get("schema") != CHECKPOINT_SCHEMA:
+        return None
+    retry = value.get("acceptance_retry_idempotent")
+    if type(retry) is not bool:
+        return None
+    projected = {
+        "schema": CHECKPOINT_SCHEMA,
+        "status": value.get("status"),
+        "acceptance_retry_idempotent": retry,
+    }
+    if value.get("status") == "unconfirmed":
+        if not _checkpoint_uuid(value.get("attempt_id")):
+            return None
+        projected["attempt_id"] = value["attempt_id"]
+        return projected
+    if value.get("status") != "accepted":
+        return None
+    if not all(_checkpoint_uuid(value.get(key)) for key in ("checkpoint_id", "accepted_attempt_id")):
+        return None
+    if value.get("event_id") != value["checkpoint_id"]:
+        return None
+    previous = value.get("prev_checkpoint_id")
+    if previous is not None and not _checkpoint_uuid(previous):
+        return None
+    for key in ("identity_id", "seq"):
+        number = value.get(key)
+        if type(number) is not int or not 0 < number <= 2**63 - 1:
+            return None
+    recorded_at = value.get("recorded_at")
+    if not isinstance(recorded_at, str) or len(recorded_at) > 64:
+        return None
+    try:
+        if datetime.fromisoformat(recorded_at).tzinfo is None:
+            return None
+    except ValueError:
+        return None
+    if type(value.get("idempotent_replay")) is not bool:
+        return None
+    projected.update({key: value[key] for key in (
+        "checkpoint_id", "event_id", "identity_id", "seq", "recorded_at",
+        "accepted_attempt_id", "idempotent_replay",
+    )})
+    projected["prev_checkpoint_id"] = previous
+    assessment = value.get("assessment")
+    if isinstance(assessment, dict):
+        assessor = assessment.get("assessor")
+        status = assessment.get("status")
+        if (
+            isinstance(assessor, str)
+            and re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", assessor)
+            and isinstance(status, str)
+            and status in {"started", "completed", "failed", "unconfirmed", "not_repeated"}
+            and assessment.get("automatic_replay") is False
+        ):
+            projected["assessment"] = {
+                "assessor": assessor, "status": status, "automatic_replay": False,
+            }
+            meaning = assessment.get("completion_means")
+            if meaning == "execution_returned; effects_are_not_atomic":
+                projected["assessment"]["completion_means"] = meaning
+    return projected
+
+
+def _checkpoint_receipt_only(payload: Dict[str, Any], receipt) -> bool:
+    """Capture acknowledgement does not supply a new operational decision."""
+    if "checkpoint" not in payload:
+        return False
+    return (
+        payload.get("success") is False
+        or "error" in payload
+        or payload.get("assessment_repeated") is False
+        or (receipt is not None and (
+            receipt["status"] == "unconfirmed" or receipt.get("idempotent_replay") is True
+        ))
+        or _decision_action(payload) is None
+    )
+
+
+def _checkpoint_only_envelope(friendly_name, source, receipt, arguments):
+    """A small acknowledgement with no current-state inference, even in full mode."""
+    envelope = {
+        "success": source.get("success", True) is True,
+        "tool": friendly_name,
+        "next_action": (
+            "Keep this checkpoint acknowledgement as evidence; "
+            "no new assessment or policy decision is supplied."
+        ),
+    }
+    if receipt is not None:
+        envelope["checkpoint"] = receipt
+    for key in ("agent_id", "agent_uuid"):
+        value = source.get(key)
+        if isinstance(value, str) and 0 < len(value) <= 128 and not any(c.isspace() for c in value):
+            envelope[key] = value
+    for key in ("message", "error"):
+        value = _one_line(source.get(key), limit=500)
+        if value is not None:
+            envelope[key] = value
+    code = source.get("error_code")
+    if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,64}", code):
+        envelope["error_code"] = code
+    if type(source.get("assessment_repeated")) is bool:
+        envelope["assessment_repeated"] = source["assessment_repeated"]
+    # Preserve an explicit assessment-write acknowledgement independently;
+    # replay never carries a new assessment acknowledgement.
+    if receipt is None or receipt.get("idempotent_replay") is not True:
+        persistence = project_state_persistence(source.get("state_persistence"))
+        if persistence is not None:
+            envelope["state_persistence"] = persistence
+    if canonical_response_mode((arguments or {}).get("response_mode") or "auto") == "full":
+        envelope["raw_governance"] = {key: value for key, value in envelope.items() if key != "tool"}
+    return envelope
 
 
 def _coherence_and_risk(payload: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
@@ -2776,6 +2906,12 @@ def build_experience_envelope(
         envelope["agent_uuid"] = payload["uuid"]
 
     source_payload = _harvest_payload(payload)
+    checkpoint = (
+        _project_checkpoint_receipt(source_payload.get("checkpoint"))
+        if canonical_name == "process_agent_update" else None
+    )
+    if canonical_name == "process_agent_update" and _checkpoint_receipt_only(source_payload, checkpoint):
+        return _checkpoint_only_envelope(friendly_name, source_payload, checkpoint, arguments)
     # Resolve the tactical prediction id ONCE, canonical-source first.
     # _harvest_payload treats a nested raw_governance as the canonical payload,
     # so preferring the outer copy could hand back a stale id when a caller
@@ -3005,7 +3141,7 @@ def build_experience_envelope(
         # mirror, every bounded formatter passes them through, and no later
         # read returns them, so a bounded shape lifts them; full mode carries
         # them under raw_governance (#2125).
-        warnings = payload.get("warnings")
+        warnings = source_payload.get("warnings")
         if isinstance(warnings, list) and warnings and not include_raw:
             envelope["warnings"] = list(warnings)
         if state_summary.get("action") == "pause":
@@ -3417,6 +3553,14 @@ def build_experience_envelope(
     # The prose stays — it tells the agent what the id is for (#2123).
     if prediction_id and canonical_name == "process_agent_update":
         envelope["prediction_id"] = prediction_id
+    if canonical_name == "process_agent_update":
+        # A nested canonical payload owns the acknowledgement. Do not revive
+        # an outer stale receipt when that payload contains no valid receipt.
+        persistence = project_state_persistence(source_payload.get("state_persistence"))
+        if persistence is not None:
+            envelope["state_persistence"] = persistence
+        if checkpoint is not None:
+            envelope["checkpoint"] = checkpoint
     if state_summary:
         # state_summary can carry glossary coaching (e.g. an uninitialized
         # verdict's "Submit one process_agent_update...") — translate it like
@@ -3519,7 +3663,20 @@ def build_experience_envelope(
                     envelope["written_as"] = written_as
 
     if include_raw:
-        envelope["raw_governance"] = payload
+        raw_payload = payload
+        if canonical_name == "process_agent_update" and "checkpoint" in source_payload:
+            # Full mode retains the canonical assessment, but the new receipt
+            # remains the same bounded projection as its top-level copy.
+            canonical_copy = dict(source_payload)
+            canonical_copy.pop("checkpoint", None)
+            if checkpoint is not None:
+                canonical_copy["checkpoint"] = checkpoint
+            if source_payload is payload:
+                raw_payload = canonical_copy
+            else:
+                raw_payload = {**payload, "raw_governance": canonical_copy}
+                raw_payload.pop("checkpoint", None)
+        envelope["raw_governance"] = raw_payload
     else:
         # raw_governance_available promises a re-call that fetches the
         # omitted payload by reading, so only the read aliases claim it: the
@@ -3633,7 +3790,11 @@ async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, 
         payload = json.loads(result[0].text)
         if not isinstance(payload, dict):
             return result
-        if payload.get("success") is False or "error" in payload:
+        checkpoint_error = (
+            name == "process_agent_update"
+            and "checkpoint" in _harvest_payload(payload)
+        )
+        if (payload.get("success") is False or "error" in payload) and not checkpoint_error:
             return result  # raw error contract carries its own recovery info
 
         # A #425 typed identity refusal is success-SHAPED (`success: true`, no

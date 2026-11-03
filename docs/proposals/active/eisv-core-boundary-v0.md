@@ -33,6 +33,12 @@ the standing governed review still govern *how* it is built. Recorded as an
 moves the registered read's data boundary to the first instrument change
 instead; see the dated notes in Sections 9 and 12.1.
 
+**Bounded implementation authorization, 2026-11-02:** the operator's subsequent
+"proceed" applies to the proposed next increment of durable neutral checkpoint
+acceptance. [Section 13.1](#131-bounded-neutral-acceptance-increment-2026-11-02)
+records that scope. It does not authorize the rest of Stage 3 or Stage 4, declare
+the preservation or parity gates complete, or replace the historical review.
+
 ---
 
 ## 1. Problem
@@ -253,6 +259,15 @@ Proposed taxonomy for attempt `kind`:
 | `refused` | A policy gate declined the check-in | `AGENT_PAUSED` / circuit breaker |
 | `deferred` | Accepted for later handling rather than now | none known today; listed so it is not invented later |
 | `failed` | Validation, authentication, identity, cancellation, or infrastructure failure | identity refusal contracts, schema validation, estimator exception |
+
+**Implementation clarification, 2026-11-02:** normal post-update completion
+does not establish the recording part of `accepted`. The
+[check-in characterization](../../operations/checkin-refactor-characterization.md)
+shows that the legacy path can finish successfully after a state-write
+exception. Its `state_persistence` acknowledgement distinguishes a confirmed
+`core.agent_state` row from unconfirmed persistence. That receipt covers an
+assessment row only; it is not a neutral checkpoint, attempt classification,
+idempotency key, or completion of the Stage 3 acceptance contract.
 
 `failed` carries a sub-class from exactly that list. An attempt that fails
 before an identity is resolved has no identity; it is recorded without one, not
@@ -664,6 +679,51 @@ the Section 14 harness and documentation proceed before the horizon; Stage 1 and
 Stage 2 runtime code wait for it. Stage 3 and
 Stage 4 require a new, explicit operator decision recorded against this document
 after the horizon.
+
+### 13.1 Bounded neutral acceptance increment, 2026-11-02
+
+After the state-write acknowledgement increment, the next-step recommendation
+was to establish durable neutral checkpoint acceptance before assessment. The
+operator replied "proceed". This records that instruction applied to the stated
+recommendation, rather than treating general support for optional EISV or the
+October data-boundary amendment as authorization for a durable ownership move.
+
+The authorized increment is a core-owned immutable checkpoint with an
+identity-scoped retry key, canonical replay/conflict handling, a durable
+per-identity sequence, and an atomic neutral-event outbox entry. Admission must
+pass the existing authentication, identity, lifecycle, deployment-posture and
+loop-cooldown checks before acceptance. The first delivery continues to run
+EISV synchronously. A later estimator or legacy state-write failure must not
+erase the checkpoint that was already committed. Delivery that has started or
+may have partially applied effects must never be automatically rerun from a
+retried request.
+
+The [acceptance contract](../../operations/checkin-refactor-characterization.md#neutral-checkpoint-acceptance-2026-11-02-increment)
+defines the transaction, receipt, retry limitations and failure states. This is
+an intentional change to acceptance semantics, not a behavior-preserving
+observational seam. The partial preservation harness and the legacy state-row
+receipt do not prove full instrument preservation, shadow parity, exactly-once
+assessment, or replay from complete estimator inputs. Each implementation claim
+needs its own evidence, including real database commit, rollback and concurrent
+retry tests and independent review of the actual diff.
+
+This increment leaves prediction ownership, outcome binding, the legacy state
+reader/view cutover, export bundles, exact assessor-input capture, asynchronous
+assessment and enforcement defaults outside its scope. The October 23 bounded,
+credential-scrubbed report-excerpt policy remains the retention policy. The
+registered cutoff remains `2026-10-15T13:45:00Z`; its recorded archival snapshot
+and reconciliation obligation remain intact. No new registered read, shifted
+cutoff or scientific threshold follows from this authorization.
+
+**Historical review status, checked read-only on 2026-11-02.** The full
+transcript of `134b6a9e32abf9f9` records a terminal `failed` event at
+`2026-09-17T08:15:59.724753+00:00`: an inactivity sweep, expressly not a reviewer
+verdict. The last reviewer synthesis at `2026-09-17T06:10:25.440029+00:00` still
+has `agrees=false` and the conditions recorded in Section 11.2. There is no
+pending reviewer move or recorded resolution effect. This note neither changes
+that terminal record nor invents a waiver, ratification, or completed parity
+result. The new bounded authorization and its implementation review are
+separate records; the old rejection remains part of the design provenance.
 
 ## 14. First implementation issue
 

@@ -29,14 +29,17 @@ questions the record answers. This document maps them onto the system:
 
 EISV is one instrument inside the kernel, not its definition: each check-in
 returns a behavioral state estimate and preserves an inferred policy
-recommendation. The estimate is observational by default; only explicit
-operator configuration gives that recommendation lifecycle authority. The operator adopted
+recommendation. The recommendation is observational by default; only explicit
+operator configuration gives it lifecycle authority. EISV continues to run in
+that posture, maintaining state history and contributing to assessment and
+guidance. The operator adopted
 moving EISV out of the core to an optional module on 2026-10-10
 ([`proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
 This settles the direction, not implementation authorization: the staged gates
 and standing governed-review conditions still apply, and the estimator still
-derives today's check-in policy recommendation. [EISV_COMPUTATION.md](EISV_COMPUTATION.md)
-owns the instrument.
+derives today's check-in policy recommendation. Runtime optionality has not
+shipped. [EISV_COMPUTATION.md](EISV_COMPUTATION.md#role-runtime-and-evidence)
+owns the instrument's role, runtime status and evidence.
 
 ## Layered architecture
 
@@ -64,8 +67,8 @@ deployed Core component.
 │   FINDINGS & KG        shared, provenance-tagged cross-agent memory          │  what supports it
 │   REVIEW (DIALECTIC)   thesis / antithesis / synthesis, recorded positions   │  who challenged it
 │   OUTCOMES             typed outcome events with provenance                  │  what happened
-│   PROPRIOCEPTION       state estimate → risk → recommendation; optional      │  one instrument,
-│   & POLICY             operator-configured actuator                          │  not the record
+│   PROPRIOCEPTION       state estimate → risk → recommendation                │  deployed instrument
+│   & POLICY             optional operator-configured actuator                 │  explicit authority
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ COORDINATION    BEAM lease plane · governed effects · agent messaging        │  single-writer
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -105,7 +108,7 @@ live longer than one session is a set of capabilities, not a roster:
 
 `agents/` ships **reference** long-lived agents: a janitor, a fleet monitor, a code watcher, a metrics chronicler and a local-model triage scribe. They are examples of the pattern and operational tools for the deployment that runs them. They are specialized, optional governed clients, not Core internals or a general agent framework, and are **live** in the reference deployment. They are outside the shipped server package and are not governance internals; see [`agents/README.md`](../agents/README.md). The orchestrated dialectic reviewer also lives in `agents/`, but it is part of an optional server feature and is described under [Review](#review-dialectic-and-recovery) below.
 
-The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, EISV dynamics, policy recommendations and knowledge graph apply to both.
+The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same record, policy recommendations and knowledge graph apply to both, and both report EISV on the same axes. Their sensors differ, so their EISV levels are not directly comparable ([sensory class split](ontology/eisv-proprioception-contract.md#sensory-class-split--which-axis-needs-which-validation-regime-2026-08-17)).
 
 ## Interfaces and transport surfaces
 

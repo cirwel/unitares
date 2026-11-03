@@ -57,7 +57,7 @@ def _patch_targets(emit_mock):
     return server, storage, patch.multiple(
         "src.mcp_handlers.dialectic.resolution",
         mcp_server=server,
-        _record_outcome_event_inline=emit_mock,
+        record_outcome=emit_mock,
     ), patch("src.agent_storage", storage)
 
 

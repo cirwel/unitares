@@ -329,7 +329,7 @@ async def test_mixin_stamps_corroboration_metadata_into_detail():
 
 @pytest.mark.asyncio
 async def test_inline_outcome_response_echoes_corroboration_metadata():
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     db = MagicMock()
     db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
@@ -337,7 +337,7 @@ async def test_inline_outcome_response_echoes_corroboration_metadata():
     db.record_outcome_event = AsyncMock(return_value="outcome-id")
 
     with patch("src.db.get_db", return_value=db):
-        payload = await _record_outcome_event_inline({
+        payload = await record_outcome({
             "agent_id": "agent-1",
             "outcome_type": "task_completed",
             "detail": {"summary": "Finished the work."},
@@ -354,14 +354,14 @@ async def test_inline_outcome_response_echoes_corroboration_metadata():
 
 
 async def _inline_record(detail):
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     db = MagicMock()
     db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
     db.get_latest_confidence_before = AsyncMock(return_value=None)
     db.record_outcome_event = AsyncMock(return_value="outcome-id")
     with patch("src.db.get_db", return_value=db):
-        payload = await _record_outcome_event_inline({
+        payload = await record_outcome({
             "agent_id": "agent-1",
             "outcome_type": "task_completed",
             "detail": detail,
@@ -487,7 +487,7 @@ def _phase5_detail(**extra):
 
 @pytest.mark.asyncio
 async def test_phase5_shadow_row_is_calibration_excluded():
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     db = MagicMock()
     db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
@@ -497,7 +497,7 @@ async def test_phase5_shadow_row_is_calibration_excluded():
     checker = MagicMock()
     with patch("src.db.get_db", return_value=db), \
          patch("src.calibration.calibration_checker", checker):
-        await _record_outcome_event_inline({
+        await record_outcome({
             "agent_id": "agent-1",
             "outcome_type": "test_passed",
             "confidence": 0.8,
@@ -515,7 +515,7 @@ async def test_phase5_shadow_row_is_calibration_excluded():
 @pytest.mark.asyncio
 async def test_phase5_enabled_row_still_trains_calibration():
     """Enable mode keeps supplying calibration — the contract's whole purpose."""
-    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    from src.outcomes import record_outcome
 
     db = MagicMock()
     db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
@@ -525,7 +525,7 @@ async def test_phase5_enabled_row_still_trains_calibration():
     checker = MagicMock()
     with patch("src.db.get_db", return_value=db), \
          patch("src.calibration.calibration_checker", checker):
-        await _record_outcome_event_inline({
+        await record_outcome({
             "agent_id": "agent-1",
             "outcome_type": "test_passed",
             "confidence": 0.8,

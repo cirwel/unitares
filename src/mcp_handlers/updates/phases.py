@@ -22,6 +22,10 @@ from src.logging_utils import get_logger
 from src import agent_storage
 from src.perf_monitor import record_ms as _perf_record_ms
 from src.report_excerpt import make_report_excerpt
+from src.state_persistence import (
+    STATE_PERSISTENCE_UNCONFIRMED_WARNING,
+    StatePersistenceReceipt,
+)
 
 from .context import UpdateContext
 from ..identity_bootstrap import (
@@ -263,21 +267,47 @@ def _prediction_id_for_phase5_evidence(ctx: UpdateContext, evidence: dict) -> st
         return explicit_prediction_id
     if ctx.confidence is None:
         return None
-    register_prediction = getattr(ctx.monitor, "register_tactical_prediction", None)
-    if not callable(register_prediction):
-        return None
     decision = (ctx.result or {}).get("decision") or {}
     decision_action = decision.get("action")
-    try:
-        minted = register_prediction(
-            float(ctx.confidence),
-            decision_action=decision_action,
-            advertise=False,
-        )
-        return str(minted) if minted else None
-    except Exception as exc:
-        logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
-        return None
+    checkpoint_id = getattr(
+        getattr(ctx, "checkpoint_receipt", None), "checkpoint_id", None
+    )
+    register_prediction = getattr(ctx.monitor, "register_tactical_prediction", None)
+    if callable(register_prediction):
+        try:
+            kwargs: Dict[str, Any] = {
+                "decision_action": decision_action,
+                "advertise": False,
+            }
+            if checkpoint_id is not None:
+                kwargs["checkpoint_id"] = checkpoint_id
+            try:
+                minted = register_prediction(float(ctx.confidence), **kwargs)
+            except TypeError:
+                minted = register_prediction(
+                    float(ctx.confidence),
+                    decision_action=decision_action,
+                    advertise=False,
+                )
+            return str(minted) if minted else None
+        except Exception as exc:
+            logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
+            return None
+    if getattr(ctx, "monitor", None) is None and getattr(ctx, "agent_id", None):
+        try:
+            from src.monitor_prediction import register_agent_prediction
+
+            minted = register_agent_prediction(
+                ctx.agent_id,
+                float(ctx.confidence),
+                decision_action=decision_action,
+                checkpoint_id=checkpoint_id,
+                advertise=False,
+            )
+            return str(minted) if minted else None
+        except Exception as exc:
+            logger.debug("Phase-5 neutral prediction id mint skipped: %s", exc, exc_info=True)
+    return None
 
 
 # Module-local strong-ref set for in-flight fire-and-forget persist tasks
@@ -1004,9 +1034,11 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 except Exception as e:
                     logger.debug(f"Outcome history unavailable for {ctx.agent_id}: {e}")
 
-                # Cache outcome history on monitor for use in sync process_update
+                # Pass outcome history call-locally into agent_state so pre-acceptance
+                # preparation never mutates the shared monitor cache before lock
+                # acquisition and checkpoint acceptance.
                 if outcome_hist is not None:
-                    monitor._cached_outcome_history = outcome_hist
+                    ctx.agent_state["_outcome_history"] = outcome_hist
 
                 decision_history = list(monitor.state.decision_history)
                 coherence_history = list(monitor.state.coherence_history)
@@ -1581,6 +1613,11 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     ctx.agent_state["task_type"] = ctx.task_type
 
     _ode_start = time.perf_counter()
+    from src.services.checkpoint_service import accept_before_assessment
+
+    async def _accept_checkpoint():
+        await accept_before_assessment(ctx)
+
     try:
         ctx.result = await mcp_server.process_update_authenticated_async(
             agent_id=ctx.agent_id,
@@ -1588,7 +1625,8 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             agent_state=ctx.agent_state,
             auto_save=True,
             confidence=ctx.confidence,
-            session_bound=True
+            session_bound=True,
+            before_assessment=_accept_checkpoint,
         )
     except PermissionError:
         raise
@@ -2052,8 +2090,11 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
     report_excerpt = make_report_excerpt(ctx.response_text)
 
     # PostgreSQL: Record EISV state
+    # Failure to receive an acknowledgement does not establish that no row
+    # committed. Keep this call-local, including while the writer is awaiting.
+    ctx.state_persistence = StatePersistenceReceipt()
     try:
-        await agent_storage.record_agent_state(
+        state_id = await agent_storage.record_agent_state(
             agent_id=agent_id,
             E=ctx.metrics_dict.get('E', 0.7),
             I=ctx.metrics_dict.get('I', 0.8),
@@ -2076,6 +2117,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             eisv_instrument=_eisv_instrument_stamp(monitor),
             report_excerpt=report_excerpt,
         )
+        ctx.state_persistence = StatePersistenceReceipt.from_acknowledgement(state_id)
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
         # #425 Path D: when STRICT_IDENTITY_REQUIRED is on, do NOT auto-
@@ -2089,8 +2131,8 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             logger.warning(
                 "[PROCESS_UPDATE] STRICT_IDENTITY_REQUIRED=true and "
                 "agent %s... missing from PG at record_agent_state — "
-                "skipping self-create (#425 Path D); state for this "
-                "update will not be recorded.",
+                "skipping self-create (#425 Path D); state persistence "
+                "is unconfirmed.",
                 (agent_id or "")[:12],
             )
             return False
@@ -2140,7 +2182,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                     f"{agent_id[:8]}... (agent will be misclassified until "
                     f"next stamp): {stamp_err}"
                 )
-            await agent_storage.record_agent_state(
+            state_id = await agent_storage.record_agent_state(
                 agent_id=agent_id,
                 E=ctx.metrics_dict.get('E', 0.7),
                 I=ctx.metrics_dict.get('I', 0.8),
@@ -2163,11 +2205,18 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 eisv_instrument=_eisv_instrument_stamp(monitor),
                 report_excerpt=report_excerpt,
             )
+            ctx.state_persistence = StatePersistenceReceipt.from_acknowledgement(state_id)
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:
             logger.warning(f"PostgreSQL create+record failed: {create_error}", exc_info=True)
     except Exception as e:
         logger.warning(f"PostgreSQL record_agent_state failed: {e}", exc_info=True)
+    finally:
+        if (
+            not ctx.state_persistence.confirmed
+            and STATE_PERSISTENCE_UNCONFIRMED_WARNING not in ctx.warnings
+        ):
+            ctx.warnings.append(STATE_PERSISTENCE_UNCONFIRMED_WARNING)
     return True
 
 
@@ -2386,7 +2435,7 @@ async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
     # Evidence arrives as plain dicts (model_dump() flattens Pydantic models).
     evidence_mode = os.environ.get("UNITARES_PHASE5_EVIDENCE_WRITE", "").lower()
     if ctx.recent_tool_results and evidence_mode in ("shadow", "1", "enable"):
-        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        from src.outcomes import record_outcome
         # #1320: disclose what happens to the evidence. "recorded" rows still
         # carry verification_source="agent_reported_tool_result" downstream —
         # recorded means graded-and-stored, not independently verified.
@@ -2405,7 +2454,7 @@ async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
                 }
                 if evidence_mode == "shadow":
                     detail["shadow_write"] = True
-                await _record_outcome_event_inline({
+                await record_outcome({
                     # In-process emitter: vouched, but its ceiling still comes
                     # from the provenance below, so these agent-attested rows
                     # stay capped exactly as the public path's do.

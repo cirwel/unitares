@@ -296,3 +296,54 @@ async def test_fetch_outcomes_uses_single_placeholder_without_agent(monkeypatch)
     assert rows == []
     assert "make_interval(hours => $1)" in recorded["query"]
     assert recorded["args"] == (24,)
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcomes_with_agent_id_delegates_to_tool_usage_helper(monkeypatch):
+    recorded = {}
+
+    class FakeConn:
+        async def fetch(self, query, *args):
+            recorded["query"] = query
+            recorded["args"] = args
+            return [
+                {
+                    "outcome_type": "task_completed",
+                    "is_bad": False,
+                    "outcome_score": 1.0,
+                    "eisv_e": 0.7,
+                    "eisv_i": 0.8,
+                    "eisv_s": 0.1,
+                    "eisv_v": 0.0,
+                    "eisv_phi": 0.2,
+                    "eisv_verdict": "safe",
+                    "eisv_coherence": 0.5,
+                    "eisv_regime": "STABLE",
+                    "detail": '{"ok": true}',
+                    "ts": None,
+                    "agent_id": "agent-1",
+                }
+            ]
+
+    class FakeAcquire:
+        async def __aenter__(self):
+            return FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeDB:
+        def acquire(self):
+            return FakeAcquire()
+
+    import src.db as db_module
+
+    monkeypatch.setattr(db_module, "get_db", lambda: FakeDB())
+
+    study = OutcomeCorrelation()
+    rows = await study._fetch_outcomes(agent_id="agent-1", since_hours=48)
+
+    assert len(rows) == 1
+    assert rows[0]["detail"] == {"ok": True}
+    assert "WHERE agent_id = $1" in recorded["query"]
+    assert recorded["args"] == ("agent-1", 48)

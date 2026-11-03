@@ -364,6 +364,8 @@ from src.mcp_handlers.schemas.core import UNIT_INTERVAL_STRING_PATTERN  # noqa: 
 
 _PATTERN_EXAMPLES = {
     UNIT_INTERVAL_STRING_PATTERN: ["0", "1", "1.0", "0.5", ".5"],
+    # Nonblank checkpoint keys: preserve whitespace while requiring content.
+    r"[\s\S]*\S[\s\S]*": ["k", "k" * 200, " key\n"],
 }
 
 

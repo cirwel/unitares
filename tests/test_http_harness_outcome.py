@@ -58,7 +58,7 @@ def _body(**overrides):
 
 def _recorder(payload=None):
     return patch(
-        "src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
+        "src.outcomes.record_outcome",
         AsyncMock(return_value=dict(payload if payload is not None else RECORDER_OK)),
     )
 

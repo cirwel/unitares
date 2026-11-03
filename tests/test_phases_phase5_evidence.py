@@ -123,15 +123,15 @@ def _make_patch_stack(ctx, *, outcome_event_mock):
     ))
     stack.enter_context(patch("governance_core.get_baseline_or_none", return_value=None))
     # health_checker is already wired by make_mock_server via HealthStatus.HEALTHY
-    # _record_outcome_event_inline is imported locally inside execute_post_update_effects as:
-    #   from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+    # record_outcome is imported locally inside execute_post_update_effects as:
+    #   from src.outcomes import record_outcome
     # Patching the source-module attribute works because `from x import y` inside a
     # function body binds at call-time (not at module load), so replacing the attribute
     # on the source module is sufficient.  If this import is ever hoisted to module-level
     # in phases.py, the patch target must change to
-    # "src.mcp_handlers.updates.phases._record_outcome_event_inline".
+    # "src.mcp_handlers.updates.phases.record_outcome".
     stack.enter_context(patch(
-        "src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
+        "src.outcomes.record_outcome",
         new=outcome_event_mock,
     ))
     return stack

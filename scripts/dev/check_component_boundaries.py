@@ -91,8 +91,12 @@ PACK_ALLOWED_MODULES = frozenset({
 
 # Component -> path prefixes (a prefix ending in "/" is a directory). Used by B3.
 COMPONENTS: dict[str, tuple[str, ...]] = {
+    "checkpoints": ("src/checkpoints.py", "src/db/mixins/checkpoint.py"),
     "identity": ("src/mcp_handlers/identity/", "src/identity/", "src/db/mixins/identity.py"),
-    "eisv": ("governance_core/", "src/db/mixins/state.py", "src/agent_monitor_state.py"),
+    "eisv": (
+        "governance_core/", "src/db/mixins/state.py",
+        "src/agent_monitor_state.py", "src/eisv/adapter.py",
+    ),
     "knowledge": (
         "src/mcp_handlers/knowledge/",
         "src/storage/knowledge_graph_age.py",
@@ -102,7 +106,13 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
     ),
     "dialectic": ("src/mcp_handlers/dialectic/", "src/dialectic_db.py"),
     "audit": ("src/db/mixins/audit.py", "src/audit_db.py"),
-    "outcomes": ("src/mcp_handlers/observability/outcome_events.py", "src/db/mixins/tool_usage.py"),
+    "outcomes": (
+        "src/outcomes.py",
+        "src/monitor_prediction.py",
+        "src/calibration_delivery.py",
+        "src/mcp_handlers/observability/outcome_events.py",
+        "src/db/mixins/tool_usage.py",
+    ),
     "lease_plane": ("src/lease_plane/", "elixir/lease_plane/"),
     # src/http_api.py is the declared re-export facade over src/http_routes/.
     "http": ("src/http_api.py", "src/http_routes/"),
@@ -111,6 +121,10 @@ COMPONENTS: dict[str, tuple[str, ...]] = {
 # Table -> (owner prefixes, declared co-owner prefixes). Used by B4. The tables
 # are the ones the proposal's Section 2.4 names.
 TABLE_OWNERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "core.checkpoints": (COMPONENTS["checkpoints"], ()),
+    "core.checkpoint_streams": (COMPONENTS["checkpoints"], ()),
+    "core.checkpoint_outbox": (COMPONENTS["checkpoints"], ()),
+    "assessment.checkpoint_deliveries": (COMPONENTS["checkpoints"], ()),
     "core.identities": (COMPONENTS["identity"], ()),
     "core.agent_state": (COMPONENTS["eisv"], ()),
     "knowledge.discoveries": (COMPONENTS["knowledge"], ()),
@@ -126,6 +140,8 @@ TABLE_OWNERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     ),
     "audit.events": (COMPONENTS["audit"], ()),
     "audit.outcome_events": (COMPONENTS["outcomes"], ()),
+    "audit.outcome_prediction_bindings": (COMPONENTS["outcomes"], ()),
+    "audit.outcome_calibration_deliveries": (COMPONENTS["outcomes"], ()),
     "lease_plane.surface_leases": (COMPONENTS["lease_plane"], ()),
 }
 

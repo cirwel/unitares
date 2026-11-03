@@ -13,6 +13,13 @@ from src.services.update_response_service import (
     serialize_process_update_response,
 )
 from src.state_locking import LockTimeoutError
+from src.services.checkpoint_service import (
+    CheckpointBoundaryStop,
+    capture_checkpoint_request,
+    checkpoint_boundary_response,
+    checkpoint_response,
+    finish_checkpoint_assessment,
+)
 
 logger = get_logger(__name__)
 
@@ -46,6 +53,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         _t_phase = now
 
     try:
+        capture_checkpoint_request(ctx)
         early_exit = await resolve_identity_and_guards(ctx)
         _tick("resolve_identity")
         if early_exit:
@@ -122,6 +130,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             identity_assurance=ctx.identity_assurance,
             monitor=ctx.monitor,
             ctx_warnings=getattr(ctx, "warnings", ()),
+            state_persistence=ctx.state_persistence,
         )
         _tick("build_response")
 
@@ -148,15 +157,33 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             logger.error(f"Response formatting failed: {fmt_err}", exc_info=True)
 
         ctx.arguments["lite_response"] = True
+        await finish_checkpoint_assessment(ctx)
         result = serialize_process_update_response(
             response_data=ctx.response_data,
             agent_uuid=ctx.agent_uuid,
             arguments=ctx.arguments,
             fallback_result=ctx.result,
             serializer=serializer,
+            state_persistence=ctx.state_persistence,
+            checkpoint=checkpoint_response(ctx),
         )
         _tick("serialize")
         return result
+    except CheckpointBoundaryStop as exc:
+        return checkpoint_boundary_response(
+            ctx, code=exc.code, message=str(exc), replay=exc.replay,
+        )
+    except Exception:
+        if getattr(ctx, "checkpoint_receipt", None) is None:
+            raise
+        # The neutral record survives failed or partial downstream execution.
+        # Do not turn record acceptance into a synthetic operational verdict.
+        await finish_checkpoint_assessment(ctx, failed=True)
+        logger.exception("Assessment failed after checkpoint acceptance")
+        return checkpoint_boundary_response(
+            ctx, code="CHECKPOINT_ASSESSMENT_FAILED",
+            message="Checkpoint accepted, but assessment did not complete. Effects may be partial; retrying the same key returns the receipt without repeating assessment.",
+        )
     finally:
         total_ms = int((time.perf_counter() - _t_total) * 1000)
         phases_str = " ".join(f"{k}={v}ms" for k, v in _phase_ms.items())

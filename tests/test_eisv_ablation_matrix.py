@@ -1562,8 +1562,9 @@ def test_candidate_pin_leaves_exploratory_reproduction_and_operator_reads_alone(
 
 # ---- data boundary at the first instrument change (stop-rule amendment 2026-10-15) ----
 
-_WIRED_CUTOFF = "2026-12-01T16:00:00Z"
-_WIRED_CUTOFF_DT = datetime(2026, 12, 1, 16, 0, tzinfo=timezone.utc)
+# Wrapper values since the 2026-11-03 run-date amendment.
+_WIRED_CUTOFF = "2026-11-03T16:00:00Z"
+_WIRED_CUTOFF_DT = datetime(2026, 11, 3, 16, 0, tzinfo=timezone.utc)
 
 
 def _wired_stop_rule_args(*extra):
@@ -1572,7 +1573,7 @@ def _wired_stop_rule_args(*extra):
         [
             "--read-protocol", "registered",
             "--read-id", STOP_RULE_READ_ID,
-            "--not-before", "2026-12-01T16:00:00Z",
+            "--not-before", _WIRED_CUTOFF,
             "--acknowledge-contamination",
             "--scopes", "task", "--windows", "365", "--leads", "0,30",
             "--anchor-scope", "trusted",
@@ -1633,7 +1634,7 @@ def test_instrument_change_clamps_the_boundary_strictly_before_it(monkeypatch):
     retry = matrix_module.effective_data_boundary(
         matrix_module.parse_args(
             ["--read-protocol", "registered", "--read-id", f"{STOP_RULE_READ_ID}-retry-1",
-             "--not-before", "2026-12-01T16:00:00Z", "--as-of", _WIRED_CUTOFF]
+             "--not-before", _WIRED_CUTOFF, "--as-of", _WIRED_CUTOFF]
         )
     )
     assert retry.effective == boundary.effective

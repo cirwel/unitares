@@ -193,9 +193,46 @@ def test_b3_private_reach_within_a_component_passes(root: Path):
     assert _problems(root) == []
 
 
+def test_b3_outcome_owner_helpers_stay_private_to_the_component(root: Path):
+    _write(root, "src/outcomes.py", "def _private():\n    return None\n")
+    _write(
+        root,
+        "src/mcp_handlers/observability/outcome_events.py",
+        "from src.outcomes import _private\n",
+    )
+    _write(root, "src/mcp_handlers/updates/phases.py", "from src.outcomes import record_outcome\n")
+    assert _problems(root) == []
+
+    _write(root, "src/mcp_handlers/updates/phases.py", "from src.outcomes import _private\n")
+    assert any("new B3 violation in src/mcp_handlers/updates/phases.py" in p for p in _problems(root))
+
+
 def test_b4_foreign_sql_fails_and_owner_sql_passes(root: Path):
     _write(root, "src/http_routes/overview.py", 'Q = "SELECT * FROM core.identities"\n')
     assert any("new B4 violation in src/http_routes/overview.py" in p for p in _problems(root))
+
+
+def test_b4_outcome_binding_and_calibration_tables_belong_to_outcomes(root: Path):
+    _write(
+        root,
+        "src/calibration_delivery.py",
+        'Q = "SELECT * FROM audit.outcome_calibration_deliveries"\n',
+    )
+    _write(
+        root,
+        "src/db/mixins/tool_usage.py",
+        'Q = "SELECT * FROM audit.outcome_prediction_bindings"\n',
+    )
+    assert _problems(root) == []
+
+    _write(
+        root,
+        "src/http_routes/overview.py",
+        'Q = "SELECT * FROM audit.outcome_prediction_bindings"\n',
+    )
+    assert any(
+        "new B4 violation in src/http_routes/overview.py" in p for p in _problems(root)
+    )
 
 
 def test_b4_elixir_writer_needs_a_declared_co_owner(root: Path):

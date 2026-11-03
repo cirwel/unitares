@@ -9,6 +9,7 @@ freshness_days: 14
 source_files:
   - unitares/commands/closeout.md
   - unitares/src/agent_loop_detection.py
+  - unitares/src/eisv/adapter.py
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
@@ -22,6 +23,12 @@ source_files:
   # `confidence` guidance survived several freshness cycles — the field it was
   # wrong about lives in phases.py, which nobody was checking.
   - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/outcomes.py
+  - unitares/src/state_persistence.py
+  - unitares/src/checkpoints.py
+  - unitares/src/db/mixins/checkpoint.py
+  - unitares/src/services/checkpoint_service.py
+  - unitares/src/services/update_response_service.py
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
@@ -238,6 +245,39 @@ same call.
 Cold-start action summaries carry a provisional headline. A `proceed` action
 before the behavioral baseline forms is permission to continue under the current
 policy, not a validated all-clear. The default state read preserves the verdict.
+
+New servers return `checkpoint` when neutral acceptance is known. Its
+`status: accepted`, `checkpoint_id`, and per-identity `seq` acknowledge an
+immutable record committed before assessment; they are not a verdict or proof
+that later effects completed. For retry recovery, supply an `idempotency_key`
+on the original call and reuse it with the same submitted content. The reply's
+`acceptance_retry_idempotent: true` covers that identity-scoped acceptance:
+a retry returns the original receipt without repeating assessment. Changed
+content conflicts. The same key under a new identity is a different scope.
+Current identity, lifecycle and cooldown gates still apply to retries. A
+receipt-only replay carries no fresh policy action or prediction. Do not infer
+operational permission from its `success: true`.
+
+An acceptance `status: unconfirmed` may follow a committed record whose
+acknowledgement was lost. Without an explicit key, another call can create a
+new record. The checkpoint's separate `assessment.status` reports execution:
+`completed` means execution returned, not atomic durability of every effect;
+`failed` may have partial effects. A crash can leave `started` ambiguous.
+Keyed retries never restart these deliveries, including those that never
+started. Recovery of an incomplete assessment is outside this increment.
+
+On completed check-ins that reach the state writer, `state_persistence`
+describes the assessment-row acknowledgement. `status: recorded` and a positive
+`state_id` confirm that the writer acknowledged that row; they do not confirm
+every other check-in effect. `status: unconfirmed` and `state_id: null` mean no
+valid acknowledgement arrived. The row may still exist if the commit completed
+before the connection failed. Read this receipt separately from top-level
+`success`. Its legacy `checkin_retry_idempotent: false` describes the assessment
+writer, which does not deduplicate itself. Use the independent checkpoint
+acceptance contract above when available; without it, repeating the full
+check-in can duplicate estimator updates and effects. Early refusals and older servers can omit
+the receipt; absence does not establish that nothing was written. This is an
+assessment-write receipt, not a neutral checkpoint ID.
 
 If you supplied a genuine `confidence`, the response may mint a concrete
 `prediction_id`. Preserve that identifier and pass it to

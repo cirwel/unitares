@@ -394,35 +394,13 @@ class OutcomeCorrelation:
     ) -> List[Dict]:
         """Fetch outcome events with EISV snapshots from DB."""
         from src.db import get_db
+        from src.db.mixins.tool_usage import fetch_outcomes_for_correlation
+
         db = get_db()
         async with db.acquire() as conn:
-            if agent_id:
-                rows = await conn.fetch(
-                    """
-                    SELECT outcome_type, is_bad, outcome_score,
-                           eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi,
-                           eisv_verdict, eisv_coherence, eisv_regime,
-                           detail, ts, agent_id
-                    FROM audit.outcome_events
-                    WHERE agent_id = $1
-                      AND ts >= now() - make_interval(hours => $2)
-                    ORDER BY ts ASC
-                    """,
-                    agent_id, since_hours,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT outcome_type, is_bad, outcome_score,
-                           eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi,
-                           eisv_verdict, eisv_coherence, eisv_regime,
-                           detail, ts, agent_id
-                    FROM audit.outcome_events
-                    WHERE ts >= now() - make_interval(hours => $1)
-                    ORDER BY ts ASC
-                    """,
-                    since_hours,
-                )
+            rows = await fetch_outcomes_for_correlation(
+                conn, agent_id=agent_id, since_hours=since_hours
+            )
             results = []
             for row in rows:
                 d = dict(row)

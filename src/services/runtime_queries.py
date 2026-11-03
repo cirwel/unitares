@@ -58,6 +58,11 @@ def _resolve_agent_identity_view(
     return canonical_handle, unique_handle, display_name
 
 
+def build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, Any]:
+    """Build the shared EISV view for read and outcome acknowledgements."""
+    return _build_eisv_semantics(metrics, monitor)
+
+
 def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, Any]:
     """Attach explicit primary/behavioral/ODE EISV views for read APIs."""
     primary_eisv = {

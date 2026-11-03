@@ -5,7 +5,8 @@ power-characterisation correction, 2026-08-23; condition 4 clarification
 and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
 merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
 and its pre-data narrowing correction, 2026-09-25, effective at merge;
-data-boundary amendment (operator), 2026-10-15, effective at merge
+data-boundary amendment (operator), 2026-10-15, effective at merge;
+run-date amendment (operator), 2026-11-03, effective at merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -284,6 +285,11 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
 `min(READ_CUTOFF, T − 1 µs)`, where T is the first instrument change recorded in
 `REGISTERED_READ_MANIFEST`; the command is unchanged. See
 [the amendment](#amendment-2026-10-15-data-boundary-at-the-first-instrument-change).)
+
+(Amended 2026-11-03: the read runs on or after 2026-11-03T16:00:00Z, with
+`--not-before 2026-11-03T16:00:00Z` and `READ_CUTOFF="2026-11-03T16:00:00Z"`.
+The effective data boundary is unchanged at T − 1 µs. See
+[the run-date amendment](#amendment-2026-11-03-run-date).)
 
 (`--fixture-rule registered` added 2026-09-02: it names the fixture predicate
 the read was registered with, which the CLI already pins for registered reads,
@@ -998,6 +1004,61 @@ down to the minute. Rationale: this is the first instrument change since
 registration, and its deployment can only follow the merge, so T precedes the
 deployment, which rule 3 above allows as conservative. T was fixed by that
 commit's time, not by any look at outcomes or at the read's data.
+
+## Amendment 2026-11-03: run date
+
+Status: operator-authorized 2026-11-03, effective at merge. This section moves
+the date the registered read runs. It changes no data boundary, PASS condition,
+threshold, cohort, label definition, candidate tuple, dispersion feature,
+window, lead, anchor scope, fixture rule or read id. Nothing earlier in this
+document is deleted.
+
+**Who decided.** The operator, on 2026-11-03, after it was set out that the
+2026-10-15 amendment had already fixed the read's data.
+
+**Why.** Under the 2026-10-15 amendment the read admits only outcomes strictly
+before T = `2026-10-15T13:45:00Z`, and every input an admitted row uses also
+predates T. Those rows were archived the same day, with the row counts and
+digest given in the instrument-change record above. Waiting until
+2026-12-01 therefore adds no eligible outcome. The one thing the remaining
+wait could still change is a backfill carrying a pre-T timestamp, and the
+pre-declared reconciliation against the archive reports those whenever the read
+runs. The operator asked for the result now rather than after a wait that adds
+no data. The operator's reason for wanting it sooner is an external deadline
+unrelated to the read's content.
+
+**The change.**
+
+1. `--not-before` moves from `2026-12-01T16:00:00Z` to `2026-11-03T16:00:00Z`.
+2. `READ_CUTOFF` (passed as `--as-of`) moves to the same instant. This is
+   required, not chosen: the CLI refuses an `--as-of` later than the access
+   time. The effective boundary stays `min(2026-11-03T16:00:00Z, T − 1 µs) =
+   T − 1 µs`, so the admitted rows are the same rows the 2026-12-01 date
+   would have admitted.
+3. The read id stays `eisv-outcome-grounding-2026-12-01`, with its
+   `-retry-<n>` form. It is a name: `REGISTERED_READ_MANIFEST` pins it, and
+   keeping it keeps the manifest, its pins and the retry rule untouched.
+4. The fleet-ops wrapper passes the two new values. The read runs once, from
+   `master`, after this amendment and the wrapper change have both merged. The
+   wrapper then retires its own LaunchAgent, so the 2026-12-01 calendar
+   trigger cannot run a second read. The post-read wake for #2610 is updated
+   to find the output under its new date.
+
+**No outcome-driven timing.** No read in the registered units has been run, and
+neither the archive nor the live database was queried to decide this. The
+decision rested on the manifest, this document and the instrument-change record.
+Apart from a pre-T backfill, which the reconciliation reports, moving the date
+cannot change which rows are admitted, so it cannot be chosen for a result.
+
+**Exposure disclosure.** This is the second amendment after interim exposure.
+The read must still be described as **amended after interim exposure**, not as
+an untouched confirmatory read, and its report names this amendment beside the
+2026-10-15 one.
+
+**What else this moves.** The holds that wait on the read lift when it is posted
+rather than on 2026-12-01: the #2610 E/I formula work, and the #2608
+(ablation protocol 0.3.1) hold on publishing a Phase I primary result. Neither
+hold's own conditions change.
 
 ## What continues regardless
 

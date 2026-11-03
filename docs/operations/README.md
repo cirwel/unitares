@@ -65,6 +65,9 @@ or [User Manual](../manual/README.md).
 
 ## Validation and evidence records
 
+- [`checkin-refactor-characterization.md`](checkin-refactor-characterization.md) —
+  check-in gates, lock and persistence boundaries, failure behavior, and the
+  evidence needed before separating the accountability record from EISV.
 - [`eisv-instrument-preservation-harness.md`](eisv-instrument-preservation-harness.md) —
   partial, tests-only pin of the EISV estimator and of the read's join mechanics
   (not the anchor-scoped registered cohort), with the estimator input inventory.
