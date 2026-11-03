@@ -127,13 +127,18 @@ profiles, dependencies, and configured reviewer/provider requirements are in
 EISV computes weighted, smoothed runtime observations and controller history.
 The [computation reference](EISV_COMPUTATION.md) defines the formulas, provenance,
 and distinction between deployed indices and the paper's research targets.
-`proceed` and `guide` are advisory; `pause` holds governed writes until recovery,
-review, an operator, or expiry lifts it. External enforcement needs host
-integration. The operator adopted moving EISV into an optional module on
+The default `observe` posture retains inferred pause recommendations as
+guidance while EISV continues to run. With the operator's `enforce` posture, an
+applied pause holds governed writes until recovery, review, an operator, or
+expiry lifts it. Existing durable holds remain authoritative in either posture;
+external enforcement needs host integration. The operator adopted moving EISV into an optional module on
 2026-10-10; the [staged implementation plan](proposals/active/eisv-core-boundary-v0.md)
-governs that work. The estimator still ships in the core path.
+governs that work. The estimator still ships in the core path; runtime
+optionality is not an available switch. See the
+[role, runtime and evidence contract](EISV_COMPUTATION.md#role-runtime-and-evidence).
 
-Correctness, safety, adversarial resistance, predictive lift, and incident
+Assessment labels such as `safe` and `healthy` describe configured bands over
+the instrument's inputs. Correctness, safety, adversarial resistance, predictive lift, and incident
 prevention require their own evidence. The [scope and threat model](SCOPE_AND_THREAT_MODEL.md)
 and [evaluation boundaries](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) state
 what remains open. The current trust boundary is one operator and its explicitly

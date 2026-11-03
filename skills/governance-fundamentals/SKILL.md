@@ -46,7 +46,14 @@ self-hosted, single-operator federation kernel for agent identity, claims and
 evidence, review, outcomes, and reconstruction. This skill covers one instrument
 inside it, the check-in's state estimate.
 
-That instrument provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists.
+EISV supports digital proprioception: an inspectable account of changes in an
+agent's working process. The current check-in path runs this estimator
+synchronously, blending observations and controller history, smoothing them,
+and comparing them with thresholds and the agent's own trajectory once a
+baseline exists. These readings inform guidance and policy; their operational
+role, intended interpretations and evidence of benefit are distinct. The
+[computation contract](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#role-runtime-and-evidence)
+owns that framing and the staged direction toward optional assessment.
 
 ## EISV State Vector
 
@@ -99,8 +106,10 @@ Prefer live tool output over static range lore if the current runtime reports a 
 
 Your state sits in a basin — a region of the EISV space:
 
-- **High basin**: Healthy. E and I are high, S and V are low. Normal operating range.
-- **Low basin**: Degraded. May need recovery or intervention.
+- **High basin**: The configured high-basin region: E and I are high, S is low,
+  and |V| is within its band. This is an instrument classification.
+- **Low basin**: The configured low-basin region. Inspect its contributing
+  readings and the policy record before interpreting what changed.
 - **Boundary**: Transitioning between basins. Extra attention from governance — the verdict's
   sub-action is `guide` regardless of the headline. The basin does **not** force `margin: tight`:
   `basin` and `margin` are two different notions of "edge", and the boundary condition is carried
@@ -131,8 +140,8 @@ acceptance and retry guidance.
 
 | Action | Sub-action | Meaning | What to do |
 |--------|-----------|---------|------------|
-| **proceed** | `approve` | State is healthy | Continue working normally |
-| **proceed** | `guide` | Something is slightly off | Read the guidance text, adjust approach |
+| **proceed** | `approve` | Effective action is proceed; approval is this policy's classification | Continue working normally |
+| **proceed** | `guide` | Policy supplies guidance | Read the guidance and assess its relevance to the work |
 | **proceed** | `guide` with `recommended_action=pause` | Default observation posture: an inferred edge was crossed, but no hold was applied | Inspect if useful; continuing is neither permission nor a safety certification |
 | **pause** | named pause with `enforcement.applied=false` | Enforcement posture returned the compatibility directive, but this path did not commit a lifecycle hold | Do not infer a write gate; inspect enforcement or recovery state |
 | **pause** | `reject` or a named pause, with `enforcement.applied=true` | Explicit compatibility actuator applied a lifecycle hold | Stop and use the named recovery, optional dialectic review, or human input |
@@ -157,7 +166,7 @@ telemetry and can legitimately disagree with the headline.
 | `margin` | Meaning | What to do |
 |----------|---------|------------|
 | `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet (a crossed edge still reports `warning` / `critical` during warmup) | Keep checking in; a real margin appears after 3+ check-ins |
-| `comfortable` | Clear of every edge that could be measured, by a healthy distance. Read `margin_scope` before treating it as "nothing is near" | Proceed normally |
+| `comfortable` | Outside the tight band for every edge that could be measured. Read `margin_scope` before interpreting its coverage | Proceed normally |
 | `tight` | Within the band around the nearest decision threshold | Be more careful with next steps; avoid increasing complexity |
 | `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
 | `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
