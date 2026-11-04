@@ -326,6 +326,22 @@ class AblationMatrixRow:
     telemetry_envelope: int | None = None
     telemetry_dimension: str | None = None
     telemetry_stratum: str | None = None
+    # Attrition for the fetch this row came from: outcomes the window and anchor
+    # scope admitted, then how many the fixture rule and the harness-lane
+    # exclusion removed before any model saw them. None when the row was not
+    # built from a database fetch (unit fixtures, frozen artifacts).
+    fetched_rows: int | None = None
+    fixture_excluded: int | None = None
+    harness_excluded: int | None = None
+
+
+# A slice that keeps less than this share of the outcomes its window and anchor
+# scope admitted is reported as starved. Agent-chosen reporting guard
+# (2026-11-03), not an inference threshold: it changes no statistic, only what
+# the report says first. On 2026-11-03 the registered stop-rule read kept 227
+# of 4,876 trusted outcomes (4.7%) and was written up as a result.
+STARVATION_RETAINED_SHARE = 0.5
+STARVED_READ_EXIT_CODE = 3
 
 
 def _fmt_float(value: float | None, digits: int = 3) -> str:
@@ -780,6 +796,43 @@ def filter_rows_for_validation(
     ]
 
 
+@dataclass(frozen=True)
+class SliceAttrition:
+    """What happened to one fetch between the database and the models."""
+
+    fetched: int
+    fixture_excluded: int
+    harness_excluded: int
+
+    @property
+    def retained(self) -> int:
+        return self.fetched - self.fixture_excluded - self.harness_excluded
+
+    @property
+    def starved(self) -> bool:
+        return self.fetched == 0 or self.retained < STARVATION_RETAINED_SHARE * self.fetched
+
+
+def row_attrition(row: AblationMatrixRow) -> SliceAttrition | None:
+    if row.fetched_rows is None:
+        return None
+    return SliceAttrition(
+        fetched=row.fetched_rows,
+        fixture_excluded=row.fixture_excluded or 0,
+        harness_excluded=row.harness_excluded or 0,
+    )
+
+
+def starved_slices(rows: Sequence[AblationMatrixRow]) -> list[tuple[tuple[str, int, float], SliceAttrition]]:
+    """One entry per fetched (scope, window, lead) slice that is starved."""
+    seen: dict[tuple[str, int, float], SliceAttrition] = {}
+    for row in rows:
+        attrition = row_attrition(row)
+        if attrition is not None:
+            seen.setdefault((row.scope, row.window_days, row.lead_minutes), attrition)
+    return [(key, attrition) for key, attrition in seen.items() if attrition.starved]
+
+
 def split_rows_by_harness_lane(
     rows: Sequence[OutcomeRow],
 ) -> dict[str, list[OutcomeRow]]:
@@ -915,6 +968,64 @@ def _format_data_boundary_lines(boundary: DataBoundary) -> list[str]:
     ]
 
 
+def _format_attrition_lines(rows: Sequence[AblationMatrixRow]) -> list[str]:
+    """What the filters removed, per fetched slice, ahead of every other section.
+
+    Empty when no row carries attrition (rows not built from a database fetch).
+    """
+    slices: dict[tuple[str, int, float], SliceAttrition] = {}
+    for row in rows:
+        attrition = row_attrition(row)
+        if attrition is not None:
+            slices.setdefault((row.scope, row.window_days, row.lead_minutes), attrition)
+    if not slices:
+        return []
+    lines: list[str] = []
+    starved = [key for key, attrition in slices.items() if attrition.starved]
+    if starved:
+        lines.extend(
+            [
+                "**EVIDENCE STARVED.** In "
+                + ", ".join(
+                    f"`{scope}/{window}/{_fmt_lead(lead)}`" for scope, window, lead in starved
+                )
+                + f", the filters removed more than {1 - STARVATION_RETAINED_SHARE:.0%} "
+                "of the outcomes the window and anchor scope admitted, or nothing was "
+                "admitted. The matrix below describes only the rows that remain. It is "
+                "not a test on the admitted population, and no verdict should be "
+                "reported from it until the removal is explained.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Evidence retained",
+            "",
+            "| Scope | Window | Lead | Admitted | Removed by fixture rule "
+            "| Removed by harness lane | Retained | Share |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for (scope, window, lead), attrition in slices.items():
+        share = (
+            f"{attrition.retained / attrition.fetched:.1%}" if attrition.fetched else "-"
+        )
+        lines.append(
+            f"| {scope} | {window} | {_fmt_lead(lead)} | {attrition.fetched} "
+            f"| {attrition.fixture_excluded} | {attrition.harness_excluded} "
+            f"| {attrition.retained} | {share} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Admitted: outcomes inside the window and the anchor scope. Every count "
+            "after it is a removal made before any model saw the data.",
+            "",
+        ]
+    )
+    return lines
+
+
 def format_matrix_report(
     rows: Sequence[AblationMatrixRow],
     *,
@@ -963,6 +1074,7 @@ def format_matrix_report(
         if contamination_acknowledged:
             lines.append("Contamination acknowledgement: recorded")
         lines.append("")
+    lines.extend(_format_attrition_lines(rows))
     excluded = tuple(str(lane) for lane in excluded_harness_lanes if str(lane))
     if excluded:
         lines.extend(
@@ -1487,6 +1599,9 @@ async def build_matrix_from_db(
         outcome_types = STRICT_OUTCOMES if scope == "strict" else TASK_OUTCOMES
         for window_days in windows:
             for lead_minutes in leads:
+                # Fixtures are kept through the fetch and removed here, so the
+                # report can say how many the rule removed. The rows the models
+                # see are the same as when fetch_rows removed them itself.
                 fetched_rows = await fetch_rows(
                     db_url,
                     fixture_rule=fixture_rule,
@@ -1496,23 +1611,37 @@ async def build_matrix_from_db(
                     anchor_predicate=anchor_predicate,
                     as_of=as_of,
                     include_identity_metadata=as_of is None,
+                    exclude_controlled_fixtures=False,
                 )
+                non_fixture_rows = [
+                    row
+                    for row in fetched_rows
+                    if not is_controlled_validation_fixture(
+                        row.detail, include_declared_purpose=False, rule=fixture_rule
+                    )
+                ]
                 if group_by_harness_lane:
                     lane_groups = {
                         lane: lane_rows
                         for lane, lane_rows in split_rows_by_harness_lane(
-                            fetched_rows
+                            non_fixture_rows
                         ).items()
                         if lane not in excluded
                     }
                 else:
                     lane_groups = {
                         None: filter_rows_for_validation(
-                            fetched_rows,
+                            non_fixture_rows,
                             exclude_harness_lanes=exclude_harness_lanes,
                             fixture_rule=fixture_rule,
                         )
                     }
+                attrition_fields = {
+                    "fetched_rows": len(fetched_rows),
+                    "fixture_excluded": len(fetched_rows) - len(non_fixture_rows),
+                    "harness_excluded": len(non_fixture_rows)
+                    - sum(len(lane_rows) for lane_rows in lane_groups.values()),
+                }
                 for harness_lane, outcome_rows in lane_groups.items():
                     telemetry_groups: list[
                         tuple[str | None, str | None, Sequence[OutcomeRow]]
@@ -1530,7 +1659,8 @@ async def build_matrix_from_db(
                         stratum_rows,
                     ) in telemetry_groups:
                         matrix_rows.append(
-                            build_matrix_row(
+                            replace(
+                                build_matrix_row(
                                 stratum_rows,
                                 scope=scope,
                                 window_days=window_days,
@@ -1544,6 +1674,8 @@ async def build_matrix_from_db(
                                 anchor_scope=anchor_scope,
                                 telemetry_dimension=telemetry_dimension,
                                 telemetry_stratum=telemetry_stratum,
+                                ),
+                                **attrition_fields,
                             )
                         )
     return matrix_rows
@@ -1740,6 +1872,20 @@ async def main_async(args: argparse.Namespace) -> int:
     else:
         # Emit only redacted aggregate report bytes, not raw DB rows or DSNs.
         sys.stdout.buffer.write(payload)
+    starved = starved_slices(rows)
+    if starved:
+        print(
+            "error: evidence starved in "
+            + ", ".join(
+                f"{scope}/{window}/{_fmt_lead(lead)} "
+                f"(kept {attrition.retained} of {attrition.fetched})"
+                for (scope, window, lead), attrition in starved
+            )
+            + "; the report is written, but explain the removal before reporting "
+            "any verdict from it",
+            file=sys.stderr,
+        )
+        return STARVED_READ_EXIT_CODE
     return 0
 
 
