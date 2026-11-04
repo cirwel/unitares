@@ -57,7 +57,7 @@ them at the pinned commit.
 | Regime instability | 35% of raw S | Label flips over the last 10 regime labels. `detect_regime` labels each check-in from S's own last change, so this term is a **self-loop** |
 | Complexity divergence | 25% of raw S, as `min(1, cd)` | `cd = |derived − claimed|`. It is an absolute value, so underclaiming counts too |
 | Continuity blend | 20% of the result | `S_input = 0.1 + 0.5 × cd` (+0.1 when a session does not continue; +0.1 with no self-report) |
-| Tool velocity | +0.10 × `clip((velocity − 5) / 10, 0, 1)` | Tool calls per check-in. The harness currently pins this to zero |
+| Tool velocity | +0.10 × `clip((velocity − 5) / 10, 0, 1)` | Calls per minute, averaged over the past hour (`tool_vel = calls in the last hour / 60`, in `src/mcp_handlers/updates/phases.py`). Only the MCP update path supplies it. The `process_update` path the harness drives never passes it, so in the harness this term is absent, not zero |
 
 Two consequences shape the design:
 
@@ -76,10 +76,15 @@ Every condition runs in both arms, on the same inputs.
 
 - **(a) Deployed:** `metrics["S"]` from `UNITARESMonitor.process_update` at the
   pinned commit, with the live plist's estimator flags (as in v0).
-- **(b) Regime-held:** the same path with `neutralize_self_loops`, which holds the
-  regime term at `REGIME_NEUTRAL_INSTABILITY = 0.12`. This matches the shadow
-  that runs on every live check-in
-  (`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`).
+- **(b) Regime-held:** the same path, with only the regime term held at
+  `REGIME_NEUTRAL_INSTABILITY = 0.12`. The harness patches
+  `_regime_instability` to return that constant; nothing else changes. It is the
+  same substitution the live shadow makes through `regime_instability_override`
+  (`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`). The broader
+  `neutralize_self_loops` flag is **not** used, because it also neutralises the
+  decision and coherence contributions to E and I. Arm (b) would then differ in
+  more than the regime term. v0's `--ablate-regime` held the term at 0.1; v1 uses
+  0.12 to match the shadow.
 
 Each arm gets its own verdict. One arm's verdict says nothing about the other.
 
@@ -100,7 +105,7 @@ self-reported values. Exceptions are noted below.
 | P2 | Confidence drops to 0.55 / 0.45 / 0.30, with complexity reported accurately | Confidence alone (drift path only) |
 | P3 | v0's joint collapse: confidence 0.30 and claimed complexity 0.90 | Continuity with v0 |
 | P4 | Thrash: alternating terse/confident and heavy/unsure reports, each reported accurately | Switching |
-| P5 | Tool-velocity burst of 15 calls per check-in, every other input unchanged | The tool term. Needs the harness extension in §8 |
+| P5 | Tool-velocity burst: tool calls arrive at 60 per minute from step 30 to step 44, every other input unchanged. Velocity is the past hour's calls ÷ 60, with a floor of 5 per minute. At 30–90 s intervals the window lasts about 15 minutes, so a lower rate might never cross the floor. 60 per minute brings the hourly average to about 15 per minute, which is full pressure, by the window's end. The predicted response builds through the window and decays over the following hour, so Step 0 checks that recovery fits the stream | The tool term. **Conditional:** it runs only if Step 0 shows the harness can drive a path that supplies `tool_call_velocity` (§8). Otherwise it is dropped, and the result says the tool term is untested |
 
 **Negative controls** (predicted not to move S):
 
@@ -109,7 +114,7 @@ self-reported values. Exceptions are noted below.
 | N1 | None | The reference stream |
 | N2a, N2b | Reports use two vocabulary sets disjoint from baseline, at the same structure and length | Wording is not instability |
 | N3 | Heavier work, reported accurately: derived and claimed complexity rise together | Antagonist to P1. The work changes, but divergence does not |
-| N4 | Cadence of 5–15 s, and separately 300–600 s, with tool calls fixed per check-in | Tempo is not instability |
+| N4 | Cadence of 5–15 s, and separately 300–600 s | Tempo is not instability. If P5's path is available, N4 also runs on it with a fixed number of tool calls per minute, so that a cadence change doesn't change velocity |
 | N5 | Terser work, reported accurately | The mirror of N3 |
 
 **Classes:** the default agent class, plus one other class overlay if the harness
@@ -140,10 +145,15 @@ out wrong is reported as wrong; it is never re-derived after collection.
 
 - **Common random numbers, with branching from a cloned state.** For seed *k*,
   run the baseline once and clone the monitor state at step 30. Every condition
-  continues from that clone. Its random draws are indexed by `(seed, condition,
-  step, field)`, not by a shared stream, so a branch that executes differently
-  can't shift another branch's draws. Recovery inputs are matched across branches
-  too. The regime trajectories are expected to diverge after step 30, because
+  continues from that clone. Draws come from keyed generators, not one shared
+  stream, so a branch that executes differently can't shift another branch's
+  draws. **Shared nuisance draws** (report text, jitter on fields the condition
+  doesn't change, intervals) are keyed by `(seed, step, field)` alone. Every
+  branch of a seed therefore gets identical nuisance inputs at every step,
+  through baseline, intervention and recovery. Only a field the intervention
+  itself changes takes a condition-specific draw, keyed by `(seed, condition,
+  step, field)`. For example, N2's vocabulary set draws the words it substitutes
+  that way, while sentence structure and length stay shared. The regime trajectories are expected to diverge after step 30, because
   that divergence is part of the effect.
 - **Microstate sensitivity (arm a).** Add a second control stream per seed that
   differs from N1 only by ±1e-4 on reported confidence from step 30. Report the
@@ -243,9 +253,19 @@ Mapped onto the four [positive-control checks](../../operations/positive-control
 - **Independence:** every dose is in absolute input units. None is expressed in
   units of an S threshold.
 
-**Harness extension for P5 and N4:** the tool-usage stub returns a fixed number
-of calls per check-in, with error rate 0, instead of all zeros. It changes
-nothing else, and the extension lands with its own tests before Step 0 closes.
+**Harness extension for P5 and N4:** stubbing the tool-usage tracker is not
+enough. The `process_update` path the harness drives never passes
+`tool_call_velocity` to the sensor (`src/governance_monitor.py`, the behavioral
+sensor call). Step 0 decides between two routes and records its choice:
+
+- drive the MCP update phase that does compute velocity (calls in the last hour
+  ÷ 60) with a stubbed tracker;
+- or pass velocity in those same units through a harness-only hook.
+
+The second route measures a path the deployed `process_update` doesn't take,
+and the result says so. Either route lands with its own tests, with tool-call
+timestamps on the injected clock. If neither route is feasible, P5 is dropped
+(§4).
 
 ## 9. Characterisation: what the combined reading adds (no pass or fail)
 
@@ -309,3 +329,12 @@ was folded into the protocol as shown.
 | Per-step AUC pools autocorrelated steps and compares across time | §9 one score per seed, matched windows, the best input chosen once, fixed directions |
 | No recovery criterion | §7 criterion 4, and streams lengthened to 100 |
 | P2's path into S, and cadence against tool counts, were unmapped | §2 path table, Step 0 shape prediction, and §8 fixed calls per check-in |
+
+The implementation review of this draft (Codex, PR #3189) found three defects in
+the first version. All three are fixed above:
+
+| Found | Fix |
+|---|---|
+| Stubbing tool counts can't reach S: `process_update` never passes `tool_call_velocity`, and velocity is in calls per minute over an hour, not per check-in | §2 units corrected. P5 is conditional on a path that supplies velocity (§8), and its rate now crosses the 5-per-minute floor |
+| `neutralize_self_loops` also neutralises the decision and coherence terms of E and I, so arm (b) would change more than the regime term | Arm (b) patches only `_regime_instability`, the same substitution the live shadow makes |
+| Keying every draw by condition gave control and intervention different jitter, which breaks common random numbers | Shared nuisance draws are keyed by `(seed, step, field)`. Only fields the intervention changes take condition-specific draws |
