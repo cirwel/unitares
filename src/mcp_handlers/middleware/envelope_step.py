@@ -3173,8 +3173,7 @@ def build_experience_envelope(
             next_action = (
                 "Keep working; sync_state only at a meaningful milestone when "
                 "you also hold a judgment the substrate cannot infer. When "
-                "an outcome lands, pass this prediction_id to record_result so it "
-                "grades this check-in."
+                "an outcome lands, pass this prediction_id to record_result."
             )
         else:
             next_action = (
