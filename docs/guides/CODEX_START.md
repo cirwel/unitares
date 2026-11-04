@@ -8,14 +8,14 @@ The installable Codex adapter itself is canonical in the companion `unitares-gov
 
 ## Goal
 
-Connect to a running UNITARES server, preserve continuity cleanly, and check in when there is meaningful agent state to report: typically at most once per assistant turn, plus milestone check-ins for substantial work. Do not manufacture a check-in, and avoid per-tool or per-edit noise. The plugin's Stop hook may add its own `substrate_interpretation` row after a turn; that row is not an agent check-in and does not need echoing (see `AGENTS.md`, *Codex-specific wiring*).
+Connect to a running UNITARES server, preserve continuity cleanly, and check in only at a meaningful milestone when you also hold a judgment the substrate cannot infer: a self-correction, revised belief, material change in uncertainty or complexity, or handoff assessment after substantive work. There is no fixed time-, turn-, or tool-count cadence; completion or session exit alone does not call for a check-in. The plugin's Stop hook may add its own `substrate_interpretation` row after a turn; that row is not an agent check-in and does not need echoing (see `AGENTS.md`, *Codex-specific wiring*).
 
 ## Stable Workflow
 
 1. Run `/governance-start`
 2. Keep continuity in `.unitares/session.json`
 3. Do real work
-4. Run `/checkin` when there is meaningful state to report (typically at most once per assistant turn), and after meaningful milestones
+4. Run `/checkin` only at a meaningful milestone when you also hold a judgment the substrate cannot infer
 5. Run `/diagnose` when continuity or governance state looks wrong
 6. Use `/dialectic` when you need structured review
 7. Run `/closeout` before saying edited work is done
@@ -24,7 +24,7 @@ If you are not using commands directly, the equivalent raw tool flow is:
 
 1. First run or fresh process: `start_session(force_new=true)` and save `agent_uuid` / `client_session_id`
 2. Fresh process continuing prior work: `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="explicit")` — only for a real handoff from a finished predecessor
-3. `sync_state()` after meaningful work, typically at most once per assistant turn
+3. `sync_state()` only at a meaningful milestone when you also hold a judgment the substrate cannot infer
 4. Same live owner / proof-owned rebind only: `identity(agent_uuid=..., continuity_token=..., resume=true)`
 5. `check_working_state()` for read-only state checks
 6. `health_check()` only if the system itself may be part of the problem
@@ -40,7 +40,7 @@ also carries it under `raw_governance`.
 
 - Codex uses slash commands and explicit tool calls; its lifecycle hooks are synchronous and do not imply a continuously running agent
 - the plugin's Stop hook may record a `substrate_interpretation` row after a turn; that is the substrate's reading, not an agent check-in, so do not echo it
-- agent-authored check-ins are yours to make, and only when there is meaningful state to report
+- agent-authored check-ins are yours to make, and require both a meaningful milestone and a judgment the substrate cannot infer
 - Watcher findings are manual unless you invoke the watcher CLI yourself
 - `.unitares/session.json` is local workspace state; use its `uuid` as a lineage candidate, not a resume credential
 
