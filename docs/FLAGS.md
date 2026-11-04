@@ -195,6 +195,7 @@ additions merge cleanly. -->
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
 | `UNITARES_PARENT_AGENT_ID` | `None (no reader fallback)` | read by main() | agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
+| `UNITARES_PER_AGENT_I_CALIBRATION` | `''` | Return True when per-agent tactical calibration in behavioral I is enabled | src/behavioral_sensor.py |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
 | `UNITARES_POLICY_ACTUATION` | `'observe'` | Return the operator-owned policy actuation posture | src/agent_loop_detection.py |
