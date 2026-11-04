@@ -89,6 +89,7 @@ Files here are capped at 800 lines. Files already longer are listed with their c
 | [`eisv-incremental-value-ablation-v1.md`](../eisv-incremental-value-ablation-v1.md) | **Active** · Draft preregistration (protocol 0.3.1); no cohort enrolled and no experiment scheduled |
 | [`legacy-coherence-identity-ablation-v0.md`](legacy-coherence-identity-ablation-v0.md) | **Built (partial)** · Measurement-only. The shadow is computed on every check-in (`compute_legacy_coherence_identity_shadow`); the aggregation read is not done |
 | [`eisv-per-agent-i-calibration-v0.md`](eisv-per-agent-i-calibration-v0.md) | **Active** · Proposed replacement and source audit (#2818, 2026-10-15). Historical temporal-pair arithmetic is exploratory; independent target-bound evidence and the specified offline comparison remain prerequisites. No live estimator, supply or threshold change |
+| [`eisv-s-validation-v1.md`](eisv-s-validation-v1.md) | **Active** · DRAFT protocol (2026-11-03) for validating S as a measurement: test-retest and faithfulness under intervention, with separated positive and negative controls, two arms (deployed, regime-held), mutants the procedure must reject, and a proposed deciding standard. Nothing has run. Collection waits on operator approval of §7 and the Step 0 predictions |
 | [`independent-operator-cohort-enrollments.md`](independent-operator-cohort-enrollments.md) | **Active** · Append-only enrollment ledger for the cohort protocol; entries are added by PR and never edited |
 
 ## Effect authorization design
