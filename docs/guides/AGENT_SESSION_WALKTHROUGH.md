@@ -13,6 +13,12 @@ The task is illustrative. The responses are not: they were captured on
 abridged to the fields the step is about; field names and values are verbatim.
 Identifiers will differ on every install.
 
+The captured `next_action` suggestions below reflect that server version;
+they do not set the current check-in cadence. Check in only at a meaningful
+milestone when you also hold a judgment the substrate cannot infer, never
+merely because a step completed. The example in step 5 reports a revised
+diagnosis after investigating the flaky test.
+
 The rules behind each step are in
 [Integrating agents](../manual/04-integrating-agents.md) and the
 [identity ontology](../ontology/identity.md). Start with the lifecycle skill's
@@ -115,7 +121,7 @@ store_finding {
 }
 ```
 
-### 5. Check in after meaningful work
+### 5. Report the revised diagnosis at a milestone
 
 ```json
 sync_state {
