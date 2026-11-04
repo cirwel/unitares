@@ -84,9 +84,10 @@ def test_propagation_surfaces_do_not_restore_withdrawn_inferences():
 
 def test_tested_claim_headings_do_not_label_engineering_findings_refuted():
     contract = _read("docs/ontology/eisv-proprioception-contract.md")
-    ledger = contract.split("## Tested claims — ledger", 1)[1].split(
-        "## Preferred wording", 1
-    )[0]
+    assert "eisv-tested-claims-ledger.md" in contract
+
+    ledger_doc = _read("docs/ontology/eisv-tested-claims-ledger.md")
+    ledger = ledger_doc.split("## Tested claims — ledger", 1)[1]
     entries = re.findall(
         r"(?ms)^\*\*(\d+)\.(.*?)(?=^\*\*\d+\.|\Z)",
         ledger,
