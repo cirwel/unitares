@@ -8,6 +8,34 @@ the dated index tag supplies no execution authority.
 
 [Proposal guide](../README.md) · [Migration inventory](../../dev/proposals-layout-2347.json)
 
+## Before a registered result is reported
+
+These rules apply to every protocol in this folder. They change no protocol's
+design, statistic or stop rule; they govern what is posted about a read
+(operator approval of this guard, 2026-11-03).
+
+1. **Attrition first.** Before any verdict, the write-up states how many rows
+   the read admitted and how many each filter removed. A read can't claim a
+   result while that removal is unexplained. The ablation matrix prints an
+   "Evidence retained" table ahead of its other sections. When a slice keeps
+   less than half of what it admitted, the report opens with **EVIDENCE
+   STARVED** and the script exits 3.
+2. **Author sign-off.** An agent may run a registered read and post its raw
+   report, labeled as unreviewed. It does not post a verdict until the operator
+   has signed off on it. That covers a pass, a fail, a closure, a refutation, or
+   a status change in the table below. It applies on an issue, in a doc and in
+   the knowledge graph. The verdict post cites the sign-off with a link or the
+   operator's dated words.
+3. **A review is not a sign-off.** A reviewer approving the write-up, from any
+   family, checks the write-up. It doesn't stand in for step 2.
+
+Why: on 2026-11-03 the stop-rule read's fixture rule removed 4,649 of 4,876
+trusted outcomes. The read kept 227 rows, and an agent posted "FAIL on all four
+conditions" across the issue, the docs and the knowledge graph. A cross-family
+reviewer passed that post. The operator asked where the data had gone, and only
+then was the cause found ([#1425](https://github.com/cirwel/unitares/issues/1425),
+[#3183](https://github.com/cirwel/unitares/pull/3183)).
+
 ## Accountability and calibration protocols
 
 | Document | Status |
