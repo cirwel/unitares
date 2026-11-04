@@ -1636,6 +1636,11 @@ async def build_matrix_from_db(
                             fixture_rule=fixture_rule,
                         )
                     }
+                if not lane_groups:
+                    # Every admitted row was removed, or none was admitted. Keep
+                    # one empty row so the slice's attrition still reaches the
+                    # report and the starvation guard.
+                    lane_groups = {None: []}
                 attrition_fields = {
                     "fetched_rows": len(fetched_rows),
                     "fixture_excluded": len(fetched_rows) - len(non_fixture_rows),

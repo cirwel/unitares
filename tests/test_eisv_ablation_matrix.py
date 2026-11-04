@@ -1875,3 +1875,28 @@ def test_cli_writes_the_report_and_exits_nonzero_when_starved(
         assert "evidence starved in task/365/0 (kept 227 of 4876)" in stderr
     else:
         assert "evidence starved" not in stderr
+
+
+@pytest.mark.parametrize("group_by_lane", [False, True])
+@pytest.mark.parametrize("fetched", [[], [_fixture(1), _fixture(2), _beam(3)]])
+def test_a_slice_with_nothing_left_still_reaches_the_starvation_guard(
+    monkeypatch, group_by_lane, fetched
+):
+    async def fake_fetch_rows(*_args, **_kwargs):
+        return list(fetched)
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+            group_by_harness_lane=group_by_lane,
+            exclude_harness_lanes=("beam",),
+        )
+    )
+    assert len(rows) == 1 and rows[0].rows == 0
+    assert rows[0].fetched_rows == len(fetched)
+    assert [key for key, _ in matrix_module.starved_slices(rows)] == [("task", 90, 0.0)]
+    assert "EVIDENCE STARVED" in format_matrix_report(rows)
