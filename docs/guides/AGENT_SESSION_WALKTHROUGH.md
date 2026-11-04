@@ -16,8 +16,8 @@ Identifiers will differ on every install.
 The captured `next_action` suggestions below reflect that server version;
 they do not set the current check-in cadence. Check in only at a meaningful
 milestone when you also hold a judgment the substrate cannot infer, never
-merely because a step completed. The example in step 5 reports a revised
-diagnosis after investigating the flaky test.
+merely because a step completed. The report in step 5 is a historical capture
+too; use the current contract when authoring check-ins.
 
 The rules behind each step are in
 [Integrating agents](../manual/04-integrating-agents.md) and the
@@ -121,7 +121,7 @@ store_finding {
 }
 ```
 
-### 5. Report the revised diagnosis at a milestone
+### 5. Captured check-in
 
 ```json
 sync_state {
