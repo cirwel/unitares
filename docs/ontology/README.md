@@ -40,6 +40,8 @@ Every current document in this folder has one entry below. Dated notes that curr
 - [`plan.md`](plan.md) · [`plan-2026-06-14.md`](plan-2026-06-14.md) — locator and preserved June 14, 2026 resolution ledger (see *Start here*)
 
 **EISV claim governance** (how EISV claims may be stated and read):
+- [`eisv-tested-claims-ledger.md`](eisv-tested-claims-ledger.md) — full 54-row source-cited audit ledger, wave notes, and dated SQL snapshots accompanying [`eisv-proprioception-contract.md`](eisv-proprioception-contract.md)
+- [`eisv-decision-records.md`](eisv-decision-records.md) — full August–September 2026 governance decision records (`legacy C(V)`, coherence authority retirement, cold-start confirmation shadow, cold-start authority guard, V-reintroduction deferral)
 - [`falsification-inference-containment-2026-08-22.md`](falsification-inference-containment-2026-08-22.md) — initial correction for five EISV falsification claims: separates source consumption, estimand identification, sample adequacy, and a pre-fixed decision standard
 - [`falsification-design-system-audit-2026-08-23.md`](falsification-design-system-audit-2026-08-23.md) — authoritative inference and protocol correction for the tested-claim ledger, its recurring ablation reads, and the outcome-grounding stop rule
 
