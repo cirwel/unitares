@@ -638,7 +638,9 @@ Full 54-row source-cited audit ledger, wave notes, and dated SQL snapshots:
   (retired for raw behavioral EISV as currently measured; no v3 without changing
   the measurement process). Not evidence against the axiom: Leg A's block-permutation
   drift veto is a whiteness detector that false-fires on stationary correlated
-  processes, and Leg B ran at effective n=3 behavioral agents (`p_min = 1/3! = 0.167 > α`).
+  processes, and Leg B ran at effective n=4 (where the exact permutation null
+  admits only perfect out-of-sample rank preservation, `p_min = 1/24 = 0.042`,
+  because the nominal n=7 counted one Raspberry Pi four times).
 - **2. Individuality of the I dimension** → **IMPLEMENTATION MISMATCH in
   calibration scoping; individuality remains UNIDENTIFIED.** `cal_I` (50–60% of
   I) is a fleet-shared scalar on each tick, diluting I's contrast, though 40–50%
@@ -692,7 +694,7 @@ stability telemetry:
   regime instability) and spring-couples back into the ODE (row 13); post-warmup
   content-movable risk components sum to 0.45 below the 0.60 cut (row 14);
   fleet-shared calibration feeds `noise_S` and `ΔEta` (row 15); deployed legacy
-  `C(V)` spans ~[0.47, 0.51] and cannot cross `tau_floor=0.25` (row 16);
+  `C(V)` spans ≈ [0.455, 0.499] (live ODE V spans [−0.0894, −0.0030]) and cannot cross `tau_floor=0.25` (row 16);
   `metrics['stability']` evaluates static default params at zero drift (row 17);
   `AdaptiveGovernor` thresholds saturate fleet-identically (row 18); the 0.05
   sigma floor dominates I z-scores for 96% of baselined agents (row 19); E is

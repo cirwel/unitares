@@ -85,6 +85,17 @@ def test_propagation_surfaces_do_not_restore_withdrawn_inferences():
 def test_tested_claim_headings_do_not_label_engineering_findings_refuted():
     contract = _read("docs/ontology/eisv-proprioception-contract.md")
     assert "eisv-tested-claims-ledger.md" in contract
+    contract_summary = contract.split("## Tested claims — ledger", 1)[1].split(
+        "## Preferred wording", 1
+    )[0]
+    contract_statuses = re.findall(
+        r"[→—]\s*\*\*(.*?)\*\*", contract_summary, flags=re.S
+    )
+    assert len(contract_statuses) == 6
+    for status in contract_statuses:
+        assert "REFUTED" not in status, (
+            f"contract summary promotes a non-scientific result to REFUTED: {status}"
+        )
 
     ledger_doc = _read("docs/ontology/eisv-tested-claims-ledger.md")
     ledger = ledger_doc.split("## Tested claims — ledger", 1)[1]
