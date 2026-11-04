@@ -171,8 +171,8 @@ ALTERNATIVES:
 - Want historical data? → Use export(action='history') (time series, not current state)
 
 WHEN TO USE:
-- After completing a task or generating output
-- After making significant progress or changes
+- At a meaningful milestone when you also hold a judgment the substrate cannot infer: a self-correction, revised belief, material change in uncertainty or complexity, or handoff assessment after substantive work.
+- One check-in may cover a coherent unit of work. Task completion, generated output, elapsed time, turn/tool counts, reminders, or automatic substrate observations alone do not call for one.
 
 ~~~text
 ASSESSMENT-BEARING RESPONSE FIELDS (shape depends on response_mode; status labels are model classifications):

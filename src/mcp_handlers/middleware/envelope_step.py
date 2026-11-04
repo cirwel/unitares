@@ -1096,8 +1096,9 @@ def _recovery_hint(
     del coherence
     continuing = action in {"proceed", "continue", "approve", "ok", "healthy", "safe"}
     margin_hint = (
-        "Policy margin is near an edge - keep scope tight, sync_state after "
-        "the next substantial step, and use self_recovery(action='review', "
+        "Policy margin is near an edge - keep scope tight, sync_state only at "
+        "a meaningful milestone when you also hold a judgment the substrate "
+        "cannot infer, and use self_recovery(action='review', "
         "reflection='...') only if work stalls."
     )
     # _needs_attention fires on EITHER an advisory verdict (guide/pause/reject)
@@ -1108,7 +1109,8 @@ def _recovery_hint(
     # named. Say which one actually fired.
     verdict_hint = (
         "Verdict is advisory rather than a threshold warning - read the guidance "
-        "text, sync_state after the next substantial step, and use "
+        "text, sync_state only at a meaningful milestone when you also hold "
+        "a judgment the substrate cannot infer, and use "
         "self_recovery(action='review', reflection='...') only if work stalls."
     )
     margin_is_near_edge = str(payload.get("margin", "")).lower() in {
@@ -1154,8 +1156,9 @@ def _recovery_hint(
             "Risk is elevated but "
             + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
-            + " - keep scope tight and sync_state after your next substantial "
-            f"step. {_review_refusal_phrase(review_limit)}, so it is not a step here."
+            + " - keep scope tight and sync_state only at a meaningful milestone "
+            "when you also hold a judgment the substrate cannot infer. "
+            f"{_review_refusal_phrase(review_limit)}, so it is not a step here."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
@@ -1166,8 +1169,9 @@ def _recovery_hint(
             "Risk is elevated but "
             + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
-            + " - keep scope tight, sync_state after your next substantial "
-            "step, and use self_recovery(action='review', reflection='...') "
+            + " - keep scope tight, sync_state only at a meaningful milestone "
+            "when you also hold a judgment the substrate cannot infer, "
+            "and use self_recovery(action='review', reflection='...') "
             "only if work stalls."
         )
     if risky and recovery_refused:
@@ -3167,13 +3171,14 @@ def build_experience_envelope(
             # binding dominates calibration rows, #2123). The id itself is
             # lifted beside this text, so it is named rather than repeated.
             next_action = (
-                "Keep working; sync_state after your next substantial step. When "
-                "an outcome lands, pass this prediction_id to record_result so it "
-                "grades this check-in."
+                "Keep working; sync_state only at a meaningful milestone when "
+                "you also hold a judgment the substrate cannot infer. When "
+                "an outcome lands, pass this prediction_id to record_result."
             )
         else:
             next_action = (
-                "Keep working - sync_state again after your next substantial step, "
+                "Keep working - sync_state only at a meaningful milestone when "
+                "you also hold a judgment the substrate cannot infer, "
                 "and record_result(...) when an outcome lands."
             )
         # In-flow review nudge (#1685): the formatter attaches review_suggested

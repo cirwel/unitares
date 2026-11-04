@@ -9,10 +9,11 @@ The installable Codex/Claude adapter bundle is canonical in the companion `unita
 ## Codex-specific wiring
 
 Codex exposes synchronous lifecycle hooks, but they do not imply a continuously
-running agent. The expected state-writing profile is sparse: the agent usually
-makes zero or one meaningful `sync_state` call during a turn, and the plugin's
-Stop hook may add one automatic `substrate_interpretation` after the turn. Only
-the former is an agent-authored check-in. Lazy onboarding can also write a
+running agent. Agent-authored state writing is sparse and has no fixed turn
+cadence: call `sync_state` only at a meaningful milestone when you also hold a
+judgment the substrate cannot infer. The plugin's Stop hook may add one
+automatic `substrate_interpretation` after the turn; that is not an
+agent-authored check-in. Lazy onboarding can also write a
 synthetic bootstrap row; initialization is not a real check-in. PostToolUse
 receipts and optional hook-parent heartbeats are audit evidence only — never
 agent runtime, progress, or EISV. Do not manufacture per-tool or per-edit
@@ -21,12 +22,12 @@ check-ins.
 ### Slash commands (`commands/*.md`)
 
 - `/governance-start` — onboard or resume; refreshes local continuity state
-- `/checkin` — governance update for the current turn, plus meaningful milestones
+- `/checkin` — an agent-authored judgment at a meaningful milestone
 - `/diagnose` — identity, state, and operator diagnostics
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid ONLY when handing off from an exited predecessor>, spawn_reason="explicit")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid ONLY when handing off from an exited predecessor>, spawn_reason="explicit")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only at a meaningful milestone when you also hold a judgment the substrate cannot infer → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
@@ -369,7 +370,10 @@ Operational rules:
    was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
-   and land at least one real `sync_state()` before exit.
+   and reuse its binding for later writes. Having an identity creates no
+   check-in quota: use `sync_state()` only at a meaningful milestone when you
+   also hold a judgment the substrate cannot infer, never merely because the
+   subagent is exiting.
 5. Persistent/substrate agents use their dedicated substrate identity pattern.
    Ordinary sessions should not copy that pattern.
 

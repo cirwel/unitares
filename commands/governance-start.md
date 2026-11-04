@@ -64,7 +64,7 @@ When reporting back:
 - show the resolved display name or agent id
 - note whether continuity is strong or weak
 - mention the next useful command:
-  - `/checkin` for the turn baseline, then after meaningful milestones
+  - `/checkin` at a meaningful milestone when you also hold a judgment the substrate cannot infer; starting a session alone does not call for one
   - `/diagnose` if continuity still looks wrong
 
 Do not dump raw JSON unless the user asks for it.
