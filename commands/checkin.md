@@ -1,5 +1,5 @@
 ---
-description: "Manual UNITARES governance check-in for the current turn"
+description: "Manual UNITARES governance check-in with an agent-authored judgment"
 ---
 
 The canonical copy of this command lives in the companion `unitares-governance-plugin` repo (`commands/checkin.md`). This copy adapts helper paths to this repo's `scripts/client/session_cache.py` and deliberately keeps repo-specific guidance the plugin copy does not yet carry: the `response_mode="compact"` default, the explanation that an argless `identity()` is gated to a fresh mint, the cache-token rule, the `--json` payload on the slot stamp, and no `reset-milestone` step (this repo's helper has none). Sections marked `<!-- repo-specific: keep on plugin sync -->` must survive a future sync from the plugin.
@@ -34,11 +34,11 @@ If this is a fresh process and no ownership proof is available, use `/governance
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 
-Call `process_agent_update` once for this `/checkin`. Outside an explicit `/checkin`, check in after meaningful milestones, before/after high-risk work, or when uncertainty/drift shows up, not every turn: the hooks already record per-turn substrate observations, and an agent report manufactured to match them is the failure the evidence classes exist to prevent.
+Call `process_agent_update` once for this explicit `/checkin`. Outside an explicit request, check in only at a meaningful milestone when you also hold a judgment the substrate cannot infer: a self-correction, revised belief, material change in uncertainty or complexity, or handoff assessment after substantive work. A boundary before or after high-risk work qualifies only when it meets both conditions. The hooks already record per-turn substrate observations; do not manufacture an agent report to echo them.
 
 Inputs:
 
-- `response_text`: concise summary of what was actually accomplished
+- `response_text`: concise, secret-free statement of your judgment and the relevant work
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: **optional, usually omit it.** Any value mints a tactical prediction that is scored into the fleet calibration curve, so pass one only when you are stating a genuine belief about how your work will hold up, never a habitual number
 - use the active session binding or `client_session_id`; do not auto-inject `continuity_token`
@@ -46,8 +46,8 @@ Inputs:
 
 Guidelines:
 
-- Do not check in after every trivial edit or tool call.
-- Add a check-in for meaningful milestones, completed steps, or decision points.
+- There is no fixed time-, turn-, or tool-count cadence. Completion, generated output, a reminder, or task exit alone does not call for a check-in.
+- One check-in may cover a coherent unit of work; a milestone or decision point also needs an agent-held judgment the substrate cannot infer.
 - If recent local edit context exists, use it to improve the summary, but do not report raw file churn as if it were real progress.
 - If deterministic results already happened in the workflow, mention them concretely instead of speaking in generalities.
 

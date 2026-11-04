@@ -369,7 +369,10 @@ Operational rules:
    was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
-   and land at least one real `sync_state()` before exit.
+   and reuse its binding for later writes. Having an identity creates no
+   check-in quota: use `sync_state()` only at a meaningful milestone when you
+   also hold a judgment the substrate cannot infer, never merely because the
+   subagent is exiting.
 5. Persistent/substrate agents use their dedicated substrate identity pattern.
    Ordinary sessions should not copy that pattern.
 

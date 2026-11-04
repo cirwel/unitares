@@ -152,8 +152,10 @@ process. Use that for ordinary `sync_state()` / `check_working_state()` calls.
 it as cross-process selfhood. Do not pass `continuity_token` on every call; reserve
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
-Use `sync_state()` after meaningful work to record progress and complexity, then
-read `action_summary` for the decision and its evidence maturity, `next_action`,
+Use `sync_state()` only at a meaningful milestone when you also hold a judgment
+the substrate cannot infer; completion or session exit alone does not call for
+one. Record that judgment and the relevant work, then read `action_summary` for
+the decision and its evidence maturity, `next_action`,
 `recovery_hint`, and, when you asked for them with
 `include_memory_suggestions=true`, `memory_suggestions`. Pass
 `confidence` only when it is a real forecast; if the response returns a
