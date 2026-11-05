@@ -142,9 +142,10 @@ defmodule UnitaresSdk.LeaseReclaimTest do
   end
 
   describe "release reason and 422-only vintage fallback (#1459 / #1462)" do
-    test "canonical release reason" do
+    test "canonical release reason for uuid_history and intent_tag modes" do
       assert LeaseReclaim.release_reason() == "reclaimed_lost_acquire"
       assert LeaseReclaim.release_reason(:uuid_history) == "reclaimed_lost_acquire"
+      assert LeaseReclaim.release_reason(:intent_tag) == "reaped_after_supervisor_failed"
     end
 
     test "fallback_release_reason/2 retries with normal ONLY on HTTP 422 schema_invalid" do
@@ -190,6 +191,80 @@ defmodule UnitaresSdk.LeaseReclaimTest do
 
       assert :no_fallback =
                LeaseReclaim.fallback_release_reason(:uuid_history, {:error, :timeout})
+    end
+  end
+
+  describe "singleton :intent_tag reclaim classification (#1462)" do
+    @own_intent "dispatch_beam_holder:dispatch_beam"
+
+    test "returns :already_cleared when status is 200 with lease: nil and non-empty own_intent" do
+      reply = {:ok, 200, %{"ok" => true, "lease" => nil}}
+      assert LeaseReclaim.classify_intent_status(reply, @own_intent) == :already_cleared
+    end
+
+    test "returns {:own_orphan, lease_id} when status is 200 and intent matches own_intent" do
+      reply = {
+        :ok,
+        200,
+        %{
+          "ok" => true,
+          "lease" => %{
+            "intent" => @own_intent,
+            "lease_id" => @lease_id,
+            "holder_agent_uuid" => @uuid_a
+          }
+        }
+      }
+
+      assert LeaseReclaim.classify_intent_status(reply, @own_intent) == {:own_orphan, @lease_id}
+    end
+
+    test "returns :foreign for another holder's intent, empty own_intent, missing lease_id, or non-200" do
+      other_reply = {
+        :ok,
+        200,
+        %{
+          "ok" => true,
+          "lease" => %{
+            "intent" => "dispatch_beam_holder:dispatch_beam_codex",
+            "lease_id" => @lease_id
+          }
+        }
+      }
+
+      assert LeaseReclaim.classify_intent_status(other_reply, @own_intent) == :foreign
+
+      matching_reply = {
+        :ok,
+        200,
+        %{"ok" => true, "lease" => %{"intent" => @own_intent, "lease_id" => @lease_id}}
+      }
+
+      assert LeaseReclaim.classify_intent_status(matching_reply, "") == :foreign
+      assert LeaseReclaim.classify_intent_status(matching_reply, nil) == :foreign
+
+      cleared_reply = {:ok, 200, %{"ok" => true, "lease" => nil}}
+      assert LeaseReclaim.classify_intent_status(cleared_reply, "") == :foreign
+      assert LeaseReclaim.classify_intent_status(cleared_reply, nil) == :foreign
+
+      empty_id_reply = {
+        :ok,
+        200,
+        %{"ok" => true, "lease" => %{"intent" => @own_intent, "lease_id" => ""}}
+      }
+
+      assert LeaseReclaim.classify_intent_status(empty_id_reply, @own_intent) == :foreign
+
+      assert LeaseReclaim.classify_intent_status({:ok, 503, %{}}, @own_intent) == :foreign
+      assert LeaseReclaim.classify_intent_status({:error, :timeout}, @own_intent) == :foreign
+    end
+
+    test "reclaim_release_ok?/1 accepts 200 and 404 and rejects other statuses or errors" do
+      assert LeaseReclaim.reclaim_release_ok?({:ok, 200, %{"ok" => true}})
+      assert LeaseReclaim.reclaim_release_ok?({:ok, 404, %{"ok" => false}})
+      refute LeaseReclaim.reclaim_release_ok?({:ok, 409, %{"ok" => false}})
+      refute LeaseReclaim.reclaim_release_ok?({:ok, 503, %{}})
+      refute LeaseReclaim.reclaim_release_ok?({:error, :timeout})
     end
   end
 end

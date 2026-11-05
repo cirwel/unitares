@@ -75,10 +75,32 @@ defmodule UnitaresSdk.LeaseReclaim do
   concurrently live residents still contend correctly and can never adopt each
   other's leases.
 
+  ## Singleton `:intent_tag` mode
+
+  While `:uuid_history` tracks per-attempt holder UUIDs in memory for cyclic
+  residents (which contend with peer residents on the same surface), singleton
+  daemon holders whose supervisor owns at most one live instance on a host
+  (such as `Dispatch.Lease`) can instead stamp an instance-qualified intent tag
+  like `"dispatch_beam_holder:<instance_tag>"` on acquire. Across a supervisor
+  or VM restart where in-memory UUID history is gone, the new singleton
+  instance can query `GET /v1/lease/status` and call
+  `classify_intent_status/2` with its own non-empty `own_intent`:
+
+    * `:already_cleared` — HTTP `200` with `%{"ok" => true, "lease" => nil}`;
+    * `{:own_orphan, lease_id}` — HTTP `200` with matching `"intent"` and a
+      non-empty `"lease_id"`, safe to release with
+      `release_reason(:intent_tag)` (`"reaped_after_supervisor_failed"`) and
+      verify via `reclaim_release_ok?/1` (`200` or `404`);
+    * `:foreign` — any other status, malformed payload, empty `own_intent`, or
+      a different holder's intent tag (never touched).
+
   ## Release reason and 422 vintage fallback
 
-  Reclaim releases use `"reclaimed_lost_acquire"` (`release_reason/0`). If and
-  only if the lease plane rejects that enum value with HTTP `422` and
+  Reclaim releases use `"reclaimed_lost_acquire"` (`release_reason/0` or
+  `release_reason(:uuid_history)`) for UUID-history reclaim, and
+  `"reaped_after_supervisor_failed"` (`release_reason(:intent_tag)`) for
+  singleton intent-tag reclaim. If and
+  only if the lease plane rejects `"reclaimed_lost_acquire"` with HTTP `422` and
   `"error" => "schema_invalid"` (an older plane router vintage),
   `fallback_release_reason/2` returns `{:retry, "normal"}` so reclaim still
   succeeds across deploy skew. Transport timeouts, `503` responses, and any
@@ -89,6 +111,7 @@ defmodule UnitaresSdk.LeaseReclaim do
   @max_candidates 4096
   @absence_grace_ms 15 * 60 * 1000
   @uuid_history_reason "reclaimed_lost_acquire"
+  @intent_tag_reason "reaped_after_supervisor_failed"
 
   @typedoc """
   State keys this module merges into a caller GenServer's state. Each entry is
@@ -100,7 +123,8 @@ defmodule UnitaresSdk.LeaseReclaim do
           lease_reclaim_candidates: [{String.t(), DateTime.t() | nil}]
         }
 
-  @type mode :: :uuid_history
+  @type mode :: :uuid_history | :intent_tag
+  @type intent_status :: :already_cleared | {:own_orphan, String.t()} | :foreign
 
   @doc """
   Fresh reclaim state to `Map.merge/2` into a GenServer's state at `init/1`.
@@ -201,13 +225,54 @@ defmodule UnitaresSdk.LeaseReclaim do
   def absorb(state, _scope, _opts), do: state
 
   @doc """
-  Canonical `release_reason` for a UUID-history reclaim release.
+  Canonical `release_reason` for a UUID-history reclaim release, or for the
+  given reclaim `mode` (`:uuid_history` or `:intent_tag`).
   """
   @spec release_reason() :: String.t()
   def release_reason, do: @uuid_history_reason
 
   @spec release_reason(mode()) :: String.t()
   def release_reason(:uuid_history), do: @uuid_history_reason
+  def release_reason(:intent_tag), do: @intent_tag_reason
+
+  @doc """
+  Classify a `GET /v1/lease/status` reply for singleton `:intent_tag` reclaim.
+
+  Requires a non-empty binary `own_intent` (e.g.
+  `"dispatch_beam_holder:<instance_tag>"`). Returns:
+
+    * `:already_cleared` when status is HTTP `200` and `"lease"` is `nil`;
+    * `{:own_orphan, lease_id}` when status is HTTP `200` and the active lease's
+      `"intent"` equals `own_intent` with a non-empty binary `"lease_id"`;
+    * `:foreign` for any other reply, status, or mismatched/missing intent.
+  """
+  @spec classify_intent_status(term(), term()) :: intent_status()
+  def classify_intent_status(
+        {:ok, 200, %{"ok" => true, "lease" => nil}},
+        own_intent
+      )
+      when is_binary(own_intent) and own_intent != "" do
+    :already_cleared
+  end
+
+  def classify_intent_status(
+        {:ok, 200, %{"ok" => true, "lease" => %{"intent" => intent, "lease_id" => lease_id}}},
+        own_intent
+      )
+      when is_binary(own_intent) and own_intent != "" and intent == own_intent and
+             is_binary(lease_id) and lease_id != "" do
+    {:own_orphan, lease_id}
+  end
+
+  def classify_intent_status(_status_reply, _own_intent), do: :foreign
+
+  @doc """
+  True when a reclaim release HTTP reply indicates the orphan lease is gone
+  (`200` released or `404` already expired/released).
+  """
+  @spec reclaim_release_ok?(term()) :: boolean()
+  def reclaim_release_ok?({:ok, status, _}) when status in [200, 404], do: true
+  def reclaim_release_ok?(_reply), do: false
 
   @doc """
   Determine whether a failed reclaim release should fall back to `"normal"`.
