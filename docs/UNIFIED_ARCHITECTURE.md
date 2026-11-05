@@ -32,13 +32,7 @@ returns a behavioral state estimate and preserves an inferred policy
 recommendation. The recommendation is observational by default; only explicit
 operator configuration gives it lifecycle authority. EISV continues to run in
 that posture, maintaining state history and contributing to assessment and
-guidance. The operator adopted
-moving EISV out of the core to an optional module on 2026-10-10
-([`proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
-This settles the direction, not implementation authorization: the staged gates
-and standing governed-review conditions still apply, and the estimator still
-derives today's check-in policy recommendation. Runtime optionality has not
-shipped. [EISV_COMPUTATION.md](EISV_COMPUTATION.md#role-runtime-and-evidence)
+guidance. [EISV_COMPUTATION.md](EISV_COMPUTATION.md#role-runtime-and-evidence)
 owns the instrument's role, runtime status and evidence.
 
 ## Layered architecture
@@ -51,8 +45,8 @@ UNITARES Core does not own the agent execution loop. Agent harnesses, custom
 clients, and reference residents sit above the public interfaces and remain
 independent userlands. MCP is the primary agent-facing contract, while REST,
 the SDK, adapters, and the dashboard expose the same Core. The general-purpose
-**UNITARES Resident** belongs in that userland layer and must use those public
-contracts; its separate repository ships an early skeleton, and it is not a
+**UNITARES Resident** belongs in that userland layer and uses those public
+contracts as a separate repository (`cirwel/unitares-resident`), not a
 deployed Core component.
 
 ```
@@ -81,12 +75,12 @@ deployed Core component.
 | Layer | Status | One-line status |
 |---|---|---|
 | Identity & lineage | **Mature** | Load-bearing; strict write gate live; anchors everything |
-| Findings & knowledge graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |
-| Review (dialectic) | **In-flight** | Independent reviewer serving live where the orchestrated-review flag is on (default off); reviewer-quality is the open frontier |
+| Findings & knowledge graph | **Live** | Provenance-tagged relational store + FTS + pgvector + Apache AGE graph links |
+| Review (dialectic) | **Live** | Thesis/antithesis/synthesis protocol with independent orchestrated reviewer dispatch (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW`) |
 | Outcomes | **Deployed** | Outcome claims are recorded with provenance; independence depends on the producer |
 | Policy & EISV | **Deployed** | Runtime observations and controller history → smoothed indices → assessment and policy |
-| Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
-| Reference residents · Storage · Interfaces | **Live / Mature** | Operational; UNITARES Resident has a separate early skeleton, not yet a usable agent product |
+| Coordination (BEAM) | **Live** | Lease plane, governed effects, and agent messaging on port 8788 |
+| Reference residents · Storage · Interfaces | **Live / Mature** | Operational; `unitares-resident` ships separately as a first-party agent runtime (`cirwel/unitares-resident`) |
 
 Evidence for particular diagnostic or decision benefits is tracked separately
 in the [claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status).

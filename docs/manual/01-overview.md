@@ -6,18 +6,17 @@ This chapter gives you the mental model and the vocabulary. Read it once; the re
 
 ## 1.1 The problem it solves
 
-Long-running agent work outlives the process that started it. Context windows
-reset, processes restart, and work passes between agents, runtimes and vendors.
-Without a shared record, a successor cannot tell who made a claim, what
-supports it, who challenged it or what actually happened, and an operator
-cannot reconstruct the work afterwards.
+Long-running agent work outlives the process that started it. Git, scratchpads,
+and handoff notes carry code and in-flight task state; across sessions, runtimes,
+and vendors, UNITARES keeps the shared record of who made a claim, what
+supports it, who challenged it, and what outcome followed.
 
 UNITARES keeps that record on a server the operator controls. Each runtime
 keeps its own models, tools and execution loop; the record is what they share.
 
 ## 1.2 Where it fits
 
-UNITARES runs **alongside** your evals and guardrails. It does not replace either.
+UNITARES runs **alongside** your Git workflow, handoff notes, evals, and guardrails.
 
 | Layer | Question it answers | When it acts |
 |---|---|---|
@@ -25,20 +24,19 @@ UNITARES runs **alongside** your evals and guardrails. It does not replace eithe
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | Who did this work, on what evidence, who challenged it, and what happened? | as the work runs, and afterwards |
 
-It is **not** an output validator, a sandbox, or a hosted agent platform. It
-does not own the agent's reasoning, tool-execution, or user-interaction loop;
+It does not own the agent's reasoning, tool-execution, or user-interaction loop;
 MCP is its primary agent-facing contract. (Full scope:
 [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
 
-The first-party **UNITARES Resident** supplies that agent experience as a
-separate userland on the same public MCP/SDK contract as every other harness.
-Its repository ships a runtime skeleton today; the agent itself has not shipped yet.
-The specialized residents in this repository are reference examples.
+The first-party **UNITARES Resident** (`cirwel/unitares-resident`) supplies a
+persistent agent runtime as a separate userland on the same public MCP/SDK
+contract as every other harness. The specialized residents in this repository
+are reference examples.
 
 **Use UNITARES if** you run several long-lived agents (coding, research, ops or
-resident), want their work attributable across restarts and handoffs, want
-findings, review and outcomes kept with the process that made them, and want
-agents to read that record before continuing.
+resident), want their claims, reviews, and outcomes attributable across sessions
+and vendors, and want agents to query that record before acting on earlier
+findings.
 
 ## 1.3 The core loop
 
@@ -129,10 +127,8 @@ posture. Verdict definitions live in
 ## 1.6 The check-in instrument: EISV
 
 The policy recommendation is derived from EISV, a behavioral state estimate computed at
-each check-in. EISV ships in the core path today and moves to an optional
-module subscribed to check-ins under a
-[staged plan](../proposals/active/eisv-core-boundary-v0.md). You do not need
-its vocabulary to use the record; it matters when you want to act on *why* a
+each check-in ([computation contract](../EISV_COMPUTATION.md#role-runtime-and-evidence)). You do not need
+its vocabulary to use the record; it matters when you want to inspect *why* a
 check-in returned the action it did.
 
 Each check-in returns four indices built from runtime observations and

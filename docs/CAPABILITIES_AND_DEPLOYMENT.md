@@ -19,8 +19,6 @@ Reconstruction is a client workflow over these records and operations. Each `syn
 (500 characters by default, `UNITARES_CHECKIN_EXCERPT_CHARS`; 0 turns it off),
 not the full text, and exported governance history does not include shared
 knowledge. Preserve source IDs and gaps when summarizing.
-Comparative reconstruction fidelity and correction propagation remain
-evaluation questions.
 
 Use `describe_tool(tool_name=..., action=...)` for the full schema of the action
 you need. Primary workflow names and canonical implementations are both public;
