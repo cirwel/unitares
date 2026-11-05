@@ -211,7 +211,7 @@
     const legacy = t.schema === "eisv.telemetry.summary.legacy";
     if (dimension === "coherence") {
       const known = !legacy && recordedSource(t.coherence_source) && recordedSource(t.coherence_role);
-      return { key: JSON.stringify([t.coherence_source, t.coherence_role, legacy]), known,
+      return { key: known ? JSON.stringify([t.coherence_source, t.coherence_role, legacy]) : "unrecorded", known,
         label: known ? (t.coherence_role === "ode_control_feedback" ? "ODE control feedback" : t.coherence_source) : "source unrecorded",
         detail: `Source: ${t.coherence_source || "unrecorded"} · role: ${t.coherence_role || "unrecorded"}` };
     }
@@ -221,7 +221,9 @@
       : primary === "ode_fallback" ? "ODE startup"
       : primary === "behavioral" ? `Behavioral / ${input.replaceAll("_", " ")}`
       : `${primary} / ${input}`;
-    return { key: JSON.stringify([primary, input, legacy]), known, label,
+    // Unknown producers share one points-only legend item; each observation's
+    // raw provenance remains available in its tooltip without implying a line.
+    return { key: known ? JSON.stringify([primary, input, legacy]) : "unrecorded", known, label,
       detail: `Estimator: ${primary || "unrecorded"} · consumed source: ${input || "unrecorded"}${legacy ? " (legacy inference)" : ""}` };
   }
 

@@ -191,6 +191,10 @@ describe("EISV telemetry source separation", () => {
       { t: "2026-11-04T12:00:00Z", E: 0, V: null },
       { t: "2026-11-04T12:01:00Z", E: 0.5, V: -0.2,
         telemetry: { schema: "eisv.telemetry.summary.legacy", primary_source: "ode_fallback", measurement_source: "ode_fallback" } },
+      { t: "2026-11-04T12:02:00Z", E: 0.4,
+        telemetry: { primary_source: "behavioral", measurement_source: "unknown", coherence_source: "legacy_tanh_v" } },
+      { t: "2026-11-04T12:03:00Z", E: 0.6,
+        telemetry: { primary_source: "unknown", measurement_source: "behavioral_sensor", coherence_role: "unknown" } },
     ];
     const { dom, charts } = await section({ source: "live", data: { points } });
     await click(dom, '[data-traj-id="agent-1"]');
@@ -198,7 +202,15 @@ describe("EISV telemetry source separation", () => {
       expect(d.showLine).toBe(false);
       expect(d.label).toContain("source unrecorded");
     });
-    expect(charts.at(-2).data.datasets[0].data).toEqual([0, null]);
+    const upper = charts.at(-2), lower = charts.at(-1);
+    expect(upper.data.datasets).toHaveLength(3); // one item per dimension
+    expect(lower.data.datasets).toHaveLength(2);
+    expect(upper.data.datasets[0].data).toEqual([0, 0.5, 0.4, 0.6]);
+    expect(lower.data.datasets[1].data).toEqual([null, -0.2, null, null]);
+    const tooltip = upper.options.plugins.tooltip.callbacks.afterBody;
+    expect(tooltip([{ dataIndex: 1 }])[0]).toContain("(legacy inference)");
+    expect(tooltip([{ dataIndex: 2 }])[0]).toContain("Estimator: behavioral · consumed source: unknown");
+    expect(tooltip([{ dataIndex: 3 }])[0]).toContain("Estimator: unknown · consumed source: behavioral_sensor");
   });
 
   it("buckets a selected source without averaging another instrument into it", () => {
