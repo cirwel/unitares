@@ -80,6 +80,7 @@ def _static_config() -> Dict[str, Any]:
     )
     from src.behavioral_assessment import floor_breach_caution_apply_enabled
     from src.behavioral_sensor import (
+        NEUTRALIZE_SENSOR_SELF_LOOPS_MODE,
         neutralize_sensor_self_loops_enabled,
         per_agent_i_calibration_enabled,
     )
@@ -100,7 +101,7 @@ def _static_config() -> Dict[str, Any]:
         "residents": sorted(load_resident_labels()),
     }
     if neutralize_sensor_self_loops_enabled():
-        cfg["neutralize_sensor_self_loops"] = True
+        cfg["neutralize_sensor_self_loops"] = NEUTRALIZE_SENSOR_SELF_LOOPS_MODE
     if per_agent_i_calibration_enabled():
         cfg["per_agent_i_calibration"] = True
     return cfg
