@@ -376,6 +376,44 @@ async def test_all_scope_statistics_use_observations_before_decimation():
 
 
 @pytest.mark.asyncio
+async def test_chart_runs_retain_hidden_source_and_instrument_changes():
+    rows = _fixture_rows(range(9))
+    for index, row in enumerate(rows):
+        state = row["state_json"]
+        measurement = state["eisv_telemetry"]["measurement"]
+        measurement["primary"]["source"] = "behavioral"
+        measurement["behavioral"]["observation_source"] = (
+            "continuity_fallback" if index == 4 else "behavioral_sensor"
+        )
+        measurement["coherence"] = {
+            "source": "legacy_tanh_v", "role": "ode_control_feedback",
+        }
+        state["eisv_instrument"] = {"id": "v1" if index < 6 else "v2"}
+    payload = await _query_fixture_history(rows, mode="all", limit=2)
+    # Decimation retains rows 1,4,8,9; both the fallback and return to the
+    # behavioral sensor are hidden, but the chart still cannot connect 4->8.
+    assert [p["chart_segments"]["eisv"] for p in payload["points"]] == [1, 1, 4, 4]
+    # Coherence does not change producer at the behavioral-input boundary.
+    # Its own run breaks only when the instrument version changes.
+    assert [p["chart_segments"]["coherence"] for p in payload["points"]] == [1, 1, 2, 2]
+
+
+@pytest.mark.asyncio
+async def test_chart_runs_track_coherence_producer_independently():
+    rows = _fixture_rows([0, 1, 2])
+    for index, row in enumerate(rows):
+        measurement = row["state_json"]["eisv_telemetry"]["measurement"]
+        measurement["primary"]["source"] = "behavioral"
+        measurement["coherence"] = {
+            "source": "legacy_tanh_v" if index == 0 else "manifold",
+            "role": "ode_control_feedback" if index == 0 else "eis_structural_measurement",
+        }
+    payload = await _query_fixture_history(rows)
+    assert [p["chart_segments"]["eisv"] for p in payload["points"]] == [1, 1, 1]
+    assert [p["chart_segments"]["coherence"] for p in payload["points"]] == [1, 2, 2]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("hours", [[0], [0, 0]])
 async def test_zero_time_span_never_produces_a_slope(hours):
     payload = await _query_fixture_history(_fixture_rows(hours))
