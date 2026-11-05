@@ -112,7 +112,7 @@ traces findings to the fixes they produced: evidence grades preserved,
 formatting repair kept from manufacturing approval, unresolved findings kept
 visible, and a review condition carried into an implementation ten days after
 its review opened. Historical deployments also delivered 370+ policy pauses
-between April and September 2026 under opt-in enforcement.
+between April and September 2026; enforcement is now explicit opt-in.
 
 The [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the
 evaluation results and registered read conditions, the
