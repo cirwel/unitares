@@ -1,6 +1,6 @@
 # S axis validation protocol (v1, draft)
 
-**Status:** DRAFT, 2026-11-03; amended 2026-11-04 after an independent standards
+**Status:** DRAFT, 2026-11-03; amended 2026-11-04 and 2026-11-05 after standards
 assessment. Nothing here has run, and no data for v1 have been collected. The
 operator must approve both the complete deciding standard in
 [§7](#7-deciding-standard-operator-slot) and the code-derived Step 0 predictions
@@ -97,17 +97,18 @@ Each stream is provisionally 100 check-ins: baseline 0–29, intervention 30–4
 recovery 45–99. Step 0 may extend it before registration if a predicted recovery
 or transient does not fit. v0's recovery of 25 steps left the 0.45 overclaim
 still 0.030 above baseline, so recovery is longer here. Inputs are generated as
-in v0: templated
-reports, `task_type="mixed"`, intervals of 30–90 s, and jitter of 0.03 on the
-self-reported values. Exceptions are noted below.
+in v0: templated reports, `task_type="mixed"`, intervals of 30–90 s, and
+jitter of 0.03 on the self-reported values. Each condition keeps confidence at
+the frozen baseline level unless it explicitly changes confidence. Exceptions
+are noted below.
 
 **Positive controls** (predicted to move S):
 
 | ID | Intervention, steps 30–44 | Separates |
 |---|---|---|
-| P1 | Overclaim complexity by 0.10 / 0.20 / 0.30 / 0.45, with confidence held at 0.75 | Divergence alone, as a dose series |
+| P1 | Overclaim complexity by 0.10 / 0.20 / 0.30 / 0.45, with confidence held at the frozen baseline level | Divergence alone, as a dose series |
 | P1u | Underclaim by 0.30 | Whether S treats underclaiming as divergence, as `abs()` predicts |
-| P2 | Confidence drops to 0.55 / 0.45 / 0.30, with complexity reported accurately | Confidence alone (drift path only) |
+| P2 | Confidence drops to 0.55 / 0.45 / 0.30, with complexity reported accurately; Step 0 verifies that all three are below the frozen baseline confidence, or amends the doses before registration | Confidence alone (drift path only) |
 | P3 | v0's joint collapse: confidence 0.30 and claimed complexity 0.90 | Continuity with v0 |
 | P4 | Thrash: alternating terse/confident and heavy/unsure reports, each reported accurately | Switching |
 | P5 | Tool-velocity burst: tool calls arrive at 60 per minute from step 30 to step 44, every other input unchanged. Velocity is the past hour's calls ÷ 60, with a floor of 5 per minute. At 30–90 s intervals the window lasts about 15 minutes, so a lower rate might never cross the floor. 60 per minute brings the hourly average to about 15 per minute, which is full pressure, by the window's end. The predicted response builds through the window and decays over the following hour, so Step 0 checks that recovery fits the stream | The tool term. **Conditional:** Step 0 must choose a route that supplies `tool_call_velocity` (§8). A harness-only hook tests the estimator but not deployed delivery of that input; if neither route works, the term is untested |
@@ -134,8 +135,11 @@ to set the stimulus, exact input values and clipping rule, included class and
 tool paths, randomization keys, analysis windows, confidence-interval and
 agreement-limit methods, and the number of seeds. A
 dated aggregate read that sets inputs is not a v1 response observation; its
-values and provenance must be recorded before prediction. Then derive the
-predictions from the pinned code and those frozen inputs, without running any
+values and provenance must be recorded before prediction. Verify that P2 and
+P3 are confidence drops from the frozen baseline and that P1 holds confidence
+at that baseline; amend the doses before registration if this is false. Then
+derive the predictions from the pinned code and those frozen inputs, without
+running any
 v1 stream or inspecting any v1 response. For every condition and both arms,
 record:
 
@@ -416,3 +420,9 @@ requires an approved operational or engineering interpretation of δ, a
 gate-level sensitivity calculation, matched retest streams, fixed recovery
 timing, and code-derived Step 0 predictions before registration. No v1
 responses were inspected or collected for this amendment.
+
+**Precollection correction, 2026-11-05.** P1 now holds confidence at the
+frozen baseline rather than at 0.75. Step 0 verifies that the fixed P2/P3
+confidence levels are actual drops from that baseline. This avoids introducing
+a confidence change into P1 if the live median differs from 0.75. No v1
+response data were used.
