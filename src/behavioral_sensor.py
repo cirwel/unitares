@@ -821,14 +821,14 @@ def compute_calibration_free_i_shadow(
     and renormalizes the remaining base terms to sum to 1.0 before the standard
     post-base adjustments (``continuity_I_input`` at 0.20, ``unique_tools_ratio``
     at 0.10):
-    - Default (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` off):
-      - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
-      - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
-    - With ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1``:
+    - Default (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1``, era ``SN1``):
       - With >=3 non-echo scored outcomes: ``outcome_score_consistency`` 1.00
       - Without >=3 non-echo scored outcomes: ineligible (``insufficient_outcomes_under_neutralized_self_loops``),
         because neither ``calibration_accuracy`` nor ``legacy_coherence_trend`` nor
         ``outcome_score_consistency`` is present in the candidate.
+    - Legacy (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0``):
+      - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
+      - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
 
     Measurement-only: the live observation is never modified and no policy reads
     this shadow.
