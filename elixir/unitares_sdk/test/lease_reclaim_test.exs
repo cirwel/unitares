@@ -259,9 +259,15 @@ defmodule UnitaresSdk.LeaseReclaimTest do
       assert LeaseReclaim.classify_intent_status({:error, :timeout}, @own_intent) == :foreign
     end
 
-    test "reclaim_release_ok?/1 accepts 200 and 404 and rejects other statuses or errors" do
+    test "reclaim_release_ok?/1 accepts 200 with ok=true and 404 and rejects ok=false, other statuses, or errors" do
       assert LeaseReclaim.reclaim_release_ok?({:ok, 200, %{"ok" => true}})
       assert LeaseReclaim.reclaim_release_ok?({:ok, 404, %{"ok" => false}})
+
+      refute LeaseReclaim.reclaim_release_ok?(
+               {:ok, 200, %{"ok" => false, "error" => "permission_denied"}}
+             )
+
+      refute LeaseReclaim.reclaim_release_ok?({:ok, 200, %{}})
       refute LeaseReclaim.reclaim_release_ok?({:ok, 409, %{"ok" => false}})
       refute LeaseReclaim.reclaim_release_ok?({:ok, 503, %{}})
       refute LeaseReclaim.reclaim_release_ok?({:error, :timeout})

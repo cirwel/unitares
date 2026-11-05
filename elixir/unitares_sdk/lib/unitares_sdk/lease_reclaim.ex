@@ -268,10 +268,11 @@ defmodule UnitaresSdk.LeaseReclaim do
 
   @doc """
   True when a reclaim release HTTP reply indicates the orphan lease is gone
-  (`200` released or `404` already expired/released).
+  (`200` with `%{"ok" => true}` released, or `404` already expired/released).
   """
   @spec reclaim_release_ok?(term()) :: boolean()
-  def reclaim_release_ok?({:ok, status, _}) when status in [200, 404], do: true
+  def reclaim_release_ok?({:ok, 200, %{"ok" => true}}), do: true
+  def reclaim_release_ok?({:ok, 404, _}), do: true
   def reclaim_release_ok?(_reply), do: false
 
   @doc """
