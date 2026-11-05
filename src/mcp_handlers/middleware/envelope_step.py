@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.types import TextContent
 
+from config.governance_config import GovernanceConfig  # noqa: F401
 from src.logging_utils import get_logger
 from src.state_persistence import project_state_persistence
 from src.mcp_handlers.response_formatter import (

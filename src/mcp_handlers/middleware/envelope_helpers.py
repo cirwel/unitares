@@ -330,9 +330,10 @@ def _coherence_and_risk(payload: Dict[str, Any]) -> tuple[Optional[float], Optio
 def _risk_summary(coherence: Optional[float], risk: Optional[float]) -> Optional[str]:
     if risk is None:
         return None
-    if risk < GovernanceConfig.RISK_APPROVE_THRESHOLD:
+    gov_cfg = _step_attr("GovernanceConfig", GovernanceConfig)
+    if risk < gov_cfg.RISK_APPROVE_THRESHOLD:
         band = "low"
-    elif risk < GovernanceConfig.RISK_REVISE_THRESHOLD:
+    elif risk < gov_cfg.RISK_REVISE_THRESHOLD:
         band = "elevated"
     else:
         band = "high"
@@ -1013,9 +1014,10 @@ def _recovery_hint(
         )
         # Only true while the cold-start guard leaves an agent's own report
         # out (COLD_START_GUARD_INCLUDE_AUTHORED off, or the guard disabled).
+        gov_cfg = _step_attr("GovernanceConfig", GovernanceConfig)
         authored_can_pause = not (
-            GovernanceConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED
-            and GovernanceConfig.COLD_START_GUARD_INCLUDE_AUTHORED
+            gov_cfg.NON_AUTHORED_COLD_START_GUARD_ENABLED
+            and gov_cfg.COLD_START_GUARD_INCLUDE_AUTHORED
         )
         if authored_can_pause and _cold_start_pause_deferred(payload, risk):
             hint += (
