@@ -57,9 +57,11 @@ the originating review transcript is operator-private.
 [Carried condition and patch](evaluations/review-correction-traces-2026-09-21.md#a-condition-survived-the-original-session-and-became-a-later-repair--pr-2317)
 
 These records establish specific, consequential corrections and continuity of
-review conditions across a fixed 20-PR sample. The
-[September 21 retrospective](evaluations/review-correction-traces-2026-09-21.md)
-documents the sampling protocol, review channels, and per-PR provenance.
+review conditions. They come from a fixed sample of 20 recent merged PRs, with
+no matched unreviewed or conventional-review control. Dialectic review,
+councils, external models, and ordinary repository review have incomplete
+common instrumentation, so this channel is one of several through which review
+runs.
 
 <details>
 <summary>Recorded exercise of the review constraint</summary>
