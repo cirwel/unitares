@@ -4,6 +4,10 @@ defmodule UnitaresSentinel.LeaseReclaim do
   wire, so a later `held_by_other` that names one of them can be recognized as
   this resident's own stranded lease and released.
 
+  Delegates to the shared `UnitaresSdk.LeaseReclaim` contract (#1462), which
+  carries the council-approved (#1459) UUID-history + 15-minute absence-grace
+  state machine across BEAM lease-plane clients.
+
   ## The gap this closes (2026-08-01 incident)
 
   `LeaseAdvisory.post_acquire_with_recovery/4` resolves a single lost acquire
@@ -17,48 +21,12 @@ defmodule UnitaresSentinel.LeaseReclaim do
   responses named both the orphan's `held_by_uuid` (a uuid this process minted)
   and the `blocking_lease_id` needed to free it.
 
-  ## What is remembered
+  ## In-memory only
 
-  Every holder uuid this process sends is remembered:
-
-    * an acquire whose both transport attempts failed contributes its
-      `attempted_holder_uuid` — that uuid MAY own a committed lease this
-      process never learned about;
-    * a SUCCESSFUL acquire contributes its `holder_uuid` too — if the eventual
-      release request is lost, the lease plane auto-renews that lease forever,
-      and the only way to recognize the resulting orphan is to still remember
-      the uuid that acquired it (the end-of-tick `release/2` is deliberately
-      fire-and-forget, so one lost release message is strictly MORE probable
-      than the double-loss that motivated this module).
-
-  ## When an entry may be forgotten
-
-  Only after its lease is PROVEN absent, plus a grace window — never by age
-  alone, and never by outcome-based clearing:
-
-    * An orphan lives unboundedly (the plane-side holder auto-renews forever),
-      so a uuid that might hold one must be remembered for as long as the
-      starvation could persist. Pure age expiry would forget the
-      stall-opening uuid during any stall longer than the window — the one
-      uuid whose INSERT committed.
-    * A successful acquire proves that, at that instant, no remembered uuid
-      holds this surface (one active lease per surface). It does NOT prove
-      one cannot appear later: a delayed duplicate request (e.g. the PR #1443
-      recovery retry executing server-side late) can still commit afterwards.
-      So a success stamps existing entries as absence-proven, and a stamped
-      entry survives a further `@absence_grace_ms` — comfortably beyond any
-      abandoned request's plausible server-side lifetime — before it is
-      dropped.
-
-  The list is bounded (`@max_candidates`) purely as a backstop; entries are a
-  few dozen bytes, and the cap is sized to outlast a day-long transport-dark
-  stall at the default 30s tick interval.
-
-  In-memory only: a resident restart forfeits reclaim for leases stranded
-  before the restart. That residual is carried by the doctor's
-  `immortal_lease` check (scheduled via `com.unitares.doctor-findings`) and
-  the `LeaseStarvation` self-finding, whose remedy names the blocking lease id
-  for a manual force-release.
+  A resident restart forfeits reclaim for leases stranded before the restart.
+  That residual is carried by the doctor's `immortal_lease` check (scheduled
+  via `com.unitares.doctor-findings`) and the `LeaseStarvation` self-finding,
+  whose remedy names the blocking lease id for a manual force-release.
 
   ## Safety
 
@@ -76,24 +44,13 @@ defmodule UnitaresSentinel.LeaseReclaim do
   other's leases.
   """
 
-  @max_candidates 4096
-  @absence_grace_ms 15 * 60 * 1000
-
-  @typedoc """
-  State keys this module merges into a caller GenServer's state. Each entry is
-  `{holder_uuid, absence_proven_at}` — `nil` until a successful acquire proves
-  the uuid holds nothing on this surface.
-  """
-  @type state :: %{
-          optional(any()) => any(),
-          lease_reclaim_candidates: [{String.t(), DateTime.t() | nil}]
-        }
+  @type state :: UnitaresSdk.LeaseReclaim.state()
 
   @doc """
   Fresh reclaim state to `Map.merge/2` into a GenServer's state at `init/1`.
   """
   @spec new() :: %{lease_reclaim_candidates: []}
-  def new, do: %{lease_reclaim_candidates: []}
+  defdelegate new(), to: UnitaresSdk.LeaseReclaim
 
   @doc """
   Options to merge into `LeaseAdvisory.acquire_cycle/1` opts so the advisory
@@ -101,60 +58,21 @@ defmodule UnitaresSentinel.LeaseReclaim do
   holder uuids.
   """
   @spec acquire_opts(map()) :: keyword()
-  def acquire_opts(%{lease_reclaim_candidates: candidates}) when is_list(candidates),
-    do: [reclaim_candidates: Enum.map(candidates, &elem(&1, 0))]
+  defdelegate acquire_opts(state), to: UnitaresSdk.LeaseReclaim
 
-  def acquire_opts(_state), do: []
+  @doc """
+  True when `held_by_uuid` matches one of this resident's remembered candidate
+  holder UUIDs.
+  """
+  @spec own_orphan_uuid?(term(), term()) :: boolean()
+  defdelegate own_orphan_uuid?(held_by_uuid, candidates), to: UnitaresSdk.LeaseReclaim
 
   @doc """
   Update reclaim memory from an acquire scope.
 
-  Call with every scope `LeaseAdvisory.acquire_cycle/1` returns, whatever its
-  outcome:
-
-    1. drop entries whose absence was proven more than the grace window ago;
-    2. on a successful acquire, stamp still-unproven entries as
-       absence-proven now (the new acquire's own uuid is exempt — its lease
-       is the one currently active);
-    3. remember `conflict.attempted_holder_uuid` (both transport attempts
-       failed) and the scope's `holder_uuid` (successful acquire) as fresh,
-       unproven entries.
-
-  Options: `:now` — injected clock for tests.
+  See `UnitaresSdk.LeaseReclaim.absorb/3`.
   """
   @spec absorb(map(), map(), keyword()) :: map()
-  def absorb(state, scope, opts \\ [])
-
-  def absorb(%{lease_reclaim_candidates: candidates} = state, %{} = scope, opts) do
-    now = Keyword.get(opts, :now) || DateTime.utc_now()
-    conflict = Map.get(scope, :conflict) || %{}
-    acquired? = Map.get(scope, :outcome) in [:acquired_new, :acquired_idempotent]
-
-    fresh =
-      [Map.get(conflict, :attempted_holder_uuid), Map.get(scope, :holder_uuid)]
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map(&{&1, nil})
-
-    survivors =
-      Enum.reject(candidates, fn {_uuid, proven_at} ->
-        is_struct(proven_at, DateTime) and
-          DateTime.diff(now, proven_at, :millisecond) > @absence_grace_ms
-      end)
-
-    survivors =
-      if acquired? do
-        Enum.map(survivors, fn
-          {uuid, nil} -> {uuid, now}
-          entry -> entry
-        end)
-      else
-        survivors
-      end
-
-    next = (survivors ++ fresh) |> Enum.take(-@max_candidates)
-
-    %{state | lease_reclaim_candidates: next}
-  end
-
-  def absorb(state, _scope, _opts), do: state
+  def absorb(state, scope, opts \\ []),
+    do: UnitaresSdk.LeaseReclaim.absorb(state, scope, opts)
 end
