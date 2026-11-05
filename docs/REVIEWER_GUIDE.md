@@ -8,8 +8,8 @@
 
 UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator server that keeps attributed records of identity,
-claims and evidence, review, outcomes, and reconstruction across sessions,
-handoffs, and agents from different vendors.
+claims and evidence, review, outcomes, and reconstruction across sessions
+and agents from different vendors.
 
 This guide is procedure: what to run and inspect, in what order. Start with the
 claims ledger, then exercise the captured workflow in a test deployment.
@@ -132,10 +132,7 @@ The default `observe` posture retains inferred pause recommendations as
 guidance while EISV continues to run. With the operator's `enforce` posture, an
 applied pause holds governed writes until recovery, review, an operator, or
 expiry lifts it. Existing durable holds remain authoritative in either posture;
-external enforcement needs host integration. The operator adopted moving EISV into an optional module on
-2026-10-10; the [staged implementation plan](proposals/active/eisv-core-boundary-v0.md)
-governs that work. The estimator still ships in the core path; runtime
-optionality is not an available switch. See the
+external enforcement needs host integration. See the
 [role, runtime and evidence contract](EISV_COMPUTATION.md#role-runtime-and-evidence).
 
 Assessment labels such as `safe` and `healthy` describe configured bands over

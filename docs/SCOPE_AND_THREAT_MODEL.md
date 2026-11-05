@@ -31,12 +31,11 @@ connecting an MCP client.
 
 ### EISV scope: check-in count, not duration
 
-The EISV instrument suits **long-lived autonomous agents**: tool-using,
-multi-step, doing real work over hours or days, where an agent can quietly
-drift without anyone noticing until something visible broke. The check-in loop
-makes mid-run state changes inspectable. Whether those changes predict a later
-incident or support effective prevention is an open evaluation question, not a
-premise of the integration.
+The EISV instrument is built for **long-lived autonomous agents**: tool-using,
+multi-step processes doing work over hours or days, where behavioral state can
+drift across steps. The check-in loop makes mid-run state changes inspectable;
+evaluation results and boundaries are tracked in
+[Evidence and limitations](EVIDENCE_AND_LIMITS.md).
 
 **Scoring stages advance by check-in count, not wall-clock time.**
 With the current constants, the cold-start prior owns check-ins 1–2, behavioral
@@ -44,8 +43,7 @@ fixed-threshold scoring owns check-ins 3–24, and self-relative scoring starts 
 check-in 25 against a 30-update baseline target. Absolute safety floors apply in
 every stage. An agent doing dozens of
 units of work — over an hour or a week — reaches self-relative scoring; one
-that does three and exits does not. This is eligibility for that scoring stage;
-whether its guidance improves a particular use remains an evaluation question.
+that does three and exits does not.
 
 **The EISV instrument is not designed for** short-lived chatbot turns, which
 end before self-relative scoring starts at check-in 25.
