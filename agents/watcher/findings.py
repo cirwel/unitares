@@ -47,6 +47,16 @@ GOV_REST_URL = "http://localhost:8767/v1/tools/call"
 # Age findings out after this many days
 FINDINGS_TTL_DAYS = 14
 
+# An open finding retained on a deleted path (``path_gone``) is aged out once it
+# is this many days past detection without adjudication. Retention keeps such a
+# finding so it can still become a label; this bounds how long it waits. Without
+# a bound, the only exit is adjudication, so the open set grows for as long as
+# nobody adjudicates (2026-11-05: 258 open, 181 on deleted paths, the oldest
+# 43 days). Aged out, not deleted: the row and its snapshot stay in
+# findings.jsonl and remain adjudicable by fingerprint. A telemetry noise
+# floor, no enforcement authority; 21 days is three weekly adjudication passes.
+PATH_GONE_EXPIRY_DAYS = 21
+
 VALID_FINDING_STATUSES = ("open", "surfaced", "confirmed", "dismissed", "aged_out")
 MIN_FINGERPRINT_PREFIX = 4  # users can type the first N chars instead of all 16
 
@@ -564,6 +574,24 @@ def update_finding_status(
     return 0
 
 
+def _detected_before(finding: dict[str, Any], cutoff: datetime) -> bool:
+    """True when the finding's ``detected_at`` parses and is before ``cutoff``.
+
+    An absent or unparseable timestamp returns False, so such a finding stays
+    open rather than expiring blindly (fail-open, as in ``sweep_stale_dedup``).
+    """
+    raw = finding.get("detected_at")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        detected = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if detected.tzinfo is None:
+        detected = detected.replace(tzinfo=timezone.utc)
+    return detected < cutoff
+
+
 def _sweep_stale_quiet() -> int:
     """Drop findings whose target file no longer exists. Quiet variant.
 
@@ -580,9 +608,13 @@ def _sweep_stale_quiet() -> int:
     if not findings:
         return 0
 
+    now = datetime.now(timezone.utc)
+    expiry_cutoff = now - timedelta(days=PATH_GONE_EXPIRY_DAYS)
+    now_iso = now.isoformat().replace("+00:00", "Z")
     kept: list[dict[str, Any]] = []
     dropped = 0
     newly_marked = 0
+    expired = 0
     for f in findings:
         if _finding_target_exists(f):
             kept.append(f)
@@ -606,21 +638,32 @@ def _sweep_stale_quiet() -> int:
             if not f.get("path_gone"):
                 f = {**f, "path_gone": True}
                 newly_marked += 1
+            if f.get("status", "open") in ("open", "surfaced") and _detected_before(
+                f, expiry_cutoff
+            ):
+                f = {
+                    **f,
+                    "status": "aged_out",
+                    "aged_out_at": now_iso,
+                    "resolution_reason": "path_gone_unadjudicated",
+                }
+                expired += 1
             kept.append(f)
         else:
             dropped += 1
 
-    # Marking path_gone is itself a state change worth persisting, so the early
-    # return has to consider both. Returning on `dropped == 0` alone would
-    # leave the flag unwritten until some later sweep happened to drop
+    # Marking path_gone and expiring are state changes worth persisting, so
+    # the early return has to consider all three. Returning on `dropped == 0`
+    # alone would leave them unwritten until some later sweep happened to drop
     # something — the exact class of silent staleness this function exists for.
-    if dropped == 0 and newly_marked == 0:
+    if dropped == 0 and newly_marked == 0 and expired == 0:
         return 0
 
     _write_findings_atomic(kept)
     log(
         f"sweep_stale_findings (auto): dropped {dropped} findings for missing "
-        f"files, retained {newly_marked} with a source snapshot"
+        f"files, retained {newly_marked} with a source snapshot, aged out "
+        f"{expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
     )
     return dropped
 
@@ -642,11 +685,16 @@ def sweep_stale_findings() -> int:
         return 0
 
     total = len(findings)
+    aged_before = sum(1 for f in findings if f.get("status") == "aged_out")
     dropped = _sweep_stale_quiet()
-    if dropped == 0:
-        print(f"(nothing to sweep: {total} findings, all target files present)")
+    expired = sum(1 for f in _iter_findings_raw() if f.get("status") == "aged_out") - aged_before
+    if dropped == 0 and expired <= 0:
+        print(f"(nothing to sweep: {total} findings, none dropped or expired)")
         return 0
-    print(f"ok: dropped {dropped} finding(s) with missing target files, kept {total - dropped}")
+    print(
+        f"ok: dropped {dropped} finding(s) with missing target files, kept {total - dropped}; "
+        f"aged out {max(expired, 0)} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
+    )
     return 0
 
 
