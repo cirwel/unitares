@@ -137,6 +137,24 @@ done
 # Watcher drops test files internally; filter here to avoid spawning python for them.
 CANDIDATES=$(printf '%s' "$CANDIDATES" | grep -v '/tests\?/' | grep -v -E '/(test_[^/]+|[^/]+_test)\.[a-z]+$' || true)
 
+# Keep only real edits. A git checkout (new worktree, branch switch, pull)
+# moves the mtime of every file it writes, so mtime alone makes a fresh
+# worktree look like a thousand edits and re-flags existing code once per
+# copy. sweep_filter keeps a file git reports modified or untracked, or that a
+# commit since the watermark touched, and every file outside a work tree. If
+# the filter itself fails, scan the unfiltered list rather than skip edits.
+RAW_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+WATERMARK_EPOCH=$(stat -f %m "$STATE_FILE" 2>/dev/null || echo "")
+FILTER_ARGS=()
+[[ -n "$WATERMARK_EPOCH" ]] && FILTER_ARGS=(--since-epoch "$WATERMARK_EPOCH")
+if FILTERED=$(printf '%s\n' "$CANDIDATES" | (cd "$REPO_ROOT" && "$PY" -m agents.watcher.sweep_filter ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"}) 2>/dev/null); then
+    CANDIDATES="$FILTERED"
+else
+    log "edit filter failed; scanning unfiltered candidates"
+fi
+FILTERED_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
+UNEDITED=$(( RAW_COUNT - FILTERED_COUNT ))
+
 if [[ -z "${CANDIDATES//[[:space:]]/}" ]]; then
     mv -f "$PENDING_STATE" "$STATE_FILE"
     exit 0
@@ -187,10 +205,10 @@ done <<< "$CANDIDATES"
 # work, hold the old watermark so the remainder is picked up next sweep.
 if [[ "$SCANNED" -ge "$MAX_FILES" ]]; then
     rm -f "$PENDING_STATE"
-    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook"
+    log "${TOTAL} changed, scanned ${SCANNED} (cap ${MAX_FILES} hit — watermark held), ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
 else
     mv -f "$PENDING_STATE" "$STATE_FILE"
-    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook"
+    log "${TOTAL} changed, scanned ${SCANNED}, ${SKIPPED_HOOK} already covered by hook, ${UNEDITED} unedited checkout files skipped"
 fi
 
 exit 0
