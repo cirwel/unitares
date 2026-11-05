@@ -70,7 +70,9 @@ def _edited_in(toplevel: str, since_iso: str | None) -> set[str] | None:
     if dirty is None or staged is None:
         return None
     names = {n for n in dirty.split("\0") if n} | {n for n in staged.split("\0") if n}
-    if since_iso is not None:
+    # An unborn branch (no commit yet) has no history, and `git log HEAD`
+    # fails there; skip it rather than let that failure fail the whole tree open.
+    if since_iso is not None and _git(["rev-parse", "--verify", "-q", "HEAD"], toplevel) is not None:
         # --cc: a merge commit otherwise lists no files, so an edit made while
         # resolving a conflict and committed before the sweep would be missed.
         # It lists only files whose merge result differs from every parent,

@@ -65,13 +65,20 @@ def test_staged_edits_are_kept(repo):
     assert kept == {str(repo / "edited.py"), str(repo / "added.py")}
 
 
-def test_staged_file_on_an_unborn_branch_is_kept(tmp_path):
+def test_unborn_branch_filters_without_failing_open(tmp_path):
+    """Review finding on #3205 (antigravity, google): with a watermark, `git
+    log HEAD` failed on a branch with no commits, and the filter failed open
+    for the whole tree. The ignored file proves filtering actually ran."""
     root = tmp_path / "fresh"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
+    (root / ".gitignore").write_text("gen/\n")
+    (root / "gen").mkdir()
+    (root / "gen" / "out.py").write_text("o = 1\n")
     (root / "first.py").write_text("f = 1\n")
     _git(root, "add", "first.py")
-    assert _kept([root / "first.py"]) == {str(root / "first.py")}
+    kept = _kept([root / "first.py", root / "gen" / "out.py"], since=time.time() - 60)
+    assert kept == {str(root / "first.py")}
 
 
 def test_conflict_resolution_committed_in_a_merge_is_kept(repo):
