@@ -43,6 +43,7 @@ def _replay_scenario(scenario: CapabilityScenario, tmp_path) -> list[dict]:
             scenario.reported_confidence,
             "proceed",
             correct,
+            agent_id="scenario_agent",
         )
         decisions.append("proceed")
         coherence.append(0.5)
@@ -53,6 +54,7 @@ def _replay_scenario(scenario: CapabilityScenario, tmp_path) -> list[dict]:
             continue
 
         calibration_error = compute_calibration_error(checker)
+        agent_channel = checker.compute_agent_tactical_calibration_channel("scenario_agent")
         observation = compute_behavioral_sensor_eisv(
             decision_history=decisions,
             coherence_history=coherence,
@@ -65,6 +67,7 @@ def _replay_scenario(scenario: CapabilityScenario, tmp_path) -> list[dict]:
             drift_norm=0.1,
             complexity_divergence=0.1,
             outcome_history=outcomes,
+            agent_calibration_channel=agent_channel,
         )
         assert observation is not None
 
