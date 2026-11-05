@@ -34,6 +34,10 @@ defmodule UnitaresSdk do
     * `UnitaresSdk.Config` — the opt-in gate that keeps dev shells off the live
       substrate
     * `UnitaresSdk.Backoff` — onboard retry and breaker policy
+    * `UnitaresSdk.LeasePlaneEnvelope` — reply classifier for the `:8788`
+      surface lease plane (`acquire` / `release`)
+    * `UnitaresSdk.LeaseReclaim` — shared orphan-lease reclaim contracts
+      (UUID-history with absence-grace + singleton intent-tag classification)
 
   ## Consuming it
 

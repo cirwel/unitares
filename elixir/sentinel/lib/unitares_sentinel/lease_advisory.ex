@@ -305,9 +305,7 @@ defmodule UnitaresSentinel.LeaseAdvisory do
          opts
        )
        when is_binary(held_by) and is_binary(blocking) do
-    candidates = Keyword.get(opts, :reclaim_candidates, [])
-
-    if held_by in candidates do
+    if UnitaresSdk.LeaseReclaim.own_orphan_uuid?(held_by, opts) do
       surface_id = Map.get(body, "surface_id")
 
       Logger.warning(
@@ -352,7 +350,7 @@ defmodule UnitaresSentinel.LeaseAdvisory do
     Map.put(scope, :conflict, conflict)
   end
 
-  @reclaim_release_reason "reclaimed_lost_acquire"
+  @reclaim_release_reason UnitaresSdk.LeaseReclaim.release_reason(:uuid_history)
 
   # Unlike `release/2` (fire-and-forget, swallows everything), a reclaim
   # release must report whether it worked: on failure the caller keeps its
