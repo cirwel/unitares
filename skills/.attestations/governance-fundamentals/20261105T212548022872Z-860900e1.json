@@ -1,12 +1,12 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-11-05T10:46:19Z",
+  "verified_at": "2026-11-05T21:25:48Z",
   "verified_date": "2026-11-05",
-  "verifier": "gemini-4-argon (re-checked EISV sensor self-loop neutralization and per-agent I calibration default-ON SN1 posture and independent I evidence gates)",
+  "verifier": "gemini-4-argon (re-checked EISV sensor self-loop neutralization and per-agent I calibration default-ON SN1 posture and consistency_I design note)",
   "source_digests": {
     "unitares/config/governance_config.py": "6112deea9bd0c7e9",
-    "unitares/docs/EISV_COMPUTATION.md": "165b70857ffcc71c",
+    "unitares/docs/EISV_COMPUTATION.md": "3824f568c083f48f",
     "unitares/governance_core/coherence.py": "ef819003ee72b388",
     "unitares/governance_core/parameters.py": "e02c333c8772f9b0",
     "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
