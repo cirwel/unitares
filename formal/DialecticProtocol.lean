@@ -875,9 +875,10 @@ theorem rejection_stands_sweep_only_fails (s : State) (isOrch : Bool) (winEnd : 
 
 /-!
   ## Compile-Time `#guard` Conformance Vectors
-  Parsed by `tests/test_dialectic_protocol_state_machine.py` to enforce
-  zero drift between `formal/DialecticProtocol.lean`, `SpecState`, and
-  the live Python implementation.
+  Parsed by `tests/test_dialectic_protocol_state_machine.py` to cross-check
+  these `#guard` trace vectors against `SpecState` and the live Python
+  implementation (while the Lean 4 kernel checks the theorems and `#guard`s
+  when `lean` is installed).
 -/
 
 def mkInitState (paused : AgentId) (reviewer : Option AgentId)
