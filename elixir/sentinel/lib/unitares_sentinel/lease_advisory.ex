@@ -386,7 +386,11 @@ defmodule UnitaresSentinel.LeaseAdvisory do
       other ->
         case UnitaresSdk.LeaseReclaim.fallback_release_reason(:uuid_history, other) do
           {:retry, fallback_reason} ->
-            {:ok, 422, rejected} = other
+            rejected =
+              case other do
+                {:ok, _status, body} -> body
+                _ -> other
+              end
 
             case post_release(lease_id, fallback_reason, opts) do
               {:ok, _status, %{"ok" => true}} ->
