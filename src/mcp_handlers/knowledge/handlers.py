@@ -80,6 +80,7 @@ from src.knowledge_authority import (
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
+    rank_by_authority,  # noqa: F401
 )
 from src.mcp_handlers.knowledge.limits import (
     MAX_DETAILS_LEN, MAX_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
@@ -91,7 +92,12 @@ from src.coherence_provenance import (
     coherence_role_for_source,
 )
 from src.perf_monitor import record_ms
+from src.recall_telemetry import record_recall_event  # noqa: F401
 from ..support.coerce import LimitError, parse_limit
+from ..support.llm_delegation import (
+    LOCAL_LLM_WAIT_BUFFER_S,  # noqa: F401
+    synthesize_results,  # noqa: F401
+)
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
