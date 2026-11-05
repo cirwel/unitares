@@ -317,3 +317,21 @@ class TestCompactionKeepsExpired:
         F.compact_findings()
 
         assert _read() == []
+
+
+def test_cli_counts_expiry_when_the_same_pass_drops_an_aged_out_row(capsys):
+    """Review finding on #3199 (codex, P2): a net status count reported
+    'aged out 0' when one row expired and an older snapshotless aged_out row
+    was dropped in the same pass."""
+    _write(
+        [
+            _finding(fingerprint="aaaa0000", detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1)),
+            _finding(fingerprint="bbbb0000", status="aged_out", line_content=""),
+        ]
+    )
+
+    F.sweep_stale_findings()
+
+    out = capsys.readouterr().out
+    assert "dropped 1" in out
+    assert "aged out 1" in out

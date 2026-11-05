@@ -607,9 +607,19 @@ def _sweep_stale_quiet() -> int:
     Same logic as ``sweep_stale_findings``, factored so the CLI variant
     can stay print-y while the auto-call-site stays silent.
     """
+    return _sweep_stale_counts()[0]
+
+
+def _sweep_stale_counts() -> tuple[int, int]:
+    """Run the stale sweep and return ``(dropped, expired)``.
+
+    The CLI reports both from here rather than diffing status populations
+    before and after, which miscounts when one pass both expires a row and
+    drops an older snapshotless ``aged_out`` row (review finding on #3199).
+    """
     findings = _iter_findings_raw()
     if not findings:
-        return 0
+        return 0, 0
 
     now = datetime.now(timezone.utc)
     expiry_cutoff = now - timedelta(days=PATH_GONE_EXPIRY_DAYS)
@@ -660,7 +670,7 @@ def _sweep_stale_quiet() -> int:
     # alone would leave them unwritten until some later sweep happened to drop
     # something — the exact class of silent staleness this function exists for.
     if dropped == 0 and newly_marked == 0 and expired == 0:
-        return 0
+        return 0, 0
 
     _write_findings_atomic(kept)
     log(
@@ -668,7 +678,7 @@ def _sweep_stale_quiet() -> int:
         f"files, retained {newly_marked} with a source snapshot, aged out "
         f"{expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
     )
-    return dropped
+    return dropped, expired
 
 
 def sweep_stale_findings() -> int:
@@ -688,15 +698,13 @@ def sweep_stale_findings() -> int:
         return 0
 
     total = len(findings)
-    aged_before = sum(1 for f in findings if f.get("status") == "aged_out")
-    dropped = _sweep_stale_quiet()
-    expired = sum(1 for f in _iter_findings_raw() if f.get("status") == "aged_out") - aged_before
-    if dropped == 0 and expired <= 0:
+    dropped, expired = _sweep_stale_counts()
+    if dropped == 0 and expired == 0:
         print(f"(nothing to sweep: {total} findings, none dropped or expired)")
         return 0
     print(
         f"ok: dropped {dropped} finding(s) with missing target files, kept {total - dropped}; "
-        f"aged out {max(expired, 0)} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
+        f"aged out {expired} unadjudicated after {PATH_GONE_EXPIRY_DAYS}d on a deleted path"
     )
     return 0
 
