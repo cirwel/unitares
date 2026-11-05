@@ -1,10 +1,13 @@
 # S axis validation protocol (v1, draft)
 
-**Status:** DRAFT, 2026-11-03. Nothing here has run, and no data for v1 have been
-collected. Collection waits for the operator to approve or edit the deciding
-standard in [§7](#7-deciding-standard-operator-slot). When it is approved, this
-file moves to `docs/proposals/registered/` with the approval cited, and from then
-on it changes only through a dated amendment.
+**Status:** DRAFT, 2026-11-03; amended 2026-11-04 after an independent standards
+assessment. Nothing here has run, and no data for v1 have been collected. The
+operator must approve both the complete deciding standard in
+[§7](#7-deciding-standard-operator-slot) and the code-derived Step 0 predictions
+before registration or collection. Approval of this draft or its merge alone does
+not register the study. Once both are approved, this file moves to
+`docs/proposals/registered/` with the approvals cited; later changes require a
+dated amendment.
 
 **Scope:** whether S, as computed, responds to known changes in its inputs with
 the predicted sign, size, timing and recovery. It also covers whether S stays
@@ -90,9 +93,11 @@ Each arm gets its own verdict. One arm's verdict says nothing about the other.
 
 ## 4. Conditions
 
-Each stream has 100 check-ins: baseline 0–29, intervention 30–44, recovery
-45–99. v0's recovery of 25 steps left the 0.45 overclaim still 0.030 above
-baseline, so recovery is longer here. Inputs are generated as in v0: templated
+Each stream is provisionally 100 check-ins: baseline 0–29, intervention 30–44,
+recovery 45–99. Step 0 may extend it before registration if a predicted recovery
+or transient does not fit. v0's recovery of 25 steps left the 0.45 overclaim
+still 0.030 above baseline, so recovery is longer here. Inputs are generated as
+in v0: templated
 reports, `task_type="mixed"`, intervals of 30–90 s, and jitter of 0.03 on the
 self-reported values. Exceptions are noted below.
 
@@ -105,7 +110,7 @@ self-reported values. Exceptions are noted below.
 | P2 | Confidence drops to 0.55 / 0.45 / 0.30, with complexity reported accurately | Confidence alone (drift path only) |
 | P3 | v0's joint collapse: confidence 0.30 and claimed complexity 0.90 | Continuity with v0 |
 | P4 | Thrash: alternating terse/confident and heavy/unsure reports, each reported accurately | Switching |
-| P5 | Tool-velocity burst: tool calls arrive at 60 per minute from step 30 to step 44, every other input unchanged. Velocity is the past hour's calls ÷ 60, with a floor of 5 per minute. At 30–90 s intervals the window lasts about 15 minutes, so a lower rate might never cross the floor. 60 per minute brings the hourly average to about 15 per minute, which is full pressure, by the window's end. The predicted response builds through the window and decays over the following hour, so Step 0 checks that recovery fits the stream | The tool term. **Conditional:** it runs only if Step 0 shows the harness can drive a path that supplies `tool_call_velocity` (§8). Otherwise it is dropped, and the result says the tool term is untested |
+| P5 | Tool-velocity burst: tool calls arrive at 60 per minute from step 30 to step 44, every other input unchanged. Velocity is the past hour's calls ÷ 60, with a floor of 5 per minute. At 30–90 s intervals the window lasts about 15 minutes, so a lower rate might never cross the floor. 60 per minute brings the hourly average to about 15 per minute, which is full pressure, by the window's end. The predicted response builds through the window and decays over the following hour, so Step 0 checks that recovery fits the stream | The tool term. **Conditional:** Step 0 must choose a route that supplies `tool_call_velocity` (§8). A harness-only hook tests the estimator but not deployed delivery of that input; if neither route works, the term is untested |
 
 **Negative controls** (predicted not to move S):
 
@@ -123,23 +128,39 @@ This is decided in Step 0, not after collection.
 
 ## 5. Step 0: derived predictions, before any collection
 
-Before collection, a commit adds `prediction-v1.md` beside this file. Using only
-the code at the pinned commit (no stream is run), it states the following for
-every condition and both arms:
+Before collection, a separate commit adds `prediction-v1.md` beside this file.
+First freeze the pinned estimator commit, dated aggregate baseline medians used
+to set the stimulus, exact input values and clipping rule, included class and
+tool paths, randomization keys, analysis windows, confidence-interval and
+agreement-limit methods, and the number of seeds. A
+dated aggregate read that sets inputs is not a v1 response observation; its
+values and provenance must be recorded before prediction. Then derive the
+predictions from the pinned code and those frozen inputs, without running any
+v1 stream or inspecting any v1 response. For every condition and both arms,
+record:
 
-1. **Direction**, and **steady-state magnitude** with a band. For divergence this
-   is the direct-path gain (§2) times the dose, plus a drift contribution
-   derived from `monitor_drift.py`.
+1. **Direction**, and the expected magnitude with a permitted band in absolute
+   S units. For divergence this is the direct-path gain (§2) times the dose,
+   plus a drift contribution derived from `monitor_drift.py`. Define the band
+   from code and stated uncertainty, not from v1 results. State when clipping
+   or a regime change prevents a simple linear prediction.
 2. **Shape:** a level shift, a transient (peak, and steps to half-decay), or no
    change. P2 is the case to settle here.
 3. **Latency:** the number of check-ins to half the steady response.
-4. **Recovery:** the number of check-ins until S is back within ±δ of control.
+4. **Recovery:** the number of check-ins until S is back within ±δ of control,
+   and a fixed latest acceptable recovery step. Extend the stream before
+   registration if a predicted recovery cannot be assessed in its window.
 5. **What neutralising each path leaves.** For each positive control, list every
    causal path and the response predicted when one path is removed. Do not
    assume it goes to zero. Regime-loop and drift side effects belong here.
 
-The operator approves the predictions together with §7. A prediction that turns
-out wrong is reported as wrong; it is never re-derived after collection.
+Step 0 also records an analytic sensitivity calculation for the hardest
+equivalence, magnitude-band, and agreement gates at the proposed seed count. It
+states what effect sizes remain inconclusive. Any change to a deciding value,
+window, condition, or sample count then needs an amended draft and a new
+approval, still before collection. The operator approves the complete predictions
+together with §7. A prediction that turns out wrong is reported as wrong; it is
+never re-derived after collection.
 
 ## 6. Pairing, seeds and windows
 
@@ -160,63 +181,99 @@ out wrong is reported as wrong; it is never re-derived after collection.
   largest |ΔS| it produces. This measures how far the self-loop amplifies a
   negligible difference, which bounds what the paired design can resolve in
   arm (a).
+- **Retest under nuisance variation.** After the common baseline, clone the
+  state at step 30 into two additional N1 continuations per seed. Both keep the
+  same working state and measurement schedule, but draw independent report
+  wording and 0.03 field jitter from separate, pre-keyed nuisance streams.
+  Compare their *matched* 37–44 window means. This tests repeatability under
+  the permitted within-style variation without overlapping windows or treating
+  adjacent adapting readings as independent replications. Report the N1
+  trajectory as a separate check for continuing baseline drift.
 - **N1 against N1 is identical by construction,** so it is asserted as identity
   and not tested inferentially.
 - **Unit:** the seed. All inference uses one value per seed per window, never
   pooled steps.
 - **Windows:** onset 30–34 (transients), response 37–44 (after burn-in),
-  recovery 85–99, retest A 15–22 and retest B 22–29 (both in baseline).
-- **Seeds:** the count is set so that the expected standard error of a paired
-  window difference is at most δ/3. As a conservative bound it uses v0's
-  unpaired spread (SD about 0.045), which gives n ≥ 182, so **n = 200 per condition
-  per arm**. Cloned branching should make the realised error smaller. If the
-  operator changes δ, n follows this rule. The cost is estimated in Step 0. Run
-  offline, as v0 was, this is several hundred thousand `process_update` calls.
+  proposed recovery 85–99, and matched retest windows 37–44 in the two N1
+  continuations. Step 0 fixes any extension needed for a predicted transient
+  or recovery before registration; no window is moved after seeing responses.
+- **Seeds:** proposed **n = 200 per condition per arm**. The v0 unpaired spread
+  (SD about 0.045) gives a nominal paired-window SE of 0.045/√200 ≈ 0.0032,
+  below δ/3 for δ = 0.01. The corresponding 90% interval has a half-width of
+  about 0.0053 at a mean of zero. That calculation alone does not establish
+  power for equivalence near ±δ, agreement limits, or magnitude bands. Step 0
+  supplies the gate-level sensitivity calculation and the operator approves the
+  seed count with δ. No seed is added after inspecting the confirmatory run.
+  The offline cost is estimated in Step 0.
 
 ## 7. Deciding standard (operator slot)
 
 These are proposed values. The operator approves or edits them before collection,
 and the approved values are fixed from then on.
 
-**δ, the equivalence margin, absolute in S units.** Proposed **0.01**: a
-quarter of the gentlest positive response v0 recorded (+0.040 at the 0.10
-overclaim). On this margin, a change that should not register moves S by less
-than a quarter of the smallest real miscalibration tested. The same δ applies
-to both arms. If the operator can name a consequence-based value (the smallest
-S change that would alter what an agent or operator does), that value should
-replace this one.
+**δ, the equivalence margin, absolute in S units.** Proposed **0.01** as an
+*engineering resolution target*, pending operator choice. It is one-quarter of
+the smallest deployed response estimated in exploratory v0 (+0.040 at the 0.10
+overclaim), but about 42% of v0's regime-held estimate for that dose (+0.024).
+Those eight-seed estimates do not establish a smallest meaningful S difference,
+and no effect of ΔS = 0.01 on an agent or operator decision has been shown. The
+operator must either supply a consequence-based margin for a stated use case,
+or explicitly approve 0.01 as a narrower instrument-resolution target. The
+same selected margin applies to both arms. An engineering margin alone does
+not validate an operational decision threshold.
 
-An arm is **FAITHFUL** only if every criterion below holds. Otherwise it is
-**NOT FAITHFUL**, and the result lists each criterion that failed. There are no
-exemptions, including for failures this protocol predicts.
+An arm is **FAITHFUL UNDER THESE SYNTHETIC INTERVENTIONS** only if every
+applicable criterion below is met, the procedure passes its mutant checks, and
+every declared S estimator input path was exercised. This is an estimator
+verdict; whether the deployed update route supplies each input is reported
+separately. A missed criterion is never excused
+because failure was predicted. Otherwise report **NOT ESTABLISHED**, with each
+reason classified as an observed contradiction, insufficient precision,
+invalid procedure, or missing path coverage. In particular, failing to prove
+TOST equivalence is not by itself proof of a meaningful difference. Report
+the estimates and intervals so an observed violation can be distinguished
+from an inconclusive result.
 
 1. **Direction and magnitude.** For every positive control, the paired window
-   mean (response window, or onset window where Step 0 predicts a transient) has
-   a one-sided 95% lower bound above zero. Its point estimate also falls inside
-   the Step 0 band.
-2. **Dose order.** For P1 and P2, every adjacent pair of doses is
-   non-decreasing in paired ΔS: one-sided paired tests by seed, Holm-corrected.
-   Page's L test (blocked by seed) reports the overall trend.
+   mean (response window, or onset window where Step 0 predicts a transient)
+   has a one-sided 95% lower bound above **δ**, and its two-sided 90% interval
+   lies inside the Step 0 permitted magnitude band. A point estimate inside
+   a band without adequate precision does not pass.
+2. **Dose order.** For P1 and P2, each adjacent dose contrast must have a
+   positive one-sided paired lower bound, Holm-corrected. This establishes a
+   rise rather than merely failing to detect a decline. If code predicts a
+   plateau from clipping, Step 0 must name that pair and its distinct test
+   before registration. Page's L test (blocked by seed) reports the overall
+   trend.
 3. **Specificity.** For every negative control except N1, TOST equivalence
    within ±δ: the 90% CI of the paired window mean lies inside ±δ.
-4. **Recovery.** For every positive control, the recovery window's paired ΔS is
-   within ±δ (TOST). If Step 0 predicts a longer recovery than step 85 allows,
-   the result reports that, and this criterion is scored at Step 0's recovery
-   step.
-5. **Reliability.** Within each seed's baseline, retest windows A and B agree:
-   the 95% Bland–Altman limits of agreement lie within ±2δ, and ICC(A,1)
-   across seeds is reported. Bit-identical replay of one stream is asserted
-   again (determinism).
-6. **Signal against noise.** For every positive control, the mean response is at
-   least 3× the within-seed resting step SD, the SD of step-to-step change in
-   retest windows A and B.
+4. **Recovery.** For every positive control, the fixed recovery window's paired
+   ΔS is within ±δ (TOST), at or before the latest acceptable step fixed in
+   Step 0. A predicted recovery beyond the current stream requires an extension
+   before registration, not a later choice of scoring window.
+5. **Reliability.** Across seeds, the 95% Bland–Altman limits of agreement for
+   the two *matched retest window means* lie within ±2δ, with the corresponding
+   confidence bounds also inside ±2δ. Report the limits, their confidence
+   bounds, the baseline drift check, and ICC(A,1) descriptively. ICC is not a
+   gate because little between-seed variance is expected for a self-relative
+   instrument. Bit-identical replay is asserted separately as determinism.
+
+**Signal against noise is characterisation, not a deciding gate.** Report the
+within-seed resting step-change SD, the seed-level paired-response spread, and
+response-to-noise ratios for both a single reading and the fixed response
+window. The former proposed 3× step-change-SD rule compared a window mean
+with per-step variation and had no stated operating use case. A future
+single-reading detection target needs its own pre-registered false-alarm and
+sensitivity standard; it is not inferred from this study.
 
 **Declared predictions for the verdicts:**
-- Arm (a) is NOT FAITHFUL. It fails criterion 3 for N2a and N2b, because of the
-  regime self-loop (v0: -0.038 live). It also fails criterion 6 for the lowest P1
-  dose: v0's resting step SD was 0.027, so 3× that is 0.081, against a response
-  of about +0.040.
-- Arm (b) is FAITHFUL.
+- Arm (a) is predicted **NOT ESTABLISHED** on specificity for N2a and N2b,
+  because of the regime self-loop (v0: -0.038 live). Its v0 resting step SD was
+  0.027 against a +0.040 response at the lowest P1 dose; that suggests poor
+  single-reading separation but is no longer a verdict criterion.
+- Arm (b) is predicted **FAITHFUL UNDER THESE SYNTHETIC INTERVENTIONS** if all
+  paths are covered. v0 did not test several v1 conditions, so this remains a
+  forecast, not an inferred v1 result.
 
 Each prediction is reported as confirmed or not.
 
@@ -224,21 +281,24 @@ Each prediction is reported as confirmed or not.
 
 Before the real arms are scored, the whole procedure (generation, pairing,
 windows, statistics and criteria) runs against deliberately broken estimators.
-These are made by patching `_compute_S_components` inside the hermetic harness
-only:
+The mutations stay inside the hermetic harness. Step 0 fixes their exact
+injection points and demonstrates from the code that the named criterion can
+detect each breakage; a mutation that leaves another route to the same signal
+cannot be assigned an impossible expected failure.
 
 | Mutant | Breakage | Must fail |
 |---|---|---|
-| M1 | Divergence weight 0 | Criterion 1 on P1 |
-| M2 | Raw S held constant | Criterion 1 on every positive control |
-| M3 | Raw S plus a deterministic term from a hash of the report's vocabulary (±0.03) | Criterion 3 on N2 |
-| M4 | All gains halved | The criterion 1 band on P1 |
-| M5 | Recovery removed: the S increase is latched after the intervention | Criterion 4 |
+| M1 | Neutralise **all three** routes from complexity divergence into final S: direct term, continuity blend, and divergence's drift contribution. Leave unrelated paths intact | Criterion 1 on P1; a direct-weight-only mutation is insufficient because the other two routes remain |
+| M2 | Hold **final S after all adjustments** constant, not just raw S | Criterion 1 on every positive control, including P5 |
+| M3 | Add a fixed +0.03 offset for the N2a vocabulary set and -0.03 for N2b, with no offset for baseline wording | Criterion 3 separately on N2a and N2b; a seed-varying ±0.03 hash could average to zero and evade a mean test |
+| M4 | Attenuate the final intervention response by a factor fixed in Step 0, chosen analytically so its expected P1 response lies outside the permitted band | Criterion 1 magnitude band on the named P1 dose; no factor is chosen from v1 outputs |
+| M5 | Latch an intervention-caused final-S increase after the intervention ends | Criterion 4 on the named positive control |
 
 If any mutant passes a criterion it should fail, the procedure is invalid for
-that criterion. The run stops and reports that, and no arm is scored on that
-criterion. Mutant outputs are scored by script, and their results are published
-with the run.
+that criterion. The run stops and reports that; neither arm receives a full
+verdict. Mutant outputs are scored by script and published with the run. The
+distribution of seed-level negative-control differences is reported alongside
+its mean, so cancellation remains visible even when mean equivalence passes.
 
 Mapped onto the four [positive-control checks](../../operations/positive-control-validity-2026-08-23.md#the-general-rule):
 
@@ -249,7 +309,8 @@ Mapped onto the four [positive-control checks](../../operations/positive-control
   silently remove divergence.
 - **Regime:** baseline confidence and the claimed-minus-derived offset are set
   to the live fleet's medians, taken from a stated, dated, aggregate read. That
-  read happens in Step 0, before collection, and is the only database contact.
+  read fixes stimulus inputs before Step 0 predictions are written; it is the
+  only database contact and supplies no v1 response observation.
 - **Independence:** every dose is in absolute input units. None is expressed in
   units of an S threshold.
 
@@ -262,10 +323,12 @@ sensor call). Step 0 decides between two routes and records its choice:
   ÷ 60) with a stubbed tracker;
 - or pass velocity in those same units through a harness-only hook.
 
-The second route measures a path the deployed `process_update` doesn't take,
-and the result says so. Either route lands with its own tests, with tool-call
-timestamps on the injected clock. If neither route is feasible, P5 is dropped
-(§4).
+The second route measures an estimator input that the deployed `process_update`
+path does not supply. It can support the estimator verdict, but no claim about
+deployed delivery of tool velocity. Either route lands with its own tests, with
+tool-call timestamps on the injected clock. If neither route is feasible, P5 is
+omitted and the estimator verdict is NOT ESTABLISHED (§7). The remaining
+conditions are still reported individually.
 
 ## 9. Characterisation: what the combined reading adds (no pass or fail)
 
@@ -286,11 +349,17 @@ reliability.
 
 ## 10. Execution, reporting and limits
 
-- **Order:** Step 0 predictions and the operator's approval, then the harness
-  extension, then the mutant run, then one run of both arms. Plumbing checks use
-  seeds 10,000 and up, print no ΔS, and assert only that streams complete. The
-  confirmatory run uses seeds 0–199. It runs once, and the result is
+- **Order:** freeze stimulus inputs and complete Step 0 predictions, obtain the
+  operator's approval of both Step 0 and §7, register the protocol, then build
+  the harness extension, run mutants, and run both arms once. Plumbing checks
+  use seeds 10,000 and up, print no ΔS, and assert only that streams complete.
+  The confirmatory run uses the seed count approved in Step 0, starting at zero.
+  It runs once, and the result is
   `docs/evaluations/eisv-s-faithfulness/result-v1.md`.
+- **Incomplete streams:** a failed or excluded stream stops scoring until its
+  cause is reported and the procedure is repaired under the registered
+  amendment rule. Do not silently replace a seed or change the seed count.
+  Clipping counts are reported against the Step 0 input-domain rule.
 - **Reporting:** before any verdict, report the attrition: streams that failed to
   complete, values clipped, and reports excluded as degenerate. Report every
   criterion for every condition and arm, including the ones that pass. Under the
@@ -313,19 +382,19 @@ reliability.
 
 ## 11. Design critique and what changed
 
-The council (one consult, advisory, `d23885fa`) raised the issues below. Each
-was folded into the protocol as shown.
+The council (one consult, advisory, `d23885fa`) raised the issues below. The
+right column gives the current treatment after the 2026-11-04 amendment.
 
 | Raised | Change |
 |---|---|
 | No overall decision rule; a predicted failure could become an exemption | §7: one verdict per arm, with no exemptions |
-| A lower bound above zero accepts tiny responses, and in a weighted sum the sign is almost guaranteed | §5 Step 0 magnitude bands, and §7 criterion 1 |
-| Zeroing a weight only tests that multiplying by zero gives zero | §8 mutants that the procedure must reject, plus the N3 antagonist |
-| Test-retest was missing (replay shows determinism only) | §7 criterion 5 and the retest windows |
+| A lower bound above zero accepts tiny responses, and in a weighted sum the sign is almost guaranteed | §5 Step 0 permitted magnitude bands; §7 criterion 1 requires a lower bound above δ and an interval inside the band |
+| Zeroing a weight only tests that multiplying by zero gives zero | §8 mutants must remove all paths to the target response; N3 remains the P1 antagonist |
+| Test-retest was missing (replay shows determinism only) | §6 matched, cloned N1 continuations with independent nuisance variation; §7 criterion 5 |
 | CRN breaks under the self-loop unless states are cloned and draws are event-indexed. N1 makes zero-variance pairs | §6 cloned branching, indexed draws, the microstate control, and N1 asserted as identity |
 | Jonckheere–Terpstra assumes independent groups, and a trend doesn't show each adjacent step | §7 criterion 2: adjacent paired tests plus Page's L |
-| δ = 0.03 came from noise dominated by the self-loop and was too wide | §7 δ = 0.01, fixed across arms, an operator slot, and seeds set by δ |
-| Signal-to-noise against between-seed SD can be gamed | §7 criterion 6 uses within-seed step SD |
+| δ = 0.03 came from noise dominated by the self-loop and was too wide | §7 keeps δ = 0.01 as a candidate engineering target, subject to an explicit operator choice and Step 0 sensitivity calculation |
+| Signal-to-noise against between-seed SD can be gamed | §7 reports both per-step and window noise, but removes the unmatched 3× ratio from the verdict pending a stated operating use case |
 | Per-step AUC pools autocorrelated steps and compares across time | §9 one score per seed, matched windows, the best input chosen once, fixed directions |
 | No recovery criterion | §7 criterion 4, and streams lengthened to 100 |
 | P2's path into S, and cadence against tool counts, were unmapped | §2 path table, Step 0 shape prediction, and §8 fixed calls per check-in |
@@ -338,3 +407,12 @@ the first version. All three are fixed above:
 | Stubbing tool counts can't reach S: `process_update` never passes `tool_call_velocity`, and velocity is in calls per minute over an hour, not per check-in | §2 units corrected. P5 is conditional on a path that supplies velocity (§8), and its rate now crosses the 5-per-minute floor |
 | `neutralize_self_loops` also neutralises the decision and coherence terms of E and I, so arm (b) would change more than the regime term | Arm (b) patches only `_regime_instability`, the same substitution the live shadow makes |
 | Keying every draw by condition gave control and intervention different jitter, which breaks common random numbers | Shared nuisance draws are keyed by `(seed, step, field)`. Only fields the intervention changes take condition-specific draws |
+
+**Post-merge standards assessment, 2026-11-04.** This amendment uses the v0
+estimates only as exploratory design evidence. It does not treat a failed TOST
+as proof of inequivalence, an unexercised tool path as a full-path validation,
+or a mean effect that can cancel across seeds as a sufficient mutant check. It
+requires an approved operational or engineering interpretation of δ, a
+gate-level sensitivity calculation, matched retest streams, fixed recovery
+timing, and code-derived Step 0 predictions before registration. No v1
+responses were inspected or collected for this amendment.
