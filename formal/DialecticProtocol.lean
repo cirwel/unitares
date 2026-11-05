@@ -4,21 +4,26 @@
 
   Mechanized Lean 4 specification of the peer-review dialectic state machine
   (`src/dialectic_protocol.py`), reviewer recusal (`src/dialectic_reviewed_work.py`),
-  and the BEAM cross-runtime resolution saga phase guard
-  (`elixir/lease_plane/lib/unitares_lease_plane/dialectic_saga.ex`).
+  reviewer reassignment (`src/mcp_handlers/dialectic/resolution_helpers.py`),
+  standing-rejection facilitation exit (`src/mcp_handlers/dialectic/rejection_stands.py`
+  and `src/mcp_handlers/dialectic/auto_resolve.py`), and the BEAM cross-runtime
+  resolution saga phase guard (`elixir/lease_plane/lib/unitares_lease_plane/dialectic_saga.ex`).
 
   Every theorem in this file is kernel-checked with zero `sorry`s and zero
-  user-defined axioms. The companion stateful test suite
-  (`tests/test_dialectic_protocol_state_machine.py`) runs `lean` on this file
-  when available and checks via Hypothesis `RuleBasedStateMachine` that the
-  live Python `DialecticSession` implementation is a strict refinement of this
-  transition system.
+  user-defined axioms, and `#guard` assertions verify executable trace vectors
+  at compile time. The companion stateful test suite
+  (`tests/test_dialectic_protocol_state_machine.py`) parses the `#guard` vectors
+  from this file to verify that the Python mirror and live `DialecticSession`
+  cannot drift from the Lean specification.
 -/
 
 namespace Unitares.DialecticProtocol
 
-/-- Discrete agent identifier. -/
+/-- Discrete agent identifier (`0..3` for participants/reviewers, `99` for `"system"`). -/
 abbrev AgentId := Nat
+
+/-- System audit agent identifier used by `_apply_reviewer_reassignment`. -/
+def systemAgentId : AgentId := 99
 
 /-- Dialectic session lifecycle phases (`DialecticPhase` in `src/dialectic_protocol.py`). -/
 inductive Phase where
@@ -43,8 +48,26 @@ inductive MsgPhase where
   | thesis
   | antithesis
   | synthesis
+  | resolved
+  | failed
   | consult
   deriving DecidableEq, Repr
+
+/-- Map a session `Phase` to the `MsgPhase` recorded on system reassignment messages. -/
+@[simp] def Phase.toMsgPhase : Phase → MsgPhase
+  | .thesis => .thesis
+  | .antithesis => .antithesis
+  | .synthesis => .synthesis
+  | .resolved => .resolved
+  | .failed => .failed
+
+/-- Topological rank of each phase in the protocol DAG. -/
+def Phase.rank : Phase → Nat
+  | .thesis => 0
+  | .antithesis => 1
+  | .synthesis => 2
+  | .resolved => 3
+  | .failed => 3
 
 /-- Abstracted transcript message (`DialecticMessage`). -/
 structure Message where
@@ -81,6 +104,11 @@ namespace StepOutcome
 @[simp] def state : StepOutcome → State
   | .ok s _ => s
   | .refused s => s
+
+/-- True iff the transition was accepted (`StepOutcome.ok`). -/
+@[simp] def accepted : StepOutcome → Bool
+  | .ok _ _ => true
+  | .refused _ => false
 
 /-- True iff the transition reported convergence (`converged = True`). -/
 @[simp] def converged : StepOutcome → Bool
@@ -129,6 +157,65 @@ def scanObjectionStands (pausedAgent : AgentId) (selfReview : Bool) : List Messa
 def reviewerObjectionStands (s : State) : Bool :=
   let selfReview := s.reviewerAgent == some s.pausedAgent
   scanObjectionStands s.pausedAgent selfReview s.transcript.reverse
+
+/--
+  Sender of the most recent independent synthesis verdict (`agrees.isSome` and
+  `sender != pausedAgent`), used by `assess_rejection_stands` (`rejection_stands.py:195-205`)
+  to verify that the standing rejection was authored by the current `reviewerAgent`
+  rather than a reviewer who has since been replaced.
+-/
+def scanLastIndepVerdictSender (pausedAgent : AgentId) : List Message → Option AgentId
+  | [] => none
+  | msg :: rest =>
+    if (msg.phase == .synthesis) && (msg.sender != pausedAgent) && msg.agrees.isSome then
+      some msg.sender
+    else
+      scanLastIndepVerdictSender pausedAgent rest
+
+def lastIndepVerdictSender (s : State) : Option AgentId :=
+  scanLastIndepVerdictSender s.pausedAgent s.transcript.reverse
+
+/--
+  True when the reviewer reconsidered a paused-agent reply to that same reviewer's
+  earlier synthesis verdict and still rejected (`BASIS_REVIEWER_ANSWERED` in
+  `src/mcp_handlers/dialectic/rejection_stands.py:207-224`).
+-/
+def scanReviewerAnsweredReply (pausedAgent : AgentId) (rev : AgentId) : List Message → Bool :=
+  fun revTranscript =>
+    -- Walk reversed transcript:
+    -- 1. No paused-agent synthesis after `last` (before seeing the latest independent verdict).
+    -- 2. At least one paused-agent synthesis between `previous` (the second-to-last independent verdict)
+    --    and `last`, and `previous.sender == rev`.
+    let rec loop (stage : Nat) (seenPausedBetween : Bool) : List Message → Bool
+      | [] => false
+      | msg :: rest =>
+        if msg.phase != .synthesis then
+          loop stage seenPausedBetween rest
+        else if msg.sender == pausedAgent then
+          if stage == 0 then
+            -- A paused-agent reply exists AFTER the latest verdict (`replies_after` non-empty)
+            false
+          else if stage == 1 then
+            loop 1 true rest
+          else
+            false
+        else
+          match msg.agrees with
+          | none => loop stage seenPausedBetween rest
+          | some _ =>
+            if stage == 0 then
+              -- Latest independent verdict (`last`)
+              if msg.sender == rev then
+                loop 1 false rest
+              else
+                false
+            else
+              -- Second-to-last independent verdict (`previous`)
+              (msg.sender == rev) && seenPausedBetween
+    loop 0 false revTranscript
+
+def reviewerAnsweredReply (s : State) (rev : AgentId) : Bool :=
+  scanReviewerAnsweredReply s.pausedAgent rev s.transcript.reverse
 
 /--
   True after an independent antithesis and before the first independent synthesis verdict
@@ -257,14 +344,101 @@ def submitSynthesis (s : State) (m : Message) : StepOutcome :=
     } false
 
 /--
-  Reviewer reassignment (`_apply_reviewer_reassignment` in `src/mcp_handlers/dialectic/`).
-  Updates `reviewerAgent` and clears `awaitingFacilitation` without altering `transcript`.
+  Reviewer reassignment (`handle_reassign_reviewer` + `_apply_reviewer_reassignment`
+  in `src/mcp_handlers/dialectic/resolution_helpers.py:645-715, 1761-1775`).
+  - Refuses if `newReviewer` is a recused work author (`isRecused s newReviewer`).
+  - Refuses if `s.phase` is not `.thesis` or `.antithesis`, unless `s.awaitingFacilitation`
+    is true or `s.phase == .synthesis && assignedReviewerRecused s`.
+  - Reopens a terminal (`.resolved` / `.failed`) session that still carries
+    `awaitingFacilitation = true` to `.antithesis` (if a thesis is in the transcript)
+    or `.thesis` (otherwise).
+  - Rewinds a `.synthesis` session with `(awaitingFacilitation || assignedReviewerRecused s)`
+    and a self-reviewer or recused reviewer (`oldRev == pausedAgent || isRecused s oldRev`)
+    to `.antithesis` so the newly assigned independent reviewer gets an antithesis turn.
+  - Appends a system audit message (`sender := systemAgentId`, `agrees := none`)
+    and clears `awaitingFacilitation`.
 -/
-def reassignReviewer (s : State) (newReviewer : AgentId) : State :=
-  { s with
-    reviewerAgent := some newReviewer,
-    awaitingFacilitation := false
-  }
+def reassignReviewer (s : State) (newReviewer : AgentId) : StepOutcome :=
+  if isRecused s newReviewer then
+    .refused s
+  else
+    let phaseAllowed :=
+      (s.phase == .thesis) ||
+      (s.phase == .antithesis) ||
+      s.awaitingFacilitation ||
+      ((s.phase == .synthesis) && assignedReviewerRecused s)
+    if !phaseAllowed then
+      .refused s
+    else
+      let wasTerminal := (s.phase == .resolved) || (s.phase == .failed)
+      let oldSelfOrConflicted :=
+        match s.reviewerAgent with
+        | none => false
+        | some oldRev => (oldRev == s.pausedAgent) || isRecused s oldRev
+      let nextPhase :=
+        if wasTerminal && s.awaitingFacilitation then
+          if s.transcript.any (fun m => m.phase == .thesis) then .antithesis else .thesis
+        else if (s.awaitingFacilitation || assignedReviewerRecused s) && oldSelfOrConflicted && (s.phase == .synthesis) then
+          .antithesis
+        else
+          s.phase
+      let auditMsg : Message := {
+        phase := nextPhase.toMsgPhase,
+        sender := systemAgentId,
+        hasRootCause := false,
+        hasConditions := false,
+        hasReasoning := true,
+        agrees := none
+      }
+      .ok { s with
+        reviewerAgent := some newReviewer,
+        awaitingFacilitation := false,
+        phase := nextPhase,
+        transcript := s.transcript ++ [auditMsg]
+      } false
+
+/--
+  Pure assessment predicate for `rejection_stands` (`assess_rejection_stands` in
+  `src/mcp_handlers/dialectic/rejection_stands.py:166-260`).
+  Note that `assess_rejection_stands` itself does not inspect `s.phase`, but requires:
+  - `s.awaitingFacilitation == true`
+  - `s.reviewerAgent == some rev` with `rev != s.pausedAgent`
+  - `reviewerObjectionStands s == true`
+  - `lastIndepVerdictSender s == some rev` (standing rejection belongs to the current reviewer)
+  - `reviewerAnsweredReply s rev || (isOrchestrated && windowEnded)`
+-/
+def assessRejectionStands (s : State) (isOrchestrated : Bool) (windowEnded : Bool) : Bool :=
+  if !s.awaitingFacilitation then
+    false
+  else
+    match s.reviewerAgent with
+    | none => false
+    | some rev =>
+      if rev == s.pausedAgent then
+        false
+      else if !reviewerObjectionStands s then
+        false
+      else if lastIndepVerdictSender s != some rev then
+        false
+      else
+        reviewerAnsweredReply s rev || (isOrchestrated && windowEnded)
+
+/--
+  Sweeper transition closing a facilitation-awaiting session whose rejection stands
+  (`_close_standing_rejections` in `src/mcp_handlers/dialectic/auto_resolve.py:540-620`).
+  Selects active `synthesis` candidates with an unrecused independent reviewer
+  where `assessRejectionStands` holds, and transitions `phase` to `.failed`
+  (leaving `awaitingFacilitation` untouched on the row).
+-/
+def closeStandingRejection (s : State) (isOrchestrated : Bool) (windowEnded : Bool) : StepOutcome :=
+  if s.phase != .synthesis then
+    .refused s
+  else if assignedReviewerRecused s then
+    .refused s
+  else if !assessRejectionStands s isOrchestrated windowEnded then
+    .refused s
+  else
+    .ok { s with phase := .failed } false
 
 /--
   BEAM resolution saga phase guard (`UnitaresLeasePlane.DialecticSaga.guard_session_phase`).
@@ -282,51 +456,25 @@ def canClaimResolveSaga (s : State) (targetStatus : Phase) : Bool :=
     | .failed => true
     | _ => false
 
-/-- Topological rank of each phase in the protocol DAG. -/
-def Phase.rank : Phase → Nat
-  | .thesis => 0
-  | .antithesis => 1
-  | .synthesis => 2
-  | .resolved => 3
-  | .failed => 3
-
-/--
-  Automated exit from facilitation when a standing reviewer rejection has had
-  its last word (`assess_rejection_stands` in `src/mcp_handlers/dialectic/rejection_stands.py`).
-  Never transitions to `.resolved`; either leaves the session open or transitions to `.failed`.
--/
-def closeStandingRejection (s : State) (reviewerHadLastWord : Bool) : StepOutcome :=
-  match s.reviewerAgent with
-  | none => .refused s
-  | some rev =>
-    if !s.awaitingFacilitation then
-      .refused s
-    else if rev == s.pausedAgent then
-      .refused s
-    else if s.phase != .synthesis then
-      .refused s
-    else if !reviewerObjectionStands s then
-      .refused s
-    else if !reviewerHadLastWord then
-      .refused s
-    else
-      .ok { s with phase := .failed, awaitingFacilitation := false } false
-
 /-!
   ## Mechanized Safety & Authority Theorems
 -/
 
 /--
-  Theorem 1a (Terminal Resolved State Is Absorbing):
-  Once a session reaches `.resolved`, neither `submitThesis`, `submitAntithesis`,
-  nor `submitSynthesis` can transition it to another phase or mutate its transcript.
+  Theorem 1a (Terminal Resolved State Is Absorbing Under Message Submissions):
+  Once a session reaches `.resolved`, `submitThesis`, `submitAntithesis`, and
+  `submitSynthesis` leave `phase = .resolved`, and `submitThesis` and
+  `submitSynthesis` return `.refused s` with the entire `State` (including
+  `transcript`) unchanged. (`submitAntithesis` when `reviewerAgent = none` may
+  populate `reviewerAgent` before refusing on phase, while keeping `phase = .resolved`
+  and `transcript = s.transcript`.)
 -/
 theorem terminal_resolved_absorbing (s : State) (m : Message)
     (h : s.phase = .resolved) :
-    (submitThesis s m).state.phase = .resolved ∧
+    submitThesis s m = .refused s ∧
     (submitAntithesis s m).state.phase = .resolved ∧
-    (submitSynthesis s m).state.phase = .resolved ∧
-    (submitSynthesis s m).state.transcript = s.transcript := by
+    (submitAntithesis s m).state.transcript = s.transcript ∧
+    submitSynthesis s m = .refused s := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · unfold submitThesis
     cases (m.sender != s.pausedAgent) <;> simp [h]
@@ -337,22 +485,28 @@ theorem terminal_resolved_absorbing (s : State) (m : Message)
       · rename_i rev
         cases (m.sender != rev) <;> simp [h]
     · simp [h]
-  · unfold submitSynthesis
-    cases assignedReviewerRecused s <;> simp [h]
+  · unfold submitAntithesis
+    cases isRecused s m.sender
+    · cases s.reviewerAgent
+      · cases (m.sender == s.pausedAgent) <;> simp [h]
+      · rename_i rev
+        cases (m.sender != rev) <;> simp [h]
+    · simp
   · unfold submitSynthesis
     cases assignedReviewerRecused s <;> simp [h]
 
 /--
-  Theorem 1b (Terminal Failed State Is Absorbing):
-  Once a session reaches `.failed`, neither `submitThesis`, `submitAntithesis`,
-  nor `submitSynthesis` can transition it to another phase or mutate its transcript.
+  Theorem 1b (Terminal Failed State Is Absorbing Under Message Submissions):
+  Once a session reaches `.failed`, `submitThesis`, `submitAntithesis`, and
+  `submitSynthesis` leave `phase = .failed`, and `submitThesis` and
+  `submitSynthesis` return `.refused s` with the entire `State` unchanged.
 -/
 theorem terminal_failed_absorbing (s : State) (m : Message)
     (h : s.phase = .failed) :
-    (submitThesis s m).state.phase = .failed ∧
+    submitThesis s m = .refused s ∧
     (submitAntithesis s m).state.phase = .failed ∧
-    (submitSynthesis s m).state.phase = .failed ∧
-    (submitSynthesis s m).state.transcript = s.transcript := by
+    (submitAntithesis s m).state.transcript = s.transcript ∧
+    submitSynthesis s m = .refused s := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · unfold submitThesis
     cases (m.sender != s.pausedAgent) <;> simp [h]
@@ -363,8 +517,13 @@ theorem terminal_failed_absorbing (s : State) (m : Message)
       · rename_i rev
         cases (m.sender != rev) <;> simp [h]
     · simp [h]
-  · unfold submitSynthesis
-    cases assignedReviewerRecused s <;> simp [h]
+  · unfold submitAntithesis
+    cases isRecused s m.sender
+    · cases s.reviewerAgent
+      · cases (m.sender == s.pausedAgent) <;> simp [h]
+      · rename_i rev
+        cases (m.sender != rev) <;> simp [h]
+    · simp
   · unfold submitSynthesis
     cases assignedReviewerRecused s <;> simp [h]
 
@@ -440,39 +599,63 @@ theorem repeat_self_clear_does_not_grow_transcript (s : State) (m : Message)
   simp_all
 
 /--
-  Theorem 5 (Reviewer Reassignment Preserves Standing Objections):
+  Helper lemma: appending a message with `agrees = none` at the end of a transcript
+  prepends it to `transcript.reverse`, and `scanObjectionStands` skips any head
+  message with `agrees = none`.
+-/
+theorem scanObjectionStands_cons_agrees_none (pausedAgent : AgentId) (selfReview : Bool)
+    (m : Message) (rest : List Message) (hNone : m.agrees = none) :
+    scanObjectionStands pausedAgent selfReview (m :: rest) =
+      scanObjectionStands pausedAgent selfReview rest := by
+  cases hPhase : (m.phase != .synthesis) <;> simp [scanObjectionStands, hNone, hPhase]
+
+/--
+  Theorem 5 (Reviewer Reassignment Preserves Standing Objections & Never Resolves):
   Reassigning a session from one independent reviewer (`r ≠ s.pausedAgent`)
   to another independent reviewer (`r' ≠ s.pausedAgent`) preserves
-  `reviewerObjectionStands` identically (`reviewerObjectionStands (reassignReviewer s r') = reviewerObjectionStands s`).
+  `reviewerObjectionStands` identically (`reviewerObjectionStands (reassignReviewer s r').state = reviewerObjectionStands s`),
+  even when the reassignment succeeds and appends a system audit message, and
+  reassignment never transitions a non-resolved (or facilitation-awaiting) session to `.resolved`.
 -/
 theorem reassignment_preserves_standing_objection (s : State) (r r' : AgentId)
     (hRev : s.reviewerAgent = some r)
     (hIndep : r ≠ s.pausedAgent)
     (hIndep' : r' ≠ s.pausedAgent) :
-    reviewerObjectionStands (reassignReviewer s r') = reviewerObjectionStands s := by
-  unfold reviewerObjectionStands reassignReviewer
-  have hSelfOld : (s.reviewerAgent == some s.pausedAgent) = false := by
-    rw [hRev]
-    simp [hIndep]
-  have hSelfNew : (some r' == some s.pausedAgent) = false := by
-    simp [hIndep']
-  simp [hSelfOld, hSelfNew]
+    reviewerObjectionStands (reassignReviewer s r').state = reviewerObjectionStands s := by
+  unfold reassignReviewer
+  cases isRecused s r'
+  · dsimp
+    cases ((s.phase == .thesis) || (s.phase == .antithesis) || s.awaitingFacilitation ||
+      ((s.phase == .synthesis) && assignedReviewerRecused s))
+    · simp
+    · dsimp
+      unfold reviewerObjectionStands
+      have hSelfOld : (s.reviewerAgent == some s.pausedAgent) = false := by
+        rw [hRev]
+        simp [hIndep]
+      have hSelfNew : (some r' == some s.pausedAgent) = false := by
+        simp [hIndep']
+      simp [hSelfOld, hSelfNew, List.reverse_append, scanObjectionStands]
+  · simp
 
 /--
-  Theorem 6 (Recused Declared Author Cannot Advance Antithesis Or Resolve Synthesis):
+  Theorem 6 (Recused Declared Author Cannot Advance Antithesis, Synthesis, Or Reassignment):
   If `isRecused s candidate = true`, then:
-  (a) `submitAntithesis s m` with `m.sender = candidate` is refused (`submitAntithesis s m = .refused s`), and
-  (b) if `s.reviewerAgent = some candidate`, `submitSynthesis s m` by any caller is refused (`submitSynthesis s m = .refused s`).
+  (a) `submitAntithesis s m` with `m.sender = candidate` is refused (`submitAntithesis s m = .refused s`),
+  (b) if `s.reviewerAgent = some candidate`, `submitSynthesis s m` by any caller is refused (`submitSynthesis s m = .refused s`), and
+  (c) `reassignReviewer s candidate` is refused (`reassignReviewer s candidate = .refused s`).
 -/
 theorem recused_author_cannot_advance_or_resolve (s : State) (m : Message) (candidate : AgentId)
     (hRec : isRecused s candidate = true) :
     (m.sender = candidate → submitAntithesis s m = .refused s) ∧
-    (s.reviewerAgent = some candidate → submitSynthesis s m = .refused s) := by
-  constructor
+    (s.reviewerAgent = some candidate → submitSynthesis s m = .refused s) ∧
+    reassignReviewer s candidate = .refused s := by
+  refine ⟨?_, ?_, ?_⟩
   · intro hSender
     simp [submitAntithesis, hSender, hRec]
   · intro hRev
     simp [submitSynthesis, assignedReviewerRecused, hRev, hRec]
+  · simp [reassignReviewer, hRec]
 
 /--
   Theorem 7 (BEAM Saga Phase Guard Correctness):
@@ -494,16 +677,21 @@ theorem saga_resolve_requires_synthesis_phase (s : State) (target : Phase) :
     · simp [hFail]
 
 /--
-  Theorem 8 (DAG Phase Rank Monotonicity):
-  No protocol transition (`submitThesis`, `submitAntithesis`, `submitSynthesis`,
-  `reassignReviewer`, or `closeStandingRejection`) ever decreases `Phase.rank`.
+  Theorem 8 (DAG Phase Rank Monotonicity & Controlled Reassignment Reopen):
+  - Message submissions (`submitThesis`, `submitAntithesis`, `submitSynthesis`)
+    and standing-rejection sweeps (`closeStandingRejection`) never decrease `Phase.rank`.
+  - `reassignReviewer` preserves `Phase.rank` whenever `s.awaitingFacilitation = false`
+    and `assignedReviewerRecused s = false`; it only lowers `Phase.rank` when
+    reopening a facilitation-awaiting or recused-reviewer session to `.thesis` or `.antithesis`.
 -/
-theorem phase_rank_monotonic (s : State) (m : Message) (newRev : AgentId) (lastWord : Bool) :
+theorem phase_rank_monotonic (s : State) (m : Message) (newRev : AgentId)
+    (isOrch : Bool) (winEnd : Bool) :
     s.phase.rank ≤ (submitThesis s m).state.phase.rank ∧
     s.phase.rank ≤ (submitAntithesis s m).state.phase.rank ∧
     s.phase.rank ≤ (submitSynthesis s m).state.phase.rank ∧
-    s.phase.rank = (reassignReviewer s newRev).phase.rank ∧
-    s.phase.rank ≤ (closeStandingRejection s lastWord).state.phase.rank := by
+    s.phase.rank ≤ (closeStandingRejection s isOrch winEnd).state.phase.rank ∧
+    ((s.awaitingFacilitation = false ∧ assignedReviewerRecused s = false) →
+      (reassignReviewer s newRev).state.phase.rank = s.phase.rank) := by
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · unfold submitThesis
     cases (m.sender != s.pausedAgent) <;>
@@ -537,18 +725,17 @@ theorem phase_rank_monotonic (s : State) (m : Message) (newRev : AgentId) (lastW
     cases reviewerObjectionStands s <;>
     cases pausedAlreadyAnsweredCurrentObjection s <;>
     simp [Phase.rank, hPhase]
-  · rfl
   · unfold closeStandingRejection
-    cases s.reviewerAgent
-    · simp
-    · rename_i rev
-      dsimp
-      cases s.awaitingFacilitation <;>
-      cases (rev == s.pausedAgent) <;>
-      cases hPhase : s.phase <;>
-      cases reviewerObjectionStands s <;>
-      cases lastWord <;>
-      simp [Phase.rank, hPhase]
+    cases hPhase : s.phase <;>
+    cases assignedReviewerRecused s <;>
+    cases assessRejectionStands s isOrch winEnd <;>
+    simp [Phase.rank, hPhase]
+  · rintro ⟨hNoFac, hNoRec⟩
+    unfold reassignReviewer
+    rw [hNoFac, hNoRec]
+    cases isRecused s newRev <;>
+    cases hPhase : s.phase <;>
+    simp [Phase.rank, hPhase]
 
 /--
   Theorem 9 (First Self-Clear Attempt Routes To Facilitation Without Resolving):
@@ -575,25 +762,119 @@ theorem first_self_clear_attempt_triggers_facilitation (s : State) (m : Message)
   simp [hRec, hPhase, hRound, hPend, hObj, hAns, hIsPaused, hAgreesTrue]
 
 /--
-  Theorem 10 (Standing Rejection Sweep Never Resolves In Paused Agent's Favour):
-  `closeStandingRejection` never converges and never transitions a non-resolved
-  session to `.resolved`; when it accepts a transition (`StepOutcome.ok`), the
-  resulting phase is strictly `.failed` and `reviewerObjectionStands s = true`.
+  Theorem 10 (Standing Rejection Sweep Only Transitions To Failed Over Standing Objection):
+  - `closeStandingRejection` never converges (`converged = false`).
+  - If `s.phase ≠ .resolved`, `(closeStandingRejection s isOrch winEnd).state.phase ≠ .resolved`.
+  - Whenever `closeStandingRejection s isOrch winEnd = .ok next c`, we have
+    `next.phase = .failed`, `s.phase = .synthesis`, `s.awaitingFacilitation = true`,
+    `reviewerObjectionStands s = true`, and `lastIndepVerdictSender s = s.reviewerAgent`.
 -/
-theorem rejection_stands_sweep_only_fails (s : State) (lastWord : Bool)
-    (hNotResolved : s.phase ≠ .resolved) :
-    (closeStandingRejection s lastWord).converged = false ∧
-    (closeStandingRejection s lastWord).state.phase ≠ .resolved := by
-  unfold closeStandingRejection
-  cases s.reviewerAgent
-  · simp [hNotResolved]
-  · rename_i rev
-    dsimp
-    cases s.awaitingFacilitation <;>
-    cases (rev == s.pausedAgent) <;>
+theorem rejection_stands_sweep_only_fails (s : State) (isOrch : Bool) (winEnd : Bool) :
+    (closeStandingRejection s isOrch winEnd).converged = false ∧
+    (s.phase ≠ .resolved → (closeStandingRejection s isOrch winEnd).state.phase ≠ .resolved) ∧
+    (∀ next c, closeStandingRejection s isOrch winEnd = .ok next c →
+      next.phase = .failed ∧
+      s.phase = .synthesis ∧
+      s.awaitingFacilitation = true ∧
+      reviewerObjectionStands s = true ∧
+      lastIndepVerdictSender s = s.reviewerAgent) := by
+  refine ⟨?_, ?_, ?_⟩
+  · unfold closeStandingRejection
+    cases (s.phase != .synthesis) <;>
+    cases assignedReviewerRecused s <;>
+    cases assessRejectionStands s isOrch winEnd <;>
+    rfl
+  · intro hNotRes
+    unfold closeStandingRejection
     cases hPhase : s.phase <;>
-    cases reviewerObjectionStands s <;>
-    cases lastWord <;>
+    cases assignedReviewerRecused s <;>
+    cases assessRejectionStands s isOrch winEnd <;>
     simp_all
+  · intro next c hOk
+    unfold closeStandingRejection at hOk
+    cases hPhase : s.phase <;>
+    cases hRec : assignedReviewerRecused s <;>
+    cases hAssess : assessRejectionStands s isOrch winEnd <;>
+    simp_all
+    unfold assessRejectionStands at hAssess
+    rcases hOk with ⟨rfl, rfl⟩
+    cases hFac : s.awaitingFacilitation <;>
+    cases hRev : s.reviewerAgent
+    all_goals simp_all
+
+/-!
+  ## Compile-Time `#guard` Conformance Vectors
+  Parsed by `tests/test_dialectic_protocol_state_machine.py` to enforce
+  zero drift between `formal/DialecticProtocol.lean`, `SpecState`, and
+  the live Python implementation.
+-/
+
+def mkInitState (paused : AgentId) (reviewer : Option AgentId)
+    (authors : List AgentId) (st : SessionType) (maxR : Nat) : State :=
+  { pausedAgent := paused
+  , reviewerAgent := reviewer
+  , declaredAuthors := authors
+  , sessionType := st
+  , maxRounds := maxR
+  , phase := .thesis
+  , synthesisRound := 0
+  , awaitingFacilitation := false
+  , transcript := [] }
+
+-- Scenario 1: Paused agent submits thesis, independent reviewer submits antithesis
+-- and rejects (`agrees = some false`), paused agent attempts self-clear (`agrees = some true`)
+-- -> routed to facilitation (`awaitingFacilitation = true`, `phase = .synthesis`),
+-- repeat self-clear is refused without growing transcript, and standing-rejection sweep
+-- after window end closes session as `.failed`.
+def traceScenario1 : State :=
+  let s0 := mkInitState 0 (some 1) [] .recovery 3
+  let s1 := (submitThesis s0 { phase := .thesis, sender := 0 }).state
+  let s2 := (submitAntithesis s1 { phase := .antithesis, sender := 1 }).state
+  let s3 := (submitSynthesis s2 { phase := .synthesis, sender := 1, agrees := some false }).state
+  let s4 := (submitSynthesis s3 { phase := .synthesis, sender := 0, agrees := some true }).state
+  let s5 := (submitSynthesis s4 { phase := .synthesis, sender := 0, agrees := some true }).state
+  let s6 := (closeStandingRejection s5 true true).state
+  s6
+
+#guard traceScenario1.phase == .failed
+#guard traceScenario1.awaitingFacilitation == true
+#guard traceScenario1.synthesisRound == 3
+#guard traceScenario1.transcript.length == 4
+#guard reviewerObjectionStands traceScenario1 == true
+
+-- Scenario 2: Reopening a `failed` session with `awaitingFacilitation = true`
+-- via `reassignReviewer` rewinds `phase` to `.antithesis`, clears `awaitingFacilitation`,
+-- preserves `reviewerObjectionStands`, and prevents `assessRejectionStands` from firing
+-- before the newly assigned reviewer speaks (`lastIndepVerdictSender != some 2`).
+def traceScenario2 : State :=
+  let s0 := mkInitState 0 (some 1) [] .recovery 3
+  let s1 := (submitThesis s0 { phase := .thesis, sender := 0 }).state
+  let s2 := (submitAntithesis s1 { phase := .antithesis, sender := 1 }).state
+  let s3 := (submitSynthesis s2 { phase := .synthesis, sender := 1, agrees := some false }).state
+  let s4 := (submitSynthesis s3 { phase := .synthesis, sender := 0, agrees := some true }).state
+  let s5 := (closeStandingRejection s4 true true).state
+  let s6 := (reassignReviewer s5 2).state
+  s6
+
+#guard traceScenario2.phase == .antithesis
+#guard traceScenario2.reviewerAgent == some 2
+#guard traceScenario2.awaitingFacilitation == false
+#guard traceScenario2.transcript.length == 5
+#guard reviewerObjectionStands traceScenario2 == true
+#guard assessRejectionStands traceScenario2 true true == false
+
+-- Scenario 3: Declared work author (`2 ∈ declaredAuthors`) is refused on `submitAntithesis`
+-- and `reassignReviewer`, while independent agent `3` succeeds.
+def traceScenario3 : State :=
+  let s0 := mkInitState 0 none [2] .review 3
+  let s1 := (submitThesis s0 { phase := .thesis, sender := 0 }).state
+  let s2 := (submitAntithesis s1 { phase := .antithesis, sender := 2 }).state
+  let s3 := (reassignReviewer s2 2).state
+  let s4 := (submitAntithesis s3 { phase := .antithesis, sender := 3 }).state
+  s4
+
+#guard traceScenario3.phase == .synthesis
+#guard traceScenario3.reviewerAgent == some 3
+#guard traceScenario3.transcript.length == 2
 
 end Unitares.DialecticProtocol

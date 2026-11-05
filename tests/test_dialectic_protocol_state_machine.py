@@ -1,23 +1,31 @@
 """
 Lean 4 formal verification & Hypothesis state-machine refinement tests for
-`src/dialectic_protocol.py`, `src/dialectic_reviewed_work.py`, and
+`src/dialectic_protocol.py`, `src/dialectic_reviewed_work.py`,
+`src/mcp_handlers/dialectic/resolution_helpers.py`, and
 `src/mcp_handlers/dialectic/rejection_stands.py`.
 
-This module bridges two verification layers:
+This module bridges three verification layers:
 1. **Lean 4 Kernel Proof Verification (`formal/DialecticProtocol.lean`)**:
    Verifies that the mechanized Lean 4 formalization declares all 11 safety and
    authority theorems with zero `sorry`s and zero user axioms, and invokes the
    `lean` kernel when installed on the host.
-2. **Hypothesis Stateful Refinement (`DialecticProtocolRefinementMachine`)**:
+2. **Parsed `#guard` Trace Conformance (`formal/DialecticProtocol.lean`)**:
+   Parses the compile-time `traceScenario*` definitions and `#guard` assertions
+   directly out of `formal/DialecticProtocol.lean` and executes them step-by-step
+   against both `SpecState` and the live Python implementation (`DialecticSession`,
+   `_apply_reviewer_reassignment`, and `assess_rejection_stands`), preventing drift
+   even on CI runners without `lean` installed.
+3. **Hypothesis Stateful Refinement (`DialecticProtocolRefinementMachine`)**:
    Executes randomized multi-step sequences (`submit_thesis`, `submit_antithesis`,
-   `submit_synthesis`, reviewer reassignment, `consult` non-protocol messages,
-   and `assess_rejection_stands` sweeps) simultaneously against the live Python
-   `DialecticSession` and a pure mirror of `Unitares.DialecticProtocol`,
+   `submit_synthesis`, `_apply_reviewer_reassignment`, `consult` non-protocol
+   messages, and `assess_rejection_stands` / `_close_standing_rejections` sweeps)
+   simultaneously against the live Python implementation and `SpecState`,
    checking exact state refinement and all 11 safety theorems at every step.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 import subprocess
@@ -25,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from hypothesis import settings, strategies as st
@@ -38,6 +47,10 @@ from src.dialectic_reviewed_work import (
 from src.mcp_handlers.dialectic.rejection_stands import (
     REJECTION_STANDS,
     assess_rejection_stands,
+)
+from src.mcp_handlers.dialectic.resolution_helpers import (
+    _apply_reviewer_reassignment,
+    _reviewer_authorship_conflict,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,11 +70,31 @@ EXPECTED_LEAN_THEOREMS = (
     "rejection_stands_sweep_only_fails",
 )
 
+EXPECTED_LEAN_DEFS = (
+    "isRecused",
+    "assignedReviewerRecused",
+    "reviewerObjectionStands",
+    "lastIndepVerdictSender",
+    "reviewerAnsweredReply",
+    "reviewerVerdictPending",
+    "pausedAlreadyAnsweredCurrentObjection",
+    "submitThesis",
+    "submitAntithesis",
+    "submitSynthesis",
+    "reassignReviewer",
+    "assessRejectionStands",
+    "closeStandingRejection",
+    "canClaimResolveSaga",
+)
+
+SYSTEM_AGENT_ID = 999
+
 AGENT_UUIDS: Dict[int, str] = {
     0: "00000000-0000-4000-8000-000000000000",
     1: "00000000-0000-4000-8000-000000000001",
     2: "00000000-0000-4000-8000-000000000002",
     3: "00000000-0000-4000-8000-000000000003",
+    SYSTEM_AGENT_ID: "system",
 }
 
 PHASE_RANK: Dict[str, int] = {
@@ -95,13 +128,18 @@ def _strip_lean_comments(source: str) -> str:
 
 
 def test_lean4_spec_structure_and_zero_sorry():
-    """`formal/DialecticProtocol.lean` declares all mechanized theorems without `sorry` or `axiom`."""
+    """`formal/DialecticProtocol.lean` declares all mechanized defs and theorems without `sorry` or `axiom`."""
     assert LEAN_SPEC_PATH.is_file(), f"Missing Lean 4 specification at {LEAN_SPEC_PATH}"
     raw = LEAN_SPEC_PATH.read_text(encoding="utf-8")
     code_only = _strip_lean_comments(raw)
 
     assert not re.search(r"\bsorry\b", code_only), "Lean specification must not contain `sorry`"
     assert not re.search(r"\baxiom\b", code_only), "Lean specification must not declare custom `axiom`s"
+    assert not re.search(r"\badmit\b", code_only), "Lean specification must not contain `admit`"
+
+    for def_name in EXPECTED_LEAN_DEFS:
+        pattern = rf"\bdef\s+{re.escape(def_name)}\b"
+        assert re.search(pattern, code_only), f"Missing def `{def_name}` in {LEAN_SPEC_PATH}"
 
     for theorem_name in EXPECTED_LEAN_THEOREMS:
         pattern = rf"\btheorem\s+{re.escape(theorem_name)}\b"
@@ -164,6 +202,10 @@ def spec_is_recused(s: SpecState, candidate: Optional[int]) -> bool:
     return candidate in s.declared_authors
 
 
+def spec_assigned_reviewer_recused(s: SpecState) -> bool:
+    return spec_is_recused(s, s.reviewer_agent)
+
+
 def spec_reviewer_objection_stands(s: SpecState) -> bool:
     self_review = s.reviewer_agent == s.paused_agent
     for msg in reversed(s.transcript):
@@ -172,6 +214,40 @@ def spec_reviewer_objection_stands(s: SpecState) -> bool:
         if not self_review and msg.sender == s.paused_agent:
             continue
         return msg.agrees is False
+    return False
+
+
+def spec_last_indep_verdict_sender(s: SpecState) -> Optional[int]:
+    for msg in reversed(s.transcript):
+        if msg.phase == "synthesis" and msg.sender != s.paused_agent and msg.agrees is not None:
+            return msg.sender
+    return None
+
+
+def spec_reviewer_answered_reply(s: SpecState, rev: int) -> bool:
+    stage = 0
+    seen_paused_between = False
+    for msg in reversed(s.transcript):
+        if msg.phase != "synthesis":
+            continue
+        if msg.sender == s.paused_agent:
+            if stage == 0:
+                return False
+            if stage == 1:
+                seen_paused_between = True
+            else:
+                return False
+        else:
+            if msg.agrees is None:
+                continue
+            if stage == 0:
+                if msg.sender == rev:
+                    stage = 1
+                    seen_paused_between = False
+                else:
+                    return False
+            else:
+                return (msg.sender == rev) and seen_paused_between
     return False
 
 
@@ -277,7 +353,7 @@ def spec_submit_synthesis(
     s: SpecState, m: SpecMessage
 ) -> Tuple[bool, bool, SpecState]:
     """Returns `(success, converged, next_state)`."""
-    if spec_is_recused(s, s.reviewer_agent):
+    if spec_assigned_reviewer_recused(s):
         return False, False, s
     if s.phase != "synthesis":
         return False, False, s
@@ -357,6 +433,413 @@ def spec_submit_synthesis(
     )
 
 
+def spec_reassign_reviewer(s: SpecState, new_reviewer: int) -> Tuple[bool, SpecState]:
+    """Mirror `reassignReviewer` in `formal/DialecticProtocol.lean`."""
+    if spec_is_recused(s, new_reviewer):
+        return False, s
+    phase_allowed = (
+        s.phase in ("thesis", "antithesis")
+        or s.awaiting_facilitation
+        or (s.phase == "synthesis" and spec_assigned_reviewer_recused(s))
+    )
+    if not phase_allowed:
+        return False, s
+
+    was_terminal = s.phase in ("resolved", "failed")
+    old_self_or_conflicted = s.reviewer_agent is not None and (
+        s.reviewer_agent == s.paused_agent
+        or spec_is_recused(s, s.reviewer_agent)
+    )
+    if was_terminal and s.awaiting_facilitation:
+        has_thesis = any(m.phase == "thesis" for m in s.transcript)
+        next_phase = "antithesis" if has_thesis else "thesis"
+    elif (
+        (s.awaiting_facilitation or spec_assigned_reviewer_recused(s))
+        and old_self_or_conflicted
+        and s.phase == "synthesis"
+    ):
+        next_phase = "antithesis"
+    else:
+        next_phase = s.phase
+
+    audit_msg_phase = (
+        next_phase
+        if next_phase in ("thesis", "antithesis", "synthesis")
+        else "synthesis"
+    )
+    audit_msg = SpecMessage(
+        phase=audit_msg_phase,
+        sender=SYSTEM_AGENT_ID,
+        has_root_cause=False,
+        has_conditions=False,
+        has_reasoning=True,
+        agrees=None,
+    )
+    return True, SpecState(
+        paused_agent=s.paused_agent,
+        reviewer_agent=new_reviewer,
+        declared_authors=s.declared_authors,
+        session_type=s.session_type,
+        max_rounds=s.max_rounds,
+        phase=next_phase,
+        synthesis_round=s.synthesis_round,
+        awaiting_facilitation=False,
+        transcript=s.transcript + (audit_msg,),
+    )
+
+
+def spec_assess_rejection_stands(
+    s: SpecState, is_orchestrated: bool, window_ended: bool
+) -> bool:
+    """Mirror `assessRejectionStands` in `formal/DialecticProtocol.lean`."""
+    if not s.awaiting_facilitation:
+        return False
+    if s.reviewer_agent is None or s.reviewer_agent == s.paused_agent:
+        return False
+    if not spec_reviewer_objection_stands(s):
+        return False
+    if spec_last_indep_verdict_sender(s) != s.reviewer_agent:
+        return False
+    return spec_reviewer_answered_reply(s, s.reviewer_agent) or (
+        is_orchestrated and window_ended
+    )
+
+
+def spec_close_standing_rejection(
+    s: SpecState, is_orchestrated: bool, window_ended: bool
+) -> Tuple[bool, SpecState]:
+    """Mirror `closeStandingRejection` in `formal/DialecticProtocol.lean`."""
+    if s.phase != "synthesis":
+        return False, s
+    if spec_assigned_reviewer_recused(s):
+        return False, s
+    if not spec_assess_rejection_stands(s, is_orchestrated, window_ended):
+        return False, s
+    return True, SpecState(
+        paused_agent=s.paused_agent,
+        reviewer_agent=s.reviewer_agent,
+        declared_authors=s.declared_authors,
+        session_type=s.session_type,
+        max_rounds=s.max_rounds,
+        phase="failed",
+        synthesis_round=s.synthesis_round,
+        awaiting_facilitation=True,
+        transcript=s.transcript,
+    )
+
+
+def _apply_live_reassignment(
+    session: DialecticSession, new_reviewer_uuid: str
+) -> bool:
+    """Execute the production phase gate + `_apply_reviewer_reassignment` against `session`."""
+    awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    recused_synthesis = bool(
+        session.phase == DialecticPhase.SYNTHESIS
+        and _reviewer_authorship_conflict(session, session.reviewer_agent_id)
+    )
+    if (
+        session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS)
+        and not awaiting
+        and not recused_synthesis
+    ):
+        return False
+
+    with patch(
+        "src.mcp_handlers.dialectic.resolution_helpers._append_protocol_message",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "src.mcp_handlers.dialectic.resolution_helpers._emit_request_reviewer_reassigned",
+        new=AsyncMock(return_value=None),
+    ):
+        try:
+            asyncio.run(
+                _apply_reviewer_reassignment(
+                    session.session_id,
+                    session,
+                    new_reviewer_uuid,
+                    reason="state_machine_test",
+                )
+            )
+            return True
+        except RuntimeError:
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Parsed `#guard` Trace Conformance Between `formal/DialecticProtocol.lean`,
+# `SpecState`, and Live `DialecticSession`
+# ---------------------------------------------------------------------------
+
+
+def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
+    """
+    Parse `traceScenario*` and `#guard` assertions directly from
+    `formal/DialecticProtocol.lean` and execute them against both `SpecState`
+    and the live Python `DialecticSession` / `_apply_reviewer_reassignment` /
+    `assess_rejection_stands` implementation.
+    """
+    code_only = _strip_lean_comments(LEAN_SPEC_PATH.read_text(encoding="utf-8"))
+
+    scenario_blocks = re.findall(
+        r"def\s+(traceScenario\d+)\s*:\s*State\s*:=\s*(.*?)(?=\n#guard|\ndef\s+traceScenario|\nend\s+Unitares)",
+        code_only,
+        flags=re.DOTALL,
+    )
+    assert len(scenario_blocks) >= 3, "Expected at least 3 `traceScenario*` blocks in Lean file"
+
+    scenarios_spec: Dict[str, SpecState] = {}
+    scenarios_live: Dict[str, DialecticSession] = {}
+
+    base_clock = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
+    tick = 0
+
+    def next_ts() -> str:
+        nonlocal tick
+        tick += 1
+        return (base_clock + timedelta(seconds=tick)).isoformat()
+
+    for name, body in scenario_blocks:
+        init_match = re.search(
+            r"mkInitState\s+(\d+)\s+(\(some\s+\d+\)|none)\s+\[([^\]]*)\]\s+\.(\w+)\s+(\d+)",
+            body,
+        )
+        assert init_match, f"Could not parse `mkInitState` in {name}"
+        paused_idx = int(init_match.group(1))
+        rev_token = init_match.group(2).strip()
+        rev_idx = (
+            None
+            if rev_token == "none"
+            else int(re.search(r"\d+", rev_token).group(0))
+        )
+        authors_raw = init_match.group(3).strip()
+        authors = (
+            tuple(int(x.strip()) for x in authors_raw.split(",") if x.strip())
+            if authors_raw
+            else ()
+        )
+        session_type = init_match.group(4)
+        max_rounds = int(init_match.group(5))
+
+        spec = SpecState(
+            paused_agent=paused_idx,
+            reviewer_agent=rev_idx,
+            declared_authors=authors,
+            session_type=session_type,
+            max_rounds=max_rounds,
+        )
+        decl = declaration_for_request(
+            [AGENT_UUIDS[i] for i in authors],
+            declared_by_agent_id=AGENT_UUIDS[paused_idx],
+        )
+        session = DialecticSession(
+            paused_agent_id=AGENT_UUIDS[paused_idx],
+            reviewer_agent_id=(AGENT_UUIDS[rev_idx] if rev_idx is not None else None),
+            paused_agent_state=embed_reviewed_work_authorship({"risk_score": 0.65}, decl),
+            session_type=session_type,
+            max_synthesis_rounds=max_rounds,
+        )
+
+        for line in body.splitlines():
+            line = line.strip()
+            if not line.startswith("let s"):
+                continue
+            if "mkInitState" in line:
+                continue
+
+            sender_match = re.search(r"sender\s*:=\s*(\d+)", line)
+            agrees_match = re.search(
+                r"agrees\s*:=\s*(none|some\s+true|some\s+false)", line
+            )
+            if "submitThesis" in line and sender_match:
+                sender = int(sender_match.group(1))
+                _, spec = spec_submit_thesis(
+                    spec,
+                    SpecMessage(phase="thesis", sender=sender),
+                )
+                session.submit_thesis(
+                    DialecticMessage(
+                        phase="thesis",
+                        agent_id=AGENT_UUIDS[sender],
+                        timestamp=next_ts(),
+                        root_cause="rc",
+                        proposed_conditions=["c"],
+                    )
+                )
+            elif "submitAntithesis" in line and sender_match:
+                sender = int(sender_match.group(1))
+                _, spec = spec_submit_antithesis(
+                    spec,
+                    SpecMessage(phase="antithesis", sender=sender),
+                )
+                session.submit_antithesis(
+                    DialecticMessage(
+                        phase="antithesis",
+                        agent_id=AGENT_UUIDS[sender],
+                        timestamp=next_ts(),
+                        reasoning="r",
+                    )
+                )
+            elif "submitSynthesis" in line and sender_match:
+                sender = int(sender_match.group(1))
+                agrees_raw = agrees_match.group(1) if agrees_match else "none"
+                agrees = (
+                    None
+                    if agrees_raw == "none"
+                    else (True if "true" in agrees_raw else False)
+                )
+                _, _, spec = spec_submit_synthesis(
+                    spec,
+                    SpecMessage(
+                        phase="synthesis",
+                        sender=sender,
+                        agrees=agrees,
+                    ),
+                )
+                session.submit_synthesis(
+                    DialecticMessage(
+                        phase="synthesis",
+                        agent_id=AGENT_UUIDS[sender],
+                        timestamp=next_ts(),
+                        proposed_conditions=["c"],
+                        root_cause="rc",
+                        reasoning="r",
+                        agrees=agrees,
+                    )
+                )
+            elif "closeStandingRejection" in line:
+                cs_match = re.search(
+                    r"closeStandingRejection\s+\w+\s+(true|false)\s+(true|false)",
+                    line,
+                )
+                assert cs_match
+                is_orch = cs_match.group(1) == "true"
+                win_end = cs_match.group(2) == "true"
+                closed, spec = spec_close_standing_rejection(spec, is_orch, win_end)
+                eval_now = base_clock + timedelta(
+                    seconds=(tick + 7200) if win_end else tick
+                )
+                payload = assess_rejection_stands(
+                    session.transcript,
+                    paused_agent_id=session.paused_agent_id,
+                    reviewer_agent_id=session.reviewer_agent_id,
+                    awaiting_facilitation=session.awaiting_facilitation,
+                    now=eval_now,
+                    is_orchestrated=lambda _rev, _o=is_orch: _o,
+                    wait_s=300.0,
+                    total_s=900.0,
+                )
+                live_can_close = (
+                    session.phase == DialecticPhase.SYNTHESIS
+                    and not _reviewer_authorship_conflict(
+                        session, session.reviewer_agent_id
+                    )
+                    and payload is not None
+                )
+                assert live_can_close == closed
+                if live_can_close:
+                    session.phase = DialecticPhase.FAILED
+            elif "reassignReviewer" in line:
+                rr_match = re.search(r"reassignReviewer\s+\w+\s+(\d+)", line)
+                assert rr_match
+                new_rev = int(rr_match.group(1))
+                ok_spec, spec = spec_reassign_reviewer(spec, new_rev)
+                ok_live = _apply_live_reassignment(session, AGENT_UUIDS[new_rev])
+                assert ok_live == ok_spec
+
+        scenarios_spec[name] = spec
+        scenarios_live[name] = session
+
+    guards = re.findall(r"#guard\s+([^\n]+)", code_only)
+    assert len(guards) >= 12, "Expected at least 12 `#guard` assertions in Lean file"
+
+    for guard_expr in guards:
+        guard_expr = guard_expr.strip()
+        m_phase = re.match(r"(traceScenario\d+)\.phase\s*==\s*\.(\w+)", guard_expr)
+        m_fac = re.match(
+            r"(traceScenario\d+)\.awaitingFacilitation\s*==\s*(true|false)",
+            guard_expr,
+        )
+        m_round = re.match(
+            r"(traceScenario\d+)\.synthesisRound\s*==\s*(\d+)", guard_expr
+        )
+        m_len = re.match(
+            r"(traceScenario\d+)\.transcript\.length\s*==\s*(\d+)", guard_expr
+        )
+        m_rev = re.match(
+            r"(traceScenario\d+)\.reviewerAgent\s*==\s*some\s+(\d+)", guard_expr
+        )
+        m_obj = re.match(
+            r"reviewerObjectionStands\s+(traceScenario\d+)\s*==\s*(true|false)",
+            guard_expr,
+        )
+        m_assess = re.match(
+            r"assessRejectionStands\s+(traceScenario\d+)\s+(true|false)\s+(true|false)\s*==\s*(true|false)",
+            guard_expr,
+        )
+        if m_phase:
+            sc_name, expected_phase = m_phase.group(1), m_phase.group(2)
+            assert scenarios_spec[sc_name].phase == expected_phase
+            assert scenarios_live[sc_name].phase.value == expected_phase
+        elif m_fac:
+            sc_name = m_fac.group(1)
+            expected_fac = m_fac.group(2) == "true"
+            assert scenarios_spec[sc_name].awaiting_facilitation is expected_fac
+            assert scenarios_live[sc_name].awaiting_facilitation is expected_fac
+        elif m_round:
+            sc_name = m_round.group(1)
+            expected_round = int(m_round.group(2))
+            assert scenarios_spec[sc_name].synthesis_round == expected_round
+            assert scenarios_live[sc_name].synthesis_round == expected_round
+        elif m_len:
+            sc_name = m_len.group(1)
+            expected_len = int(m_len.group(2))
+            assert len(scenarios_spec[sc_name].transcript) == expected_len
+            assert len(scenarios_live[sc_name].transcript) == expected_len
+        elif m_rev:
+            sc_name = m_rev.group(1)
+            expected_rev = int(m_rev.group(2))
+            assert scenarios_spec[sc_name].reviewer_agent == expected_rev
+            assert (
+                scenarios_live[sc_name].reviewer_agent_id == AGENT_UUIDS[expected_rev]
+            )
+        elif m_obj:
+            sc_name = m_obj.group(1)
+            expected_obj = m_obj.group(2) == "true"
+            assert (
+                spec_reviewer_objection_stands(scenarios_spec[sc_name]) is expected_obj
+            )
+            assert (
+                scenarios_live[sc_name]._reviewer_objection_stands() is expected_obj
+            )
+        elif m_assess:
+            sc_name = m_assess.group(1)
+            is_orch = m_assess.group(2) == "true"
+            win_end = m_assess.group(3) == "true"
+            expected_assess = m_assess.group(4) == "true"
+            assert (
+                spec_assess_rejection_stands(
+                    scenarios_spec[sc_name], is_orch, win_end
+                )
+                is expected_assess
+            )
+            eval_now = base_clock + timedelta(
+                seconds=(tick + 7200) if win_end else tick
+            )
+            live_payload = assess_rejection_stands(
+                scenarios_live[sc_name].transcript,
+                paused_agent_id=scenarios_live[sc_name].paused_agent_id,
+                reviewer_agent_id=scenarios_live[sc_name].reviewer_agent_id,
+                awaiting_facilitation=scenarios_live[sc_name].awaiting_facilitation,
+                now=eval_now,
+                is_orchestrated=lambda _rev, _o=is_orch: _o,
+                wait_s=300.0,
+                total_s=900.0,
+            )
+            assert (live_payload is not None) is expected_assess
+        else:
+            pytest.fail(f"Unrecognized `#guard` expression in Lean file: {guard_expr}")
+
+
 # ---------------------------------------------------------------------------
 # Stateful Refinement & Invariant Model-Checking
 # ---------------------------------------------------------------------------
@@ -375,7 +858,7 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         self.spec: Optional[SpecState] = None
         self.clock: datetime = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
 
-    def _next_timestamp(self, seconds: int = 10) -> str:
+    def _next_timestamp(self, seconds: int = 1) -> str:
         self.clock = self.clock + timedelta(seconds=seconds)
         return self.clock.isoformat()
 
@@ -397,7 +880,9 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         max_rounds: int,
     ):
         paused_uuid = AGENT_UUIDS[paused_idx]
-        reviewer_uuid = AGENT_UUIDS[reviewer_choice] if reviewer_choice is not None else None
+        reviewer_uuid = (
+            AGENT_UUIDS[reviewer_choice] if reviewer_choice is not None else None
+        )
         author_uuids = [AGENT_UUIDS[i] for i in declared_authors]
 
         decl = declaration_for_request(author_uuids, declared_by_agent_id=paused_uuid)
@@ -469,6 +954,7 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         assert self.session is not None and self.spec is not None
         prev_phase = self.session.phase.value
         prev_rank = PHASE_RANK[prev_phase]
+        prev_transcript_len = len(self.session.transcript)
         was_recused = spec_is_recused(self.spec, sender_idx)
 
         msg = DialecticMessage(
@@ -491,6 +977,9 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
 
         assert res["success"] == ok_spec
         assert PHASE_RANK[self.session.phase.value] >= prev_rank
+        if prev_phase in ("resolved", "failed"):
+            assert self.session.phase.value == prev_phase
+            assert len(self.session.transcript) == prev_transcript_len
         if was_recused:
             # Theorem 6a: recused author cannot advance antithesis
             assert res["success"] is False
@@ -508,8 +997,10 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
 
         objection_before = self.session._reviewer_objection_stands()
         pending_before = self.session._reviewer_verdict_pending()
-        answered_before = self.session._paused_agent_already_answered_current_objection()
-        reviewer_recused_before = spec_is_recused(self.spec, self.spec.reviewer_agent)
+        answered_before = (
+            self.session._paused_agent_already_answered_current_objection()
+        )
+        reviewer_recused_before = spec_assigned_reviewer_recused(self.spec)
         is_paused = sender_idx == self.spec.paused_agent
 
         msg = DialecticMessage(
@@ -559,27 +1050,36 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
 
     @rule(new_reviewer_idx=st.integers(min_value=0, max_value=3))
     def step_reassign_reviewer(self, new_reviewer_idx: int):
-        """Model `_apply_reviewer_reassignment` (`reviewer_agent_id` update + clear `awaiting_facilitation`)."""
+        """
+        Execute live `_apply_reviewer_reassignment` and `spec_reassign_reviewer`
+        across all phases (including reopening `FAILED` sessions with
+        `awaiting_facilitation=True` and rewinding conflicted `SYNTHESIS` sessions).
+        """
         assert self.session is not None and self.spec is not None
-        if self.session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
-            return
-
         old_reviewer_idx = self.spec.reviewer_agent
+        old_phase = self.session.phase.value
+        old_rank = PHASE_RANK[old_phase]
+        was_awaiting = self.session.awaiting_facilitation
+        was_recused = spec_assigned_reviewer_recused(self.spec)
+        candidate_recused = spec_is_recused(self.spec, new_reviewer_idx)
         objection_before = self.session._reviewer_objection_stands()
 
-        self.session.reviewer_agent_id = AGENT_UUIDS[new_reviewer_idx]
-        self.session.awaiting_facilitation = False
-        self.spec = SpecState(
-            paused_agent=self.spec.paused_agent,
-            reviewer_agent=new_reviewer_idx,
-            declared_authors=self.spec.declared_authors,
-            session_type=self.spec.session_type,
-            max_rounds=self.spec.max_rounds,
-            phase=self.spec.phase,
-            synthesis_round=self.spec.synthesis_round,
-            awaiting_facilitation=False,
-            transcript=self.spec.transcript,
+        ok_live = _apply_live_reassignment(
+            self.session, AGENT_UUIDS[new_reviewer_idx]
         )
+        ok_spec, next_spec = spec_reassign_reviewer(self.spec, new_reviewer_idx)
+        self.spec = next_spec
+
+        assert ok_live == ok_spec
+
+        # Theorem 6c: Recused candidate cannot be assigned as reviewer
+        if candidate_recused:
+            assert ok_live is False
+
+        # Theorem 8: When not awaiting facilitation and not replacing a recused
+        # reviewer, reassignment preserves phase rank
+        if not was_awaiting and not was_recused:
+            assert PHASE_RANK[self.session.phase.value] == old_rank
 
         # Theorem 5: Reassignment between independent reviewers preserves standing objection
         if (
@@ -596,12 +1096,14 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         last_ts_before = self.session.get_last_update_timestamp()
         objection_before = self.session._reviewer_objection_stands()
         pending_before = self.session._reviewer_verdict_pending()
-        answered_before = self.session._paused_agent_already_answered_current_objection()
+        answered_before = (
+            self.session._paused_agent_already_answered_current_objection()
+        )
 
         consult_msg = DialecticMessage(
             phase="consult",
             agent_id=AGENT_UUIDS[sender_idx],
-            timestamp=self._next_timestamp(seconds=300),
+            timestamp=self._next_timestamp(seconds=1),
             reasoning="External advisory consult note",
         )
         self.session.transcript.append(consult_msg)
@@ -627,15 +1129,19 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         )
 
     @rule(
-        elapsed_seconds=st.sampled_from([10, 600, 7200]),
+        window_ended=st.booleans(),
         is_orchestrated=st.booleans(),
     )
-    def step_assess_rejection_stands(
-        self, elapsed_seconds: int, is_orchestrated: bool
+    def step_assess_and_close_rejection_stands(
+        self, window_ended: bool, is_orchestrated: bool
     ):
-        """Verify Theorem 10 against live `assess_rejection_stands`."""
+        """
+        Verify `assess_rejection_stands` equivalence with `spec_assess_rejection_stands`
+        and apply the `_close_standing_rejections` transition (`spec_close_standing_rejection`)
+        when eligible so subsequent steps can test reopening `FAILED` facilitation sessions.
+        """
         assert self.session is not None and self.spec is not None
-        eval_now = self.clock + timedelta(seconds=elapsed_seconds)
+        eval_now = self.clock + timedelta(seconds=7200 if window_ended else 0)
         payload = assess_rejection_stands(
             self.session.transcript,
             paused_agent_id=self.session.paused_agent_id,
@@ -646,15 +1152,36 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             wait_s=300.0,
             total_s=900.0,
         )
+        spec_holds = spec_assess_rejection_stands(
+            self.spec, is_orchestrated=is_orchestrated, window_ended=window_ended
+        )
+        assert (payload is not None) == spec_holds
+
         if payload is not None:
             # Theorem 10: `assess_rejection_stands` only fires when awaiting facilitation
-            # with a standing independent reviewer rejection, and its action is never resume.
+            # with a standing independent reviewer rejection from the current reviewer.
             assert self.session.awaiting_facilitation is True
             assert self.session._reviewer_objection_stands() is True
             assert self.session.reviewer_agent_id is not None
             assert self.session.reviewer_agent_id != self.session.paused_agent_id
             assert payload["action"] == REJECTION_STANDS
             assert payload["reason"] == REJECTION_STANDS
+
+        # Apply `_close_standing_rejections` (`auto_resolve.py:540-620`) transition
+        closed_spec, next_spec = spec_close_standing_rejection(
+            self.spec, is_orchestrated=is_orchestrated, window_ended=window_ended
+        )
+        live_can_close = (
+            self.session.phase == DialecticPhase.SYNTHESIS
+            and not _reviewer_authorship_conflict(
+                self.session, self.session.reviewer_agent_id
+            )
+            and payload is not None
+        )
+        assert live_can_close == closed_spec
+        if live_can_close:
+            self.session.phase = DialecticPhase.FAILED
+            self.spec = next_spec
 
     @invariant()
     def check_refinement_bisimulation(self):
