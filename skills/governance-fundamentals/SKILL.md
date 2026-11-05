@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-10-29"
+last_verified: "2026-11-05"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -48,7 +48,7 @@ inside it, the check-in's state estimate.
 
 EISV supports digital proprioception: an inspectable account of changes in an
 agent's working process. The current check-in path runs this estimator
-synchronously, blending observations and controller history, smoothing them,
+synchronously, blending behavioral observations, smoothing them,
 and comparing them with thresholds and the agent's own trajectory once a
 baseline exists. These readings inform guidance and policy; their operational
 role, intended interpretations and evidence of benefit are distinct. The
@@ -62,9 +62,9 @@ streams, updated through check-ins:
 
 | Dimension | Range | What the current computation records |
 |-----------|-------|---------|
-| **E** (Energy) | [0, 1] | Weighted observations and controller history: prior decisions, coherence level, complexity divergence, and available outcome, continuity and tool features |
-| **I** (Information Integrity) | [0, 1] | Calibration error, coherence trend, and available outcome-score consistency, continuity and tool-variety features |
-| **S** (Entropy) | [0, 1] | Drift, regime transitions, complexity divergence, and available continuity and tool features |
+| **E** (Energy) | [0, 1] | Weighted observations: complexity divergence, recent outcome success, and available continuity and tool features (controller decision and coherence-level self-loops neutralized by default) |
+| **I** (Information Integrity) | [0, 1] | Eligible per-agent calibration accuracy and non-echo outcome consistency (or uncalibrated base fallback when neither gate is met), plus available continuity and tool-variety features (controller coherence-trend and fleet-strategic self-loops neutralized by default) |
+| **S** (Entropy) | [0, 1] | Drift, complexity divergence, and available continuity and tool features (controller regime-instability self-loop neutralized by default) |
 | **V** (Valence) | [-1, 1] | Separately EMA-smoothed gap between raw E and I observations |
 
 These are weighted indices with historical names. Productive capacity,
@@ -77,9 +77,9 @@ For the formulas and producer distinctions, see the repository's
 
 ### How the Live Path Reads Them
 
-- **E (Energy)** blends scores assigned to prior governance decisions, complexity divergence, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` (see *Coherence*), with optional continuity and tool-success inputs. Because prior decisions enter E, a policy response can change later E even when task and tool features stay fixed. That reflects controller feedback; it does not independently confirm the condition that prompted the decision. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
-- **I (Integrity)** blends calibration error and outcome-score consistency with the trend of that same legacy controller scalar, plus optional continuity and tool-variety inputs. Outcome consistency measures variance: constant success and constant failure scores both have zero variance. Outcome success enters E separately. The live handler's calibration input comes from lifetime fleet strategic bins, not an error measurement for the current claim; an agent-scoped candidate is measurement-only. The monitor fallback uses tactical overconfidence instead.
-- **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
+- **E (Energy)** blends complexity divergence and recent recorded outcomes (renormalized to 50/50 of the base weight by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which excludes prior governance decisions and the legacy `legacy_tanh_v` coherence-level self-loop; setting `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=0` restores those legacy controller terms), with optional continuity and tool-success inputs. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
+- **I (Integrity)** blends eligible per-agent calibration accuracy (pooled with a cohort prior when supplied, or tactical calibration once five or more recent verified confidence–outcome pairs exist) and per-agent outcome-score consistency (`consistency_score`, once three or more non-echo outcomes exist in the last 24h, excluding `outcome_event` echo duplicates). Those two evidence gates are independent: when both are active their base weights renormalize to `5/7` (`calibration_accuracy`) and `2/7` (`consistency_score`); when only one gate is met, that term carries `100%` of the base; only when neither gate is met does `I` use the neutral `0.75` `uncalibrated_base_fallback` (default under `UNITARES_PER_AGENT_I_CALIBRATION=1` and `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`, which exclude the legacy `legacy_tanh_v` coherence-trend self-loop and lifetime fleet-strategic bins; setting those flags to `0` restores the legacy terms), plus optional continuity and tool-variety inputs. Outcome consistency measures variance: constant success and constant failure scores both have zero variance. Outcome success enters E separately.
+- **S (Entropy / drift)** rises with drift norm and complexity divergence (with the controller's regime-instability self-loop neutralized by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), plus optional continuity and tool-error/rework features.
 - **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
 
 The headline math is proprioceptive residuals. The live estimation stages are
@@ -194,9 +194,9 @@ The plain-English `mirror` array in your check-in response already summarizes an
 
 `coherence` is an overloaded compatibility field, not one universal instrument.
 Interpret it only with the accompanying `coherence_source` and `coherence_role`.
-The deployed `legacy_tanh_v` value is ODE control feedback: it feeds E, I, the
-omitted-confidence estimator and the compatibility backstops, and it is not behavioral health evidence. The
-dynamical-systems (ODE) model feeds later behavioral observations and final
+The deployed `legacy_tanh_v` value is ODE control feedback: it feeds the
+omitted-confidence estimator and the compatibility backstops (its direct sensor self-loops into E and I are neutralized by default under `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1`), and it is not behavioral health evidence. The
+dynamical-systems (ODE) model still feeds final
 structural checks. Behavioral assessment owns the main risk/verdict path after
 the two-check-in prior window; this does not remove the ODE's influence on the
 final action. For live interpretation read the behavioral assessment and policy

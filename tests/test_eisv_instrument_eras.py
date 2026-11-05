@@ -386,8 +386,8 @@ def test_a_threshold_override_changes_the_instrument_id():
     ("UNITARES_PHI_TELEMETRY_ONLY", "0"),
     ("UNITARES_GROUNDING_APPLY", "1"),
     ("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1"),
-    ("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1"),
-    ("UNITARES_PER_AGENT_I_CALIBRATION", "1"),
+    ("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0"),
+    ("UNITARES_PER_AGENT_I_CALIBRATION", "0"),
     ("UNITARES_I_DYNAMICS", "logistic"),
     ("UNITARES_INTEGRATOR", "euler"),
     ("UNITARES_PARAMS_PROFILE", "v41"),
@@ -406,14 +406,14 @@ def test_value_affecting_flags_change_the_config_hash(monkeypatch, flag, value):
 def test_neutralize_sensor_self_loops_renormalization_splits_from_v1_boolean_hash(monkeypatch):
     """Upgrading UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS from #3185 (True) to #3197
     (renormalized_v2) changes the instrument id and resets settling on advance."""
-    monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+    monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
     eisv_instrument.reset_caches()
     off_cfg = eisv_instrument.effective_config()
     assert "neutralize_sensor_self_loops" not in off_cfg
     off_hash = eisv_instrument.config_hash(off_cfg)
 
     v1_hash = eisv_instrument.config_hash({**off_cfg, "neutralize_sensor_self_loops": True})
-    monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+    monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
     eisv_instrument.reset_caches()
     v2_cfg = eisv_instrument.effective_config()
     assert v2_cfg["neutralize_sensor_self_loops"] == "renormalized_v2"
