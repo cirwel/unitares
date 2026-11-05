@@ -106,18 +106,22 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     are excluded from the base formulas and the remaining observed base
     components are renormalized to sum to 1.0 (while the one-step shadow
     ablations ``compute_*_shadow`` continue to use constant substitution for
-    single-term level attribution):
+    single-term level attribution; if no non-loop base input is observed on a
+    dimension, its documented default fallback carries 1.0 of the base before
+    optional post-base blends):
     - ``decision_history`` and ``legacy_coherence_level`` excluded from base E,
       renormalizing onto ``complexity_calibration`` (0.50) + ``outcome_success``
-      (0.50) with >= 3 non-echo outcomes or ``complexity_calibration`` (1.00)
-      without
+      (0.50) when both are observed, 1.00 on whichever single term is observed,
+      or ``complexity_calibration`` default (0.85, ``observed=False``) when
+      neither is observed
     - ``legacy_coherence_trend`` excluded from base I, renormalizing onto
-      ``calibration_accuracy`` (5/7) + ``outcome_score_consistency`` (2/7) with
-      >= 3 non-echo outcomes, ``calibration_accuracy`` (1.00) without outcomes,
-      or ``outcome_score_consistency`` (1.00) / explicit uncalibrated fallback
-      (0.75) when calibration-free I is active
+      ``calibration_accuracy`` (5/7) + ``outcome_score_consistency`` (2/7) when
+      both are observed, 1.00 on whichever single term is observed, or explicit
+      ``uncalibrated_base_fallback`` (0.75, ``observed=False``) when neither
+      calibration nor >= 3 outcome scores is observed
     - ``regime_instability`` excluded from base S, renormalizing onto
-      ``drift_norm`` (8/13) + ``complexity_divergence`` (5/13)
+      ``drift_norm`` (8/13) + ``complexity_divergence`` (5/13) when both are
+      observed (or both defaulted), or 1.00 on whichever single term is observed
     - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome
       echoes excluded from E and I
     """
@@ -814,12 +818,32 @@ def compute_calibration_free_i_shadow(
     and renormalizes the remaining base terms to sum to 1.0 before the standard
     post-base adjustments (``continuity_I_input`` at 0.20, ``unique_tools_ratio``
     at 0.10):
-    - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
-    - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
+    - Default (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` off):
+      - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
+      - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
+    - With ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1``:
+      - With >=3 non-echo scored outcomes: ``outcome_score_consistency`` 1.00
+      - Without >=3 non-echo scored outcomes: ineligible (``insufficient_outcomes_under_neutralized_self_loops``),
+        because neither ``calibration_accuracy`` nor ``legacy_coherence_trend`` nor
+        ``outcome_score_consistency`` is present in the candidate.
 
     Measurement-only: the live observation is never modified and no policy reads
     this shadow.
     """
+    active_neutralize = neutralize_sensor_self_loops_enabled()
+    if active_neutralize:
+        weights_with_outcomes = {
+            "outcome_score_consistency": 1.00,
+        }
+        weights_without_outcomes = None
+    else:
+        weights_with_outcomes = {
+            "legacy_coherence_trend": 0.60,
+            "outcome_score_consistency": 0.40,
+        }
+        weights_without_outcomes = {
+            "legacy_coherence_trend": 1.00,
+        }
     base = {
         "schema": CALIBRATION_FREE_I_ABLATION_SCHEMA,
         "mode": "measurement_only",
@@ -829,13 +853,8 @@ def compute_calibration_free_i_shadow(
             "source": "fleet_calibration",
             "role": "global_calibration_term_in_I",
             "operation": "remove_slot_and_renormalize_base_weights",
-            "weights_with_outcomes": {
-                "legacy_coherence_trend": 0.60,
-                "outcome_score_consistency": 0.40,
-            },
-            "weights_without_outcomes": {
-                "legacy_coherence_trend": 1.00,
-            },
+            "weights_with_outcomes": weights_with_outcomes,
+            "weights_without_outcomes": weights_without_outcomes,
         },
         "not_modeled": [
             "recursive_E_I_history_replay",
@@ -854,6 +873,24 @@ def compute_calibration_free_i_shadow(
             "candidate": None,
             "candidate_minus_deployed": None,
         }
+    if active_neutralize:
+        filtered_outcomes = filter_behavioral_outcomes(outcome_history)
+        valid_scores = [
+            s for o in (filtered_outcomes or ())
+            if (s := o.get("outcome_score")) is not None
+            and isinstance(s, (int, float))
+            and not isinstance(s, bool)
+            and math.isfinite(s)
+        ]
+        if len(valid_scores) < 3:
+            return {
+                **base,
+                "eligible": False,
+                "eligibility_reason": "insufficient_outcomes_under_neutralized_self_loops",
+                "deployed": None,
+                "candidate": None,
+                "candidate_minus_deployed": None,
+            }
     inputs = dict(
         decision_history=decision_history,
         coherence_history=coherence_history,
@@ -1003,16 +1040,15 @@ def _compute_E_components(
 
     if neutralize_self_loops:
         # Exclude controller self-loops (decision_history, legacy_coherence_level)
-        # and renormalize remaining observed base terms to sum to 1.0.
-        if has_outcomes:
+        # and renormalize remaining observed base terms to sum to 1.0 (avoiding
+        # diluting an observed term with a defaulted constant when only one of
+        # the two non-loop base terms is observed).
+        cal_observed = complexity_divergence is not None
+        if has_outcomes and cal_observed:
             components = [
                 _component(
                     "complexity_calibration", "continuity_metrics", cal_e, 0.50,
-                    observed=complexity_divergence is not None,
-                    default_reason=(
-                        None if complexity_divergence is not None
-                        else "default_complexity_divergence_0.15"
-                    ),
+                    observed=True,
                 ),
                 _component(
                     "outcome_success", "recent_outcomes", outcome_e, 0.50,
@@ -1023,13 +1059,21 @@ def _compute_E_components(
                 components[0]["weighted_contribution"]
                 + components[1]["weighted_contribution"]
             )
+        elif has_outcomes:
+            components = [
+                _component(
+                    "outcome_success", "recent_outcomes", outcome_e, 1.00,
+                    observed=True,
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
         else:
             components = [
                 _component(
                     "complexity_calibration", "continuity_metrics", cal_e, 1.00,
-                    observed=complexity_divergence is not None,
+                    observed=cal_observed,
                     default_reason=(
-                        None if complexity_divergence is not None
+                        None if cal_observed
                         else "default_complexity_divergence_0.15"
                     ),
                 ),
@@ -1249,50 +1293,53 @@ def _compute_I_components(
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
 
     if neutralize_self_loops:
-        # Exclude legacy_coherence_trend and renormalize remaining base terms to sum to 1.0.
-        if consistency_I is not None:
-            if effective_calibration_free_i:
-                components = [
-                    _component(
-                        "outcome_score_consistency", "recent_outcomes", consistency_I, 1.00,
-                        observed=True,
-                        health_evidence=False,
-                    ),
-                ]
-                raw = components[0]["weighted_contribution"]
-            else:
-                components = [
-                    _component(
-                        "calibration_accuracy", cal_source, cal_I, 0.50 / 0.70,
-                        observed=cal_observed,
-                        default_reason=cal_default_reason,
-                    ),
-                    _component(
-                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20 / 0.70,
-                        observed=True,
-                        health_evidence=False,
-                    ),
-                ]
-                raw = (
-                    components[0]["weighted_contribution"]
-                    + components[1]["weighted_contribution"]
-                )
-        elif effective_calibration_free_i:
+        # Exclude legacy_coherence_trend and renormalize remaining observed base terms to sum to 1.0.
+        cal_active = (not effective_calibration_free_i) and cal_observed
+        if consistency_I is not None and cal_active:
             components = [
                 _component(
-                    "uncalibrated_base_fallback", "behavioral_sensor_default", 0.75, 1.00,
-                    observed=False,
-                    default_reason="no_admissible_calibration_or_outcomes",
+                    "calibration_accuracy", cal_source, cal_I, 0.50 / 0.70,
+                    observed=True,
+                ),
+                _component(
+                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20 / 0.70,
+                    observed=True,
+                    health_evidence=False,
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+            )
+        elif consistency_I is not None:
+            components = [
+                _component(
+                    "outcome_score_consistency", "recent_outcomes", consistency_I, 1.00,
+                    observed=True,
                     health_evidence=False,
                 ),
             ]
             raw = components[0]["weighted_contribution"]
-        else:
+        elif cal_active:
             components = [
                 _component(
                     "calibration_accuracy", cal_source, cal_I, 1.00,
-                    observed=cal_observed,
-                    default_reason=cal_default_reason,
+                    observed=True,
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
+        else:
+            fallback_reason = (
+                "no_admissible_calibration_or_outcomes"
+                if effective_calibration_free_i
+                else "default_calibration_accuracy_0.75"
+            )
+            components = [
+                _component(
+                    "uncalibrated_base_fallback", "behavioral_sensor_default", 0.75, 1.00,
+                    observed=False,
+                    default_reason=fallback_reason,
+                    health_evidence=False,
                 ),
             ]
             raw = components[0]["weighted_contribution"]
@@ -1451,25 +1498,44 @@ def _compute_S_components(
     # only for compute_regime_self_loop_shadow; the deployed path never sets it.
     regime_overridden = regime_instability_override is not None
     if neutralize_self_loops and not regime_overridden:
-        components = [
-            _component(
-                "drift_norm", "governance_drift", drift_s, 0.40 / 0.65,
-                observed=drift_norm is not None,
-                default_reason=None if drift_norm is not None else "default_drift_norm_0.2",
-            ),
-            _component(
-                "complexity_divergence", "continuity_metrics", cd_s, 0.25 / 0.65,
-                observed=complexity_divergence is not None,
-                default_reason=(
-                    None if complexity_divergence is not None
-                    else "default_complexity_divergence_0.1"
+        drift_observed = drift_norm is not None
+        cd_observed = complexity_divergence is not None
+        if drift_observed and not cd_observed:
+            components = [
+                _component(
+                    "drift_norm", "governance_drift", drift_s, 1.00,
+                    observed=True,
                 ),
-            ),
-        ]
-        raw = (
-            components[0]["weighted_contribution"]
-            + components[1]["weighted_contribution"]
-        )
+            ]
+            raw = components[0]["weighted_contribution"]
+        elif cd_observed and not drift_observed:
+            components = [
+                _component(
+                    "complexity_divergence", "continuity_metrics", cd_s, 1.00,
+                    observed=True,
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
+        else:
+            components = [
+                _component(
+                    "drift_norm", "governance_drift", drift_s, 0.40 / 0.65,
+                    observed=drift_observed,
+                    default_reason=None if drift_observed else "default_drift_norm_0.2",
+                ),
+                _component(
+                    "complexity_divergence", "continuity_metrics", cd_s, 0.25 / 0.65,
+                    observed=cd_observed,
+                    default_reason=(
+                        None if cd_observed
+                        else "default_complexity_divergence_0.1"
+                    ),
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+            )
         value = max(0.05, min(1.0, raw))
         return {
             "value": value,

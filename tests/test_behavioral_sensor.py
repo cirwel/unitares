@@ -1231,6 +1231,134 @@ class TestNeutralizeSensorSelfLoops:
         assert i_by_name["calibration_accuracy"]["weight"] == pytest.approx(0.50 / 0.70)
         assert i_by_name["outcome_score_consistency"]["weight"] == pytest.approx(0.20 / 0.70)
 
+    def test_neutralize_self_loops_single_observed_and_all_defaulted_base_terms(
+        self, monkeypatch
+    ):
+        from src.behavioral_sensor import compute_behavioral_sensor_components
+
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        outcomes = [
+            {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 1.0},
+            {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 0.9},
+            {"outcome_type": "test_failed", "is_bad": True, "outcome_score": 0.2},
+        ]
+        base_histories = dict(
+            decision_history=["risk_pause"] * 6,
+            coherence_history=[0.35, 0.35, 0.35, 0.65, 0.65, 0.65],
+            regime_history=_FLAPPING,
+            E_history=[0.6] * 6,
+            I_history=[0.7] * 6,
+            S_history=[0.3] * 6,
+            V_history=[0.0] * 6,
+        )
+
+        # 1. When complexity_divergence=None and calibration_error=None, but outcomes and drift_norm are observed:
+        # observed terms carry 1.00 of the base instead of being diluted by defaults.
+        single_obs = compute_behavioral_sensor_components(
+            **base_histories,
+            calibration_error=None,
+            drift_norm=0.2,
+            complexity_divergence=None,
+            outcome_history=outcomes,
+        )
+        e_comps = single_obs["dimensions"]["E"]["components"]
+        i_comps = single_obs["dimensions"]["I"]["components"]
+        s_comps = single_obs["dimensions"]["S"]["components"]
+
+        assert [c["name"] for c in e_comps] == ["outcome_success"]
+        assert e_comps[0]["weight"] == pytest.approx(1.00)
+        assert e_comps[0]["observed"] is True
+
+        assert [c["name"] for c in i_comps] == ["outcome_score_consistency"]
+        assert i_comps[0]["weight"] == pytest.approx(1.00)
+        assert i_comps[0]["observed"] is True
+
+        assert [c["name"] for c in s_comps] == ["drift_norm"]
+        assert s_comps[0]["weight"] == pytest.approx(1.00)
+        assert s_comps[0]["observed"] is True
+
+        # 2. When drift_norm=None and complexity_divergence is observed:
+        cd_only = compute_behavioral_sensor_components(
+            **base_histories,
+            calibration_error=None,
+            drift_norm=None,
+            complexity_divergence=0.1,
+            outcome_history=None,
+        )
+        s_cd = cd_only["dimensions"]["S"]["components"]
+        assert [c["name"] for c in s_cd] == ["complexity_divergence"]
+        assert s_cd[0]["weight"] == pytest.approx(1.00)
+        assert s_cd[0]["observed"] is True
+
+        # 3. When no non-loop base input is observed on E, I, or S:
+        all_defaulted = compute_behavioral_sensor_components(
+            **base_histories,
+            calibration_error=None,
+            drift_norm=None,
+            complexity_divergence=None,
+            outcome_history=None,
+        )
+        e_def = all_defaulted["dimensions"]["E"]["components"]
+        i_def = all_defaulted["dimensions"]["I"]["components"]
+        s_def = all_defaulted["dimensions"]["S"]["components"]
+
+        assert [c["name"] for c in e_def] == ["complexity_calibration"]
+        assert e_def[0]["observed"] is False
+        assert e_def[0]["default_reason"] == "default_complexity_divergence_0.15"
+
+        assert [c["name"] for c in i_def] == ["uncalibrated_base_fallback"]
+        assert i_def[0]["observed"] is False
+        assert i_def[0]["value"] == pytest.approx(0.75)
+        assert i_def[0]["default_reason"] == "default_calibration_accuracy_0.75"
+
+        assert [c["name"] for c in s_def] == ["drift_norm", "complexity_divergence"]
+        assert all(c["observed"] is False for c in s_def)
+
+    def test_calibration_free_i_shadow_under_neutralized_self_loops(self, monkeypatch):
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_components,
+            compute_calibration_free_i_shadow,
+        )
+
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        inputs = dict(
+            decision_history=["proceed"] * 6,
+            coherence_history=[0.45, 0.45, 0.45, 0.50, 0.50, 0.50],
+            regime_history=["CONVERGENCE"] * 6,
+            E_history=[0.7] * 6,
+            I_history=[0.8] * 6,
+            S_history=[0.2] * 6,
+            V_history=[0.0] * 6,
+            calibration_error=0.40,
+        )
+
+        # Without >=3 non-echo scored outcomes, candidate has no non-loop base I terms -> ineligible
+        no_outcomes_shadow = compute_calibration_free_i_shadow(**inputs, outcome_history=None)
+        assert no_outcomes_shadow["eligible"] is False
+        assert (
+            no_outcomes_shadow["eligibility_reason"]
+            == "insufficient_outcomes_under_neutralized_self_loops"
+        )
+        assert no_outcomes_shadow["intervention"]["weights_with_outcomes"] == {
+            "outcome_score_consistency": 1.00
+        }
+        assert no_outcomes_shadow["intervention"]["weights_without_outcomes"] is None
+
+        # With >=3 non-echo scored outcomes, candidate uses outcome_score_consistency at 1.00
+        outcomes = [
+            {"outcome_type": "test_passed", "outcome_score": 0.9, "is_bad": False},
+            {"outcome_type": "test_passed", "outcome_score": 0.8, "is_bad": False},
+            {"outcome_type": "test_passed", "outcome_score": 0.85, "is_bad": False},
+        ]
+        with_outcomes_shadow = compute_calibration_free_i_shadow(
+            **inputs, outcome_history=outcomes
+        )
+        assert with_outcomes_shadow["eligible"] is True
+        expected_i = compute_behavioral_sensor_components(
+            **inputs, outcome_history=outcomes, calibration_free_i=True
+        )["dimensions"]["I"]["value"]
+        assert with_outcomes_shadow["candidate"]["I"] == pytest.approx(expected_i)
+
     def test_shadow_loop_ablations_report_ineligible_when_neutralize_enabled(self, monkeypatch):
         """When UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, the three self-loop shadows report eligible=False with reason 'self_loop_already_neutralized'."""
         from src.behavioral_sensor import (
