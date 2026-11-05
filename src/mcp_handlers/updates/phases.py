@@ -955,18 +955,23 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import (
+                    CALIBRATION_FREE_I_ABLATION_SCHEMA,
                     DECISION_SELF_LOOP_ABLATION_SCHEMA,
                     LEGACY_COHERENCE_ABLATION_SCHEMA,
                     REGIME_SELF_LOOP_ABLATION_SCHEMA,
                     compute_behavioral_sensor_eisv,
+                    compute_calibration_free_i_shadow,
                     compute_decision_self_loop_shadow,
                     compute_legacy_coherence_dependency_shadow,
                     compute_regime_self_loop_shadow,
+                    filter_behavioral_outcomes,
+                    neutralize_sensor_self_loops_enabled,
                 )
                 from src.coherence_provenance import (
                     LEGACY_COHERENCE_SOURCE,
                     ODE_CONTROL_FEEDBACK_ROLE,
                 )
+                from src.dual_log.continuity import should_exclude_template_divergence
                 from src.eisv_telemetry import build_behavioral_derivation
                 from src.mcp_handlers.updates.context import get_mean_calibration_error
 
@@ -984,10 +989,15 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 substrate_canaries = {}
                 cm = getattr(monitor, '_last_continuity_metrics', None)
                 if cm is not None:
-                    comp_div = getattr(cm, 'complexity_divergence', None)
+                    # cm is the previous check-in's ContinuityMetrics, so read
+                    # the exclusion flag stamped when cm was created rather than
+                    # mixing cm with the current check-in's text/epistemic_class.
+                    exclude_template_div = should_exclude_template_divergence(cm)
                     cont_E = getattr(cm, 'E_input', None)
-                    cont_I = getattr(cm, 'I_input', None)
-                    cont_S = getattr(cm, 'S_input', None)
+                    if not exclude_template_div:
+                        comp_div = getattr(cm, 'complexity_divergence', None)
+                        cont_I = getattr(cm, 'I_input', None)
+                        cont_S = getattr(cm, 'S_input', None)
                     # Observe-only: were these three features measurements, or
                     # defaults/constants? getattr-with-default so a monitor
                     # carrying a pre-upgrade ContinuityMetrics stays readable.
@@ -999,6 +1009,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                         "continuity_degenerate": bool(
                             getattr(cm, 'continuity_degenerate', False)
                         ),
+                        "template_divergence_excluded": bool(exclude_template_div),
                     }
 
                 # Tool usage signals for behavioral sensor
@@ -1026,11 +1037,21 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     from src.db import get_db
                     _db = get_db()
                     if _db and hasattr(_db, 'get_recent_outcomes'):
-                        outcome_hist = await _db.get_recent_outcomes(
-                            agent_id=ctx.agent_id,
-                            limit=20,
-                            since_hours=24.0,
-                        )
+                        if neutralize_sensor_self_loops_enabled():
+                            raw_outcomes = await _db.get_recent_outcomes(
+                                agent_id=ctx.agent_id,
+                                limit=100,
+                                since_hours=24.0,
+                            )
+                            if raw_outcomes is not None:
+                                filtered = filter_behavioral_outcomes(raw_outcomes)
+                                outcome_hist = filtered[:20] if filtered is not None else None
+                        else:
+                            outcome_hist = await _db.get_recent_outcomes(
+                                agent_id=ctx.agent_id,
+                                limit=20,
+                                since_hours=24.0,
+                            )
                 except Exception as e:
                     logger.debug(f"Outcome history unavailable for {ctx.agent_id}: {e}")
 
@@ -1039,6 +1060,12 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # acquisition and checkpoint acceptance.
                 if outcome_hist is not None:
                     ctx.agent_state["_outcome_history"] = outcome_hist
+
+                agent_cal_channel = (
+                    ctx._calibration_signal.get("agent_channel")
+                    if isinstance(ctx._calibration_signal, dict)
+                    else None
+                )
 
                 decision_history = list(monitor.state.decision_history)
                 coherence_history = list(monitor.state.coherence_history)
@@ -1065,6 +1092,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     tool_error_rate=tool_err,
                     tool_call_velocity=tool_vel,
                     unique_tools_ratio=tool_div,
+                    agent_calibration_channel=agent_cal_channel,
                 )
                 behavioral_eisv = compute_behavioral_sensor_eisv(
                     **behavioral_sensor_inputs
@@ -1135,6 +1163,22 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                         "candidate": None,
                         "candidate_minus_deployed": None,
                     }
+                try:
+                    calibration_free_i_shadow = compute_calibration_free_i_shadow(
+                        **behavioral_sensor_inputs,
+                        deployed_observation=behavioral_eisv,
+                    )
+                except Exception as cal_free_exc:  # noqa: BLE001 -- measurement only
+                    calibration_free_i_shadow = {
+                        "schema": CALIBRATION_FREE_I_ABLATION_SCHEMA,
+                        "mode": "measurement_only",
+                        "policy_applied": False,
+                        "eligible": False,
+                        "eligibility_reason": f"shadow_error:{type(cal_free_exc).__name__}",
+                        "deployed": None,
+                        "candidate": None,
+                        "candidate_minus_deployed": None,
+                    }
                 ctx.agent_state["_eisv_shadow_ablations"] = {
                     "legacy_coherence_neutralized": {
                         "behavioral_sensor": behavioral_shadow,
@@ -1144,6 +1188,9 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     },
                     "regime_self_loop_neutralized": {
                         "behavioral_sensor": regime_shadow,
+                    },
+                    "calibration_free_i": {
+                        "behavioral_sensor": calibration_free_i_shadow,
                     },
                 }
                 ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
@@ -1587,10 +1634,15 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
 
         _mon = mcp_server.monitors.get(ctx.agent_id)
 
-        # Complexity divergence from continuity metrics
+        # Complexity divergence from continuity metrics (previous check-in's cm)
         if _mon:
+            from src.dual_log.continuity import should_exclude_template_divergence
             _cm = getattr(_mon, '_last_continuity_metrics', None)
-            if _cm and hasattr(_cm, 'complexity_divergence'):
+            if (
+                _cm
+                and hasattr(_cm, 'complexity_divergence')
+                and not should_exclude_template_divergence(_cm)
+            ):
                 anomaly_signals["complexity_divergence"] = _cm.complexity_divergence
 
         anomaly_noise = compute_anomaly_entropy(baseline, anomaly_signals)
@@ -1806,11 +1858,16 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
                 baseline.update("tool_call_velocity", _tu_total / 60.0)
         except Exception:
             pass
-        # Complexity divergence
+        # Complexity divergence (post-ODE: cm is the current check-in's ContinuityMetrics)
         monitor = mcp_server.monitors.get(agent_id)
         if monitor:
+            from src.dual_log.continuity import should_exclude_template_divergence
             cm = getattr(monitor, '_last_continuity_metrics', None)
-            if cm and hasattr(cm, 'complexity_divergence'):
+            if (
+                cm
+                and hasattr(cm, 'complexity_divergence')
+                and not should_exclude_template_divergence(cm)
+            ):
                 baseline.update("complexity_divergence", cm.complexity_divergence)
         # Fire-and-forget persist to PostgreSQL
         schedule_baseline_save(agent_id)
@@ -2258,8 +2315,16 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     # Auto-emitted outcomes are weak agent-reported labels inferred from text.
     # Score the label itself (completed=1, failed=0); neither behavioral update
     # consistency nor legacy ODE control feedback measures outcome quality.
+    # Non-authored substrate observations/interpretations and runtime tool-count
+    # rollups ("N tool calls completed: ...") are not task-completion claims (#2418).
+    from src.dual_log.continuity import is_automatic_or_rollup_checkin
 
     ctx.outcome_event_id = None
+    if is_automatic_or_rollup_checkin(
+        response_text=ctx.response_text,
+        epistemic_class=ctx.epistemic_class,
+    ):
+        return
     try:
         if ctx.response_text and ctx.complexity >= 0.3:
             _rt_lower = ctx.response_text.lower()

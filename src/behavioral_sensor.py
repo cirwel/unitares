@@ -10,7 +10,107 @@ in telemetry and do not replace/reweight it without shadowing the resulting E/I
 distribution and downstream baselines first.
 """
 
+from collections.abc import Mapping
 import math
+import os
+
+
+NEUTRALIZE_SENSOR_SELF_LOOPS_ENV = "UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS"
+PER_AGENT_I_CALIBRATION_ENV = "UNITARES_PER_AGENT_I_CALIBRATION"
+
+SELF_REFERENTIAL_OUTCOME_TYPES = frozenset({"trajectory_validated", "cirs_resonance"})
+
+AGENT_CALIBRATION_POOLING_K = 10.0
+MIN_UNPOOLED_AGENT_CALIBRATION_PAIRS = 5
+
+
+def is_self_referential_outcome(outcome: object) -> bool:
+    """Return True when an outcome row is a server-generated trajectory/resonance echo.
+
+    ``_post_update_trajectory`` emits ``trajectory_validated`` rows (scored as
+    ``1 / (1 + exp(-10 * (prev_drift_norm - current_drift_norm)))``) and
+    ``_post_update_cirs`` emits ``cirs_resonance`` rows from the monitor's own
+    internal state, both with ``verification_source = "server_observation"``.
+    ``trajectory_validated`` alone accounts for 80.3% of unfiltered outcome rows
+    (``docs/evaluations/eisv-ei-referent/result-v0.md``), feeding the observer's
+    own drift and oscillation state back into ``E`` (``outcome_success``), ``I``
+    (``outcome_score_consistency``), and ``outcomes_in_e`` (#2610, Invariant 4).
+
+    On the live ``get_recent_outcomes`` path (where ``verification_source`` is
+    not selected when ``UNITARES_OUTCOME_PROVENANCE_FILTER=off``), rows matching
+    ``SELF_REFERENTIAL_OUTCOME_TYPES`` are excluded by ``outcome_type``. When
+    ``verification_source`` is present on a caller-supplied row (e.g. in replay
+    or direct unit calls), only ``"server_observation"`` rows are excluded.
+
+    In the behavioral sensor, filtering these rows is coupled to
+    ``neutralize_self_loops`` (``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS``) so
+    removing echo rows cannot shift weight onto active loop-derived
+    ``decision_e`` (0.35 -> 0.40) and ``legacy_coherence_level`` (0.25 -> 0.30)
+    when an agent has fewer than 3 non-echo outcomes (see
+    ``src/db/mixins/tool_usage.py:get_recent_outcomes``).
+    """
+    if isinstance(outcome, Mapping):
+        outcome_type = outcome.get("outcome_type")
+        verification_source = outcome.get("verification_source")
+    else:
+        try:
+            outcome_type = outcome["outcome_type"]
+        except (KeyError, TypeError, IndexError):
+            outcome_type = None
+        try:
+            verification_source = outcome["verification_source"]
+        except (KeyError, TypeError, IndexError):
+            verification_source = None
+    if str(outcome_type or "").strip().lower() not in SELF_REFERENTIAL_OUTCOME_TYPES:
+        return False
+    if verification_source is not None:
+        return str(verification_source).strip().lower() == "server_observation"
+    return True
+
+
+def filter_behavioral_outcomes(outcome_history: list | None) -> list | None:
+    """Return ``outcome_history`` with self-referential trajectory/resonance rows removed."""
+    if outcome_history is None:
+        return None
+    return [row for row in outcome_history if not is_self_referential_outcome(row)]
+
+
+def per_agent_i_calibration_enabled() -> bool:
+    """Return True when per-agent tactical calibration in behavioral I is enabled.
+
+    Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default off). When
+    enabled (#2818 §3.1 & §3.2):
+    - Requires ``agent_calibration_channel`` with ``evidence_status == "available"``
+      and ``freshness_status == "recent"`` (rejecting ``"stale"`` and ``"unknown"``).
+    - If a frozen reference-cohort ``prior_error`` in ``(0, 1)`` is supplied on
+      the channel (§3.2(3)) and ``n_verified_pairs >= 1``, ``calibration_accuracy``
+      uses partial-pooled error ``e_pool = (1 - w) * prior_error + w * e_agent``
+      with ``w = n / (n + 10)`` (``source="agent_calibration_pooled"``).
+    - If no reference-cohort ``prior_error`` is supplied (per §3.2(3)-(4),
+      never substituting zero error or the legacy 0.1474 fleet scalar) and
+      ``n_verified_pairs >= 5``, uses the agent's own sample-weighted binned ECE
+      ``1.0 - e_agent`` (``source="agent_tactical_calibration"``).
+    - Otherwise (``n_verified_pairs == 0``, stale/unknown freshness, or ``n < 5``
+      without a reference prior), no shared prior enters ``I`` (§3.2 Rule 1);
+      base ``I`` uses the calibration-free renormalization (Arm F, §6.4).
+    """
+    raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def neutralize_sensor_self_loops_enabled() -> bool:
+    """Return True when controller self-loops in the behavioral sensor are neutralized.
+
+    Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
+    enabled, the self-referential controller terms inside the behavioral sensor
+    are neutralized:
+    - ``decision_history`` in E -> observed fleet-level ``DECISION_NEUTRAL_SCORE`` (0.84)
+    - ``coherence_history`` in E and I -> nominal neutral ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60, mapped from ``LEGACY_COHERENCE_NEUTRAL_VALUE = 0.50``)
+    - ``regime_instability`` in S -> observed fleet-level ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
+    - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome echoes excluded from E and I
+    """
+    raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
@@ -19,6 +119,7 @@ LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
 
 DECISION_SELF_LOOP_ABLATION_SCHEMA = "decision_self_loop_ablation.v1"
 BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA = "behavioral_sensor.components.v1"
+CALIBRATION_FREE_I_ABLATION_SCHEMA = "calibration_free_i_ablation.v1"
 # The neutral stand-in is the OBSERVED level, not the score table's midpoint.
 # Measured 2026-08-20 over 30d (n=33,379 non-synthetic): guide 52.7% -> 0.7,
 # approve 47.2% -> 1.0, and the 0.0-scored pause vocabulary is 0.12% of rows.
@@ -63,6 +164,10 @@ def compute_behavioral_sensor_eisv(
     unique_tools_ratio: float | None = None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool | None = None,
+    calibration_free_i: bool = False,
+    per_agent_i_calibration: bool | None = None,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict | None:
     """Compute the deployed mixed-provenance EISV observation.
 
@@ -87,6 +192,10 @@ def compute_behavioral_sensor_eisv(
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
         regime_instability_override=regime_instability_override,
+        neutralize_self_loops=neutralize_self_loops,
+        calibration_free_i=calibration_free_i,
+        per_agent_i_calibration=per_agent_i_calibration,
+        agent_calibration_channel=agent_calibration_channel,
     )
     if components is None:
         return None
@@ -116,6 +225,10 @@ def compute_behavioral_sensor_components(
     unique_tools_ratio: float | None = None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool | None = None,
+    calibration_free_i: bool = False,
+    per_agent_i_calibration: bool | None = None,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict | None:
     """Explain the exact deployed behavioral observation without changing it.
 
@@ -128,23 +241,40 @@ def compute_behavioral_sensor_components(
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return None
 
+    active_neutralize = (
+        neutralize_sensor_self_loops_enabled()
+        if neutralize_self_loops is None
+        else bool(neutralize_self_loops)
+    )
+    active_per_agent_i = (
+        per_agent_i_calibration_enabled()
+        if per_agent_i_calibration is None
+        else bool(per_agent_i_calibration)
+    )
+
     dimensions = {
         "E": _compute_E_components(
             decision_history,
             coherence_history,
             complexity_divergence,
             outcome_history,
+            neutralize_self_loops=active_neutralize,
         ),
         "I": _compute_I_components(
             coherence_history,
             calibration_error,
             outcome_history,
+            neutralize_self_loops=active_neutralize,
+            calibration_free_i=calibration_free_i,
+            per_agent_i_calibration=active_per_agent_i,
+            agent_calibration_channel=agent_calibration_channel,
         ),
         "S": _compute_S_components(
             drift_norm,
             regime_history,
             complexity_divergence,
             regime_instability_override=regime_instability_override,
+            neutralize_self_loops=active_neutralize,
         ),
         "V": _compute_V_components(E_history, I_history),
     }
@@ -226,6 +356,8 @@ def compute_legacy_coherence_dependency_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral E/I reading with legacy coherence neutralized.
 
@@ -261,6 +393,15 @@ def compute_legacy_coherence_dependency_shadow(
             "future_outcomes",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -289,6 +430,7 @@ def compute_legacy_coherence_dependency_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     neutral_history = [LEGACY_COHERENCE_NEUTRAL_VALUE] * min(
         len(coherence_history), 10
@@ -311,6 +453,7 @@ def compute_legacy_coherence_dependency_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     if deployed is None or candidate is None:
         return {
@@ -355,6 +498,8 @@ def compute_decision_self_loop_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral E/I reading with ``decision_e`` neutralized.
 
@@ -426,6 +571,15 @@ def compute_decision_self_loop_shadow(
             "basin_boundary_flip_counterfactual",
         ],
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3:
         return {
             **base,
@@ -453,6 +607,7 @@ def compute_decision_self_loop_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(
         decision_history=decision_history, **shared
@@ -508,6 +663,8 @@ def compute_regime_self_loop_shadow(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
     deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
     """Shadow the behavioral S reading with the regime-instability term neutralized.
 
@@ -551,6 +708,15 @@ def compute_regime_self_loop_shadow(
             "the fleet stand-in"
         ),
     }
+    if neutralize_sensor_self_loops_enabled():
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "self_loop_already_neutralized",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return {
             **base,
@@ -578,10 +744,12 @@ def compute_regime_self_loop_shadow(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
     )
     deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
     candidate = compute_behavioral_sensor_eisv(
-        **inputs, regime_instability_override=REGIME_NEUTRAL_INSTABILITY
+        **inputs,
+        regime_instability_override=REGIME_NEUTRAL_INSTABILITY,
     )
     if deployed is None or candidate is None:
         return {
@@ -602,6 +770,118 @@ def compute_regime_self_loop_shadow(
         "candidate": {"S": candidate_s},
         "candidate_minus_deployed": {"S": candidate_s - deployed_s},
         "deployed_regime_instability": _regime_instability(regime_history),
+    }
+
+
+def compute_calibration_free_i_shadow(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+    deployed_observation: dict | None = None,
+    *,
+    agent_calibration_channel: Mapping | None = None,
+) -> dict:
+    """Shadow the behavioral I reading with the global calibration slot removed (Arm F).
+
+    Implements Arm F of ``docs/proposals/active/eisv-per-agent-i-calibration-v0.md``
+    §6.4 (#2818): removes ``calibration_accuracy`` from the base ``I`` formula
+    and renormalizes the remaining base terms to sum to 1.0 before the standard
+    post-base adjustments (``continuity_I_input`` at 0.20, ``unique_tools_ratio``
+    at 0.10):
+    - With >=3 scored outcomes: ``legacy_coherence_trend`` 0.60 + ``outcome_score_consistency`` 0.40
+    - Without >=3 scored outcomes: ``legacy_coherence_trend`` 1.00
+
+    Measurement-only: the live observation is never modified and no policy reads
+    this shadow.
+    """
+    base = {
+        "schema": CALIBRATION_FREE_I_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "intervention": {
+            "field": "calibration_error",
+            "source": "fleet_calibration",
+            "role": "global_calibration_term_in_I",
+            "operation": "remove_slot_and_renormalize_base_weights",
+            "weights_with_outcomes": {
+                "legacy_coherence_trend": 0.60,
+                "outcome_score_consistency": 0.40,
+            },
+            "weights_without_outcomes": {
+                "legacy_coherence_trend": 1.00,
+            },
+        },
+        "not_modeled": [
+            "recursive_E_I_history_replay",
+            "behavioral_ema_replay",
+            "V_counterfactual",
+            "policy_effect",
+            "future_outcomes",
+        ],
+    }
+    if len(decision_history) < 3 or len(coherence_history) < 3:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_behavioral_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    inputs = dict(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+        agent_calibration_channel=agent_calibration_channel,
+    )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
+    candidate = compute_behavioral_sensor_eisv(**inputs, calibration_free_i=True)
+    if deployed is None or candidate is None:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "behavioral_sensor_unavailable",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    deployed_i = float(deployed["I"])
+    candidate_i = float(candidate["I"])
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": {"I": deployed_i},
+        "candidate": {"I": candidate_i},
+        "candidate_minus_deployed": {"I": candidate_i - deployed_i},
     }
 
 # --- E: Decision success rate, exponentially weighted ---
@@ -689,11 +969,19 @@ def _compute_E_components(
     coherence_history: list | None = None,
     complexity_divergence: float | None = None,
     outcome_history: list | None = None,
+    *,
+    neutralize_self_loops: bool = False,
 ) -> dict:
     # Decision success — exponentially weighted
     window = decision_history[-10:]
-    if not window:
+    if neutralize_self_loops:
+        decision_e = DECISION_NEUTRAL_SCORE
+        decision_observed = False
+        decision_default_reason = "self_loop_neutralized"
+    elif not window:
         decision_e = 0.65
+        decision_observed = False
+        decision_default_reason = "no_decision_history"
     else:
         n = len(window)
         alpha = 0.3
@@ -703,41 +991,53 @@ def _compute_E_components(
             w * _DECISION_SCORES.get(str(d).lower(), 0.5)
             for w, d in zip(weights, window)
         ) / total_w
+        decision_observed = True
+        decision_default_reason = None
 
     # Legacy C(V_ODE) controller level — map [0.35, 0.65] → [0.3, 0.9].
     # ``coherence_history`` is retained as the compatibility parameter name.
-    if coherence_history and len(coherence_history) >= 3:
+    if neutralize_self_loops:
+        coh_e = LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        coh_observed = False
+        coh_default_reason = "self_loop_neutralized"
+    elif coherence_history and len(coherence_history) >= 3:
         recent_coh = coherence_history[-10:]
         mean_coh = sum(recent_coh) / len(recent_coh)
         coh_e = 0.3 + (mean_coh - 0.35) * 2.0  # 0.35→0.3, 0.65→0.9
         coh_e = max(0.3, min(0.9, coh_e))
+        coh_observed = True
+        coh_default_reason = None
     else:
         coh_e = 0.6
+        coh_observed = False
+        coh_default_reason = "insufficient_coherence_history"
 
     # Complexity calibration — low divergence = high capacity awareness
     cd = complexity_divergence if complexity_divergence is not None else 0.15
     cal_e = max(0.3, min(1.0, 1.0 - cd))
 
     # Outcome success rate — successful outcomes indicate productive energy
-    if outcome_history and len(outcome_history) >= 3:
-        good_count = sum(1 for o in outcome_history if not o.get('is_bad', False))
-        success_rate = good_count / len(outcome_history)
+    filtered_outcomes = (
+        filter_behavioral_outcomes(outcome_history)
+        if neutralize_self_loops
+        else outcome_history
+    )
+    if filtered_outcomes and len(filtered_outcomes) >= 3:
+        good_count = sum(1 for o in filtered_outcomes if not o.get('is_bad', False))
+        success_rate = good_count / len(filtered_outcomes)
         outcome_e = OUTCOME_E_FLOOR + success_rate * OUTCOME_E_SPAN  # [0,1] -> [0.3, 0.9]
         # Weights: 35% decision, 25% coherence, 20% calibration, 20% outcomes
         components = [
             _component(
                 "decision_history", "governance_decisions", decision_e, 0.35,
-                observed=bool(window),
-                default_reason=None if window else "no_decision_history",
+                observed=decision_observed,
+                default_reason=decision_default_reason,
                 health_evidence=False,
             ),
             _component(
                 "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.25,
-                observed=bool(coherence_history and len(coherence_history) >= 3),
-                default_reason=(
-                    None if coherence_history and len(coherence_history) >= 3
-                    else "insufficient_coherence_history"
-                ),
+                observed=coh_observed,
+                default_reason=coh_default_reason,
                 health_evidence=False,
             ),
             _component(
@@ -758,17 +1058,14 @@ def _compute_E_components(
         components = [
             _component(
                 "decision_history", "governance_decisions", decision_e, 0.40,
-                observed=bool(window),
-                default_reason=None if window else "no_decision_history",
+                observed=decision_observed,
+                default_reason=decision_default_reason,
                 health_evidence=False,
             ),
             _component(
                 "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.30,
-                observed=bool(coherence_history and len(coherence_history) >= 3),
-                default_reason=(
-                    None if coherence_history and len(coherence_history) >= 3
-                    else "insufficient_coherence_history"
-                ),
+                observed=coh_observed,
+                default_reason=coh_default_reason,
                 health_evidence=False,
             ),
             _component(
@@ -823,51 +1120,137 @@ def _compute_I_components(
     coherence_history: list,
     calibration_error: float | None,
     outcome_history: list | None = None,
+    *,
+    neutralize_self_loops: bool = False,
+    calibration_free_i: bool = False,
+    per_agent_i_calibration: bool = False,
+    agent_calibration_channel: Mapping | None = None,
 ) -> dict:
+    effective_calibration_free_i = bool(calibration_free_i)
+    cal_source = "fleet_calibration"
+    cal_observed = calibration_error is not None
+    cal_default_reason = (
+        None if calibration_error is not None
+        else "default_calibration_accuracy_0.75"
+    )
     cal_I = 1.0 - calibration_error if calibration_error is not None else 0.75
     cal_I = max(0.0, min(1.0, cal_I))
 
-    coh_I = _coherence_trend(coherence_history)
+    if per_agent_i_calibration and not effective_calibration_free_i:
+        agent_cal_I: float | None = None
+        agent_cal_source: str | None = None
+        if isinstance(agent_calibration_channel, Mapping):
+            n_pairs = agent_calibration_channel.get("n_verified_pairs")
+            agent_err = agent_calibration_channel.get("calibration_error")
+            status = agent_calibration_channel.get("evidence_status")
+            freshness = agent_calibration_channel.get("freshness_status")
+            prior_err = agent_calibration_channel.get("prior_error")
+            if (
+                status == "available"
+                and freshness == "recent"
+                and isinstance(n_pairs, int)
+                and not isinstance(n_pairs, bool)
+                and n_pairs >= 1
+                and isinstance(agent_err, (int, float))
+                and not isinstance(agent_err, bool)
+                and math.isfinite(float(agent_err))
+            ):
+                clamped_err = max(0.0, min(1.0, float(agent_err)))
+                if (
+                    isinstance(prior_err, (int, float))
+                    and not isinstance(prior_err, bool)
+                    and math.isfinite(float(prior_err))
+                    and 0.0 < float(prior_err) < 1.0
+                ):
+                    w = float(n_pairs) / (float(n_pairs) + AGENT_CALIBRATION_POOLING_K)
+                    e_pool = (1.0 - w) * float(prior_err) + w * clamped_err
+                    agent_cal_I = max(0.0, min(1.0, 1.0 - e_pool))
+                    agent_cal_source = "agent_calibration_pooled"
+                elif n_pairs >= MIN_UNPOOLED_AGENT_CALIBRATION_PAIRS:
+                    agent_cal_I = max(0.0, min(1.0, 1.0 - clamped_err))
+                    agent_cal_source = "agent_tactical_calibration"
+        if agent_cal_I is not None and agent_cal_source is not None:
+            cal_I = agent_cal_I
+            cal_source = agent_cal_source
+            cal_observed = True
+            cal_default_reason = None
+        else:
+            # #2818 §3.2 Rule 1 & Rule 3: with no admissible per-agent evidence
+            # (or n < 5 without a reference-cohort prior, or stale pairs), no
+            # shared fleet scalar or invented prior enters I; fall back to
+            # calibration-free I (Arm F).
+            effective_calibration_free_i = True
+
+    if neutralize_self_loops:
+        coh_I = LEGACY_COHERENCE_NEUTRAL_COMPONENT
+        coh_observed = False
+        coh_default_reason = "self_loop_neutralized"
+    else:
+        coh_I = _coherence_trend(coherence_history)
+        coh_observed = len(coherence_history) >= 4
+        coh_default_reason = (
+            None if len(coherence_history) >= 4
+            else "insufficient_coherence_history"
+        )
 
     # Outcome consistency — consistent scores indicate information integrity
-    if outcome_history and len(outcome_history) >= 3:
-        scores = [s for o in outcome_history
+    filtered_outcomes = (
+        filter_behavioral_outcomes(outcome_history)
+        if neutralize_self_loops
+        else outcome_history
+    )
+    if filtered_outcomes and len(filtered_outcomes) >= 3:
+        scores = [s for o in filtered_outcomes
                   if (s := o.get('outcome_score')) is not None
-                  and isinstance(s, (int, float)) and math.isfinite(s)]
+                  and isinstance(s, (int, float)) and not isinstance(s, bool)
+                  and math.isfinite(s)]
         if len(scores) >= 3:
             mean_s = sum(scores) / len(scores)
             score_var = sum((s - mean_s) ** 2 for s in scores) / len(scores)
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
-            # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
-            components = [
-                _component(
-                    "calibration_accuracy", "fleet_calibration", cal_I, 0.50,
-                    observed=calibration_error is not None,
-                    default_reason=(
-                        None if calibration_error is not None
-                        else "default_calibration_accuracy_0.75"
+            if effective_calibration_free_i:
+                components = [
+                    _component(
+                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.60,
+                        observed=coh_observed,
+                        default_reason=coh_default_reason,
+                        health_evidence=False,
                     ),
-                ),
-                _component(
-                    "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
-                    observed=len(coherence_history) >= 4,
-                    default_reason=(
-                        None if len(coherence_history) >= 4
-                        else "insufficient_coherence_history"
+                    _component(
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.40,
+                        observed=True,
+                        health_evidence=False,
                     ),
-                    health_evidence=False,
-                ),
-                _component(
-                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
-                    observed=True,
-                    health_evidence=False,
-                ),
-            ]
-            raw = (
-                components[0]["weighted_contribution"]
-                + components[1]["weighted_contribution"]
-                + components[2]["weighted_contribution"]
-            )
+                ]
+                raw = (
+                    components[0]["weighted_contribution"]
+                    + components[1]["weighted_contribution"]
+                )
+            else:
+                # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
+                components = [
+                    _component(
+                        "calibration_accuracy", cal_source, cal_I, 0.50,
+                        observed=cal_observed,
+                        default_reason=cal_default_reason,
+                    ),
+                    _component(
+                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
+                        observed=coh_observed,
+                        default_reason=coh_default_reason,
+                        health_evidence=False,
+                    ),
+                    _component(
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
+                        observed=True,
+                        health_evidence=False,
+                    ),
+                ]
+                raw = (
+                    components[0]["weighted_contribution"]
+                    + components[1]["weighted_contribution"]
+                    + components[2]["weighted_contribution"]
+                )
             value = max(0.0, min(1.0, raw))
             return {
                 "value": value,
@@ -876,29 +1259,34 @@ def _compute_I_components(
                 "adjustments": [],
             }
 
-    components = [
-        _component(
-            "calibration_accuracy", "fleet_calibration", cal_I, 0.60,
-            observed=calibration_error is not None,
-            default_reason=(
-                None if calibration_error is not None
-                else "default_calibration_accuracy_0.75"
+    if effective_calibration_free_i:
+        components = [
+            _component(
+                "legacy_coherence_trend", "legacy_tanh_v", coh_I, 1.00,
+                observed=coh_observed,
+                default_reason=coh_default_reason,
+                health_evidence=False,
             ),
-        ),
-        _component(
-            "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
-            observed=len(coherence_history) >= 4,
-            default_reason=(
-                None if len(coherence_history) >= 4
-                else "insufficient_coherence_history"
+        ]
+        raw = components[0]["weighted_contribution"]
+    else:
+        components = [
+            _component(
+                "calibration_accuracy", cal_source, cal_I, 0.60,
+                observed=cal_observed,
+                default_reason=cal_default_reason,
             ),
-            health_evidence=False,
-        ),
-    ]
-    raw = (
-        components[0]["weighted_contribution"]
-        + components[1]["weighted_contribution"]
-    )
+            _component(
+                "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
+                observed=coh_observed,
+                default_reason=coh_default_reason,
+                health_evidence=False,
+            ),
+        ]
+        raw = (
+            components[0]["weighted_contribution"]
+            + components[1]["weighted_contribution"]
+        )
     value = max(0.0, min(1.0, raw))
     return {
         "value": value,
@@ -945,6 +1333,7 @@ def _compute_S_components(
     complexity_divergence: float | None,
     *,
     regime_instability_override: float | None = None,
+    neutralize_self_loops: bool = False,
 ) -> dict:
     # Drift component (40%)
     dn = drift_norm if drift_norm is not None else 0.2
@@ -953,8 +1342,21 @@ def _compute_S_components(
     # Regime instability (35%): count transitions / window. The override exists
     # only for compute_regime_self_loop_shadow; the deployed path never sets it.
     regime_overridden = regime_instability_override is not None
-    regime_s = (float(regime_instability_override) if regime_overridden
-                else _regime_instability(regime_history))
+    if regime_overridden:
+        regime_s = float(regime_instability_override)
+        regime_observed = False
+        regime_default_reason = "ablation_override"
+    elif neutralize_self_loops:
+        regime_s = REGIME_NEUTRAL_INSTABILITY
+        regime_observed = False
+        regime_default_reason = "self_loop_neutralized"
+    else:
+        regime_s = _regime_instability(regime_history)
+        regime_observed = len(regime_history) >= 2
+        regime_default_reason = (
+            None if len(regime_history) >= 2
+            else "insufficient_regime_history"
+        )
 
     # Complexity divergence (25%)
     cd = complexity_divergence if complexity_divergence is not None else 0.1
@@ -968,12 +1370,8 @@ def _compute_S_components(
         ),
         _component(
             "regime_instability", "regime_history", regime_s, 0.35,
-            observed=len(regime_history) >= 2 and not regime_overridden,
-            default_reason=(
-                "ablation_override" if regime_overridden
-                else None if len(regime_history) >= 2
-                else "insufficient_regime_history"
-            ),
+            observed=regime_observed,
+            default_reason=regime_default_reason,
         ),
         _component(
             "complexity_divergence", "continuity_metrics", cd_s, 0.25,

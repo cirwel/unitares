@@ -174,6 +174,7 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; no default (unset: the local lane refuses with MODEL_NOT_CONFIGURED) | src/local_inference_env.py |
 | `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:223); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:255, src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
+| `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS` | `''` | Return True when controller self-loops in the behavioral sensor are neutralized | src/behavioral_sensor.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'false'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `'false'` | Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION) | src/mcp_listen_config.py |
@@ -194,6 +195,7 @@ additions merge cleanly. -->
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
 | `UNITARES_PARENT_AGENT_ID` | `None (no reader fallback)` | read by main() | agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
+| `UNITARES_PER_AGENT_I_CALIBRATION` | `''` | Return True when per-agent tactical calibration in behavioral I is enabled | src/behavioral_sensor.py |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
 | `UNITARES_POLICY_ACTUATION` | `'observe'` | Return the operator-owned policy actuation posture | src/agent_loop_detection.py |

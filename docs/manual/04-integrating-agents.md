@@ -20,7 +20,9 @@ integrators read the same operational rules.
    writes.
 3. **Real handoff from a finished predecessor:** start fresh and declare
    `parent_agent_id=<prior uuid>, spawn_reason="explicit"`.
-4. Call `sync_state(...)` after meaningful work.
+4. Call `sync_state(...)` only at a meaningful milestone when you also hold a
+   judgment the substrate cannot infer; completion or session exit alone does
+   not call for a check-in.
 5. Call `record_result(...)` when a bounded external outcome exists. To grade
    a specific check-in, pass the `prediction_id` that check-in returned;
    `sync_state` issues one only when you pass `confidence`, and it expires, so
@@ -35,7 +37,7 @@ first.
 session = start_session(force_new=True)
 
 result = sync_state(
-    response_text="Implemented the change and ran the focused tests.",
+    response_text="Tracing the flake changed my diagnosis to shared fixture state; I expect the isolation fix to prevent recurrence.",
     complexity=0.5,
     confidence=0.8,
     client_session_id=session["client_session_id"],
@@ -59,7 +61,9 @@ which proves no ownership. Full rules: [`identity.md`](../ontology/identity.md).
 
 Short dispatched subagents usually should not onboard. If one genuinely needs
 its own identity, declare the dispatcher as parent with
-`spawn_reason="subagent"` and leave at least one real check-in.
+`spawn_reason="subagent"`; having an identity creates no check-in quota. Use
+the same two conditions as other agents; never check in merely because the
+subagent is exiting.
 
 ## 4.3 Primary workflow tools
 

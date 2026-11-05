@@ -148,9 +148,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or "
         "openai/gpt-oss model still routes off-box. host_id rejects the "
         "Claude, Codex and Antigravity adapters; those are delegate_inference's. "
-        "Requires a bound identity. A successful call also runs one governance "
-        "update on your state (Energy accounting), logged as an ordinary "
-        "auto_attest row."
+        "Requires a bound identity. Audited as event_type='inference_call' "
+        "(route, privacy class and outcome, never prompt or response text); "
+        "it does not run a governance update."
     ),
     "delegate_inference": (
         "Hand a bounded task to a strong-model CLI host (operator extension, "
@@ -176,9 +176,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "consult.thorough.prefer order in UNITARES_INFERENCE_HOSTS_FILE, or the "
         "only enabled, configured and available host; missing or ambiguous "
         "selection refuses with setup guidance. No vendor is the default. "
-        "A successful call also runs one governance "
-        "update on your state (Energy accounting), logged as an ordinary "
-        "auto_attest row."
+        "Audited as event_type='inference_call' (route, privacy class and "
+        "outcome, never prompt or response text); it does not run a "
+        "governance update."
     ),
     "consult": (
         "Ask a model or council to critique a design or assumption (no review "
@@ -195,7 +195,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "instead. Requires a bound identity. "
         "Audited as event_type='consultation', readable by bound agents: "
         "route and keyed hashes, never text (key: record.hash_key). "
-        "A success also updates your governance state. "
+        "Does not update your governance state. "
         "host_id pins a host and infers omitted effort (standard for Ollama/HF, "
         "thorough for CLI); an explicit effort must match. External hosts require "
         "cloud_allowed and pinned calls require "
@@ -219,7 +219,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     "dialectic": (
         "Open and advance governed, on-record peer review sessions. To OPEN a "
         "review, use request_review; this lane can change governance state. "
-        "For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and "
+        "For advice outside a governed-review session, use consult; consultation audit metadata still applies. get and "
         "list serve unbound callers; every other action needs a bound "
         "identity, quick fails without issue_description, and thesis, "
         "antithesis, synthesis, reassign and reconcile_effect each need a "

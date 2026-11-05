@@ -79,9 +79,13 @@ def _static_config() -> Dict[str, Any]:
         sensor_coupling_mode,
     )
     from src.behavioral_assessment import floor_breach_caution_apply_enabled
+    from src.behavioral_sensor import (
+        neutralize_sensor_self_loops_enabled,
+        per_agent_i_calibration_enabled,
+    )
     from src.grounding.class_indicator import load_resident_labels
 
-    return {
+    cfg: Dict[str, Any] = {
         "params": dict(sorted(vars(get_active_params()).items())),
         "integrator": get_integrator_mode(),
         "i_dynamics": get_i_dynamics_mode(),
@@ -95,6 +99,11 @@ def _static_config() -> Dict[str, Any]:
         "void_threshold": dict(gc.GovernanceConfig.VOID_THRESHOLD_BY_CLASS),
         "residents": sorted(load_resident_labels()),
     }
+    if neutralize_sensor_self_loops_enabled():
+        cfg["neutralize_sensor_self_loops"] = True
+    if per_agent_i_calibration_enabled():
+        cfg["per_agent_i_calibration"] = True
+    return cfg
 
 
 def effective_config() -> Dict[str, Any]:

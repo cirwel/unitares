@@ -84,6 +84,11 @@ async def http_agent_history(request):
                            coalesce(s.state_json #>>
                                '{eisv_telemetry,measurement,primary,source}',
                                'unknown') AS primary_source,
+                           jsonb_build_array(
+                               s.state_json #>> '{eisv_telemetry,measurement,coherence,source}',
+                               s.state_json #>> '{eisv_telemetry,measurement,coherence,role}'
+                           ) AS coherence_producer,
+                           s.state_json->'eisv_instrument'->>'id' AS instrument_id,
                            coalesce(s.state_json #>>
                                '{eisv_telemetry,policy_evaluation,maturity_gate,measurement_phase}',
                                s.state_json #>>
@@ -128,9 +133,25 @@ async def http_agent_history(request):
                             ::double precision AS gap_seconds,
                         lag(primary_source) OVER w AS previous_primary_source,
                         lag(measurement_source) OVER w AS previous_measurement_source,
+                        lag(coherence_producer) OVER w AS previous_coherence_producer,
+                        lag(instrument_id) OVER w AS previous_instrument_id,
                         lag(maturity_phase) OVER w AS previous_maturity_phase
                     FROM requested
                     WINDOW w AS (ORDER BY rn)
+                ),
+                segmented AS (
+                    -- Count boundaries BEFORE decimation: an A -> B -> A
+                    -- excursion must still break the line if B is not plotted.
+                    -- IDs are local to this response, not instrument identities.
+                    SELECT *,
+                        sum(CASE WHEN primary_source IS DISTINCT FROM previous_primary_source
+                            OR measurement_source IS DISTINCT FROM previous_measurement_source
+                            OR instrument_id IS DISTINCT FROM previous_instrument_id
+                            THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS eisv_segment,
+                        sum(CASE WHEN coherence_producer IS DISTINCT FROM previous_coherence_producer
+                            OR instrument_id IS DISTINCT FROM previous_instrument_id
+                            THEN 1 ELSE 0 END) OVER (ORDER BY rn) AS coherence_segment
+                    FROM timed
                 ),
                 trajectory AS (
                     SELECT jsonb_build_object(
@@ -175,11 +196,11 @@ async def http_agent_history(request):
                     ) AS trajectory_stats
                     FROM timed
                 )
-                SELECT timed.recorded_at, e, i, s_entropy, v, coherence, risk_score,
+                SELECT segmented.recorded_at, e, i, s_entropy, v, coherence, risk_score,
                        state_json, epistemic_class, telemetry_available, total,
                        agent_report_total, substrate_total, telemetry_total,
-                       trajectory_stats
-                FROM timed CROSS JOIN trajectory
+                       trajectory_stats, eisv_segment, coherence_segment
+                FROM segmented CROSS JOIN trajectory
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
                            ELSE true
@@ -218,6 +239,12 @@ async def http_agent_history(request):
                 "epistemic_class": r["epistemic_class"],
                 "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
+                # Response-local source runs over unsampled history. Consumers
+                # must not join equal-source points across different runs.
+                "chart_segments": {
+                    "eisv": r.get("eisv_segment"),
+                    "coherence": r.get("coherence_segment"),
+                },
             }
             envelope_requested = telemetry_mode == "all" or (
                 telemetry_mode == "latest" and index == len(rows) - 1

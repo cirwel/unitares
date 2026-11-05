@@ -79,8 +79,9 @@ contract `2.2.0` on 2026-10-26.
    Follow
    `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
    describe state, not outcomes.
-3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
-   not after every tool call. Use `store_finding` / `update_finding` for durable
+3. **Use each record for its job.** Call `sync_state` only at a meaningful
+   milestone when you also hold a judgment the substrate cannot infer, not
+   after every tool call. Use `store_finding` / `update_finding` for durable
    knowledge and `record_result` only for an outcome that actually occurred.
 4. **Reuse durable knowledge safely.** Search before `store_finding`. If
    authorized, update or supersede an existing finding rather than duplicate
@@ -106,7 +107,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
 | Start a fresh process identity | `start_session(force_new=true, ...)` | `onboard` |
-| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check in at a meaningful milestone with an agent-held judgment | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
 | Check your working state | `check_working_state(client_session_id=...)` | `get_governance_metrics` |
 | Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
 | Record what actually happened | `record_result(...)` | `outcome_event` |
@@ -170,11 +171,12 @@ Avoid these patterns:
 
 ## Check-ins
 
-Call `sync_state()` after meaningful work:
+Call `sync_state()` only at a meaningful milestone when you also hold a
+judgment the substrate cannot infer:
 
 ~~~text
 sync_state(
-  response_text: "Brief summary of what you did",
+  response_text: "Your judgment and the relevant work, concise and secret-free",
   complexity: 0.0-1.0,   # Task difficulty estimate
   confidence: 0.0-1.0    # OPTIONAL — omit unless you are genuinely stating a
                          # belief about your own work. Any value you pass mints
@@ -197,10 +199,14 @@ excerpt is your own report, not a verified claim; a durable claim still needs
 
 ### When to Check In
 
-- After completing a meaningful unit of work
-- Before and after high-complexity tasks
-- When you feel uncertain or notice drift
-- **Not** after every single tool call — use judgment between these bounds
+- Check in only at a meaningful milestone when you also hold a judgment the
+  substrate cannot infer: a self-correction, revised belief, material change
+  in uncertainty or complexity, or handoff assessment after substantive work.
+- A boundary before or after high-risk or high-complexity work qualifies only
+  when it meets both conditions. One check-in may cover a coherent unit of work.
+- There is no fixed time-, turn-, or tool-count cadence. Completion, generated
+  output, reminders, session start or exit, and automatic substrate observations
+  alone do not call for a check-in. Do not manufacture a report to echo them.
 
 ### What You Get Back
 

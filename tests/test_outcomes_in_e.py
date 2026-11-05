@@ -220,3 +220,33 @@ def test_enrichment_marks_change_per_monitor():
     ctx = SimpleNamespace(agent_state={}, monitor=monitor, response_data={})
     enrich_outcomes_in_e(ctx)
     assert "outcomes_in_e" not in ctx.response_data
+
+
+def test_self_referential_trajectory_outcomes_do_not_enter_e_or_account_when_neutralized(monkeypatch):
+    """#2610 / Invariant 4: under UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1, trajectory_validated and cirs_resonance echoes are excluded from E, I, and outcomes_in_e while default (off) behavior is unchanged."""
+    echo_only = [
+        {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.25},
+        {"outcome_type": "trajectory_validated", "is_bad": True, "outcome_score": 0.30},
+        {"outcome_type": "cirs_resonance", "is_bad": True, "outcome_score": 0.0},
+        {"outcome_type": "trajectory_validated", "is_bad": False, "outcome_score": 0.80},
+    ]
+    # Default (flag off): legacy behavior preserved
+    monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+    assert _evidence(echo_only)["counted"] == 4
+
+    # Flag on: server-generated echoes excluded; caller-reported trajectory_validated preserved
+    monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+    assert _evidence(echo_only) is None
+    assert compute_behavioral_sensor_eisv(**_inputs(echo_only)) == compute_behavioral_sensor_eisv(
+        **_inputs(None)
+    )
+
+    mixed = _outcomes(4, 1) + echo_only
+    evidence = _evidence(mixed)
+    assert evidence["counted"] == 4
+    assert evidence["adverse"] == 1
+    assert evidence["adverse_by_type"] == {"test_failed": 1}
+    assert compute_behavioral_sensor_eisv(**_inputs(mixed)) == compute_behavioral_sensor_eisv(
+        **_inputs(_outcomes(4, 1))
+    )
+

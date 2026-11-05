@@ -14,23 +14,32 @@ import pytest
 from src.mcp_handlers.updates import phases
 
 
-def _ctx(text: str, complexity: float = 0.6) -> SimpleNamespace:
+def _ctx(
+    text: str,
+    complexity: float = 0.6,
+    epistemic_class: str = "agent_report",
+) -> SimpleNamespace:
     return SimpleNamespace(
         agent_id="agent-under-test",
         response_text=text,
         complexity=complexity,
         confidence=None,
+        epistemic_class=epistemic_class,
         arguments={"client_session_id": "sess-1"},
         metrics_dict={},
         outcome_event_id=None,
     )
 
 
-async def _emitted_types(text: str, complexity: float = 0.6) -> list[str]:
+async def _emitted_types(
+    text: str,
+    complexity: float = 0.6,
+    epistemic_class: str = "agent_report",
+) -> list[str]:
     db = MagicMock()
     db.record_outcome_event = AsyncMock(return_value="outcome-1")
     with patch("src.db.get_db", return_value=db):
-        await phases._post_update_auto_outcome(_ctx(text, complexity))
+        await phases._post_update_auto_outcome(_ctx(text, complexity, epistemic_class))
     return [c.kwargs["outcome_type"] for c in db.record_outcome_event.call_args_list]
 
 
@@ -74,3 +83,18 @@ async def test_failure_words_and_inflections_still_emit_task_failed(text):
 @pytest.mark.asyncio
 async def test_low_complexity_still_emits_nothing():
     assert await _emitted_types("Fixed the parser", complexity=0.1) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text,epistemic_class",
+    [
+        ("12 tool calls completed: read_file, edit_file, bash", "agent_report"),
+        ("1 tool call completed: rg", "agent_report"),
+        ("All checks completed and verified.", "substrate_observation"),
+        ("Task failed with error.", "substrate_interpretation"),
+    ],
+)
+async def test_automatic_and_rollup_checkins_emit_no_auto_outcomes(text, epistemic_class):
+    """#2418 Fix 2: non-authored check-ins and runtime tool-count rollups never emit task_completed/task_failed."""
+    assert await _emitted_types(text, complexity=0.7, epistemic_class=epistemic_class) == []

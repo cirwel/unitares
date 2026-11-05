@@ -1744,3 +1744,159 @@ def test_receipt_and_report_show_both_boundaries(monkeypatch, tmp_path, change_a
     else:
         assert f"Instrument change recorded: `{change_at.isoformat()}`" in report
         assert "strictly before the recorded instrument change" in report
+
+
+# ---- attrition is reported first (2026-11-03) ----
+
+
+def _fixture(idx: int) -> OutcomeRow:
+    row = _row(idx, bad=False, risk=0.2)
+    return OutcomeRow(**{**row.__dict__, "detail": {"synthetic_calibration_fixture": True}})
+
+
+def _beam(idx: int) -> OutcomeRow:
+    row = _row(idx, bad=True, risk=None)
+    return OutcomeRow(**{**row.__dict__, "detail": {"harness": "beam"}})
+
+
+def test_build_matrix_counts_what_each_filter_removed(monkeypatch):
+    seen_kwargs = []
+    fetched = [_row(0, bad=False, risk=0.1), _fixture(1), _fixture(2), _beam(3)]
+
+    async def fake_fetch_rows(*_args, **kwargs):
+        seen_kwargs.append(kwargs)
+        return list(fetched)
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test", scopes=["task"], windows=[90], leads=[0]
+        )
+    )
+
+    # Fixtures reach the matrix so it can count them, and are removed there.
+    assert seen_kwargs[0]["exclude_controlled_fixtures"] is False
+    assert [(r.rows, r.fetched_rows, r.fixture_excluded, r.harness_excluded) for r in rows] == [
+        (1, 4, 2, 1)
+    ]
+    attrition = matrix_module.row_attrition(rows[0])
+    assert attrition.retained == 1 and attrition.starved
+
+
+def test_grouped_lanes_still_drop_fixtures_and_count_excluded_lanes(monkeypatch):
+    async def fake_fetch_rows(*_args, **_kwargs):
+        return [_row(0, bad=False, risk=0.1), _fixture(1), _beam(2), _beam(3)]
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+            group_by_harness_lane=True,
+            exclude_harness_lanes=("beam",),
+        )
+    )
+    assert [(r.harness_lane, r.rows, r.fixture_excluded, r.harness_excluded) for r in rows] == [
+        ("substrate", 1, 1, 2)
+    ]
+
+
+def _attrition_row(fetched: int, fixture: int, harness: int = 0, lead: float = 0.0):
+    return AblationMatrixRow(
+        scope="task", window_days=365, lead_minutes=lead,
+        rows=fetched - fixture - harness, bad=0, bad_clusters=0, bad_agents=0,
+        prior_state=0, prior_risk=0, baseline_auc=None, baseline_brier=None,
+        best_candidate=None, best_auc_delta=None, best_brier_improvement=None,
+        beats_both=False, conclusion="-",
+        fetched_rows=fetched, fixture_excluded=fixture, harness_excluded=harness,
+    )
+
+
+def test_report_leads_with_attrition_and_flags_a_starved_read():
+    # The 2026-11-03 registered read: 4,876 admitted, 4,649 removed by the fixture rule.
+    report = format_matrix_report(
+        [_attrition_row(4876, 4649), _attrition_row(4876, 4649, lead=30.0)],
+        read_protocol="registered",
+        read_id="eisv-outcome-grounding-2026-12-01",
+        fixture_rule="registered",
+    )
+    assert "**EVIDENCE STARVED.** In `task/365/0`, `task/365/30`" in report
+    assert "| task | 365 | 0 | 4876 | 4649 | 0 | 227 | 4.7% |" in report
+    # Ahead of every other section, after the read's identity lines.
+    assert report.index("Read ID:") < report.index("EVIDENCE STARVED")
+    assert report.index("## Evidence retained") < report.index("Fixture rule:")
+
+
+def test_report_shows_attrition_without_a_banner_when_most_rows_survive():
+    report = format_matrix_report([_attrition_row(4876, 2)])
+    assert "## Evidence retained" in report
+    assert "| task | 365 | 0 | 4876 | 2 | 0 | 4874 | 100.0% |" in report
+    assert "EVIDENCE STARVED" not in report
+
+
+def test_report_flags_an_empty_admission_as_starved():
+    report = format_matrix_report([_attrition_row(0, 0)])
+    assert "EVIDENCE STARVED" in report
+    assert "| task | 365 | 0 | 0 | 0 | 0 | 0 | - |" in report
+
+
+def test_rows_without_a_fetch_render_no_attrition_section():
+    report = format_matrix_report([dataclasses.replace(_attrition_row(10, 0), fetched_rows=None)])
+    assert "Evidence retained" not in report
+    assert "EVIDENCE STARVED" not in report
+
+
+@pytest.mark.parametrize("fixture, expected_rc", [(4649, 3), (2, 0)])
+def test_cli_writes_the_report_and_exits_nonzero_when_starved(
+    monkeypatch, tmp_path, capsys, fixture, expected_rc
+):
+    async def fake_build_matrix_from_db(_db_url, **_kwargs):
+        return [_attrition_row(4876, fixture)]
+
+    monkeypatch.setattr(matrix_module, "build_matrix_from_db", fake_build_matrix_from_db)
+    out = tmp_path / "matrix.md"
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol", "exploratory",
+            "--read-id", f"exploratory-attrition-{fixture}",
+            "--acknowledge-contamination",
+            "--db-url", "postgresql://unused",
+            "--read-ledger-dir", str(tmp_path),
+            "--output", str(out),
+        ]
+    )
+    rc = asyncio.run(matrix_module.main_async(args))
+    assert rc == expected_rc
+    assert "## Evidence retained" in out.read_text(encoding="utf-8")
+    stderr = capsys.readouterr().err
+    if expected_rc:
+        assert "evidence starved in task/365/0 (kept 227 of 4876)" in stderr
+    else:
+        assert "evidence starved" not in stderr
+
+
+@pytest.mark.parametrize("group_by_lane", [False, True])
+@pytest.mark.parametrize("fetched", [[], [_fixture(1), _fixture(2), _beam(3)]])
+def test_a_slice_with_nothing_left_still_reaches_the_starvation_guard(
+    monkeypatch, group_by_lane, fetched
+):
+    async def fake_fetch_rows(*_args, **_kwargs):
+        return list(fetched)
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+            group_by_harness_lane=group_by_lane,
+            exclude_harness_lanes=("beam",),
+        )
+    )
+    assert len(rows) == 1 and rows[0].rows == 0
+    assert rows[0].fetched_rows == len(fetched)
+    assert [key for key, _ in matrix_module.starved_slices(rows)] == [("task", 90, 0.0)]
+    assert "EVIDENCE STARVED" in format_matrix_report(rows)

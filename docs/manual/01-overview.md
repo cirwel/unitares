@@ -43,7 +43,8 @@ agents to read that record before continuing.
 ## 1.3 The core loop
 
 A process binds an identity, reads the record before acting, writes what it
-found, checks in after meaningful work, and records the outcome:
+found, checks in only at a meaningful milestone when it also holds a judgment
+the substrate cannot infer, and records the outcome:
 
 ```python
 session = start_session(force_new=True)
@@ -59,7 +60,7 @@ finding = store_finding(
 
 result = sync_state(
     client_session_id=csid,
-    response_text="Fixed the race and ran the focused tests.",
+    response_text="Tracing the flake changed my diagnosis to a shutdown race; I expect the synchronization fix to prevent recurrence.",
     complexity=0.4,
     confidence=0.7,
 )

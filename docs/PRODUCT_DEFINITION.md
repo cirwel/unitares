@@ -63,7 +63,8 @@ a new process:
    `client_session_id` on later calls, and search earlier findings before
    repeating work. Authorized reads can also precede binding.
 2. **Keep the evidence.** Store the diagnosis as a finding with code and test
-   references. Use `sync_state` after meaningful work.
+   references. Use `sync_state` only at a meaningful milestone when you also
+   hold a judgment the substrate cannot infer.
 3. **Join the review.** Request review, read the participating reviewer's
    response, and address objections. Preserve unresolved conditions.
 4. **Record the result.** Use `record_result` with outcome provenance, adding the

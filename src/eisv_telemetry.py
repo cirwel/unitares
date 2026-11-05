@@ -295,7 +295,26 @@ def build_behavioral_derivation(
     if outcome_history is None:
         missing_inputs.append("outcome_history")
 
-    from src.behavioral_sensor import compute_behavioral_sensor_components
+    from src.behavioral_sensor import (
+        compute_behavioral_sensor_components,
+        filter_behavioral_outcomes,
+        neutralize_sensor_self_loops_enabled,
+    )
+
+    active_neutralize = neutralize_sensor_self_loops_enabled()
+    filtered_outcomes = (
+        filter_behavioral_outcomes(list(outcome_history))
+        if (outcome_history is not None and active_neutralize)
+        else (list(outcome_history) if outcome_history is not None else None)
+    )
+    raw_agent_channel = (
+        calibration_signal.get("agent_channel")
+        if isinstance(calibration_signal, Mapping)
+        else None
+    )
+    agent_cal_channel = (
+        raw_agent_channel if isinstance(raw_agent_channel, Mapping) else None
+    )
 
     components = compute_behavioral_sensor_components(
         decision_history=list(decision_history),
@@ -311,10 +330,12 @@ def build_behavioral_derivation(
         continuity_E_input=_number(continuity_E_input),
         continuity_I_input=_number(continuity_I_input),
         continuity_S_input=_number(continuity_S_input),
-        outcome_history=list(outcome_history) if outcome_history is not None else None,
+        outcome_history=filtered_outcomes,
         tool_error_rate=_number(tool_error_rate),
         tool_call_velocity=_number(tool_call_velocity),
         unique_tools_ratio=_number(unique_tools_ratio),
+        neutralize_self_loops=active_neutralize,
+        agent_calibration_channel=agent_cal_channel,
     )
 
     return {
@@ -339,7 +360,7 @@ def build_behavioral_derivation(
                 }
             },
             "features": features,
-            "outcomes": _sanitize_outcomes(outcome_history),
+            "outcomes": _sanitize_outcomes(filtered_outcomes),
         },
         # S_history and V_history remain accepted by the legacy function
         # signature but are not read by its current formulas.  Naming that fact
@@ -424,6 +445,16 @@ def build_eisv_telemetry_envelope(
         "missing_inputs": ["derivation_trace"],
         "computed_observation": None,
     }
+    cal_sig = (
+        derivation.get("calibration_signal")
+        if isinstance(derivation, Mapping)
+        else None
+    )
+    agent_cal = (
+        cal_sig.get("agent_channel")
+        if isinstance(cal_sig, Mapping)
+        else None
+    )
 
     return {
         "schema": EISV_TELEMETRY_SCHEMA,
@@ -439,6 +470,11 @@ def build_eisv_telemetry_envelope(
                 "source": metrics.get("coherence_source") or "unknown",
                 "role": metrics.get("coherence_role") or "unknown",
             },
+            "agent_calibration": (
+                _json_safe(agent_cal)
+                if isinstance(agent_cal, Mapping)
+                else None
+            ),
             "behavioral": behavioral,
             "ode": {
                 "source": "ode_diagnostic",

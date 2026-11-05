@@ -97,6 +97,25 @@ first deployed change to the live EISV update path
 (`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
 2026-12-01; the read is described as amended after interim exposure.
 
+**Result, 2026-11-03.** The registered read ran once, on 2026-11-03 under the
+[run-date amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-11-03-run-date).
+It did not get to test EISV. The registered fixture rule removed 4,649 of the
+4,876 trusted outcomes in the window as test traffic, because nearly every
+trusted outcome after 2026-08-02 carries a scraped-confidence stamp. Only 227
+rows remained, which gave 29 and 28 bad clusters at leads 0 and 30, against a
+threshold of 150. This is closure for insufficient eligible evidence, and the
+inference is `INCONCLUSIVE`; it is not a measured null and not a refutation.
+The scheduled read track closes. The corrected-rule sensitivity run declared
+on 2026-09-02, which has no authority, restores the data: 4,874 rows and 449 bad
+clusters before T. On rework prediction it shows no detectable lift over the
+previous-outcome baseline (selective p 0.858 and 0.828), and its Brier error is
+slightly higher than the baseline's (Brier improvement −0.0012 and −0.0007). Its inference is
+`INCONCLUSIVE`, not refuted.
+Reopening requires a new premise. The full table, the power probe and the
+reconciliation are in the
+[stop rule's result section](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#result-2026-11-03)
+and on [#1425](https://github.com/cirwel/unitares/issues/1425).
+
 *Reading note, 2026-10-16. Non-normative; it changes no condition, threshold,
 cutoff, cohort, kill criterion or reopening rule, and the registered file is
 untouched.* Under the shipped estimator, PASS condition 1 (`selective p ≤
