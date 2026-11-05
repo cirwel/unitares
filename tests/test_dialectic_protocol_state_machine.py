@@ -13,25 +13,29 @@ This module bridges three verification layers:
    Parses the compile-time `traceScenario*` definitions and `#guard` assertions
    directly out of `formal/DialecticProtocol.lean` and executes them step-by-step
    against both `SpecState` and the live Python implementation (`DialecticSession`,
-   `_apply_reviewer_reassignment`, and `assess_rejection_stands`), preventing drift
-   even on CI runners without `lean` installed.
+   `_handle_reassign_reviewer`, `_close_standing_rejections`, and
+   `assess_rejection_stands`), preventing drift even on CI runners without `lean`
+   installed.
 3. **Hypothesis Stateful Refinement (`DialecticProtocolRefinementMachine`)**:
    Executes randomized multi-step sequences (`submit_thesis`, `submit_antithesis`,
-   `submit_synthesis`, `_apply_reviewer_reassignment`, `consult` non-protocol
+   `submit_synthesis`, `_handle_reassign_reviewer`, `consult` non-protocol
    messages, and `assess_rejection_stands` / `_close_standing_rejections` sweeps)
    simultaneously against the live Python implementation and `SpecState`,
-   checking exact state refinement and all 11 safety theorems at every step.
+   checking exact state refinement, element-by-element transcript equality, and
+   all 11 safety theorems at every step.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, patch
 
@@ -44,13 +48,18 @@ from src.dialectic_reviewed_work import (
     declaration_for_request,
     embed_reviewed_work_authorship,
 )
+from src.mcp_handlers.dialectic.auto_resolve import (
+    _CycleCounts,
+    _close_standing_rejections,
+)
 from src.mcp_handlers.dialectic.rejection_stands import (
     REJECTION_STANDS,
     assess_rejection_stands,
 )
+from src.mcp_handlers.dialectic import handlers as dialectic_handlers
 from src.mcp_handlers.dialectic.resolution_helpers import (
-    _apply_reviewer_reassignment,
-    _reviewer_authorship_conflict,
+    ACTIVE_SESSIONS,
+    _handle_reassign_reviewer as handle_reassign_reviewer,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -435,7 +444,7 @@ def spec_submit_synthesis(
 
 def spec_reassign_reviewer(s: SpecState, new_reviewer: int) -> Tuple[bool, SpecState]:
     """Mirror `reassignReviewer` in `formal/DialecticProtocol.lean`."""
-    if spec_is_recused(s, new_reviewer):
+    if new_reviewer == s.paused_agent or spec_is_recused(s, new_reviewer):
         return False, s
     phase_allowed = (
         s.phase in ("thesis", "antithesis")
@@ -523,46 +532,118 @@ def spec_close_standing_rejection(
         max_rounds=s.max_rounds,
         phase="failed",
         synthesis_round=s.synthesis_round,
-        awaiting_facilitation=True,
+        awaiting_facilitation=False,
         transcript=s.transcript,
     )
+
+
+def spec_can_claim_resolve_saga(s: SpecState, target_status: str) -> bool:
+    """Mirror `canClaimResolveSaga` in `formal/DialecticProtocol.lean`."""
+    if s.phase in ("resolved", "failed"):
+        return False
+    if target_status == "resolved":
+        return s.phase == "synthesis" and not spec_assigned_reviewer_recused(s)
+    if target_status == "failed":
+        return True
+    return False
 
 
 def _apply_live_reassignment(
     session: DialecticSession, new_reviewer_uuid: str
 ) -> bool:
-    """Execute the production phase gate + `_apply_reviewer_reassignment` against `session`."""
-    awaiting = bool(getattr(session, "awaiting_facilitation", False))
-    recused_synthesis = bool(
-        session.phase == DialecticPhase.SYNTHESIS
-        and _reviewer_authorship_conflict(session, session.reviewer_agent_id)
+    """Execute the production `handle_reassign_reviewer` handler against `session`."""
+    ACTIVE_SESSIONS[session.session_id] = session
+    fake_meta = {
+        uuid: {"status": "active"}
+        for idx, uuid in AGENT_UUIDS.items()
+        if idx != SYSTEM_AGENT_ID
+    }
+    fake_mcp = SimpleNamespace(
+        load_metadata_async=AsyncMock(return_value=None),
+        agent_metadata=fake_meta,
     )
-    if (
-        session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS)
-        and not awaiting
-        and not recused_synthesis
-    ):
-        return False
-
-    with patch(
-        "src.mcp_handlers.dialectic.resolution_helpers._append_protocol_message",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "src.mcp_handlers.dialectic.resolution_helpers._emit_request_reviewer_reassigned",
-        new=AsyncMock(return_value=None),
-    ):
-        try:
-            asyncio.run(
-                _apply_reviewer_reassignment(
-                    session.session_id,
-                    session,
-                    new_reviewer_uuid,
-                    reason="state_machine_test",
+    try:
+        with patch.object(
+            dialectic_handlers,
+            "_reviewer_reassignment_actor",
+            return_value="operator",
+        ), patch.object(
+            dialectic_handlers,
+            "mcp_server",
+            fake_mcp,
+        ), patch(
+            "src.mcp_handlers.dialectic.resolution_helpers._append_protocol_message",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "src.mcp_handlers.dialectic.resolution_helpers._emit_request_reviewer_reassigned",
+            new=AsyncMock(return_value=None),
+        ):
+            res = asyncio.run(
+                handle_reassign_reviewer(
+                    {
+                        "session_id": session.session_id,
+                        "new_reviewer_id": new_reviewer_uuid,
+                        "reason": "state_machine_test",
+                    }
                 )
             )
-            return True
-        except RuntimeError:
-            return False
+        payload = json.loads(res[0].text)
+        return bool(payload.get("success") is True)
+    finally:
+        ACTIVE_SESSIONS.pop(session.session_id, None)
+
+
+def _apply_live_close_standing_rejection(
+    session: DialecticSession, eval_now: datetime, is_orchestrated: bool
+) -> bool:
+    """Execute the production `_close_standing_rejections` sweeper against `session`."""
+    ACTIVE_SESSIONS[session.session_id] = session
+    row = {
+        "session_id": session.session_id,
+        "awaiting_facilitation": session.awaiting_facilitation,
+        "phase": session.phase.value,
+        "reviewer_agent_id": session.reviewer_agent_id,
+        "paused_agent_id": session.paused_agent_id,
+        "paused_agent_state": session.paused_agent_state,
+        "updated_at": eval_now.isoformat(),
+        "messages": [m.to_dict() for m in session.transcript],
+    }
+
+    def _pinned_assess(*args, **kwargs):
+        kwargs["now"] = eval_now
+        return assess_rejection_stands(*args, **kwargs)
+
+    try:
+        with patch(
+            "src.mcp_handlers.dialectic.auto_resolve.has_inflight_saga_async",
+            new=AsyncMock(return_value=False),
+        ), patch(
+            "src.mcp_handlers.dialectic.auto_resolve.get_session_async",
+            new=AsyncMock(return_value=row),
+        ), patch(
+            "src.mcp_handlers.dialectic.auto_resolve._attempt_guarded_write",
+            new=AsyncMock(return_value=True),
+        ), patch(
+            "src.mcp_handlers.dialectic.handlers._has_orchestrated_reviewer_budget",
+            side_effect=lambda _row, _rid: is_orchestrated,
+        ), patch(
+            "src.mcp_handlers.dialectic.rejection_stands.continuation_window_s",
+            return_value=(300.0, 900.0),
+        ), patch(
+            "src.mcp_handlers.dialectic.rejection_stands.assess_rejection_stands",
+            side_effect=_pinned_assess,
+        ):
+            closed_ids = asyncio.run(
+                _close_standing_rejections(
+                    _CycleCounts(),
+                    [],
+                    [row],
+                    decision_read_ts=eval_now,
+                )
+            )
+        return session.session_id in closed_ids
+    finally:
+        ACTIVE_SESSIONS.pop(session.session_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -575,8 +656,8 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
     """
     Parse `traceScenario*` and `#guard` assertions directly from
     `formal/DialecticProtocol.lean` and execute them against both `SpecState`
-    and the live Python `DialecticSession` / `_apply_reviewer_reassignment` /
-    `assess_rejection_stands` implementation.
+    and the live Python `DialecticSession` / `handle_reassign_reviewer` /
+    `_close_standing_rejections` implementation.
     """
     code_only = _strip_lean_comments(LEAN_SPEC_PATH.read_text(encoding="utf-8"))
 
@@ -718,26 +799,10 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
                 eval_now = base_clock + timedelta(
                     seconds=(tick + 7200) if win_end else tick
                 )
-                payload = assess_rejection_stands(
-                    session.transcript,
-                    paused_agent_id=session.paused_agent_id,
-                    reviewer_agent_id=session.reviewer_agent_id,
-                    awaiting_facilitation=session.awaiting_facilitation,
-                    now=eval_now,
-                    is_orchestrated=lambda _rev, _o=is_orch: _o,
-                    wait_s=300.0,
-                    total_s=900.0,
+                live_closed = _apply_live_close_standing_rejection(
+                    session, eval_now, is_orch
                 )
-                live_can_close = (
-                    session.phase == DialecticPhase.SYNTHESIS
-                    and not _reviewer_authorship_conflict(
-                        session, session.reviewer_agent_id
-                    )
-                    and payload is not None
-                )
-                assert live_can_close == closed
-                if live_can_close:
-                    session.phase = DialecticPhase.FAILED
+                assert live_closed == closed
             elif "reassignReviewer" in line:
                 rr_match = re.search(r"reassignReviewer\s+\w+\s+(\d+)", line)
                 assert rr_match
@@ -993,6 +1058,7 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         assert self.session is not None and self.spec is not None
         prev_phase = self.session.phase.value
         prev_rank = PHASE_RANK[prev_phase]
+        prev_round = self.session.synthesis_round
         prev_len = len(self.session.transcript)
 
         objection_before = self.session._reviewer_objection_stands()
@@ -1048,10 +1114,26 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             assert res["success"] is False
             assert len(self.session.transcript) == prev_len
 
+        # Theorem 9: First self-clear attempt routes to facilitation without resolving
+        if (
+            prev_phase == "synthesis"
+            and not reviewer_recused_before
+            and prev_round <= self.session.max_synthesis_rounds
+            and not pending_before
+            and objection_before
+            and not answered_before
+            and is_paused
+            and agrees is True
+        ):
+            assert res["success"] is True
+            assert not res.get("converged", False)
+            assert self.session.phase == DialecticPhase.SYNTHESIS
+            assert self.session.awaiting_facilitation is True
+
     @rule(new_reviewer_idx=st.integers(min_value=0, max_value=3))
     def step_reassign_reviewer(self, new_reviewer_idx: int):
         """
-        Execute live `_apply_reviewer_reassignment` and `spec_reassign_reviewer`
+        Execute live `handle_reassign_reviewer` and `spec_reassign_reviewer`
         across all phases (including reopening `FAILED` sessions with
         `awaiting_facilitation=True` and rewinding conflicted `SYNTHESIS` sessions).
         """
@@ -1062,6 +1144,7 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         was_awaiting = self.session.awaiting_facilitation
         was_recused = spec_assigned_reviewer_recused(self.spec)
         candidate_recused = spec_is_recused(self.spec, new_reviewer_idx)
+        candidate_is_paused = new_reviewer_idx == self.spec.paused_agent
         objection_before = self.session._reviewer_objection_stands()
 
         ok_live = _apply_live_reassignment(
@@ -1072,8 +1155,8 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
 
         assert ok_live == ok_spec
 
-        # Theorem 6c: Recused candidate cannot be assigned as reviewer
-        if candidate_recused:
+        # Theorem 6c & 6d: Recused candidate or paused agent (`SELF_REVIEW`) cannot be assigned
+        if candidate_recused or candidate_is_paused:
             assert ok_live is False
 
         # Theorem 8: When not awaiting facilitation and not replacing a recused
@@ -1081,13 +1164,12 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         if not was_awaiting and not was_recused:
             assert PHASE_RANK[self.session.phase.value] == old_rank
 
-        # Theorem 5: Reassignment between independent reviewers preserves standing objection
-        if (
-            old_reviewer_idx is not None
-            and old_reviewer_idx != self.spec.paused_agent
-            and new_reviewer_idx != self.spec.paused_agent
-        ):
+        # Theorem 5: Reassignment from an independent reviewer preserves standing
+        # objection and never transitions a non-resolved session to resolved
+        if old_reviewer_idx is not None and old_reviewer_idx != self.spec.paused_agent:
             assert self.session._reviewer_objection_stands() == objection_before
+        if old_phase != "resolved":
+            assert self.session.phase != DialecticPhase.RESOLVED
 
     @rule(sender_idx=st.integers(min_value=0, max_value=3))
     def step_append_consult_entry(self, sender_idx: int):
@@ -1137,8 +1219,7 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
     ):
         """
         Verify `assess_rejection_stands` equivalence with `spec_assess_rejection_stands`
-        and apply the `_close_standing_rejections` transition (`spec_close_standing_rejection`)
-        when eligible so subsequent steps can test reopening `FAILED` facilitation sessions.
+        and execute the real `_close_standing_rejections` sweeper (`spec_close_standing_rejection`).
         """
         assert self.session is not None and self.spec is not None
         eval_now = self.clock + timedelta(seconds=7200 if window_ended else 0)
@@ -1167,25 +1248,22 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             assert payload["action"] == REJECTION_STANDS
             assert payload["reason"] == REJECTION_STANDS
 
-        # Apply `_close_standing_rejections` (`auto_resolve.py:540-620`) transition
+        # Execute real `_close_standing_rejections` (`auto_resolve.py:512-655`)
         closed_spec, next_spec = spec_close_standing_rejection(
             self.spec, is_orchestrated=is_orchestrated, window_ended=window_ended
         )
-        live_can_close = (
-            self.session.phase == DialecticPhase.SYNTHESIS
-            and not _reviewer_authorship_conflict(
-                self.session, self.session.reviewer_agent_id
-            )
-            and payload is not None
+        live_closed = _apply_live_close_standing_rejection(
+            self.session, eval_now=eval_now, is_orchestrated=is_orchestrated
         )
-        assert live_can_close == closed_spec
-        if live_can_close:
-            self.session.phase = DialecticPhase.FAILED
-            self.spec = next_spec
+        assert live_closed == closed_spec
+        self.spec = next_spec
+        if live_closed:
+            assert self.session.phase == DialecticPhase.FAILED
+            assert self.session.awaiting_facilitation is False
 
     @invariant()
     def check_refinement_bisimulation(self):
-        """Live `DialecticSession` and Lean mirror `SpecState` agree on all state projections."""
+        """Live `DialecticSession` and Lean mirror `SpecState` agree on all state projections and transcript contents."""
         if self.session is None or self.spec is None:
             return
 
@@ -1199,6 +1277,10 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         assert self.session.synthesis_round == self.spec.synthesis_round
         assert self.session.awaiting_facilitation == self.spec.awaiting_facilitation
         assert len(self.session.transcript) == len(self.spec.transcript)
+        for live_m, spec_m in zip(self.session.transcript, self.spec.transcript):
+            assert live_m.phase == spec_m.phase
+            assert live_m.agent_id == AGENT_UUIDS[spec_m.sender]
+            assert live_m.agrees == spec_m.agrees
 
         assert (
             self.session._reviewer_objection_stands()
@@ -1212,6 +1294,14 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             self.session._paused_agent_already_answered_current_objection()
             == spec_paused_already_answered(self.spec)
         )
+
+        # Theorem 7: BEAM saga phase & authority guard invariants
+        if spec_can_claim_resolve_saga(self.spec, "resolved"):
+            assert self.session.phase == DialecticPhase.SYNTHESIS
+            assert not spec_assigned_reviewer_recused(self.spec)
+        if self.session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
+            assert not spec_can_claim_resolve_saga(self.spec, "resolved")
+            assert not spec_can_claim_resolve_saga(self.spec, "failed")
 
 
 TestDialecticProtocolStateMachine = DialecticProtocolRefinementMachine.TestCase
