@@ -2,19 +2,19 @@
   UNITARES Dialectic Protocol & Resolution Authority State Machine
   ================================================================
 
-  Mechanized Lean 4 specification of the peer-review dialectic state machine
+  Mechanized Lean 4 specification of the Python peer-review dialectic state machine
   (`src/dialectic_protocol.py`), reviewer recusal (`src/dialectic_reviewed_work.py`),
-  reviewer reassignment (`src/mcp_handlers/dialectic/resolution_helpers.py`),
+  reviewer reassignment (`src/mcp_handlers/dialectic/resolution_helpers.py`), and
   standing-rejection facilitation exit (`src/mcp_handlers/dialectic/rejection_stands.py`
-  and `src/mcp_handlers/dialectic/auto_resolve.py`), and the BEAM cross-runtime
-  resolution saga phase guard (`elixir/lease_plane/lib/unitares_lease_plane/dialectic_saga.ex`).
+  and `src/mcp_handlers/dialectic/auto_resolve.py`).
 
-  Every theorem in this file is kernel-checked with zero `sorry`s and zero
-  user-defined axioms, and `#guard` assertions verify executable trace vectors
-  at compile time. The companion stateful test suite
-  (`tests/test_dialectic_protocol_state_machine.py`) parses the `#guard` vectors
-  from this file to verify that the Python mirror and live `DialecticSession`
-  cannot drift from the Lean specification.
+  When the Lean 4 toolchain (`lean`) is installed on the host or CI runner,
+  `test_lean4_kernel_typechecks_dialectic_protocol` invokes the Lean kernel on
+  this file to verify every theorem with zero `sorry`s and zero user-defined
+  axioms and to evaluate the compile-time `#guard` trace vectors. On runners
+  without `lean`, `test_lean4_guard_scenarios_match_python_mirror_and_live_session`
+  parses the `traceScenario*` definitions and `#guard` assertions from this file
+  and executes them against both `SpecState` and the live Python implementation.
 -/
 
 namespace Unitares.DialecticProtocol
@@ -442,31 +442,20 @@ def closeStandingRejection (s : State) (isOrchestrated : Bool) (windowEnded : Bo
     .ok { s with phase := .failed, awaitingFacilitation := false } false
 
 /--
-  Whether the session row's `status` column is terminal (`status in ["resolved", "failed"]`
-  in `UnitaresLeasePlane.DialecticSaga.guard_session_phase`, `dialectic_saga.ex:1299`).
+  Non-protocol advisory `consult` transcript entry (`NON_PROTOCOL_PHASES = {"consult"}`
+  in `src/dialectic_protocol.py:424`). Appends a `.consult` message to `s.transcript`
+  without altering `phase`, `reviewerAgent`, `synthesisRound`, or `awaitingFacilitation`.
 -/
-def Phase.isTerminalStatus : Phase → Bool
-  | .resolved => true
-  | .failed   => true
-  | _         => false
-
-/--
-  BEAM resolution saga phase and authority guard
-  (`UnitaresLeasePlane.DialecticSaga.guard_session_phase` and
-  `validate_resolution_authority` in `dialectic_saga.ex:1278-1397`).
-  - A session with terminal row status (`resolved` or `failed`) cannot claim any resolution saga.
-  - A saga targeting `resolved` additionally requires `s.phase == .synthesis`
-    and an unrecused reviewer (`!assignedReviewerRecused s`).
-  - A saga targeting `failed` is permitted from any non-terminal phase (`thesis`, `antithesis`, `synthesis`).
--/
-def canClaimResolveSaga (s : State) (targetStatus : Phase) : Bool :=
-  if s.phase.isTerminalStatus then
-    false
-  else
-    match targetStatus with
-    | .resolved => (s.phase == .synthesis) && !assignedReviewerRecused s
-    | .failed => true
-    | _ => false
+def appendConsult (s : State) (sender : AgentId) : State :=
+  let consultMsg : Message := {
+    phase := .consult,
+    sender := sender,
+    hasRootCause := false,
+    hasConditions := false,
+    hasReasoning := true,
+    agrees := none
+  }
+  { s with transcript := s.transcript ++ [consultMsg] }
 
 /-!
   ## Mechanized Safety & Authority Theorems
@@ -695,25 +684,56 @@ theorem recused_author_cannot_advance_or_resolve (s : State) (m : Message) (cand
   · simp [reassignReviewer]
 
 /--
-  Theorem 7 (BEAM Saga Phase & Authority Guard Correctness):
-  - `canClaimResolveSaga s .resolved = true` implies `s.phase = .synthesis`
-    and `assignedReviewerRecused s = false`.
-  - Terminal sessions (`s.phase.isTerminalStatus = true`, i.e. `status` in `["resolved", "failed"]`)
-    never allow claiming any resolution saga (`canClaimResolveSaga s target = false`).
+  Theorem 7 (Non-Protocol Consult Entries Preserve All Protocol & Authority Predicates):
+  Appending an advisory `.consult` transcript entry (`appendConsult s sender`)
+  preserves `phase`, `reviewerAgent`, `synthesisRound`, `awaitingFacilitation`,
+  `reviewerObjectionStands`, `reviewerVerdictPending`,
+  `pausedAlreadyAnsweredCurrentObjection`, `lastIndepVerdictSender`,
+  `reviewerAnsweredReply`, and `assessRejectionStands` identically.
 -/
-theorem saga_resolve_requires_synthesis_phase (s : State) (target : Phase) :
-    (canClaimResolveSaga s .resolved = true →
-      (s.phase = .synthesis ∧ assignedReviewerRecused s = false)) ∧
-    (s.phase.isTerminalStatus = true → canClaimResolveSaga s target = false) := by
-  constructor
-  · intro hClaim
-    unfold canClaimResolveSaga Phase.isTerminalStatus at hClaim
-    cases hPhase : s.phase <;>
-    cases hRec : assignedReviewerRecused s <;>
-    simp_all
-  · intro hTerm
-    unfold canClaimResolveSaga
-    simp [hTerm]
+theorem consult_preserves_authority_predicates (s : State) (sender : AgentId)
+    (rev : AgentId) (isOrch : Bool) (winEnd : Bool) :
+    (appendConsult s sender).phase = s.phase ∧
+    (appendConsult s sender).reviewerAgent = s.reviewerAgent ∧
+    (appendConsult s sender).synthesisRound = s.synthesisRound ∧
+    (appendConsult s sender).awaitingFacilitation = s.awaitingFacilitation ∧
+    reviewerObjectionStands (appendConsult s sender) = reviewerObjectionStands s ∧
+    reviewerVerdictPending (appendConsult s sender) = reviewerVerdictPending s ∧
+    pausedAlreadyAnsweredCurrentObjection (appendConsult s sender) =
+      pausedAlreadyAnsweredCurrentObjection s ∧
+    lastIndepVerdictSender (appendConsult s sender) = lastIndepVerdictSender s ∧
+    reviewerAnsweredReply (appendConsult s sender) rev = reviewerAnsweredReply s rev ∧
+    assessRejectionStands (appendConsult s sender) isOrch winEnd =
+      assessRejectionStands s isOrch winEnd := by
+  have hObj : reviewerObjectionStands (appendConsult s sender) = reviewerObjectionStands s := by
+    simp [appendConsult, reviewerObjectionStands, List.reverse_append, scanObjectionStands]
+  have hPend : reviewerVerdictPending (appendConsult s sender) = reviewerVerdictPending s := by
+    unfold appendConsult reviewerVerdictPending
+    cases s.reviewerAgent
+    · rfl
+    · rename_i r
+      dsimp
+      have hNotAnti : (MsgPhase.consult == MsgPhase.antithesis) = false := rfl
+      have hNotSynth : (MsgPhase.consult == MsgPhase.synthesis) = false := rfl
+      cases (r == s.pausedAgent) <;> simp [List.any_append, hNotAnti, hNotSynth]
+  have hAns : pausedAlreadyAnsweredCurrentObjection (appendConsult s sender) =
+      pausedAlreadyAnsweredCurrentObjection s := by
+    simp [appendConsult, pausedAlreadyAnsweredCurrentObjection, List.reverse_append, scanAlreadyAnswered]
+  have hLast : lastIndepVerdictSender (appendConsult s sender) = lastIndepVerdictSender s := by
+    simp [appendConsult, lastIndepVerdictSender, List.reverse_append, scanLastIndepVerdictSender]
+  have hRep : ∀ r, reviewerAnsweredReply (appendConsult s sender) r = reviewerAnsweredReply s r := by
+    intro r
+    simp [appendConsult, reviewerAnsweredReply, scanReviewerAnsweredReply,
+      List.reverse_append, scanReviewerAnsweredReply.loop]
+  have hAssess : assessRejectionStands (appendConsult s sender) isOrch winEnd =
+      assessRejectionStands s isOrch winEnd := by
+    unfold assessRejectionStands
+    have hPhaseFac : (appendConsult s sender).awaitingFacilitation = s.awaitingFacilitation := rfl
+    have hPhaseRev : (appendConsult s sender).reviewerAgent = s.reviewerAgent := rfl
+    have hPhasePaused : (appendConsult s sender).pausedAgent = s.pausedAgent := rfl
+    rw [hPhaseFac, hPhaseRev, hPhasePaused, hObj, hLast]
+    cases s.awaitingFacilitation <;> cases s.reviewerAgent <;> simp [hRep]
+  exact ⟨rfl, rfl, rfl, rfl, hObj, hPend, hAns, hLast, hRep rev, hAssess⟩
 
 /--
   Theorem 8 (DAG Phase Rank Monotonicity & Controlled Reassignment Reopen):
@@ -834,15 +854,20 @@ theorem rejection_stands_sweep_only_fails (s : State) (isOrch : Bool) (winEnd : 
     cases assessRejectionStands s isOrch winEnd <;>
     simp_all
   · intro next c hOk
-    unfold closeStandingRejection at hOk
+    cases next
+    unfold closeStandingRejection assessRejectionStands at hOk
     cases hPhase : s.phase <;>
     cases hRec : assignedReviewerRecused s <;>
-    cases hAssess : assessRejectionStands s isOrch winEnd <;>
-    simp_all
-    rcases hOk with ⟨rfl, rfl⟩
-    unfold assessRejectionStands at hAssess
     cases hFac : s.awaitingFacilitation <;>
-    cases hRev : s.reviewerAgent <;>
+    cases hRev : s.reviewerAgent
+    all_goals simp_all
+    rename_i rev
+    cases hSelf : (rev == s.pausedAgent) <;>
+    cases hObj : reviewerObjectionStands s <;>
+    cases hLast : (lastIndepVerdictSender s != some rev) <;>
+    cases hAns : reviewerAnsweredReply s rev <;>
+    cases isOrch <;>
+    cases winEnd <;>
     simp_all
 
 /-!
@@ -925,5 +950,30 @@ def traceScenario3 : State :=
 #guard traceScenario3.phase == .synthesis
 #guard traceScenario3.reviewerAgent == some 3
 #guard traceScenario3.transcript.length == 2
+
+-- Scenario 4: Thesis content validation refusal (`hasRootCause = false` or
+-- `hasConditions = false` in `.recovery`), `reviewerVerdictPending == true`
+-- after independent antithesis blocking premature self-clear, `appendConsult`
+-- preserving all predicates, and `reviewerAnsweredReply` (`stage = 1` branch)
+-- allowing `closeStandingRejection` even when `isOrchestrated = false` and `windowEnded = false`.
+def traceScenario4 : State :=
+  let s0 := mkInitState 0 (some 1) [] .recovery 4
+  let s1 := (submitThesis s0 { phase := .thesis, sender := 0, hasRootCause := false, hasConditions := true }).state
+  let s2 := (submitThesis s1 { phase := .thesis, sender := 0, hasRootCause := true, hasConditions := false }).state
+  let s3 := (submitThesis s2 { phase := .thesis, sender := 0, hasRootCause := true, hasConditions := true }).state
+  let s4 := (submitAntithesis s3 { phase := .antithesis, sender := 1 }).state
+  let s5 := (submitSynthesis s4 { phase := .synthesis, sender := 0, agrees := some true }).state
+  let s6 := appendConsult s5 2
+  let s7 := (submitSynthesis s6 { phase := .synthesis, sender := 1, agrees := some false }).state
+  let s8 := (submitSynthesis s7 { phase := .synthesis, sender := 0, agrees := some true }).state
+  let s9 := (submitSynthesis s8 { phase := .synthesis, sender := 1, agrees := some false }).state
+  let s10 := (closeStandingRejection s9 false false).state
+  s10
+
+#guard traceScenario4.phase == .failed
+#guard traceScenario4.awaitingFacilitation == false
+#guard traceScenario4.synthesisRound == 4
+#guard traceScenario4.transcript.length == 6
+#guard reviewerObjectionStands traceScenario4 == true
 
 end Unitares.DialecticProtocol

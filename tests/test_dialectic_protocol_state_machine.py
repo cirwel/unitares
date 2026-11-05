@@ -8,21 +8,21 @@ This module bridges three verification layers:
 1. **Lean 4 Kernel Proof Verification (`formal/DialecticProtocol.lean`)**:
    Verifies that the mechanized Lean 4 formalization declares all 11 safety and
    authority theorems with zero `sorry`s and zero user axioms, and invokes the
-   `lean` kernel when installed on the host.
+   `lean` kernel when installed on the host/runner (skipping the subprocess
+   check on Python-only CI runners without `lean`).
 2. **Parsed `#guard` Trace Conformance (`formal/DialecticProtocol.lean`)**:
    Parses the compile-time `traceScenario*` definitions and `#guard` assertions
    directly out of `formal/DialecticProtocol.lean` and executes them step-by-step
    against both `SpecState` and the live Python implementation (`DialecticSession`,
    `_handle_reassign_reviewer`, `_close_standing_rejections`, and
-   `assess_rejection_stands`), preventing drift even on CI runners without `lean`
-   installed.
+   `assess_rejection_stands`) on every pytest run.
 3. **Hypothesis Stateful Refinement (`DialecticProtocolRefinementMachine`)**:
    Executes randomized multi-step sequences (`submit_thesis`, `submit_antithesis`,
    `submit_synthesis`, `_handle_reassign_reviewer`, `consult` non-protocol
    messages, and `assess_rejection_stands` / `_close_standing_rejections` sweeps)
    simultaneously against the live Python implementation and `SpecState`,
-   checking exact state refinement, element-by-element transcript equality, and
-   all 11 safety theorems at every step.
+   checking state refinement, element-by-element transcript equality, and the
+   11 protocol safety properties at every step.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ EXPECTED_LEAN_THEOREMS = (
     "repeat_self_clear_does_not_grow_transcript",
     "reassignment_preserves_standing_objection",
     "recused_author_cannot_advance_or_resolve",
-    "saga_resolve_requires_synthesis_phase",
+    "consult_preserves_authority_predicates",
     "phase_rank_monotonic",
     "first_self_clear_attempt_triggers_facilitation",
     "rejection_stands_sweep_only_fails",
@@ -93,7 +93,7 @@ EXPECTED_LEAN_DEFS = (
     "reassignReviewer",
     "assessRejectionStands",
     "closeStandingRejection",
-    "canClaimResolveSaga",
+    "appendConsult",
 )
 
 SYSTEM_AGENT_ID = 999
@@ -537,15 +537,27 @@ def spec_close_standing_rejection(
     )
 
 
-def spec_can_claim_resolve_saga(s: SpecState, target_status: str) -> bool:
-    """Mirror `canClaimResolveSaga` in `formal/DialecticProtocol.lean`."""
-    if s.phase in ("resolved", "failed"):
-        return False
-    if target_status == "resolved":
-        return s.phase == "synthesis" and not spec_assigned_reviewer_recused(s)
-    if target_status == "failed":
-        return True
-    return False
+def spec_append_consult(s: SpecState, sender: int) -> SpecState:
+    """Mirror `appendConsult` in `formal/DialecticProtocol.lean`."""
+    consult_msg = SpecMessage(
+        phase="consult",
+        sender=sender,
+        has_root_cause=False,
+        has_conditions=False,
+        has_reasoning=True,
+        agrees=None,
+    )
+    return SpecState(
+        paused_agent=s.paused_agent,
+        reviewer_agent=s.reviewer_agent,
+        declared_authors=s.declared_authors,
+        session_type=s.session_type,
+        max_rounds=s.max_rounds,
+        phase=s.phase,
+        synthesis_round=s.synthesis_round,
+        awaiting_facilitation=s.awaiting_facilitation,
+        transcript=s.transcript + (consult_msg,),
+    )
 
 
 def _apply_live_reassignment(
@@ -728,22 +740,31 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
                 continue
 
             sender_match = re.search(r"sender\s*:=\s*(\d+)", line)
+            rc_match = re.search(r"hasRootCause\s*:=\s*(true|false)", line)
+            cond_match = re.search(r"hasConditions\s*:=\s*(true|false)", line)
             agrees_match = re.search(
                 r"agrees\s*:=\s*(none|some\s+true|some\s+false)", line
             )
             if "submitThesis" in line and sender_match:
                 sender = int(sender_match.group(1))
+                has_rc = rc_match.group(1) == "true" if rc_match else True
+                has_cond = cond_match.group(1) == "true" if cond_match else True
                 _, spec = spec_submit_thesis(
                     spec,
-                    SpecMessage(phase="thesis", sender=sender),
+                    SpecMessage(
+                        phase="thesis",
+                        sender=sender,
+                        has_root_cause=has_rc,
+                        has_conditions=has_cond,
+                    ),
                 )
                 session.submit_thesis(
                     DialecticMessage(
                         phase="thesis",
                         agent_id=AGENT_UUIDS[sender],
                         timestamp=next_ts(),
-                        root_cause="rc",
-                        proposed_conditions=["c"],
+                        root_cause="rc" if has_rc else "   ",
+                        proposed_conditions=["c"] if has_cond else [],
                     )
                 )
             elif "submitAntithesis" in line and sender_match:
@@ -785,6 +806,19 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
                         root_cause="rc",
                         reasoning="r",
                         agrees=agrees,
+                    )
+                )
+            elif "appendConsult" in line:
+                ac_match = re.search(r"appendConsult\s+\w+\s+(\d+)", line)
+                assert ac_match
+                sender = int(ac_match.group(1))
+                spec = spec_append_consult(spec, sender)
+                session.transcript.append(
+                    DialecticMessage(
+                        phase="consult",
+                        agent_id=AGENT_UUIDS[sender],
+                        timestamp=next_ts(),
+                        reasoning="consult note",
                     )
                 )
             elif "closeStandingRejection" in line:
@@ -1173,13 +1207,34 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
 
     @rule(sender_idx=st.integers(min_value=0, max_value=3))
     def step_append_consult_entry(self, sender_idx: int):
-        """Non-protocol `consult` transcript entries never alter phase, objection state, or last-update clock."""
+        """
+        Theorem 7 (`consult_preserves_authority_predicates`): non-protocol `consult`
+        transcript entries preserve phase, reviewer, round, facilitation flag,
+        last-update timestamp, and all resolution-authority predicates.
+        """
         assert self.session is not None and self.spec is not None
+        phase_before = self.session.phase
+        rev_before = self.session.reviewer_agent_id
+        round_before = self.session.synthesis_round
+        fac_before = self.session.awaiting_facilitation
         last_ts_before = self.session.get_last_update_timestamp()
         objection_before = self.session._reviewer_objection_stands()
         pending_before = self.session._reviewer_verdict_pending()
         answered_before = (
             self.session._paused_agent_already_answered_current_objection()
+        )
+        assess_before = (
+            assess_rejection_stands(
+                self.session.transcript,
+                paused_agent_id=self.session.paused_agent_id,
+                reviewer_agent_id=self.session.reviewer_agent_id,
+                awaiting_facilitation=self.session.awaiting_facilitation,
+                now=self.clock + timedelta(seconds=7200),
+                is_orchestrated=lambda _rev: True,
+                wait_s=300.0,
+                total_s=900.0,
+            )
+            is not None
         )
 
         consult_msg = DialecticMessage(
@@ -1189,19 +1244,12 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             reasoning="External advisory consult note",
         )
         self.session.transcript.append(consult_msg)
-        self.spec = SpecState(
-            paused_agent=self.spec.paused_agent,
-            reviewer_agent=self.spec.reviewer_agent,
-            declared_authors=self.spec.declared_authors,
-            session_type=self.spec.session_type,
-            max_rounds=self.spec.max_rounds,
-            phase=self.spec.phase,
-            synthesis_round=self.spec.synthesis_round,
-            awaiting_facilitation=self.spec.awaiting_facilitation,
-            transcript=self.spec.transcript
-            + (SpecMessage(phase="consult", sender=sender_idx),),
-        )
+        self.spec = spec_append_consult(self.spec, sender_idx)
 
+        assert self.session.phase == phase_before
+        assert self.session.reviewer_agent_id == rev_before
+        assert self.session.synthesis_round == round_before
+        assert self.session.awaiting_facilitation == fac_before
         assert self.session.get_last_update_timestamp() == last_ts_before
         assert self.session._reviewer_objection_stands() == objection_before
         assert self.session._reviewer_verdict_pending() == pending_before
@@ -1209,6 +1257,20 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             self.session._paused_agent_already_answered_current_objection()
             == answered_before
         )
+        assess_after = (
+            assess_rejection_stands(
+                self.session.transcript,
+                paused_agent_id=self.session.paused_agent_id,
+                reviewer_agent_id=self.session.reviewer_agent_id,
+                awaiting_facilitation=self.session.awaiting_facilitation,
+                now=self.clock + timedelta(seconds=7200),
+                is_orchestrated=lambda _rev: True,
+                wait_s=300.0,
+                total_s=900.0,
+            )
+            is not None
+        )
+        assert assess_after == assess_before
 
     @rule(
         window_ended=st.booleans(),
@@ -1294,14 +1356,6 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
             self.session._paused_agent_already_answered_current_objection()
             == spec_paused_already_answered(self.spec)
         )
-
-        # Theorem 7: BEAM saga phase & authority guard invariants
-        if spec_can_claim_resolve_saga(self.spec, "resolved"):
-            assert self.session.phase == DialecticPhase.SYNTHESIS
-            assert not spec_assigned_reviewer_recused(self.spec)
-        if self.session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
-            assert not spec_can_claim_resolve_saga(self.spec, "resolved")
-            assert not spec_can_claim_resolve_saga(self.spec, "failed")
 
 
 TestDialecticProtocolStateMachine = DialecticProtocolRefinementMachine.TestCase
