@@ -12,17 +12,13 @@ Performance:
 Claude Desktop compatible: All operations are async and non-blocking.
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
-from types import SimpleNamespace
-import asyncio
 import hashlib
-import json
 import os
-import re
 import secrets
 import threading
 
@@ -72,34 +68,22 @@ import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
-from ..identity.stable_session import audit_reference, redact_provenance
+from ..identity.stable_session import audit_reference
 from src.knowledge_graph import (
     get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
-    normalize_response_type,
-    VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
-    VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
-    CLOSURE_CLASS_ADMITTING_STATUSES, CLOSURE_CLASS_CLEARING_STATUSES,
-    closure_evidence_to_json,
 )
 from src.mcp_handlers.knowledge.imported_preview import annotate_imported_read
 from src.mcp_handlers.knowledge.read_metadata import annotate_resolution_notes, add_resolution_notes_hint
 
 from src.knowledge_authority import (
-    CHANNEL_MESSAGE,
-    GOVERNED_CLAIM,
     IMPORTED_CONTEXT,
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
-    channel_lanes,
-    is_imported_context,
-    is_lane_filter,
-    rank_by_authority,
+    rank_by_authority,  # noqa: F401
 )
 from src.mcp_handlers.knowledge.limits import (
-    MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_DISCOVERY_METADATA_LEN,
-    MAX_SUMMARY_LEN, MAX_TAG_LEN, MAX_TAGS, MAX_UPDATED_DETAILS_LEN,
-    MAX_UPDATED_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
+    MAX_DETAILS_LEN, MAX_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
 )
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -108,14 +92,12 @@ from src.coherence_provenance import (
     coherence_role_for_source,
 )
 from src.perf_monitor import record_ms
-from src.recall_telemetry import (
-    LEXICAL_INDEX_MISS,
-    LOW_CONFIDENCE,
-    ZERO_RESULT,
-    record_recall_event,
-)
+from src.recall_telemetry import record_recall_event  # noqa: F401
 from ..support.coerce import LimitError, parse_limit
-from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results
+from ..support.llm_delegation import (
+    LOCAL_LLM_WAIT_BUFFER_S,  # noqa: F401
+    synthesize_results,  # noqa: F401
+)
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
@@ -124,48 +106,122 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.broadcaster import broadcaster_instance
 
 
-def _compact_identity_assurance(assurance: Any) -> Dict[str, Any]:
-    """Return the useful proof summary for a lean read response."""
-    if not isinstance(assurance, dict):
-        return {}
-    return {
-        key: assurance[key]
-        for key in ("tier", "caller_proven")
-        if key in assurance
-    }
+from .validation_helpers import (
+    VALID_DISCOVERY_TYPES,
+    VALID_SEVERITIES,
+    SEVERITY_ALIASES,
+    _normalize_discovery_type,
+    _detect_toolcall_markup_leak,
+    _degenerate_write_response,
+    _write_bound_refusal,
+    _oversized_tags,
+    _oversized_metadata,
+    _invalid_enum_response,
+    _coerce_pagination_int,
+    _annotate_knowledge_confidence_authority,
+    _AUDIT_QUERY_TEXT_MAX,  # noqa: F401
+    _audit_safe_query_text,
+    _audit_safe_tags,
+    _discovery_not_found,
+    _StoreResponseError,
+    _KnowledgeStoreRequest,
+    _KnowledgeStoreState,
+    _InvalidResponseTo,
+    _parse_response_to,
+    _auto_link_requested,
+    _link_similar_store_discoveries,
+    _refuse_oversized_store_metadata,
+    _authorize_store_discovery,
+    _attach_store_response_hints,
+    _attach_store_related_discoveries,
+    _KnowledgeUpdateRequest,
+    _UpdateResponseError,
+    _refuse_oversized_summary_or_tags,
+    _GATED_SEVERITIES,
+    _effective_update_severity,
+    _requested_non_owner_edits,  # noqa: F401
+    _require_owned_binding,
+    _authorize_high_severity_update,
+    _apply_update_metadata_fields,  # noqa: F401
+    CLOSURE_CLASSES,  # noqa: F401
+    _CLOSING_STATUSES,
+    _CLASS_ADMITTING_STATUSES,  # noqa: F401
+    CLOSURE_CLASS_PERSISTED,  # noqa: F401
+    _unclassified_closure_note,
+    _resolution_notes_call,  # noqa: F401
+    _unstored_closure_class_note,
+    _validate_closure_class,  # noqa: F401
+    _build_discovery_updates,
+    _BatchItemError,
+    _PreparedBatchDiscovery,
+    _BatchStoreResult,
+    _truncate_batch_summary,
+    _truncate_batch_details,
+    _parse_batch_response_to,
+    _parse_batch_severity,
+    _parse_batch_confidence,
+    _NOTE_TOTAL_LEN,  # noqa: F401
+    _NoteResponseError,
+    _KnowledgeNoteRequest,
+    _truncate_note_text,
+    _split_note_text,
+    _infer_note_severity,
+    _supersede_notes_block_details,
+)
+from .search_helpers import (
+    _LEAN_DISCOVERY_FIELDS,  # noqa: F401
+    _one_line,  # noqa: F401
+    _lean_search_payload,  # noqa: F401
+    _compact_knowledge_read_result,
+    _compute_staleness,  # noqa: F401
+    _compute_staleness_warning,  # noqa: F401
+    _SearchParameterError,
+    _KnowledgeSearchRequest,
+    _KnowledgeSearchState,
+    _optional_flag,
+    _resolve_detail_inclusion,
+    _parse_search_timestamp,
+    _parse_half_life,
+    _validate_search_backend,
+    _retrieve_fts_candidates,
+    _retrieve_substring_candidates,
+    _within_window,  # noqa: F401
+    _window_kwargs,
+    _tag_kwargs,
+    _authority_ranking_enabled,  # noqa: F401
+    _authority_pool_size,
+    _recency_weighted,  # noqa: F401
+    _rank_search_documents,
+    _candidate_status_visible,  # noqa: F401
+    _filter_and_rerank_candidates,
+    _run_newest_first_text_search,
+    _run_indexed_filter_search,
+    _apply_semantic_fts_fallback,
+    ARCHIVED_COLD_MIN_RESULTS,  # noqa: F401
+    ARCHIVED_COLD_SCORE_PENALTY,  # noqa: F401
+    ARCHIVED_COLD_TIER,  # noqa: F401
+    KNOWLEDGE_SEARCH_TIMEOUT_S,
+    ARCHIVED_COLD_RESPONSE_RESERVE_S,  # noqa: F401
+    _ABANDONED_ARCHIVED_COLD_PASSES,  # noqa: F401
+    SEARCH_SYNTHESIS_RESERVE_S,  # noqa: F401
+    SEARCH_SYNTHESIS_MIN_TIMEOUT_S,  # noqa: F401
+    SUPERSESSION_LOOKUP_RESERVE_S,  # noqa: F401
+    _archived_cold_widening,  # noqa: F401
+    _bounded_supersession_lookup,
+    _apply_archived_cold_tier,
+    _candidate_matches_semantic_fallback,  # noqa: F401
+    _exclude_search_labels,
+    _serialize_search_discoveries,
+    _base_search_response,
+    _attach_search_diagnostics,
+    _attach_empty_search_guidance,
+    _attach_search_scores_and_confidence,
+    _attach_search_usage_hints,
+    _attach_search_synthesis,
+)
 
 
-def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Compact caller identity metadata without touching discovery payloads."""
-    compact = dict(payload)
-    compact.pop("identity_context", None)
 
-    if "identity_assurance" in compact:
-        compact["identity_assurance"] = _compact_identity_assurance(
-            compact["identity_assurance"]
-        )
-
-    signature = compact.get("agent_signature")
-    if isinstance(signature, dict):
-        compact_signature = {"uuid": signature.get("uuid")}
-        assurance = _compact_identity_assurance(
-            signature.get("identity_assurance")
-        )
-        if assurance:
-            compact_signature["identity_assurance"] = assurance
-        compact["agent_signature"] = compact_signature
-
-    agent = compact.get("agent")
-    if isinstance(agent, dict):
-        compact_agent = dict(agent)
-        compact_agent.pop("identity_context", None)
-        if "identity_assurance" in compact_agent:
-            compact_agent["identity_assurance"] = _compact_identity_assurance(
-                compact_agent["identity_assurance"]
-            )
-        compact["agent"] = compact_agent
-
-    return compact
 
 
 # The digest reuses the canonical _CLOSING_STATUSES (the closure_class
@@ -173,180 +229,12 @@ def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]
 # declared a closure_class vouches for nothing in particular, and the digest
 # says so instead of letting the bare status read as verified.
 
-_LEAN_DISCOVERY_FIELDS = (
-    "id",
-    "discovery_id",
-    "summary",
-    "type",
-    "status",
-    "severity",
-    "tags",
-    "superseded",
-    "superseded_by",
-    "staleness_warning",
-    "last_activity_days",
-    "authority",
-    "imported_memory",
-    "closure_class",
-    "resolution_notes",
-    # Set only on rows the archived/cold second pass appended, so a lean
-    # reader can tell an aged-out row from a current one.
-    "retrieval_tier",
-    # Who wrote it: the write-time display label and the identity a reader
-    # passes back as agent_id_filter. Without them the default lean search
-    # told a reader what a finding says but not who wrote it (#2386); the
-    # envelope's digest budget decides how much of this survives.
-    "by",
-    "_agent_id",
-)
 
 
-def _one_line(value: Any, limit: int = 240) -> Any:
-    if not isinstance(value, str):
-        return value
-    value = " ".join(value.split())
-    return value if len(value) <= limit else value[: limit - 3].rstrip() + "..."
 
 
-def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Return one-line search digests without preview, score-map, or identity bloat."""
-    discoveries = payload.get("discoveries")
-    if not isinstance(discoveries, list):
-        return payload
-
-    # `relevance` must mean match QUALITY, never rank wearing a score's clothes.
-    #
-    # RRF assigns 1/(k + rank); at the default k=60 that makes rank 1 score
-    # 0.0164, rank 2 0.0161, rank 3 0.0159 — for every query, whether the top
-    # hit is exact or unrelated. Measured live 2026-08-29: two unrelated
-    # queries returned byte-identical score triples, one of them a flat miss.
-    # `rrf_fuse`'s docstring calls the scores "comparable across queries", and
-    # they are — in the useless sense that rank 1 is always 1/61.
-    #
-    # The bug was ordering: rrf_scores sat AHEAD of similarity_scores in a
-    # first-match-wins list, and the cross-encoder that would have outranked
-    # both is flag-off by default (UNITARES_ENABLE_RERANKER). So the common
-    # path picked the rank-derived number and never reached the cosine
-    # similarity sitting in the same payload, which does carry match strength.
-    #
-    # Quality signals only, best first. The fusion score is still reported,
-    # under a name that says what it is.
-    quality_maps = (
-        ("cross_encoder_rerank", payload.get("rerank_scores")),
-        ("semantic_similarity", payload.get("similarity_scores")),
-    )
-    lean_discoveries = []
-    for discovery in discoveries:
-        if not isinstance(discovery, dict):
-            continue
-        lean = {
-            key: discovery[key]
-            for key in _LEAN_DISCOVERY_FIELDS
-            if discovery.get(key) is not None
-        }
-        if "summary" in lean:
-            lean["summary"] = _one_line(lean["summary"])
-        if lean.get("status") in _CLOSING_STATUSES and "closure_class" not in lean:
-            lean["closure_standard"] = "undeclared"
-        if isinstance(lean.get("tags"), list):
-            lean["tags"] = lean["tags"][:12]
-        discovery_id = discovery.get("id") or discovery.get("discovery_id")
-        for basis, score_map in quality_maps:
-            if isinstance(score_map, dict) and discovery_id in score_map:
-                lean["relevance"] = score_map[discovery_id]
-                lean["relevance_basis"] = basis
-                break
-        else:
-            # A lexical-only hit has no quality number anywhere in the payload.
-            # Omitting `relevance` is the point: substituting the rank-derived
-            # RRF value here is what made a miss indistinguishable from a hit.
-            lean["relevance_basis"] = "lexical_rank_only"
-
-        fusion = payload.get("rrf_scores")
-        if isinstance(fusion, dict) and discovery_id in fusion:
-            lean["fusion_score"] = fusion[discovery_id]
-        lean_discoveries.append(lean)
-
-    lean_payload = {
-        key: payload[key]
-        for key in (
-            "success",
-            "query",
-            "count",
-            "message",
-            "search_mode_used",
-            "low_confidence",
-            "confidence_note",
-            "resolution_notes_hint",
-            "search_degraded",
-            "search_degraded_message",
-            "limit_clamped_from",
-            "_more_available",
-            # A queryless listing that left unpromoted imported memory out
-            # says so, and how to read that lane; without these the lean
-            # digest showed the remainder as the whole set (#2125).
-            "imported_omitted",
-            "imported_omitted_hint",
-            "sort_by",
-            "created_after",
-            "created_before",
-            "recency_half_life_days",
-        )
-        if payload.get(key) is not None
-    }
-    # The archived/cold second pass reports itself here too: its counts when
-    # it added rows (the long note stays in full mode), or why the page holds
-    # first-pass rows only. search_shared_memory reads this lean payload, so
-    # without these its digest could not say either.
-    archived_cold = payload.get("archived_cold_fallback")
-    if isinstance(archived_cold, dict):
-        lean_payload["archived_cold_fallback"] = {
-            key: value for key, value in archived_cold.items() if key != "note"
-        }
-    if payload.get("archived_cold_fallback_error"):
-        lean_payload["archived_cold_fallback_error"] = payload["archived_cold_fallback_error"]
-    lean_payload["discoveries"] = lean_discoveries
-    lean_payload["discovery_retrieval_options"] = {
-        "current_tier": "lean_digest",
-        "open_one": "knowledge(action='details', discovery_id='...')",
-    }
-
-    signature = payload.get("agent_signature")
-    if isinstance(signature, dict) and signature.get("uuid"):
-        assurance = _compact_identity_assurance(signature.get("identity_assurance"))
-        lean_payload["caller"] = {"uuid": signature["uuid"], **assurance}
-    return lean_payload
 
 
-def _compact_knowledge_read_result(
-    result: Sequence[TextContent],
-    *,
-    mode: str,
-) -> Sequence[TextContent]:
-    """Apply response-mode shaping to JSON text blocks, preserving other content."""
-    compacted = []
-    for item in result:
-        if not isinstance(item, TextContent):
-            compacted.append(item)
-            continue
-        try:
-            payload = json.loads(item.text)
-        except (TypeError, ValueError):
-            compacted.append(item)
-            continue
-        if not isinstance(payload, dict):
-            compacted.append(item)
-            continue
-        shaped = _compact_caller_identity_envelope(payload)
-        if mode == "lean":
-            shaped = _lean_search_payload(shaped)
-        compacted.append(item.model_copy(update={
-            "text": json.dumps(
-                shaped,
-                ensure_ascii=False,
-            )
-        }))
-    return compacted
 
 
 def _knowledge_read_response_mode(handler):
@@ -366,37 +254,11 @@ def _knowledge_read_response_mode(handler):
     wrapped._lean_knowledge_read_response = True
     return wrapped
 
-VALID_DISCOVERY_TYPES = {
-    "architectural_decision", "learning", "pattern", "bug_fix",
-    "refactoring", "documentation", "experiment", "question", "note", "rule",
-    "insight", "bug_found", "improvement", "exploration", "observation",
-    # System-generated rollup rows (Issue #1 synthesis). Listed so search can
-    # filter discovery_type='topic_rollup'; written by the synthesis pass, not
-    # by agents directly.
-    "topic_rollup",
-}
 # Single-sourced in src.knowledge_graph next to the status/response_type
 # vocabularies; tests/test_knowledge_enum_sync.py pins all three against the
 # SQL CHECK constraints.
-VALID_SEVERITIES = _SHARED_VALID_SEVERITIES
-SEVERITY_ALIASES = {
-    "info": "low",
-    "informational": "low",
-    "warn": "medium",
-    "warning": "medium",
-    "error": "high",
-    "fatal": "critical",
-    "urgent": "critical",
-}
 
 
-def _normalize_discovery_type(discovery_type: Any) -> Any:
-    if isinstance(discovery_type, str):
-        normalized = discovery_type.strip().lower()
-        if normalized == "bug":
-            return "bug_found"
-        return normalized
-    return discovery_type
 
 
 # Tool-call serialization markers that must never appear in a stored discovery.
@@ -406,224 +268,26 @@ def _normalize_discovery_type(discovery_type: Any) -> Any:
 # details) with no warning. Legit prose effectively never contains these, so a
 # hard reject is low-false-positive. (KG 2026-06-13 footgun: "knowledge
 # store/update silently accepts degenerate writes".)
-_TOOLCALL_MARKUP_MARKERS = (
-    "<parameter name=",
-    "</parameter>",
-    "<invoke name=",
-    "</invoke>",
-    "<function_calls>",
-    "</function_calls>",
-    "antml:parameter",
-    "antml:invoke",
-)
 
 
-def _detect_toolcall_markup_leak(*texts: Any) -> "str | None":
-    """Return the first tool-call markup marker found in any text arg, else None."""
-    for text in texts:
-        if not isinstance(text, str):
-            continue
-        for marker in _TOOLCALL_MARKUP_MARKERS:
-            if marker in text:
-                return marker
-    return None
 
 
-def _degenerate_write_response(leaked_marker: str, field: str):
-    """Loud, actionable reject for a text field that absorbed tool-call markup."""
-    return error_response(
-        f"Refusing to store: `{field}` contains tool-call markup "
-        f"({leaked_marker!r}). This usually means a later argument (commonly "
-        f"`tags`) was folded into the text and the structured argument arrived "
-        f"empty — storing it would persist a corrupt, unsearchable row. Re-send "
-        f"with each argument as a separate parameter.",
-        error_code="degenerate_write_rejected",
-        error_category="validation_error",
-        recovery={
-            "action": "Resend the call with summary, content/details, and tags "
-            "as distinct arguments; do not embed tags or markup inside content. "
-            "If the text you authored is clean, your context may have been "
-            "quoting these markers and contaminated the call: describe them "
-            "without the literal strings (e.g. 'an antml parameter tag') or "
-            "send the content from a file via REST. "
-            f"Matched marker: {leaked_marker!r}."
-        },
-    )
 
 
-def _write_bound_refusal(message: str, action: str) -> TextContent:
-    """INVALID_PARAM for a knowledge write with a value over its bound."""
-    return error_response(
-        message,
-        error_code="INVALID_PARAM",
-        error_category="validation_error",
-        recovery={"action": action, "related_tools": ["knowledge"]},
-    )
 
 
-def _oversized_tags(tags: Any, outcome: str) -> Optional[tuple[str, str]]:
-    """(message, recovery action) when tags are over MAX_TAGS or MAX_TAG_LEN.
-
-    Measured on normalize_tags output, the list storage writes. ``outcome``
-    ends the message ("Nothing was stored." or "Nothing was changed."). Input
-    normalize_tags cannot read is left to the write path, which fails on it as
-    it did before these bounds.
-    """
-    if tags is None:
-        return None
-    try:
-        normalized = normalize_tags(tags)
-    except Exception:
-        return None
-    if len(normalized) > MAX_TAGS:
-        return (
-            f"tags has {len(normalized)} entries after normalization; the "
-            f"limit is {MAX_TAGS}. {outcome}",
-            f"Send at most {MAX_TAGS} tags, naming the topics and components a "
-            "search should find this by. Put descriptive text in summary or "
-            "details.",
-        )
-    long_tags = [tag for tag in normalized if len(tag) > MAX_TAG_LEN]
-    if long_tags:
-        longest = max(long_tags, key=len)
-        return (
-            f"{len(long_tags)} tag(s) are over {MAX_TAG_LEN} characters after "
-            f"normalization (the longest is {len(longest):,}, starting "
-            f"'{longest[:40]}'); the limit is {MAX_TAG_LEN}. {outcome}",
-            f"Tags are short labels such as 'age-backend'. Shorten each to at "
-            f"most {MAX_TAG_LEN} characters and put descriptive text in summary "
-            "or details.",
-        )
-    return None
 
 
 # How a metadata refusal names a part of the node metadata that a caller
 # fills under another name. Every other part is named by its own key.
-_METADATA_PART_NAMES = {
-    "references_files": "related_files",
-    "provenance": (
-        "provenance (memory_context, task_label, task_outcome and the other "
-        "provenance fields, or a batch item's provenance)"
-    ),
-}
 
 
-def _oversized_metadata(discovery: DiscoveryNode) -> Optional[tuple[str, str]]:
-    """(message, recovery action) when a new finding's metadata is over its bound.
-
-    Measured as the AGE backend writes it: the node metadata its store builds
-    (KnowledgeGraphAGE._build_discovery_metadata), serialized with json.dumps
-    as GraphMixin._sanitize_cypher_param serializes it. A value json.dumps
-    cannot encode is measured as its str(); the store then fails on it as it
-    did before this bound. Held on both backends, so a finding stored on one
-    can be carried to the other. Call it after the handler has set every
-    field it stores (related_to included).
-    """
-    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
-
-    metadata = KnowledgeGraphAGE._build_discovery_metadata(discovery)
-    if not metadata:
-        return None
-    try:
-        size = len(json.dumps(metadata, default=str))
-    except ValueError:
-        # A circular reference: the store fails on it as it did before.
-        return None
-    if size <= MAX_DISCOVERY_METADATA_LEN:
-        return None
-    parts = sorted(
-        ((len(json.dumps(value, default=str)), key) for key, value in metadata.items()),
-        reverse=True,
-    )
-    largest = ", ".join(
-        f"{_METADATA_PART_NAMES.get(key, key)} {length:,}"
-        for length, key in parts[:3]
-    )
-    return (
-        f"This finding's metadata would be {size:,} characters as stored JSON; "
-        f"the limit is {MAX_DISCOVERY_METADATA_LEN:,}. Nothing was stored. "
-        f"Largest parts, in characters: {largest}.",
-        "Send fewer or shorter related_files, and keep provenance fields such as "
-        "memory_context, task_label and task_outcome to short labels. Put long "
-        "material in details.",
-    )
 
 
-def _invalid_enum_response(field: str, value: Any, valid_values: set[str], *, tip: str | None = None):
-    normalized = str(value).strip().lower()
-    suggestion = None
-    if field == "severity":
-        suggestion = SEVERITY_ALIASES.get(normalized)
-    elif field == "discovery_type" and normalized == "bug":
-        suggestion = "bug_found"
-
-    valid = sorted(valid_values)
-    message = f"Invalid {field} '{normalized}'. Valid: {valid}."
-    if suggestion in valid_values:
-        message += f" Did you mean '{suggestion}'?"
-    elif tip:
-        message += f" {tip}"
-
-    return error_response(
-        message,
-        error_code="PARAMETER_ERROR",
-        error_category="validation_error",
-        details={
-            "error_type": "invalid_enum_value",
-            "parameter": field,
-            "provided_value": normalized,
-            "valid_values": valid,
-            "suggested_value": suggestion if suggestion in valid_values else None,
-        },
-        recovery={
-            "action": (
-                f"Use {field}='{suggestion}'"
-                if suggestion in valid_values
-                else f"Use one of: {', '.join(valid)}"
-            )
-        },
-    )
 
 
-def _coerce_pagination_int(
-    value: Any,
-    *,
-    default: int,
-    minimum: int,
-    maximum: int | None = None,
-) -> int:
-    if value is None:
-        return default
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError):
-        return default
-    if coerced < minimum:
-        return default
-    if maximum is not None and coerced > maximum:
-        return maximum
-    return coerced
 
 
-def _annotate_knowledge_confidence_authority(discovery) -> None:
-    """Preserve writer confidence and record its actual authority boundary.
-
-    The retired implementation capped a discovery at ``legacy C(V) + 0.3``.
-    That directional ODE control value is neither evidence about the discovery
-    nor a calibrated writer-reliability measurement, so the cap manufactured a
-    federation-wide confidence ceiling from an unrelated signal.
-    """
-    if discovery.confidence is None:
-        return
-    if discovery.provenance is None:
-        discovery.provenance = {}
-    discovery.provenance["confidence_authority"] = {
-        "schema": "knowledge.confidence.authority.v2",
-        "source": "writer_supplied",
-        "validation": "range_only",
-        "legacy_coherence_clamp": "retired",
-        "coherence_used": False,
-    }
 
 
 async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
@@ -662,55 +326,15 @@ async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
 #: Upper bound on the query text stored in an audit row. Long enough for the
 #: real distribution (mean term count is 0.1; a two-digit-term query is already
 #: an outlier) and short enough that an accidental paste cannot bloat the table.
-_AUDIT_QUERY_TEXT_MAX = 300
 
 #: Credential shapes to blank before a query string reaches audit.events. Sibling
 #: of `_redact_sensitive_report_text` in scripts/analysis/eisv_ablation_matrix.py;
 #: kept local because src/ must not import from scripts/. An agent searching the
 #: KG for "rotate the api_key=..." would otherwise persist the value verbatim.
-_AUDIT_QUERY_REDACTIONS = (
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]+):([^\s/@]+)@"), r"\1:[REDACTED]@"),
-    (
-        re.compile(
-            r"(?i)\b(api[_-]?key|passwd|password|secret|token|bearer)\s*([:=]|\s)\s*[^\s,;|]+"
-        ),
-        r"\1\2[REDACTED]",
-    ),
-)
 
 
-def _audit_safe_query_text(query: Any) -> Optional[str]:
-    """Redact and bound a search query for storage in ``audit.events``.
-
-    Read traffic has been counted since PR #532, but only ever as
-    ``query_present`` / ``query_term_count`` / ``result_count`` — never the
-    terms. That makes retrievability unauditable: you can see that a search
-    happened and how many rows came back, but not whether the right entry was
-    reachable for what was actually asked. Measuring retrieval quality has so
-    far required hand-building a gold set, which does not scale and does not
-    reflect production traffic.
-
-    Returns None for anything that is not a usable string, so the payload key is
-    simply absent rather than present-and-null.
-    """
-    if not isinstance(query, str):
-        return None
-    text = query.strip()
-    if not text:
-        return None
-    for pattern, replacement in _AUDIT_QUERY_REDACTIONS:
-        text = pattern.sub(replacement, text)
-    if len(text) > _AUDIT_QUERY_TEXT_MAX:
-        text = text[:_AUDIT_QUERY_TEXT_MAX] + "…"
-    return text
 
 
-def _audit_safe_tags(tags: Any) -> Optional[list]:
-    """Bounded, string-only view of a caller's tag filter for the audit row."""
-    if not isinstance(tags, (list, tuple)):
-        return None
-    cleaned = [str(tag)[:64] for tag in tags if isinstance(tag, (str, int))][:10]
-    return cleaned or None
 
 
 async def _broadcast_knowledge_read(
@@ -822,120 +446,12 @@ async def _record_supersession_edge(graph, *, new_id: str, old_id: str) -> Optio
     return None
 
 
-_STALE_AFTER_DAYS = 60
 
 
-def _is_durable_entry(discovery) -> bool:
-    """Whether ``open`` is this entry's resting status rather than "unresolved".
-
-    Reuses the lifecycle's retention classification (the permanent types and
-    the permanent/foundational/architecture/decision tags) instead of keeping
-    a second list that can drift, plus ``insight``, which is resting-open but
-    deliberately not a permanent type: adding it there would change retention.
-    Known edge (operator decision, 2026-09-26): an open ``bug_found`` tagged
-    ``architecture`` counts as durable here, because the tag makes it
-    permanent for retention.
-    """
-    from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
-
-    kind = getattr(discovery, "type", None)
-    if kind == "insight":
-        return True
-    # A read path: a malformed legacy tag must not make set() raise mid-search.
-    tags = [tag for tag in (getattr(discovery, "tags", None) or []) if isinstance(tag, str)]
-    view = SimpleNamespace(type=kind, tags=tags)
-    return KnowledgeGraphLifecycle().get_lifecycle_policy(view) == "permanent"
 
 
-def _compute_staleness(discovery) -> Optional[tuple[int, str]]:
-    """``(days since the last write, warning)`` for an open entry past the
-    staleness threshold, else ``None``.
-
-    A non-open entry (``status`` in ``CLOSURE_CLASS_ADMITTING_STATUSES`` —
-    every status except the two that reopen a row, ``open`` and ``disputed``:
-    ``resolved``, ``closed``, ``wont_fix``, ``superseded``, plus the lifecycle
-    retention states ``archived`` and ``cold`` a closed row is later tiered
-    into) never gets this warning, regardless of how long ago it was last
-    touched: closure is the reason a stale-looking timestamp is fine, and the
-    "...and is still open" wording below would otherwise contradict the
-    entry's own recorded status. Reuses ``CLOSURE_CLASS_ADMITTING_STATUSES``
-    (the same open/closed partition ``apply_closure_reopen_rule`` and
-    migration 071's check constraint key off, imported at module top) rather
-    than a second list that can drift from it. A missing/unknown ``status``
-    is treated as open (matching ``DiscoveryNode``'s own ``status`` default),
-    not silently reclassified as closed.
-
-    Keyed on the last write (``updated_at`` when newer than the store time),
-    not the first store. Before 2026-08-16 the checks keyed on store-time
-    facts, so long-lived entries that are actively maintained — e.g. the
-    memory-mirror corpus, re-pushed on every source-file edit — warned forever,
-    and a warning that always fires trains readers to ignore it (observed live:
-    an entry updated 25 minutes earlier still said "written against v2.14.0").
-
-    There is no version clause. Until 2026-09-26 a never-updated entry also
-    warned when its store-time ``system_version`` was 2+ minor releases behind
-    the server's. Both values come from the VERSION file, so that counted
-    release cuts, not code change: it fired on entries 22-57 days old
-    depending on when releases happened, and never on a leave_note, which
-    records no version (operator decision D1, 2026-09-26). ``system_version``
-    stays on the result as store-time provenance.
-
-    The wording follows the entry's type (operator decision D2): for durable
-    entries, where ``open`` is the resting status, "still open" would frame a
-    record as a neglected task, so they get a neutral sentence that still says
-    to verify — permanent rules carry volatile details too.
-
-    ``updated_at`` is stamped by any field update (status, tags, severity), not
-    only content rewrites — accepted imprecision: a lifecycle touch on an open
-    entry is itself a recency signal, and content-hash timestamps are not worth
-    the machinery.
-    """
-
-    if getattr(discovery, "status", None) in CLOSURE_CLASS_ADMITTING_STATUSES:
-        return None
-
-    def _parse_utc(value):
-        ts = datetime.fromisoformat(value) if isinstance(value, str) else value
-        if ts.tzinfo is None:
-            # Legacy rows may have naive timestamps (treat as UTC);
-            # post-2026-04-25 rows are UTC-aware.
-            ts = ts.replace(tzinfo=timezone.utc)
-        return ts
-
-    # >60 days since the last write. Compare in UTC.
-    was_updated = False
-    try:
-        last_write = _parse_utc(discovery.timestamp)
-        try:
-            if getattr(discovery, "updated_at", None):
-                updated = _parse_utc(discovery.updated_at)
-                if updated > last_write:
-                    last_write = updated
-                    was_updated = True
-        except (ValueError, TypeError):
-            pass
-        age_days = (datetime.now(timezone.utc) - last_write).days
-    except (ValueError, TypeError):
-        return None
-    if age_days <= _STALE_AFTER_DAYS:
-        return None
-
-    if _is_durable_entry(discovery):
-        return age_days, (
-            f"Last written {age_days} days ago; durable entries can carry "
-            "volatile details (ports, paths, refs) — verify before acting on them."
-        )
-    if was_updated:
-        sentence = f"This entry was last updated {age_days} days ago and is still open."
-    else:
-        sentence = f"This entry is {age_days} days old and still open."
-    return age_days, sentence + " It may be outdated — verify before acting on it."
 
 
-def _compute_staleness_warning(discovery) -> Optional[str]:
-    """The canonical per-entry ``staleness_warning`` string, or ``None``."""
-    staleness = _compute_staleness(discovery)
-    return staleness[1] if staleness else None
 
 
 async def _build_s7_provenance_chain_with_fallback(
@@ -997,42 +513,6 @@ async def _build_s7_provenance_chain_with_fallback(
         return None
 
 
-async def _discovery_not_found(discovery_id: str, graph) -> TextContent:
-    """Build a 'not found' error with prefix-match suggestions.
-
-    LLMs sometimes truncate ISO-timestamp discovery IDs (e.g. '2025-12-20T15:43:51' → '2025').
-    When an exact match fails, search for IDs that start with the given prefix and offer
-    suggestions so the agent can retry with the correct full ID.
-    """
-    suggestions = []
-    try:
-        db = await graph._get_db()
-        cypher = f"""
-            MATCH (d:Discovery)
-            WHERE d.id STARTS WITH ${{prefix}}
-            RETURN d.id
-            LIMIT 5
-        """
-        rows = await db.graph_query(cypher, {"prefix": discovery_id})
-        for row in rows:
-            if isinstance(row, dict) and "d.id" in row:
-                suggestions.append(row["d.id"])
-            elif isinstance(row, str):
-                suggestions.append(row)
-    except Exception:
-        pass  # Best-effort suggestions
-
-    if suggestions:
-        return error_response(
-            f"Discovery '{discovery_id}' not found. Did you mean one of these?",
-            recovery={
-                "matching_ids": suggestions,
-                "action": "Retry with the full discovery_id from the list above",
-                "hint": "Discovery IDs are ISO timestamps (e.g. '2025-12-20T15:43:51.020454'). "
-                        "Pass the complete ID, not just the year.",
-            }
-        )
-    return error_response(f"Discovery '{discovery_id}' not found")
 
 def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tuple[Optional[TextContent], Optional[str]]:
     """
@@ -1534,41 +1014,10 @@ def _resolve_low_friction_writer(
     return agent_id, None, True
 
 
-class _StoreResponseError(Exception):
-    """Abort a store operation with an already-structured MCP error."""
-
-    def __init__(self, response: TextContent):
-        super().__init__()
-        self.response = response
 
 
-@dataclass(frozen=True)
-class _KnowledgeStoreRequest:
-    arguments: Dict[str, Any]
-    agent_id: str
-    discovery_type: Any
-    summary: Any
-    supersedes_id: Optional[str]
-    display_name_warning: Optional[str]
-    is_anonymous_writer: bool
 
 
-@dataclass
-class _KnowledgeStoreState:
-    request: _KnowledgeStoreRequest
-    graph: Any
-    summary: Any
-    details: Any = ""
-    truncation_info: dict[str, str] = field(default_factory=dict)
-    response_to: Optional[ResponseTo] = None
-    severity: Optional[str] = None
-    provenance: Optional[dict[str, Any]] = None
-    provenance_chain: Any = None
-    discovery: Optional[DiscoveryNode] = None
-    supersedes_target: Any = None
-    supersedes_warning: Optional[str] = None
-    similar: list[Any] = field(default_factory=list)
-    similar_discoveries: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
@@ -1796,44 +1245,8 @@ def _truncate_store_content(state: _KnowledgeStoreState) -> None:
     state.details = raw_details
 
 
-class _InvalidResponseTo(Exception):
-    """A response_to the caller supplied but that cannot become a typed link."""
 
 
-def _parse_response_to(response_data: Any) -> Optional[ResponseTo]:
-    """Parse the optional typed parent link shared by store, batch store and note.
-
-    An absent or empty value means no link. Anything else either becomes a
-    ResponseTo or raises _InvalidResponseTo with a caller-facing message: a
-    write the caller asked to thread must not land unthreaded and report
-    success. The batch path used to drop an unknown response_type silently,
-    and all three dropped a malformed shape, so the reply edge (which lineage
-    scoring in src/identity/memory_integration.py reads) went missing
-    without a trace.
-    """
-    if not response_data:
-        return None
-    required_fields = {"discovery_id", "response_type"}
-    if not isinstance(response_data, dict) or not required_fields.issubset(
-        response_data
-    ):
-        raise _InvalidResponseTo(
-            "Invalid response_to: expected "
-            "{'discovery_id': <parent id>, 'response_type': <type>}"
-        )
-
-    raw_parent_id = response_data["discovery_id"]
-    parent_id = "" if raw_parent_id is None else str(raw_parent_id).strip()
-    if not parent_id:
-        raise _InvalidResponseTo("Invalid response_to.discovery_id (empty)")
-
-    response_type = normalize_response_type(response_data["response_type"])
-    if response_type not in VALID_RESPONSE_TYPES:
-        raise _InvalidResponseTo(
-            f"Invalid response_type '{response_data['response_type']}'. "
-            f"Valid: {sorted(VALID_RESPONSE_TYPES)}"
-        )
-    return ResponseTo(discovery_id=parent_id, response_type=response_type)
 
 
 def _parse_store_response_to(arguments: Dict[str, Any]) -> Optional[ResponseTo]:
@@ -2019,54 +1432,12 @@ async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
         )
 
 
-def _auto_link_requested(value: Any) -> bool:
-    """Whether a store links the new row to similar ones. On unless explicitly false.
-
-    The params middleware validates through a Pydantic model whose
-    ``auto_link_related`` defaults to None and then merges ``model_dump()`` back
-    into the arguments, so an unsent flag arrives as a present None. Reading it
-    with ``.get(..., True)`` therefore saw None and skipped linking for every
-    validated store; a string "false" read raw was truthy the other way round.
-    """
-    return _optional_flag(value) is not False
 
 
-async def _link_similar_store_discoveries(state: _KnowledgeStoreState) -> None:
-    if not _auto_link_requested(state.request.arguments.get("auto_link_related")):
-        return
-    from .synthesis import is_rollup
-
-    candidates = await state.graph.find_similar(state.discovery, limit=8)
-    state.similar = [item for item in candidates if not is_rollup(item)][:5]
-    state.discovery.related_to = [item.id for item in state.similar]
-    state.similar_discoveries = [item.to_dict(include_details=False) for item in state.similar]
 
 
-def _refuse_oversized_store_metadata(state: _KnowledgeStoreState) -> None:
-    oversized = _oversized_metadata(state.discovery)
-    if oversized:
-        raise _StoreResponseError(_write_bound_refusal(*oversized))
 
 
-def _authorize_store_discovery(state: _KnowledgeStoreState) -> None:
-    if state.discovery.severity not in {"high", "critical"}:
-        return
-    from ..utils import verify_agent_ownership
-
-    if verify_agent_ownership(state.request.agent_id, state.request.arguments):
-        return
-    raise _StoreResponseError(
-        error_response(
-            "Authentication required for high-severity discoveries.",
-            error_code="AUTH_REQUIRED",
-            error_category="auth_error",
-            recovery={
-                "action": "Ensure your session is bound to this agent",
-                "related_tools": ["identity"],
-                "workflow": "Pass client_session_id on this call to bind as yourself. identity(client_session_id=...) reports the binding; a bare identity() mints a new agent instead of reading yours.",
-            },
-        )
-    )
 
 
 async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
@@ -2090,60 +1461,8 @@ async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
         )
 
 
-def _attach_store_response_hints(response: dict[str, Any], state: _KnowledgeStoreState) -> None:
-    request = state.request
-    if request.is_anonymous_writer:
-        response["agent_mode"] = "anonymous"
-        # Conditional on purpose, like the unbound metrics read: a process
-        # that already called start_session and dropped the id on this call
-        # would fork its work across two identities by minting again.
-        response["_identity_hint"] = (
-            "Stored under a lightweight anonymous writer ID, not an agent "
-            "identity. For authorship continuity, pass on each write the "
-            "client_session_id that start_session returned to this process; "
-            "if it has none, call start_session(force_new=true) first."
-        )
-    response["_resolve_when_done"] = (
-        "When this is addressed, close the loop: "
-        f"knowledge(action='update', discovery_id='{state.discovery.id}', "
-        "status='resolved')"
-    )
-    if request.supersedes_id:
-        if state.supersedes_target is not None:
-            response["superseded"] = request.supersedes_id
-        elif state.supersedes_warning:
-            response["_supersedes_warning"] = state.supersedes_warning
-    if request.display_name_warning:
-        response["_name_hint"] = request.display_name_warning
-    if state.truncation_info:
-        response["_truncated"] = state.truncation_info
-        response["_tip"] = (
-            "Content was truncated. For longer content, split into multiple "
-            f"discoveries or use the details field ({MAX_DETAILS_LEN} char limit)."
-        )
 
 
-def _attach_store_related_discoveries(response: dict[str, Any], state: _KnowledgeStoreState) -> None:
-    if not state.similar_discoveries:
-        return
-    response["related_discoveries"] = state.similar_discoveries
-    open_similar = [item for item in state.similar if item.status == "open"]
-    if len(open_similar) < 3:
-        return
-    unique_agents = {item.agent_id for item in open_similar}
-    response["consolidation_hint"] = (
-        f"This issue has been found {len(open_similar)} times by "
-        f"{len(unique_agents)} agent(s), all still open. Consider superseding "
-        "older entries or resolving them."
-    )
-    # The scheduled synthesis pass rolls these topics up next
-    # (src/kg_synthesis_schedule.py); before it, the hint went nowhere.
-    from src.kg_synthesis_schedule import hint_topics, record_consolidation_hint
-
-    record_consolidation_hint(
-        hint_topics(state.discovery.tags, (item.tags for item in open_similar)),
-        discovery_id=state.discovery.id,
-    )
 
 
 def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
@@ -2228,192 +1547,23 @@ async def handle_store_knowledge_graph(
         return [error_response(f"Failed to store knowledge: {str(exc)}")]
 
 
-class _SearchParameterError(ValueError):
-    """Caller-visible validation error raised while parsing a KG search."""
-
-
-@dataclass(frozen=True)
-class _KnowledgeSearchRequest:
-    arguments: Dict[str, Any]
-    limit: int
-    # None = caller expressed no preference; True/False = they did.
-    include_details: Optional[bool]
-    include_provenance: bool
-    synthesize: bool
-    query_text: Any
-    agent_id: Optional[str]
-    search_mode_requested: str
-    operator_forced: Optional[str]
-    exclude_labels: set[str]
-    tags: Optional[list[str]]
-    discovery_type: Any
-    severity: Any
-    status: Any
-    include_archived: bool
-    include_cold: bool
-    authority_mode: str
-    # Set when the caller over-asked and the limit was clamped down — surfaced
-    # in the response so truncation is distinguishable from "that was all".
-    limit_clamped_from: Optional[int] = None
-    # "relevance" or "created_at". created_at orders the query's full-text
-    # matches newest first; see _run_newest_first_text_search.
-    sort_by: str = "relevance"
-    # Exclusive, timezone-aware bounds on created_at.
-    created_after: Optional[datetime] = None
-    created_before: Optional[datetime] = None
-    # Opt-in recency weight on the relevance score (operator decision
-    # 2026-09-27: per call, default off). None = no weighting.
-    recency_half_life_days: Optional[float] = None
-    # The caller's literal include_archived / include_cold: None when unsent.
-    # An explicit false keeps that status out of the archived/cold second
-    # pass; the plain booleans above cannot tell false from unsent.
-    include_archived_explicit: Optional[bool] = None
-    include_cold_explicit: Optional[bool] = None
-
-    @property
-    def query_terms(self) -> list[str]:
-        return str(self.query_text).split() if self.query_text else []
-
-    @property
-    def query_term_count(self) -> int:
-        return len(self.query_terms)
-
-
-@dataclass
-class _KnowledgeSearchState:
-    request: _KnowledgeSearchRequest
-    graph: Any
-    results: list[Any] = field(default_factory=list)
-    candidates: list[Any] = field(default_factory=list)
-    search_mode: str = ""
-    operator_used: str = "N/A"
-    fields_searched: list[str] = field(default_factory=list)
-    semantic_scores: dict[str, float] = field(default_factory=dict)
-    rerank_scores: dict[str, float] = field(default_factory=dict)
-    rrf_scores: dict[str, float] = field(default_factory=dict)
-    fts_anchor_ids: Optional[set[str]] = None
-    tag_filter_dropped: int = 0
-    search_degraded_warning: Optional[str] = None
-    semantic_skipped_reason: Optional[str] = None
-    hybrid_skipped_reason: Optional[str] = None
-    fts_fallback_skipped_reason: Optional[str] = None
-    fts_operator_used: Optional[str] = None
-    fts_fallback_used: bool = False
-    fallback_used: bool = False
-    fallback_explanation: Optional[str] = None
-    min_similarity: Any = 0.3
-    rerank_on: bool = False
-    rerank_pool_size: int = 0
-    first_stage_limit: int = 0
-    hybrid_on: bool = False
-    graph_expand_on: bool = False
-    use_semantic: bool = False
-    hybrid_path: bool = False
-    authority_reranked: bool = False
-    # Unpromoted imported-memory rows the queryless listing skipped while
-    # filling its page (see _omits_imported_lane).
-    imported_omitted: int = 0
-    # Archived/cold rows appended by the second pass (_apply_archived_cold_tier).
-    archived_cold_ids: set[str] = field(default_factory=set)
-    archived_cold_primary_count: int = 0
-    archived_cold_statuses: list[str] = field(default_factory=list)
-    archived_cold_error: Optional[str] = None
-    # time.monotonic() at which the handler's timeout fires; None when the
-    # search runs outside handle_search_knowledge_graph (no budget to keep).
-    deadline: Optional[float] = None
-
-
-def _optional_flag(value: Any) -> Optional[bool]:
-    """Tri-state flag: None when the caller said nothing, else a real bool.
-
-    Collapsing "unspecified" and "explicitly false" into `False` is what made
-    `include_details=false` unhonorable — the auto-include heuristic could not
-    tell a caller who wanted summaries from one who had no opinion, so it
-    overrode both.
-
-    MCP admits these as strings, so `"false"` must not become `True` the way a
-    bare `bool("false")` would.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        token = value.strip().lower()
-        if token in ("true", "1", "yes"):
-            return True
-        if token in ("false", "0", "no"):
-            return False
-        return None
-    return bool(value)
 
 
 
-AUTO_DETAIL_MAX_RESULTS = 3
 
 
-def _resolve_detail_inclusion(
-    requested: Optional[bool], result_count: int
-) -> tuple[bool, bool]:
-    """Decide ``(auto_details, include_details)`` for one search response.
-
-    Auto-include is a convenience for a caller with no opinion, NOT an
-    override of one. The old expression was ``not request.include_details``,
-    which was True for "unspecified" and for an explicit ``false`` alike, so
-    there was no way to ask for summaries of a small result set. A dogfood
-    probe measured the cost of that: 3 results, 44,205 bytes, into the
-    caller's context after they had asked for none of it.
-
-    Extracted so the contract is testable directly. A test that re-implements
-    this arithmetic would pass against a broken caller.
-    """
-    auto = requested is None and 0 < result_count <= AUTO_DETAIL_MAX_RESULTS
-    return auto, bool(requested) or auto
 
 
-def _parse_search_timestamp(name: str, value: Any) -> Optional[datetime]:
-    """Parse a created_after/created_before bound into an aware UTC datetime.
-
-    A value without an offset is read as UTC, the zone every discovery id and
-    created_at is written in. An unparseable value is refused rather than
-    dropped: a window the caller wrote must not silently become no window.
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value).strip()
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            raise _SearchParameterError(
-                f"{name} {value!r} is not an ISO 8601 timestamp; "
-                "pass e.g. '2026-09-26T00:00:00Z' or '2026-09-26'."
-            ) from None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
-RECENCY_HALF_LIFE_MAX_DAYS = 36500.0
 
 
-def _parse_half_life(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        days = float(value)
-    except (TypeError, ValueError):
-        raise _SearchParameterError(
-            f"recency_half_life_days {value!r} is not a number of days."
-        ) from None
-    if not (0 < days <= RECENCY_HALF_LIFE_MAX_DAYS):
-        raise _SearchParameterError(
-            f"recency_half_life_days must be above 0 and at most "
-            f"{RECENCY_HALF_LIFE_MAX_DAYS:g}; got {value!r}."
-        )
-    return days
+
+
+
+
+
+
 
 
 def _parse_knowledge_search_request(
@@ -2590,35 +1740,6 @@ def _parse_knowledge_search_request(
     )
 
 
-def _validate_search_backend(state: _KnowledgeSearchState) -> tuple[bool, bool]:
-    """Validate a forced mode and return semantic/FTS capability flags."""
-    request = state.request
-    graph = state.graph
-    has_semantic = hasattr(graph, "semantic_search")
-    has_fts = hasattr(graph, "full_text_search")
-    backend_label = graph.__class__.__name__
-
-    if request.search_mode_requested == "semantic" and not has_semantic:
-        raise _SearchParameterError(
-            "search_mode=semantic requires a backend with semantic_search; "
-            f"active backend {backend_label} has none. "
-            "Use search_mode=fts, or set UNITARES_KNOWLEDGE_BACKEND=age."
-        )
-    if request.search_mode_requested == "hybrid" and not (has_semantic and has_fts):
-        missing = []
-        if not has_semantic:
-            missing.append("semantic_search")
-        if not has_fts:
-            missing.append("full_text_search")
-        raise _SearchParameterError(
-            "search_mode=hybrid requires both semantic and FTS; "
-            f"active backend {backend_label} is missing {', '.join(missing)}."
-        )
-    if request.search_mode_requested == "fts" and not has_fts:
-        raise _SearchParameterError(
-            f"search_mode=fts requires full_text_search; active backend {backend_label} has none."
-        )
-    return has_semantic, has_fts
 
 
 def _select_search_modes(
@@ -2819,170 +1940,26 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
     state.search_mode = "semantic"
 
 
-def _fts_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
-    kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
-    if request.sort_by == "created_at":
-        kwargs["order_by"] = "created_at"
-        # The post-LIMIT filter stays, but under time order it would leave a
-        # page of newer ineligible rows and nothing to return.
-        kwargs["filters"] = {
-            "agent_id": request.agent_id,
-            "type": request.discovery_type,
-            "severity": request.severity,
-            "status": request.status,
-            "exclude_archived": not request.include_archived,
-            "exclude_cold": not request.include_cold,
-        }
-    return kwargs
 
 
-def _fts_page_size(state: _KnowledgeSearchState) -> int:
-    request = state.request
-    base_limit = int(min(max(request.limit * 5, request.limit), 500))
-    return max(
-        base_limit,
-        state.rerank_pool_size if state.rerank_on else 0,
-        _authority_pool_size(request),
-    )
 
 
-async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
-    request = state.request
-    candidate_limit = _fts_page_size(state)
-    primary_operator = request.operator_forced or "AND"
-    fts_kwargs = _fts_kwargs(request)
-    state.candidates = await state.graph.full_text_search(
-        str(request.query_text),
-        limit=candidate_limit,
-        operator=primary_operator,
-        **fts_kwargs,
-    )
-    state.fts_operator_used = primary_operator
-
-    if (
-        not state.candidates
-        and request.operator_forced is None
-        and primary_operator == "AND"
-        and request.query_term_count > 1
-    ):
-        if request.query_term_count <= 24:
-            state.candidates = await state.graph.full_text_search(
-                str(request.query_text),
-                limit=candidate_limit,
-                operator="OR",
-                **fts_kwargs,
-            )
-            if state.candidates:
-                state.fts_operator_used = "OR"
-                state.fts_fallback_used = True
-        else:
-            state.fts_fallback_skipped_reason = (
-                f"automatic OR fallback skipped for {request.query_term_count}-term "
-                "query (limit 24); pass operator='OR' to request broad recall"
-            )
-    state.fts_anchor_ids = {document.id for document in state.candidates}
-    state.search_mode = "fts"
 
 
-async def _retrieve_substring_candidates(state: _KnowledgeSearchState) -> None:
-    state.candidates = await state.graph.query(limit=200)
-    state.search_mode = "substring_scan"
 
 
-def _candidate_matches_search(
-    document: Any,
-    state: _KnowledgeSearchState,
-    substring_terms: Optional[list[str]],
-) -> bool:
-    request = state.request
-    if substring_terms:
-        tags_text = " ".join(document.tags or [])
-        haystack = ((document.summary or "") + "\n" + (document.details or "") + "\n" + tags_text).lower()
-        if not any(term in haystack for term in substring_terms):
-            return False
-    if request.agent_id and document.agent_id != request.agent_id:
-        return False
-    if request.discovery_type and document.type != request.discovery_type:
-        return False
-    if request.severity and document.severity != request.severity:
-        return False
-    if not _candidate_status_visible(document, request):
-        return False
-    if request.tags and not _matches_tags(document, request.tags):
-        return False
-    return _within_window(document, request)
 
 
-def _document_created_at(document: Any) -> Optional[datetime]:
-    raw = getattr(document, "timestamp", None) or getattr(document, "created_at", None)
-    if isinstance(raw, datetime):
-        parsed = raw
-    else:
-        try:
-            parsed = datetime.fromisoformat(str(raw))
-        except (TypeError, ValueError):
-            return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _within_window(document: Any, request: _KnowledgeSearchRequest) -> bool:
-    """Apply created_after/created_before to a candidate already in hand.
-
-    The SQL paths filter inside the query; semantic retrieval cannot, so its
-    candidates are held to the window here. A row whose creation time cannot
-    be read is outside any window: it cannot be shown to be inside one.
-    """
-    if not (request.created_after or request.created_before):
-        return True
-    created = _document_created_at(document)
-    if created is None:
-        return False
-    if request.created_after and created <= request.created_after:
-        return False
-    if request.created_before and created >= request.created_before:
-        return False
-    return True
 
 
-def _window_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
-    # Sent only when a window was asked for, so an unwindowed search makes
-    # exactly the backend call it made before.
-    kwargs: dict[str, Any] = {}
-    if request.created_after:
-        kwargs["created_after"] = request.created_after
-    if request.created_before:
-        kwargs["created_before"] = request.created_before
-    return kwargs
 
 
-def _matches_tags(document: Any, tags: list[str]) -> bool:
-    stored = set(document.tags or [])
-    return any(tag in stored for tag in tags)
 
 
-def _tag_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
-    # The predicate rides inside the backend's ranked query, so a tagged row
-    # that ranks below the first-stage limit is still retrieved. Untagged
-    # searches send nothing and their backend calls are unchanged.
-    return {"tags": request.tags} if request.tags else {}
 
 
-def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
-    """Prefer governed knowledge unless the caller explicitly asks for raw order.
-
-    A source-tag query is already an explicit request to inspect the imported
-    lane, so applying its default penalty there would only distort that lane's
-    own relevance order. Only a filter made entirely of source-memory tags
-    counts: tags match any-of, so a mixed filter also returns ordinary
-    findings. A `channel-*` filter is honoured per row, in rank_by_authority,
-    because a channel- tag can also be an ordinary topic.
-    """
-    if request.authority_mode == "all":
-        return False
-    if request.sort_by == "created_at":
-        # The caller asked for time order; an authority nudge would reorder it.
-        return False
-    return not is_lane_filter(request.tags)
 
 
 # Candidates authority ranking sees before the page is cut. Retrieval
@@ -2990,150 +1967,18 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
 # below a page of down-ranked rows is never retrieved to be lifted. The
 # queryless listing is exempt: it is a newest-first read, and widening it
 # would pull older rows above newer ones rather than break close contests.
-AUTHORITY_POOL_SIZE = 50
 
 
-def _authority_pool_size(request: _KnowledgeSearchRequest) -> int:
-    # A recency weight reorders the same way authority does, so it needs the
-    # same pool: a fresh row just below the first page must be retrieved to
-    # be lifted.
-    if _authority_ranking_enabled(request) or request.recency_half_life_days:
-        return AUTHORITY_POOL_SIZE
-    return 0
 
 
-def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
-    if state.rerank_scores:
-        return state.rerank_scores
-    if state.rrf_scores:
-        return state.rrf_scores
-    if state.semantic_scores:
-        return state.semantic_scores
-    return {}
 
 
-def _recency_weighted(
-    documents: list[Any],
-    scores: dict[str, float],
-    half_life_days: float,
-) -> tuple[list[Any], dict[str, float]]:
-    """Multiply each row's relevance by 0.5 ** (age / half-life) and re-sort.
-
-    A true half-life: a row half_life_days old keeps half its score. (The AGE
-    backend's semantic blend uses 1 / (1 + age / 90), which is 0.5 at 90
-    days but decays more slowly after that.) The base score is the one
-    authority ranking reads: rerank, then RRF, then semantic similarity,
-    then a full-text row's own rank, then position. RRF is rank-derived and
-    nearly flat, so on a hybrid search the weight dominates the order. A
-    row whose creation time cannot be read is left unweighted.
-    """
-    now = datetime.now(timezone.utc)
-    weighted: dict[str, float] = {}
-    for index, document in enumerate(documents):
-        document_id = str(getattr(document, "id", ""))
-        base = scores.get(document_id)
-        if not isinstance(base, (int, float)):
-            base = getattr(document, "relevance", None)
-        if not isinstance(base, (int, float)):
-            base = 1.0 / (1.0 + index * 0.05)
-        created = _document_created_at(document)
-        decay = 1.0
-        if created is not None:
-            age_days = max(0.0, (now - created).total_seconds() / 86400.0)
-            decay = 0.5 ** (age_days / half_life_days)
-        weighted[document_id] = float(base) * decay
-    ordered = sorted(
-        enumerate(documents),
-        key=lambda item: (-weighted[str(getattr(item[1], "id", ""))], item[0]),
-    )
-    return [document for _, document in ordered], weighted
 
 
-def _rank_search_documents(
-    state: _KnowledgeSearchState,
-    documents: list[Any],
-) -> list[Any]:
-    scores = _authority_score_map(state)
-    half_life = state.request.recency_half_life_days
-    if half_life:
-        documents, scores = _recency_weighted(documents, scores, half_life)
-    ranked, changed = rank_by_authority(
-        documents,
-        relevance_scores=scores,
-        enabled=_authority_ranking_enabled(state.request),
-        read_lanes=channel_lanes(state.request.tags),
-    )
-    state.authority_reranked = state.authority_reranked or changed
-    return ranked
 
 
-def _candidate_status_visible(
-    document: Any, request: _KnowledgeSearchRequest
-) -> bool:
-    if request.status:
-        return document.status == request.status
-    if not request.include_archived and document.status == "archived":
-        return False
-    return request.include_cold or document.status != "cold"
 
 
-async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
-    request = state.request
-    substring_terms = (
-        str(request.query_text).lower().split()
-        if state.search_mode in ("substring_scan", "substring_newest_first")
-        else None
-    )
-    # Authority ranking has to see more than the page it reorders: capped at
-    # `limit`, a native finding just below a page of down-ranked rows was
-    # dropped before its multiplier could lift it.
-    if state.rerank_on:
-        filter_cap = state.rerank_pool_size
-    elif state.hybrid_on or _authority_pool_size(request):
-        filter_cap = max(request.limit, AUTHORITY_POOL_SIZE)
-    else:
-        filter_cap = request.limit
-    filtered = []
-    for document in state.candidates:
-        if request.tags and not _matches_tags(document, request.tags):
-            state.tag_filter_dropped += 1
-            continue
-        if _candidate_matches_search(document, state, substring_terms) and not _label_excluded(
-            document, request
-        ):
-            filtered.append(document)
-            if len(filtered) >= filter_cap:
-                break
-
-    if not (state.rerank_on and filtered):
-        state.results = _rank_search_documents(state, filtered)[: request.limit]
-        return
-
-    try:
-        from src.reranker import rerank as _rerank
-
-        pairs = [(document.id, f"{document.summary}\n{(document.details or '')[:2000]}") for document in filtered]
-        reranked = await _rerank(
-            str(request.query_text),
-            pairs,
-            top_k=len(filtered),
-            max_rerank_size=state.rerank_pool_size,
-        )
-        state.rerank_scores = dict(reranked)
-        by_id = {document.id: document for document in filtered}
-        reranked_documents = [
-            by_id[discovery_id]
-            for discovery_id, _ in reranked
-            if discovery_id in by_id
-        ]
-        state.results = _rank_search_documents(state, reranked_documents)[: request.limit]
-        state.search_mode = f"{state.search_mode}_reranked" if state.search_mode else "reranked"
-    except Exception as exc:
-        logger.warning(
-            "[KG_SEARCH] reranker failed; keeping first-stage order: %s",
-            exc,
-        )
-        state.results = _rank_search_documents(state, filtered)[: request.limit]
 
 
 async def _run_text_search(state: _KnowledgeSearchState) -> None:
@@ -3180,221 +2025,17 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
     state.fields_searched = ["summary", "details", "tags"]
 
 
-async def _run_newest_first_text_search(
-    state: _KnowledgeSearchState, *, has_fts: bool
-) -> None:
-    """sort_by=created_at: the query's full-text matches, newest first.
-
-    The tsquery is the membership test and the database does the ordering, so
-    a match written a minute ago comes first however weakly it ranks.
-    Re-sorting a relevance page instead would only reorder rows that already
-    ranked in, which is the failure this exists for. No reranker, no
-    semantic leg, no authority reorder: each would put relevance back.
-    """
-    state.rerank_on = False
-    state.hybrid_on = False
-    if has_fts:
-        await _retrieve_fts_candidates(state)
-        state.search_mode = "fts_newest_first"
-    else:
-        # query() is already newest first; the substring filter runs below.
-        await _retrieve_substring_candidates(state)
-        state.search_mode = "substring_newest_first"
-    await _filter_and_rerank_candidates(state)
-    if has_fts:
-        await _continue_newest_first_pages(state)
-    state.operator_used = state.fts_operator_used or "N/A"
-    state.fields_searched = ["summary", "details", "tags"]
 
 
 # Rows newest-first continuation may read in total, the same ceiling as one
 # full-text candidate page. Pages double, so a long run of excluded writers
 # is crossed in a few queries rather than cut off after a fixed page count.
-NEWEST_FIRST_SCAN_CEILING = 500
 
 
-async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
-    """Read older pages while filters the SQL cannot express leave the page short.
-
-    Everything the database can filter already sits in the ordered query.
-    Writer-label exclusion cannot (a label is resolved from provenance or
-    agent metadata), so a run of newer matches from excluded writers can
-    fill a whole page. Keyset continuation reads the next older page from
-    the oldest row seen, doubling the page each time, until the limit fills,
-    the matches run out, or NEWEST_FIRST_SCAN_CEILING rows have been read.
-    """
-    request = state.request
-    page_size = _fts_page_size(state)
-    page = state.candidates
-    pool = list(page)
-    while len(pool) < NEWEST_FIRST_SCAN_CEILING:
-        if len(state.results) >= request.limit or len(page) < page_size:
-            return
-        page_size = min(page_size * 2, NEWEST_FIRST_SCAN_CEILING - len(pool))
-        oldest = _document_created_at(page[-1])
-        if oldest is None:
-            return
-        kwargs = _fts_kwargs(request)
-        kwargs["before"] = (oldest, page[-1].id)
-        page = await state.graph.full_text_search(
-            str(request.query_text),
-            limit=page_size,
-            operator=state.fts_operator_used or request.operator_forced or "AND",
-            **kwargs,
-        )
-        if not page:
-            return
-        if state.fts_anchor_ids is not None:
-            state.fts_anchor_ids.update(document.id for document in page)
-        pool.extend(page)
-        state.candidates = pool
-        state.tag_filter_dropped = 0
-        await _filter_and_rerank_candidates(state)
 
 
-async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
-    request = state.request
-
-    async def _read(limit: int) -> list[Any]:
-        return await state.graph.query(
-            agent_id=request.agent_id,
-            tags=request.tags,
-            type=request.discovery_type,
-            severity=request.severity,
-            status=request.status,
-            limit=limit,
-            exclude_archived=not request.status and not request.include_archived,
-            exclude_cold=not request.status and not request.include_cold,
-            **_window_kwargs(request),
-        )
-
-    omit_imported = _omits_imported_lane(request)
-    if not request.exclude_labels and not omit_imported:
-        state.results = await _read(request.limit)
-    else:
-        # Writer-label and imported-lane exclusion cannot run in the query, so
-        # reading exactly `limit` rows let excluded rows take the page. Re-read
-        # with a doubling limit until the visible page fills, the rows run
-        # out, or the same row ceiling newest-first continuation uses is
-        # reached. Imports are the uncommon case on most graphs, so that
-        # exclusion alone starts at the page size and widens only when it
-        # actually dropped something.
-        fetch_limit = (
-            min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
-            if request.exclude_labels
-            else request.limit
-        )
-        while True:
-            rows = await _read(fetch_limit)
-            visible = [
-                document for document in rows if not _label_excluded(document, request)
-            ]
-            if omit_imported:
-                kept = [
-                    document for document in visible if not is_imported_context(document)
-                ]
-                state.imported_omitted = len(visible) - len(kept)
-                visible = kept
-            state.results = visible
-            if (
-                len(state.results) >= request.limit
-                or len(rows) < fetch_limit
-                or fetch_limit >= NEWEST_FIRST_SCAN_CEILING
-            ):
-                break
-            fetch_limit = min(fetch_limit * 2, NEWEST_FIRST_SCAN_CEILING)
-    state.search_mode = "indexed_filters"
-    state.fields_searched = [
-        name
-        for name, value in (
-            ("agent_id", request.agent_id),
-            ("tags", request.tags),
-            ("type", request.discovery_type),
-            ("severity", request.severity),
-            ("status", request.status),
-        )
-        if value
-    ]
 
 
-async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
-    request = state.request
-    if (
-        state.results
-        or not request.query_text
-        or state.search_mode not in {"fts", "semantic"}
-        or state.search_mode != "semantic"
-        or not hasattr(state.graph, "full_text_search")
-    ):
-        return
-
-    try:
-        logger.debug(
-            "Semantic search returned 0 results, falling back to FTS for %r",
-            request.query_text,
-        )
-        primary_operator = request.operator_forced or "AND"
-        fallback_limit = max(request.limit * 2, _authority_pool_size(request))
-        candidates = await state.graph.full_text_search(
-            str(request.query_text),
-            limit=fallback_limit,
-            operator=primary_operator,
-            **_tag_kwargs(request),
-            **_window_kwargs(request),
-        )
-        fallback_operator = primary_operator
-        used_or_retry = False
-        if (
-            not candidates
-            and request.operator_forced is None
-            and primary_operator == "AND"
-            and request.query_term_count > 1
-        ):
-            if request.query_term_count <= 24:
-                candidates = await state.graph.full_text_search(
-                    str(request.query_text),
-                    limit=fallback_limit,
-                    operator="OR",
-                    **_tag_kwargs(request),
-                    **_window_kwargs(request),
-                )
-                if candidates:
-                    fallback_operator = "OR"
-                    used_or_retry = True
-            else:
-                state.fts_fallback_skipped_reason = (
-                    f"automatic OR fallback skipped for {request.query_term_count}-term "
-                    "query (limit 24); pass operator='OR' to request broad recall"
-                )
-
-        for document in candidates:
-            if request.tags and not _matches_tags(document, request.tags):
-                state.tag_filter_dropped += 1
-                continue
-            if not _candidate_matches_semantic_fallback(document, request):
-                continue
-            if _label_excluded(document, request):
-                continue
-            state.results.append(document)
-            # The executor ranks and then cuts the page, so collect the
-            # whole authority pool here, not just `limit`.
-            if len(state.results) >= max(request.limit, _authority_pool_size(request)):
-                break
-        if not state.results:
-            return
-
-        state.fallback_used = True
-        state.search_mode = "semantic_fallback_fts"
-        state.fts_operator_used = fallback_operator
-        state.fts_fallback_used = used_or_retry
-        state.fallback_explanation = (
-            f"Semantic search found no concepts similar to '{request.query_text}' "
-            f"(similarity threshold: {state.min_similarity}). "
-            f"Falling back to keyword search (FTS, operator={fallback_operator}) "
-            "for exact term matching."
-        )
-    except Exception as exc:
-        logger.debug("Semantic→FTS fallback failed: %s", exc)
 
 
 # A query search that finds fewer active rows than this runs a second pass
@@ -3402,51 +2043,22 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
 # proposal 1). About two thirds of the graph is archived or cold, and lifecycle
 # aging moves a row there by age alone, so a default search could miss the only
 # entry that answers the question.
-ARCHIVED_COLD_MIN_RESULTS = 3
 # Second-pass rows sit after every active row; their reported scores are
 # multiplied by this so the numbers agree with the order.
-ARCHIVED_COLD_SCORE_PENALTY = 0.5
-ARCHIVED_COLD_TIER = "archived_cold_fallback"
 # search_knowledge_graph's handler timeout. The second pass is optional, so it
 # gets only what the first pass left of this budget, less this reserve for
 # building the response. Without the bound, a slow second pass ran into the
 # handler timeout and the caller lost the first page it had already earned.
-KNOWLEDGE_SEARCH_TIMEOUT_S = 15.0
-ARCHIVED_COLD_RESPONSE_RESERVE_S = 3.0
 # Second passes the handler stopped waiting for, kept referenced until they
 # finish unwinding so the loop does not collect them mid-cancel.
-_ABANDONED_ARCHIVED_COLD_PASSES: set[asyncio.Task] = set()
 # Search synthesis (synthesize=true) is bounded by the same budget: its LLM
 # request timeout is what is left, less this reserve and call_local_llm's
 # wait buffer, capped at the old fixed 30s; under the minimum it is skipped.
-SEARCH_SYNTHESIS_MAX_TIMEOUT_S = 30.0
-SEARCH_SYNTHESIS_RESERVE_S = 1.0
-SEARCH_SYNTHESIS_MIN_TIMEOUT_S = 2.0
 # The replacement-id lookup for superseded rows runs last, after the optional
 # second pass may have spent the budget down to its reserve, so it gets what is
 # left less this reserve for building the response.
-SUPERSESSION_LOOKUP_RESERVE_S = 1.0
 
 
-def _archived_cold_widening(request: _KnowledgeSearchRequest) -> Optional[dict[str, bool]]:
-    """The include flags a second pass would turn on, or None when it should not run.
-
-    Query searches only: a queryless listing is a newest-first poll of a known
-    lane, and padding it with stale rows would hand a poller old work as new.
-    An explicit status filter already says which statuses the caller wants,
-    and an explicit include_archived=false / include_cold=false keeps that
-    status out.
-    """
-    if not request.query_text or request.status:
-        return None
-    widen_archived = not request.include_archived and request.include_archived_explicit is not False
-    widen_cold = not request.include_cold and request.include_cold_explicit is not False
-    if not (widen_archived or widen_cold):
-        return None
-    return {
-        "include_archived": request.include_archived or widen_archived,
-        "include_cold": request.include_cold or widen_cold,
-    }
 
 
 async def _run_archived_cold_pass(second: _KnowledgeSearchState, limit: int) -> None:
@@ -3456,695 +2068,44 @@ async def _run_archived_cold_pass(second: _KnowledgeSearchState, limit: int) -> 
         second.results = _rank_search_documents(second, second.results)[:limit]
 
 
-def _settle_abandoned_pass(task: asyncio.Task) -> None:
-    _ABANDONED_ARCHIVED_COLD_PASSES.discard(task)
-    if not task.cancelled() and task.exception() is not None:
-        logger.debug("[KG_SEARCH] abandoned archived/cold pass ended with: %s", task.exception())
 
 
-async def _bounded_supersession_lookup(
-    graph, superseded_ids: list, deadline: float,
-) -> Dict[str, list]:
-    """``get_superseded_by`` within what is left of the search budget.
-
-    An empty mapping when no time is left or the lookup overruns; the overrun
-    task is stopped like an abandoned second pass. Cancelling the request
-    cancels the lookup too.
-    """
-    budget = deadline - SUPERSESSION_LOOKUP_RESERVE_S - time.monotonic()
-    if budget <= 0:
-        logger.info("[KG_SEARCH] supersession lookup skipped: search budget spent")
-        return {}
-    task = asyncio.create_task(graph.get_superseded_by(superseded_ids))
-    try:
-        done, _ = await asyncio.wait({task}, timeout=budget)
-    except asyncio.CancelledError:
-        _abandon_archived_cold_pass(task)
-        raise
-    if not done:
-        _abandon_archived_cold_pass(task)
-        logger.warning(
-            "[KG_SEARCH] supersession lookup did not finish within %.1fs; "
-            "returning superseded rows without superseded_by", budget,
-        )
-        return {}
-    return task.result()
 
 
-def _abandon_archived_cold_pass(task: asyncio.Task) -> None:
-    """Stop a second pass the handler no longer waits for.
-
-    The cancel stops later retrieval stages from starting. A statement already
-    running on the ExecutorPool loop may still finish there (CPython #105836);
-    nothing reads its result.
-    """
-    task.cancel()
-    _ABANDONED_ARCHIVED_COLD_PASSES.add(task)
-    task.add_done_callback(_settle_abandoned_pass)
 
 
-async def _apply_archived_cold_tier(
-    state: _KnowledgeSearchState,
-    *,
-    first_pass_s: float = 0.0,
-) -> None:
-    """Fill a short page from archived and cold rows, ranked below every active row.
-
-    Re-runs the same retrieval with the widened status filter, so ranking,
-    tag, window, label and authority rules are the ones the first pass used.
-    Only rows the first pass hid by status are added.
-
-    The pass is optional, so it never costs the caller the first page. With a
-    deadline it is skipped when what remains (less the response reserve) is
-    shorter than the first pass took, and otherwise the handler stops waiting
-    for it when that remainder runs out. Either way the first page comes back
-    with archived_cold_error saying why. The pass runs as its own task so the
-    handler can stop waiting without a timeout wrapper around the retrieval;
-    cancellation of the whole request still propagates.
-    """
-    request = state.request
-    threshold = min(ARCHIVED_COLD_MIN_RESULTS, request.limit)
-    if len(state.results) >= threshold:
-        return
-    widening = _archived_cold_widening(request)
-    if widening is None:
-        return
-
-    budget: Optional[float] = None
-    if state.deadline is not None:
-        budget = state.deadline - ARCHIVED_COLD_RESPONSE_RESERVE_S - time.monotonic()
-        if budget <= 0 or budget < first_pass_s:
-            state.archived_cold_error = (
-                f"second pass skipped: {max(budget, 0.0):.1f}s of the "
-                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget was left after a "
-                f"{first_pass_s:.1f}s first pass; returning the first page only"
-            )
-            logger.info("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
-            return
-
-    second = _KnowledgeSearchState(
-        request=replace(request, **widening),
-        graph=state.graph,
-    )
-    task = asyncio.create_task(_run_archived_cold_pass(second, request.limit))
-    try:
-        done, _ = await asyncio.wait({task}, timeout=budget)
-    except asyncio.CancelledError:
-        # The request itself was cancelled: take the pass down with it.
-        _abandon_archived_cold_pass(task)
-        raise
-    if not done:
-        _abandon_archived_cold_pass(task)
-        state.archived_cold_error = (
-            f"second pass did not finish within the {budget:.1f}s left of the "
-            f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget; returning the first page only"
-        )
-        logger.warning("[KG_SEARCH] archived/cold %s", state.archived_cold_error)
-        return
-    if task.cancelled():
-        state.archived_cold_error = "second pass was cancelled; returning the first page only"
-        return
-    exc = task.exception()
-    if exc is not None:
-        if not isinstance(exc, Exception):
-            raise exc
-        logger.warning("[KG_SEARCH] archived/cold second pass failed: %s", exc)
-        state.archived_cold_error = str(exc)
-        return
-
-    seen = {document.id for document in state.results}
-    room = request.limit - len(state.results)
-    added = [
-        document
-        for document in second.results
-        if document.id not in seen and not _candidate_status_visible(document, request)
-    ][:room]
-    if not added:
-        return
-
-    state.archived_cold_primary_count = len(state.results)
-    state.archived_cold_statuses = [
-        status
-        for status, widened in (
-            ("archived", widening["include_archived"] and not request.include_archived),
-            ("cold", widening["include_cold"] and not request.include_cold),
-        )
-        if widened
-    ]
-    for document in added:
-        state.archived_cold_ids.add(document.id)
-        for source, target in (
-            (second.semantic_scores, state.semantic_scores),
-            (second.rerank_scores, state.rerank_scores),
-            (second.rrf_scores, state.rrf_scores),
-        ):
-            if document.id in source:
-                target[document.id] = source[document.id] * ARCHIVED_COLD_SCORE_PENALTY
-    if state.fts_anchor_ids is not None and second.fts_anchor_ids:
-        state.fts_anchor_ids.update(
-            document.id for document in added if document.id in second.fts_anchor_ids
-        )
-    state.results = list(state.results) + added
-    if not state.search_mode:
-        state.search_mode = second.search_mode
 
 
-def _candidate_matches_semantic_fallback(
-    document: Any,
-    request: _KnowledgeSearchRequest,
-) -> bool:
-    if request.agent_id and document.agent_id != request.agent_id:
-        return False
-    if request.discovery_type and document.type != request.discovery_type:
-        return False
-    if request.severity and document.severity != request.severity:
-        return False
-    # The same status predicate as the main path: this one used to check
-    # archived only, so a cold row could come back from a default search.
-    if not _candidate_status_visible(document, request):
-        return False
-    if request.tags and not any(tag in set(document.tags or []) for tag in request.tags):
-        return False
-    return _within_window(document, request)
 
 
-def _omits_imported_lane(request: _KnowledgeSearchRequest) -> bool:
-    """Whether a queryless listing leaves unpromoted imported memory out.
-
-    With no query there is no relevance contest for the authority multiplier
-    to decide, so ranking only reshuffles a page imports have already filled,
-    and open imports read as open work to every sweep. The listing omits them
-    and reports the count instead. A caller still reads the lane by asking
-    for it: authority_mode='all', or a tag filter made only of
-    imported-memory tags (the same lane test ranking honours).
-    """
-    if request.authority_mode == "all":
-        return False
-    return not is_lane_filter(request.tags)
 
 
-def _label_excluded(document: Any, request: _KnowledgeSearchRequest) -> bool:
-    """True when the writer's display label is one the caller excluded.
-
-    Checked while candidates are collected, not only after the page is cut:
-    otherwise an excluded writer's row can take a slot under the limit and
-    leave the page short, or empty at limit=1 under newest-first order.
-    """
-    if not request.exclude_labels:
-        return False
-    display = _resolve_agent_display(document.agent_id)
-    display_name = display.get("display_name", document.agent_id) or ""
-    return str(display_name).strip().lower() in request.exclude_labels
 
 
-def _exclude_search_labels(state: _KnowledgeSearchState) -> None:
-    if not state.request.exclude_labels:
-        return
-    state.results = [
-        document for document in state.results if not _label_excluded(document, state.request)
-    ]
 
 
-def _serialize_search_discoveries(
-    state: _KnowledgeSearchState,
-    *,
-    include_details: bool,
-) -> list[dict[str, Any]]:
-    discoveries = []
-    for document in state.results:
-        provenance = document.provenance if isinstance(document.provenance, dict) else None
-        display_name = (provenance or {}).get("writer_label_at_write")
-        if not display_name:
-            display = _resolve_agent_display(document.agent_id)
-            display_name = display.get("display_name", document.agent_id)
-
-        # Summary-only searches are lists of leads. Expanded results promise
-        # full inline content, so keep their original summary as well.
-        summary = document.summary if include_details else _one_line(document.summary, limit=200)
-        item = {"by": display_name, "summary": summary}
-        item["authority"] = assess_authority(document).to_dict()
-        session_at_write = (provenance or {}).get("writer_session_id_at_write")
-        if session_at_write:
-            item["session_id_at_write"] = audit_reference(session_at_write)
-
-        serialized = document.to_dict(include_details=include_details)
-        # Summary-mode serialization already computes lifecycle metadata and a
-        # bounded details preview. Keep those fields on the wire instead of
-        # collapsing the result to id/type/status/tags: the intermediate digest
-        # tier should let a caller choose one record to open without first
-        # expanding every discovery inline.
-        for key in (
-            "id",
-            "type",
-            "status",
-            "severity",
-            "tags",
-            "created_at",
-            "updated_at",
-            "superseded_by",
-            "closure_class",
-            "has_details",
-            "details_preview",
-            "details_length",
-            "has_more_details",
-        ):
-            value = serialized.get(key)
-            if value is not None:
-                item[key] = value
-        if include_details and serialized.get("details"):
-            item["details"] = serialized.get("details")
-        # The evidence rides with an expanded result only, as details do.
-        if include_details and serialized.get("closure_evidence") is not None:
-            item["closure_evidence"] = serialized.get("closure_evidence")
-        item["_agent_id"] = document.agent_id
-        item["system_version"] = provenance.get("system_version") if provenance else None
-        if document.status == "open":
-            staleness = _compute_staleness(document)
-            if staleness:
-                # The prose is the canonical field (the dashboard reads it);
-                # `last_activity_days` is the same fact in structured form,
-                # present only when the warning is, so a digest can carry it
-                # without the sentence. The name is the one
-                # knowledge(action='audit') already gives days since the last
-                # write; its `age_days` counts from creation instead.
-                item["last_activity_days"], item["staleness_warning"] = staleness
-        if state.request.include_provenance:
-            item["provenance"] = redact_provenance(document.provenance)
-            if document.provenance_chain:
-                item["provenance_chain"] = document.provenance_chain
-        annotate_resolution_notes(item, document)
-        annotate_imported_read(item, document)
-        if document.id in state.archived_cold_ids:
-            item["retrieval_tier"] = ARCHIVED_COLD_TIER
-        discoveries.append(item)
-    return discoveries
 
 
-def _base_search_response(
-    state: _KnowledgeSearchState,
-    discoveries: list[dict[str, Any]],
-    *,
-    auto_details: bool,
-    include_details: bool,
-) -> dict[str, Any]:
-    request = state.request
-    detail_suffix = (
-        " (details auto-included for small result set)"
-        if auto_details
-        else ""
-        if include_details
-        else " (summaries only)"
-    )
-    response = {
-        "search_mode_used": state.search_mode,
-        "search_mode_requested": request.search_mode_requested,
-        "operator_used": state.operator_used,
-        "fields_searched": state.fields_searched,
-        "query": request.query_text,
-        "discoveries": discoveries,
-        "count": len(state.results),
-        "message": f"Found {len(state.results)} discovery(ies){detail_suffix}",
-        **_search_order_echo(request),
-    }
-    add_resolution_notes_hint(response)
-    return response
 
 
-def _search_order_echo(request: _KnowledgeSearchRequest) -> dict[str, Any]:
-    """Say how the list is ordered and windowed, only when it differs from default."""
-    echo: dict[str, Any] = {}
-    if request.sort_by != "relevance":
-        echo["sort_by"] = request.sort_by
-    if request.created_after:
-        echo["created_after"] = request.created_after.isoformat()
-    if request.created_before:
-        echo["created_before"] = request.created_before.isoformat()
-    if request.recency_half_life_days:
-        echo["recency_half_life_days"] = request.recency_half_life_days
-    return echo
 
 
-def _attach_search_diagnostics(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-) -> None:
-    if state.semantic_skipped_reason:
-        response["semantic_skipped_reason"] = state.semantic_skipped_reason
-    if state.fts_operator_used:
-        response["fts_operator_used"] = state.fts_operator_used
-        response["fts_fallback_used"] = state.fts_fallback_used
-    if state.search_degraded_warning:
-        response["search_degraded"] = True
-        response["search_degraded_message"] = state.search_degraded_warning
-    if state.hybrid_skipped_reason:
-        response["hybrid_skipped_reason"] = state.hybrid_skipped_reason
-    if state.fts_fallback_skipped_reason:
-        response["fts_fallback_skipped_reason"] = state.fts_fallback_skipped_reason
-    if state.tag_filter_dropped:
-        response["tag_filter_dropped"] = state.tag_filter_dropped
-    if state.imported_omitted:
-        response["imported_omitted"] = state.imported_omitted
-        response["imported_omitted_hint"] = (
-            "This listing left out unpromoted imported-memory rows. Pass "
-            "authority_mode='all', or filter on an imported-memory tag, to "
-            "read them; a query search still returns them, down-ranked."
-        )
-    if state.fallback_used:
-        response["fallback_used"] = True
-        response["fallback_message"] = state.fallback_explanation or (
-            "No exact matches found. Retried with individual terms (OR operator)."
-        )
-        response["fallback_terms"] = str(state.request.query_text).split()[:3] if state.request.query_text else []
-    if state.archived_cold_ids:
-        statuses = " and ".join(state.archived_cold_statuses)
-        response[ARCHIVED_COLD_TIER] = {
-            "used": True,
-            "primary_count": state.archived_cold_primary_count,
-            "added": len(state.archived_cold_ids),
-            "statuses_searched": state.archived_cold_statuses,
-            "threshold": ARCHIVED_COLD_MIN_RESULTS,
-            "score_penalty": ARCHIVED_COLD_SCORE_PENALTY,
-            "note": (
-                f"Only {state.archived_cold_primary_count} active result(s) matched, "
-                f"so a second pass searched {statuses} rows. Those rows come after "
-                f"every active result, carry retrieval_tier='{ARCHIVED_COLD_TIER}', "
-                f"and their scores are multiplied by {ARCHIVED_COLD_SCORE_PENALTY}. "
-                "Check status and superseded_by before relying on one. Pass "
-                "include_archived=false or include_cold=false to leave that status out."
-            ),
-        }
-    elif state.archived_cold_error:
-        response[f"{ARCHIVED_COLD_TIER}_error"] = state.archived_cold_error
-
-    authority_counts: dict[str, int] = {}
-    for document in state.results:
-        tier = assess_authority(document).tier
-        authority_counts[tier] = authority_counts.get(tier, 0) + 1
-    if authority_counts and (
-        IMPORTED_CONTEXT in authority_counts
-        or CHANNEL_MESSAGE in authority_counts
-        or GOVERNED_CLAIM in authority_counts
-    ):
-        response["authority_policy"] = {
-            "mode": state.request.authority_mode,
-            "reranked": state.authority_reranked,
-            "result_tiers": authority_counts,
-            "note": (
-                "Authority affects close ranking contests; it is provenance-aware "
-                "retrieval, not a truth verdict. Filter by source or channel tags "
-                "or pass authority_mode='all' to inspect raw relevance order."
-            ),
-        }
 
 
-def _empty_search_hints(request: _KnowledgeSearchRequest) -> list[str]:
-    hints = []
-    query_words = 0
-    if request.query_text:
-        query_text = str(request.query_text)
-        normalized = query_text.replace("_", " ").replace("-", " ")
-        query_words = len([word for word in normalized.split() if word.strip()])
-        if query_words >= 5:
-            hints.append(
-                f"Long query ({query_words} words) - try semantic search: "
-                f"knowledge(action='search', query='{request.query_text}', semantic=true)"
-            )
-            hints.append(
-                "Or broaden to key concepts: knowledge(action='search', query='"
-                + ", ".join(query_text.split()[:3])
-                + "')"
-            )
-        elif query_words >= 2:
-            hints.append("Multi-word query - try semantic search (semantic=true) for conceptual matching")
-            hints.append("Or search individual terms: " + ", ".join(query_text.split()[:3]))
-        else:
-            hints.append(f"Single term '{request.query_text}' - try broader search or use tags")
-            hints.append(f"Try: knowledge(action='search', tags=['{request.query_text}']) or broaden query")
-        hints.append("Alternative: Search by tags instead (knowledge(action='search', tags=['tag1', 'tag2']))")
-
-    if request.agent_id:
-        hints.append(f"Filter active: agent_id='{request.agent_id[:20]}...' - remove to search across all agents")
-    if request.tags:
-        hints.append(f"Filter active: {len(request.tags)} tag(s) - remove or use fewer tags for broader results")
-    if request.discovery_type:
-        hints.append(f"Filter active: type='{request.discovery_type}' - remove to search all discovery types")
-    if request.severity:
-        hints.append(f"Filter active: severity='{request.severity}' - remove to search all severities")
-    return hints
 
 
-def _attach_empty_search_guidance(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-) -> None:
-    if state.results:
-        return
-    request = state.request
-    if request.query_text:
-        record_recall_event(
-            ZERO_RESULT,
-            request.query_text,
-            query_terms=request.query_term_count,
-            search_mode=state.search_mode,
-            detail={
-                "hybrid_skipped": bool(state.hybrid_skipped_reason),
-                "fts_or_fallback_skipped": bool(state.fts_fallback_skipped_reason),
-                "tags_present": bool(request.tags),
-            },
-        )
-    hints = _empty_search_hints(request)
-    if hints:
-        response["empty_results_hints"] = hints
-        response["tip"] = f"No results found. {hints[0]}"
-        response["all_suggestions"] = hints
 
 
-def _attach_score_map(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-    *,
-    key: str,
-    scores: dict[str, float],
-    digits: int,
-) -> None:
-    if not scores or not state.request.query_text:
-        return
-    visible = {document.id: round(scores[document.id], digits) for document in state.results if document.id in scores}
-    if visible:
-        response[key] = visible
 
 
-def _verbatim_probe_terms(terms: list[str]) -> list[str]:
-    """Query terms whose literal presence in a result is meaningful.
-
-    Drops websearch control tokens: bare boolean operators, and negated terms,
-    where a leading '-' asks for ABSENCE so demanding the literal would invert
-    the caller's intent. Phrase quotes are stripped so a quoted phrase is
-    probed as its own text.
-    """
-    probes: list[str] = []
-    for term in terms:
-        if term in ("OR", "AND") or term.startswith("-"):
-            continue
-        cleaned = term.strip('"').lower()
-        if cleaned:
-            probes.append(cleaned)
-    return probes
 
 
-def _contains_all_terms(document: Any, probes: list[str]) -> bool:
-    """True when every probe term appears verbatim in the document's own text."""
-    if not probes:
-        return False
-    haystack = " ".join(
-        (
-            getattr(document, "summary", "") or "",
-            getattr(document, "details", "") or "",
-            " ".join(getattr(document, "tags", None) or []),
-        )
-    ).lower()
-    return all(probe in haystack for probe in probes)
 
 
-def _attach_search_scores_and_confidence(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-) -> None:
-    _attach_score_map(
-        response,
-        state,
-        key="similarity_scores",
-        scores=state.semantic_scores,
-        digits=3,
-    )
-    _attach_score_map(
-        response,
-        state,
-        key="rerank_scores",
-        scores=state.rerank_scores,
-        digits=3,
-    )
-    _attach_score_map(
-        response,
-        state,
-        key="rrf_scores",
-        scores=state.rrf_scores,
-        digits=4,
-    )
-
-    request = state.request
-    if not (request.query_text and state.results and state.fts_anchor_ids is not None):
-        return
-    lexical_hits = sum(1 for document in state.results if document.id in state.fts_anchor_ids)
-    if lexical_hits:
-        return
-
-    # An unanchored FTS arm is a fact about the index, not about the results.
-    # PostgreSQL's parser emits some spans as one undecomposed lexeme -- paths,
-    # urls, emails -- so a result can carry the caller's terms verbatim and
-    # still anchor nothing. Issue #1711: this note fired on a rank-1 hit whose
-    # summary contained the query string exactly, and told the caller to treat
-    # it as "exploratory rather than authoritative". Read the text before
-    # making a claim about the text.
-    probes = _verbatim_probe_terms(request.query_terms)
-    verbatim = [document for document in state.results if _contains_all_terms(document, probes)]
-    if verbatim:
-        record_recall_event(
-            LEXICAL_INDEX_MISS,
-            request.query_text,
-            query_terms=request.query_term_count,
-            search_mode=state.search_mode,
-            detail={"verbatim_results": len(verbatim), "returned": len(state.results)},
-        )
-        response["lexical_index_note"] = (
-            f"{len(verbatim)} of {len(state.results)} results contain every query "
-            "term verbatim but were not anchored by the full-text index, which "
-            "indexes some spans (paths, urls, emails) whole. Those results are "
-            "literal matches; rank them accordingly."
-        )
-        return
-
-    response["low_confidence"] = True
-    record_recall_event(
-        LOW_CONFIDENCE,
-        request.query_text,
-        query_terms=request.query_term_count,
-        search_mode=state.search_mode,
-    )
-    response["confidence_note"] = (
-        "No result matched your query terms lexically — these are semantic-only "
-        "matches and may be tangential (semantic relevance is weakly calibrated "
-        "on this corpus). Rephrase with distinctive key terms, or treat these as "
-        "exploratory rather than authoritative."
-    )
 
 
-def _attach_search_usage_hints(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-    *,
-    auto_details: bool,
-    include_details: bool,
-) -> None:
-    request = state.request
-    if request.query_text and request.query_term_count > 1:
-        if state.search_mode == "fts" and not state.fallback_used:
-            response["operator_note"] = (
-                "Multi-term FTS ran with "
-                f"operator={state.fts_operator_used or state.operator_used}. "
-                "Use operator='OR' for broader recall, or tags/filters for tighter scope."
-            )
-        elif state.search_mode == "semantic":
-            response["operator_note"] = (
-                "Semantic search considers all terms together (conceptual similarity, not keyword matching)."
-            )
-    response["discovery_retrieval_options"] = {
-        "current_tier": (
-            "full_inline_auto"
-            if auto_details
-            else "full_inline"
-            if include_details
-            else "digest"
-        ),
-        "digest": "include_details=false",
-        "open_one": "knowledge(action='details', discovery_id='...')",
-        "all_inline": "include_details=true (can be large for multi-result searches)",
-    }
-    if not include_details:
-        response["_tip"] = (
-            "Results include bounded previews. Open one with knowledge(action='details', "
-            "discovery_id='...'); use include_details=true only when every result "
-            "is needed inline."
-        )
-    if request.limit_clamped_from is not None:
-        # A clamped caller must be able to tell truncation from "that was
-        # all" — and must not be advised to raise a limit that is already
-        # at the ceiling.
-        response["limit_clamped_from"] = request.limit_clamped_from
-        if len(state.results) == request.limit:
-            response["_more_available"] = (
-                f"You asked for {request.limit_clamped_from} results; the "
-                f"server maximum is {request.limit}, so results were "
-                f"truncated there. Narrow the query to see the rest."
-            )
-    elif len(state.results) == request.limit:
-        response["_more_available"] = f"Results may be limited to {request.limit}. Use limit=N (max 100) to get more."
-    if state.search_mode == "substring_scan" and not state.results and request.query_text:
-        response["search_hint"] = (
-            "No results with substring matching. Try: "
-            "1) Use specific tags: tags=['identity', 'philosophy'] "
-            "2) Search by discovery_type: discovery_type='insight' "
-            "3) Use single keywords instead of phrases"
-        )
 
 
-async def _attach_search_synthesis(
-    response: dict[str, Any],
-    state: _KnowledgeSearchState,
-    discoveries: list[dict[str, Any]],
-) -> None:
-    if not state.request.synthesize:
-        return
-    if len(discoveries) < 3:
-        response["_synthesis_note"] = "Synthesis skipped: fewer than 3 results"
-        return
-    # The LLM call gets what retrieval left of the handler's budget, less a
-    # reserve for the rest of the response. Without this a slow model ran
-    # into the handler timeout and the caller lost the results it had: the
-    # archived/cold second pass makes that likelier, since filling a short
-    # page to 3 rows is what turns synthesis on.
-    llm_timeout = SEARCH_SYNTHESIS_MAX_TIMEOUT_S
-    if state.deadline is not None:
-        llm_timeout = min(
-            llm_timeout,
-            state.deadline
-            - time.monotonic()
-            - SEARCH_SYNTHESIS_RESERVE_S
-            - LOCAL_LLM_WAIT_BUFFER_S,
-        )
-        if llm_timeout < SEARCH_SYNTHESIS_MIN_TIMEOUT_S:
-            response["_synthesis_note"] = (
-                "Synthesis skipped: too little of the "
-                f"{KNOWLEDGE_SEARCH_TIMEOUT_S:g}s search budget left after retrieval"
-            )
-            return
-    try:
-        synthesis = await synthesize_results(
-            discoveries=discoveries,
-            query=state.request.query_text,
-            max_discoveries=10,
-            max_tokens=400,
-            timeout=llm_timeout,
-        )
-        if synthesis:
-            response["synthesis"] = synthesis
-            logger.debug(
-                "Knowledge synthesis generated for %d discoveries",
-                len(discoveries),
-            )
-    except Exception as exc:
-        logger.debug("Synthesis skipped: %s", exc)
-        response["_synthesis_note"] = "Synthesis unavailable (local LLM not responding)"
 
 
 async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, Any]:
@@ -4411,28 +2372,8 @@ async def handle_list_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Tex
     except Exception as e:
         return [error_response(f"Failed to list knowledge: {str(e)}")]
 
-@dataclass(frozen=True)
-class _KnowledgeUpdateRequest:
-    arguments: Dict[str, Any]
-    discovery_id: str
-    status: Any
-    details: Any
-    resolution_note: Optional[str]
-    summary: Any
-    severity: Any
-    discovery_type: Any
-    tags: Any
-    superseded_by: Any
-    closure_class: Optional[str] = None
-    closure_evidence: Any = None
 
 
-class _UpdateResponseError(Exception):
-    """Abort a discovery update with an already-structured MCP error."""
-
-    def __init__(self, response: TextContent):
-        super().__init__()
-        self.response = response
 
 
 def _parse_knowledge_update_request(
@@ -4510,71 +2451,10 @@ def _parse_knowledge_update_request(
     return request
 
 
-def _refuse_oversized_summary_or_tags(request: _KnowledgeUpdateRequest) -> None:
-    """Refuse an update whose summary or tags are over their bounds.
-
-    Measured on the values storage would write (the summary as a string, the
-    tags normalized). On AGE either one over the Cypher parameter limit fails
-    the whole update and reads back as "Discovery not found"; refusing here
-    names the real cause and changes nothing.
-    """
-    if request.summary is not None:
-        size = len(str(request.summary))
-        if size > MAX_UPDATED_SUMMARY_LEN:
-            raise _UpdateResponseError(
-                _write_bound_refusal(
-                    f"summary is {size:,} characters; the limit is "
-                    f"{MAX_UPDATED_SUMMARY_LEN:,}. Nothing was changed.",
-                    f"Send a summary of at most {MAX_UPDATED_SUMMARY_LEN:,} "
-                    "characters: the claim itself. Put supporting material in "
-                    "details, or in resolution_notes when closing.",
-                )
-            )
-    oversized_tags = _oversized_tags(request.tags, "Nothing was changed.")
-    if oversized_tags:
-        raise _UpdateResponseError(_write_bound_refusal(*oversized_tags))
 
 
-_SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-_GATED_SEVERITIES = ("high", "critical")
 
 
-def _effective_update_severity(
-    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
-) -> Optional[str]:
-    """The severity an update's gates must answer to: the higher of the two.
-
-    Gating on the STORED severity alone leaves escalation ungated: `store()`
-    demands ``require_registered_agent`` + ``verify_agent_ownership`` for
-    high/critical (see ``_resolve_store_writer`` / ``_authorize_store_discovery``),
-    but an update that *raises* low -> critical would be judged against the
-    stored ``low`` and take the anonymous low-friction path — landing a
-    critical row that ``store()`` would have refused. Same mint-vs-gate
-    coupling class as #598/#1056: a gate that guards one write path is not a
-    gate.
-
-    Taking the max also keeps de-escalation gated, which matters at least as
-    much: silently downgrading someone else's critical finding hides a real
-    problem rather than inventing a fake one.
-    """
-    stored = discovery.severity
-    requested = request.severity
-    if requested is None:
-        return stored
-    requested = str(requested).lower()
-    if requested not in _SEVERITY_RANK:
-        # Invalid values are rejected later by _apply_update_metadata_fields
-        # with a proper enum error. Gate on the stored value meanwhile rather
-        # than letting an unparseable severity waive the check.
-        return stored
-    if stored is None:
-        return requested
-    stored_key = str(stored).lower()
-    if stored_key not in _SEVERITY_RANK:
-        return requested
-    return max(
-        (stored_key, requested), key=lambda value: _SEVERITY_RANK[value]
-    )
 
 
 def _resolve_update_writer(
@@ -4604,281 +2484,22 @@ def _resolve_update_writer(
     return agent_id
 
 
-def _requested_non_owner_edits(
-    request: _KnowledgeUpdateRequest, allowed_statuses: set[str]
-) -> list[str]:
-    """List fields a non-owner cannot change on a high-severity discovery."""
-    requested_edits = [
-        field_name
-        for field_name, field_value in {
-            "details/content": request.details,
-            "summary": request.summary,
-            "severity": request.severity,
-            "discovery_type": request.discovery_type,
-            "tags": request.tags,
-        }.items()
-        if field_value is not None
-    ]
-    if (
-        request.resolution_note is not None
-        and request.status not in allowed_statuses
-    ):
-        requested_edits.append("resolution_notes")
-    # Same rule as resolution_notes: a non-owner declares the standard of a
-    # closure only in the call that makes it.
-    if (
-        request.closure_class is not None
-        and request.status not in allowed_statuses
-    ):
-        requested_edits.append("closure_class")
-    return requested_edits
 
 
 # What _requested_non_owner_edits lets a non-owner set on a gated finding, but
 # only in the call that closes it. Every other field it lists is the owner's.
-_CLOSING_CALL_FIELDS = ("resolution_notes", "closure_class")
 
 
-def _non_owner_edit_refusal(
-    discovery_id: str, requested_edits: list[str], allowed_list: list[str]
-) -> TextContent:
-    """Refuse a non-owner's edit, naming the call that would be accepted.
-
-    "Retry with status only" is right for the owner's fields and wrong for
-    resolution_notes and closure_class: following it drops them, when the same
-    call with a cross-agent closing status would have landed them.
-    """
-    owner_only = [f for f in requested_edits if f not in _CLOSING_CALL_FIELDS]
-    closing_call = [f for f in requested_edits if f in _CLOSING_CALL_FIELDS]
-    if not closing_call:
-        message = (
-            "Permission denied: Non-owners cannot edit "
-            f"{', '.join(owner_only)} on high-severity discovery "
-            f"'{discovery_id}'. Allowed cross-agent status values: "
-            f"{allowed_list}."
-        )
-        action = f"Retry with status only. Allowed values: {allowed_list}"
-    else:
-        closing_fields = " and ".join(closing_call)
-        verb = "is" if len(closing_call) == 1 else "are"
-        accepted = (
-            f"{closing_fields} {verb} accepted from a non-owner only together "
-            f"with a cross-agent closing status, one of {allowed_list}"
-        )
-        if owner_only:
-            message = (
-                "Permission denied: Non-owners cannot edit "
-                f"{', '.join(owner_only)} on high-severity discovery "
-                f"'{discovery_id}', and {accepted}."
-            )
-            action = (
-                f"Drop {', '.join(owner_only)}, and pass {closing_fields} "
-                f"together with status in {allowed_list}."
-            )
-        else:
-            message = (
-                f"Permission denied on high-severity discovery "
-                f"'{discovery_id}': {accepted}."
-            )
-            action = f"Pass {closing_fields} together with status in {allowed_list}."
-    return error_response(
-        message,
-        recovery={
-            "action": action,
-            "related_tools": [
-                "knowledge",
-                "search_knowledge_graph",
-            ],
-        },
-    )
 
 
-def _require_owned_binding(request: _KnowledgeUpdateRequest, agent_id: str) -> None:
-    """Refuse a write to a high or critical finding from an unproven caller."""
-    from ..utils import verify_agent_ownership
-
-    if not verify_agent_ownership(agent_id, request.arguments):
-        raise _UpdateResponseError(
-            error_response(
-                "Authentication required for updating high-severity discoveries.",
-                error_code="AUTH_REQUIRED",
-                error_category="auth_error",
-                recovery={
-                    "action": "Ensure your session is bound to this agent",
-                    "related_tools": ["identity"],
-                    "workflow": (
-                        "Pass client_session_id on this call to bind as yourself. "
-                        "identity(client_session_id=...) reports the binding; a bare "
-                        "identity() mints a new agent instead of reading yours."
-                    ),
-                },
-            )
-        )
 
 
-def _authorize_high_severity_update(
-    request: _KnowledgeUpdateRequest,
-    discovery: DiscoveryNode,
-    agent_id: str,
-) -> None:
-    """Enforce authentication and ownership rules for sensitive updates."""
-    # Effective, not stored — an update that raises severity into the gated
-    # band must clear the same bar store() sets for creating it there.
-    if _effective_update_severity(request, discovery) not in _GATED_SEVERITIES:
-        return
-
-    _require_owned_binding(request, agent_id)
-
-    allowed_statuses = {"resolved", "closed", "wont_fix"}
-    if discovery.agent_id == agent_id:
-        return
-
-    requested_edits = _requested_non_owner_edits(request, allowed_statuses)
-    allowed_list = sorted(allowed_statuses)
-    if requested_edits:
-        raise _UpdateResponseError(
-            _non_owner_edit_refusal(
-                request.discovery_id, requested_edits, allowed_list
-            )
-        )
-    if request.status not in allowed_statuses:
-        raise _UpdateResponseError(
-            error_response(
-                f"Permission denied: Cannot set status '{request.status}' on "
-                f"high-severity discovery '{request.discovery_id}'. Allowed "
-                f"cross-agent status values: {allowed_list}.",
-                recovery={
-                    "action": (
-                        f"Use status in {allowed_list} to close another "
-                        "agent's discovery"
-                    ),
-                    "related_tools": [
-                        "knowledge",
-                        "search_knowledge_graph",
-                    ],
-                },
-            )
-        )
 
 
-def _apply_update_text_fields(
-    request: _KnowledgeUpdateRequest,
-    discovery: DiscoveryNode,
-    updates: dict[str, Any],
-) -> None:
-    """Apply summary, details, and resolution-note edits."""
-    if request.summary is not None:
-        updates["summary"] = str(request.summary)
-    if request.details is not None:
-        updates["details"] = str(request.details)
-    if request.resolution_note is not None:
-        base_details = (
-            str(request.details)
-            if request.details is not None
-            else (discovery.details or "")
-        ).rstrip()
-        note_block = (
-            f"Resolution notes ({_utc_now_iso()}):\n"
-            f"{request.resolution_note}"
-        )
-        updates["details"] = (
-            f"{base_details}\n\n{note_block}" if base_details else note_block
-        )
 
 
-def _refuse_oversized_details(
-    request: _KnowledgeUpdateRequest,
-    updates: dict[str, Any],
-    call: str = "update",
-) -> None:
-    """Refuse an update whose details value is over MAX_UPDATED_DETAILS_LEN.
-
-    Measured on the value storage would write, so the stored details (earlier
-    notes included) or the details this call sends count along with the new
-    notes block. On AGE a value over the Cypher parameter limit fails the
-    whole update and reads back as "Discovery not found"; refusing here
-    names the real cause and changes nothing. ``call`` names the call the
-    recovery tells the caller to resend (a supersede appends notes too).
-    """
-    details = updates.get("details")
-    if details is None or len(details) <= MAX_UPDATED_DETAILS_LEN:
-        return
-
-    size = len(details)
-    limit = f"the limit is {MAX_UPDATED_DETAILS_LEN:,}. Nothing was changed."
-    elsewhere = (
-        "Put long material such as logs in the repository, a PR or a new "
-        "finding that responds to this one (response_to={'discovery_id': "
-        f"'{request.discovery_id}', 'response_type': 'elaboration'}}) and "
-        "point to it."
-    )
-    if request.resolution_note is None:
-        message = f"details is {size:,} characters; {limit}"
-        action = (
-            f"Send details of at most {MAX_UPDATED_DETAILS_LEN:,} characters. "
-            f"{elsewhere}"
-        )
-    else:
-        message = (
-            "details with these resolution_notes appended would be "
-            f"{size:,} characters; {limit}"
-        )
-        room = MAX_UPDATED_DETAILS_LEN - (size - len(request.resolution_note))
-        if room > 0:
-            action = (
-                f"Shorten resolution_notes to at most {room:,} characters: "
-                "what closed the finding, with pointers (a commit, a PR, a "
-                f"finding id) to the rest. {elsewhere}"
-            )
-        else:
-            held_by = (
-                "The details this call sends leave"
-                if request.details is not None
-                else "This finding's stored details leave"
-            )
-            action = (
-                f"{held_by} no room for a notes block. Send the {call} "
-                "without resolution_notes and record the notes as a new "
-                "finding that responds to this one (response_to="
-                f"{{'discovery_id': '{request.discovery_id}', "
-                "'response_type': 'elaboration'})."
-            )
-    raise _UpdateResponseError(
-        error_response(
-            message,
-            error_code="INVALID_PARAM",
-            error_category="validation_error",
-            recovery={"action": action, "related_tools": ["knowledge"]},
-        )
-    )
 
 
-def _apply_update_metadata_fields(
-    request: _KnowledgeUpdateRequest, updates: dict[str, Any]
-) -> None:
-    """Validate and apply severity, type, and tags edits."""
-    if request.severity is not None:
-        severity = str(request.severity).lower()
-        if severity not in VALID_SEVERITIES:
-            raise _UpdateResponseError(
-                _invalid_enum_response("severity", severity, VALID_SEVERITIES)
-            )
-        updates["severity"] = severity
-
-    if request.discovery_type is not None:
-        discovery_type = _normalize_discovery_type(request.discovery_type)
-        if discovery_type not in VALID_DISCOVERY_TYPES:
-            raise _UpdateResponseError(
-                _invalid_enum_response(
-                    "discovery_type",
-                    discovery_type,
-                    VALID_DISCOVERY_TYPES,
-                )
-            )
-        updates["type"] = discovery_type
-
-    if request.tags is not None:
-        updates["tags"] = request.tags
 
 
 # By what standard was this closed. `status` alone is two-valued over a
@@ -4886,22 +2507,13 @@ def _apply_update_metadata_fields(
 # observed, cause unknown", and forced to pick, everyone picks the one that
 # shortens the queue. Recording the standard keeps a weak closure attached to
 # its own row instead of diluting what "resolved" means graph-wide.
-CLOSURE_CLASSES = {
-    "fix_verified",
-    "unobserved",
-    "not_reproducible",
-    "obsolete",
-    "duplicate",
-}
 
-_CLOSING_STATUSES = {"resolved", "closed", "wont_fix", "superseded"}
 
 # Where a class may sit: the closing statuses, and archived and cold, where the
 # lifecycle moves closed rows for retention without reopening them. Migration
 # 071 made discoveries_closure_class_requires_closed admit exactly this set;
 # tests/test_kg_closure_class.py holds the two together.
 # Reopening a row (open, disputed) clears its class.
-_CLASS_ADMITTING_STATUSES = CLOSURE_CLASS_ADMITTING_STATUSES
 
 # Evidence each class must actually carry. These two encode the specific ways a
 # closure went wrong on 2026-08-19 and are not generic diligence prompts.
@@ -4915,10 +2527,6 @@ _CLASS_ADMITTING_STATUSES = CLOSURE_CLASS_ADMITTING_STATUSES
 #   condition had ceased from a sibling signal still being written. Siblings
 #   share the sink, not the emitter, so that check carries no information about
 #   whether THIS condition would still be recorded.
-_CLOSURE_EVIDENCE_REQUIRED = {
-    "fix_verified": ("deployed", "observed"),
-    "unobserved": ("window", "instrument_check"),
-}
 
 # Whether the storage layer writes closure_class and closure_evidence. It does.
 # #1752 added the validation above and migration 064's two columns, but until
@@ -4932,339 +2540,30 @@ _CLOSURE_EVIDENCE_REQUIRED = {
 # discoveries_closure_class_requires_closed admitted a class only on resolved,
 # closed, wont_fix or superseded rows, so the lifecycle's resolved -> archived
 # move (and archived -> cold) would have been refused for every classified row.
-CLOSURE_CLASS_PERSISTED = True
 
 
-def _closure_class_choices() -> str:
-    """The closure classes as prose: a list literal reads as a list value."""
-    return ", ".join(f"'{name}'" for name in sorted(CLOSURE_CLASSES))
 
 
-def _closure_evidence_keys_prose() -> str:
-    """Which classes need which closure_evidence keys, from the validator's table."""
-    return "; ".join(
-        f"'{closure_class}' needs {' and '.join(keys)}"
-        for closure_class, keys in sorted(_CLOSURE_EVIDENCE_REQUIRED.items())
-    )
 
 
-def _closure_evidence_examples() -> str:
-    """The closure_evidence object each class needs, as a caller would send it."""
-    return "; ".join(
-        f"'{closure_class}' also needs closure_evidence="
-        "{" + ", ".join(f"'{key}': '...'" for key in keys) + "}"
-        for closure_class, keys in sorted(_CLOSURE_EVIDENCE_REQUIRED.items())
-    )
 
 
-_CLOSURE_PREAMBLE = (
-    "This closure declares no standard and reads as unclassified: a later "
-    "reader cannot tell it from a closure resting on a deployed fix whose "
-    "effect was observed."
-)
-_UNOBSERVED_IS_HONEST = (
-    "'unobserved' is the honest label when the evidence is that a symptom "
-    "stopped appearing."
-)
 
 
-def _closure_class_call(discovery_id: str, status: Optional[str]) -> str:
-    """The follow-up that records a class, as this caller can make it.
-
-    update_finding declares closure_class and closure_evidence (interface
-    contract 1.20.0). The status this update set is repeated for the reason
-    _resolution_notes_call gives: a non-owner of a high or critical finding may
-    set a class only together with a cross-agent closing status. For anyone
-    else the repeated status is a no-op: resolved_at is stamped only on the
-    transition into resolved or on a resolved row that has none, so repeating
-    'resolved' leaves an existing stamp alone.
-    """
-    status_argument = f", status='{status}'" if status else ""
-    return (
-        f"update_finding(discovery_id='{discovery_id}'{status_argument}, "
-        "closure_class='...')"
-    )
 
 
-def _unclassified_closure_note(
-    discovery_id: str, status: str, *, notes_passed: bool = False
-) -> str:
-    """What a closing update without closure_class should do next.
-
-    A call that already carried notes is told they are on the record rather
-    than that it declares nothing: the notes may name the standard, and the
-    class records it as a field of its own.
-    """
-    if not CLOSURE_CLASS_PERSISTED:
-        # Kept so the notes stay true if storage stops writing the class
-        # again: resolution_notes is then the only durable place for it.
-        standards = (
-            f"{_closure_class_choices()} ({_closure_evidence_keys_prose()})"
-        )
-        return (
-            f"{_CLOSURE_PREAMBLE} The server does not store closure_class, so "
-            "name the standard and its evidence in resolution_notes, which is "
-            f"stored: {_resolution_notes_call(discovery_id, status)} appends "
-            f"them. The standard is one of {standards}. {_UNOBSERVED_IS_HONEST}"
-        )
-    classes = (
-        f"closure_class is a string, one of: {_closure_class_choices()}; "
-        f"{_closure_evidence_examples()}."
-    )
-    call = _closure_class_call(discovery_id, status)
-    if notes_passed:
-        return (
-            "This closure passed no closure_class. Its resolution_notes are "
-            "stored with the record; the class records the standard they rest "
-            f"on as a field of its own, and {call} sets it. {classes} "
-            f"{_UNOBSERVED_IS_HONEST}"
-        )
-    return (
-        f"{_CLOSURE_PREAMBLE} {call} records the standard. {classes} "
-        f"{_UNOBSERVED_IS_HONEST}"
-    )
 
 
-def _resolution_notes_call(discovery_id: str, status: Optional[str]) -> str:
-    """The follow-up that appends resolution_notes, as this caller can make it.
-
-    update_finding's wire declares discovery_id, status and resolution_notes.
-    The status this update set is repeated because a non-owner of a high or
-    critical finding may add resolution_notes only together with a cross-agent
-    closing status (_requested_non_owner_edits): without it the same call is
-    refused. For anyone else the repeated status is a no-op; resolved_at is
-    stamped on the transition into resolved, or on a resolved row that has
-    none, so repeating 'resolved' leaves an existing stamp alone. An update
-    that set no status
-    needs none: a non-owner of a gated finding cannot make one succeed.
-    """
-    status_argument = f", status='{status}'" if status else ""
-    return (
-        f"update_finding(discovery_id='{discovery_id}'{status_argument}, "
-        "resolution_notes='...')"
-    )
 
 
-def _unstored_closure_class_note(
-    discovery_id: str,
-    closure_class: str,
-    status: Optional[str],
-    *,
-    notes_passed: bool = False,
-) -> str:
-    """A class that passed validation but is not on the record read back."""
-    unstored = (
-        f"closure_class '{closure_class}' passed validation, but the record "
-        "read back after this update does not carry it. resolution_notes is "
-        "stored"
-    )
-    call = _resolution_notes_call(discovery_id, status)
-    if notes_passed:
-        return (
-            f"{unstored}, and this call's notes are on the record: if they do "
-            f"not name the standard and its evidence, {call} appends a note "
-            "that does."
-        )
-    return f"{unstored}: name the standard and its evidence there with {call}."
 
 
-def _invalid_closure_param(message: str, recovery: Optional[str] = None) -> _UpdateResponseError:
-    return _UpdateResponseError(
-        error_response(
-            message,
-            error_code="INVALID_PARAM",
-            error_category="validation_error",
-            recovery={"action": recovery} if recovery else None,
-        )
-    )
 
 
-def _validate_closure_class(
-    request: _KnowledgeUpdateRequest,
-    normalized_status: Optional[str],
-    stored_status: Optional[str] = None,
-) -> None:
-    """Reject an ill-formed or contradictory closure class.
-
-    ``normalized_status`` is the status this update sets, if any; otherwise the
-    class is judged against ``stored_status``, the status the row already has.
-    Without that fallback, now that storage writes the class, a class sent to
-    an open row would reach storage, the constraint would refuse it, and the
-    AGE backend would report the refusal as "Discovery not found".
-    """
-    if request.closure_class is None:
-        if request.closure_evidence is not None:
-            # Evidence is stored with its class, never alone.
-            raise _invalid_closure_param(
-                "closure_evidence is evidence for a closure_class and is "
-                "stored only with one; pass closure_class in the same call, "
-                f"one of: {_closure_class_choices()}."
-            )
-        return
-
-    if request.closure_class not in CLOSURE_CLASSES:
-        raise _UpdateResponseError(
-            error_response(
-                f"Invalid closure_class '{request.closure_class}'. It is a "
-                f"string, one of: {_closure_class_choices()}.",
-                error_code="INVALID_PARAM",
-                error_category="validation_error",
-                recovery={
-                    "action": (
-                        "Pick the class describing what you actually had. "
-                        "'unobserved' is the honest label for closing because "
-                        "the condition stopped occurring without an established "
-                        "cause — prefer it over 'fix_verified' when the evidence "
-                        "is that a symptom is absent."
-                    ),
-                    "related_tools": ["knowledge"],
-                },
-            )
-        )
-
-    # A standard for a closure that is not happening. The DB rejects this too;
-    # failing here gives the caller a usable message instead of a constraint.
-    admitted = ", ".join(sorted(_CLASS_ADMITTING_STATUSES))
-    if normalized_status is not None:
-        if normalized_status not in _CLASS_ADMITTING_STATUSES:
-            raise _invalid_closure_param(
-                "closure_class names the standard a closure rests on, so it "
-                f"cannot sit on status='{normalized_status}'. It is admitted "
-                f"on: {admitted}."
-            )
-    elif stored_status is not None:
-        stored = str(stored_status).lower()
-        if stored not in _CLASS_ADMITTING_STATUSES:
-            raise _invalid_closure_param(
-                "closure_class names the standard a closure rests on, and "
-                f"discovery '{request.discovery_id}' is '{stored}' while this "
-                "call sets no status.",
-                recovery=(
-                    "Close it in the same call: pass status as one of "
-                    f"{', '.join(sorted(_CLOSING_STATUSES))} with the class."
-                ),
-            )
-
-    evidence = request.closure_evidence
-    if evidence is not None and not isinstance(evidence, dict):
-        raise _invalid_closure_param(
-            "closure_evidence is an object of named evidence, not "
-            f"{type(evidence).__name__}.",
-            recovery=_closure_evidence_hint(request.closure_class),
-        )
-    if evidence is not None:
-        # Refused before storage: on AGE an oversized property fails the whole
-        # update (status included) and reads back as "Discovery not found".
-        stored_size = len(closure_evidence_to_json(evidence).encode("utf-8"))
-        if stored_size > MAX_CLOSURE_EVIDENCE_BYTES:
-            raise _invalid_closure_param(
-                f"closure_evidence is {stored_size:,} bytes as stored JSON; the "
-                f"limit is {MAX_CLOSURE_EVIDENCE_BYTES:,}. Nothing was changed.",
-                recovery=(
-                    "Keep each evidence value to a short statement or a pointer "
-                    "(a commit, a build_sha, a query, a finding id) and put long "
-                    "material such as log excerpts in resolution_notes, which is "
-                    "appended to details."
-                ),
-            )
-
-    required = _CLOSURE_EVIDENCE_REQUIRED.get(request.closure_class)
-    if not required:
-        return
-
-    if not isinstance(evidence, dict):
-        raise _UpdateResponseError(
-            error_response(
-                f"closure_class='{request.closure_class}' requires "
-                f"closure_evidence as an object with keys {list(required)}.",
-                error_code="INVALID_PARAM",
-                error_category="validation_error",
-                recovery={"action": _closure_evidence_hint(request.closure_class)},
-            )
-        )
-
-    missing = [
-        key
-        for key in required
-        if not str(evidence.get(key) or "").strip()
-    ]
-    if missing:
-        raise _UpdateResponseError(
-            error_response(
-                f"closure_class='{request.closure_class}' is missing required "
-                f"closure_evidence: {missing}.",
-                error_code="INVALID_PARAM",
-                error_category="validation_error",
-                recovery={"action": _closure_evidence_hint(request.closure_class)},
-            )
-        )
 
 
-def _closure_evidence_hint(closure_class: str) -> str:
-    if closure_class == "fix_verified":
-        return (
-            "deployed: what shipped and how you confirmed it is in the RUNNING "
-            "build (compare build_sha, not a cached status line). "
-            "observed: the new behaviour you saw. The old symptom being absent "
-            "is not an observation of the fix — if that is all you have, the "
-            "class is 'unobserved'."
-        )
-    if closure_class == "unobserved":
-        return (
-            "window: the period over which the condition did not occur. "
-            "instrument_check: how you established the recorder for THIS "
-            "condition is still live. A sibling signal still arriving does not "
-            "establish it; siblings share the sink, not the emitter."
-        )
-    return (
-        "Send closure_evidence as an object of named facts, for example "
-        "{'of': '<discovery_id>'} for 'duplicate', or omit it."
-    )
 
 
-def _build_discovery_updates(
-    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
-) -> tuple[dict[str, Any], Optional[str]]:
-    """Build and validate the backend update payload."""
-    updates: dict[str, Any] = {"updated_at": _utc_now_iso()}
-    normalized_status = None
-
-    if request.status is not None:
-        normalized_status = str(request.status).lower()
-        if normalized_status not in VALID_DISCOVERY_STATUSES:
-            raise _UpdateResponseError(
-                error_response(
-                    f"Invalid status '{normalized_status}'. "
-                    f"Valid: {sorted(VALID_DISCOVERY_STATUSES)}"
-                )
-            )
-        updates["status"] = normalized_status
-        # Stamp resolved_at on the transition into resolved only. Repeating
-        # status='resolved' (the closure note's follow-up names it so a
-        # non-owner of a high/critical finding can append notes) must not move
-        # when the finding was actually resolved.
-        if normalized_status == "resolved" and (
-            getattr(discovery, "status", None) != "resolved"
-            or not getattr(discovery, "resolved_at", None)
-        ):
-            # ...or backfill a resolved row that never got one.
-            updates["resolved_at"] = _utc_now_iso()
-
-    _validate_closure_class(request, normalized_status, discovery.status)
-    if request.closure_class is not None:
-        # The pair is written together, so a class changed to one that needs
-        # no evidence does not keep the previous class's evidence.
-        updates["closure_class"] = request.closure_class
-        updates["closure_evidence"] = request.closure_evidence
-    elif normalized_status in CLOSURE_CLASS_CLEARING_STATUSES:
-        # Reopening: the closure the class described is no longer the state.
-        updates["closure_class"] = None
-        updates["closure_evidence"] = None
-
-    _apply_update_text_fields(request, discovery, updates)
-    _refuse_oversized_details(request, updates)
-    _apply_update_metadata_fields(request, updates)
-    return updates, normalized_status
 
 
 def _build_update_response(
@@ -5538,23 +2837,10 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
         return [error_response(f"Failed to get discovery details: {str(e)}")]
 
 
-class _BatchItemError(Exception):
-    """Abort one batch item with a plain per-item error message."""
 
 
-@dataclass(frozen=True)
-class _PreparedBatchDiscovery:
-    discovery: DiscoveryNode
-    summary: Any
-    discovery_type: Any
-    truncated_fields: list[str]
 
 
-@dataclass
-class _BatchStoreResult:
-    stored: list[dict[str, Any]] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
 
 
 def _validate_batch_discoveries(arguments: Dict[str, Any]) -> list[Any]:
@@ -5578,73 +2864,14 @@ def _validate_batch_discoveries(arguments: Dict[str, Any]) -> list[Any]:
     return discoveries
 
 
-def _truncate_batch_summary(summary: Any) -> tuple[Any, Optional[str]]:
-    """Truncate a batch summary at a nearby sentence or word boundary."""
-    if len(summary) <= MAX_SUMMARY_LEN:
-        return summary, None
-
-    truncation = f"summary ({len(summary)} → {MAX_SUMMARY_LEN})"
-    shortened = summary[:MAX_SUMMARY_LEN]
-    for end_char in [". ", "! ", "? "]:
-        last_end = shortened.rfind(end_char, MAX_SUMMARY_LEN - 100)
-        if last_end > 0:
-            shortened = shortened[: last_end + 1]
-            break
-    else:
-        last_space = shortened.rfind(" ")
-        if last_space > MAX_SUMMARY_LEN - 50:
-            shortened = shortened[:last_space]
-    return shortened.rstrip() + SUMMARY_TRUNCATION_MARKER, truncation
 
 
-def _truncate_batch_details(details: Any) -> tuple[Any, Optional[str]]:
-    """Apply the stable details limit used by batch writes."""
-    if len(details) <= MAX_DETAILS_LEN:
-        return details, None
-    truncation = f"details ({len(details)} → {MAX_DETAILS_LEN})"
-    return details[:MAX_DETAILS_LEN] + "... [truncated]", truncation
 
 
-def _parse_batch_response_to(
-    disc_data: dict[str, Any],
-) -> Optional[ResponseTo]:
-    """Parse one batch item's response edge; an invalid one fails that item."""
-    try:
-        return _parse_response_to(disc_data.get("response_to"))
-    except _InvalidResponseTo as exc:
-        raise _BatchItemError(str(exc)) from None
 
 
-def _parse_batch_severity(
-    disc_data: dict[str, Any],
-    idx: int,
-    result: _BatchStoreResult,
-) -> Optional[str]:
-    """Validate severity without fabricating a fallback value."""
-    severity = disc_data.get("severity")
-    if severity is None:
-        return None
-
-    normalized = str(severity).lower()
-    if normalized in VALID_SEVERITIES:
-        return normalized
-
-    result.warnings.append(
-        f"Discovery {idx}: invalid severity '{severity}' ignored "
-        f"(stored unset). Valid: {sorted(VALID_SEVERITIES)}"
-    )
-    return None
 
 
-def _parse_batch_confidence(disc_data: dict[str, Any]) -> Optional[float]:
-    """Parse and clamp optional confidence, ignoring malformed values."""
-    if disc_data.get("confidence") is None:
-        return None
-    try:
-        confidence = float(disc_data["confidence"])
-    except (ValueError, TypeError):
-        return None
-    return max(0.0, min(1.0, confidence))
 
 
 def _prepare_batch_discovery(
@@ -5856,41 +3083,12 @@ async def _handle_store_knowledge_graph_batch(
         ]
 
 
-_NOTE_TOTAL_LEN = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
-_NOTE_INFRASTRUCTURE_TAGS = frozenset(
-    {
-        "infrastructure",
-        "search",
-        "embedding",
-        "silent-failure",
-        "degraded",
-        "database",
-        "service",
-    }
-)
 
 
-class _NoteResponseError(Exception):
-    """Abort a note write with an already-structured MCP error."""
-
-    def __init__(self, response: TextContent):
-        super().__init__()
-        self.response = response
 
 
-@dataclass(frozen=True)
-class _KnowledgeNoteRequest:
-    arguments: Dict[str, Any]
-    agent_id: str
-    text: Any
-    is_anonymous_writer: bool
 
 
-def _truncate_note_text(text: Any) -> Any:
-    """Apply the legacy combined note limit before splitting fields."""
-    if len(text) <= _NOTE_TOTAL_LEN:
-        return text
-    return text[:_NOTE_TOTAL_LEN] + "... [truncated]"
 
 
 def _parse_note_response_to(
@@ -5903,31 +3101,8 @@ def _parse_note_response_to(
         raise _NoteResponseError(error_response(str(exc))) from None
 
 
-def _split_note_text(text: Any) -> tuple[Any, Any]:
-    """Split a note into summary and details at a nearby boundary."""
-    if len(text) <= MAX_SUMMARY_LEN:
-        return text, ""
-
-    shortened = text[:MAX_SUMMARY_LEN]
-    split_pos = MAX_SUMMARY_LEN
-    for end_char in [". ", "! ", "? ", "\n"]:
-        last_end = shortened.rfind(end_char, MAX_SUMMARY_LEN - 200)
-        if last_end > 0:
-            split_pos = last_end + len(end_char)
-            break
-    else:
-        last_space = shortened.rfind(" ")
-        if last_space > MAX_SUMMARY_LEN - 100:
-            split_pos = last_space
-    return text[:split_pos].rstrip(), text[split_pos:].strip()
 
 
-def _infer_note_severity(tags: list[str]) -> str:
-    """Preserve the legacy infrastructure-bug severity inference."""
-    tag_set = set(tags)
-    if "bug" in tag_set and tag_set & _NOTE_INFRASTRUCTURE_TAGS:
-        return "medium"
-    return "low"
 
 
 def _capture_note_provenance(
@@ -6284,18 +3459,6 @@ async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Text
         return [error_response(f"Failed to get lifecycle stats: {str(e)}")]
 
 
-def _supersede_notes_block_details(
-    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
-) -> str:
-    """The older finding's details with the supersede's notes appended.
-
-    Built as an update builds them (_apply_update_text_fields) and held to
-    the same bound; over it, raises _UpdateResponseError.
-    """
-    updates: dict[str, Any] = {}
-    _apply_update_text_fields(request, discovery, updates)
-    _refuse_oversized_details(request, updates, call="supersede")
-    return updates["details"]
 
 
 def _authorize_supersede_notes(
