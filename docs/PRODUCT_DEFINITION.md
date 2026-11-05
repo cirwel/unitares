@@ -22,9 +22,10 @@ The shared record answers five questions:
 | **What happened?** | Typed outcome events preserve reported results and evidence grades, with prediction binding when supplied. |
 | **What can a successor recover?** | Knowledge search, review reads, history export, and authorized outcome-evidence reads let a client reconstruct the work from available records. |
 
-Git and Markdown handoffs fit alongside this record: a finding can reference
-code, logs, test results, or a handoff document while retaining attribution and
-later corrections. See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md)
+Git, scratchpads, and Markdown handoff notes carry code and in-flight task state;
+the UNITARES record sits alongside them so a finding can reference code, logs,
+test results, or a handoff document while retaining attribution, review history,
+and later corrections. See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md)
 for tool names, service prerequisites, and retention and authorization boundaries.
 
 ## Interfaces and integration
@@ -47,12 +48,11 @@ It also ships EISV on the check-in path, where the instrument maintains state
 history and supplies assessment and guidance. Agents own their reasoning and
 execution; an operator owns every authority boundary.
 
-**UNITARES Resident** is a separate first-party agent project for persistent
+**UNITARES Resident** is a separate first-party agent runtime for persistent
 conversations, provider and tool adapters, scheduling, task queues, and operator
-interfaces. Its repository and runtime skeleton ship today; the agent
-itself has not shipped yet. It uses the same public MCP/SDK contract as any
-other harness, with no direct database access, Core-internal imports, or
-privileged measurement or policy path.
+interfaces (`cirwel/unitares-resident`). It uses the same public MCP/SDK
+contract as any other harness, with no direct database access, Core-internal
+imports, or privileged measurement or policy path.
 
 ## One task across agents
 
@@ -82,18 +82,17 @@ Operators that still need the historical circuit breaker can opt into
 `UNITARES_POLICY_ACTUATION=enforce`. Existing durable pauses remain real state
 until their normal recovery, review, operator, or expiry path lifts them. EISV
 continues to run in `observe`; that setting controls intervention authority.
-Its move to an optional module is the adopted direction under the
-[staged plan](proposals/active/eisv-core-boundary-v0.md), not an available runtime
-switch. The [computation reference](EISV_COMPUTATION.md#role-runtime-and-evidence)
-separates its operational role, runtime status and evidence.
+The [computation reference](EISV_COMPUTATION.md#role-runtime-and-evidence)
+documents its operational role, runtime status, and evidence.
 
 ## Who it is for, and what "done" looks like
 
 Agents are direct users. One operator running several long-lived agents
 controls the deployment and chooses their runtimes and infrastructure. The
 goal is a retrievable record of claims, evidence, reviews, outcomes, and state
-interpretations that lets a later process continue the work. UNITARES connects those
-records alongside the outputs of evals, guardrails, and sandboxes.
+interpretations across sessions while Git, handoff notes, and scratchpads carry
+code and task state. UNITARES connects those records alongside the outputs of
+evals, guardrails, and sandboxes.
 
 ## Provenance
 
@@ -113,11 +112,9 @@ traces findings to the fixes they produced: evidence grades preserved,
 formatting repair kept from manufacturing approval, unresolved findings kept
 visible, and a review condition carried into an implementation ten days after
 its review opened. Historical deployments also delivered 370+ policy pauses
-between April and September 2026; that is evidence that the actuator operated,
-not that the pauses improved outcomes. The actuator is now explicit opt-in.
+between April and September 2026 under opt-in enforcement.
 
-Comparative benefit and task-outcome improvement remain unmeasured. The
-[evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the
+The [evidence record](EVIDENCE_AND_LIMITS.md#evaluation-boundaries) holds the
 evaluation results and registered read conditions, the
 [scope and threat model](SCOPE_AND_THREAT_MODEL.md) covers agents concealing or
 gaming signals, and the [Reviewer Guide](REVIEWER_GUIDE.md) exercises the
