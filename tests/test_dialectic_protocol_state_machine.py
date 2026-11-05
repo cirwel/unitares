@@ -625,6 +625,29 @@ def _apply_live_close_standing_rejection(
         kwargs["now"] = eval_now
         return assess_rejection_stands(*args, **kwargs)
 
+    initial_row_snapshot = dict(row)
+    persisted_row = dict(row)
+    resolve_calls: List[Dict[str, Any]] = []
+
+    async def _mock_resolve_session_async(
+        session_id: str,
+        resolution: Dict[str, Any],
+        status: str = "resolved",
+        **kwargs: Any,
+    ) -> bool:
+        resolve_calls.append(
+            {
+                "session_id": session_id,
+                "resolution": dict(resolution) if isinstance(resolution, dict) else resolution,
+                "status": status,
+                "kwargs": dict(kwargs),
+            }
+        )
+        persisted_row["phase"] = status
+        if kwargs.get("clear_facilitation"):
+            persisted_row["awaiting_facilitation"] = False
+        return True
+
     try:
         with patch(
             "src.mcp_handlers.dialectic.auto_resolve.has_inflight_saga_async",
@@ -633,8 +656,14 @@ def _apply_live_close_standing_rejection(
             "src.mcp_handlers.dialectic.auto_resolve.get_session_async",
             new=AsyncMock(return_value=row),
         ), patch(
-            "src.mcp_handlers.dialectic.auto_resolve._attempt_guarded_write",
-            new=AsyncMock(return_value=True),
+            "src.mcp_handlers.dialectic.auto_resolve.resolve_session_async",
+            side_effect=_mock_resolve_session_async,
+        ), patch(
+            "src.mcp_handlers.dialectic.auto_resolve.probe_saga_since_async",
+            new=AsyncMock(return_value={}),
+        ), patch(
+            "src.mcp_handlers.dialectic.auto_resolve.emit_guarded_write",
+            new=AsyncMock(return_value=None),
         ), patch(
             "src.mcp_handlers.dialectic.handlers._has_orchestrated_reviewer_budget",
             side_effect=lambda _row, _rid: is_orchestrated,
@@ -653,7 +682,41 @@ def _apply_live_close_standing_rejection(
                     decision_read_ts=eval_now,
                 )
             )
-        return session.session_id in closed_ids
+        closed = session.session_id in closed_ids
+        if closed or resolve_calls:
+            assert closed is True
+            assert len(resolve_calls) == 1
+            call = resolve_calls[0]
+            assert call["session_id"] == session.session_id
+            assert call["status"] == "failed", (
+                f"Expected standing rejection write status='failed', got {call['status']!r}"
+            )
+            kw = call["kwargs"]
+            assert kw.get("clear_facilitation") is True, (
+                "Standing rejection terminal write must pass clear_facilitation=True"
+            )
+            assert kw.get("exclude_inflight_saga") is True
+            assert kw.get("expected_phase") == initial_row_snapshot.get("phase")
+            assert kw.get("expected_updated_at") == initial_row_snapshot.get("updated_at")
+            assert kw.get("expected_reviewer") == initial_row_snapshot.get("reviewer_agent_id")
+            assert kw.get("expected_awaiting_facilitation") == bool(
+                initial_row_snapshot.get("awaiting_facilitation")
+            )
+            res_payload = call["resolution"]
+            assert isinstance(res_payload, dict)
+            assert res_payload.get("action") == "rejection_stands"
+            assert res_payload.get("reviewer_approved") is False
+            # Override the cached session from the persisted DB row so any
+            # discrepancy in the `resolve_session_async` callback arguments
+            # directly determines the post-state seen by the refinement suite.
+            session.phase = DialecticPhase(persisted_row["phase"])
+            session.awaiting_facilitation = bool(persisted_row["awaiting_facilitation"])
+            assert persisted_row["phase"] == session.phase.value == "failed"
+            assert persisted_row["awaiting_facilitation"] is False
+            assert session.awaiting_facilitation is False
+        else:
+            assert len(resolve_calls) == 0
+        return closed
     finally:
         ACTIVE_SESSIONS.pop(session.session_id, None)
 
