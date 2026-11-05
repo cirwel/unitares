@@ -26,9 +26,11 @@
 #                                 this to the interpreter the hooks use.
 #
 # Each run also performs the findings lifecycle (agent.py --lifecycle) before
-# anything else, so stale-path marking, expiry and line-drift cleanup keep
-# running whether or not anything is displaying findings and whether or not
-# Ollama is up. Lifecycle needs no model.
+# anything else: the stale-path sweep and the line-drift sweep, exactly what
+# surface_pending runs before a chime. They keep running whether or not
+# anything is displaying findings and whether or not Ollama is up; lifecycle
+# needs no model. Compaction (--compact) is deliberately not part of it: it
+# deletes resolved rows, which are labels, so it stays an explicit act.
 #
 # Host schedulers and their selected scan roots belong in deployment config.
 
