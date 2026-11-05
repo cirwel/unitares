@@ -1,0 +1,37 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-11-05T02:07:53Z",
+  "verified_date": "2026-11-05",
+  "verifier": "gpt-6-astra / b0294071-7374-444b-9824-182dcc63b42f: rechecked monitor intake and telemetry against skill claims; fallback provenance and offline replay add no estimator, lifecycle, coherence, policy or review authority changes",
+  "source_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": "cac1e9a7459b5e0f",
+    "unitares/skills/dialectic-reasoning/SKILL.md": "1f2622c3fb573343",
+    "unitares/skills/governance-fundamentals/SKILL.md": "a22cff879e00a38d",
+    "unitares/skills/governance-lifecycle/SKILL.md": "3ec5f9172f2c7a78",
+    "unitares/skills/knowledge-graph/SKILL.md": "19ca81fc3d035b88",
+    "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
+    "unitares/src/agent_loop_detection.py": "7227f1ac862f1610",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/eisv/adapter.py": "1c9ef7fa0362bf30",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "862831ee9525d389",
+    "unitares/src/mcp_handlers/identity/handlers.py": "b8af2cee7a2da807",
+    "unitares/src/mcp_handlers/identity/session.py": "fb6e981963d92126",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "9b1faf6273ed04a9",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "5f4e9a9b08c51a87",
+    "unitares/src/mcp_handlers/schemas/identity.py": "8f8798c5515927bc",
+    "unitares/src/mcp_handlers/tool_stability.py": "b271b275a249db52",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "53978bc1f2a6ec7a"
+  },
+  "skill_digest": "c662fac680541c17",
+  "superseded_digests": {
+    "unitares/docs/EISV_COMPUTATION.md": [
+      "7330fb67b4febcd4"
+    ]
+  }
+}

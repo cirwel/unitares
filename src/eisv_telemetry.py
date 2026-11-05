@@ -391,6 +391,61 @@ def build_physical_sensor_derivation(sensor_eisv: Mapping[str, Any]) -> dict[str
     }
 
 
+def build_continuity_fallback_derivation(
+    continuity_metrics: Any,
+    *,
+    template_divergence_excluded: bool,
+    computed: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Describe the fallback actually consumed, without reconstructing its inputs.
+
+    The continuity trace precedes tool/ROC changes to the public divergence.
+    A legacy/custom producer without that trace stays unknown. The component
+    labels describe dependency, not target validity or confidence.
+    """
+    captured = getattr(continuity_metrics, "input_derivation", None)
+    trace = captured if isinstance(captured, Mapping) else None
+    selections = {}
+    for dimension in ("E", "I", "S"):
+        candidate = getattr(continuity_metrics, f"{dimension}_input", None)
+        excluded = dimension in ("I", "S") and template_divergence_excluded
+        reason = "template_divergence_excluded" if excluded else (
+            "missing_continuity_input" if candidate is None else None
+        )
+        captured_value = (trace or {}).get(dimension, {}).get("value")
+        trace_matches = trace is not None and candidate == captured_value
+        dependency = "explicit_default" if reason else "unknown"
+        if not reason and trace_matches:
+            dependency = (
+                "default_dependent"
+                if dimension in ("I", "S") and trace["intermediates"]["divergence_defaulted"]
+                else "observed_other"
+            )
+        selections[dimension] = {
+            "continuity_input": _number(candidate),
+            "value": _number(computed.get(dimension)),
+            "default_reason": reason,
+            "dependency": dependency,
+            "trace_matches_input": trace_matches,
+        }
+    return {
+        "kind": "continuity_fallback",
+        "formula": "src.governance_monitor.UNITARESMonitor.process_update:continuity_fallback",
+        "formula_version": 1,
+        "inputs": {"continuity": _json_safe(trace)},
+        "missing_inputs": [] if trace is not None else ["continuity_derivation_trace"],
+        "template_divergence_excluded": template_divergence_excluded,
+        "selection": selections,
+        "computed_observation": _eisv_values(computed),
+        "known_limitations": [
+            "response_tokens estimates report length, not all work performed",
+            "checkin_gap_ms is wall-clock spacing, not generation duration",
+            "continuity inputs precede later tool/ROC divergence adjustments",
+            "default_dependent marks the whole input as depending on a default; it is not a fractional attribution",
+        ],
+    }
+
+
 def build_eisv_telemetry_envelope(
     *,
     metrics: Mapping[str, Any],

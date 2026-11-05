@@ -1394,6 +1394,19 @@ class UNITARESMonitor:
                     else continuity_metrics.S_input
                 )
                 beh_obs_source = 'continuity_fallback'
+                # Replace any upstream attempted sensor trace with the fallback
+                # actually consumed. Telemetry failure must not alter intake.
+                agent_state.pop('_eisv_derivation', None)
+                try:
+                    from src.eisv_telemetry import build_continuity_fallback_derivation
+
+                    agent_state['_eisv_derivation'] = build_continuity_fallback_derivation(
+                        continuity_metrics,
+                        template_divergence_excluded=exclude_template_div,
+                        computed={'E': beh_E_obs, 'I': beh_I_obs, 'S': beh_S_obs},
+                    )
+                except Exception as exc:
+                    logger.debug("Continuity fallback trace unavailable: %s", type(exc).__name__)
 
         # Provenance for the authoritative vector: which source produced the
         # observations this check-in's behavioral state was updated from.

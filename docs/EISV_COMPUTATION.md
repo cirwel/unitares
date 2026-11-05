@@ -311,6 +311,44 @@ does not change any score or action. See
 [`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)
 for the schema, privacy bounds, export surfaces, and legacy-row behavior.
 
+For `continuity_fallback`, `derivation.inputs.continuity` records the inputs
+where continuity E/I/S were computed: approximate report-token count,
+wall-clock check-in gap, structural counts, self-complexity, formula branch,
+raw/pre-clip values and bounds. It includes no report text or tool names.
+`derivation.selection` records the values actually handed to the behavioral
+filter, including missing-input and template-exclusion defaults. Missing traces
+remain unknown. A clip at a bound and an actual change by clipping are separate
+fields; neither means that an input was defaulted. A zero report-token count
+does not establish zero work. Check-in spacing is not generation duration.
+
+The trace captures complexity/divergence **before** later tool-use blending
+and rate-of-change adjustments. Those adjustments currently do not recompute
+continuity E/I/S, so the final public divergence can differ from the value that
+produced I/S. The record preserves that distinction rather than retroactively
+substituting the final divergence. `default_dependent` labels the whole input
+as depending on a default; it does not quantify a fractional contribution.
+
+To inspect inherited dependencies, export one identity's ordered, unsampled
+`eisv.telemetry.v1` envelopes into
+`{"agent_id": "...", "records": [ ... ]}` and run:
+
+```sh
+python3 scripts/analysis/eisv_provenance_replay.py trace.json --out replay.json
+```
+
+This offline tool checks adjacent version-2 behavioral updates with the real
+`BehavioralEISV` implementation and four-decimal serialization bounds. The
+first saved state has unknown ancestry. Gaps, resets, unsupported metadata and
+numeric mismatches re-anchor that history as unknown. Duplicate measurement
+IDs are rejected; repeated content alone is not a duplicate. V retains
+separate E-input and I-input ancestry with one shared unknown anchor, so signed
+cancellation cannot erase a default or unknown dependency. Only reconciled
+convex component recipes receive fractional allocations; additive or nonlinear
+recipes remain unresolved rather than being renormalized. Source labels and
+coefficient totals are not confidence, independent evidence, readiness rules,
+or proof of target validity. Baseline provenance and ODE prediction/innovation
+are outside this replay; no live estimator, baseline, policy or flag is changed.
+
 ## Don't take this document's word for it
 
 Whether these numbers add useful signal beyond simple baselines is an **open,
