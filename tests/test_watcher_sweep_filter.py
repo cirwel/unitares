@@ -74,6 +74,33 @@ def test_staged_file_on_an_unborn_branch_is_kept(tmp_path):
     assert _kept([root / "first.py"]) == {str(root / "first.py")}
 
 
+def test_conflict_resolution_committed_in_a_merge_is_kept(repo):
+    """Review finding on #3205 (codex, P1): `git log --name-only` lists no
+    files for a merge commit, so a resolution committed before the sweep was
+    missed. Branch commits predate the watermark; only the merge is new."""
+    _git(repo, "checkout", "-q", "-b", "topic")
+    (repo / "clean.py").write_text("x = 'topic'\n")
+    _git(repo, "commit", "-q", "-am", "topic", date=OLD)
+    _git(repo, "checkout", "-q", "main")
+    (repo / "clean.py").write_text("x = 'main'\n")
+    _git(repo, "commit", "-q", "-am", "main", date=OLD)
+    watermark = time.time() - 60
+    subprocess.run(["git", "-C", str(repo), "merge", "-q", "topic"], capture_output=True)
+    (repo / "clean.py").write_text("x = 'resolved'\n")
+    _git(repo, "commit", "-q", "-am", "merge topic")  # merge committed now
+    kept = _kept([repo / "clean.py", repo / "edited.py"], since=watermark)
+    assert kept == {str(repo / "clean.py")}
+
+
+def test_relative_candidates_resolve_against_the_callers_directory(repo, monkeypatch):
+    """Review finding on #3205 (codex, P2): a relative scan root is relative to
+    the caller, and the kept path comes back absolute for later steps."""
+    (repo / "edited.py").write_text("y = 7\n")
+    monkeypatch.chdir(repo.parent)
+    kept = SF.filter_candidates([f"{repo.name}/edited.py", f"{repo.name}/clean.py"])
+    assert kept == [str(repo / "edited.py")]
+
+
 def test_ignored_file_is_skipped(repo):
     (repo / "build").mkdir()
     (repo / "build" / "gen.py").write_text("g = 1\n")

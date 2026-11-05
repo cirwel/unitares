@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "agents/watcher/watcher-sweep.sh"
 
 
@@ -73,7 +75,8 @@ def test_lifecycle_failure_is_logged_with_its_exit_code(tmp_path):
     assert "lifecycle failed (exit 5)" in log.read_text()
 
 
-def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path):
+@pytest.mark.parametrize("relative_root", [False, True])
+def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path, relative_root):
     """End to end through the engine: a committed, untouched file whose mtime
     is new (as after a checkout) is skipped; a real edit is scanned."""
     import sys
@@ -106,7 +109,14 @@ def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path):
         "exit 0\n"
     )
 
-    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+    cwd = None
+    if relative_root:
+        # Review finding on #3205 (codex, P2): run from the root's parent with
+        # a relative root, as an operator might by hand.
+        cwd = root.parent
+        env["UNITARES_WATCHER_SWEEP_ROOTS"] = root.name
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True,
+                            text=True, cwd=cwd)
 
     assert result.returncode == 0, result.stderr
     scans = [c for c in calls.read_text().splitlines() if " --all " in f" {c} "]

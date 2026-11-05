@@ -147,7 +147,7 @@ RAW_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 WATERMARK_EPOCH=$(stat -f %m "$STATE_FILE" 2>/dev/null || echo "")
 FILTER_ARGS=()
 [[ -n "$WATERMARK_EPOCH" ]] && FILTER_ARGS=(--since-epoch "$WATERMARK_EPOCH")
-if FILTERED=$(printf '%s\n' "$CANDIDATES" | (cd "$REPO_ROOT" && "$PY" -m agents.watcher.sweep_filter ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"}) 2>/dev/null); then
+if FILTERED=$(printf '%s\n' "$CANDIDATES" | PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m agents.watcher.sweep_filter ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"} 2>/dev/null); then
     CANDIDATES="$FILTERED"
 else
     log "edit filter failed; scanning unfiltered candidates"

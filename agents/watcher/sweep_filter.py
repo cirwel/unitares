@@ -16,7 +16,8 @@ never refreshes and rewrites the index of a work tree another session is using.
 Any git failure keeps the candidate: the worst case is the old behavior, never
 a silently skipped edit.
 
-Usage: candidate paths on stdin, one per line; kept paths on stdout.
+Usage: candidate paths on stdin, one per line, resolved against the current
+directory; kept paths on stdout, absolute.
 
     python3 -m agents.watcher.sweep_filter --since-epoch 1793900000
 """
@@ -70,8 +71,12 @@ def _edited_in(toplevel: str, since_iso: str | None) -> set[str] | None:
         return None
     names = {n for n in dirty.split("\0") if n} | {n for n in staged.split("\0") if n}
     if since_iso is not None:
+        # --cc: a merge commit otherwise lists no files, so an edit made while
+        # resolving a conflict and committed before the sweep would be missed.
+        # It lists only files whose merge result differs from every parent,
+        # not everything the merge brought in.
         committed = _git(
-            ["log", f"--since={since_iso}", "--format=", "--name-only", "-z", "HEAD"],
+            ["log", f"--since={since_iso}", "--cc", "--format=", "--name-only", "-z", "HEAD"],
             toplevel,
         )
         if committed is None:
@@ -94,6 +99,9 @@ def filter_candidates(paths: list[str], since_epoch: float | None = None) -> lis
         path = raw.strip()
         if not path:
             continue
+        # Absolute from here on: a relative scan root is relative to the
+        # caller's directory, and later steps may run from elsewhere.
+        path = os.path.abspath(path)
         directory = str(Path(path).parent)
         if not os.path.isdir(directory):
             continue
