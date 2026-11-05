@@ -21,8 +21,8 @@ This module bridges three verification layers:
    `submit_synthesis`, `_handle_reassign_reviewer`, `consult` non-protocol
    messages, and `assess_rejection_stands` / `_close_standing_rejections` sweeps)
    simultaneously against the live Python implementation and `SpecState`,
-   checking state refinement, element-by-element transcript equality, and the
-   11 protocol safety properties at every step.
+   checking state refinement and element-by-element transcript equality via
+   `@invariant` and asserting each transition's safety properties in its `@rule`.
 """
 
 from __future__ import annotations
@@ -947,8 +947,8 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_session():
 class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
     """
     Runs arbitrary interleavings of dialectic protocol actions against both
-    `DialecticSession` and `SpecState`, checking bisimulation and the 11
-    Lean-proved safety theorems at every step.
+    `DialecticSession` and `SpecState`, checking state/transcript bisimulation
+    via `@invariant` and transition-specific safety properties in each `@rule`.
     """
 
     def __init__(self):
@@ -1125,6 +1125,11 @@ class DialecticProtocolRefinementMachine(RuleBasedStateMachine):
         assert res["success"] == ok_spec
         assert bool(res.get("converged", False)) == conv_spec
         assert PHASE_RANK[self.session.phase.value] >= prev_rank
+        if prev_phase in ("resolved", "failed"):
+            # Theorems 1a/1b: terminal states are absorbing under submit_synthesis
+            assert res["success"] is False
+            assert self.session.phase.value == prev_phase
+            assert len(self.session.transcript) == prev_len
 
         # Theorem 2: No unilateral self-clear over standing reviewer objection (#1543)
         if prev_phase != "resolved" and objection_before and is_paused:

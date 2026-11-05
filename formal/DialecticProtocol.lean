@@ -443,7 +443,7 @@ def closeStandingRejection (s : State) (isOrchestrated : Bool) (windowEnded : Bo
 
 /--
   Non-protocol advisory `consult` transcript entry (`NON_PROTOCOL_PHASES = {"consult"}`
-  in `src/dialectic_protocol.py:424`). Appends a `.consult` message to `s.transcript`
+  in `src/dialectic_protocol.py:207`). Appends a `.consult` message to `s.transcript`
   without altering `phase`, `reviewerAgent`, `synthesisRound`, or `awaitingFacilitation`.
 -/
 def appendConsult (s : State) (sender : AgentId) : State :=
@@ -856,19 +856,22 @@ theorem rejection_stands_sweep_only_fails (s : State) (isOrch : Bool) (winEnd : 
   · intro next c hOk
     cases next
     unfold closeStandingRejection assessRejectionStands at hOk
-    cases hPhase : s.phase <;>
-    cases hRec : assignedReviewerRecused s <;>
-    cases hFac : s.awaitingFacilitation <;>
     cases hRev : s.reviewerAgent
-    all_goals simp_all
-    rename_i rev
-    cases hSelf : (rev == s.pausedAgent) <;>
-    cases hObj : reviewerObjectionStands s <;>
-    cases hLast : (lastIndepVerdictSender s != some rev) <;>
-    cases hAns : reviewerAnsweredReply s rev <;>
-    cases isOrch <;>
-    cases winEnd <;>
-    simp_all
+    · cases hPhase : s.phase <;>
+      cases hRec : assignedReviewerRecused s <;>
+      cases hFac : s.awaitingFacilitation <;>
+      simp_all
+    · rename_i rev
+      cases hPhase : s.phase <;>
+      cases hRec : assignedReviewerRecused s <;>
+      cases hFac : s.awaitingFacilitation <;>
+      cases hSelf : (rev == s.pausedAgent) <;>
+      cases hObj : reviewerObjectionStands s <;>
+      cases hLast : (lastIndepVerdictSender s != some rev) <;>
+      cases hAns : reviewerAnsweredReply s rev <;>
+      cases isOrch <;>
+      cases winEnd <;>
+      simp_all
 
 /-!
   ## Compile-Time `#guard` Conformance Vectors
