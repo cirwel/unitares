@@ -54,6 +54,26 @@ def test_modified_and_untracked_files_are_kept(repo):
     assert kept == {str(repo / "edited.py"), str(repo / "new.py")}
 
 
+def test_staged_edits_are_kept(repo):
+    """Review finding on #3205 (codex, P1): `ls-files -m` omits an edit once it
+    is staged, and the watermark then moves past it for good."""
+    (repo / "edited.py").write_text("y = 9\n")
+    (repo / "added.py").write_text("w = 1\n")
+    _git(repo, "add", "edited.py", "added.py")
+    kept = _kept([repo / "clean.py", repo / "edited.py", repo / "added.py"],
+                 since=time.time() - 60)
+    assert kept == {str(repo / "edited.py"), str(repo / "added.py")}
+
+
+def test_staged_file_on_an_unborn_branch_is_kept(tmp_path):
+    root = tmp_path / "fresh"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    (root / "first.py").write_text("f = 1\n")
+    _git(root, "add", "first.py")
+    assert _kept([root / "first.py"]) == {str(root / "first.py")}
+
+
 def test_ignored_file_is_skipped(repo):
     (repo / "build").mkdir()
     (repo / "build" / "gen.py").write_text("g = 1\n")

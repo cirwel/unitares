@@ -6,9 +6,9 @@ pulling makes every file it writes look edited. Measured 2026-11-05: one sweep
 saw 1,256 "changed" files, nearly all from fresh worktree checkouts, and
 re-flagged existing code once per copy.
 
-A candidate inside a git work tree is kept when git reports it modified or
-untracked, or when a commit made since the sweep's watermark touched it (an
-edit committed before the sweep ran). A candidate outside any work tree has no
+A candidate inside a git work tree is kept when git reports it modified
+(staged or not) or untracked, or when a commit made since the sweep's
+watermark touched it (an edit committed before the sweep ran). A candidate outside any work tree has no
 git history to consult and is kept, as before.
 
 Every git read runs with ``GIT_OPTIONAL_LOCKS=0`` so a status-style command
@@ -60,10 +60,15 @@ def _toplevel(directory: str, cache: dict[str, str | None]) -> str | None:
 
 def _edited_in(toplevel: str, since_iso: str | None) -> set[str] | None:
     """Absolute, resolved paths edited in this work tree, or None on failure."""
+    # Unstaged modifications and untracked files.
     dirty = _git(["ls-files", "-z", "-m", "-o", "--exclude-standard"], toplevel)
-    if dirty is None:
+    # Staged changes: `ls-files -m` omits an edit once it is `git add`-ed, and
+    # the watermark then moves past it, so a staged edit would never be seen.
+    # Without a revision, `diff --cached` also works on an unborn branch.
+    staged = _git(["diff", "--cached", "--name-only", "-z"], toplevel)
+    if dirty is None or staged is None:
         return None
-    names = {n for n in dirty.split("\0") if n}
+    names = {n for n in dirty.split("\0") if n} | {n for n in staged.split("\0") if n}
     if since_iso is not None:
         committed = _git(
             ["log", f"--since={since_iso}", "--format=", "--name-only", "-z", "HEAD"],
