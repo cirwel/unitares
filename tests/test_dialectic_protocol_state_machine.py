@@ -706,11 +706,8 @@ def _apply_live_close_standing_rejection(
             assert isinstance(res_payload, dict)
             assert res_payload.get("action") == "rejection_stands"
             assert res_payload.get("reviewer_approved") is False
-            # Override the cached session from the persisted DB row so any
-            # discrepancy in the `resolve_session_async` callback arguments
-            # directly determines the post-state seen by the refinement suite.
-            session.phase = DialecticPhase(persisted_row["phase"])
-            session.awaiting_facilitation = bool(persisted_row["awaiting_facilitation"])
+            # Both the DB callback (`persisted_row`) and `_sync_cached_session`
+            # (`session`) must independently agree on the terminal state.
             assert persisted_row["phase"] == session.phase.value == "failed"
             assert persisted_row["awaiting_facilitation"] is False
             assert session.awaiting_facilitation is False
