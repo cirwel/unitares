@@ -172,3 +172,25 @@ def test_cli_reads_stdin_and_prints_kept(repo, monkeypatch, capsys):
         f"{repo / 'clean.py'}\n{repo / 'edited.py'}\n\n"))
     assert SF.main([]) == 0
     assert capsys.readouterr().out.splitlines() == [str(repo / "edited.py")]
+
+
+def test_cli_reads_the_watermark_from_a_file(repo, tmp_path, monkeypatch, capsys):
+    """The engine passes its state file; the filter reads its mtime itself,
+    because `stat -f %m` is BSD-only."""
+    state = tmp_path / "sweep.state"
+    state.touch()
+    old = time.time() - 60
+    os.utime(state, (old, old))
+    (repo / "edited.py").write_text("y = 8\n")
+    _git(repo, "commit", "-q", "-am", "edit")  # after the watermark
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(
+        f"{repo / 'clean.py'}\n{repo / 'edited.py'}\n"))
+    assert SF.main(["--since-file", str(state)]) == 0
+    assert capsys.readouterr().out.splitlines() == [str(repo / "edited.py")]
+
+
+def test_cli_missing_watermark_file_is_ignored(repo, tmp_path, monkeypatch, capsys):
+    (repo / "edited.py").write_text("y = 9\n")
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(f"{repo / 'edited.py'}\n"))
+    assert SF.main(["--since-file", str(tmp_path / "absent")]) == 0
+    assert capsys.readouterr().out.splitlines() == [str(repo / "edited.py")]

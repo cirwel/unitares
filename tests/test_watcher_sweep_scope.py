@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
+import time
 
 import pytest
 
@@ -94,6 +95,15 @@ def test_sweep_scans_real_edits_and_skips_checkout_writes(tmp_path, relative_roo
     subprocess.run(["git", "-C", str(root), "add", "."], check=True, env=git_env)
     subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "seed"], check=True, env=git_env)
     (root / "edited.py").write_text("b = 2\n")
+
+    # Pre-set the watermark an hour back: the engine's own seeding uses BSD
+    # `date -v`, which fails on Linux CI and would put the watermark after
+    # the files above.
+    state = Path(env["HOME"]) / ".unitares" / "watcher-sweep.state"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.touch()
+    hour_ago = time.time() - 3600
+    os.utime(state, (hour_ago, hour_ago))
 
     bins = Path(env["PATH"].split(":")[0])
     (bins / "curl").write_text("#!/bin/sh\nexit 0\n")  # Ollama reachable

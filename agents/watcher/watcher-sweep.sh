@@ -144,10 +144,7 @@ CANDIDATES=$(printf '%s' "$CANDIDATES" | grep -v '/tests\?/' | grep -v -E '/(tes
 # commit since the watermark touched, and every file outside a work tree. If
 # the filter itself fails, scan the unfiltered list rather than skip edits.
 RAW_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
-WATERMARK_EPOCH=$(stat -f %m "$STATE_FILE" 2>/dev/null || echo "")
-FILTER_ARGS=()
-[[ -n "$WATERMARK_EPOCH" ]] && FILTER_ARGS=(--since-epoch "$WATERMARK_EPOCH")
-if FILTERED=$(printf '%s\n' "$CANDIDATES" | PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m agents.watcher.sweep_filter ${FILTER_ARGS[@]+"${FILTER_ARGS[@]}"} 2>/dev/null); then
+if FILTERED=$(printf '%s\n' "$CANDIDATES" | PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m agents.watcher.sweep_filter --since-file "$STATE_FILE" 2>/dev/null); then
     CANDIDATES="$FILTERED"
 else
     log "edit filter failed; scanning unfiltered candidates"

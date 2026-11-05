@@ -19,7 +19,7 @@ a silently skipped edit.
 Usage: candidate paths on stdin, one per line, resolved against the current
 directory; kept paths on stdout, absolute.
 
-    python3 -m agents.watcher.sweep_filter --since-epoch 1793900000
+    python3 -m agents.watcher.sweep_filter --since-file ~/.unitares/watcher-sweep.state
 """
 
 from __future__ import annotations
@@ -127,8 +127,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="sweep watermark; commits after it count as edits",
     )
+    parser.add_argument(
+        "--since-file",
+        default=None,
+        help="sweep watermark file; its mtime is the watermark (portable, "
+        "unlike BSD `stat -f`); ignored when absent",
+    )
     args = parser.parse_args(argv)
-    for path in filter_candidates(sys.stdin.read().splitlines(), args.since_epoch):
+    since = args.since_epoch
+    if since is None and args.since_file:
+        try:
+            since = os.stat(args.since_file).st_mtime
+        except OSError:
+            since = None
+    for path in filter_candidates(sys.stdin.read().splitlines(), since):
         print(path)
     return 0
 
