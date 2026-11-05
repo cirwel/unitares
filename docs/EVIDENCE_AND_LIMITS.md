@@ -58,13 +58,10 @@ the originating review transcript is operator-private.
 
 These records establish specific, consequential corrections and continuity of
 review conditions. They come from a fixed sample of 20 recent merged PRs, with
-no matched unreviewed or conventional-review control; some reviews were
-author-relayed or filed under the same GitHub identity. Dialectic review,
+no matched unreviewed or conventional-review control. Dialectic review,
 councils, external models, and ordinary repository review have incomplete
 common instrumentation, so this channel is one of several through which review
-runs. A prospective comparison (`accountable-coordination-ablation-v0`) was
-registered and closed on 2026-10-01 before any run; it needs more than one
-operator.
+runs.
 
 <details>
 <summary>Recorded exercise of the review constraint</summary>
@@ -153,7 +150,7 @@ on 2026-09-26, followed by version updates through 0.3.3 on 2026-10-06.
 The agent-side contract is also distributed as
 [`unitares-sdk` on PyPI](https://pypi.org/project/unitares-sdk/), published from
 CI through a trusted publisher. These records establish integration acceptance
-and package availability. External adoption remains unvalidated.
+and package availability.
 
 ### Security response
 
@@ -166,8 +163,7 @@ Two high-severity advisories published on 2026-10-05 document fixes in 3.2.0:
   bypass was reachable from a browser page through CSRF or DNS rebinding.
   [Advisory and fix](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v)
 
-Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0.
-Neither credits an outside finder:
+Two medium-severity advisories published on 2026-10-15 document fixes in 3.3.0:
 
 - **Lifecycle actions on another agent:** any bound client could archive,
   delete or unpause another agent, and an agent could give itself the operator

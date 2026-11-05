@@ -7,9 +7,9 @@
 
 ### Accountability infrastructure for long-running AI agents.
 
-A self-hosted record your agents write to. After a restart or handoff, the next
-agent can look up who claimed what, on what evidence, who disputed it, and what
-replaced it.
+A self-hosted record your agents write to. Across sessions and runtimes, any
+agent or operator can look up who claimed what, on what evidence, who disputed
+it, and what replaced it.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.14+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
@@ -18,13 +18,13 @@ replaced it.
 
 </div>
 
-Agent work outlives the process that started it. A coding session restarts, a
-research agent loses its context, a task moves to another runtime. Logs show
-each run, but not the thread between them. Without that thread, the next agent
-can repeat a dead end, act on a claim that was already corrected, or lose the
-evidence behind an earlier decision.
+Agent work outlives the process that started it. Git, scratchpads, and handoff
+notes carry code and in-flight task state; UNITARES keeps the shared record of
+claims, reviews, and outcomes across runs. When a finding is corrected or a
+change is challenged, the next session reads the updated record instead of
+acting on a superseded claim.
 
-UNITARES is a server you run that keeps that thread. Any agent or model that speaks MCP or HTTP can connect (with ready integrations for Claude Code, Codex, and Hermes Agent) and write its findings, reviews, and results to one operator-owned record. A later agent, or you, can read it back and see where each piece came from.
+UNITARES is a server you run that keeps that record. Any agent or model that speaks MCP or HTTP can connect (with ready integrations for Claude Code, Codex, and Hermes Agent) and write its findings, reviews, and results to one operator-owned record. A later agent, or you, can read it back and see where each piece came from.
 
 **[See one incident without installing anything →](https://cirwel.github.io/unitares/demo.html)** · [Read the evidence](docs/EVIDENCE_AND_LIMITS.md) · [Install](#install)
 
@@ -38,20 +38,19 @@ UNITARES is a server you run that keeps that thread. Any agent or model that spe
 | **What happened?** | **Outcome grounding**: test, build, and task results are recorded against the check-ins that predicted them. |
 | **What can a successor recover?** | **Reconstruction**: a new process can search or export prior findings, open review conditions, and outcomes before it acts. |
 
-**Digital proprioception** runs on today's check-in path: EISV summarizes
-observations over time and supplies feedback and a policy recommendation.
-Actuation is opt-in; separating EISV into an optional module is
-[staged architecture work](docs/EISV_COMPUTATION.md#role-runtime-and-evidence).
-**Second opinions** let `consult` ask a connected local or orchestrated model.
-Structured dialectic is available for durable review, not required recovery.
+**Digital proprioception** runs on the check-in path: EISV summarizes
+behavioral observations over time and returns state feedback and a policy
+recommendation ([computation contract](docs/EISV_COMPUTATION.md#role-runtime-and-evidence)).
+**Second opinions** let `consult` ask a connected local or orchestrated model,
+and structured dialectic records thesis, challenge, and resolution on the work.
 
 ## See the record before installing
 
 Agent A (Codex) finds a bug, records it, and exits. Agent B (Claude Code) later
 finds the real cause and records a finding that supersedes A's. Agent C (Hermes
-Agent) picks up A's task after a restart and reads the record before touching
-the code (reading needs no identity): its search returns A's finding marked
-superseded, with a link to B's. C then declares that it continues A's task.
+Agent) works on the same area in a later session and reads the record before
+touching the code (reading needs no identity): its search returns A's finding
+marked superseded, with a link to B's. C then declares lineage from A.
 This API sketch is separate from the [hosted service-reload incident](https://cirwel.github.io/unitares/demo.html).
 
 ```text
@@ -65,20 +64,19 @@ start_session  {"force_new": true}                                     -> agent 
 store_finding  {"summary": "upload retry fails on clock skew", ...}     -> finding b
 use_tool       {"tool_name": "knowledge", "arguments": {"action": "supersede", "discovery_id": "<b>", "supersedes_id": "<a>"}, ...}
 
-# Agent C (Hermes Agent), after A's restart
+# Agent C (Hermes Agent), in a later session
 search_shared_memory {"query": "upload retry test"}   -> finding a (superseded, points to b), finding b
 start_session  {"force_new": true, "parent_agent_id": "<A's id>", "spawn_reason": "explicit"}
 ```
 
 The Claude Code and Codex plugin's session start points each new session at the
-record. For a complete handoff call by call, see the
+record. For a complete call-by-call sequence, see the
 [captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md).
 
 ## Install
 
 **Homebrew preview**, recommended for an Apple Silicon desktop Mac: the [`cirwel/unitares` tap](https://github.com/cirwel/homebrew-unitares) installs the services natively; follow its [install](https://github.com/cirwel/homebrew-unitares#install) and [first-time setup](https://github.com/cirwel/homebrew-unitares#first-time-setup).
 The packaged `unitares update` coordinates writer shutdown, verified backup, migrations, prior-state restoration, and deep health when writers restart (schema verification when they remain stopped); kegs that predate it use the tap's [one-time manual transition](https://github.com/cirwel/homebrew-unitares#upgrades-and-recovery).
-The preview label remains while the tap builds from source and supports Apple Silicon macOS only.
 
 **Docker Compose**, on any platform: with Git, curl, and Docker Compose installed, one command starts the latest published release of the local stack (the server, PostgreSQL with AGE and pgvector, Redis, and the coordination plane; add [`docker-compose.full.yml`](docs/manual/02-install.md#24-quickstart-defaults-and-a-full-setup) for local semantic search and hybrid ranking, or use the [core profile](docs/manual/02-install.md#a-smaller-stack-the-core-profile) to run only the first two):
 
@@ -97,9 +95,9 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 
 ## Who it is for
 
-For an operator running several long-lived AI agents across vendors, on infrastructure they control, who needs the agents' shared account of the work to survive restarts and handoffs.
+For an operator running several long-lived AI agents across vendors on infrastructure they control, who wants one queryable record of identities, findings, reviews, and outcomes across the fleet.
 
-UNITARES works alongside Git, issue trackers, handoff notes, evals and guardrails, and keeps the record that ties the agents' work together across them. Each agent keeps its own loop and model. Inferred pauses are observational by default; the operator decides whether one is enforced. Identity, authorization, archive and coordination boundaries are enforced by the server.
+UNITARES works alongside Git, issue trackers, handoff notes, scratchpads, evals, and guardrails: those carry code, task state, and runtime checks, while UNITARES keeps the shared record that ties the agents' claims, reviews, and outcomes together. Each agent keeps its own loop and model. Inferred pauses are advisory by default, and the operator decides when hard holds are enforced. Identity, authorization, archive, and coordination boundaries are enforced by the server.
 
 ## How it fits together
 
@@ -115,14 +113,13 @@ claims and evidence, reviews, and outcomes stay bound to the process that
 recorded them, and a replaced claim points to its replacement, for review and
 for reconstruction later.
 
-Storage is PostgreSQL and Redis, with no required external model API. The
-quickstart runs the AGE backend, which stores the links between findings; the
-plain `postgres` backend has no supersession links and full-text search only.
-The check-in's behavioral state estimate is a form of runtime [proprioception](docs/ontology/eisv-proprioception-contract.md). Its raw policy
-recommendation is retained as part of the record. By default, that
-recommendation cannot pause an identity or block its writes.
+Storage is PostgreSQL (with Apache AGE for supersession graph links and pgvector
+for embeddings) and Redis, with no required external model API. The check-in's
+behavioral state estimate is a form of runtime [proprioception](docs/ontology/eisv-proprioception-contract.md);
+its policy recommendation is retained in the record and is advisory by default,
+with optional hard-hold enforcement.
 
-What each claim has been measured to do, and what has not been measured, is in
+Empirical evaluations, operational measurements, and scope are documented in
 [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) and the
 [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 
