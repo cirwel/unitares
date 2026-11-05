@@ -54,6 +54,7 @@ def envelope(state, obs, trace, source="continuity_fallback"):
     (0, 60000, 0.3, "report_tokens_per_checkin_gap", True),
     (0, None, 0.5, "report_length_fallback", False),
     (0, 0, 0.5, "report_length_fallback", False),
+    (0, -1, 0.5, "report_length_fallback", False),
     (2000, None, 1.0, "report_length_fallback", True),
 ])
 def test_exact_energy_branch_clipping_and_zero_report(tokens, gap, expected, branch, clipped):
@@ -67,6 +68,24 @@ def test_exact_energy_branch_clipping_and_zero_report(tokens, gap, expected, bra
     # A boundary hit is distinct from an actual change by clipping.
     assert trace["E"]["at_bound"] == (expected in (0.3, 1.0))
     assert trace["E"]["branch_reason"] == ("missing_gap" if gap is None else "nonpositive_gap" if gap <= 0 else "positive_gap")
+    selection = fallback(cm)[1]["selection"]["E"]
+    alternate_formula = gap is None or gap <= 0
+    assert selection["dependency"] == ("fallback_formula" if alternate_formula else "observed_other")
+    assert selection["formula_fallback_reason"] == (trace["E"]["branch_reason"] if alternate_formula else None)
+
+
+def test_zero_valence_keeps_both_formula_fallback_and_explicit_default_ancestry():
+    state = BehavioralEISV()
+    obs, trace = fallback(metrics(tokens=0, gap=None), excluded=True)
+    assert obs["E"] == obs["I"] == 0.5
+    records = [envelope(state, obs, trace) for _ in range(4)]
+    assert state.V == 0
+    row = replay({"agent_id": "synthetic", "records": records})["rows"][-1]
+    carry = 0.45 * 0.5 * 0.55
+    assert row["coefficients"]["V_E_term"]["fallback_formula"] == pytest.approx(1 - carry)
+    assert row["coefficients"]["V_I_term"]["explicit_default"] == pytest.approx(1 - carry)
+    assert row["coefficients"]["V_E_term"]["observed_other"] == 0
+    assert row["coefficients"]["E"]["fallback_formula"] > 0
 
 
 def test_defaults_exclusion_and_unknown_are_distinct():

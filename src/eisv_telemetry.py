@@ -414,17 +414,24 @@ def build_continuity_fallback_derivation(
         )
         captured_value = (trace or {}).get(dimension, {}).get("value")
         trace_matches = trace is not None and candidate == captured_value
+        formula_fallback_reason = (
+            trace["E"].get("branch_reason")
+            if dimension == "E" and trace_matches and trace["E"].get("branch") == "report_length_fallback"
+            else None
+        )
         dependency = "explicit_default" if reason else "unknown"
         if not reason and trace_matches:
-            dependency = (
-                "default_dependent"
-                if dimension in ("I", "S") and trace["intermediates"]["divergence_defaulted"]
-                else "observed_other"
-            )
+            if formula_fallback_reason:
+                dependency = "fallback_formula"
+            elif dimension in ("I", "S") and trace["intermediates"]["divergence_defaulted"]:
+                dependency = "default_dependent"
+            else:
+                dependency = "observed_other"
         selections[dimension] = {
             "continuity_input": _number(candidate),
             "value": _number(computed.get(dimension)),
             "default_reason": reason,
+            "formula_fallback_reason": formula_fallback_reason,
             "dependency": dependency,
             "trace_matches_input": trace_matches,
         }
@@ -442,6 +449,8 @@ def build_continuity_fallback_derivation(
             "checkin_gap_ms is wall-clock spacing, not generation duration",
             "continuity inputs precede later tool/ROC divergence adjustments",
             "default_dependent marks the whole input as depending on a default; it is not a fractional attribution",
+            "fallback_formula marks a missing/nonpositive-gap alternative formula, even when report length is observed",
+            "observed_other records presence at this computation boundary, not proof of upstream default-free ancestry",
         ],
     }
 

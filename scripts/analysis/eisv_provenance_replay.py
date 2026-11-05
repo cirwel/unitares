@@ -20,7 +20,7 @@ from src.behavioral_state import BOOTSTRAP_UPDATES, BehavioralEISV  # noqa: E402
 from src.eisv_telemetry import BEHAVIORAL_SENSOR_FORMULA_VERSION  # noqa: E402
 
 CATEGORIES = (
-    "explicit_default", "default_dependent", "observed_controller",
+    "explicit_default", "default_dependent", "fallback_formula", "observed_controller",
     "observed_other", "unknown", "unresolved_formula",
 )
 DIMENSIONS = ("E", "I", "S", "V")
@@ -177,6 +177,8 @@ def replay(packet):
             "initial/carry history is unknown; reset/gap boundaries re-anchor, never invent bootstrap ancestry",
             "V legs share one anchor and must not be summed or canceled to claim certainty",
             "fallback default_dependent allocates the whole input, not a fraction of its formula",
+            "fallback_formula retains missing/nonpositive-gap formula dependence even for an observed zero report length",
+            "observed categories reflect recorded presence at the computation boundary, not recursive upstream/default-free ancestry",
             "baseline provenance and ODE innovations are not replayed; no policy or outcome claims",
             "exporter asserts single identity and ordered records; no population inference",
         ],

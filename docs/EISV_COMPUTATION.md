@@ -320,6 +320,11 @@ filter, including missing-input and template-exclusion defaults. Missing traces
 remain unknown. A clip at a bound and an actual change by clipping are separate
 fields; neither means that an input was defaulted. A zero report-token count
 does not establish zero work. Check-in spacing is not generation duration.
+When the gap is missing or nonpositive, E uses a different report-length
+formula. Its dependency is `fallback_formula`, with the reason recorded
+separately from a scalar missing-input default. This remains visible even for
+zero report tokens and zero V; neither clipping nor signed cancellation
+turns it into an observed rate.
 
 The trace captures complexity/divergence **before** later tool-use blending
 and rate-of-change adjustments. Those adjustments currently do not recompute
@@ -348,6 +353,10 @@ recipes remain unresolved rather than being renormalized. Source labels and
 coefficient totals are not confidence, independent evidence, readiness rules,
 or proof of target validity. Baseline provenance and ODE prediction/innovation
 are outside this replay; no live estimator, baseline, policy or flag is changed.
+`observed_*` means present at the recorded computation boundary. Upstream
+values can themselves contain defaults (including schema-defaulted
+self-complexity); this ledger does not establish recursive, default-free
+ancestry for those values.
 
 ## Don't take this document's word for it
 
