@@ -403,6 +403,39 @@ def test_value_affecting_flags_change_the_config_hash(monkeypatch, flag, value):
     assert eisv_instrument.config_hash() != baseline
 
 
+def test_neutralize_sensor_self_loops_renormalization_splits_from_v1_boolean_hash(monkeypatch):
+    """Upgrading UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS from #3185 (True) to #3197
+    (renormalized_v2) changes the instrument id and resets settling on advance."""
+    monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+    eisv_instrument.reset_caches()
+    off_cfg = eisv_instrument.effective_config()
+    assert "neutralize_sensor_self_loops" not in off_cfg
+    off_hash = eisv_instrument.config_hash(off_cfg)
+
+    v1_hash = eisv_instrument.config_hash({**off_cfg, "neutralize_sensor_self_loops": True})
+    monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+    eisv_instrument.reset_caches()
+    v2_cfg = eisv_instrument.effective_config()
+    assert v2_cfg["neutralize_sensor_self_loops"] == "renormalized_v2"
+    v2_hash = eisv_instrument.config_hash()
+    assert len({off_hash, v1_hash, v2_hash}) == 3
+
+    era = eisv_eras.current_era_id()
+    v1_id = f"{era}:{v1_hash}"
+    monitor = _monitor(120)
+    setattr(
+        monitor,
+        eisv_instrument.TRACK_ATTR,
+        {"id": v1_id, "updates": 80, "carried_from": None},
+    )
+    eisv_instrument.advance(monitor)
+    stamp = eisv_instrument.stamp(monitor)
+    assert stamp["id"] == f"{era}:{v2_hash}"
+    assert stamp["carried_from"] == v1_id
+    assert stamp["updates_since_change"] == 1
+    assert eisv_eras.is_settled(stamp) is False
+
+
 def test_class_calibration_tables_feed_the_config_hash(monkeypatch):
     from config import governance_config as gc
 
