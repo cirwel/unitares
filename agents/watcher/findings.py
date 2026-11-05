@@ -56,6 +56,9 @@ FINDINGS_TTL_DAYS = 14
 # findings.jsonl and remain adjudicable by fingerprint. A telemetry noise
 # floor, no enforcement authority; 21 days is three weekly adjudication passes.
 PATH_GONE_EXPIRY_DAYS = 21
+# resolution_reason stamped by that expiry. ``compact_findings`` keeps rows
+# that still carry it: they are unadjudicated evidence, not resolved labels.
+PATH_GONE_EXPIRY_REASON = "path_gone_unadjudicated"
 
 VALID_FINDING_STATUSES = ("open", "surfaced", "confirmed", "dismissed", "aged_out")
 MIN_FINGERPRINT_PREFIX = 4  # users can type the first N chars instead of all 16
@@ -645,7 +648,7 @@ def _sweep_stale_quiet() -> int:
                     **f,
                     "status": "aged_out",
                     "aged_out_at": now_iso,
-                    "resolution_reason": "path_gone_unadjudicated",
+                    "resolution_reason": PATH_GONE_EXPIRY_REASON,
                 }
                 expired += 1
             kept.append(f)
@@ -1466,6 +1469,14 @@ def compact_findings(max_age_days: int = 7, now: datetime | None = None) -> int:
         status = f.get("status", "open")
         if status not in resolved_states:
             # open/surfaced — always keep
+            kept.append(f)
+            continue
+        if status == "aged_out" and f.get("resolution_reason") == PATH_GONE_EXPIRY_REASON:
+            # Expired from the open set unadjudicated, not resolved: the
+            # snapshot is the only remaining evidence and can still become a
+            # label by fingerprint. Deleting it here would repeat the #1631
+            # loss by another route. Once adjudicated, its status changes and
+            # it compacts like any other resolved row.
             kept.append(f)
             continue
         ts = f.get("detected_at", "")

@@ -273,3 +273,47 @@ class TestExpiry:
         out = capsys.readouterr().out
         assert "aged out 1" in out
         assert "nothing to sweep" not in out
+
+
+class TestCompactionKeepsExpired:
+    """Review finding on #3199 (codex, P1): ``compact_findings`` drops aged_out
+    rows older than its cutoff by ``detected_at``, and every expired row is
+    already past that cutoff, so the first ``--compact`` would delete the
+    evidence that expiry promised to keep."""
+
+    def test_expired_row_survives_compaction(self, capsys):
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+        F._sweep_stale_quiet()
+
+        F.compact_findings()
+
+        rows = _read()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "aged_out"
+        assert rows[0]["line_content"]
+
+    def test_expired_row_is_still_adjudicable_then_compacts(self, capsys):
+        _write([_finding(path_gone=True, detected_at=_iso_days_ago(F.PATH_GONE_EXPIRY_DAYS + 1))])
+        F._sweep_stale_quiet()
+
+        assert F.update_finding_status("deadbeef", "dismissed", emit_resolution_event=False) == 0
+        assert _read()[0]["status"] == "dismissed"
+
+        F.compact_findings()
+
+        assert _read() == [], "an adjudicated row compacts like any other"
+
+    def test_other_aged_out_rows_still_compact(self, capsys):
+        _write(
+            [
+                _finding(
+                    status="aged_out",
+                    resolution_reason="line_drift_token_absent",
+                    detected_at=_iso_days_ago(30),
+                )
+            ]
+        )
+
+        F.compact_findings()
+
+        assert _read() == []
