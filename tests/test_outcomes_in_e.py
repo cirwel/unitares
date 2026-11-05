@@ -246,7 +246,13 @@ def test_self_referential_trajectory_outcomes_do_not_enter_e_or_account_when_neu
     assert evidence["counted"] == 4
     assert evidence["adverse"] == 1
     assert evidence["adverse_by_type"] == {"test_failed": 1}
+    assert evidence["share_of_observation"] == pytest.approx(0.50 * 0.80 * 0.85, abs=1e-4)
     assert compute_behavioral_sensor_eisv(**_inputs(mixed)) == compute_behavioral_sensor_eisv(
         **_inputs(_outcomes(4, 1))
+    )
+    before = compute_behavioral_sensor_eisv(**_inputs(_outcomes(4, 1)))["E"]
+    after = compute_behavioral_sensor_eisv(**_inputs(_outcomes(5, 2)))["E"]
+    assert before - after == pytest.approx(
+        evidence["next_adverse_outcome"]["lowers_by"], abs=1e-4
     )
 

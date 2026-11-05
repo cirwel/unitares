@@ -103,11 +103,23 @@ def neutralize_sensor_self_loops_enabled() -> bool:
 
     Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
     enabled, the self-referential controller terms inside the behavioral sensor
-    are neutralized:
-    - ``decision_history`` in E -> observed fleet-level ``DECISION_NEUTRAL_SCORE`` (0.84)
-    - ``coherence_history`` in E and I -> nominal neutral ``LEGACY_COHERENCE_NEUTRAL_COMPONENT`` (0.60, mapped from ``LEGACY_COHERENCE_NEUTRAL_VALUE = 0.50``)
-    - ``regime_instability`` in S -> observed fleet-level ``REGIME_NEUTRAL_INSTABILITY`` (0.12)
-    - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome echoes excluded from E and I
+    are excluded from the base formulas and the remaining observed base
+    components are renormalized to sum to 1.0 (while the one-step shadow
+    ablations ``compute_*_shadow`` continue to use constant substitution for
+    single-term level attribution):
+    - ``decision_history`` and ``legacy_coherence_level`` excluded from base E,
+      renormalizing onto ``complexity_calibration`` (0.50) + ``outcome_success``
+      (0.50) with >= 3 non-echo outcomes or ``complexity_calibration`` (1.00)
+      without
+    - ``legacy_coherence_trend`` excluded from base I, renormalizing onto
+      ``calibration_accuracy`` (5/7) + ``outcome_score_consistency`` (2/7) with
+      >= 3 non-echo outcomes, ``calibration_accuracy`` (1.00) without outcomes,
+      or ``outcome_score_consistency`` (1.00) / explicit uncalibrated fallback
+      (0.75) when calibration-free I is active
+    - ``regime_instability`` excluded from base S, renormalizing onto
+      ``drift_norm`` (8/13) + ``complexity_divergence`` (5/13)
+    - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome
+      echoes excluded from E and I
     """
     raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
@@ -972,13 +984,68 @@ def _compute_E_components(
     *,
     neutralize_self_loops: bool = False,
 ) -> dict:
+    # Complexity calibration — low divergence = high capacity awareness
+    cd = complexity_divergence if complexity_divergence is not None else 0.15
+    cal_e = max(0.3, min(1.0, 1.0 - cd))
+
+    # Outcome success rate — successful outcomes indicate productive energy
+    filtered_outcomes = (
+        filter_behavioral_outcomes(outcome_history)
+        if neutralize_self_loops
+        else outcome_history
+    )
+    has_outcomes = bool(filtered_outcomes and len(filtered_outcomes) >= 3)
+    outcome_e = 0.0
+    if has_outcomes and filtered_outcomes is not None:
+        good_count = sum(1 for o in filtered_outcomes if not o.get('is_bad', False))
+        success_rate = good_count / len(filtered_outcomes)
+        outcome_e = OUTCOME_E_FLOOR + success_rate * OUTCOME_E_SPAN  # [0,1] -> [0.3, 0.9]
+
+    if neutralize_self_loops:
+        # Exclude controller self-loops (decision_history, legacy_coherence_level)
+        # and renormalize remaining observed base terms to sum to 1.0.
+        if has_outcomes:
+            components = [
+                _component(
+                    "complexity_calibration", "continuity_metrics", cal_e, 0.50,
+                    observed=complexity_divergence is not None,
+                    default_reason=(
+                        None if complexity_divergence is not None
+                        else "default_complexity_divergence_0.15"
+                    ),
+                ),
+                _component(
+                    "outcome_success", "recent_outcomes", outcome_e, 0.50,
+                    observed=True,
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+            )
+        else:
+            components = [
+                _component(
+                    "complexity_calibration", "continuity_metrics", cal_e, 1.00,
+                    observed=complexity_divergence is not None,
+                    default_reason=(
+                        None if complexity_divergence is not None
+                        else "default_complexity_divergence_0.15"
+                    ),
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
+        value = max(0.0, min(1.0, raw))
+        return {
+            "value": value,
+            "base_value": value,
+            "components": components,
+            "adjustments": [],
+        }
+
     # Decision success — exponentially weighted
     window = decision_history[-10:]
-    if neutralize_self_loops:
-        decision_e = DECISION_NEUTRAL_SCORE
-        decision_observed = False
-        decision_default_reason = "self_loop_neutralized"
-    elif not window:
+    if not window:
         decision_e = 0.65
         decision_observed = False
         decision_default_reason = "no_decision_history"
@@ -996,11 +1063,7 @@ def _compute_E_components(
 
     # Legacy C(V_ODE) controller level — map [0.35, 0.65] → [0.3, 0.9].
     # ``coherence_history`` is retained as the compatibility parameter name.
-    if neutralize_self_loops:
-        coh_e = LEGACY_COHERENCE_NEUTRAL_COMPONENT
-        coh_observed = False
-        coh_default_reason = "self_loop_neutralized"
-    elif coherence_history and len(coherence_history) >= 3:
+    if coherence_history and len(coherence_history) >= 3:
         recent_coh = coherence_history[-10:]
         mean_coh = sum(recent_coh) / len(recent_coh)
         coh_e = 0.3 + (mean_coh - 0.35) * 2.0  # 0.35→0.3, 0.65→0.9
@@ -1012,20 +1075,7 @@ def _compute_E_components(
         coh_observed = False
         coh_default_reason = "insufficient_coherence_history"
 
-    # Complexity calibration — low divergence = high capacity awareness
-    cd = complexity_divergence if complexity_divergence is not None else 0.15
-    cal_e = max(0.3, min(1.0, 1.0 - cd))
-
-    # Outcome success rate — successful outcomes indicate productive energy
-    filtered_outcomes = (
-        filter_behavioral_outcomes(outcome_history)
-        if neutralize_self_loops
-        else outcome_history
-    )
-    if filtered_outcomes and len(filtered_outcomes) >= 3:
-        good_count = sum(1 for o in filtered_outcomes if not o.get('is_bad', False))
-        success_rate = good_count / len(filtered_outcomes)
-        outcome_e = OUTCOME_E_FLOOR + success_rate * OUTCOME_E_SPAN  # [0,1] -> [0.3, 0.9]
+    if has_outcomes:
         # Weights: 35% decision, 25% coherence, 20% calibration, 20% outcomes
         components = [
             _component(
@@ -1181,24 +1231,13 @@ def _compute_I_components(
             # calibration-free I (Arm F).
             effective_calibration_free_i = True
 
-    if neutralize_self_loops:
-        coh_I = LEGACY_COHERENCE_NEUTRAL_COMPONENT
-        coh_observed = False
-        coh_default_reason = "self_loop_neutralized"
-    else:
-        coh_I = _coherence_trend(coherence_history)
-        coh_observed = len(coherence_history) >= 4
-        coh_default_reason = (
-            None if len(coherence_history) >= 4
-            else "insufficient_coherence_history"
-        )
-
     # Outcome consistency — consistent scores indicate information integrity
     filtered_outcomes = (
         filter_behavioral_outcomes(outcome_history)
         if neutralize_self_loops
         else outcome_history
     )
+    consistency_I: float | None = None
     if filtered_outcomes and len(filtered_outcomes) >= 3:
         scores = [s for o in filtered_outcomes
                   if (s := o.get('outcome_score')) is not None
@@ -1208,40 +1247,28 @@ def _compute_I_components(
             mean_s = sum(scores) / len(scores)
             score_var = sum((s - mean_s) ** 2 for s in scores) / len(scores)
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
+
+    if neutralize_self_loops:
+        # Exclude legacy_coherence_trend and renormalize remaining base terms to sum to 1.0.
+        if consistency_I is not None:
             if effective_calibration_free_i:
                 components = [
                     _component(
-                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.60,
-                        observed=coh_observed,
-                        default_reason=coh_default_reason,
-                        health_evidence=False,
-                    ),
-                    _component(
-                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.40,
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 1.00,
                         observed=True,
                         health_evidence=False,
                     ),
                 ]
-                raw = (
-                    components[0]["weighted_contribution"]
-                    + components[1]["weighted_contribution"]
-                )
+                raw = components[0]["weighted_contribution"]
             else:
-                # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
                 components = [
                     _component(
-                        "calibration_accuracy", cal_source, cal_I, 0.50,
+                        "calibration_accuracy", cal_source, cal_I, 0.50 / 0.70,
                         observed=cal_observed,
                         default_reason=cal_default_reason,
                     ),
                     _component(
-                        "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
-                        observed=coh_observed,
-                        default_reason=coh_default_reason,
-                        health_evidence=False,
-                    ),
-                    _component(
-                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
+                        "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20 / 0.70,
                         observed=True,
                         health_evidence=False,
                     ),
@@ -1249,15 +1276,92 @@ def _compute_I_components(
                 raw = (
                     components[0]["weighted_contribution"]
                     + components[1]["weighted_contribution"]
-                    + components[2]["weighted_contribution"]
                 )
-            value = max(0.0, min(1.0, raw))
-            return {
-                "value": value,
-                "base_value": value,
-                "components": components,
-                "adjustments": [],
-            }
+        elif effective_calibration_free_i:
+            components = [
+                _component(
+                    "uncalibrated_base_fallback", "behavioral_sensor_default", 0.75, 1.00,
+                    observed=False,
+                    default_reason="no_admissible_calibration_or_outcomes",
+                    health_evidence=False,
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
+        else:
+            components = [
+                _component(
+                    "calibration_accuracy", cal_source, cal_I, 1.00,
+                    observed=cal_observed,
+                    default_reason=cal_default_reason,
+                ),
+            ]
+            raw = components[0]["weighted_contribution"]
+        value = max(0.0, min(1.0, raw))
+        return {
+            "value": value,
+            "base_value": value,
+            "components": components,
+            "adjustments": [],
+        }
+
+    coh_I = _coherence_trend(coherence_history)
+    coh_observed = len(coherence_history) >= 4
+    coh_default_reason = (
+        None if len(coherence_history) >= 4
+        else "insufficient_coherence_history"
+    )
+
+    if consistency_I is not None:
+        if effective_calibration_free_i:
+            components = [
+                _component(
+                    "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.60,
+                    observed=coh_observed,
+                    default_reason=coh_default_reason,
+                    health_evidence=False,
+                ),
+                _component(
+                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.40,
+                    observed=True,
+                    health_evidence=False,
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+            )
+        else:
+            # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
+            components = [
+                _component(
+                    "calibration_accuracy", cal_source, cal_I, 0.50,
+                    observed=cal_observed,
+                    default_reason=cal_default_reason,
+                ),
+                _component(
+                    "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
+                    observed=coh_observed,
+                    default_reason=coh_default_reason,
+                    health_evidence=False,
+                ),
+                _component(
+                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
+                    observed=True,
+                    health_evidence=False,
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+                + components[2]["weighted_contribution"]
+            )
+        value = max(0.0, min(1.0, raw))
+        return {
+            "value": value,
+            "base_value": value,
+            "components": components,
+            "adjustments": [],
+        }
 
     if effective_calibration_free_i:
         components = [
@@ -1339,17 +1443,45 @@ def _compute_S_components(
     dn = drift_norm if drift_norm is not None else 0.2
     drift_s = min(1.0, dn * 1.5)
 
+    # Complexity divergence (25%)
+    cd = complexity_divergence if complexity_divergence is not None else 0.1
+    cd_s = min(1.0, cd)
+
     # Regime instability (35%): count transitions / window. The override exists
     # only for compute_regime_self_loop_shadow; the deployed path never sets it.
     regime_overridden = regime_instability_override is not None
+    if neutralize_self_loops and not regime_overridden:
+        components = [
+            _component(
+                "drift_norm", "governance_drift", drift_s, 0.40 / 0.65,
+                observed=drift_norm is not None,
+                default_reason=None if drift_norm is not None else "default_drift_norm_0.2",
+            ),
+            _component(
+                "complexity_divergence", "continuity_metrics", cd_s, 0.25 / 0.65,
+                observed=complexity_divergence is not None,
+                default_reason=(
+                    None if complexity_divergence is not None
+                    else "default_complexity_divergence_0.1"
+                ),
+            ),
+        ]
+        raw = (
+            components[0]["weighted_contribution"]
+            + components[1]["weighted_contribution"]
+        )
+        value = max(0.05, min(1.0, raw))
+        return {
+            "value": value,
+            "base_value": value,
+            "components": components,
+            "adjustments": [],
+        }
+
     if regime_overridden:
         regime_s = float(regime_instability_override)
         regime_observed = False
         regime_default_reason = "ablation_override"
-    elif neutralize_self_loops:
-        regime_s = REGIME_NEUTRAL_INSTABILITY
-        regime_observed = False
-        regime_default_reason = "self_loop_neutralized"
     else:
         regime_s = _regime_instability(regime_history)
         regime_observed = len(regime_history) >= 2
@@ -1357,10 +1489,6 @@ def _compute_S_components(
             None if len(regime_history) >= 2
             else "insufficient_regime_history"
         )
-
-    # Complexity divergence (25%)
-    cd = complexity_divergence if complexity_divergence is not None else 0.1
-    cd_s = min(1.0, cd)
 
     components = [
         _component(
