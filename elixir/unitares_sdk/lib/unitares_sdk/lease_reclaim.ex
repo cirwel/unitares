@@ -1,67 +1,106 @@
 defmodule UnitaresSdk.LeaseReclaim do
   @moduledoc """
-  Shared lease-orphan reclaim contracts for BEAM lease-plane clients (#1459, #1462).
+  Shared per-resident memory of the holder uuids a process has recently put on
+  the wire, so a later `held_by_other` that names one of them can be recognized
+  as this resident's own stranded lease and released (#1459, #1462).
 
-  The surface lease plane (`:8788`) auto-renews active leases while the server
-  is up, so a lease whose acquire response or release request was lost — or
-  whose owning singleton supervisor restarted without running `terminate/2` —
-  becomes an immortal orphan unless its legitimate owner can recognize and
-  reclaim it on a later `409 held_by_other`.
+  ## The gap this closes (2026-08-01 incident)
 
-  Two distinct ownership proofs exist across the fleet, and their safety rules
-  must not be conflated:
+  `UnitaresSentinel.LeaseAdvisory.post_acquire_with_recovery/4` resolves a
+  single lost acquire response by retrying once with the same body — idempotent
+  re-acquire on `holder_agent_uuid`. On 2026-08-01 15:42 BOTH attempts timed out
+  at the transport (a Postgres stall slowed the plane past the 2s client budget
+  while the first attempt's INSERT had already committed), the attempt's holder
+  uuid was discarded, and every subsequent tick minted a fresh uuid that saw
+  only `held_by_other`. The poller was starved for 1h49m (216 ticks) until an
+  operator force-released the lease — even though every one of those 409
+  responses named both the orphan's `held_by_uuid` (a uuid this process minted)
+  and the `blocking_lease_id` needed to free it.
 
-    1. **Per-attempt UUID history (`:uuid_history`)** — default for resident
-       tick clients (`UnitaresSentinel.LeaseAdvisory`). Every `holder_agent_uuid`
-       put on the wire (both double-transport-failure attempts and successful
-       acquires) is remembered in process state until a later successful
-       acquire proves the surface held no prior orphan, plus a 15-minute
-       `@absence_grace_ms` window for delayed in-flight duplicates. Because
-       each attempt mints a fresh random UUID locally, a `409 held_by_other`
-       naming a remembered `held_by_uuid` is a cryptographic authorship proof
-       that THIS process created the blocking lease.
+  ## What is remembered
 
-    2. **Instance-qualified singleton intent tag (`:intent_tag`)** — opt-in
-       for supervised singletons (`Dispatch.Lease`) that restart with empty
-       in-memory state. Because a `409` body does not carry `intent`, the
-       caller fetches `GET /v1/lease/status` and passes `{status, body}` to
-       `intent_reclaim_decision/2` with its instance-qualified `owner_intent`.
-       Only an exact match on a non-empty `owner_intent` is reclaimable.
+  Every holder uuid this process sends is remembered:
 
-  ## Release reasons and 422 vintage fallback
+    * an acquire whose both transport attempts failed contributes its
+      `attempted_holder_uuid` — that uuid MAY own a committed lease this
+      process never learned about;
+    * a SUCCESSFUL acquire contributes its `holder_uuid` too — if the eventual
+      release request is lost, the lease plane auto-renews that lease forever,
+      and the only way to recognize the resulting orphan is to still remember
+      the uuid that acquired it (an end-of-tick `release/2` is often
+      fire-and-forget, so one lost release message is strictly MORE probable
+      than the double-loss that motivated this module).
 
-    * `:uuid_history` releases with `"reclaimed_lost_acquire"`. If and only if
-      the lease plane rejects that enum value with `422 schema_invalid` (an
-      older plane vintage), `fallback_release_reason/2` returns
-      `{:retry, "normal"}` so reclaim still succeeds across deploy skew.
-      Transport timeouts and `503` errors deliberately return `:no_fallback`
-      so an unapplied migration or DB stall never silently mislabels orphan
-      hold durations as `"normal"`.
-    * `:intent_tag` releases with `"reaped_after_supervisor_failed"`.
+  ## When an entry may be forgotten
+
+  Only after its lease is PROVEN absent, plus a grace window — never by age
+  alone, and never by outcome-based clearing:
+
+    * An orphan lives unboundedly (the plane-side holder auto-renews forever),
+      so a uuid that might hold one must be remembered for as long as the
+      starvation could persist. Pure age expiry would forget the
+      stall-opening uuid during any stall longer than the window — the one
+      uuid whose INSERT committed.
+    * A successful acquire proves that, at that instant, no remembered uuid
+      holds this surface (one active lease per surface). It does NOT prove
+      one cannot appear later: a delayed duplicate request (e.g. the PR #1443
+      recovery retry executing server-side late) can still commit afterwards.
+      So a success stamps existing entries as absence-proven, and a stamped
+      entry survives a further `@absence_grace_ms` — comfortably beyond any
+      abandoned request's plausible server-side lifetime — before it is
+      dropped.
+
+  The list is bounded (`@max_candidates`) purely as a backstop; entries are a
+  few dozen bytes, and the cap is sized to outlast a day-long transport-dark
+  stall at the default 30s tick interval.
+
+  In-memory only: a resident restart forfeits reclaim for leases stranded
+  before the restart. That residual is carried by the doctor's
+  `immortal_lease` check (scheduled via `com.unitares.doctor-findings`) and
+  the `LeaseStarvation` self-finding, whose remedy names the blocking lease id
+  for a manual force-release.
+
+  ## Safety
+
+  Holder uuids are minted process-locally from `:crypto.strong_rand_bytes/1`
+  (`LeaseAdvisory.new_holder_uuid/0`). A match between `held_by_uuid` and a
+  remembered uuid therefore proves the blocking lease was created by an
+  acquire THIS process sent — releasing it can never take a lease away from
+  another live holder. (This is a fleet convention, not a server-enforced
+  property: the plane does not authenticate holder uuids, and every 409
+  publishes the holder uuid to every bearer client. It holds because every
+  client mints uuids randomly per attempt and none echoes observed uuids back
+  into acquire — verified fleet-wide at review time.) This is deliberately NOT
+  the rejected stable-holder-uuid design: uuids stay per-attempt, so two
+  concurrently live residents still contend correctly and can never adopt each
+  other's leases.
+
+  ## Release reason and 422 vintage fallback
+
+  Reclaim releases use `"reclaimed_lost_acquire"` (`release_reason/0`). If and
+  only if the lease plane rejects that enum value with HTTP `422` and
+  `"error" => "schema_invalid"` (an older plane router vintage),
+  `fallback_release_reason/2` returns `{:retry, "normal"}` so reclaim still
+  succeeds across deploy skew. Transport timeouts, `503` responses, and any
+  non-422 errors return `:no_fallback` so DB stalls and unapplied migrations
+  never silently mislabel orphan hold durations as `"normal"`.
   """
 
   @max_candidates 4096
   @absence_grace_ms 15 * 60 * 1000
-
   @uuid_history_reason "reclaimed_lost_acquire"
-  @intent_tag_reason "reaped_after_supervisor_failed"
 
   @typedoc """
-  State keys merged into a caller GenServer's state for `:uuid_history`
-  reclaim. Each entry is `{holder_uuid, absence_proven_at}` — `nil` until a
-  successful acquire proves the uuid holds nothing on this surface.
+  State keys this module merges into a caller GenServer's state. Each entry is
+  `{holder_uuid, absence_proven_at}` — `nil` until a successful acquire proves
+  the uuid holds nothing on this surface.
   """
   @type state :: %{
           optional(any()) => any(),
           lease_reclaim_candidates: [{String.t(), DateTime.t() | nil}]
         }
 
-  @type mode :: :uuid_history | :intent_tag
-
-  @type intent_decision ::
-          :already_free
-          | {:reclaimable, String.t()}
-          | :foreign
+  @type mode :: :uuid_history
 
   @doc """
   Fresh reclaim state to `Map.merge/2` into a GenServer's state at `init/1`.
@@ -112,17 +151,18 @@ defmodule UnitaresSdk.LeaseReclaim do
   @doc """
   Update reclaim memory from an acquire scope.
 
-  Preserves the council-approved (#1459) retention rules:
-    1. drop entries whose absence was proven more than `@absence_grace_ms`
-       (15 minutes) ago — never by age alone, and never by outcome clearing;
-    2. on a successful acquire (`:acquired_new` or `:acquired_idempotent`),
-       stamp still-unproven entries as absence-proven now (preserving any
-       earlier stamp);
+  Call with every scope `LeaseAdvisory.acquire_cycle/1` returns, whatever its
+  outcome:
+
+    1. drop entries whose absence was proven more than the grace window ago;
+    2. on a successful acquire, stamp still-unproven entries as
+       absence-proven now (the new acquire's own uuid is exempt — its lease
+       is the one currently active);
     3. remember `conflict.attempted_holder_uuid` (both transport attempts
        failed) and the scope's `holder_uuid` (successful acquire) as fresh,
-       unproven entries, bounded at `@max_candidates` (4096).
+       unproven entries.
 
-  Options: `:now` — injected `DateTime` clock for tests.
+  Options: `:now` — injected clock for tests.
   """
   @spec absorb(map(), map(), keyword()) :: map()
   def absorb(state, scope, opts \\ [])
@@ -161,87 +201,31 @@ defmodule UnitaresSdk.LeaseReclaim do
   def absorb(state, _scope, _opts), do: state
 
   @doc """
-  Classify a decoded `GET /v1/lease/status` reply (`{status, body}`) against an
-  instance-qualified singleton `owner_intent` string (`Dispatch.Lease` pattern).
-
-    * `:already_free` — `200` with `%{"ok" => true, "lease" => nil}`
-    * `{:reclaimable, lease_id}` — `200` with `%{"ok" => true, "lease" => %{"intent" => ^owner_intent, "lease_id" => lease_id}}`
-    * `:foreign` — any other intent, blank `owner_intent`, missing `lease_id`, or non-200 reply
+  Canonical `release_reason` for a UUID-history reclaim release.
   """
-  @spec intent_reclaim_decision({non_neg_integer(), term()}, String.t()) :: intent_decision()
-  def intent_reclaim_decision({status, body}, owner_intent) when is_integer(status),
-    do: intent_reclaim_decision(status, body, owner_intent)
+  @spec release_reason() :: String.t()
+  def release_reason, do: @uuid_history_reason
 
-  def intent_reclaim_decision(_reply, _owner_intent), do: :foreign
-
-  @doc """
-   3-arity form of `intent_reclaim_decision/2` taking `status`, `body`, and `owner_intent`.
-  """
-  @spec intent_reclaim_decision(non_neg_integer(), term(), String.t()) :: intent_decision()
-  def intent_reclaim_decision(status, body, owner_intent)
-      when is_integer(status) and is_binary(owner_intent) do
-    case String.trim(owner_intent) do
-      "" ->
-        :foreign
-
-      _non_empty ->
-        case {status, body} do
-          {200, %{"ok" => true, "lease" => nil}} ->
-            :already_free
-
-          {200,
-           %{
-             "ok" => true,
-             "lease" => %{"intent" => ^owner_intent, "lease_id" => lease_id}
-           }}
-          when is_binary(lease_id) and lease_id != "" ->
-            {:reclaimable, lease_id}
-
-          _ ->
-            :foreign
-        end
-    end
-  end
-
-  def intent_reclaim_decision(_status, _body, _owner_intent), do: :foreign
-
-  @doc """
-  Alias for `intent_reclaim_decision/2`.
-  """
-  @spec own_orphan_status?({non_neg_integer(), term()}, String.t()) :: intent_decision()
-  def own_orphan_status?(reply, owner_intent),
-    do: intent_reclaim_decision(reply, owner_intent)
-
-  @doc """
-  Canonical `release_reason` for a reclaim mode.
-  """
   @spec release_reason(mode()) :: String.t()
   def release_reason(:uuid_history), do: @uuid_history_reason
-  def release_reason(:intent_tag), do: @intent_tag_reason
-
-  @doc """
-  Ordered list of release reasons to try for a reclaim mode (primary reason
-  first, followed by any 422 vintage fallback).
-  """
-  @spec reclaim_release_reasons(mode()) :: [String.t()]
-  def reclaim_release_reasons(:uuid_history), do: [@uuid_history_reason, "normal"]
-  def reclaim_release_reasons(:intent_tag), do: [@intent_tag_reason]
 
   @doc """
   Determine whether a failed reclaim release should fall back to `"normal"`.
 
-  Per the #1459 council decision, ONLY a `422 schema_invalid` response from the
-  lease plane (indicating an older router vintage that predates
-  `"reclaimed_lost_acquire"`) triggers `{:retry, "normal"}`. Transport errors
-  and `503` responses return `:no_fallback` so DB stalls and unapplied
-  migrations never silently mislabel orphan spans.
+  Per the #1459 council decision, ONLY an HTTP `422` response carrying
+  `"error" => "schema_invalid"` from the lease plane (indicating an older
+  router vintage that predates `"reclaimed_lost_acquire"`) triggers
+  `{:retry, "normal"}`. Transport errors, `503` responses, non-422 status
+  codes, and `422` errors for any other reason return `:no_fallback` so DB
+  stalls and unapplied migrations never silently mislabel orphan spans.
   """
-  @spec fallback_release_reason(mode(), term()) :: {:retry, String.t()} | :no_fallback
-  def fallback_release_reason(:uuid_history, 422), do: {:retry, "normal"}
+  @spec fallback_release_reason(term()) :: {:retry, String.t()} | :no_fallback
+  def fallback_release_reason(reply), do: fallback_release_reason(:uuid_history, reply)
 
+  @spec fallback_release_reason(mode(), term()) :: {:retry, String.t()} | :no_fallback
   def fallback_release_reason(
         :uuid_history,
-        {:ok, %{"ok" => false, "error" => "schema_invalid"}}
+        {:ok, 422, %{"ok" => false, "error" => "schema_invalid"}}
       ),
       do: {:retry, "normal"}
 

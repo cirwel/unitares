@@ -141,79 +141,22 @@ defmodule UnitaresSdk.LeaseReclaimTest do
     end
   end
 
-  describe "singleton intent-tag reclaim classification (#1462)" do
-    @owner_intent "dispatch_beam:singleton:poller@host"
-
-    test "200 with nil lease classifies as :already_free" do
-      reply = {200, %{"ok" => true, "lease" => nil}}
-      assert :already_free = LeaseReclaim.intent_reclaim_decision(reply, @owner_intent)
-      assert :already_free = LeaseReclaim.own_orphan_status?(reply, @owner_intent)
-    end
-
-    test "200 with matching non-empty owner_intent and lease_id is {:reclaimable, lease_id}" do
-      reply = {
-        200,
-        %{
-          "ok" => true,
-          "lease" => %{
-            "lease_id" => @lease_id,
-            "intent" => @owner_intent,
-            "holder_uuid" => @uuid_a
-          }
-        }
-      }
-
-      assert {:reclaimable, @lease_id} =
-               LeaseReclaim.intent_reclaim_decision(reply, @owner_intent)
-    end
-
-    test "different intent, missing lease_id, blank owner_intent, or non-200 classifies as :foreign" do
-      matching_body = %{
-        "ok" => true,
-        "lease" => %{"lease_id" => @lease_id, "intent" => @owner_intent}
-      }
-
-      assert :foreign =
-               LeaseReclaim.intent_reclaim_decision(
-                 {200,
-                  %{"ok" => true, "lease" => %{"lease_id" => @lease_id, "intent" => "other"}}},
-                 @owner_intent
-               )
-
-      assert :foreign =
-               LeaseReclaim.intent_reclaim_decision(
-                 {200, %{"ok" => true, "lease" => %{"intent" => @owner_intent}}},
-                 @owner_intent
-               )
-
-      assert :foreign = LeaseReclaim.intent_reclaim_decision({200, matching_body}, "")
-      assert :foreign = LeaseReclaim.intent_reclaim_decision({200, matching_body}, "   ")
-      assert :foreign = LeaseReclaim.intent_reclaim_decision({503, matching_body}, @owner_intent)
-    end
-  end
-
-  describe "release reasons and 422-only vintage fallback (#1459 / #1462)" do
-    test "canonical release reasons per mode" do
+  describe "release reason and 422-only vintage fallback (#1459 / #1462)" do
+    test "canonical release reason" do
+      assert LeaseReclaim.release_reason() == "reclaimed_lost_acquire"
       assert LeaseReclaim.release_reason(:uuid_history) == "reclaimed_lost_acquire"
-      assert LeaseReclaim.release_reason(:intent_tag) == "reaped_after_supervisor_failed"
-
-      assert LeaseReclaim.reclaim_release_reasons(:uuid_history) == [
-               "reclaimed_lost_acquire",
-               "normal"
-             ]
-
-      assert LeaseReclaim.reclaim_release_reasons(:intent_tag) == [
-               "reaped_after_supervisor_failed"
-             ]
     end
 
-    test "fallback_release_reason/2 retries with normal ONLY on 422 schema_invalid for uuid_history" do
-      assert {:retry, "normal"} = LeaseReclaim.fallback_release_reason(:uuid_history, 422)
+    test "fallback_release_reason/2 retries with normal ONLY on HTTP 422 schema_invalid" do
+      assert {:retry, "normal"} =
+               LeaseReclaim.fallback_release_reason(
+                 {:ok, 422, %{"ok" => false, "error" => "schema_invalid"}}
+               )
 
       assert {:retry, "normal"} =
                LeaseReclaim.fallback_release_reason(
                  :uuid_history,
-                 {:ok, %{"ok" => false, "error" => "schema_invalid"}}
+                 {:ok, 422, %{"ok" => false, "error" => "schema_invalid"}}
                )
 
       assert {:retry, "normal"} =
@@ -222,12 +165,31 @@ defmodule UnitaresSdk.LeaseReclaimTest do
                  {:error, {:release_refused, 422, "schema_invalid", %{}}}
                )
 
+      # Bare 422 without schema_invalid, or schema_invalid with non-422 status, must not fall back
+      assert :no_fallback = LeaseReclaim.fallback_release_reason(:uuid_history, 422)
+
+      assert :no_fallback =
+               LeaseReclaim.fallback_release_reason(
+                 :uuid_history,
+                 {:ok, 422, %{"ok" => false, "error" => "other_error"}}
+               )
+
+      assert :no_fallback =
+               LeaseReclaim.fallback_release_reason(
+                 :uuid_history,
+                 {:ok, 503, %{"ok" => false, "error" => "schema_invalid"}}
+               )
+
+      assert :no_fallback =
+               LeaseReclaim.fallback_release_reason(
+                 :uuid_history,
+                 {:ok, %{"ok" => false, "error" => "schema_invalid"}}
+               )
+
       assert :no_fallback = LeaseReclaim.fallback_release_reason(:uuid_history, 503)
 
       assert :no_fallback =
                LeaseReclaim.fallback_release_reason(:uuid_history, {:error, :timeout})
-
-      assert :no_fallback = LeaseReclaim.fallback_release_reason(:intent_tag, 422)
     end
   end
 end

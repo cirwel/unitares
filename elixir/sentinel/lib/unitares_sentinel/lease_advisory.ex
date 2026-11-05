@@ -361,7 +361,7 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   # span-since-acquire is anything but a legitimate hold.
   defp release_checked(lease_id, opts) do
     case post_release(lease_id, @reclaim_release_reason, opts) do
-      {:ok, %{"ok" => true}} ->
+      {:ok, _status, %{"ok" => true}} ->
         Logger.info(
           "lease_advisory: released reclaimed lease_id=#{lease_id} " <>
             "reason=#{@reclaim_release_reason}"
@@ -371,7 +371,7 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
       # The lease is already gone (operator force-release or reaper racing
       # us). The reclaim's goal is achieved — proceed to re-acquire.
-      {:ok, %{"ok" => false, "error" => "not_found"}} ->
+      {:ok, _status, %{"ok" => false, "error" => "not_found"}} ->
         Logger.info(
           "lease_advisory: reclaim target lease_id=#{lease_id} already released — proceeding"
         )
@@ -380,56 +380,54 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
       # A 422 schema_invalid is the ONE unambiguous vintage signal: this
       # plane's router predates reclaimed_lost_acquire. Fall back to 'normal'
-      # so reclaim works against an old plane regardless of deploy order;
-      # the audit distinction upgrades itself once the plane is current.
-      # Releasing twice is safe (release is a WHERE released_at IS NULL
-      # update).
-      #
-      # Deliberately NOT applied to anything else:
-      #   * transport errors — under the DB stall that triggers reclaims, a
-      #     timed-out release may still have committed server-side with the
-      #     right reason; a 'normal' retry would mislabel exactly the orphan
-      #     spans this reason exists to distinguish;
-      #   * 503s — ambiguous between a real internal error and new router
-      #     code over an UNAPPLIED 056 migration (the CHECK rejects what the
-      #     router enum accepted). Falling back there would make the
-      #     unapplied-migration state silently self-defeat the label forever.
-      #     Failing loudly instead starves the tick, keeps the candidate, and
-      #     lets the repeating warning + the LeaseStarvation finding route
-      #     the operator to the missing migration.
-      {:ok, %{"ok" => false, "error" => "schema_invalid"} = rejected} ->
-        case post_release(lease_id, "normal", opts) do
-          {:ok, %{"ok" => true}} ->
-            Logger.info(
-              "lease_advisory: released reclaimed lease_id=#{lease_id} reason=normal " <>
-                "(plane rejected #{@reclaim_release_reason}: #{inspect(rejected)}; " <>
-                "old-plane fallback)"
-            )
-
-            :ok
-
-          {:ok, %{"ok" => false, "error" => "not_found"}} ->
-            :ok
-
-          other ->
-            {:error, other}
-        end
-
+      # via UnitaresSdk.LeaseReclaim.fallback_release_reason/2 so reclaim
+      # works against an old plane regardless of deploy order; the audit
+      # distinction upgrades itself once the plane is current.
       other ->
-        {:error, other}
+        case UnitaresSdk.LeaseReclaim.fallback_release_reason(:uuid_history, other) do
+          {:retry, fallback_reason} ->
+            {:ok, 422, rejected} = other
+
+            case post_release(lease_id, fallback_reason, opts) do
+              {:ok, _status, %{"ok" => true}} ->
+                Logger.info(
+                  "lease_advisory: released reclaimed lease_id=#{lease_id} reason=#{fallback_reason} " <>
+                    "(plane rejected #{@reclaim_release_reason}: #{inspect(rejected)}; " <>
+                    "old-plane fallback)"
+                )
+
+                :ok
+
+              {:ok, _status, %{"ok" => false, "error" => "not_found"}} ->
+                :ok
+
+              {:ok, _status, body} ->
+                {:error, {:ok, body}}
+
+              err ->
+                {:error, err}
+            end
+
+          :no_fallback ->
+            case other do
+              {:ok, _status, body} -> {:error, {:ok, body}}
+              err -> {:error, err}
+            end
+        end
     end
   end
 
   defp post_release(lease_id, reason, opts) do
     with {:ok, token} <- bearer_token(opts),
-         {:ok, _status, response_body} <-
+         {:ok, status, response_body} <-
            post_json(
              "/v1/lease/release",
              %{"lease_id" => lease_id, "release_reason" => reason},
              token,
              opts
-           ) do
-      decode_object(response_body)
+           ),
+         {:ok, decoded} <- decode_object(response_body) do
+      {:ok, status, decoded}
     end
   end
 

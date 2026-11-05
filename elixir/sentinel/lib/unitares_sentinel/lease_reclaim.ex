@@ -20,6 +20,28 @@ defmodule UnitaresSentinel.LeaseReclaim do
   operator force-released the lease — even though every one of those 409
   responses named both the orphan's `held_by_uuid` (a uuid this process minted)
   and the `blocking_lease_id` needed to free it.
+
+  ## In-memory only
+
+  A resident restart forfeits reclaim for leases stranded before the restart.
+  That residual is carried by the doctor's `immortal_lease` check (scheduled
+  via `com.unitares.doctor-findings`) and the `LeaseStarvation` self-finding,
+  whose remedy names the blocking lease id for a manual force-release.
+
+  ## Safety
+
+  Holder uuids are minted process-locally from `:crypto.strong_rand_bytes/1`
+  (`LeaseAdvisory.new_holder_uuid/0`). A match between `held_by_uuid` and a
+  remembered uuid therefore proves the blocking lease was created by an
+  acquire THIS process sent — releasing it can never take a lease away from
+  another live holder. (This is a fleet convention, not a server-enforced
+  property: the plane does not authenticate holder uuids, and every 409
+  publishes the holder uuid to every bearer client. It holds because every
+  client mints uuids randomly per attempt and none echoes observed uuids back
+  into acquire — verified fleet-wide at review time.) This is deliberately NOT
+  the rejected stable-holder-uuid design: uuids stay per-attempt, so two
+  concurrently live residents still contend correctly and can never adopt each
+  other's leases.
   """
 
   @type state :: UnitaresSdk.LeaseReclaim.state()
