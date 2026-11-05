@@ -1404,6 +1404,52 @@ def test_main_resolve_routes_through_findings_lease_wrapper(
     assert seen == {"intent": "resolve aaaaaaaa", "holder_agent_id": resolver}
 
 
+def test_main_lifecycle_routes_through_findings_lease_wrapper(
+    watcher_module, monkeypatch
+):
+    """--lifecycle is the scheduler entry point: it must take the same lease
+    and local lock as --sweep-stale, because both sweeps rewrite findings.jsonl."""
+    monkeypatch.setattr(watcher_module, "_make_identity_client", lambda: object())
+    monkeypatch.setattr(watcher_module, "resolve_identity", lambda _client: None)
+    seen = {}
+    ran = []
+
+    def fake_lease_wrapper(intent, mutation, *, holder_agent_id=None):
+        seen["intent"] = intent
+        return mutation()
+
+    monkeypatch.setattr(watcher_module, "_run_with_watcher_findings_lease", fake_lease_wrapper)
+    monkeypatch.setattr(watcher_module, "_sweep_stale_quiet", lambda: ran.append("stale") or 0)
+    monkeypatch.setattr(watcher_module, "_sweep_token_drift_quiet", lambda: ran.append("drift") or 0)
+
+    rc = watcher_module.main(["--lifecycle"])
+
+    assert rc == 0
+    assert seen == {"intent": "findings lifecycle sweep"}
+    assert ran == ["stale", "drift"]
+
+
+def test_lifecycle_runs_without_surfacing(watcher_module, tmp_path, capsys):
+    """Lifecycle no longer depends on the display path: run on its own, it
+    applies the stale sweep and prints nothing, and marks nothing surfaced."""
+    real = tmp_path / "real.py"
+    real.write_text("print('hi')\n")
+    missing = tmp_path / "deleted-worktree" / "ghost.py"
+    _seed_findings(
+        watcher_module,
+        [
+            _make_raw_entry("real____00000000", file=str(real), status="open"),
+            _make_raw_entry("ghost___00000000", file=str(missing), status="open"),
+        ],
+    )
+
+    assert watcher_module.run_lifecycle() == 0
+
+    after = {f["fingerprint"]: f["status"] for f in watcher_module._iter_findings_raw()}
+    assert after == {"real____00000000": "open"}, "swept, and nothing marked surfaced"
+    assert capsys.readouterr().out == ""
+
+
 @pytest.mark.parametrize("flag", ["--resolve", "--dismiss"])
 def test_main_refuses_non_uuid_agent_id_before_mutating(
     watcher_module, monkeypatch, capsys, flag

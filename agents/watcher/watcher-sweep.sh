@@ -20,6 +20,15 @@
 #                                 (required; no workspace is selected by default)
 #   UNITARES_WATCHER_SWEEP_MAX    max files per sweep (default: 40)
 #   UNITARES_WATCHER_AGENT        path to agent.py (default: alongside this file)
+#   UNITARES_WATCHER_PYTHON       interpreter for agent.py (default: python3 on
+#                                 PATH). A scheduler's PATH can resolve a
+#                                 python3 without Watcher's dependencies, so set
+#                                 this to the interpreter the hooks use.
+#
+# Each run also performs the findings lifecycle (agent.py --lifecycle) before
+# anything else, so stale-path marking, expiry and line-drift cleanup keep
+# running whether or not anything is displaying findings and whether or not
+# Ollama is up. Lifecycle needs no model.
 #
 # Host schedulers and their selected scan roots belong in deployment config.
 
@@ -28,6 +37,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WATCHER_AGENT="${UNITARES_WATCHER_AGENT:-${SCRIPT_DIR}/agent.py}"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PY="${UNITARES_WATCHER_PYTHON:-python3}"
 
 ROOTS="${UNITARES_WATCHER_SWEEP_ROOTS:-}"
 if [[ -z "$ROOTS" ]]; then
@@ -50,6 +60,15 @@ log() {
 }
 
 mkdir -p "$STATE_DIR" "$LOCK_DIR"
+
+# --- Findings lifecycle: every run, before any skip below ---
+# Runs under the findings lock inside agent.py. A failure is logged and the
+# scan still proceeds; lifecycle retries on the next interval.
+LIFECYCLE_RC=0
+"$PY" "${WATCHER_AGENT}" --lifecycle >/dev/null 2>&1 || LIFECYCLE_RC=$?
+if [[ "$LIFECYCLE_RC" -ne 0 ]]; then
+    log "lifecycle failed (exit ${LIFECYCLE_RC}); retrying next interval"
+fi
 
 # --- Window: everything modified since the last successful sweep ---
 # The watermark is the state file's own mtime, compared with `find -newer`.
@@ -150,13 +169,13 @@ while IFS= read -r FILE_PATH; do
     touch "$LOCK_FILE"
 
     # Same region extraction the hook uses, so prompts stay ~60-150 lines.
-    REGIONS=$(cd "$REPO_ROOT" && python3 -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
+    REGIONS=$(cd "$REPO_ROOT" && "$PY" -m agents.watcher.hook_input --file "$FILE_PATH" 2>/dev/null || true)
     if [[ -z "$REGIONS" ]]; then
-        python3 "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
+        "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" >/dev/null 2>&1
     else
         while IFS= read -r REGION; do
             [[ -z "$REGION" ]] && continue
-            python3 "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
+            "$PY" "${WATCHER_AGENT}" --all --file "$FILE_PATH" --region "$REGION" >/dev/null 2>&1
         done <<< "$REGIONS"
     fi
     SCANNED=$(( SCANNED + 1 ))
