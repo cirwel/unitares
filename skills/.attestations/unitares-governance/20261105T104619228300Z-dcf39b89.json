@@ -1,13 +1,13 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-11-05T10:39:45Z",
+  "verified_at": "2026-11-05T10:46:19Z",
   "verified_date": "2026-11-05",
-  "verifier": "gemini-4-argon (re-checked EISV sensor self-loop neutralization and per-agent I calibration default-ON SN1 posture)",
+  "verifier": "gemini-4-argon (re-checked EISV sensor self-loop neutralization and per-agent I calibration default-ON SN1 posture and independent I evidence gates)",
   "source_digests": {
     "unitares/docs/EISV_COMPUTATION.md": "165b70857ffcc71c",
     "unitares/skills/dialectic-reasoning/SKILL.md": "e23a1486d3397505",
-    "unitares/skills/governance-fundamentals/SKILL.md": "f10b8b2ea35c2642",
+    "unitares/skills/governance-fundamentals/SKILL.md": "9a1d46de11050d2f",
     "unitares/skills/governance-lifecycle/SKILL.md": "3ec5f9172f2c7a78",
     "unitares/skills/knowledge-graph/SKILL.md": "19ca81fc3d035b88",
     "unitares/skills/unitares-dashboard/SKILL.md": "ad9d23e2f1018ca1",
