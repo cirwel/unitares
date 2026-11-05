@@ -52,7 +52,9 @@ section, and the plan, name what it could not settle:
 Read from `src/behavioral_sensor.py` (`_compute_S_components`,
 `compute_behavioral_sensor_components`) and `src/dual_log/continuity.py` at
 `d2b3fac3d`. [Step 0](#5-step-0-derived-predictions-before-any-collection) re-reads
-them at the pinned commit.
+them at the pinned commit. The weights below describe the legacy RK1 posture
+explicitly fixed for both arms in §3; they do not describe the SN1 default
+introduced by #3204.
 
 | Path into S | Weight | What drives it |
 |---|---|---|
@@ -75,21 +77,43 @@ Two consequences shape the design:
 
 ## 3. Arms
 
-Every condition runs in both arms, on the same inputs.
+Every condition runs in both arms, on the same inputs. This draft preserves
+the historical RK1 comparison motivated by v0. Both arms explicitly set:
 
-- **(a) Deployed:** `metrics["S"]` from `UNITARESMonitor.process_update` at the
-  pinned commit, with the live plist's estimator flags (as in v0).
-- **(b) Regime-held:** the same path, with only the regime term held at
-  `REGIME_NEUTRAL_INSTABILITY = 0.12`. The harness patches
-  `_regime_instability` to return that constant; nothing else changes. It is the
-  same substitution the live shadow makes through `regime_instability_override`
-  (`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`). The broader
-  `neutralize_self_loops` flag is **not** used, because it also neutralises the
-  decision and coherence contributions to E and I. Arm (b) would then differ in
-  more than the regime term. v0's `--ablate-regime` held the term at 0.1; v1 uses
-  0.12 to match the shadow.
+| Estimator flag | Arm (a) | Arm (b) |
+|---|---|---|
+| `UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS` | `0` | `0` |
+| `UNITARES_PER_AGENT_I_CALIBRATION` | `0` | `0` |
 
-Each arm gets its own verdict. One arm's verdict says nothing about the other.
+- **(a) Legacy RK1 reference:** `metrics["S"]` from
+  `UNITARESMonitor.process_update` at the pinned commit, with the flag values
+  above. This reconstructs the historical posture; it is not a claim to test
+  whichever posture is deployed at collection time.
+- **(b) Legacy RK1, regime-held:** the same path and flags, with only the
+  regime term held at `REGIME_NEUTRAL_INSTABILITY = 0.12`. The harness patches
+  `_regime_instability` to return that constant; nothing else changes. This
+  uses the same constant-substitution mechanism as
+  `regime_instability_override`
+  (`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`).
+  v0's `--ablate-regime` held the term at 0.1; v1 uses 0.12.
+
+Set the flags explicitly before monitor initialization in each isolated harness
+process; inherit neither unset defaults nor the live plist. Step 0 records the
+full effective estimator configuration, including any function-level overrides,
+with the pinned code. Harness setup must assert that self-loop neutralization
+and per-agent I calibration are both disabled, that the regime term retains
+its 0.35 base weight in both arms, and that only arm (b) substitutes 0.12.
+A setup mismatch stops execution before any confirmatory stream.
+
+#3204 introduces the SN1 default, which removes the regime term from S's base.
+With neutralization enabled, patching `_regime_instability` cannot supply this
+comparison. This protocol therefore does not validate SN1. Testing the current
+deployed posture requires an amended arm definition, code-derived predictions,
+and operator approval before registration or collection; do not silently
+switch the arms to SN1 when the deployment changes.
+
+Each arm gets its own verdict under the explicit RK1 configuration. One arm's
+verdict says nothing about the other or about SN1.
 
 ## 4. Conditions
 
@@ -130,7 +154,8 @@ This is decided in Step 0, not after collection.
 ## 5. Step 0: derived predictions, before any collection
 
 Before collection, a separate commit adds `prediction-v1.md` beside this file.
-First freeze the pinned estimator commit, dated aggregate baseline medians used
+First freeze the pinned estimator commit, both arms' explicit flag values and
+full effective estimator configuration from §3, dated aggregate baseline medians used
 to set the stimulus, exact input values and clipping rule, included class and
 tool paths, randomization keys, analysis windows, confidence-interval and
 agreement-limit methods, and the number of seeds. A
@@ -271,14 +296,18 @@ single-reading detection target needs its own pre-registered false-alarm and
 sensitivity standard; it is not inferred from this study.
 
 **Declared predictions for the verdicts:**
-- Arm (a) is predicted **NOT ESTABLISHED** on specificity for N2a and N2b,
+- Legacy RK1 arm (a), with both §3 flags fixed at `0`, is predicted
+  **NOT ESTABLISHED** on specificity for N2a and N2b,
   because of the regime self-loop (v0: -0.038 live). Its v0 resting step SD was
   0.027 against a +0.040 response at the lowest P1 dose; that suggests poor
   single-reading separation but is no longer a verdict criterion.
-- Arm (b) is predicted **FAITHFUL UNDER THESE SYNTHETIC INTERVENTIONS** if all
+- Regime-held RK1 arm (b), with the same flags, is predicted
+  **FAITHFUL UNDER THESE SYNTHETIC INTERVENTIONS** if all
   paths are covered. v0 did not test several v1 conditions, so this remains a
   forecast, not an inferred v1 result.
 
+These forecasts apply only to the explicit RK1 arms in §3, not to SN1.
+Step 0 re-derives them at the pinned code and configuration before approval.
 Each prediction is reported as confirmed or not.
 
 ## 8. Can the procedure fail? Mutants and validity checks
@@ -353,7 +382,8 @@ reliability.
 
 ## 10. Execution, reporting and limits
 
-- **Order:** freeze stimulus inputs and complete Step 0 predictions, obtain the
+- **Order:** freeze both arms' effective configuration (§3) and stimulus inputs,
+  and complete Step 0 predictions, obtain the
   operator's approval of both Step 0 and §7, register the protocol, then build
   the harness extension, run mutants, and run both arms once. Plumbing checks
   use seeds 10,000 and up, print no ΔS, and assert only that streams complete.
@@ -409,7 +439,7 @@ the first version. All three are fixed above:
 | Found | Fix |
 |---|---|
 | Stubbing tool counts can't reach S: `process_update` never passes `tool_call_velocity`, and velocity is in calls per minute over an hour, not per check-in | §2 units corrected. P5 is conditional on a path that supplies velocity (§8), and its rate now crosses the 5-per-minute floor |
-| `neutralize_self_loops` also neutralises the decision and coherence terms of E and I, so arm (b) would change more than the regime term | Arm (b) patches only `_regime_instability`, the same substitution the live shadow makes |
+| `neutralize_self_loops` also neutralises the decision and coherence terms of E and I, so arm (b) would change more than the regime term | Both arms explicitly disable self-loop neutralization and per-agent I calibration; only arm (b) patches `_regime_instability` to 0.12 (§3) |
 | Keying every draw by condition gave control and intervention different jitter, which breaks common random numbers | Shared nuisance draws are keyed by `(seed, step, field)`. Only fields the intervention changes take condition-specific draws |
 
 **Post-merge standards assessment, 2026-11-04.** This amendment uses the v0
@@ -426,3 +456,11 @@ frozen baseline rather than at 0.75. Step 0 verifies that the fixed P2/P3
 confidence levels are actual drops from that baseline. This avoids introducing
 a confidence change into P1 if the live median differs from 0.75. No v1
 response data were used.
+
+**Estimator-posture correction, 2026-11-05.** The independent review on
+[#3195](https://github.com/cirwel/unitares/pull/3195#issuecomment-6661360952)
+identified that inheriting live flags would collapse the regime comparison
+under #3204's SN1 defaults. Both arms now explicitly reconstruct RK1, and their
+scope, predictions and setup checks state that choice. This remains a draft
+proposal for operator approval; no study was registered and no v1 response
+data were used for this correction.
