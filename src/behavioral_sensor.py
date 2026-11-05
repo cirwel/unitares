@@ -79,8 +79,9 @@ def filter_behavioral_outcomes(outcome_history: list | None) -> list | None:
 def per_agent_i_calibration_enabled() -> bool:
     """Return True when per-agent tactical calibration in behavioral I is enabled.
 
-    Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default off). When
-    enabled (#2818 §3.1 & §3.2):
+    Controlled by ``UNITARES_PER_AGENT_I_CALIBRATION`` (default ON; set to
+    ``0``/``false``/``no``/``off``/``""`` to restore the legacy shared fleet
+    calibration scalar). When enabled (#2818 §3.1 & §3.2):
     - Requires ``agent_calibration_channel`` with ``evidence_status == "available"``
       and ``freshness_status == "recent"`` (rejecting ``"stale"`` and ``"unknown"``).
     - If a frozen reference-cohort ``prior_error`` in ``(0, 1)`` is supplied on
@@ -95,20 +96,21 @@ def per_agent_i_calibration_enabled() -> bool:
       without a reference prior), no shared prior enters ``I`` (§3.2 Rule 1);
       base ``I`` uses the calibration-free renormalization (Arm F, §6.4).
     """
-    raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "").strip().lower()
+    raw = os.environ.get("UNITARES_PER_AGENT_I_CALIBRATION", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
 def neutralize_sensor_self_loops_enabled() -> bool:
     """Return True when controller self-loops in the behavioral sensor are neutralized.
 
-    Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default off). When
-    enabled, the self-referential controller terms inside the behavioral sensor
-    are excluded from the base formulas and the remaining observed base
-    components are renormalized to sum to 1.0 (while the one-step shadow
-    ablations ``compute_*_shadow`` continue to use constant substitution for
-    single-term level attribution; if no non-loop base input is observed on a
-    dimension, its documented default fallback carries 1.0 of the base before
+    Controlled by ``UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS`` (default ON; set to
+    ``0``/``false``/``no``/``off``/``""`` to restore the legacy self-loop
+    terms). When enabled, the self-referential controller terms inside the
+    behavioral sensor are excluded from the base formulas and the remaining
+    observed base components are renormalized to sum to 1.0 (while the one-step
+    shadow ablations ``compute_*_shadow`` continue to use constant substitution
+    for single-term level attribution; if no non-loop base input is observed on
+    a dimension, its documented default fallback carries 1.0 of the base before
     optional post-base blends):
     - ``decision_history`` and ``legacy_coherence_level`` excluded from base E,
       renormalizing onto ``complexity_calibration`` (0.50) + ``outcome_success``
@@ -126,7 +128,7 @@ def neutralize_sensor_self_loops_enabled() -> bool:
     - server-generated ``trajectory_validated`` / ``cirs_resonance`` outcome
       echoes excluded from E and I
     """
-    raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "").strip().lower()
+    raw = os.environ.get("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 

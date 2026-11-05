@@ -125,16 +125,25 @@ class TestBehavioralSensor:
             key: record["dimensions"][key]["value"]
             for key in ("E", "I", "S", "V")
         } == deployed
-        assert record["dimensions"]["E"]["components"][0]["name"] == "decision_history"
-        assert record["dimensions"]["I"]["components"][0]["source"] == "fleet_calibration"
+        assert record["dimensions"]["E"]["components"][0]["name"] == "complexity_calibration"
+        assert record["dimensions"]["I"]["components"][0]["name"] == "outcome_score_consistency"
         assert record["dimensions"]["V"]["details"]["cadence_normalized"] is False
 
-    def test_component_record_names_defaulted_inputs(self):
+    def test_component_record_names_defaulted_inputs(self, monkeypatch):
         record = compute_behavioral_sensor_components(**make_histories(n=5))
-
         integrity = record["dimensions"]["I"]
-        calibration = next(
+        fallback = next(
             item for item in integrity["components"]
+            if item["name"] == "uncalibrated_base_fallback"
+        )
+        assert fallback["observed"] is False
+        assert fallback["default_reason"] == "no_admissible_calibration_or_outcomes"
+
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
+        legacy_record = compute_behavioral_sensor_components(**make_histories(n=5))
+        calibration = next(
+            item for item in legacy_record["dimensions"]["I"]["components"]
             if item["name"] == "calibration_accuracy"
         )
         assert calibration["observed"] is False
@@ -142,6 +151,11 @@ class TestBehavioralSensor:
 
 
 class TestLegacyCoherenceDependencyShadow:
+    @pytest.fixture(autouse=True)
+    def _legacy_self_loops_active(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
+
     def test_midpoint_history_has_zero_shadow_delta(self):
         histories = make_histories(n=10, coherence=0.5)
         deployed = compute_behavioral_sensor_eisv(**histories)
@@ -690,17 +704,16 @@ class TestPrepareUnlockedInputsContract:
         shadow = ctx.agent_state["_eisv_shadow_ablations"][
             "legacy_coherence_neutralized"
         ]["behavioral_sensor"]
-        assert shadow["eligible"] is True
+        assert shadow["eligible"] is False
+        assert shadow["eligibility_reason"] == "self_loop_already_neutralized"
         assert shadow["policy_applied"] is False
         regime = ctx.agent_state["_eisv_shadow_ablations"][
             "regime_self_loop_neutralized"
         ]["behavioral_sensor"]
-        # This fixture's monitor is a MagicMock, so the numbers are mock objects;
-        # the shadow's arithmetic is pinned by TestRegimeSelfLoopShadow.
+        assert regime["eligible"] is False
+        assert regime["eligibility_reason"] == "self_loop_already_neutralized"
         assert regime["mode"] == "measurement_only"
         assert regime["policy_applied"] is False
-        # The fallback dict also satisfies the two lines above; this one fails
-        # if the shadow raised.
         assert not str(regime.get("eligibility_reason") or "").startswith("shadow_error")
 
     @pytest.mark.asyncio
@@ -921,6 +934,10 @@ def _shadow_inputs(decision_history):
 
 
 class TestDecisionSelfLoopShadow:
+    @pytest.fixture(autouse=True)
+    def _legacy_self_loops_active(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+
     def test_measurement_only_and_never_applied(self):
         from src.behavioral_sensor import compute_decision_self_loop_shadow
         r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"] * 10))
@@ -1018,6 +1035,10 @@ _FLAPPING = ["DIVERGENCE", "CONVERGENCE"] * 5
 
 
 class TestRegimeSelfLoopShadow:
+    @pytest.fixture(autouse=True)
+    def _legacy_self_loops_active(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+
     def test_measurement_only_and_never_applied(self):
         from src.behavioral_sensor import compute_regime_self_loop_shadow
         r = compute_regime_self_loop_shadow(**_regime_inputs(_FLAPPING))
@@ -1083,6 +1104,11 @@ class TestRegimeSelfLoopShadow:
 
 class TestCalibrationFreeIShadow:
     """Arm F of #2818 §6.4: remove global calibration slot from I and renormalize."""
+
+    @pytest.fixture(autouse=True)
+    def _legacy_self_loops_and_fleet_cal_active(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
 
     def test_without_outcomes_renormalizes_coherence_trend_to_unity(self):
         from src.behavioral_sensor import compute_calibration_free_i_shadow
@@ -1159,8 +1185,10 @@ class TestNeutralizeSensorSelfLoops:
             drift_norm=0.2,
             complexity_divergence=0.1,
         )
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
         baseline = compute_behavioral_sensor_eisv(**inputs)
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
         neutralized = compute_behavioral_sensor_eisv(**inputs)
         assert neutralized != baseline
 
@@ -1218,7 +1246,8 @@ class TestNeutralizeSensorSelfLoops:
             complexity_divergence=0.1,
             outcome_history=outcomes,
         )
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
         comps = compute_behavioral_sensor_components(**inputs)
         e_by_name = {c["name"]: c for c in comps["dimensions"]["E"]["components"]}
         i_by_name = {c["name"]: c for c in comps["dimensions"]["I"]["components"]}
@@ -1236,7 +1265,8 @@ class TestNeutralizeSensorSelfLoops:
     ):
         from src.behavioral_sensor import compute_behavioral_sensor_components
 
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
         outcomes = [
             {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 1.0},
             {"outcome_type": "test_passed", "is_bad": False, "outcome_score": 0.9},
@@ -1320,7 +1350,8 @@ class TestNeutralizeSensorSelfLoops:
             compute_calibration_free_i_shadow,
         )
 
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
+        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "0")
         inputs = dict(
             decision_history=["proceed"] * 6,
             coherence_history=[0.45, 0.45, 0.45, 0.50, 0.50, 0.50],
@@ -1493,16 +1524,16 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
         assert filter_behavioral_outcomes(echo_rows + real_rows) == real_rows
 
         h = make_histories(n=6)
-        # Default (flag off): echo_rows are not filtered
-        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
-        comp_default = compute_behavioral_sensor_components(**h, outcome_history=echo_rows)
+        # Legacy (flag off): echo_rows are not filtered
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        comp_legacy = compute_behavioral_sensor_components(**h, outcome_history=echo_rows)
         assert any(
             c["name"] == "outcome_success"
-            for c in comp_default["dimensions"]["E"]["components"]
+            for c in comp_legacy["dimensions"]["E"]["components"]
         )
 
-        # With neutralize_self_loops enabled: echo_rows are excluded while decision_e/coherence are neutralized
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        # Default (neutralize_self_loops enabled): echo_rows are excluded while decision_e/coherence are neutralized
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
         comp_echo_only = compute_behavioral_sensor_components(**h, outcome_history=echo_rows)
         comp_none = compute_behavioral_sensor_components(**h, outcome_history=None)
         assert comp_echo_only == comp_none
@@ -1617,7 +1648,8 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
             compute_behavioral_sensor_eisv,
         )
 
-        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "1")
+        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+        monkeypatch.delenv("UNITARES_PER_AGENT_I_CALIBRATION", raising=False)
         h = make_histories(n=6, coherence=0.5)
         arm_f = compute_behavioral_sensor_eisv(
             **h,
@@ -1669,11 +1701,11 @@ class TestOutcomeEchoExclusionAndPerAgentICalibration:
     def test_per_agent_i_calibration_with_neutralize_self_loops_does_not_pin_i_to_constant_coherence(
         self, monkeypatch
     ):
-        """When both UNITARES_PER_AGENT_I_CALIBRATION=1 (no admissible pairs) and UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1 are active, I uses outcome_score_consistency (1.00) with >=3 outcomes or explicit uncalibrated fallback (0.75) without outcomes, never legacy_coherence_trend."""
+        """When both UNITARES_PER_AGENT_I_CALIBRATION=1 (no admissible pairs) and UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS=1 are active (the default), I uses outcome_score_consistency (1.00) with >=3 outcomes or explicit uncalibrated fallback (0.75) without outcomes, never legacy_coherence_trend."""
         from src.behavioral_sensor import compute_behavioral_sensor_components
 
-        monkeypatch.setenv("UNITARES_PER_AGENT_I_CALIBRATION", "1")
-        monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "1")
+        monkeypatch.delenv("UNITARES_PER_AGENT_I_CALIBRATION", raising=False)
+        monkeypatch.delenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", raising=False)
         h = make_histories(n=6, coherence=0.5)
         no_pairs_channel = {
             "evidence_status": "unavailable",

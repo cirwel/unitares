@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for UNITARES, accountability infrastructure for
   long-running AI agents. Use this as the entrypoint when you need the overall
   model and route into the split governance skills.
-last_verified: "2026-10-29"
+last_verified: "2026-11-05"
 freshness_days: 35
 source_files:
   - unitares/docs/EISV_COMPUTATION.md
@@ -63,7 +63,7 @@ and policy. Neutral acceptance survives assessment failure, and replaying a
 checkpoint receipt does not evaluate state again. See `governance-lifecycle`
 for acceptance and retry semantics.
 
-- `E`: weighted observations and prior judgments
+- `E`: weighted complexity, outcome, continuity, and tool observations
 - `I`: calibration and consistency features
 - `S`: deviations and activity features
 - `V`: separately smoothed raw E/I observation gap

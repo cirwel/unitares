@@ -5,7 +5,7 @@ description: >
   requesting structured review, submitting a thesis, reviewing another agent's
   thesis, or synthesizing conditions for resolution. Covers structured
   argumentation and convergence.
-last_verified: "2026-10-29"
+last_verified: "2026-11-05"
 freshness_days: 28
 source_files:
   - unitares/docs/EISV_COMPUTATION.md
