@@ -7,22 +7,15 @@ archived/cold tiering, staleness computation, and response projection modular.
 from dataclasses import dataclass, field, replace
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import asyncio
 import json
-import math
-import os
-import re
 import sys
 import time
 
-from ..utils import success_response, error_response
 from ..identity.stable_session import audit_reference, redact_provenance
 from src.knowledge_graph import (
-    DiscoveryNode,
-    normalize_tags,
-    VALID_DISCOVERY_STATUSES,
     CLOSURE_CLASS_ADMITTING_STATUSES,
 )
 from src.mcp_handlers.knowledge.imported_preview import annotate_imported_read
@@ -43,9 +36,7 @@ from src.recall_telemetry import (
     ZERO_RESULT,
     record_recall_event as _default_record_recall_event,
 )
-from ..support.coerce import LimitError, parse_limit
 from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results as _default_synthesize_results
-from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 from .validation_helpers import _CLOSING_STATUSES
 from src.logging_utils import get_logger
 

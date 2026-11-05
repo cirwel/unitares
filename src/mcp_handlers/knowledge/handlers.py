@@ -12,17 +12,13 @@ Performance:
 Claude Desktop compatible: All operations are async and non-blocking.
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
-from types import SimpleNamespace
-import asyncio
 import hashlib
-import json
 import os
-import re
 import secrets
 import threading
 
@@ -72,34 +68,21 @@ import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
-from ..identity.stable_session import audit_reference, redact_provenance
+from ..identity.stable_session import audit_reference
 from src.knowledge_graph import (
     get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
-    normalize_response_type,
-    VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
-    VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
-    CLOSURE_CLASS_ADMITTING_STATUSES, CLOSURE_CLASS_CLEARING_STATUSES,
-    closure_evidence_to_json,
 )
 from src.mcp_handlers.knowledge.imported_preview import annotate_imported_read
 from src.mcp_handlers.knowledge.read_metadata import annotate_resolution_notes, add_resolution_notes_hint
 
 from src.knowledge_authority import (
-    CHANNEL_MESSAGE,
-    GOVERNED_CLAIM,
     IMPORTED_CONTEXT,
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
-    channel_lanes,
-    is_imported_context,
-    is_lane_filter,
-    rank_by_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
-    MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_DISCOVERY_METADATA_LEN,
-    MAX_SUMMARY_LEN, MAX_TAG_LEN, MAX_TAGS, MAX_UPDATED_DETAILS_LEN,
-    MAX_UPDATED_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
+    MAX_DETAILS_LEN, MAX_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
 )
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -108,14 +91,7 @@ from src.coherence_provenance import (
     coherence_role_for_source,
 )
 from src.perf_monitor import record_ms
-from src.recall_telemetry import (
-    LEXICAL_INDEX_MISS,
-    LOW_CONFIDENCE,
-    ZERO_RESULT,
-    record_recall_event,
-)
 from ..support.coerce import LimitError, parse_limit
-from ..support.llm_delegation import LOCAL_LLM_WAIT_BUFFER_S, synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
@@ -129,18 +105,15 @@ from .validation_helpers import (
     VALID_SEVERITIES,
     SEVERITY_ALIASES,
     _normalize_discovery_type,
-    _TOOLCALL_MARKUP_MARKERS,
     _detect_toolcall_markup_leak,
     _degenerate_write_response,
     _write_bound_refusal,
     _oversized_tags,
-    _METADATA_PART_NAMES,
     _oversized_metadata,
     _invalid_enum_response,
     _coerce_pagination_int,
     _annotate_knowledge_confidence_authority,
-    _AUDIT_QUERY_TEXT_MAX,
-    _AUDIT_QUERY_REDACTIONS,
+    _AUDIT_QUERY_TEXT_MAX,  # noqa: F401
     _audit_safe_query_text,
     _audit_safe_tags,
     _discovery_not_found,
@@ -158,34 +131,20 @@ from .validation_helpers import (
     _KnowledgeUpdateRequest,
     _UpdateResponseError,
     _refuse_oversized_summary_or_tags,
-    _SEVERITY_RANK,
     _GATED_SEVERITIES,
     _effective_update_severity,
-    _requested_non_owner_edits,
-    _CLOSING_CALL_FIELDS,
-    _non_owner_edit_refusal,
+    _requested_non_owner_edits,  # noqa: F401
     _require_owned_binding,
     _authorize_high_severity_update,
-    _apply_update_text_fields,
-    _refuse_oversized_details,
-    _apply_update_metadata_fields,
-    CLOSURE_CLASSES,
+    _apply_update_metadata_fields,  # noqa: F401
+    CLOSURE_CLASSES,  # noqa: F401
     _CLOSING_STATUSES,
-    _CLASS_ADMITTING_STATUSES,
-    _CLOSURE_EVIDENCE_REQUIRED,
-    CLOSURE_CLASS_PERSISTED,
-    _closure_class_choices,
-    _closure_evidence_keys_prose,
-    _closure_evidence_examples,
-    _CLOSURE_PREAMBLE,
-    _UNOBSERVED_IS_HONEST,
-    _closure_class_call,
+    _CLASS_ADMITTING_STATUSES,  # noqa: F401
+    CLOSURE_CLASS_PERSISTED,  # noqa: F401
     _unclassified_closure_note,
-    _resolution_notes_call,
+    _resolution_notes_call,  # noqa: F401
     _unstored_closure_class_note,
-    _invalid_closure_param,
-    _validate_closure_class,
-    _closure_evidence_hint,
+    _validate_closure_class,  # noqa: F401
     _build_discovery_updates,
     _BatchItemError,
     _PreparedBatchDiscovery,
@@ -195,8 +154,7 @@ from .validation_helpers import (
     _parse_batch_response_to,
     _parse_batch_severity,
     _parse_batch_confidence,
-    _NOTE_TOTAL_LEN,
-    _NOTE_INFRASTRUCTURE_TAGS,
+    _NOTE_TOTAL_LEN,  # noqa: F401
     _NoteResponseError,
     _KnowledgeNoteRequest,
     _truncate_note_text,
@@ -205,77 +163,52 @@ from .validation_helpers import (
     _supersede_notes_block_details,
 )
 from .search_helpers import (
-    _compact_identity_assurance,
-    _compact_caller_identity_envelope,
-    _LEAN_DISCOVERY_FIELDS,
-    _one_line,
-    _lean_search_payload,
+    _LEAN_DISCOVERY_FIELDS,  # noqa: F401
+    _one_line,  # noqa: F401
+    _lean_search_payload,  # noqa: F401
     _compact_knowledge_read_result,
-    _STALE_AFTER_DAYS,
-    _is_durable_entry,
-    _compute_staleness,
-    _compute_staleness_warning,
+    _compute_staleness,  # noqa: F401
+    _compute_staleness_warning,  # noqa: F401
     _SearchParameterError,
     _KnowledgeSearchRequest,
     _KnowledgeSearchState,
     _optional_flag,
-    AUTO_DETAIL_MAX_RESULTS,
     _resolve_detail_inclusion,
     _parse_search_timestamp,
-    RECENCY_HALF_LIFE_MAX_DAYS,
     _parse_half_life,
     _validate_search_backend,
-    _fts_kwargs,
-    _fts_page_size,
     _retrieve_fts_candidates,
     _retrieve_substring_candidates,
-    _candidate_matches_search,
-    _document_created_at,
-    _within_window,
+    _within_window,  # noqa: F401
     _window_kwargs,
-    _matches_tags,
     _tag_kwargs,
-    _authority_ranking_enabled,
-    AUTHORITY_POOL_SIZE,
+    _authority_ranking_enabled,  # noqa: F401
     _authority_pool_size,
-    _authority_score_map,
-    _recency_weighted,
+    _recency_weighted,  # noqa: F401
     _rank_search_documents,
-    _candidate_status_visible,
+    _candidate_status_visible,  # noqa: F401
     _filter_and_rerank_candidates,
     _run_newest_first_text_search,
-    NEWEST_FIRST_SCAN_CEILING,
-    _continue_newest_first_pages,
     _run_indexed_filter_search,
     _apply_semantic_fts_fallback,
-    ARCHIVED_COLD_MIN_RESULTS,
-    ARCHIVED_COLD_SCORE_PENALTY,
-    ARCHIVED_COLD_TIER,
+    ARCHIVED_COLD_MIN_RESULTS,  # noqa: F401
+    ARCHIVED_COLD_SCORE_PENALTY,  # noqa: F401
+    ARCHIVED_COLD_TIER,  # noqa: F401
     KNOWLEDGE_SEARCH_TIMEOUT_S,
-    ARCHIVED_COLD_RESPONSE_RESERVE_S,
-    _ABANDONED_ARCHIVED_COLD_PASSES,
-    SEARCH_SYNTHESIS_MAX_TIMEOUT_S,
-    SEARCH_SYNTHESIS_RESERVE_S,
-    SEARCH_SYNTHESIS_MIN_TIMEOUT_S,
-    SUPERSESSION_LOOKUP_RESERVE_S,
-    _archived_cold_widening,
-    _settle_abandoned_pass,
+    ARCHIVED_COLD_RESPONSE_RESERVE_S,  # noqa: F401
+    _ABANDONED_ARCHIVED_COLD_PASSES,  # noqa: F401
+    SEARCH_SYNTHESIS_RESERVE_S,  # noqa: F401
+    SEARCH_SYNTHESIS_MIN_TIMEOUT_S,  # noqa: F401
+    SUPERSESSION_LOOKUP_RESERVE_S,  # noqa: F401
+    _archived_cold_widening,  # noqa: F401
     _bounded_supersession_lookup,
-    _abandon_archived_cold_pass,
     _apply_archived_cold_tier,
-    _candidate_matches_semantic_fallback,
-    _omits_imported_lane,
-    _label_excluded,
+    _candidate_matches_semantic_fallback,  # noqa: F401
     _exclude_search_labels,
     _serialize_search_discoveries,
     _base_search_response,
-    _search_order_echo,
     _attach_search_diagnostics,
-    _empty_search_hints,
     _attach_empty_search_guidance,
-    _attach_score_map,
-    _verbatim_probe_terms,
-    _contains_all_terms,
     _attach_search_scores_and_confidence,
     _attach_search_usage_hints,
     _attach_search_synthesis,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -19,7 +20,6 @@ from src.state_persistence import project_state_persistence
 from src.tool_modes import progressive_aware_hint
 from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
-    normalize_discovery_list,
 )
 from src.mcp_handlers.support.param_normalization import (
     FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
@@ -29,25 +29,13 @@ from src.mcp_handlers.support.param_normalization import (
 
 logger = get_logger(__name__)
 
-_MEMORY_SUGGESTION_LIMIT = 3
-_SEARCH_MORE_ROW_LIMIT = 17
-_ACTION_ALIASES = {
-    "approve": ("proceed", None),
-    "continue": ("proceed", None),
-    "healthy": ("proceed", None),
-    "ok": ("proceed", None),
-    "safe": ("proceed", None),
-    "caution": ("proceed", "guide"),
-    "guide": ("proceed", "guide"),
-    "resumed": ("proceed", "resumed"),
-    "not_paused": ("proceed", "not_paused"),
-    "block": ("pause", "block"),
-    "high-risk": ("pause", "high-risk"),
-    "reject": ("pause", "reject"),
-    "stop": ("pause", "stop"),
-}
-
 _RECOVERY_RISK_CEILING = 0.40
+
+
+def _step_attr(name: str, default: Any = None) -> Any:
+    """Read canonical constants from envelope_step so tests and runtime share one source."""
+    mod = sys.modules.get("src.mcp_handlers.middleware.envelope_step")
+    return getattr(mod, name, default) if mod is not None else default
 
 
 def _review_risk_limit() -> float:
@@ -540,7 +528,8 @@ def _action_summary(
 
     raw_action = decision.get("action") or _decision_action(payload)
     raw_action = str(raw_action).strip().lower() if raw_action is not None else None
-    inferred_action, inferred_sub_action = _ACTION_ALIASES.get(
+    action_aliases = _step_attr("_ACTION_ALIASES", {})
+    inferred_action, inferred_sub_action = action_aliases.get(
         raw_action,
         (raw_action, None),
     )
@@ -553,7 +542,7 @@ def _action_summary(
     if not sub_action and inferred_action == "proceed":
         # recent_decisions stores the bare action ("proceed"); a guided
         # verdict ("caution"/"guide") still carries the guide sub_action.
-        verdict_sub = _ACTION_ALIASES.get(str(_verdict_value(payload) or "").lower())
+        verdict_sub = action_aliases.get(str(_verdict_value(payload) or "").lower())
         if verdict_sub and verdict_sub[0] == "proceed" and verdict_sub[1]:
             sub_action = verdict_sub[1]
 
@@ -2016,7 +2005,7 @@ def _prune_resolution_notes_hint(envelope: Dict[str, Any], notes_in_more: bool) 
     suggestions = envelope.get("memory_suggestions") or []
     if any(isinstance(row, dict) and "resolution_notes" in row for row in suggestions):
         return
-    if notes_in_more and len(suggestions) == _MEMORY_SUGGESTION_LIMIT:
+    if notes_in_more and len(suggestions) == _step_attr("_MEMORY_SUGGESTION_LIMIT", 3):
         return
     envelope.pop("resolution_notes_hint", None)
 

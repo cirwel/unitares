@@ -55,88 +55,63 @@ the original handler result untouched.
 from __future__ import annotations
 
 import json
-import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from mcp.types import TextContent
 
-from config.governance_config import GovernanceConfig
-from src.checkpoints import CHECKPOINT_SCHEMA
 from src.logging_utils import get_logger
 from src.state_persistence import project_state_persistence
-from src.tool_modes import progressive_aware_hint
 from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
     normalize_discovery_list,
 )
 from src.mcp_handlers.support.param_normalization import (
-    FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
-    FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
     resolve_metrics_verbosity,
 )
 
 logger = get_logger(__name__)
 
 from src.mcp_handlers.middleware.envelope_helpers import (
-    _RECOVERY_RISK_CEILING,
     _review_risk_limit,
-    _operator_resume_limit,
     _stopped_recovery_route,
-    _review_refusal_phrase,
     _MEMORY_SUMMARY_PREVIEW_CHARS,
     _MEMORY_BY_LABEL_CHARS,
     _MEMORY_TAG_LIMIT,
-    _RELATED_DISCOVERY_LIMIT,
-    _RELATED_SUMMARY_PREVIEW_CHARS,
     _SYNC_ROUTINE_BUDGET_BYTES,
     _SEARCH_LEAN_BUDGET_BYTES,
-    _SEARCH_FULL_MODE_ROUTE,
     _SEARCH_FULL_MODE_HINT,
     _SEARCH_MORE_BUDGET_BYTES,
     _SEARCH_MORE_SUMMARY_CHARS,
-    _START_SESSION_BUDGET_BYTES,
-    _START_SESSION_SIBLING_BUDGET_BYTES,
-    _START_SESSION_NOTICE_ALLOWANCE_BYTES,
+    _START_SESSION_BUDGET_BYTES,  # noqa: F401
+    _START_SESSION_SIBLING_BUDGET_BYTES,  # noqa: F401
+    _START_SESSION_NOTICE_ALLOWANCE_BYTES,  # noqa: F401
     _ONBOARD_RAW_MODES,
     _ONBOARD_LIFT_KEYS,
-    _ROUTINE_MINT_OUTCOMES,
     _RECORDED_LINEAGE_STATES,
     _ONBOARD_ASSURANCE_KEYS,
     _FRESH_MINT_ASSURANCE_NOTE,
     _lift,
     _harvest_payload,
-    _checkpoint_uuid,
     _project_checkpoint_receipt,
     _checkpoint_receipt_only,
     _checkpoint_only_envelope,
     _coherence_and_risk,
     _risk_summary,
-    _verdict_value,
-    _decision_action,
-    _verdict_evidence,
-    _is_cold_start,
-    _cold_start_pause_deferred,
-    _verdict_assurance,
+    _verdict_value,  # noqa: F401
+    _decision_action,  # noqa: F401
     _one_line,
     _action_summary,
-    _ROUTINE_VERDICTS,
     _is_routine_proceed,
     _drop_routine_proceed_duplicates,
     _drop_all_clear_status,
     _legacy_diagnostics,
-    _COHERENCE_BADGE_KEYS,
     _metrics_state_summary,
-    _METRICS_STOP_DECISIONS,
-    _metrics_decision,
-    _metrics_verdict_step,
     _metrics_next_action,
     _metrics_identity_assurance,
-    _needs_attention,
+    _needs_attention,  # noqa: F401
     _compact_eisv,
     _recovery_hint,
-    _resolves,
+    _resolves,  # noqa: F401
     _verdict_caveat,
     _reflection,
     _UNKNOWN_WRITER,
@@ -145,28 +120,19 @@ from src.mcp_handlers.middleware.envelope_helpers import (
     _compact_related_discoveries,
     _explicit_search_limit,
     _knowledge_write_summary,
-    _experience_aliases,
-    _friendly_hint_text,
-    _CALLER_TEXT_KEYS,
+    _experience_aliases,  # noqa: F401
     _friendly_action_hint,
     _as_bool,
     _PREDICTION_BOUND_OUTCOME_HINT,
     _UNBOUND_OUTCOME_HINT,
     _is_alias_injected_action,
-    _ROUTINE_REVIEW_KEYS,
-    _ROUTINE_REVIEW_PHASES,
+    _ROUTINE_REVIEW_KEYS,  # noqa: F401
     _review_ack_blockers,
     _review_ack_raw_policy,
     _onboard_assurance_is_abnormal,
-    _ROUTINE_MINT_KEYS,
     _FULL_ONBOARD_SHAPE_KEYS,
-    _RESIDENT_REGISTRATION_STATUSES,
-    _compact_resident_registration,
-    _BOOTSTRAP_WRITTEN_KEYS,
-    _compact_bootstrap,
-    _ROUTINE_MINT_NOTICES,
+    _RESIDENT_REGISTRATION_STATUSES,  # noqa: F401
     _lift_mint_notices,
-    _thread_context_blocker,
     _routine_mint_blockers,
     _is_routine_mint,
     _start_session_budget,
@@ -175,11 +141,9 @@ from src.mcp_handlers.middleware.envelope_helpers import (
     _mode_in_effect,
     _attach_response_size,
     _prune_resolution_notes_hint,
-    _MIXED_RELEVANCE_NOTE,
     _note_mixed_relevance,
     _STALENESS_NOTE,
     _RETRIEVAL_KEPT_FOR_ATTRIBUTION,
-    _coaching_yields,
     _truncate_search_projection,
     _restore_digest_attribution,
 )

@@ -4,19 +4,16 @@ Extracted from ``knowledge/handlers.py`` to keep write validation, bounds checki
 closure-class verification, and request models modular.
 """
 
-from dataclasses import dataclass, field, replace
-from typing import Dict, Any, Sequence, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
 from mcp.types import TextContent
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import json
-import os
 import re
 import sys
 
-from ..utils import success_response, error_response
-from ..identity.stable_session import audit_reference, redact_provenance
+from ..utils import error_response
 from src.knowledge_graph import (
-    get_knowledge_graph,
     DiscoveryNode,
     ResponseTo,
     normalize_tags,
@@ -27,14 +24,6 @@ from src.knowledge_graph import (
     CLOSURE_CLASS_ADMITTING_STATUSES,
     CLOSURE_CLASS_CLEARING_STATUSES,
     closure_evidence_to_json,
-)
-from src.knowledge_authority import (
-    CHANNEL_MESSAGE,
-    GOVERNED_CLAIM,
-    IMPORTED_CONTEXT,
-    PROMOTION_SCHEMA,
-    PROMOTION_TAG,
-    assess_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
     MAX_CLOSURE_EVIDENCE_BYTES,
@@ -47,11 +36,6 @@ from src.mcp_handlers.knowledge.limits import (
     MAX_UPDATED_SUMMARY_LEN,
     SUMMARY_TRUNCATION_MARKER,
 )
-from src.coherence_provenance import (
-    BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
-    coherence_role_for_source,
-)
-from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)

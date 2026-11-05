@@ -5,45 +5,30 @@ actionability derivation, pause-evidence capture, and synthetic-reviewer
 eligibility helpers modular.
 """
 
-from typing import Dict, Any, Sequence, Optional, List, Tuple
+from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
 from dataclasses import dataclass
-import json
 import math
 import os
 from numbers import Real
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from .wait_assessment import assess_wait, suggests_facilitation
 from src.dialectic_protocol import (
     NON_PROTOCOL_PHASES,
     DialecticSession,
-    DialecticMessage,
-    DialecticPhase,
 )
 from src.dialectic_reviewed_work import (
-    ReviewedWorkAuthorship,
-    ReviewedWorkAuthorshipError,
-    declaration_for_request,
-    embed_reviewed_work_authorship,
-    parse_reviewed_work_author_agent_ids,
     read_reviewed_work_authorship,
 )
-from src.coherence_provenance import coherence_role_for_source
-from ..utils import success_response, error_response
-from ..support.coerce import coerce_bool
+from ..utils import error_response
 from .beam_resolve_client import BeamDialecticPolicyRefusal
 from .responses import (
     default_cooldown_steps,
     default_escalate_steps,
     default_resume_steps,
-    next_step_negotiate_synthesis,
-    next_step_no_consensus,
-    next_step_resume_not_applied,
-    next_step_resumed,
-    next_step_submit_antithesis,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as _default_mcp_server

@@ -7,21 +7,14 @@ Implements MCP tools for peer-review dialectic resolution of circuit breaker sta
 from typing import Dict, Any, Sequence, Optional, List, Tuple
 from mcp.types import TextContent
 import asyncio
-from dataclasses import dataclass
 import json
-import math
-import os
 import uuid
-from numbers import Real
-import re
 from datetime import datetime, timedelta, timezone
 
-from .wait_assessment import assess_wait, suggests_facilitation
 
 # Import type definitions
 
 from src.dialectic_protocol import (
-    NON_PROTOCOL_PHASES,
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
@@ -47,9 +40,6 @@ from .events import (
     emit_reviewer_reassigned,
 )
 from .responses import (
-    default_cooldown_steps,
-    default_escalate_steps,
-    default_resume_steps,
     get_agent_not_found_recovery,
     get_session_exception_recovery,
     get_session_timeout_recovery,
@@ -180,9 +170,7 @@ from src.dialectic_db import (
 
 from .actionability import (
     _synthetic_review_budget,
-    REVIEW_DISPATCH_MARGIN,
     SUBMIT_THESIS_TIMEOUT,
-    ONE_CALL_CREATION_MARGIN,
     REQUEST_REVIEW_TIMEOUT,
     _beam_policy_error_code,
     _beam_policy_recovery,
@@ -191,32 +179,26 @@ from .actionability import (
     _TranscriptAppendRefused,
     _meta_value,
     _agent_label,
-    _agent_status,
-    _agent_display,
+    _agent_status,  # noqa: F401
+    _agent_display,  # noqa: F401
     _as_string_list,
-    _reviewer_objection_stands_in_session_data,
-    _reviewer_verdict_pending_in_session_data,
-    _latest_synthesis_agent_in_session_data,
+    _reviewer_objection_stands_in_session_data,  # noqa: F401
+    _reviewer_verdict_pending_in_session_data,  # noqa: F401
+    _latest_synthesis_agent_in_session_data,  # noqa: F401
     _saved_brief_thesis_call,
-    _last_activity_age_s,
-    _has_orchestrated_reviewer_budget,
+    _last_activity_age_s,  # noqa: F401
+    _has_orchestrated_reviewer_budget,  # noqa: F401
     _build_dialectic_actionability,
     _reviewer_authorship_conflict,
     _PAUSE_EVIDENCE_SCHEMA,
-    _PAUSE_EISV_KEYS,
-    _PAUSE_SOURCE_PATTERN,
-    _pause_number,
-    _project_pause_lane,
-    _project_pause_measurement,
     _capture_pause_evidence,
     AutomatedTrigger,
-    LIST_TOPIC_PREVIEW_CHARS,
+    LIST_TOPIC_PREVIEW_CHARS,  # noqa: F401
     _preview_topic,
     SYNTHETIC_REVIEWER_ID,
     _judgment_was_formed,
-    _REVIEWER_PROVENANCE_KEYS,
-    _REVIEWER_KINDS,
-    _PROVENANCE_STR_MAX,
+    _REVIEWER_PROVENANCE_KEYS,  # noqa: F401
+    _REVIEWER_KINDS,  # noqa: F401
     _reviewer_provenance_stamp,
     _synthetic_reviewer_provenance,
     _merge_caller_reviewer_provenance,
@@ -224,12 +206,11 @@ from .actionability import (
     MAX_CONSULTS_PER_SESSION,
     _consult_list,
     _synthetic_review_approves,
-    _REVIEWER_FLOOR_NAMES,
+    _REVIEWER_FLOOR_NAMES,  # noqa: F401
     _reviewer_fallback_block,
     _reviewer_profile_block,
     _synthetic_reviewer_enabled,
     _snapshot_agent_state,
-    _TerminalReadback,
     _read_terminal_readback,
     _terminal_readback_next_step,
     _apply_terminal_readback,
