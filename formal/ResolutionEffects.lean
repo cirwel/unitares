@@ -430,12 +430,13 @@ theorem claim_requires_pending_state (eff : ResolutionEffectRow) (sess : Session
   rw [hGuard]
   simp
 
-/-- **Theorem 3 (Single-Claimant Mutual Exclusion):**
-    If claimant `owner1` claims `eff` (`out1.claimed = true`), then any
-    concurrent or subsequent `claimResolutionEffect` by `owner2` against
-    `out1.row` returns `claimed = false`, keeps `state = .applying`, and
-    preserves `ownerToken = some owner1` and `attemptCount = eff.attemptCount + 1`
-    (`src/dialectic_db.py:1114-1155`). -/
+/-- **Theorem 3 (Single-Claimant Mutual Exclusion Under Row-Level Serialization):**
+    Assuming PostgreSQL's row-level `UPDATE` lock serializes competing claims on
+    `e.state = 'pending'`, once claimant `owner1` claims `eff` (`out1.claimed = true`),
+    any subsequent `claimResolutionEffect` by `owner2` against `out1.row` returns
+    `claimed = false`, keeps `state = .applying`, and preserves
+    `ownerToken = some owner1` and `attemptCount = eff.attemptCount + 1`
+    (`src/dialectic_db.py:1113-1155`). -/
 theorem single_claimant_mutual_exclusion (eff : ResolutionEffectRow)
     (sess1 sess2 : SessionSnapshot) (owner1 owner2 : OwnerToken)
     (exp1 exp2 : ClaimExpectations) (now1 now2 : Nat)
