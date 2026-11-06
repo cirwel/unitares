@@ -1,5 +1,6 @@
 """First-run safety and interruption tests; no shared service or database writes."""
 import copy
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -214,6 +215,24 @@ def test_directory_sync_failure_keeps_journal_incomplete_and_resume_syncs_again(
     assert calls == ['sync', 'sync']
     assert provision.read_journal(i.new().path)['stage'] == 'complete'
     assert i.calls.count('bootstrap') == 1
+
+
+def test_journal_parent_sync_failure_prevents_database_mutations(installation, monkeypatch):
+    i = installation
+    sync = os.fsync
+    parent = i.new().directory.parent
+    def fail_parent(fd):
+        if parent.exists() and os.fstat(fd).st_ino == parent.stat().st_ino:
+            raise OSError('journal parent sync failed')
+        sync(fd)
+    monkeypatch.setattr(provision.os, 'fsync', fail_parent)
+    with pytest.raises(OSError, match='journal parent sync failed'):
+        i.new().setup(apply=True)
+    assert not i.calls
+    assert not i.db['role'] and not i.db['database']
+    monkeypatch.setattr(provision.os, 'fsync', sync)
+    i.new().setup(apply=True, resume=True)
+    assert provision.read_journal(i.new().path)['stage'] == 'complete'
 
 
 @pytest.mark.parametrize('change', ['cluster', 'privileges', 'config', 'files', 'extensions'])

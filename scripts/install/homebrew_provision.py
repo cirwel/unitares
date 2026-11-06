@@ -103,11 +103,14 @@ class NativeProvisioner:
                 os.replace(temporary, self.path)
             else:
                 os.link(temporary, self.path)
-            directory_fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            # The lifecycle lock may have just created var/unitares. Persist
+            # its parent links too before treating the journal as durable intent.
+            for directory in (self.directory, self.directory.parent, self.brew.prefix):
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -315,6 +318,10 @@ return 0
         self.verify_owned(snapshot)
         if os.path.lexists(self.brew.config) and read_config(self.brew.config) != self.state['config']:
             raise Refusal('Configuration appeared or changed during setup; refusing to overwrite it.')
+        if existing:
+            # A prior filesystem error may have left readable but unsynced
+            # intent. Re-establish durability before touching Redis or SQL.
+            self.save(self.state['stage'])
         self.bind_redis()
         stage = self.state['stage']
         if stage in ('planned', 'role_pending'):
