@@ -34,17 +34,11 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   """
 
   alias UnitaresLeasePlane.DB
+  alias UnitaresLeasePlane.DialecticSaga.Claims
 
-  require Logger
-
-  @inflight_states ~w(reserved paused_agent_applied both_agents_applied reverting)
   @reviewed_work_authorship_key "_dialectic_reviewed_work_authorship"
   @reviewed_work_authorship_schema "unitares.dialectic-reviewed-work-authorship.v1"
   @max_reviewed_work_author_agent_ids 32
-  @canonical_agent_uuid ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
-  # PostgreSQL's POSIX regex engine does not understand Elixir's \A / \z
-  # anchors. Keep the two representations explicit so a valid declaration
-  # reaches the guarded UPDATE instead of raising `invalid escape \ sequence`.
   @sql_canonical_agent_uuid "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
   @type claim_ok ::
@@ -99,7 +93,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
              is_binary(reviewer_agent_id) and is_map(payload) do
     status = Map.get(params, :status, "resolved")
     effect_protocol = Map.get(params, :effect_protocol)
-    hash = operation_hash(payload, status, effect_protocol)
+    hash = Claims.operation_hash(payload, status, effect_protocol)
     json = Jason.encode!(payload)
 
     Postgrex.transaction(DB, fn conn ->
@@ -114,9 +108,9 @@ defmodule UnitaresLeasePlane.DialecticSaga do
              Map.get(params, :expected_awaiting_facilitation)
            ) do
         {:ok, %{updated_at: locked_updated_at}} ->
-          with :ok <- reclaim_stale_reserved(conn, session_id),
+          with :ok <- Claims.reclaim_stale_reserved(conn, session_id),
                {:ok, result} <-
-                 reserve_claim(
+                 Claims.reserve_claim(
                    conn,
                    session_id,
                    paused_agent_id,
@@ -124,7 +118,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
                    json,
                    hash,
                    Map.get(params, :expected_updated_at),
-                   locked_updated_at
+                   locked_updated_at,
+                   fn -> bump_session_saga_revision(conn, session_id) end
                  ) do
             result
           else
@@ -136,7 +131,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           # reservations before releasing that lock, so a sanctioned reopen
           # and its fresh claim cannot land between the terminal observation
           # and a later broad cleanup that would revoke the new generation.
-          case revert_reserved_session_claims(conn, session_id) do
+          case Claims.revert_reserved_session_claims(conn, session_id) do
             :ok -> {:session_terminal, terminal_status}
             {:error, reason} -> Postgrex.rollback(conn, reason)
           end
@@ -158,14 +153,6 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   end
 
   def claim(_), do: {:error, :invalid_params}
-
-  # Default: a `reserved` saga older than this with no forward progress is
-  # assumed orphaned by a crashed resolver and may be reverted so the session
-  # is not permanently wedged. Resolutions complete in well under a second; a
-  # 2-minute floor is far above the happy path. Only `reserved` is reclaimable —
-  # later states (paused_agent_applied/…) imply real partial work and are left
-  # for explicit recovery.
-  @stale_reserved_seconds 120
 
   @doc """
   End-to-end BEAM-owned resolve of the SYNTHESIS->RESOLVED transition.
@@ -258,11 +245,11 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       Map.get(p, :dispute_type),
       Map.get(p, :max_synthesis_rounds),
       Map.get(p, :synthesis_round, 0),
-      encode_json(Map.get(p, :paused_agent_state)),
+      Claims.encode_json(Map.get(p, :paused_agent_state)),
       Map.get(p, :trigger_source)
     ]
 
-    with :ok <- validate_reviewer_authorship(p, paused, Map.get(p, :reviewer_agent_id)) do
+    with :ok <- Claims.validate_reviewer_authorship(p, paused, Map.get(p, :reviewer_agent_id)) do
       case Postgrex.query(DB, sql, args) do
         {:ok, %{rows: [[_sid]]}} ->
           UnitaresLeasePlane.DialecticLivenessSupervisor.ensure_started(sid)
@@ -278,18 +265,6 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   end
 
   def create_session(_), do: {:error, :invalid_params}
-
-  # Pre-encode to a JSON binary. Every call site MUST bind the result through
-  # `($N::text)::jsonb`, never a bare `$N::jsonb`: Postgrex infers a bare jsonb
-  # param as jsonb and runs its own Jason encoder over the value, so an
-  # already-encoded binary lands as a jsonb *string* rather than an object.
-  # That double-encoding silently corrupted every jsonb this module wrote
-  # between 2026-06-28 and 2026-08-10 (`resolution_json`, `paused_agent_state_json`,
-  # `resolution_payload_json` — 90 rows; `->>` on them returned NULL). The
-  # `::text` hop forces the binary in as text so Postgres parses it. Same idiom
-  # as `UnitaresLeasePlane.Repo.insert_tool_usage/2`.
-  defp encode_json(nil), do: nil
-  defp encode_json(v), do: Jason.encode!(v)
 
   @non_terminal_phases ~w(awaiting_thesis thesis antithesis synthesis quorum_voting)
 
@@ -462,7 +437,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
             {:error, :session_terminal}
 
           {:ok, %{rows: [[_status, paused, state]]}} ->
-            case validate_reviewer_authorship_state(state, paused, reviewer) do
+            case Claims.validate_reviewer_authorship_state(state, paused, reviewer) do
               :ok -> {:error, :reviewer_write_refused}
               error -> error
             end
@@ -482,52 +457,6 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   def update_reviewer(_session_id, _reviewer, _claim_if_unassigned),
     do: {:error, :invalid_reviewer}
 
-  defp validate_reviewer_authorship(params, paused, reviewer) do
-    validate_reviewer_authorship_state(Map.get(params, :paused_agent_state), paused, reviewer)
-  end
-
-  defp validate_reviewer_authorship_state(state, paused, reviewer) when is_map(state) do
-    case Map.fetch(state, @reviewed_work_authorship_key) do
-      :error ->
-        :ok
-
-      {:ok,
-       %{
-         "schema" => @reviewed_work_authorship_schema,
-         "status" => "declared",
-         "authorship_verified" => false,
-         "reviewed_work_author_agent_ids" => author_ids,
-         "declared_by_agent_id" => declared_by
-       }}
-      when is_list(author_ids) and author_ids != [] and is_binary(declared_by) ->
-        valid_authors =
-          length(author_ids) <= @max_reviewed_work_author_agent_ids and
-            Enum.all?(author_ids, &canonical_agent_uuid?/1) and
-            Enum.uniq(author_ids) == author_ids
-
-        if valid_authors and canonical_agent_uuid?(declared_by) and declared_by == paused do
-          if is_nil(reviewer) or reviewer == paused or reviewer not in author_ids,
-            do: :ok,
-            else: {:error, :reviewer_recused}
-        else
-          {:error, :invalid_review_authorship}
-        end
-
-      {:ok, _malformed} ->
-        {:error, :invalid_review_authorship}
-    end
-  end
-
-  defp validate_reviewer_authorship_state(nil, _paused, _reviewer), do: :ok
-
-  defp validate_reviewer_authorship_state(_malformed, _paused, _reviewer),
-    do: {:error, :invalid_review_authorship}
-
-  defp canonical_agent_uuid?(value) when is_binary(value),
-    do: Regex.match?(@canonical_agent_uuid, value)
-
-  defp canonical_agent_uuid?(_value), do: false
-
   defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok,
@@ -538,18 +467,13 @@ defmodule UnitaresLeasePlane.DialecticSaga do
          claim_updated_at: claim_updated_at
        }} ->
         case commit_session_row(
+               params,
                session_id,
                payload,
                status,
-               Map.get(params, :paused_agent_id),
-               Map.get(params, :reviewer_agent_id),
-               Map.get(params, :expected_phase),
-               Map.get(params, :expected_transcript_revision),
-               Map.get(params, :expected_awaiting_facilitation),
                saga_id,
                claim_revision,
-               claim_updated_at,
-               Map.get(params, :effect_protocol)
+               claim_updated_at
              ) do
           :written ->
             {:ok, %{status: status, saga_id: saga_id, origin: origin}}
@@ -557,13 +481,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           {:already_terminal, existing_status} ->
             # A non-saga writer won after claim. Release this reservation and
             # report the actual terminal row; never attribute it to this call.
-            with :ok <- revert_reserved_claim(saga_id) do
-              {:ok,
-               %{
-                 status: existing_status,
-                 saga_id: nil,
-                 origin: :already_terminal
-               }}
+            with :ok <- Claims.revert_reserved_claim(saga_id) do
+              {:ok, %{status: existing_status, saga_id: nil, origin: :already_terminal}}
             end
 
           {:error, reason} = error when reason in @deterministic_post_claim_refusals ->
@@ -572,7 +491,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
             # reservation immediately so a corrected decision does not sit
             # behind the orphan-reclaim timeout. Unknown database/transport
             # errors stay reserved for conservative recovery.
-            case revert_reserved_claim(saga_id) do
+            case Claims.revert_reserved_claim(saga_id) do
               :ok -> error
               {:error, cleanup_error} -> {:error, cleanup_error}
             end
@@ -611,110 +530,52 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   # 075 (effect outbox), 077 (transcript frontier), and 078 (saga generation)
   # are hard prerequisites for deploying this versioned writer.
   defp commit_session_row(
+         params,
          session_id,
          payload,
          status,
-         paused_agent_id,
-         reviewer_agent_id,
-         expected_phase,
-         expected_transcript_revision,
-         expected_awaiting_facilitation,
          saga_id,
          claim_revision,
-         claim_updated_at,
-         "v1"
+         claim_updated_at
        ) do
-    sql = """
-    WITH terminal AS (
-      #{guarded_terminal_update_sql("session_id, paused_agent_id, reviewer_agent_id, paused_agent_state_json, resolution_json")}
-    ), prepared AS (
-      SELECT terminal.*,
-             CASE
-               WHEN COALESCE(
-                 paused_agent_state_json ? 'pause_effect_required',
-                 false
-               )
-               THEN paused_agent_state_json->'pause_effect_required' = 'true'::jsonb
-               ELSE false
-             END AS effect_required,
-             NOT COALESCE(
-               paused_agent_state_json ? 'pause_effect_required',
-               false
-             ) AS legacy_unbound
-      FROM terminal
-    ), enqueued AS (
-      INSERT INTO coordination.dialectic_resolution_effects
-        (session_id, paused_agent_id, reviewer_agent_id, effect_required,
-         pause_token, resolution_payload_json, state,
-         execution_result_json, applied_at)
-      SELECT session_id, paused_agent_id, reviewer_agent_id,
-             effect_required, paused_agent_state_json->>'pause_token',
-             resolution_json,
-             CASE WHEN effect_required THEN 'pending' ELSE 'applied' END,
-             CASE WHEN effect_required THEN NULL ELSE
-               jsonb_build_object(
-                 'success', true,
-                 'no_op', true,
-                 'reason', CASE
-                   WHEN legacy_unbound THEN 'legacy_unbound_session'
-                   ELSE 'active_at_session_open'
-                 END
-               )
-             END,
-             CASE WHEN effect_required THEN NULL ELSE clock_timestamp() END
-      FROM prepared
-      WHERE $2 = 'resolved'
-      RETURNING session_id
-    )
-    SELECT terminal.session_id
-    FROM terminal
-    LEFT JOIN enqueued USING (session_id)
-    """
+    sql =
+      case Map.get(params, :effect_protocol) do
+        "v1" ->
+          Claims.v1_terminal_commit_sql(
+            guarded_terminal_update_sql(
+              "session_id, paused_agent_id, reviewer_agent_id, paused_agent_state_json, resolution_json"
+            )
+          )
 
-    commit_claimed_session_row(
-      sql,
-      session_id,
-      payload,
-      status,
-      paused_agent_id,
-      reviewer_agent_id,
-      expected_phase,
-      expected_transcript_revision,
-      expected_awaiting_facilitation,
-      saga_id,
-      claim_revision,
-      claim_updated_at
-    )
-  end
+        _ ->
+          guarded_terminal_update_sql("session_id")
+      end
 
-  defp commit_session_row(
-         session_id,
-         payload,
-         status,
-         paused_agent_id,
-         reviewer_agent_id,
-         expected_phase,
-         expected_transcript_revision,
-         expected_awaiting_facilitation,
-         saga_id,
-         claim_revision,
-         claim_updated_at,
-         _legacy_protocol
-       ) do
-    commit_claimed_session_row(
-      guarded_terminal_update_sql("session_id"),
-      session_id,
-      payload,
-      status,
-      paused_agent_id,
-      reviewer_agent_id,
-      expected_phase,
-      expected_transcript_revision,
-      expected_awaiting_facilitation,
-      saga_id,
-      claim_revision,
-      claim_updated_at
-    )
+    Postgrex.transaction(DB, fn conn ->
+      Claims.commit_claimed_session(
+        conn,
+        saga_id,
+        session_id,
+        claim_revision,
+        fn -> lock_session_row(conn, session_id) end,
+        fn ->
+          run_terminal_commit_query(
+            conn,
+            sql,
+            session_id,
+            payload,
+            status,
+            params,
+            claim_revision,
+            claim_updated_at
+          )
+        end
+      )
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp guarded_terminal_update_sql(returning_columns) do
@@ -778,59 +639,6 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     """
   end
 
-  defp commit_claimed_session_row(
-         sql,
-         session_id,
-         payload,
-         status,
-         paused_agent_id,
-         reviewer_agent_id,
-         expected_phase,
-         expected_transcript_revision,
-         expected_awaiting_facilitation,
-         saga_id,
-         claim_revision,
-         claim_updated_at
-       ) do
-    Postgrex.transaction(DB, fn conn ->
-      with :ok <- lock_session_row(conn, session_id),
-           :ok <- lock_reserved_claim(conn, saga_id, session_id, claim_revision) do
-        case run_terminal_commit_query(
-               conn,
-               sql,
-               session_id,
-               payload,
-               status,
-               paused_agent_id,
-               reviewer_agent_id,
-               expected_phase,
-               expected_transcript_revision,
-               expected_awaiting_facilitation,
-               claim_revision,
-               claim_updated_at
-             ) do
-          :written ->
-            case commit_reserved_claim(conn, saga_id, claim_revision) do
-              :ok -> :written
-              {:error, reason} -> Postgrex.rollback(conn, reason)
-            end
-
-          {:error, reason} ->
-            Postgrex.rollback(conn, reason)
-
-          other ->
-            other
-        end
-      else
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-    |> case do
-      {:ok, result} -> result
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp lock_session_row(conn, session_id) do
     case Postgrex.query(
            conn,
@@ -843,55 +651,22 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
-  defp lock_reserved_claim(conn, saga_id, session_id, claim_revision) do
-    case Postgrex.query(
-           conn,
-           """
-           SELECT 1
-           FROM coordination.session_resolution_sagas
-           WHERE saga_id::text = $1 AND session_id = $2
-             AND claim_revision = $3 AND state = 'reserved'
-           FOR UPDATE
-           """,
-           [saga_id, session_id, claim_revision]
-         ) do
-      {:ok, %{rows: [[1]]}} -> :ok
-      {:ok, %{rows: []}} -> {:error, :saga_claim_lost}
-      {:error, error} -> {:error, error}
-    end
-  end
-
-  defp commit_reserved_claim(conn, saga_id, claim_revision) do
-    case Postgrex.query(
-           conn,
-           """
-           UPDATE coordination.session_resolution_sagas
-           SET state = 'pg_committed', pg_committed_at = now(), updated_at = now()
-           WHERE saga_id::text = $1 AND claim_revision = $2 AND state = 'reserved'
-           RETURNING saga_id
-           """,
-           [saga_id, claim_revision]
-         ) do
-      {:ok, %{num_rows: 1}} -> :ok
-      {:ok, %{num_rows: 0}} -> {:error, :saga_claim_lost}
-      {:error, error} -> {:error, error}
-    end
-  end
-
   defp run_terminal_commit_query(
          conn,
          sql,
          session_id,
          payload,
          status,
-         paused_agent_id,
-         reviewer_agent_id,
-         expected_phase,
-         expected_transcript_revision,
-         expected_awaiting_facilitation,
+         params,
          claim_revision,
          claim_updated_at
        ) do
+    paused_agent_id = Map.get(params, :paused_agent_id)
+    reviewer_agent_id = Map.get(params, :reviewer_agent_id)
+    expected_phase = Map.get(params, :expected_phase)
+    expected_transcript_revision = Map.get(params, :expected_transcript_revision)
+    expected_awaiting_facilitation = Map.get(params, :expected_awaiting_facilitation)
+
     case Postgrex.query(conn, sql, [
            session_id,
            status,
@@ -916,80 +691,17 @@ defmodule UnitaresLeasePlane.DialecticSaga do
                "SELECT status, phase, paused_agent_id, reviewer_agent_id, paused_agent_state_json, transcript_revision, awaiting_facilitation, resolution_saga_revision, updated_at FROM core.dialectic_sessions WHERE session_id = $1",
                [session_id]
              ) do
-          {:ok,
-           %{
-             rows: [
-               [
-                 existing,
-                 _phase,
-                 _paused,
-                 _reviewer,
-                 _state,
-                 _revision,
-                 _awaiting,
-                 _saga_revision,
-                 _updated_at
-               ]
-             ]
-           }}
-          when existing in @terminal_statuses ->
-            # Already terminal (raced/idempotent). The caller commits the
-            # losing saga but must report the live winner, not its request.
-            {:already_terminal, existing}
-
-          {:ok,
-           %{
-             rows: [
-               [
-                 _existing,
-                 stored_phase,
-                 stored_paused,
-                 stored_reviewer,
-                 state,
-                 stored_revision,
-                 stored_awaiting,
-                 stored_saga_revision,
-                 stored_updated_at
-               ]
-             ]
-           }} ->
-            case validate_resolution_authority(
-                   status,
-                   stored_paused,
-                   stored_reviewer,
-                   state,
-                   paused_agent_id,
-                   reviewer_agent_id
-                 ) do
-              :ok
-              when not is_nil(expected_phase) and stored_phase != expected_phase ->
-                {:error, :session_phase_mismatch}
-
-              :ok
-              when not is_nil(expected_transcript_revision) and
-                     stored_revision != expected_transcript_revision ->
-                {:error, :session_revision_mismatch}
-
-              :ok
-              when not is_nil(expected_awaiting_facilitation) and
-                     stored_awaiting != expected_awaiting_facilitation ->
-                {:error, :session_facilitation_mismatch}
-
-              :ok when stored_saga_revision != claim_revision ->
-                {:error, :saga_claim_lost}
-
-              :ok when stored_updated_at != claim_updated_at ->
-                {:error, :session_activity_mismatch}
-
-              :ok when status == "resolved" and stored_phase != "synthesis" ->
-                {:error, :session_phase_mismatch}
-
-              :ok ->
-                {:error, :session_write_refused}
-
-              error ->
-                error
-            end
+          {:ok, %{rows: [row]}} ->
+            Claims.classify_terminal_commit_miss(row, %{
+              status: status,
+              paused_agent_id: paused_agent_id,
+              reviewer_agent_id: reviewer_agent_id,
+              expected_phase: expected_phase,
+              expected_transcript_revision: expected_transcript_revision,
+              expected_awaiting_facilitation: expected_awaiting_facilitation,
+              claim_revision: claim_revision,
+              claim_updated_at: claim_updated_at
+            })
 
           {:ok, %{rows: []}} ->
             {:error, :session_not_found}
@@ -1000,75 +712,6 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
       {:error, e} ->
         {:error, e}
-    end
-  end
-
-  defp reclaim_stale_reserved(conn, session_id) do
-    sql = """
-    UPDATE coordination.session_resolution_sagas
-    SET state = 'reverted', reverted_at = now(), updated_at = now()
-    WHERE session_id = $1 AND state = 'reserved'
-      AND last_attempt_at < now() - ($2 || ' seconds')::interval
-    """
-
-    case Postgrex.query(conn, sql, [session_id, Integer.to_string(@stale_reserved_seconds)]) do
-      {:ok, %{num_rows: n}} when n > 0 ->
-        Logger.warning(
-          "dialectic_saga: reclaimed #{n} stale reserved saga(s) for session #{String.slice(session_id, 0, 16)} (assumed orphaned)"
-        )
-
-        :ok
-
-      {:ok, _} ->
-        :ok
-
-      {:error, e} ->
-        {:error, e}
-    end
-  end
-
-  defp revert_reserved_claim(saga_id) do
-    sql = """
-    UPDATE coordination.session_resolution_sagas
-    SET state = 'reverted', reverted_at = now(), updated_at = now()
-    WHERE saga_id::text = $1 AND state = 'reserved'
-    """
-
-    case Postgrex.query(DB, sql, [saga_id]) do
-      {:ok, %{num_rows: 1}} ->
-        :ok
-
-      {:ok, %{num_rows: 0}} ->
-        # Cleanup is idempotent when a reaper or another deterministic refusal
-        # already reverted this generation. Forward states still refuse so a
-        # committed decision can never be unwound.
-        case Postgrex.query(
-               DB,
-               "SELECT state FROM coordination.session_resolution_sagas WHERE saga_id::text = $1",
-               [saga_id]
-             ) do
-          {:ok, %{rows: [["reverted"]]}} -> :ok
-          {:ok, _} -> {:error, :saga_cleanup_refused}
-          {:error, error} -> {:error, error}
-        end
-
-      {:error, error} ->
-        {:error, error}
-    end
-  end
-
-  defp revert_reserved_session_claims(conn, session_id) do
-    case Postgrex.query(
-           conn,
-           """
-           UPDATE coordination.session_resolution_sagas
-           SET state = 'reverted', reverted_at = now(), updated_at = now()
-           WHERE session_id = $1 AND state = 'reserved'
-           """,
-           [session_id]
-         ) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
     end
   end
 
@@ -1095,19 +738,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   `{:ok, count}`. Run by `DialecticSagaReaper` under the PeriodicWorker.
   """
   @spec reclaim_all_stale() :: {:ok, non_neg_integer()} | {:error, term()}
-  def reclaim_all_stale do
-    sql = """
-    UPDATE coordination.session_resolution_sagas
-    SET state = 'reverted', reverted_at = now(), updated_at = now()
-    WHERE state = 'reserved'
-      AND last_attempt_at < now() - ($1 || ' seconds')::interval
-    """
-
-    case Postgrex.query(DB, sql, [Integer.to_string(@stale_reserved_seconds)]) do
-      {:ok, %{num_rows: n}} -> {:ok, n}
-      {:error, e} -> {:error, e}
-    end
-  end
+  defdelegate reclaim_all_stale(), to: Claims
 
   @doc """
   Live (non-terminal) dialectic sessions as a BEAM-served presence read: each
@@ -1129,7 +760,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     LIMIT $2
     """
 
-    case Postgrex.query(DB, sql, [@inflight_states, limit]) do
+    case Postgrex.query(DB, sql, [Claims.inflight_states(), limit]) do
       {:ok, %{rows: rows}} ->
         {:ok,
          Enum.map(rows, fn [sid, phase, age, resolving] ->
@@ -1194,41 +825,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     """
 
     case Postgrex.query(DB, sql, [session_id]) do
-      {:ok,
-       %{
-         rows: [
-           [
-             status,
-             paused,
-             reviewer,
-             inactive_s,
-             phase,
-             awaiting,
-             revision,
-             updated_at,
-             verdict_msg,
-             replies,
-             agreed
-           ]
-         ]
-       }} ->
-        {:ok,
-         %{
-           status: status,
-           paused_agent_id: paused,
-           reviewer_agent_id: reviewer,
-           inactive_seconds: inactive_s,
-           # Carried so a reap can say WHICH kind of stall it ended. Without
-           # these the sweeper writes a verdict-free row and every reader
-           # reconstructs "the agent walked away" — see fail_stuck/2.
-           phase: phase,
-           awaiting_facilitation: awaiting == true,
-           transcript_revision: revision,
-           updated_at: updated_at,
-           standing_verdict: if(is_nil(verdict_msg), do: "none", else: "reject"),
-           verdict_message_id: verdict_msg,
-           verdict_acceptance: verdict_acceptance(verdict_msg, replies, agreed)
-         }}
+      {:ok, %{rows: [row]}} ->
+        {:ok, Claims.build_liveness_snapshot(row)}
 
       {:ok, %{rows: []}} ->
         {:ok, nil}
@@ -1259,19 +857,10 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   @doc "Return the in-flight saga_id for a session, or nil. Used by recovery + the Python sweeper guard's BEAM-side mirror."
   @spec get_inflight(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
-  def get_inflight(session_id) when is_binary(session_id) do
-    sql = """
-    SELECT saga_id::text FROM coordination.session_resolution_sagas
-    WHERE session_id = $1 AND state = ANY($2)
-    LIMIT 1
-    """
+  defdelegate get_inflight(session_id), to: Claims
 
-    case Postgrex.query(DB, sql, [session_id, @inflight_states]) do
-      {:ok, %{rows: [[saga_id]]}} -> {:ok, saga_id}
-      {:ok, %{rows: []}} -> {:ok, nil}
-      {:error, e} -> {:error, e}
-    end
-  end
+  @doc false
+  defdelegate payload_hash(payload), to: Claims
 
   # ---------- internals ----------
 
@@ -1290,79 +879,15 @@ defmodule UnitaresLeasePlane.DialecticSaga do
         "FROM core.dialectic_sessions WHERE session_id = $1 FOR UPDATE"
 
     case Postgrex.query(conn, sql, [session_id]) do
-      {:ok,
-       %{
-         rows: [
-           [status, _phase, _paused, _reviewer, _state, _revision, _awaiting, _updated_at]
-         ]
-       }}
-      when status in ["resolved", "failed"] ->
-        {:error, {:session_terminal, status}}
-
-      {:ok,
-       %{
-         rows: [
-           [_status, phase, _paused, _reviewer, _state, _revision, _awaiting, _updated_at]
-         ]
-       }}
-      when not is_nil(expected_phase) and phase != expected_phase ->
-        {:error, :session_phase_mismatch}
-
-      {:ok,
-       %{
-         rows: [
-           [_status, _phase, _paused, _reviewer, _state, revision, _awaiting, _updated_at]
-         ]
-       }}
-      when not is_nil(expected_transcript_revision) and
-             revision != expected_transcript_revision ->
-        {:error, :session_revision_mismatch}
-
-      {:ok,
-       %{
-         rows: [
-           [_status, _phase, _paused, _reviewer, _state, _revision, awaiting, _updated_at]
-         ]
-       }}
-      when not is_nil(expected_awaiting_facilitation) and
-             awaiting != expected_awaiting_facilitation ->
-        {:error, :session_facilitation_mismatch}
-
-      {:ok,
-       %{
-         rows: [
-           [_status, phase, _paused, _reviewer, _state, _revision, _awaiting, _updated_at]
-         ]
-       }}
-      when requested_status == "resolved" and phase != "synthesis" ->
-        {:error, :session_phase_mismatch}
-
-      {:ok,
-       %{
-         rows: [
-           [
-             _status,
-             phase,
-             stored_paused,
-             stored_reviewer,
-             state,
-             _revision,
-             _awaiting,
-             updated_at
-           ]
-         ]
-       }} ->
-        case validate_resolution_authority(
-               requested_status,
-               stored_paused,
-               stored_reviewer,
-               state,
-               paused_agent_id,
-               reviewer_agent_id
-             ) do
-          :ok -> {:ok, %{phase: phase, updated_at: updated_at}}
-          error -> error
-        end
+      {:ok, %{rows: [row]}} ->
+        Claims.classify_guard_session_phase(row, %{
+          paused_agent_id: paused_agent_id,
+          reviewer_agent_id: reviewer_agent_id,
+          requested_status: requested_status,
+          expected_phase: expected_phase,
+          expected_transcript_revision: expected_transcript_revision,
+          expected_awaiting_facilitation: expected_awaiting_facilitation
+        })
 
       {:ok, %{rows: []}} ->
         {:error, :session_not_found}
@@ -1372,197 +897,20 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
-  defp validate_resolution_authority(
-         requested_status,
-         stored_paused,
-         stored_reviewer,
-         state,
-         paused_agent_id,
-         reviewer_agent_id
-       ) do
-    cond do
-      stored_paused != paused_agent_id or stored_reviewer != reviewer_agent_id ->
-        {:error, :session_identity_mismatch}
-
-      requested_status == "resolved" and stored_paused == stored_reviewer and
-        is_map(state) and Map.get(state, "pause_effect_required") == true ->
-        {:error, :self_review_not_authorizing}
-
-      requested_status == "resolved" ->
-        validate_reviewer_authorship_state(state, stored_paused, stored_reviewer)
-
-      true ->
-        :ok
-    end
-  end
-
-  defp reserve_claim(
-         conn,
-         session_id,
-         paused_agent_id,
-         reviewer_agent_id,
-         json,
-         hash,
-         expected_updated_at,
-         locked_updated_at
-       ) do
-    # The session row is already locked by guard_session_phase/7.  Read and
-    # lock any live claim before allocating a new generation, preserving the
-    # global session -> saga lock order used by terminal commit.
-    inflight_sql = """
-    SELECT saga_id::text, resolution_payload_hash, paused_agent_id,
-           reviewer_agent_id, claim_revision, claim_updated_at
-    FROM coordination.session_resolution_sagas
-    WHERE session_id = $1
-      AND state IN ('reserved', 'paused_agent_applied',
-                    'both_agents_applied', 'reverting')
-    LIMIT 1
-    FOR UPDATE
-    """
-
-    case Postgrex.query(conn, inflight_sql, [session_id]) do
-      {:ok,
-       %{
-         rows: [
-           [
-             saga_id,
-             ^hash,
-             ^paused_agent_id,
-             ^reviewer_agent_id,
-             revision,
-             claim_updated_at
-           ]
-         ]
-       }}
-      when is_integer(revision) and revision > 0 and not is_nil(claim_updated_at) ->
-        {:ok,
-         %{
-           saga_id: saga_id,
-           origin: :idempotent,
-           claim_revision: revision,
-           claim_updated_at: claim_updated_at
-         }}
-
-      {:ok, %{rows: [_]}} ->
-        {:error, :saga_in_flight}
-
-      {:ok, %{rows: []}}
-      when not is_nil(expected_updated_at) and
-             locked_updated_at != expected_updated_at ->
-        # Check the caller's activity frontier only when allocating a new
-        # generation. An exact live claim is an idempotent replay even though
-        # that claim itself advanced updated_at; terminal commit still binds
-        # claim_updated_at and refuses any activity after the reservation.
-        {:error, :session_activity_mismatch}
-
-      {:ok, %{rows: []}} ->
-        insert_new_claim(
-          conn,
-          session_id,
-          paused_agent_id,
-          reviewer_agent_id,
-          json,
-          hash
-        )
-
-      {:error, error} ->
-        {:error, error}
-    end
-  end
-
-  defp insert_new_claim(conn, session_id, paused_agent_id, reviewer_agent_id, json, hash) do
-    with {:ok, %{rows: [[revision, updated_at]]}} <-
-           Postgrex.query(
-             conn,
-             """
-             UPDATE core.dialectic_sessions
-             SET resolution_saga_revision = resolution_saga_revision + 1
-             WHERE session_id = $1
-             RETURNING resolution_saga_revision, updated_at
-             """,
-             [session_id]
-           ),
-         {:ok, %{rows: [[saga_id]]}} <-
-           Postgrex.query(
-             conn,
-             """
-             INSERT INTO coordination.session_resolution_sagas
-               (saga_id, session_id, paused_agent_id, reviewer_agent_id, state,
-                resolution_payload_json, resolution_payload_hash,
-                claim_revision, claim_updated_at, last_attempt_at, attempt_count)
-             VALUES (gen_random_uuid(), $1, $2, $3, 'reserved',
-                     ($4::text)::jsonb, $5, $6, $7, now(), 1)
-             RETURNING saga_id::text
-             """,
-             [
-               session_id,
-               paused_agent_id,
-               reviewer_agent_id,
-               json,
-               hash,
-               revision,
-               updated_at
-             ]
-           ) do
-      {:ok,
-       %{
-         saga_id: saga_id,
-         origin: :new,
-         claim_revision: revision,
-         claim_updated_at: updated_at
-       }}
-    else
+  defp bump_session_saga_revision(conn, session_id) do
+    case Postgrex.query(
+           conn,
+           """
+           UPDATE core.dialectic_sessions
+           SET resolution_saga_revision = resolution_saga_revision + 1
+           WHERE session_id = $1
+           RETURNING resolution_saga_revision, updated_at
+           """,
+           [session_id]
+         ) do
+      {:ok, %{rows: [[revision, updated_at]]}} -> {:ok, {revision, updated_at}}
       {:ok, %{rows: []}} -> {:error, :session_not_found}
       {:error, error} -> {:error, error}
     end
   end
-
-  # Deterministic payload hash: recursively sort map keys, encoding as a stable
-  # array-of-pairs structure so the same logical resolution always hashes
-  # identically (the dedup key). We hash a canonical *representation*, not a
-  # round-trippable object, so no Jason.OrderedObject dependency is needed.
-  # NOTE: BEAM-internal idempotency only; byte-parity with Python's HMAC
-  # canonical_payload is a separate, later concern (architect M2).
-  @doc false
-  def payload_hash(payload) when is_map(payload) do
-    payload
-    |> canonical()
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-  end
-
-  # Saga idempotency is identity of the whole terminal operation, not merely
-  # the JSON stored in resolution_json. The same payload sent as `failed`
-  # versus `resolved`, or through the effect-owning v2 route versus legacy v1,
-  # must contend rather than join one another's reservation.
-  defp operation_hash(payload, status, effect_protocol) do
-    payload_hash(%{
-      "resolution_payload" => payload,
-      "status" => status,
-      "effect_protocol" => effect_protocol
-    })
-  end
-
-  defp canonical(m) when is_map(m) do
-    m
-    |> Enum.map(fn {k, v} -> [to_string(k), canonical(v)] end)
-    |> Enum.sort_by(fn [k, _] -> k end)
-  end
-
-  defp canonical(list) when is_list(list), do: Enum.map(list, &canonical/1)
-  defp canonical(other), do: other
-
-  # accepted   -- the paused agent posted after the verdict and agreed
-  # contested  -- it posted after the verdict and did not agree
-  # no_reply   -- it never posted after the verdict
-  # not_applicable -- no standing rejection to accept or contest
-  #
-  # Descriptive only. `no_reply` in particular must NOT be read as acceptance:
-  # the common cause is that the agent's session had already ended, not that it
-  # assented. Nothing may terminate on this field.
-  defp verdict_acceptance(nil, _replies, _agreed), do: "not_applicable"
-  defp verdict_acceptance(_msg, replies, _agreed) when replies in [nil, 0], do: "no_reply"
-  defp verdict_acceptance(_msg, _replies, true), do: "accepted"
-  defp verdict_acceptance(_msg, _replies, _agreed), do: "contested"
 end
