@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `2.4.0`
+**Current contract:** `unitares.interface-contract.v1`, version `2.4.1`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -1347,3 +1347,20 @@ Accept neutral durable check-in checkpoints and optional identity-scoped idempot
   consuming receipts should distinguish capture, assessment execution and the
   independent assessment-state acknowledgement. Hash-pinning clients should
   inspect the two updated schemas and refresh their pins.
+
+## 2.4.1 (2026-11-05)
+
+Finding aliases advertise their existing required inputs as non-null strings: store_finding.summary and update_finding.discovery_id.
+
+Both aliases now list the input in `required`, remove its nullable branch and
+null default, and describe it as required in full and lite discovery. Direct
+MCP argument validation rejects omitted or null values before dispatch. The
+underlying multi-action `knowledge` router retains optional fields because its
+requirements depend on the selected action. Valid requests, authorization,
+field constraints, and write semantics are unchanged.
+
+The `store_finding` and `update_finding` input digests and aggregate surface
+digest change. No capability or parameter is added or removed. Clients should
+supply the summary when storing and the discovery ID when updating, as the
+handlers already required. Hash-pinning clients should refresh those two
+schema pins; schema-aware clients can now detect incomplete calls locally.

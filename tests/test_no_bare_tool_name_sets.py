@@ -55,6 +55,11 @@ EXCEPTIONS: dict[str, str] = {
         f"{GUARDED_REGISTRY}: keyed by the workflow alias whose schema it narrows; "
         "tests/test_alias_schema_narrowing.py"
     ),
+    "src/alias_schema.py::ALIAS_SCHEMA_REQUIRED": (
+        f"{GUARDED_REGISTRY}: keyed by the advertised alias whose inputs are required; "
+        "the multi-action router keeps its own requirements. "
+        "tests/test_finding_alias_required_inputs.py checks discovery and transport validation"
+    ),
     "src/alias_schema.py::ALIAS_SCHEMA_PROPERTY_OVERRIDES": (
         f"{GUARDED_REGISTRY}: keyed by the advertised alias whose schema it overrides, "
         "so the canonical tool keeps its own; tests/test_mcp_schema_parity.py holds "
