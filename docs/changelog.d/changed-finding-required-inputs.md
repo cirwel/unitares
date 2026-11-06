@@ -1,1 +1,0 @@
-- Interface contract 2.4.1: Finding aliases advertise their existing required inputs as non-null strings: store_finding.summary and update_finding.discovery_id.
