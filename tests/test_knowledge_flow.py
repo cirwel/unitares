@@ -130,10 +130,13 @@ async def test_a_failed_graph_probe_raises_not_reports_no_graph():
 # against a fake connection.
 
 class _AgeConn:
-    def __init__(self, *, installed, probe_error=None, ext_error=None):
+    def __init__(self, *, installed, probe_error=None, ext_error=None, unprivileged=False):
         self.installed, self.probe_error, self.ext_error = installed, probe_error, ext_error
+        self.unprivileged = unprivileged
 
     async def fetchval(self, sql, *args):
+        if sql == "SELECT current_setting('is_superuser') = 'off'":
+            return self.unprivileged
         if "pg_extension" in sql:
             if self.ext_error:
                 raise self.ext_error
@@ -143,6 +146,8 @@ class _AgeConn:
         raise AssertionError(f"unexpected fetchval: {sql}")
 
     async def execute(self, sql, *args):
+        if self.unprivileged and "LOAD 'age'" in sql:
+            raise AssertionError('Non-superuser must use administrator preload')
         if not self.installed and "LOAD 'age'" in sql:
             raise RuntimeError("could not access file \"age\"")
         return None
@@ -197,8 +202,9 @@ async def test_graph_status_error_when_the_extension_check_fails():
 
 
 @pytest.mark.asyncio
-async def test_graph_status_available_when_the_probe_succeeds():
-    assert await _mixin_db(installed=True).graph_status() == "available"
+@pytest.mark.parametrize('unprivileged', [False, True])
+async def test_graph_status_available_when_the_probe_succeeds(unprivileged):
+    assert await _mixin_db(installed=True, unprivileged=unprivileged).graph_status() == "available"
 
 
 @pytest.mark.asyncio
