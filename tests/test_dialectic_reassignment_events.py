@@ -101,8 +101,11 @@ class TestBothProducersEmit:
     def test_request_path_emits(self):
         from pathlib import Path
 
-        src = Path(events.__file__).parent / "handlers.py"
-        text = src.read_text(encoding="utf-8")
+        pkg = Path(events.__file__).parent
+        text = "\n".join(
+            (pkg / name).read_text(encoding="utf-8")
+            for name in ("handlers.py", "resolution_helpers.py", "phase_submission.py")
+        )
         assert "emit_reviewer_reassigned(" in text
         assert 'source="request"' in text
 
@@ -111,7 +114,7 @@ class TestBothProducersEmit:
         from pathlib import Path
 
         pkg = Path(events.__file__).parent
-        for name in ("auto_resolve.py", "handlers.py"):
+        for name in ("auto_resolve.py", "handlers.py", "resolution_helpers.py", "phase_submission.py"):
             text = (pkg / name).read_text(encoding="utf-8")
             assert '"event_type": "dialectic_reviewer_reassigned"' not in text, (
                 f"{name} builds the reassignment payload inline; it must call "
