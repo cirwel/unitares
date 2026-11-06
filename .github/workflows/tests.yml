@@ -166,6 +166,30 @@ jobs:
       run: |
         bash scripts/dev/check-deploy-lib.sh
 
+    - name: Cache Lean 4 toolchain (elan)
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.elan
+        key: elan-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain') }}
+
+    - name: Install and run Lean 4 kernel on formal specifications
+      run: |
+        set -euo pipefail
+        toolchain="$(tr -d '[:space:]' < formal/lean-toolchain)"
+        if [ ! -x "$HOME/.elan/bin/elan" ]; then
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --no-modify-path --default-toolchain "$toolchain"
+        else
+          "$HOME/.elan/bin/elan" toolchain install "$toolchain"
+          "$HOME/.elan/bin/elan" default "$toolchain"
+        fi
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.elan/bin:$PATH"
+        lean --version
+        for spec in formal/*.lean; do
+          echo "Kernel-checking $spec ..."
+          lean "$spec"
+        done
+
     - name: Run smoke tests
       run: |
         make test-smoke

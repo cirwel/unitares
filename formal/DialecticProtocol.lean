@@ -8,13 +8,11 @@
   standing-rejection facilitation exit (`src/mcp_handlers/dialectic/rejection_stands.py`
   and `src/mcp_handlers/dialectic/auto_resolve.py`).
 
-  When the Lean 4 toolchain (`lean`) is installed on the host or CI runner,
-  `test_lean4_kernel_typechecks_dialectic_protocol` invokes the Lean kernel on
-  this file to verify every theorem with zero `sorry`s and zero user-defined
-  axioms and to evaluate the compile-time `#guard` trace vectors. On runners
-  without `lean`, `test_lean4_guard_scenarios_match_python_mirror_and_live_session`
-  parses the `traceScenario*` definitions and `#guard` assertions from this file
-  and executes them against both `SpecState` and the live Python implementation.
+  Pinned to `formal/lean-toolchain` (`leanprover/lean4:v4.35.0`) and verified
+  in GitHub Actions (`smoke` job in `.github/workflows/tests.yml`) and via
+  `test_lean4_kernel_typechecks_dialectic_protocol` with zero `sorry`s and
+  zero user-defined axioms, plus compile-time `#guard` trace vectors parsed
+  and cross-checked by `test_lean4_guard_scenarios_match_python_mirror_and_live_session`.
 -/
 
 namespace Unitares.DialecticProtocol
