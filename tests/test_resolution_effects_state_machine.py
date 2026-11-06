@@ -616,10 +616,14 @@ class _LiveResolutionEffectsSqlBackend:
     SQL Predicate Verification vs Direct Python Emulation:
     - For `DialecticDB.resolve_session`: asserts the presence of the `terminal`,
       `prepared`, and `enqueued` CTEs (`AND status NOT IN ('resolved', 'failed')`,
-      `paused_agent_state_json ? 'pause_effect_required'`,
+      `reviewer_agent_id IS DISTINCT FROM paused_agent_id`,
+      `reviewed_work_authorship`, `paused_agent_state_json ? 'pause_effect_required'`,
       `CASE WHEN effect_required THEN 'pending' ELSE 'applied' END`,
-      `WHERE $1 = 'resolved'`) in the emitted SQL string and evaluates the
-      `prepared` / `enqueued` logic against the session row's JSONB state.
+      `WHERE $1 = 'resolved'`) in the emitted SQL string and evaluates
+      pause-bound self-review refusal plus the `prepared` / `enqueued` logic and
+      migration 075 schema checks against the session row's JSONB state. (The
+      full reviewer-authorship/CAS/saga matrix on `resolve_session` is verified
+      in `formal/SagaCasProtocol.lean` and `tests/test_saga_cas_protocol_state_machine.py`.)
     - For `DialecticDB.get_resolution_effect`: asserts
       `FROM coordination.dialectic_resolution_effects WHERE session_id = $1`.
     - For `DialecticDB.claim_resolution_effect`: asserts the presence of all 7
@@ -849,6 +853,10 @@ class _LiveResolutionEffectsSqlBackend:
             eff_candidate: Optional[Dict[str, Any]] = None
 
             if req_status == "resolved":
+                assert (
+                    "reviewer_agent_id IS DISTINCT FROM paused_agent_id" in norm
+                    and "reviewed_work_authorship" in norm
+                ), f"resolve_session missing authority_guard on resolved: {norm}"
                 pstate = sess.get("paused_agent_state_json") or {}
                 has_key = "pause_effect_required" in pstate
                 eff_req = (
@@ -856,6 +864,11 @@ class _LiveResolutionEffectsSqlBackend:
                     if has_key
                     else False
                 )
+                if (
+                    eff_req
+                    and sess["reviewer_agent_id"] == sess["paused_agent_id"]
+                ):
+                    return None
                 legacy_unbound = not has_key
                 pause_tok = pstate.get("pause_token")
                 eff_candidate = {
@@ -905,6 +918,16 @@ class _LiveResolutionEffectsSqlBackend:
                 "session_id": sid,
                 "effect_ts": now_dt.isoformat(),
             }
+
+        # 1b. `resolve_session` post-refusal diagnostic SELECT (`src/dialectic_db.py:979-984`)
+        if (
+            norm.startswith(
+                "SELECT status, phase, paused_agent_id, reviewer_agent_id, paused_agent_state_json, resolution_json, transcript_revision FROM core.dialectic_sessions WHERE session_id = $1"
+            )
+        ):
+            sid = args[0]
+            sess = self.sessions.get(sid)
+            return dict(sess) if sess is not None else None
 
         # 2. `get_resolution_effect`
         if (
@@ -1884,6 +1907,25 @@ def test_migration_075_schema_constraints_enforced_by_sql_emulator():
                 "sess-075", {"action": "resume", "summary": "bad"}, "resolved"
             )
         )
+    assert backend.sessions["sess-075"]["status"] == "active"
+    assert "sess-075" not in backend.effects
+
+    # 4. pause-bound self-review is refused by authority_guard without enqueuing an effect
+    backend.seed_session(
+        "sess-075",
+        paused_agent_id=AGENT_UUIDS[0],
+        reviewer_agent_id=AGENT_UUIDS[0],
+        pause_token=PAUSE_TOKENS[10],
+        pause_binding="explicitTrue",
+    )
+    detail: Dict[str, Any] = {}
+    ok = asyncio.run(
+        db.resolve_session(
+            "sess-075", RESOLUTION_PAYLOADS[1], "resolved", detail=detail
+        )
+    )
+    assert ok is False
+    assert detail.get("refused") == "self_review_not_authorizing"
     assert backend.sessions["sess-075"]["status"] == "active"
     assert "sess-075" not in backend.effects
 
