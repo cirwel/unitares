@@ -9,9 +9,8 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
 
   require Logger
 
+  alias AgentOrchestrator.AgentRunner
   alias AgentOrchestrator.AgentRunner.OutputBuffer
-
-  @line_max_bytes 65_536
 
   # Child stdin disposition. Default `close` — see wire_stdin/3 for why an open
   # stdin is both unusable here and a hang risk for the CLIs we spawn.
@@ -143,7 +142,7 @@ defmodule AgentOrchestrator.AgentRunner.LeaseGovernance do
             # exit_status is unspecified, so AgentRunner waits for both.
             :eof,
             :stderr_to_stdout,
-            {:line, @line_max_bytes},
+            {:line, AgentRunner.line_max_bytes()},
             {:args, exec_args}
           ]
           |> maybe_opt(

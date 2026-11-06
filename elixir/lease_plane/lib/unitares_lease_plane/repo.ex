@@ -34,6 +34,9 @@ defmodule UnitaresLeasePlane.Repo do
   substrate_state, substrate_state_observed_at, effect_fence
   """
 
+  @doc false
+  def select_lease_columns, do: @select_lease_columns
+
   # ---------- acquire ----------
 
   @doc """

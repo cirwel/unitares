@@ -153,6 +153,9 @@ defmodule AgentOrchestrator.AgentRunner do
   @default_max_lines 1000
   @line_max_bytes 65_536
 
+  @doc false
+  def line_max_bytes, do: @line_max_bytes
+
   defstruct [
     :execution_id,
     :agent_id,

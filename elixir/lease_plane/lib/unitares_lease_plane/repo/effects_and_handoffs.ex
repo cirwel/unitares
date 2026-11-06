@@ -6,23 +6,9 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
   """
 
   alias UnitaresLeasePlane.DB
+  alias UnitaresLeasePlane.Repo
 
   @typep lease :: map()
-
-  # Cast uuid columns to text on the boundary so callers don't have to
-  # know whether Postgrex returned 16-byte raw binaries or 36-char strings.
-  @select_lease_columns """
-  lease_id::text AS lease_id,
-  surface_id, surface_kind,
-  holder_agent_uuid::text AS holder_agent_uuid,
-  holder_class, holder_kind, holder_pid, heartbeat_required, intent,
-  acquired_at, expires_at, last_heartbeat_at, released_at, release_reason,
-  audit_session, original_ttl_s, earned_status,
-  substrate_state, substrate_state_observed_at, effect_fence
-  """
-
-  @doc false
-  def select_lease_columns, do: @select_lease_columns
 
   # ---------- effect custody freshness ----------
 
@@ -178,7 +164,7 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
   @spec active_lease(binary()) :: {:ok, lease} | {:error, :not_found | term()}
   def active_lease(lease_id) when is_binary(lease_id) do
     sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
+      "SELECT #{Repo.select_lease_columns()} FROM lease_plane.surface_leases " <>
         "WHERE lease_id = $1 AND released_at IS NULL"
 
     case Postgrex.query(DB, sql, [uuid_to_binary(lease_id)]) do
@@ -222,7 +208,7 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
   @doc false
   def lock_active_lease(conn, lease_id) do
     sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
+      "SELECT #{Repo.select_lease_columns()} FROM lease_plane.surface_leases " <>
         "WHERE lease_id = $1 AND released_at IS NULL FOR UPDATE"
 
     case Postgrex.query(conn, sql, [uuid_to_binary(lease_id)]) do
@@ -250,7 +236,7 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
     VALUES
       ($1, $2, $3, 'remote_heartbeat', NULL, true, $4,
        now() + make_interval(secs => $5), $5, $6, 'provisional')
-    RETURNING #{@select_lease_columns}
+    RETURNING #{Repo.select_lease_columns()}
     """
 
     intent = old_lease.intent || "handoff from #{old_lease.lease_id}"
@@ -285,7 +271,7 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
   @spec expired_active_leases(pos_integer()) :: {:ok, [lease]} | {:error, term()}
   def expired_active_leases(limit) when is_integer(limit) and limit > 0 do
     sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
+      "SELECT #{Repo.select_lease_columns()} FROM lease_plane.surface_leases " <>
         "WHERE released_at IS NULL AND effect_fence IS NULL AND expires_at < now() " <>
         "ORDER BY expires_at ASC LIMIT $1"
 
@@ -301,7 +287,7 @@ defmodule UnitaresLeasePlane.Repo.EffectsAndHandoffs do
     UPDATE lease_plane.surface_leases
     SET released_at = now(), release_reason = $2
     WHERE lease_id = $1 AND released_at IS NULL AND expires_at < now()
-    RETURNING #{@select_lease_columns}
+    RETURNING #{Repo.select_lease_columns()}
     """
 
     case Postgrex.transaction(DB, fn conn ->
