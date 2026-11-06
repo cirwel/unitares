@@ -207,9 +207,11 @@ def resolveGuardOk (s : SessionRow) (targetStatus : SessionStatus) (cas : CasExp
   (targetStatus != .resolved || resolveAuthorityOk s)
 
 /-- `detail.get("refused")` populated by `DialecticDB.resolve_session` on refusal
-    (`src/dialectic_db.py:1015-1063`). Only explicit reviewer-authority refusals
-    on non-terminal rows set `detail["refused"]`; CAS, saga, terminal-conflict,
-    and SQL `NULL`-reviewer refusals leave `detail.get("refused") = none`. -/
+    (`src/dialectic_db.py:1015-1063`). Computed from the row's current state
+    whenever `targetStatus = .resolved` and the row is non-terminal (regardless
+    of whether a CAS or saga predicate also failed); returns `none` when the row
+    is terminal, `targetStatus != .resolved`, or the row's reviewer/authorship
+    state passes Python's post-refusal check. -/
 def computeRefusalReason (s : SessionRow) (targetStatus : SessionStatus) : Option String :=
   if s.status.isTerminal || targetStatus != .resolved then
     none
