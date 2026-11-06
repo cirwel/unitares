@@ -123,13 +123,20 @@ veto by removing the label.
   `PR_QUEUE_REQUIRED_CHECKS` says. The queue reads the policy from the base, as
   CI does, and fails closed when it cannot read the policy or the diff.
 - **Readiness is agent-declared, never operator-inferred.** A PR still in draft
-  is "still working — hands off," even when the diff looks finished, and nobody
-  marks another agent's PR ready on its behalf. A draft whose owner went silent
-  is a question for the owner (KG channel) first — the stranded-work audit will
-  NOT surface it, since it skips branches with an open PR. If the owner cannot
-  return, the operator may mark it ready as an explicit override, saying so in a
-  PR comment. Ordering constraints the agent knows about ("merge after #N")
-  belong in the PR body, so in-order merging acts on declared state.
+  is "still working — hands off," even when the diff looks finished. Ask a silent
+  owner through the project channel when available; the stranded-work audit will
+  NOT surface the PR because it skips branches with an open PR. If the owner
+  cannot return, the operator may mark it ready directly or assign it to a successor by
+  UNITARES agent UUID through an operator-authored PR comment or a direct
+  instruction to that successor.
+  The assignment must separately authorize readiness and queue entry. The
+  successor verifies the current head, CI, review coverage, unresolved findings,
+  and collision or ordering constraints, then records acceptance and its own
+  attribution in a PR comment while preserving the original author's
+  provenance. Silence, age, and green checks do not transfer ownership. A
+  readiness-only assignment does not authorize `approved-to-merge` or a merge.
+  Ordering constraints the agent knows about ("merge after #N") belong in the
+  PR body, so in-order merging acts on declared state.
 
 ### Review workflow
 
@@ -838,8 +845,9 @@ Draft PRs cannot be queued, so mark ready first.
 
 - **The label is the merge decision, and the owning agent makes it.** Apply
   it when you mark your PR ready, on the same validation (CI green, `review`
-  passing), and never on another agent's PR; the operator vetoes by removing
-  it. The exception is a PR labelled `governance-sensitive` (see
+  passing). An operator-assigned successor may apply it only when the PR comment
+  explicitly authorizes queue entry; never label an unassigned PR. The operator
+  vetoes by removing it. The exception is a PR labelled `governance-sensitive` (see
   `docs/dev/GOVERNANCE_SENSITIVITY.md`), touching that manifest, or coming from
   a fork: the queue never arms it, and the operator merges it by hand. When the
   queue first sees `approved-to-merge` (within 15 minutes of application), it
