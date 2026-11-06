@@ -42,9 +42,13 @@
 #      after that the label stays on, since each try adds two label events to
 #      the PR and past a few hundred GitHub stops showing it new ones (#3036).
 #
-# The approval label is the merge decision. The agent that owns a PR applies it
-# when it marks the PR ready, never on another agent's PR, and the maintainer
-# vetoes by removing it (AGENTS.md / CLAUDE.md shared contract). It approves the PR as it stood when the label went on. The
+# The approval label is the merge decision. The authorized delivery owner applies
+# it when marking ready: the opening owner, a completed stuck-queue adopter, or
+# the named operator-assigned successor with explicit queue-entry authority and
+# the verified grant/acceptance recorded on the PR (AGENTS.md / CLAUDE.md).
+# Original authorship is preserved; another agent may not self-assign authority.
+# This script checks label/head coverage, not the human origin of a handover.
+# The maintainer vetoes by removing the label. It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
