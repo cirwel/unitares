@@ -11,7 +11,7 @@
       - `DialecticDB.has_inflight_saga` / `probe_inflight_saga` (`lines 1285-1336`)
       - `DialecticDB.probe_saga_since` (`lines 1338-1384`)
     - `src/mcp_handlers/dialectic/auto_resolve.py`:
-      - `_CycleCounts` (`lines 91-125`)
+      - `_CycleCounts` (`lines 66-118`)
       - `_probe_write_overlap` (`lines 228-286`)
       - `_attempt_guarded_write` (`lines 289-432`)
 
@@ -184,13 +184,18 @@ def casMatches (s : SessionRow) (cas : CasExpectations) : Bool :=
     | some r => s.resolutionSagaRevision == r
   phaseOk && updatedOk && reviewerOk && revOk && facOk && sagaRevOk
 
-/-- Evaluate the `status == 'resolved'` reviewer authority guard in
-    `DialecticDB.resolve_session` (`src/dialectic_db.py:862-911`). -/
+/-- Evaluate the `status == 'resolved'` reviewer authority SQL guard in
+    `DialecticDB.resolve_session` (`src/dialectic_db.py:862-911`).
+    In PostgreSQL, when `declaredAuthors` is non-empty (`paused_agent_state_json`
+    contains `_dialectic_reviewed_work_authorship`) and `reviewer` is `none` (`NULL`),
+    `reviewer_agent_id = paused_agent_id OR NOT (authors ? reviewer_agent_id)`
+    evaluates to `NULL` (falsy in `WHERE`), so `declaredAuthors.isEmpty` is
+    required when `reviewer = none`. -/
 def resolveAuthorityOk (s : SessionRow) : Bool :=
   let notSelfPauseBound := !(s.pauseEffectRequired && s.reviewer == some s.pausedAgent)
   let authorOk := s.authorshipValid &&
     match s.reviewer with
-    | none   => true
+    | none   => s.declaredAuthors.isEmpty
     | some r => (r == s.pausedAgent) || !(s.declaredAuthors.contains r)
   notSelfPauseBound && authorOk
 
@@ -201,20 +206,24 @@ def resolveGuardOk (s : SessionRow) (targetStatus : SessionStatus) (cas : CasExp
   !(cas.excludeInflightSaga && hasInflightSaga s.sagas) &&
   (targetStatus != .resolved || resolveAuthorityOk s)
 
-/-- Diagnostic refusal reason computed when `resolveGuardOk` is false and not an idempotent replay
-    (`src/dialectic_db.py:1015-1063`). -/
-def computeRefusalReason (s : SessionRow) (targetStatus : SessionStatus) : String :=
-  if s.status.isTerminal then
-    "already_terminal_conflict"
-  else if targetStatus == .resolved && !resolveAuthorityOk s then
-    if s.pauseEffectRequired && s.reviewer == some s.pausedAgent then
-      "self_review_not_authorizing"
-    else if !s.authorshipValid then
-      "invalid_review_authorship"
-    else
-      "reviewer_recused"
-  else
-    "cas_or_saga_refused"
+/-- `detail.get("refused")` populated by `DialecticDB.resolve_session` on refusal
+    (`src/dialectic_db.py:1015-1063`). Only explicit reviewer-authority refusals
+    on non-terminal rows set `detail["refused"]`; CAS, saga, terminal-conflict,
+    and SQL `NULL`-reviewer refusals leave `detail.get("refused") = none`. -/
+def computeRefusalReason (s : SessionRow) (targetStatus : SessionStatus) : Option String :=
+  if s.status.isTerminal || targetStatus != .resolved then
+    none
+  else if s.pauseEffectRequired && s.reviewer == some s.pausedAgent then
+    some "self_review_not_authorizing"
+  else if !s.authorshipValid then
+    some "invalid_review_authorship"
+  else match s.reviewer with
+    | some r =>
+      if r != s.pausedAgent && s.declaredAuthors.contains r then
+        some "reviewer_recused"
+      else
+        none
+    | none => none
 
 /-- Result of `resolveSession` combining `DialecticDB.resolve_session` and
     `resolve_session_async` (`src/dialectic_db.py:772-1063, 2195-2253`). -/
@@ -265,7 +274,7 @@ def resolveSession (s : SessionRow) (targetStatus : SessionStatus)
     , rawResult := false
     , sweeperWritten := false
     , winnerStatus := some s.status
-    , refusedReason := some (computeRefusalReason s targetStatus) }
+    , refusedReason := computeRefusalReason s targetStatus }
 
 /-- Result of `DialecticDB.add_message` (`src/dialectic_db.py:1399-1587`). -/
 structure AddMessageOutput where
@@ -312,7 +321,7 @@ def addMessage (s : SessionRow) (cas : CasExpectations)
   else
     { state := s, written := false, newRevision := none }
 
-/-- Sweeper cycle counters (`_CycleCounts` in `src/mcp_handlers/dialectic/auto_resolve.py:91-125`). -/
+/-- Sweeper cycle counters (`_CycleCounts` in `src/mcp_handlers/dialectic/auto_resolve.py:66-118`). -/
 structure CycleCounts where
   writeAttemptCount       : Nat := 0
   writeSucceededCount     : Nat := 0
@@ -488,27 +497,44 @@ theorem concurrent_message_bump_invalidates_stale_cas (s : SessionRow)
   apply stale_transcript_revision_blocks_resolve _ _ _ _ s.transcriptRevision hPinned
   omega
 
-/-- **Theorem 6 (Pause-Bound Self-Review Blocks `.resolved` Terminal Writes):**
+/-- **Theorem 6 (Pause-Bound Self-Review Blocks `.resolved` Terminal Writes While Permitting `.failed`):**
     When `s.pauseEffectRequired = true` and `s.reviewer = some s.pausedAgent`,
-    `resolveSession s .resolved cas now` never writes (`written = false` and `state = s`)
+    `resolveSession s .resolved cas now` never writes (`written = false` and `state = s`),
+    whereas `resolveSession s .failed cas now` writes (`written = true`) whenever the
+    non-authority guards (`!s.status.isTerminal`, `casMatches`, and saga exclusion) hold
     (`src/dialectic_db.py:862-875, 1024-1036`). -/
 theorem pause_bound_self_review_blocks_resolved_not_failed (s : SessionRow)
     (cas : CasExpectations) (now : Nat)
     (hPause : s.pauseEffectRequired = true)
     (hSelf : s.reviewer = some s.pausedAgent) :
     (resolveSession s .resolved cas now).written = false ∧
-    (resolveSession s .resolved cas now).state = s := by
+    (resolveSession s .resolved cas now).state = s ∧
+    ((!s.status.isTerminal && casMatches s cas &&
+      !(cas.excludeInflightSaga && hasInflightSaga s.sagas)) = true →
+      (resolveSession s .failed cas now).written = true) := by
   have hAuth : resolveAuthorityOk s = false := by
     unfold resolveAuthorityOk
     rw [hPause, hSelf]
     simp
-  have hGuard : resolveGuardOk s .resolved cas = false := by
+  have hGuardRes : resolveGuardOk s .resolved cas = false := by
     unfold resolveGuardOk
     rw [hAuth]
     simp
-  unfold resolveSession
-  rw [hGuard]
-  cases hEq : (s.status == .resolved) <;> simp
+  refine ⟨?_, ?_, ?_⟩
+  · unfold resolveSession
+    rw [hGuardRes]
+    cases hEq : (s.status == .resolved) <;> simp
+  · unfold resolveSession
+    rw [hGuardRes]
+    cases hEq : (s.status == .resolved) <;> simp
+  · intro hNonAuth
+    have hGuardFail : resolveGuardOk s .failed cas = true := by
+      unfold resolveGuardOk
+      rw [hNonAuth]
+      rfl
+    unfold resolveSession
+    rw [hGuardFail]
+    rfl
 
 /-- **Theorem 7a (Unhealthy Overlap Probe Never Reports Clean):**
     When `probeHealthy = false`, `probeWriteOverlap (probeSagaSince sagas since false)`
@@ -617,7 +643,8 @@ def sagaScenario1 : SessionRow :=
   rReplay.state
 
 #guard sagaScenario1Stale.written == false
-#guard sagaScenario1Stale.refusedReason == some "cas_or_saga_refused"
+#guard sagaScenario1Stale.winnerStatus == some .active
+#guard sagaScenario1Stale.refusedReason == none
 #guard sagaScenario1Replay.written == false
 #guard sagaScenario1Replay.idempotentReplay == true
 #guard sagaScenario1Replay.rawResult == true
@@ -647,7 +674,8 @@ def sagaScenario2 : SessionRow :=
   rAfter.state
 
 #guard sagaScenario2Blocked.written == false
-#guard sagaScenario2Blocked.refusedReason == some "cas_or_saga_refused"
+#guard sagaScenario2Blocked.winnerStatus == some .active
+#guard sagaScenario2Blocked.refusedReason == none
 #guard sagaScenario2.status == .failed
 #guard sagaScenario2.awaitingFacilitation == false
 #guard hasInflightSaga sagaScenario2.sagas == false
@@ -668,6 +696,7 @@ def sagaScenario3 : SessionRow :=
   rFail.state
 
 #guard sagaScenario3SelfResolve.written == false
+#guard sagaScenario3SelfResolve.winnerStatus == some .active
 #guard sagaScenario3SelfResolve.refusedReason == some "self_review_not_authorizing"
 #guard sagaScenario3.status == .failed
 #guard sagaScenario3.phase == .failed

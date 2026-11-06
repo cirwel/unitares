@@ -127,10 +127,6 @@ def _find_lean_binary() -> Optional[str]:
         direct = elan_toolchains / sanitized / "bin" / "lean"
         if direct.is_file():
             return str(direct)
-    if elan_toolchains.is_dir():
-        for candidate in sorted(elan_toolchains.glob("*/bin/lean"), reverse=True):
-            if candidate.is_file():
-                return str(candidate)
     from_path = shutil.which("lean")
     if from_path:
         return from_path

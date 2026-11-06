@@ -109,10 +109,6 @@ def _find_lean_binary() -> Optional[str]:
         direct = elan_toolchains / sanitized / "bin" / "lean"
         if direct.is_file():
             return str(direct)
-    if elan_toolchains.is_dir():
-        for candidate in sorted(elan_toolchains.glob("*/bin/lean"), reverse=True):
-            if candidate.is_file():
-                return str(candidate)
     which_lean = shutil.which("lean")
     if which_lean:
         return which_lean
@@ -322,11 +318,12 @@ def spec_resolve_authority_ok(s: SpecSessionRow) -> bool:
     not_self_pause_bound = not (
         s.pause_effect_required and s.reviewer == s.paused_agent
     )
-    author_ok = s.authorship_valid and (
-        s.reviewer is None
-        or s.reviewer == s.paused_agent
-        or s.reviewer not in s.declared_authors
-    )
+    if s.reviewer is None:
+        author_ok = s.authorship_valid and len(s.declared_authors) == 0
+    else:
+        author_ok = s.authorship_valid and (
+            s.reviewer == s.paused_agent or s.reviewer not in s.declared_authors
+        )
     return not_self_pause_bound and author_ok
 
 
@@ -341,16 +338,22 @@ def spec_resolve_guard_ok(
     )
 
 
-def spec_compute_refusal_reason(s: SpecSessionRow, target_status: str) -> str:
-    if s.is_terminal:
-        return "already_terminal_conflict"
-    if target_status == "resolved" and not spec_resolve_authority_ok(s):
-        if s.pause_effect_required and s.reviewer == s.paused_agent:
-            return "self_review_not_authorizing"
-        if not s.authorship_valid:
-            return "invalid_review_authorship"
+def spec_compute_refusal_reason(
+    s: SpecSessionRow, target_status: str
+) -> Optional[str]:
+    if s.is_terminal or target_status != "resolved":
+        return None
+    if s.pause_effect_required and s.reviewer == s.paused_agent:
+        return "self_review_not_authorizing"
+    if not s.authorship_valid:
+        return "invalid_review_authorship"
+    if (
+        s.reviewer is not None
+        and s.reviewer != s.paused_agent
+        and s.reviewer in s.declared_authors
+    ):
         return "reviewer_recused"
-    return "cas_or_saga_refused"
+    return None
 
 
 def spec_resolve_session(
@@ -590,20 +593,25 @@ class _LiveSessionSqlBackend:
         return any(sg["state"] in INFLIGHT_SAGA_STATES for sg in self.sagas)
 
     def _eval_reviewer_authority(self, candidate_reviewer: Optional[str]) -> bool:
-        paused_state = self.row.get("paused_agent_state_json") or {}
-        temp_row = {
-            **self.row,
-            "reviewer_agent_id": candidate_reviewer,
-            "paused_agent_state_json": paused_state,
-        }
-        auth = dialectic_db_module.read_reviewed_work_authorship(temp_row)
+        paused_state = self.row.get("paused_agent_state_json")
+        if (
+            paused_state is None
+            or REVIEWED_WORK_AUTHORSHIP_STATE_KEY not in paused_state
+        ):
+            return True
+        auth = dialectic_db_module.read_reviewed_work_authorship(self.row)
         if auth.is_invalid:
             return False
-        if auth.recuses(
-            candidate_reviewer, paused_agent_id=self.row["paused_agent_id"]
-        ):
+        if candidate_reviewer is None:
+            # In PostgreSQL (`src/dialectic_db.py:901-906`),
+            # `reviewer_agent_id = paused_agent_id OR NOT (authors ? reviewer_agent_id)`
+            # evaluates to NULL (falsy in WHERE) when reviewer_agent_id is NULL
+            # and `_dialectic_reviewed_work_authorship` is present.
             return False
-        return True
+        return (
+            candidate_reviewer == self.row["paused_agent_id"]
+            or candidate_reviewer not in auth.author_agent_ids
+        )
 
     async def _fetchrow(self, sql: str, *args: Any) -> Optional[Dict[str, Any]]:
         norm = " ".join(sql.split())
@@ -1014,25 +1022,14 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_code():
 
                     guard_step_name = let_to_guard_name.get((name, let_var))
                     if guard_step_name is not None:
-                        refused_reason = detail.get("refused")
-                        if (
-                            not sweeper_ok
-                            and not raw_ok
-                            and refused_reason is None
-                        ):
-                            refused_reason = (
-                                "already_terminal"
-                                if detail.get("existing_status")
-                                in ("resolved", "failed")
-                                else "cas_or_saga_refused"
-                            )
                         step_outputs_spec[guard_step_name] = res_out
                         step_outputs_live[guard_step_name] = {
                             "written": sweeper_ok,
                             "idempotent_replay": bool(not sweeper_ok and raw_ok),
                             "raw_result": raw_ok,
                             "sweeper_written": sweeper_ok,
-                            "refused_reason": refused_reason,
+                            "winner_status": detail.get("existing_status"),
+                            "refused_reason": detail.get("refused"),
                         }
 
             scenarios_spec[name] = spec
@@ -1067,10 +1064,22 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_code():
                     expected = re.search(r"==\s*(true|false)", expr).group(1) == "true"
                     assert sp_out.sweeper_written is expected
                     assert lv_out["sweeper_written"] is expected
+                elif f"{step_name}.winnerStatus ==" in expr:
+                    if "== none" in expr:
+                        assert sp_out.winner_status is None
+                        assert lv_out["winner_status"] is None
+                    else:
+                        expected = re.search(r"some\s+\.(\w+)", expr).group(1)
+                        assert sp_out.winner_status == expected
+                        assert lv_out["winner_status"] == expected
                 elif f"{step_name}.refusedReason ==" in expr:
-                    expected = re.search(r'some\s+"([^"]+)"', expr).group(1)
-                    assert sp_out.refused_reason == expected
-                    assert lv_out["refused_reason"] == expected
+                    if "== none" in expr:
+                        assert sp_out.refused_reason is None
+                        assert lv_out["refused_reason"] is None
+                    else:
+                        expected = re.search(r'some\s+"([^"]+)"', expr).group(1)
+                        assert sp_out.refused_reason == expected
+                        assert lv_out["refused_reason"] == expected
                 else:
                     raise AssertionError(f"Unrecognized step #guard expression: {expr}")
             if matched_step:

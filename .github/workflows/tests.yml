@@ -166,24 +166,31 @@ jobs:
       run: |
         bash scripts/dev/check-deploy-lib.sh
 
-    - name: Cache Lean 4 toolchain (elan)
+    - name: Cache Lean 4 toolchain
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
-        path: ~/.elan
-        key: elan-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain') }}
+        path: ~/.elan/toolchains/leanprover--lean4---v4.35.0
+        key: lean4-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain') }}
 
     - name: Install and run Lean 4 kernel on formal specifications
       run: |
         set -euo pipefail
         toolchain="$(tr -d '[:space:]' < formal/lean-toolchain)"
-        if [ ! -x "$HOME/.elan/bin/elan" ]; then
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --no-modify-path --default-toolchain "$toolchain"
-        else
-          "$HOME/.elan/bin/elan" toolchain install "$toolchain"
-          "$HOME/.elan/bin/elan" default "$toolchain"
+        [[ "$toolchain" == "leanprover/lean4:v4.35.0" ]] || {
+          echo "Update pinned Lean 4 SHA-256 in .github/workflows/tests.yml when changing formal/lean-toolchain ($toolchain)" >&2
+          exit 1
+        }
+        lean_dir="$HOME/.elan/toolchains/leanprover--lean4---v4.35.0"
+        if [ ! -x "$lean_dir/bin/lean" ]; then
+          archive="$(mktemp -t lean4.XXXXXX.tar.zst)"
+          trap 'rm -f "$archive"' EXIT
+          curl -sSfL -o "$archive" "https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-linux.tar.zst"
+          echo "7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d  $archive" | sha256sum -c -
+          mkdir -p "$lean_dir"
+          tar --zstd -xf "$archive" -C "$lean_dir" --strip-components=1
         fi
-        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-        export PATH="$HOME/.elan/bin:$PATH"
+        echo "$lean_dir/bin" >> "$GITHUB_PATH"
+        export PATH="$lean_dir/bin:$PATH"
         lean --version
         for spec in formal/*.lean; do
           echo "Kernel-checking $spec ..."
