@@ -33,8 +33,15 @@ from .context import UpdateContext
 logger = get_logger(__name__)
 
 
-def _e_attr(name: str, default: Any = None) -> Any:
+def _e() -> Any:
     mod = sys.modules.get("src.mcp_handlers.updates.enrichments")
+    if mod is None:
+        from src.mcp_handlers.updates import enrichments as mod
+    return mod
+
+
+def _e_attr(name: str, default: Any = None) -> Any:
+    mod = _e()
     if mod is not None and hasattr(mod, name):
         return getattr(mod, name)
     return default
@@ -558,7 +565,7 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
             # caller opt-in is necessary but not sufficient for this branch.
             elif _proactive_kg_due(ctx):
                 proactive = await _cached_kg_search_by_checkin_text(
-                    ctx, floor=_e_attr("_KG_PROACTIVE_FLOOR", 0.35)
+                    ctx, floor=getattr(_e(), "_KG_PROACTIVE_FLOOR")
                 )
                 proactive = await _dedupe_surfaced_kg(ctx, proactive)
                 if proactive:
@@ -569,7 +576,7 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
                         "value": max(
                             (r.get("relevance", 0) or 0) for r in proactive
                         ),
-                        "threshold": _e_attr("_KG_PROACTIVE_FLOOR", 0.35),
+                        "threshold": getattr(_e(), "_KG_PROACTIVE_FLOOR"),
                         "fired": True,
                         "discovery_ids": [
                             r.get("discovery_id") for r in proactive if r.get("discovery_id")
@@ -593,8 +600,8 @@ async def _enrich_mirror_signals_impl(ctx: UpdateContext) -> None:
                     else None
                 ),
                 "threshold": (
-                    _e_attr("_REVIEW_NUDGE_CONF_CEILING", 0.4) if nudge_reason == "low_confidence"
-                    else _e_attr("_REVIEW_NUDGE_COMPLEXITY_FLOOR", 0.8) if nudge_reason == "high_complexity"
+                    getattr(_e(), "_REVIEW_NUDGE_CONF_CEILING") if nudge_reason == "low_confidence"
+                    else getattr(_e(), "_REVIEW_NUDGE_COMPLEXITY_FLOOR") if nudge_reason == "high_complexity"
                     else None
                 ),
                 "fired": True,
@@ -757,20 +764,20 @@ async def _search_kg_by_checkin_text(
         results = []
         try:
             results = await asyncio.wait_for(
-                graph.semantic_search(response_text, limit=3), timeout=_e_attr("_KG_SEARCH_TIMEOUT", 0.25)
+                graph.semantic_search(response_text, limit=3), timeout=getattr(_e(), "_KG_SEARCH_TIMEOUT")
             )
         except asyncio.TimeoutError:
-            logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", _e_attr("_KG_SEARCH_TIMEOUT", 0.25) * 1000)
+            logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", getattr(_e(), "_KG_SEARCH_TIMEOUT") * 1000)
             _mark_surfacing_degraded(ctx)
             return []
         except (AttributeError, NotImplementedError):
             try:
                 results = await asyncio.wait_for(
                     _full_text_search_with_recall(graph, response_text),
-                    timeout=_e_attr("_KG_SEARCH_TIMEOUT", 0.25),
+                    timeout=getattr(_e(), "_KG_SEARCH_TIMEOUT"),
                 )
             except asyncio.TimeoutError:
-                logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", _e_attr("_KG_SEARCH_TIMEOUT", 0.25) * 1000)
+                logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", getattr(_e(), "_KG_SEARCH_TIMEOUT") * 1000)
                 _mark_surfacing_degraded(ctx)
                 return []
             except (AttributeError, NotImplementedError):
@@ -854,13 +861,13 @@ async def _cached_kg_search_by_checkin_text(
     """
     if not getattr(ctx, "_kg_search_ready", False):
         results = await _e_attr("_search_kg_by_checkin_text", _search_kg_by_checkin_text)(
-            ctx, floor=_e_attr("_RELATED_DISCOVERY_RELEVANCE_FLOOR", 0.1)
+            ctx, floor=getattr(_e(), "_RELATED_DISCOVERY_RELEVANCE_FLOOR")
         )
         ctx._kg_search_results = list(results)
         ctx._kg_search_ready = True
 
     results = list(getattr(ctx, "_kg_search_results", []))
-    if floor <= _e_attr("_RELATED_DISCOVERY_RELEVANCE_FLOOR", 0.1):
+    if floor <= getattr(_e(), "_RELATED_DISCOVERY_RELEVANCE_FLOOR"):
         return results
 
     filtered = []
@@ -902,8 +909,8 @@ def _review_nudge_trigger(ctx: UpdateContext) -> Optional[str]:
     """Return the trigger reason when an in-flow review nudge is due, else None.
 
     Triggers, any one sufficient (checked in this order):
-      * the agent reported confidence at or under _e_attr("_REVIEW_NUDGE_CONF_CEILING", 0.4)
-      * the agent reported complexity at or over _e_attr("_REVIEW_NUDGE_COMPLEXITY_FLOOR", 0.8)
+      * the agent reported confidence at or under _REVIEW_NUDGE_CONF_CEILING
+      * the agent reported complexity at or over _REVIEW_NUDGE_COMPLEXITY_FLOOR
       * the policy decision came back sub_action == "guide"
 
     Gated by UNITARES_REVIEW_NUDGE (default off) and a >3-update warmup — a
@@ -917,9 +924,9 @@ def _review_nudge_trigger(ctx: UpdateContext) -> Optional[str]:
         total = getattr(ctx.meta, "total_updates", 0) if ctx.meta else 0
         if total <= 3:
             return None
-        if ctx.confidence is not None and ctx.confidence <= _e_attr("_REVIEW_NUDGE_CONF_CEILING", 0.4):
+        if ctx.confidence is not None and ctx.confidence <= getattr(_e(), "_REVIEW_NUDGE_CONF_CEILING"):
             return "low_confidence"
-        if ctx.complexity is not None and ctx.complexity >= _e_attr("_REVIEW_NUDGE_COMPLEXITY_FLOOR", 0.8):
+        if ctx.complexity is not None and ctx.complexity >= getattr(_e(), "_REVIEW_NUDGE_COMPLEXITY_FLOOR"):
             return "high_complexity"
         decision = ctx.response_data.get("decision")
         if isinstance(decision, dict) and decision.get("sub_action") == "guide":
@@ -956,9 +963,9 @@ async def _review_nudge_novel(ctx: UpdateContext) -> bool:
                 f"review_nudge:{ctx.agent_uuid}:{session_scope}",
                 "1",
                 nx=True,
-                ex=_e_attr("_REVIEW_NUDGE_TTL_SECONDS", 86400),
+                ex=getattr(_e(), "_REVIEW_NUDGE_TTL_SECONDS"),
             ),
-            timeout=_e_attr("_REDIS_NOTIF_TIMEOUT", 0.5),
+            timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT"),
         )
         return bool(added)
     except Exception:
@@ -992,7 +999,7 @@ async def _dedupe_surfaced_kg(ctx: UpdateContext, results: list) -> list:
                 continue
             try:
                 added = await asyncio.wait_for(
-                    redis.sadd(key, did), timeout=_e_attr("_REDIS_NOTIF_TIMEOUT", 0.5)
+                    redis.sadd(key, did), timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT")
                 )
             except (asyncio.TimeoutError, Exception):
                 fresh.append(entry)  # fail-open on this entry
@@ -1002,8 +1009,8 @@ async def _dedupe_surfaced_kg(ctx: UpdateContext, results: list) -> list:
         if fresh:
             try:
                 await asyncio.wait_for(
-                    redis.expire(key, _e_attr("_KG_SURFACED_TTL_SECONDS", 86400)),
-                    timeout=_e_attr("_REDIS_NOTIF_TIMEOUT", 0.5),
+                    redis.expire(key, getattr(_e(), "_KG_SURFACED_TTL_SECONDS")),
+                    timeout=getattr(_e(), "_REDIS_NOTIF_TIMEOUT"),
                 )
             except (asyncio.TimeoutError, Exception):
                 pass

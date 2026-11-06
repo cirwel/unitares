@@ -55,8 +55,6 @@ from .enrichment_helpers import (
     run_grounding_stage,  # noqa: F401
 )
 
-_BASIN_BOUNDARY_REFLECTION_TEXT = "Your state sits near a basin boundary."
-
 
 # Below this blended relevance, a related-discovery match is noise rather than
 # signal and is not surfaced as a "build on these" suggestion. The score is the
