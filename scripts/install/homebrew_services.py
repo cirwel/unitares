@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control the existing, configured macOS Homebrew install; never install or migrate."""
+"""Configure and control macOS Homebrew; database provisioning is explicit opt-in."""
 from __future__ import annotations
 
 import argparse
@@ -161,6 +161,7 @@ class Homebrew:
 
     def setup(self, apply=False, non_interactive=False):
         """Create only a missing configuration; never start services or execute DDL."""
+        self.check_setup_barrier()
         self.check_installation()
         records = self.info()
         self.check_commands(records)
@@ -188,7 +189,12 @@ class Homebrew:
         # Keep generated values literal in both the Python reader and shell wrappers.
         if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in "'\"$`\\" for char in db_url):
             raise Refusal('URL-encode database credentials; the URL must be a single literal value.')
-        config = {
+        self.write_configuration(self.default_configuration(db_url))
+        print('Created private configuration (mode 600). No services or databases were changed.')
+        self.setup_next_step(records)
+
+    def default_configuration(self, db_url):
+        return {
             'DB_POSTGRES_URL': db_url,
             'DB_BACKEND': 'postgres',
             'DB_AGE_GRAPH': 'governance_graph',
@@ -206,6 +212,7 @@ class Homebrew:
             'UNITARES_MODEL_ID': '',
             'UNITARES_RESIDENTS': '',
         }
+    def write_configuration(self, config):
         self.configure(config)
         directory = self.config.parent
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -223,8 +230,13 @@ class Homebrew:
             os.link(temporary, self.config)
         finally:
             os.unlink(temporary)
-        print('Created private configuration (mode 600). No services or databases were changed.')
-        self.setup_next_step(records)
+
+    def check_setup_barrier(self):
+        try:
+            from .homebrew_provision import check_setup_barrier
+        except ImportError:
+            from homebrew_provision import check_setup_barrier
+        check_setup_barrier(self.prefix)
 
     def database_environment(self):
         from urllib.parse import unquote, urlsplit, urlunsplit
@@ -337,6 +349,7 @@ class Homebrew:
             raise Refusal('The installed schema check failed. Bootstrap a fresh database or use the documented backed-up native upgrade procedure before starting writers.')
 
     def start(self, check=False, timeout=60, allow_update_stage=False):
+        self.check_setup_barrier()
         if not allow_update_stage:
             self.check_update_barrier()
         self.configure()
@@ -417,6 +430,8 @@ def main(argv=None):
     setup = actions.add_parser('setup', help='inspect native setup; --apply creates missing private configuration only')
     setup.add_argument('--apply', action='store_true')
     setup.add_argument('--non-interactive', action='store_true')
+    setup.add_argument('--provision-db', action='store_true', help='create a new, dedicated native database with an ownership journal')
+    setup.add_argument('--resume', action='store_true', help='resume this installation’s verified database provisioning stages')
     start = actions.add_parser('start')
     start.add_argument('--check', action='store_true', help='report the startup plan without changing services')
     start.add_argument('--timeout', type=int, default=60, help='readiness timeout per service, in seconds')
@@ -427,11 +442,25 @@ def main(argv=None):
     logs.add_argument('--no-follow', action='store_true')
     logs.add_argument('--tail', type=int, default=100)
     args = parser.parse_args(argv)
+    if getattr(args, 'resume', False) and not (args.provision_db and args.apply):
+        parser.error('--resume requires --provision-db --apply')
     if not 1 <= getattr(args, 'timeout', 60) <= 300 or not 1 <= getattr(args, 'tail', 100) <= 10000:
         parser.error('timeout must be 1–300 seconds; tail must be 1–10000 lines')
     try:
         brew = Homebrew()
         if args.action == 'setup':
+            if args.provision_db:
+                try:
+                    from .homebrew_provision import NativeProvisioner
+                except ImportError:
+                    from homebrew_provision import NativeProvisioner
+                provisioner = NativeProvisioner(brew)
+                if args.apply:
+                    with brew.lock():
+                        provisioner.setup(apply=True, resume=args.resume)
+                else:
+                    provisioner.setup()
+                return 0
             if args.apply:
                 with brew.lock():
                     brew.setup(apply=True, non_interactive=args.non_interactive)

@@ -64,7 +64,15 @@ class GraphMixin:
 
     async def _prepare_age_connection(self, conn) -> None:
         """Load AGE and configure the required search path on a connection."""
-        await conn.execute("LOAD 'age'")
+        # A native administrator can preload AGE for this role/database. LOAD
+        # still requires superuser even when the library is already loaded;
+        # avoid it here so the application role need not be a cluster admin.
+        # session_preload_libraries itself is a privileged setting to read.
+        # Non-superusers rely on administrator preload; the ensuing graph
+        # operation/probe establishes readiness, rather than assuming it here.
+        unprivileged = await conn.fetchval("SELECT current_setting('is_superuser') = 'off'")
+        if unprivileged is not True:
+            await conn.execute("LOAD 'age'")
         await conn.execute("SET search_path = ag_catalog, core, audit, public")
 
     async def _ensure_age_graph_exists(self, conn, *, external_conn: bool = False) -> None:

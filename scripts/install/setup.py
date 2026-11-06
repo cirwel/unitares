@@ -138,7 +138,7 @@ def _build_migrations_command() -> str:
     migrations, partition functions, and the AGE graph. Reconstructing that
     order here previously created a second, incomplete install path.
     """
-    return "./scripts/install/bootstrap_postgres.sh --apply"
+    return './scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"'
 
 
 SECRETS_TEMPLATE = """\

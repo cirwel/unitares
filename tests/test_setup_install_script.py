@@ -166,7 +166,7 @@ def test_remediation_for_redis_continuity_warning(setup_mod):
 def test_schema_remediation_uses_canonical_bootstrap(setup_mod):
     payload = _doctor_payload(("schema_migrations", "fail", "missing"))
     items = setup_mod.build_remediation(payload)
-    assert items[0].command == "./scripts/install/bootstrap_postgres.sh --apply"
+    assert items[0].command == './scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"'
 
 
 def test_remediation_for_secrets_wrong_mode(setup_mod):

@@ -21,8 +21,9 @@ the first copy's data or switch its clients.
   and Python environment are separate from the packaged Homebrew installation.
 
 Homebrew provides package installation, private configuration, native service
-control and an explicit coordinated updater. Database creation/bootstrap stays
-an operator step. `unitares update --check` reads the locally cached tap and
+control and an explicit coordinated updater. Fresh database creation/bootstrap
+is an explicit opt-in through `unitares setup --homebrew --provision-db --apply`;
+existing databases are never adopted. `unitares update --check` reads the locally cached tap and
 database migration plan; `unitares update` refreshes the tap, stops both writers,
 writes and verifies a private database backup, upgrades the managed formulae,
 re-executes the new package's updater, applies migrations, restores the previous
