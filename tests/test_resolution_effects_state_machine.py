@@ -846,11 +846,7 @@ class _LiveResolutionEffectsSqlBackend:
                 else res_json_raw
             )
             now_dt = _int_to_ts(self.clock_tick)
-            sess["status"] = req_status
-            sess["phase"] = req_phase
-            sess["resolution_json"] = res_payload
-            sess["awaiting_facilitation"] = False
-            sess["updated_at"] = now_dt
+            eff_candidate: Optional[Dict[str, Any]] = None
 
             if req_status == "resolved":
                 pstate = sess.get("paused_agent_state_json") or {}
@@ -894,7 +890,16 @@ class _LiveResolutionEffectsSqlBackend:
                     "created_at": now_dt,
                     "updated_at": now_dt,
                 }
+                # Validate migration 075 schema BEFORE mutating `sess` so a CTE
+                # INSERT failure aborts the entire statement atomically.
                 _assert_migration_075_effect_schema(eff_candidate)
+
+            sess["status"] = req_status
+            sess["phase"] = req_phase
+            sess["resolution_json"] = res_payload
+            sess["awaiting_facilitation"] = False
+            sess["updated_at"] = now_dt
+            if eff_candidate is not None:
                 self.effects[sid] = eff_candidate
             return {
                 "session_id": sid,
@@ -1829,6 +1834,8 @@ def test_migration_075_schema_constraints_enforced_by_sql_emulator():
         asyncio.run(
             db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
         )
+    assert backend.sessions["sess-075"]["status"] == "active"
+    assert "sess-075" not in backend.effects
 
     # 2a. effect_required=True with pause_token=None violates CHECK
     backend.seed_session(
@@ -1843,6 +1850,8 @@ def test_migration_075_schema_constraints_enforced_by_sql_emulator():
         asyncio.run(
             db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
         )
+    assert backend.sessions["sess-075"]["status"] == "active"
+    assert "sess-075" not in backend.effects
 
     # 2b. effect_required=False (legacyUnbound) with pause_token!=None violates CHECK
     backend.seed_session(
@@ -1857,6 +1866,8 @@ def test_migration_075_schema_constraints_enforced_by_sql_emulator():
         asyncio.run(
             db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
         )
+    assert backend.sessions["sess-075"]["status"] == "active"
+    assert "sess-075" not in backend.effects
 
     # 3. resolution_payload_json missing required keys violates CHECK
     backend.seed_session(
@@ -1873,6 +1884,8 @@ def test_migration_075_schema_constraints_enforced_by_sql_emulator():
                 "sess-075", {"action": "resume", "summary": "bad"}, "resolved"
             )
         )
+    assert backend.sessions["sess-075"]["status"] == "active"
+    assert "sess-075" not in backend.effects
 
 
 @settings(
