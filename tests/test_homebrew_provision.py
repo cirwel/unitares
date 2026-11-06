@@ -58,7 +58,7 @@ def installation(tmp_path, monkeypatch):
             if fault['sql'] == kind:
                 fault['sql'] = None
                 raise native.Refusal('injected after mutation')
-            return '1' if kind == 'probe' else ''
+            return '1\n1' if kind == 'probe' else ''
 
     def run(args, *, env, timeout):
         assert 'PGHOSTADDR' not in env and 'PGSERVICE' not in env

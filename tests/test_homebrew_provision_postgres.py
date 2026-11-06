@@ -4,6 +4,7 @@ UNITARES_NATIVE_TEST_PG_BIN=/opt/homebrew/opt/postgresql@17/bin pytest ...
 Requires the installed AGE/pgvector libraries. Never touches brew services or
 the operator's databases. The cluster is stopped in the fixture's finalizer.
 """
+import asyncio
 import os
 from pathlib import Path
 import subprocess
@@ -90,6 +91,28 @@ def test_real_provisioning_nonsuperuser_graph_and_no_bootstrap_replay(cluster, m
     assert sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname='unitares'") == 'f'
     assert sql("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname IN ('core','audit','knowledge','governance_graph')", 'unitares') == 'unitares'
     assert sql("SET search_path=ag_catalog,public; SELECT * FROM cypher('governance_graph', $$ CREATE (n:Acceptance {value: 7}) RETURN n.value $$) AS (v agtype)", 'unitares', 'unitares') == '7'
+    async def runtime_readiness():
+        import asyncpg
+        from src.db.mixins.graph import GraphMixin
+        graph = GraphMixin()
+        graph._age_graph = 'governance_graph'
+        conn = await asyncpg.connect(host=socket, port=15437, user='unitares', database='unitares')
+        try:
+            async with conn.transaction():
+                await graph._prepare_age_connection(conn)
+                await graph._ensure_age_graph_exists(conn, external_conn=True)
+                await graph._probe_age_graph(conn)
+        finally:
+            await conn.close()
+    asyncio.run(runtime_readiness())
+    # AGE's extension configuration tables are included in database backups.
+    # The application role must be able to dump them without becoming superuser.
+    backup = prefix / 'acceptance.dump'
+    result = execute([str(binaries / 'pg_dump'), '-h', socket, '-p', '15437', '-U', 'unitares',
+                      '-d', 'unitares', '-Fc', '-f', str(backup)], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    result = execute([str(binaries / 'pg_restore'), '--list', str(backup)], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
     before = sql('SELECT count(*) FROM core.schema_migrations', 'unitares')
     url, runtime = database_environment()
     replay = execute(['bash', str(ROOT / 'scripts/install/bootstrap_postgres.sh'), '--apply',

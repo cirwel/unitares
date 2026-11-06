@@ -231,7 +231,8 @@ return 0
     def source_hash(self) -> str:
         root = self.brew.app
         files = sorted((root / 'db/postgres').rglob('*.sql')) + [
-            root / 'scripts/install/bootstrap_postgres.sh', root / 'scripts/dev/apply_migrations.py']
+            root / 'scripts/install/bootstrap_postgres.sh', root / 'scripts/dev/apply_migrations.py',
+            root / 'scripts/install/homebrew_provision.py', root / 'scripts/install/homebrew_services.py']
         digest = hashlib.sha256()
         for path in files:
             digest.update(str(path.relative_to(root)).encode())
@@ -347,8 +348,11 @@ return 0
         if self.state['stage'] == 'database_created':
             # Only the new database and this role/database setting are changed.
             # The application and every object it creates remain nonsuperuser.
+            # Schema USAGE alone does not permit runtime catalog reads or the
+            # extension configuration-table reads performed by pg_dump.
             self.sql((self.brew.app / 'db/postgres/init-extensions.sql').read_text()
                      + "\nGRANT USAGE ON SCHEMA ag_catalog TO unitares;\n"
+                     + "GRANT SELECT ON ag_catalog.ag_graph, ag_catalog.ag_label TO unitares;\n"
                      + "ALTER ROLE unitares IN DATABASE unitares SET session_preload_libraries='age';",
                      database='unitares')
             self.save('bootstrap_pending')
@@ -372,9 +376,11 @@ return 0
         self.brew.check_schema()
         # A real Cypher read under application credentials verifies the role-
         # scoped preload, extension grants, graph ownership and runtime access.
-        probe = self.sql("SET search_path=ag_catalog,public; SELECT * FROM cypher('governance_graph', $$ RETURN 1 $$) AS (value agtype);",
+        probe = self.sql("SET search_path=ag_catalog,public; "
+                         "SELECT count(*) FROM ag_catalog.ag_graph WHERE name='governance_graph'; "
+                         "SELECT * FROM cypher('governance_graph', $$ RETURN 1 $$) AS (value agtype);",
                          database='unitares', application=True)
-        if probe != '1':
+        if probe != '1\n1':
             raise Refusal('Application-role AGE probe failed; configuration was not published.')
         self.bind_redis()
         if not os.path.lexists(self.brew.config):
