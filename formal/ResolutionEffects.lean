@@ -101,6 +101,13 @@ structure SessionSnapshot where
   pauseBinding      : PauseBinding := .explicitTrue
   deriving DecidableEq, Repr, Inhabited
 
+/-- Schema constraint from `db/postgres/migrations/075_dialectic_resolution_effects.sql:26-32`:
+    1. `reviewer_agent_id TEXT NOT NULL` (`s.reviewer.isSome = true`)
+    2. `CHECK ((effect_required AND pause_token IS NOT NULL) OR (NOT effect_required AND pause_token IS NULL))`
+       (`s.pauseBinding.enqueueEffectRequired == s.pauseToken.isSome`). -/
+def SessionSnapshot.schemaValidForEnqueue (s : SessionSnapshot) : Bool :=
+  s.reviewer.isSome && (s.pauseBinding.enqueueEffectRequired == s.pauseToken.isSome)
+
 /-- Durable row in `coordination.dialectic_resolution_effects`
     (`src/dialectic_db.py:1072-1077`). -/
 structure ResolutionEffectRow where
@@ -122,6 +129,11 @@ structure ResolutionEffectRow where
   uncertainAt          : Option Nat := none
   updatedAt            : Nat := 100
   deriving DecidableEq, Repr, Inhabited
+
+/-- Schema invariant on `coordination.dialectic_resolution_effects` rows from
+    `db/postgres/migrations/075_dialectic_resolution_effects.sql:26-32`. -/
+def ResolutionEffectRow.schemaValid (e : ResolutionEffectRow) : Bool :=
+  e.reviewer.isSome && (e.effectRequired == e.pauseToken.isSome)
 
 /-- Enqueue a resolution effect row during `DialecticDB.resolve_session`
     when `status = 'resolved'` (`src/dialectic_db.py:924-968`). -/
@@ -396,22 +408,29 @@ def rateDenominator (c : OutcomeCounts) : Nat :=
   ## Machine-Checked Protocol Invariants (Theorems 1–11)
 -/
 
-/-- **Theorem 1 (Non-Required Effect Enqueues Directly As `.applied`):**
-    When `sess.pauseBinding` is `.legacyUnbound` or `.explicitFalse`
+/-- **Theorem 1 (Non-Required Effect Enqueues Directly As `.applied` Under Migration 075 Schema):**
+    When `sess.schemaValidForEnqueue = true` (`075_dialectic_resolution_effects.sql:26-32`)
+    and `sess.pauseBinding` is `.legacyUnbound` or `.explicitFalse`
     (`enqueueEffectRequired = false`), `enqueueResolutionEffect sess now`
-    creates the row directly in `.applied` with `hasExecutionEvidence = true`
-    and `appliedAt = some now` (`src/dialectic_db.py:952-964`). -/
+    creates a schema-valid row directly in `.applied` with `pauseToken = none`,
+    `hasExecutionEvidence = true`, and `appliedAt = some now`
+    (`src/dialectic_db.py:952-964`). -/
 theorem enqueue_non_required_immediately_applied (sess : SessionSnapshot) (now : Nat)
+    (hSchema : sess.schemaValidForEnqueue = true)
     (hNotReq : sess.pauseBinding.enqueueEffectRequired = false) :
     let eff := enqueueResolutionEffect sess now
     eff.state = .applied ∧
     eff.effectRequired = false ∧
+    eff.pauseToken = none ∧
     eff.hasExecutionEvidence = true ∧
-    eff.appliedAt = some now := by
+    eff.appliedAt = some now ∧
+    eff.schemaValid = true := by
   dsimp only
-  unfold enqueueResolutionEffect
+  unfold SessionSnapshot.schemaValidForEnqueue at hSchema
+  rw [hNotReq] at hSchema
+  unfold enqueueResolutionEffect ResolutionEffectRow.schemaValid
   rw [hNotReq]
-  simp
+  cases hTok : sess.pauseToken <;> cases hRev : sess.reviewer <;> simp_all
 
 /-- **Theorem 2 (Claim Requires `.pending` State):**
     Whenever `eff.state ≠ .pending`, `claimResolutionEffect eff sess owner exp now`
@@ -626,7 +645,7 @@ def mkInitEffectSession (pauseBinding : PauseBinding) : SessionSnapshot :=
   , pausedAgent := 0
   , reviewer := some 1
   , resolutionPayload := 1
-  , pauseToken := some 10
+  , pauseToken := if pauseBinding.enqueueEffectRequired then some 10 else none
   , pauseBinding := pauseBinding }
 
 def defaultClaimExp : ClaimExpectations :=
@@ -738,6 +757,7 @@ def effectScenario4 : ResolutionEffectRow :=
 
 #guard effectScenario4.state == .applied
 #guard effectScenario4.effectRequired == false
+#guard effectScenario4.pauseToken == none
 #guard effectScenario4.hasExecutionEvidence == true
 #guard effectScenario4.noOpReason == some "legacy_unbound_session"
 #guard effectScenario4.appliedAt == some 100

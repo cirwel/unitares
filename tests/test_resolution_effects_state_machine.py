@@ -88,9 +88,90 @@ PAUSE_TOKENS: Dict[int, str] = {
 }
 
 RESOLUTION_PAYLOADS: Dict[int, Dict[str, Any]] = {
-    1: {"action": "resume", "summary": "agreed_1"},
-    2: {"action": "resume", "summary": "agreed_2"},
+    1: {
+        "action": "resume",
+        "conditions": ["calibrate_confidence"],
+        "root_cause": "transient_drift_1",
+        "reasoning": "agreed_on_remediation_1",
+        "signature_a": "sig-paused-1",
+        "signature_b": "sig-reviewer-1",
+        "timestamp": "2026-11-05T12:00:00Z",
+        "signature_version": 2,
+    },
+    2: {
+        "action": "resume",
+        "conditions": ["add_smoke_check", "monitor_coherence"],
+        "root_cause": "transient_drift_2",
+        "reasoning": "agreed_on_remediation_2",
+        "signature_a": "sig-paused-2",
+        "signature_b": "sig-reviewer-2",
+        "timestamp": "2026-11-05T12:05:00Z",
+        "signature_version": 2,
+    },
 }
+
+
+def _assert_migration_075_effect_schema(eff_row: Dict[str, Any]) -> None:
+    """Enforce the PostgreSQL table constraints from
+    `db/postgres/migrations/075_dialectic_resolution_effects.sql:25-52` on every
+    `INSERT INTO coordination.dialectic_resolution_effects` row."""
+    if not eff_row.get("paused_agent_id"):
+        raise ValueError(
+            "075_dialectic_resolution_effects: paused_agent_id NOT NULL violated"
+        )
+    if not eff_row.get("reviewer_agent_id"):
+        raise ValueError(
+            "075_dialectic_resolution_effects: reviewer_agent_id NOT NULL violated"
+        )
+    eff_req = eff_row.get("effect_required")
+    if not isinstance(eff_req, bool):
+        raise ValueError(
+            "075_dialectic_resolution_effects: effect_required BOOLEAN NOT NULL violated"
+        )
+    pause_tok = eff_row.get("pause_token")
+    token_check_ok = (
+        eff_req
+        and isinstance(pause_tok, str)
+        and pause_tok.strip() != ""
+    ) or (not eff_req and pause_tok is None)
+    if not token_check_ok:
+        raise ValueError(
+            f"075_dialectic_resolution_effects: effect_required/pause_token CHECK violated "
+            f"(effect_required={eff_req!r}, pause_token={pause_tok!r})"
+        )
+    raw_payload = eff_row.get("resolution_payload_json")
+    payload = (
+        json.loads(raw_payload)
+        if isinstance(raw_payload, str)
+        else raw_payload
+    )
+    required_keys = {
+        "action",
+        "conditions",
+        "root_cause",
+        "reasoning",
+        "signature_a",
+        "signature_b",
+        "timestamp",
+        "signature_version",
+    }
+    payload_check_ok = (
+        isinstance(payload, dict)
+        and required_keys.issubset(payload.keys())
+        and payload.get("action") == "resume"
+        and isinstance(payload.get("conditions"), list)
+        and isinstance(payload.get("root_cause"), str)
+        and isinstance(payload.get("reasoning"), str)
+        and isinstance(payload.get("signature_a"), str)
+        and isinstance(payload.get("signature_b"), str)
+        and isinstance(payload.get("timestamp"), str)
+        and isinstance(payload.get("signature_version"), (int, float))
+        and not isinstance(payload.get("signature_version"), bool)
+    )
+    if not payload_check_ok:
+        raise ValueError(
+            f"075_dialectic_resolution_effects: resolution_payload_json CHECK violated: {payload!r}"
+        )
 
 EXPECTED_THEOREMS = (
     "enqueue_non_required_immediately_applied",
@@ -781,7 +862,7 @@ class _LiveResolutionEffectsSqlBackend:
                 )
                 legacy_unbound = not has_key
                 pause_tok = pstate.get("pause_token")
-                self.effects[sid] = {
+                eff_candidate = {
                     "session_id": sid,
                     "paused_agent_id": sess["paused_agent_id"],
                     "reviewer_agent_id": sess["reviewer_agent_id"],
@@ -813,6 +894,8 @@ class _LiveResolutionEffectsSqlBackend:
                     "created_at": now_dt,
                     "updated_at": now_dt,
                 }
+                _assert_migration_075_effect_schema(eff_candidate)
+                self.effects[sid] = eff_candidate
             return {
                 "session_id": sid,
                 "effect_ts": now_dt.isoformat(),
@@ -1391,14 +1474,23 @@ def _parse_lean_resolution_effects_scenarios(
             m_sess = re.match(r"^mkInitEffectSession\s+(\.\w+)$", rhs)
             if m_sess:
                 pb = _parse_lean_pause_binding(m_sess.group(1))
-                snap = SpecEffectSessionSnapshot(pause_binding=pb)
+                ptok_int = (
+                    10
+                    if spec_pause_binding_enqueue_effect_required(pb)
+                    else None
+                )
+                snap = SpecEffectSessionSnapshot(
+                    pause_token=ptok_int, pause_binding=pb
+                )
                 live_backend.seed_session(
                     "sess-guard",
                     status="active",
                     phase="synthesis",
                     paused_agent_id=AGENT_UUIDS[0],
                     reviewer_agent_id=AGENT_UUIDS[1],
-                    pause_token=PAUSE_TOKENS[10],
+                    pause_token=(
+                        PAUSE_TOKENS[ptok_int] if ptok_int is not None else None
+                    ),
                     pause_binding=pb,
                 )
                 return snap, snap
@@ -1638,6 +1730,7 @@ def _parse_lean_resolution_effects_scenarios(
         "lastError": "last_error",
         "uncertainAt": "uncertain_at",
         "effectRequired": "effect_required",
+        "pauseToken": "pause_token",
         "noOpReason": "no_op_reason",
         "canary": "canary",
         "openCount": "open_count",
@@ -1717,6 +1810,69 @@ def test_lean4_guard_scenarios_match_python_mirror_and_live_code():
 # ============================================================================
 # Hypothesis Stateful Refinement Suite (`RuleBasedStateMachine`)
 # ============================================================================
+
+
+def test_migration_075_schema_constraints_enforced_by_sql_emulator():
+    """Verify `_LiveResolutionEffectsSqlBackend` enforces all 3 constraints from
+    `db/postgres/migrations/075_dialectic_resolution_effects.sql:25-52` on enqueue."""
+    backend = _LiveResolutionEffectsSqlBackend("sess-075")
+    db = backend.make_db()
+
+    # 1. reviewer_agent_id NOT NULL violation
+    backend.seed_session(
+        "sess-075",
+        reviewer_agent_id=None,
+        pause_token=PAUSE_TOKENS[10],
+        pause_binding="explicitTrue",
+    )
+    with pytest.raises(ValueError, match="reviewer_agent_id NOT NULL violated"):
+        asyncio.run(
+            db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
+        )
+
+    # 2a. effect_required=True with pause_token=None violates CHECK
+    backend.seed_session(
+        "sess-075",
+        reviewer_agent_id=AGENT_UUIDS[1],
+        pause_token=None,
+        pause_binding="explicitTrue",
+    )
+    with pytest.raises(
+        ValueError, match="effect_required/pause_token CHECK violated"
+    ):
+        asyncio.run(
+            db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
+        )
+
+    # 2b. effect_required=False (legacyUnbound) with pause_token!=None violates CHECK
+    backend.seed_session(
+        "sess-075",
+        reviewer_agent_id=AGENT_UUIDS[1],
+        pause_token=PAUSE_TOKENS[10],
+        pause_binding="legacyUnbound",
+    )
+    with pytest.raises(
+        ValueError, match="effect_required/pause_token CHECK violated"
+    ):
+        asyncio.run(
+            db.resolve_session("sess-075", RESOLUTION_PAYLOADS[1], "resolved")
+        )
+
+    # 3. resolution_payload_json missing required keys violates CHECK
+    backend.seed_session(
+        "sess-075",
+        reviewer_agent_id=AGENT_UUIDS[1],
+        pause_token=PAUSE_TOKENS[10],
+        pause_binding="explicitTrue",
+    )
+    with pytest.raises(
+        ValueError, match="resolution_payload_json CHECK violated"
+    ):
+        asyncio.run(
+            db.resolve_session(
+                "sess-075", {"action": "resume", "summary": "bad"}, "resolved"
+            )
+        )
 
 
 @settings(
@@ -1810,16 +1966,19 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         pause_binding=st.sampled_from(
             ["explicitTrue", "explicitFalse", "legacyUnbound"]
         ),
-        pause_token=st.sampled_from([None, 10, 20]),
+        active_pause_token=st.sampled_from([10, 20]),
         resolution_payload=st.sampled_from([1, 2]),
     )
     def init_resolved_session(
         self,
         pause_binding: str,
-        pause_token: Optional[int],
+        active_pause_token: int,
         resolution_payload: int,
     ) -> None:
         now = self._advance_clock()
+        pause_token: Optional[int] = (
+            active_pause_token if pause_binding == "explicitTrue" else None
+        )
         self.spec_session = SpecEffectSessionSnapshot(
             status_resolved=True,
             paused_agent=0,
@@ -1856,6 +2015,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         if pause_binding in ("explicitFalse", "legacyUnbound"):
             assert live_row.state == "applied"
             assert live_row.effect_required is False
+            assert live_row.pause_token is None
             assert live_row.has_execution_evidence is True
             assert live_row.applied_at == now
             assert live_row.no_op_reason == (
@@ -1868,25 +2028,25 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         pause_binding=st.sampled_from(
             ["explicitTrue", "explicitFalse", "legacyUnbound"]
         ),
-        pause_token=st.sampled_from([None, 10, 20]),
+        active_pause_token=st.sampled_from([10, 20]),
         resolution_payload=st.sampled_from([1, 2]),
-        null_reviewer=st.booleans(),
     )
     def rule_reseed_resolved_session(
         self,
         pause_binding: str,
-        pause_token: Optional[int],
+        active_pause_token: int,
         resolution_payload: int,
-        null_reviewer: bool,
     ) -> None:
-        """Reset the primary effect session to explore fresh enqueue & claim paths
-        (including `reviewer_agent_id = None` to exercise strict SQL `=` behavior)."""
+        """Reset the primary effect session with a schema-valid resolved session
+        to explore fresh enqueue & claim paths."""
         now = self._advance_clock()
-        rev = None if null_reviewer else 1
+        pause_token: Optional[int] = (
+            active_pause_token if pause_binding == "explicitTrue" else None
+        )
         self.spec_session = SpecEffectSessionSnapshot(
             status_resolved=True,
             paused_agent=0,
-            reviewer=rev,
+            reviewer=1,
             resolution_payload=resolution_payload,
             pause_token=pause_token,
             pause_binding=pause_binding,
@@ -1900,7 +2060,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
             status="active",
             phase="synthesis",
             paused_agent_id=AGENT_UUIDS[0],
-            reviewer_agent_id=AGENT_UUIDS[rev] if rev is not None else None,
+            reviewer_agent_id=AGENT_UUIDS[1],
             pause_token=(
                 PAUSE_TOKENS[pause_token] if pause_token is not None else None
             ),
@@ -1918,6 +2078,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         if pause_binding in ("explicitFalse", "legacyUnbound"):
             assert live_row.state == "applied"
             assert live_row.effect_required is False
+            assert live_row.pause_token is None
             assert live_row.has_execution_evidence is True
             assert live_row.applied_at == now
             assert live_row.no_op_reason == (
@@ -1930,7 +2091,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         owner=st.sampled_from([101, 202, 303]),
         match_expectations=st.booleans(),
         wrong_paused_agent=st.booleans(),
-        wrong_reviewer=st.booleans(),
+        wrong_reviewer=st.sampled_from(["match", "other", "null"]),
         wrong_pause_token=st.booleans(),
         wrong_effect_required=st.booleans(),
         wrong_payload=st.booleans(),
@@ -1940,7 +2101,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         owner: int,
         match_expectations: bool,
         wrong_paused_agent: bool,
-        wrong_reviewer: bool,
+        wrong_reviewer: str,
         wrong_pause_token: bool,
         wrong_effect_required: bool,
         wrong_payload: bool,
@@ -1958,9 +2119,15 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 resolution_payload=pre_eff.resolution_payload,
             )
         else:
+            if wrong_reviewer == "null":
+                exp_rev: Optional[int] = None
+            elif wrong_reviewer == "other":
+                exp_rev = 3
+            else:
+                exp_rev = pre_eff.reviewer
             exp = SpecClaimExpectations(
                 paused_agent=2 if wrong_paused_agent else pre_eff.paused_agent,
-                reviewer=3 if wrong_reviewer else pre_eff.reviewer,
+                reviewer=exp_rev,
                 effect_required=(
                     (not pre_eff.effect_required)
                     if wrong_effect_required
@@ -2018,7 +2185,7 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
     @rule(
         status_resolved=st.booleans(),
         drift_paused_agent=st.booleans(),
-        drift_reviewer=st.booleans(),
+        drift_reviewer=st.sampled_from(["match", "other", "null"]),
         drift_payload=st.booleans(),
         drift_pause_token=st.booleans(),
         drift_pause_binding=st.sampled_from(
@@ -2029,17 +2196,23 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
         self,
         status_resolved: bool,
         drift_paused_agent: bool,
-        drift_reviewer: bool,
+        drift_reviewer: str,
         drift_payload: bool,
         drift_pause_token: bool,
         drift_pause_binding: str,
     ) -> None:
         """Simulate out-of-band session drift on `core.dialectic_sessions` to verify
         that `claim_resolution_effect`'s `EXISTS` subquery catches session-level drift
-        across status, phase, participants, payload, pause_token, and pause_effect_required."""
+        across status, phase, participants (including nullable `s.reviewer_agent_id`),
+        payload, pause_token, and pause_effect_required."""
         assert self.spec_session is not None and self.spec_effect is not None
         new_paused = 4 if drift_paused_agent else self.spec_effect.paused_agent
-        new_rev = 5 if drift_reviewer else self.spec_effect.reviewer
+        if drift_reviewer == "null":
+            new_rev: Optional[int] = None
+        elif drift_reviewer == "other":
+            new_rev = 5
+        else:
+            new_rev = self.spec_effect.reviewer
         new_payload = 2 if drift_payload else self.spec_effect.resolution_payload
         new_tok = 20 if drift_pause_token else self.spec_effect.pause_token
         self.spec_session = replace(
