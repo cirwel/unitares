@@ -202,7 +202,7 @@ additions merge cleanly. -->
 | `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1744); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1753) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_DIR` | `None (no reader fallback)` | — | src/process_cleanup.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
-| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_tasks.py |
+| `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_resident_monitors.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_READ_ONLY_TOKENS` | `''` | Read the read-only key digests | src/http_routes/access.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
