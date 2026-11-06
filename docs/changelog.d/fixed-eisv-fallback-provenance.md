@@ -1,1 +1,0 @@
-- Record startup continuity-fallback EISV inputs, formula branches, clipping and default reasons at computation time. Add an offline replay that preserves inherited unknown/default dependencies and both V legs without changing estimates, baseline updates, readiness or policy.

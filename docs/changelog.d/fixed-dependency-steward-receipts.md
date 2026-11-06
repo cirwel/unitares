@@ -1,1 +1,0 @@
-- **Dependency PR stewardship:** turn opaque merge-queue stalls into bounded, machine-readable attention events, and add durable role-owned Dependabot receipts that accept only GitHub `MERGED` or `CLOSED` as completion.

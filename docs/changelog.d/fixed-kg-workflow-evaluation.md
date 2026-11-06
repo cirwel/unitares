@@ -1,1 +1,0 @@
-- **KG workflow checks:** validate supplied corpus membership and required evidence before model enrollment; retain query errors as recoverable bounded turns and test exact tag-filter recovery plus newer unsupported notes. Clarify current summaries, source reads and project-tag limits in the canonical KG skill. These offline controls make no retrieval-quality or adoption claim.

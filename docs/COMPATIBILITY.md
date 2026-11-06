@@ -8,7 +8,7 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.6.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
+| UNITARES server | `v4.0.0` | Source version string. Master may carry further unreleased changes, collected as fragments in `docs/changelog.d/` until the next release. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.6.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 40412142192](https://github.com/cirwel/unitares/actions/runs/40412142192). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.6.0). |
 | `unitares-governance` plugin | `v0.4.24` | Carries the skills bundle for server `v3.6.0`, whose changelog entry names it as the bundle carrier (`plugin-bundle-recut: v0.4.24`). The plugin's [release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.24) record the mirrored commit and the file-by-file comparison. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
 | `unitares-sdk` | `0.6.1` | Published Python client for resident and custom integrations. `sdk-v0.6.1` is the newest SDK tag in server `v3.6.0`, and PyPI serves it. Install it with `pip install unitares-sdk==0.6.1`; use a server Git tag only when deliberately testing an unreleased SDK build. What changed: [changelog](CHANGELOG.md). |
@@ -34,6 +34,22 @@ installs and automation for little immediate user value. New public prose should
 lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
+
+- v4.0.0 makes inferred policy actuation opt-in: set
+  `UNITARES_POLICY_ACTUATION=enforce` before upgrading if the deployment relies
+  on inferred pause recommendations creating lifecycle holds. Existing durable
+  pauses, authorization failures, archive state, and loop cooldowns remain
+  enforced. The negotiated interface advances independently from 2.3.0 to
+  2.4.1. SN1 sensor self-loop neutralization and per-agent I calibration default
+  on; their explicit opt-out settings and migration guidance are in the
+  [upgrade notes](releases/4.0.0.md). Container/development defaults move to
+  Python 3.15 while server support remains 3.14+ and SDK support remains 3.12+.
+  Apply migrations 080 (durable calibration delivery) and 081 (neutral
+  checkpoints) before starting this server; migration 079 is a manual
+  prerequisite when enabling the optional hub. Mixed-version writers and
+  downgrade behavior are not validated. The in-tree SDK 0.6.2 adds optional
+  single-attempt onboarding; published install pins stay on 0.6.1 until the
+  SDK artifact is verified.
 
 - v3.6.0 moves the interface contract from 1.56.0 to 2.3.0 and adds no
   database migration. Existing clients keep their registered callable names,
