@@ -483,12 +483,14 @@ def _ticks_from_ts(dt: datetime) -> int:
 
 
 class _LiveSessionSqlBackend:
-    """In-memory SQL evaluator that backs a real `DialecticDB` instance.
+    """In-memory SQL backend that backs a real `DialecticDB` instance.
 
     Instead of mocking `DialecticDB.resolve_session`, `DialecticDB.add_message`,
     `DialecticDB.probe_saga_since`, or `DialecticDB.probe_inflight_saga`, this
-    backend intercepts `conn.fetchrow(sql, *args)` and evaluates the exact SQL
-    predicates and positional `$N` parameters produced by `DialecticDB`.
+    backend intercepts `conn.fetchrow(sql, *args)`, parses the CAS/saga SQL
+    predicates and positional `$N` parameters produced by `DialecticDB`, and
+    models the JSONB reviewer-authority `WHERE` clause in `_eval_reviewer_authority`
+    after asserting the expected SQL authority clause fragments on `sql`.
     """
 
     def __init__(self, init_spec: SpecSessionRow):
@@ -707,6 +709,19 @@ class _LiveSessionSqlBackend:
 
             if target_status == "resolved":
                 assert "pause_effect_required" in norm
+                assert (
+                    f"NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')"
+                    in norm
+                )
+                assert (
+                    "AND ( reviewer_agent_id = paused_agent_id OR NOT ("
+                    in norm
+                )
+                assert (
+                    f"'{{"
+                    f"{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}' ? reviewer_agent_id"
+                    in norm
+                )
                 paused_state = self.row.get("paused_agent_state_json") or {}
                 if (
                     paused_state.get("pause_effect_required") is True
@@ -778,7 +793,21 @@ class _LiveSessionSqlBackend:
 
             m_set_rev = re.search(r"reviewer_agent_id = \$(\d+)", set_part)
             if m_set_rev:
-                cand_rev = args[int(m_set_rev.group(1)) - 1]
+                rev_idx_sql = int(m_set_rev.group(1))
+                assert (
+                    f"NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')"
+                    in where_part
+                )
+                assert (
+                    f"AND ( ${rev_idx_sql} = paused_agent_id OR NOT ("
+                    in where_part
+                )
+                assert (
+                    f"'{{"
+                    f"{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}' ? ${rev_idx_sql}"
+                    in where_part
+                )
+                cand_rev = args[rev_idx_sql - 1]
                 if not self._eval_reviewer_authority(cand_rev):
                     return None
                 self.row["reviewer_agent_id"] = cand_rev
