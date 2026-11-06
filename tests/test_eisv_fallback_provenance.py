@@ -184,7 +184,7 @@ def test_unknown_history_survives_new_defaults_on_both_valence_legs():
     assert historical["coefficients"]["V_I_term"]["explicit_default"] == pytest.approx(0.45)
 
 
-def test_richer_sensor_reconciles_convex_terms_but_does_not_normalize_additive_s():
+def test_richer_sensor_reconciles_convex_terms_but_does_not_normalize_additive_s(monkeypatch):
     inputs = dict(
         decision_history=["proceed"] * 3, coherence_history=[0.5] * 3,
         regime_history=["STABLE"] * 3, E_history=[0.5] * 3, I_history=[0.5] * 3,
@@ -196,11 +196,21 @@ def test_richer_sensor_reconciles_convex_terms_but_does_not_normalize_additive_s
     record = envelope(BehavioralEISV(), obs, trace, source="behavioral")
     e, _ = input_ledger(record, "E")
     assert sum(e.values()) == pytest.approx(1)
-    assert e["observed_controller"] > 0
+    assert e["observed_controller"] == 0
+    assert e["observed_other"] > 0
     assert e["explicit_default"] > 0
     s, explanation = input_ledger(record, "S")
     assert s["unresolved_formula"] == 1
     assert "no renormalization" in explanation
+
+    monkeypatch.setenv("UNITARES_NEUTRALIZE_SENSOR_SELF_LOOPS", "0")
+    legacy_obs = compute_behavioral_sensor_eisv(**inputs)
+    legacy_trace = build_behavioral_derivation(**inputs, computed=legacy_obs)
+    legacy_record = envelope(BehavioralEISV(), legacy_obs, legacy_trace, source="behavioral")
+    legacy_e, _ = input_ledger(legacy_record, "E")
+    assert sum(legacy_e.values()) == pytest.approx(1)
+    assert legacy_e["observed_controller"] > 0
+    assert legacy_e["explicit_default"] > 0
 
 
 def test_replay_gaps_resets_mismatch_missing_metadata_and_duplicate_identity():
