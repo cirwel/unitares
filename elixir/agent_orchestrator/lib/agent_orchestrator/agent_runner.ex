@@ -142,10 +142,10 @@ defmodule AgentOrchestrator.AgentRunner do
 
   use GenServer
 
-  import Bitwise
-
   require Logger
 
+  alias AgentOrchestrator.AgentRunner.LeaseGovernance
+  alias AgentOrchestrator.AgentRunner.OutputBuffer
   alias AgentOrchestrator.LeasePlaneClient
   alias AgentOrchestrator.ResultStore
   alias AgentOrchestrator.Telemetry
@@ -153,34 +153,8 @@ defmodule AgentOrchestrator.AgentRunner do
   @default_max_lines 1000
   @line_max_bytes 65_536
 
-  # Child stdin disposition. Default `close` — see wire_stdin/3 for why an open
-  # stdin is both unusable here and a hang risk for the CLIs we spawn.
-  @default_stdin "close"
-  @sh "/bin/sh"
-
-  # Default ceiling on a single agent's wall-clock lifetime (30 min). Generous —
-  # well past the slowest known consumer (orchestrated reviewer ~70s, council
-  # lanes ~120s) — so it only ever fires on a genuinely wedged agent. Per-spawn
-  # overridable via the spec's `max_runtime_ms` (nil / <= 0 disables it);
-  # config-overridable via :default_max_runtime_ms.
-  @default_max_runtime_ms 1_800_000
-
-  # Lineage-provisioning env vars surfaced to the child (candidate
-  # declarations — see "Lineage provisioning" in the moduledoc).
-  @server_url_var "UNITARES_SERVER_URL"
-  @client_session_id_var "UNITARES_CLIENT_SESSION_ID"
-  # Fail-closed companion to the session anchor: the child's onboard hook resumes
-  # under the anchor ONLY when this orchestration marker is present, so a stray
-  # UNITARES_CLIENT_SESSION_ID leaked into a normal interactive session (which the
-  # same hook serves) cannot trigger resume-sharing — it mints. See the
-  # session-anchor moduledoc section and onboard_helper.run_onboard's `orchestrated`.
-  @orchestrated_var "UNITARES_ORCHESTRATED"
-  @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
-  @lineage_reason_var "UNITARES_SPAWN_REASON"
-  @default_spawn_reason "subagent"
-
-  # Shape check only (8-4-4-4-12 hex) — ancestry truth is the server's call.
-  @uuid_re ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+  @doc false
+  def line_max_bytes, do: @line_max_bytes
 
   defstruct [
     :execution_id,
@@ -325,7 +299,7 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @doc "Generate an immutable UUID-backed execution id."
   @spec generate_execution_id() :: String.t()
-  def generate_execution_id, do: "ex-" <> uuid4()
+  def generate_execution_id, do: "ex-" <> LeaseGovernance.uuid4()
 
   # ---------- GenServer ----------
 
@@ -335,21 +309,21 @@ defmodule AgentOrchestrator.AgentRunner do
     execution_id = Map.fetch!(spec, :execution_id)
     agent_id = Map.fetch!(spec, :agent_id)
     lease_client = Map.get(spec, :lease_client, LeasePlaneClient)
-    lease_cfg = normalize_lease_cfg(Map.get(spec, :lease), execution_id)
+    lease_cfg = LeaseGovernance.normalize_lease_cfg(Map.get(spec, :lease), execution_id)
 
     # Validate lineage BEFORE the lease acquire: a refused spawn must not have
     # touched the plane (no acquire-then-release churn for a config error).
-    case normalize_lineage_cfg(Map.get(spec, :lineage)) do
+    case LeaseGovernance.normalize_lineage_cfg(Map.get(spec, :lineage)) do
       {:error, reason} ->
         {:stop, {:invalid_lineage, reason}}
 
       {:ok, lineage_cfg} ->
-        case normalize_server_url(Map.get(spec, :server_url)) do
+        case LeaseGovernance.normalize_server_url(Map.get(spec, :server_url)) do
           {:error, reason} ->
             {:stop, {:invalid_server_url, reason}}
 
           {:ok, server_url} ->
-            case normalize_client_session_id(Map.get(spec, :client_session_id)) do
+            case LeaseGovernance.normalize_client_session_id(Map.get(spec, :client_session_id)) do
               {:error, reason} ->
                 {:stop, {:invalid_client_session_id, reason}}
 
@@ -361,14 +335,14 @@ defmodule AgentOrchestrator.AgentRunner do
                   lease_cfg: lease_cfg,
                   lineage: if(lineage_cfg, do: :provisioned, else: :none),
                   max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines),
-                  redact: redact_closure(spec),
+                  redact: OutputBuffer.redact_closure(spec),
                   profile: Map.get(spec, :profile)
                 }
 
                 init_with_lease(
                   state,
                   spec,
-                  candidate_env(lineage_cfg, server_url, client_session_id)
+                  LeaseGovernance.candidate_env(lineage_cfg, server_url, client_session_id)
                 )
             end
         end
@@ -381,14 +355,14 @@ defmodule AgentOrchestrator.AgentRunner do
     # clause's value, so the acquired lease_id would be invisible there and the
     # lease would orphan (and a non-file lease does NOT self-heal — see release
     # discipline in terminate/2).
-    case maybe_acquire_lease(state) do
+    case LeaseGovernance.maybe_acquire_lease(state) do
       {:error, :lease_denied, reason} ->
         {:stop, {:lease_denied, reason}}
 
       {:ok, lease_id, presence} ->
         state = %{state | lease_id: lease_id, presence: presence}
 
-        case open_port(spec, candidates) do
+        case LeaseGovernance.open_port(spec, candidates) do
           {:ok, port, os_pid} ->
             cmd = Map.get(spec, :cmd)
 
@@ -412,7 +386,7 @@ defmodule AgentOrchestrator.AgentRunner do
             # async" on a 504), so without this an agent that never exits leaks
             # its OS process + subprocess tree until the orchestrator restarts.
             # The timer fires :max_runtime into our own mailbox; we self-reap.
-            maybe_arm_max_runtime(spec)
+            LeaseGovernance.maybe_arm_max_runtime(spec)
 
             {:ok,
              %{
@@ -427,28 +401,30 @@ defmodule AgentOrchestrator.AgentRunner do
           {:error, reason} ->
             # Port failed to open after a lease was taken — release so we don't
             # leak the surface (state now carries lease_id).
-            _ = maybe_release_lease(state, @release_reason)
+            _ = LeaseGovernance.maybe_release_lease(state, @release_reason)
             {:stop, reason}
         end
     end
   end
 
   @impl true
-  def handle_call(:snapshot, _from, state), do: {:reply, {:ok, result(state)}, state}
+  def handle_call(:snapshot, _from, state),
+    do: {:reply, {:ok, OutputBuffer.result(state)}, state}
 
   def handle_call(:describe, _from, state),
-    do: {:reply, {:ok, execution_summary(state)}, state}
+    do: {:reply, {:ok, OutputBuffer.execution_summary(state)}, state}
 
   def handle_call(:await, from, %{exit_status: nil} = state) do
     {:noreply, %{state | waiters: [from | state.waiters]}}
   end
 
-  def handle_call(:await, _from, state), do: {:reply, {:ok, result(state)}, state}
+  def handle_call(:await, _from, state),
+    do: {:reply, {:ok, OutputBuffer.result(state)}, state}
 
   @impl true
   # Line-framed stdout/stderr from the child.
   def handle_info({port, {:data, {:eol, line}}}, %{port: port} = state) do
-    {:noreply, push_line(state, state.partial <> line)}
+    {:noreply, OutputBuffer.push_line(state, state.partial <> line)}
   end
 
   def handle_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state) do
@@ -458,7 +434,7 @@ defmodule AgentOrchestrator.AgentRunner do
     # @line_max_bytes with no newline would otherwise grow `partial` without
     # limit. Flush the oversized fragment as a synthetic line instead.
     if byte_size(partial) >= @line_max_bytes do
-      {:noreply, flush_oversized(state, partial)}
+      {:noreply, OutputBuffer.flush_oversized(state, partial)}
     else
       {:noreply, %{state | partial: partial}}
     end
@@ -505,8 +481,8 @@ defmodule AgentOrchestrator.AgentRunner do
         "reaping os_pid=#{inspect(state.os_pid)}"
     )
 
-    if is_integer(state.os_pid), do: kill_tree(state.os_pid)
-    safe_close(state.port)
+    if is_integer(state.os_pid), do: LeaseGovernance.kill_tree(state.os_pid)
+    LeaseGovernance.safe_close(state.port)
     finalize(%{state | port: nil}, {:killed, :max_runtime})
   end
 
@@ -521,7 +497,7 @@ defmodule AgentOrchestrator.AgentRunner do
     # With the :eof Port option, EOF deliberately leaves the port open. Close
     # it only after the numeric status is also known, then publish the complete
     # output as one terminal result.
-    safe_close(state.port)
+    LeaseGovernance.safe_close(state.port)
     finalize(%{state | port: nil}, status)
   end
 
@@ -539,17 +515,19 @@ defmodule AgentOrchestrator.AgentRunner do
   # works, without retaining forever.
   defp finalize(state, status) do
     state =
-      if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
+      if state.partial != "",
+        do: OutputBuffer.push_line(%{state | partial: ""}, state.partial),
+        else: state
 
     Logger.info(
       "execution #{state.execution_id} agent=#{state.agent_id} exited status=#{inspect(status)}"
     )
 
     emit_stop(state, status, stop_reason(status))
-    release_status = maybe_release_lease(state, @release_reason)
+    release_status = LeaseGovernance.maybe_release_lease(state, @release_reason)
     state = %{state | exit_status: status, port: nil, release_status: release_status}
     state = reply_waiters(state)
-    ResultStore.put(state.execution_id, result(state))
+    ResultStore.put(state.execution_id, OutputBuffer.result(state))
 
     if status == 0 do
       {:stop, :normal, state}
@@ -620,18 +598,19 @@ defmodule AgentOrchestrator.AgentRunner do
     # Guarded on a NOT-yet-finalized state so we never signal a clean exit's
     # os_pid, which by now could belong to an unrelated reused pid (the same
     # guard AgentPort uses via its `exited` flag).
-    if is_nil(state.exit_status) and is_integer(state.os_pid), do: kill_tree(state.os_pid)
+    if is_nil(state.exit_status) and is_integer(state.os_pid),
+      do: LeaseGovernance.kill_tree(state.os_pid)
 
     # Idempotent with the exit-status path: release returns :not_found harmlessly
     # if already released. Closing the port here kills the child on operator stop.
-    if state.port, do: safe_close(state.port)
+    if state.port, do: LeaseGovernance.safe_close(state.port)
     # Retry the release UNLESS the finalize path already released cleanly
     # (:ok) or there was no lease (:no_lease). A previous {:error, _} (e.g. the
     # plane was briefly unreachable) must NOT be treated as done — a non-file
     # lease is held by an auto-renewing plane-side holder and will NOT self-heal
     # at TTL, so the release is the only thing that frees it.
     unless state.release_status in [:ok, :no_lease] do
-      maybe_release_lease(state, @release_reason)
+      LeaseGovernance.maybe_release_lease(state, @release_reason)
     end
 
     :ok
@@ -655,457 +634,9 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  # Presence is DEFAULT-ON and best-effort: with no `:lease` key, an agent
-  # registers an `agent:/<id>` presence row on the plane (migration 042 routes it
-  # to the self-healing remote_heartbeat path). `lease: false` opts out entirely.
-  # A `:lease` map overrides the defaults (e.g. `required: true` to make it a
-  # gating lease, or a different `surface_id`).
-  defp normalize_lease_cfg(false, _execution_id), do: nil
-
-  defp normalize_lease_cfg(nil, execution_id), do: normalize_lease_cfg(%{}, execution_id)
-
-  defp normalize_lease_cfg(%{} = cfg, execution_id) do
-    %{
-      # Best-effort by default: presence should NOT gate spawning. A caller that
-      # genuinely needs a gating lease passes `required: true`.
-      required: Map.get(cfg, :required, false),
-      holder_agent_uuid: Map.get(cfg, :holder_agent_uuid) || uuid4(),
-      surface_id: Map.get(cfg, :surface_id) || "agent:/" <> execution_id,
-      ttl_s:
-        Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300))
-    }
-  end
-
-  # Returns {:ok, lease_id, presence} | {:error, :lease_denied, reason}.
-  # presence is :disabled | :registered | :unregistered — a distinguishable
-  # signal so a consumer of plane presence knows that an :unregistered agent is
-  # live-but-not-on-the-plane (absence from the plane ≠ not running).
-  defp maybe_acquire_lease(%{lease_cfg: nil}), do: {:ok, nil, :disabled}
-
-  defp maybe_acquire_lease(%{
-         execution_id: execution_id,
-         agent_id: agent_id,
-         lease_cfg: cfg,
-         lease_client: client
-       }) do
-    case client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s) do
-      {:ok, lease_id} ->
-        {:ok, lease_id, :registered}
-
-      {:error, reason} ->
-        if cfg.required do
-          {:error, :lease_denied, reason}
-        else
-          # Best-effort: proceed, but emit a DISTINGUISHABLE signal. This agent is
-          # running yet has no plane presence row — anything querying the plane
-          # for "live agents" must not read this agent's absence as "not running."
-          # :no_bearer means presence is simply not configured (dev/test) → quiet;
-          # any other reason is a configured-but-unreachable plane → loud.
-          level = if reason == :no_bearer, do: :debug, else: :warning
-
-          Logger.log(
-            level,
-            "execution #{execution_id} agent=#{agent_id} presence UNREGISTERED " <>
-              "(#{inspect(reason)}) — running " <>
-              "WITHOUT a presence row; plane-absence does NOT imply not-running"
-          )
-
-          {:ok, nil, :unregistered}
-        end
-    end
-  end
-
-  defp maybe_release_lease(%{lease_id: nil}, _reason), do: :no_lease
-
-  defp maybe_release_lease(%{lease_id: lease_id, lease_client: client}, reason) do
-    case client.release(lease_id, reason) do
-      :ok ->
-        :ok
-
-      {:error, r} = err ->
-        Logger.warning("agent lease release failed lease=#{lease_id}: #{inspect(r)}")
-        err
-    end
-  end
-
-  defp open_port(spec, candidates) do
-    cmd = Map.fetch!(spec, :cmd)
-
-    case resolve_executable(cmd) do
-      nil ->
-        {:error, {:executable_not_found, cmd}}
-
-      path ->
-        # `|| []` not just a default: an explicit `env: nil` (spec built from
-        # nullable config) must not crash the merge below — that exception
-        # escapes open_port's rescue and orphans the just-acquired lease.
-        env = Map.get(spec, :env, []) || []
-
-        {exec, exec_args} =
-          wire_stdin(Map.get(spec, :stdin) || @default_stdin, path, Map.get(spec, :args, []))
-
-        opts =
-          [
-            :binary,
-            :exit_status,
-            # EOF is the output-drain barrier. Its ordering relative to
-            # exit_status is unspecified, so AgentRunner waits for both.
-            :eof,
-            :stderr_to_stdout,
-            {:line, @line_max_bytes},
-            {:args, exec_args}
-          ]
-          |> maybe_opt(:env, encode_env(child_env(env ++ secret_env(spec), candidates)))
-          |> maybe_opt(:cd, Map.get(spec, :cd))
-
-        try do
-          port = Port.open({:spawn_executable, exec}, opts)
-          os_pid = port |> Port.info(:os_pid) |> elem(1)
-          {:ok, port, os_pid}
-        rescue
-          e -> {:error, {:port_open_error, Exception.message(e)}}
-        end
-    end
-  end
-
-  defp resolve_executable(cmd) do
-    if String.contains?(cmd, "/"), do: cmd, else: System.find_executable(cmd)
-  end
-
-  # Close the child's stdin by re-exec'ing it through /bin/sh with stdin
-  # redirected from /dev/null. Two properties matter and neither survives if the
-  # caller does this wrapping itself:
-  #
-  #   * the ALLOWLIST and `executable_not_found` still see the real command,
-  #     because resolve_executable/1 runs on `spec.cmd` before this. A caller
-  #     that passes `/bin/sh` itself defeats both — a missing binary becomes an
-  #     opaque exit 127 from the shell instead of a spawn error, so the caller's
-  #     fail-open path never fires.
-  #   * `"$0"` / `"$@"` keep the command and its arguments as separate argv
-  #     words, so an argument containing quotes, `$(...)`, or backticks is never
-  #     interpreted by the shell.
-  defp wire_stdin("pipe", path, args), do: {path, args}
-
-  defp wire_stdin(_close, path, args),
-    do: {@sh, ["-c", ~s(exec "$0" "$@" </dev/null), path | args]}
-
-  # Lineage PROVISIONING (see moduledoc): candidate declarations only — the
-  # child makes its own onboard call. Validated up front because a malformed
-  # parent UUID does not fail here; it fails later as false ancestry in the
-  # governance lineage DAG, attributed to whatever agent declared it.
-  defp normalize_lineage_cfg(nil), do: {:ok, nil}
-
-  defp normalize_lineage_cfg(%{} = cfg) do
-    parent = Map.get(cfg, :parent_agent_uuid)
-    spawn_reason = Map.get(cfg, :spawn_reason, @default_spawn_reason)
-
-    cond do
-      not (is_binary(parent) and Regex.match?(@uuid_re, parent)) ->
-        {:error, {:parent_agent_uuid_not_uuid, parent}}
-
-      not (is_binary(spawn_reason) and spawn_reason != "") ->
-        {:error, {:spawn_reason_invalid, spawn_reason}}
-
-      true ->
-        {:ok, %{parent_agent_uuid: parent, spawn_reason: spawn_reason}}
-    end
-  end
-
-  defp normalize_lineage_cfg(other), do: {:error, {:lineage_not_map, other}}
-
-  # Scheme check only — a value with no http(s):// scheme fails at the child
-  # as a confusing OFFLINE far from its cause; refuse it at the boundary.
-  defp normalize_server_url(nil), do: {:ok, nil}
-
-  defp normalize_server_url(url) when is_binary(url) do
-    if String.starts_with?(url, ["http://", "https://"]) do
-      {:ok, url}
-    else
-      {:error, {:server_url_not_http, url}}
-    end
-  end
-
-  defp normalize_server_url(other), do: {:error, {:server_url_not_string, other}}
-
-  # Non-empty-string check only — the server canonicalizes/sanitizes the session
-  # key itself (see resolve_session_identity). An empty/blank anchor is refused
-  # here because it would silently fall back to fresh-mint-per-turn, the exact
-  # symptom this provisioning prevents (a confusing "still minting" far from the
-  # blank-anchor cause).
-  defp normalize_client_session_id(nil), do: {:ok, nil}
-
-  defp normalize_client_session_id(v) when is_binary(v) do
-    if String.trim(v) == "" do
-      {:error, {:client_session_id_blank, v}}
-    else
-      {:ok, v}
-    end
-  end
-
-  defp normalize_client_session_id(other), do: {:error, {:client_session_id_not_string, other}}
-
-  # The full provisioned-candidate list for the child env, built from the
-  # already-validated configs.
-  defp candidate_env(lineage_cfg, server_url, client_session_id) do
-    lineage =
-      case lineage_cfg do
-        nil ->
-          []
-
-        cfg ->
-          [{@lineage_parent_var, cfg.parent_agent_uuid}, {@lineage_reason_var, cfg.spawn_reason}]
-      end
-
-    server = if server_url, do: [{@server_url_var, server_url}], else: []
-
-    # The anchor travels WITH the orchestration marker: the child's hook
-    # fail-closes on the marker, so provisioning the anchor without it would
-    # make a genuine orchestrated child fail to resume (anchor ignored). They
-    # are one unit — set both, or neither.
-    session =
-      if client_session_id,
-        do: [{@client_session_id_var, client_session_id}, {@orchestrated_var, "1"}],
-        else: []
-
-    lineage ++ server ++ session
-  end
-
-  defp provisioned_env([], _env), do: []
-
-  defp provisioned_env(candidates, env) do
-    explicit = for {k, v} <- env, is_binary(v), into: MapSet.new(), do: k
-
-    # Explicit env wins: the caller setting the var directly has made the more
-    # specific statement; silently overriding it would be the invasive version.
-    # An unset (`false`) is not a statement about the value, so provisioning
-    # still applies over it.
-    Enum.reject(candidates, fn {k, _v} -> MapSet.member?(explicit, k) end)
-  end
-
-  # Child env: explicit entries, minus any unset a provisioned variable
-  # replaces, then the provisioned variables themselves.
-  defp child_env(env, candidates) do
-    provisioned = provisioned_env(candidates, env)
-    replaced = MapSet.new(provisioned, fn {k, _v} -> k end)
-    Enum.reject(env, fn {k, v} -> v == false and MapSet.member?(replaced, k) end) ++ provisioned
-  end
-
-  defp maybe_opt(opts, _key, nil), do: opts
-  defp maybe_opt(opts, _key, []), do: opts
-  defp maybe_opt(opts, key, val), do: [{key, val} | opts]
-
-  # Arm the self-reap timer unless this spawn opted out. The message lands in our
-  # own mailbox after init returns, handled by handle_info(:max_runtime, ...).
-  defp maybe_arm_max_runtime(spec) do
-    case max_runtime_ms(spec) do
-      ms when is_integer(ms) and ms > 0 -> Process.send_after(self(), :max_runtime, ms)
-      _ -> :ok
-    end
-  end
-
-  # An explicit `max_runtime_ms` in the spec wins (an integer caps; nil / <= 0
-  # disables — the per-spawn escape hatch for a legitimately long agent). Absent,
-  # fall back to the configured/default ceiling.
-  defp max_runtime_ms(spec) do
-    case Map.fetch(spec, :max_runtime_ms) do
-      {:ok, v} ->
-        v
-
-      :error ->
-        Application.get_env(:agent_orchestrator, :default_max_runtime_ms, @default_max_runtime_ms)
-    end
-  end
-
-  defp encode_env([]), do: []
-
-  defp encode_env(env) do
-    Enum.map(env, fn
-      {k, false} -> {String.to_charlist(k), false}
-      {k, v} -> {String.to_charlist(k), String.to_charlist(v)}
-    end)
-  end
-
-  # Values shorter than 4 bytes are not redacted: replacing them would mangle
-  # ordinary output while hiding almost nothing. Output is redacted line by
-  # line, so a value holding a line break could pass in pieces; profiles refuse
-  # both kinds of secret, and neither is accepted here.
-  defp redact_values(values) when is_list(values) do
-    values
-    |> Enum.filter(
-      &(is_binary(&1) and byte_size(&1) >= 4 and not String.contains?(&1, ["\n", "\r"]))
-    )
-    |> Enum.uniq()
-  end
-
-  defp redact_values(_), do: []
-
-  # Secrets arrive behind a closure (see the :secret_env spec field) so the
-  # spawn request, a GenServer call that times out, or a supervisor report
-  # never prints them.
-  defp secret_env(spec) do
-    case Map.get(spec, :secret_env) do
-      fun when is_function(fun, 0) -> fun.()
-      _ -> []
-    end
-  end
-
-  defp redact_closure(spec) do
-    values =
-      redact_values(
-        List.wrap(Map.get(spec, :redact)) ++ Enum.map(secret_env(spec), fn {_k, v} -> v end)
-      )
-
-    fn -> values end
-  end
-
-  defp redactions(%{redact: fun}) when is_function(fun, 0), do: fun.()
-  defp redactions(_state), do: []
-
-  defp redact_line(line, []), do: line
-  defp redact_line(line, values), do: String.replace(line, values, "[redacted]")
-
-  # An oversized fragment is published as a synthetic line. With secrets to
-  # redact, a secret may straddle the cut, so redact what is complete and hold
-  # back the last (longest secret - 1) bytes, which no complete secret can
-  # start in, as the start of the next fragment.
-  # Either way the cut moves back to a UTF-8 character boundary, so neither
-  # fragment holds half a character (Jason refuses invalid UTF-8).
-  defp flush_oversized(state, partial) do
-    {text, hold} =
-      case redactions(state) do
-        [] ->
-          {partial, 0}
-
-        values ->
-          {redact_line(partial, values), (values |> Enum.map(&byte_size/1) |> Enum.max()) - 1}
-      end
-
-    cut = char_boundary(text, max(byte_size(text) - hold, 0))
-    head = binary_part(text, 0, cut)
-    tail = binary_part(text, cut, byte_size(text) - cut)
-    %{push_line(%{state | partial: ""}, head) | partial: tail}
-  end
-
-  # A cut inside a character steps back over its continuation bytes
-  # (0b10xxxxxx); a cut at the end holds back a trailing character the chunk
-  # boundary left incomplete. Bytes that are not UTF-8 are cut as they are.
-  defp char_boundary(text, cut) do
-    cut = step_back(text, cut, 3)
-    if cut == byte_size(text), do: complete_end(text, cut), else: cut
-  end
-
-  defp step_back(_text, 0, _left), do: 0
-  defp step_back(_text, cut, 0), do: cut
-
-  defp step_back(text, cut, left) do
-    if cut < byte_size(text) and continuation?(:binary.at(text, cut)),
-      do: step_back(text, cut - 1, left - 1),
-      else: cut
-  end
-
-  defp complete_end(text, size) do
-    case Enum.find(max(size - 1, 0)..max(size - 4, 0)//-1, fn i ->
-           i < size and not continuation?(:binary.at(text, i))
-         end) do
-      nil ->
-        size
-
-      lead_at ->
-        need = sequence_length(:binary.at(text, lead_at))
-        if need > 1 and lead_at + need > size, do: lead_at, else: size
-    end
-  end
-
-  defp continuation?(byte), do: Bitwise.band(byte, 0xC0) == 0x80
-
-  defp sequence_length(byte) when byte < 0x80, do: 1
-  defp sequence_length(byte) when Bitwise.band(byte, 0xE0) == 0xC0, do: 2
-  defp sequence_length(byte) when Bitwise.band(byte, 0xF0) == 0xE0, do: 3
-  defp sequence_length(byte) when Bitwise.band(byte, 0xF8) == 0xF0, do: 4
-  defp sequence_length(_byte), do: 1
-
-  defp push_line(state, line) do
-    # Bounded ring: keep newest max_output_lines. Stored newest-first for O(1)
-    # prepend; reversed on read in result/1.
-    output = [redact_line(line, redactions(state)) | state.output]
-
-    {output, count} =
-      if state.output_count + 1 > state.max_output_lines do
-        {Enum.take(output, state.max_output_lines), state.max_output_lines}
-      else
-        {output, state.output_count + 1}
-      end
-
-    %{state | output: output, output_count: count, partial: ""}
-  end
-
   defp reply_waiters(state) do
-    result = result(state)
+    result = OutputBuffer.result(state)
     Enum.each(state.waiters, fn from -> GenServer.reply(from, {:ok, result}) end)
     %{state | waiters: []}
-  end
-
-  defp result(state) do
-    state
-    |> execution_summary()
-    |> Map.merge(%{
-      lease_released: state.release_status == :ok,
-      output: Enum.reverse(state.output)
-    })
-  end
-
-  defp execution_summary(state) do
-    %{
-      execution_id: state.execution_id,
-      agent_id: state.agent_id,
-      cmd: state.cmd,
-      started_at: state.started_at,
-      os_pid: state.os_pid,
-      lease_id: state.lease_id,
-      presence: state.presence,
-      lineage: state.lineage,
-      profile: state.profile,
-      exit_status: state.exit_status,
-      running: state.exit_status == nil
-    }
-  end
-
-  defp safe_close(port) do
-    if Port.info(port) != nil, do: Port.close(port)
-  catch
-    :error, _ -> :ok
-  end
-
-  # Recursively SIGKILL a process and all its descendants, deepest first, so a
-  # reaped agent leaves no orphaned subprocesses (e.g. the MCP servers `claude`
-  # spawns). Best-effort and side-effecting; an already-dead pid just fails the
-  # kill harmlessly. Children are discovered via `pgrep -P` BEFORE the parent is
-  # signalled — once the parent dies its children reparent to init and can no
-  # longer be found by walking from it.
-  defp kill_tree(pid) do
-    children =
-      case System.cmd("pgrep", ["-P", "#{pid}"], stderr_to_stdout: true) do
-        {out, 0} -> out |> String.split() |> Enum.map(&String.to_integer/1)
-        _ -> []
-      end
-
-    Enum.each(children, &kill_tree/1)
-    System.cmd("kill", ["-KILL", "#{pid}"], stderr_to_stdout: true)
-    :ok
-  catch
-    # pgrep/kill are external; a malformed pid or a transient System.cmd failure
-    # must not crash terminate/2 (which would skip the lease release below it).
-    _, _ -> :ok
-  end
-
-  # RFC-4122 v4 UUID without a third-party dep. Version nibble forced to 4 and
-  # the variant high bits to 10xx per §4.4.
-  defp uuid4 do
-    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
-    c = (c &&& 0x0FFF) ||| 0x4000
-    d = (d &&& 0x3FFF) ||| 0x8000
-
-    :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
-    |> IO.iodata_to_binary()
   end
 end

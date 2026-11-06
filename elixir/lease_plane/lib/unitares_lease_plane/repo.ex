@@ -16,6 +16,8 @@ defmodule UnitaresLeasePlane.Repo do
   """
 
   alias UnitaresLeasePlane.DB
+  alias UnitaresLeasePlane.Repo.EffectsAndHandoffs
+  alias UnitaresLeasePlane.Repo.Messaging
 
   @typep lease :: map()
   @typep event :: map()
@@ -31,6 +33,9 @@ defmodule UnitaresLeasePlane.Repo do
   audit_session, original_ttl_s, earned_status,
   substrate_state, substrate_state_observed_at, effect_fence
   """
+
+  @doc false
+  def select_lease_columns, do: @select_lease_columns
 
   # ---------- acquire ----------
 
@@ -59,7 +64,7 @@ defmodule UnitaresLeasePlane.Repo do
         {:error, reason} -> Postgrex.rollback(conn, reason)
       end
     end)
-    |> normalize_tx_result()
+    |> EffectsAndHandoffs.normalize_tx_result()
   end
 
   defp maybe_existing_active(conn, surface_id) do
@@ -70,7 +75,7 @@ defmodule UnitaresLeasePlane.Repo do
 
       case Postgrex.query(conn, sql, [surface_id]) do
         {:ok, %{rows: []}} -> {:ok, nil}
-        {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
+        {:ok, %{rows: [row], columns: cols}} -> {:ok, EffectsAndHandoffs.row_to_map(cols, row)}
         {:error, e} -> {:error, e}
       end
     end
@@ -100,8 +105,8 @@ defmodule UnitaresLeasePlane.Repo do
         :ok
 
       {:ok, %{rows: [row], columns: cols}} ->
-        lease = row_to_map(cols, row)
-        log_event(conn, "reaped_remote_ttl", lease)
+        lease = EffectsAndHandoffs.row_to_map(cols, row)
+        EffectsAndHandoffs.log_event(conn, "reaped_remote_ttl", lease)
 
       {:error, e} ->
         {:error, e}
@@ -145,7 +150,7 @@ defmodule UnitaresLeasePlane.Repo do
       # requires. Without these, Pydantic validation degrades to AcquireSchemaInvalid.
       # Preserved log_conflict from upstream — emits the audit event for the
       # conflict-detected path.
-      case log_conflict(conn, p, existing) do
+      case EffectsAndHandoffs.log_conflict(conn, p, existing) do
         :ok ->
           {:ok,
            {:error, :held_by_other,
@@ -199,7 +204,7 @@ defmodule UnitaresLeasePlane.Repo do
 
     args = [
       p.surface_id,
-      uuid_to_binary(p.holder_agent_uuid),
+      EffectsAndHandoffs.uuid_to_binary(p.holder_agent_uuid),
       Map.get(p, :holder_class, "process_instance"),
       p.holder_kind,
       Map.get(p, :holder_pid),
@@ -226,9 +231,9 @@ defmodule UnitaresLeasePlane.Repo do
     case Postgrex.query(conn, insert_lease_sql, args) do
       {:ok, %{rows: [row], columns: cols}} ->
         Postgrex.query!(conn, "RELEASE SAVEPOINT #{savepoint}", [])
-        lease = row_to_map(cols, row)
+        lease = EffectsAndHandoffs.row_to_map(cols, row)
 
-        case log_event(conn, "acquire", lease) do
+        case EffectsAndHandoffs.log_event(conn, "acquire", lease) do
           :ok -> {:ok, {:ok, lease, :new}}
           {:error, e} -> {:error, e}
         end
@@ -279,14 +284,14 @@ defmodule UnitaresLeasePlane.Repo do
     """
 
     args = [
-      uuid_to_binary(existing.lease_id),
+      EffectsAndHandoffs.uuid_to_binary(existing.lease_id),
       substrate_state,
       substrate_observed_at
     ]
 
     case Postgrex.query(conn, sql, args) do
       {:ok, %{rows: [row], columns: cols}} ->
-        refreshed = row_to_map(cols, row)
+        refreshed = EffectsAndHandoffs.row_to_map(cols, row)
         {:ok, {:ok, refreshed, :idempotent}}
 
       # Lease was released between the maybe_existing_active read and our UPDATE
@@ -333,7 +338,7 @@ defmodule UnitaresLeasePlane.Repo do
 
     case Postgrex.query(DB, sql, [surface_id]) do
       {:ok, %{rows: []}} -> {:ok, nil}
-      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
+      {:ok, %{rows: [row], columns: cols}} -> {:ok, EffectsAndHandoffs.row_to_map(cols, row)}
       {:error, e} -> {:error, e}
     end
   end
@@ -342,149 +347,21 @@ defmodule UnitaresLeasePlane.Repo do
 
   @doc """
   Re-read the exact leases acquired for an effect before dispatching it.
-
-  A replacement lease, even for the same surface and holder, does not restore
-  an earlier effect's custody. Expiry uses the database wall clock (including
-  the boundary itself), independently of whether the reaper has run.
-
-  This is a freshness check, NOT a lock held across a filesystem operation.
-  Revocation after this read still requires executor-side fencing to exclude.
-  Experiment and limits: `docs/operations/effect-custody-recheck.md`.
   """
   @spec check_effect_custody([map()]) :: :ok | {:error, atom()}
-  def check_effect_custody([_ | _] = leases) do
-    Enum.reduce_while(leases, :ok, fn lease, :ok ->
-      case check_effect_lease(lease) do
-        :ok -> {:cont, :ok}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
-  end
-
-  def check_effect_custody(_), do: {:error, :custody_unavailable}
-
-  defp check_effect_lease(%{
-         lease_id: id,
-         surface_id: surface,
-         holder_agent_uuid: holder
-       }) do
-    sql = """
-    SELECT released_at IS NULL, expires_at > clock_timestamp()
-    FROM lease_plane.surface_leases
-    WHERE lease_id = $1 AND surface_id = $2 AND holder_agent_uuid = $3
-    """
-
-    case Postgrex.query(DB, sql, [uuid_to_binary(id), surface, uuid_to_binary(holder)]) do
-      {:ok, %{rows: [[true, true]]}} -> :ok
-      {:ok, %{rows: [[true, false]]}} -> {:error, :custody_expired}
-      {:ok, %{rows: [[false, _]]}} -> {:error, :revoked}
-      {:ok, %{rows: []}} -> {:error, :revoked}
-      _ -> {:error, :custody_unavailable}
-    end
-  end
-
-  defp check_effect_lease(_), do: {:error, :custody_unavailable}
+  defdelegate check_effect_custody(leases), to: EffectsAndHandoffs
 
   @doc """
   Commit a durable, exclusive reservation before pre-image capture or mutation.
-  An optional prepare callback runs on the same transaction connection after
-  custody validation. Its payload/promotion claim commits with the reservation,
-  or both roll back. It must not perform filesystem I/O.
-  This transaction is the admission point: it serializes with release on
-  the exact lease row. Expiry is checked here; admitted operations retain
-  custody until all their filesystem calls have returned, even after expiry.
-  A connection/process loss does NOT release this reservation.
   """
-  def begin_effect_custody(effect_id, leases, prepare \\ fn _conn -> :ok end)
-
-  def begin_effect_custody(
-        effect_id,
-        [
-          %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
-        ],
-        prepare
-      )
-      when is_binary(effect_id) and is_function(prepare, 1) do
-    sql = """
-    UPDATE lease_plane.surface_leases SET effect_fence = $4
-    WHERE lease_id = $1 AND surface_id = $2 AND holder_agent_uuid = $3
-      AND released_at IS NULL AND expires_at > clock_timestamp()
-      AND effect_fence IS NULL
-    RETURNING lease_id
-    """
-
-    # Take the lock before evaluating the clock. UPDATE's original WHERE may
-    # have been evaluated before waiting behind an unchanged row lock.
-    admission =
-      Postgrex.transaction(DB, fn conn ->
-        with {:ok, _lease} <- lock_active_lease(conn, id),
-             {:ok, %{num_rows: 1}} <-
-               Postgrex.query(conn, sql, [
-                 uuid_to_binary(id),
-                 surface,
-                 uuid_to_binary(holder),
-                 effect_id
-               ]) do
-          case prepare.(conn) do
-            :ok -> :ok
-            {:error, reason} -> Postgrex.rollback(conn, {:prepare_failed, reason})
-          end
-        else
-          {:ok, %{num_rows: 0}} -> Postgrex.rollback(conn, :not_admitted)
-          {:error, reason} -> Postgrex.rollback(conn, reason)
-        end
-      end)
-
-    case admission do
-      {:ok, :ok} ->
-        :ok
-
-      {:error, :not_found} ->
-        {:error, :revoked}
-
-      {:error, :not_admitted} ->
-        case check_effect_custody([
-               %{lease_id: id, surface_id: surface, holder_agent_uuid: holder}
-             ]) do
-          :ok -> {:error, :effect_in_progress}
-          error -> error
-        end
-
-      {:error, {:prepare_failed, reason}} ->
-        {:error, reason}
-
-      {:error, _} ->
-        {:error, :custody_unavailable}
-    end
-  end
-
-  def begin_effect_custody(_, _, _), do: {:error, :custody_unavailable}
+  def begin_effect_custody(effect_id, leases, prepare \\ fn _conn -> :ok end),
+    do: EffectsAndHandoffs.begin_effect_custody(effect_id, leases, prepare)
 
   @doc """
   Retire only this execution's reservation after its last possible filesystem
-  call. Never call from an `after` clause or a timeout/recovery sweep: those do
-  not establish that an outstanding filesystem operation has finished.
+  call.
   """
-  def finish_effect_custody(effect_id, [%{lease_id: id}]) do
-    case Postgrex.query(
-           DB,
-           """
-           UPDATE lease_plane.surface_leases SET effect_fence = NULL
-           WHERE lease_id = $1 AND effect_fence = $2 AND released_at IS NULL
-           """,
-           [uuid_to_binary(id), effect_id]
-         ) do
-      {:ok, %{num_rows: 1}} -> :ok
-      _ -> {:error, :custody_unavailable}
-    end
-  end
-
-  def finish_effect_custody(_, _), do: {:error, :custody_unavailable}
-
-  defp custody_error(%Postgrex.Error{postgres: %{constraint: "effect_custody_reserved"}}),
-    do: :effect_in_progress
-
-  defp custody_error(reason), do: reason
+  defdelegate finish_effect_custody(effect_id, leases), to: EffectsAndHandoffs
 
   # ---------- identity attestation replay ledger ----------
 
@@ -570,12 +447,12 @@ defmodule UnitaresLeasePlane.Repo do
     case Postgrex.transaction(DB, fn conn ->
            with {:ok, %{rows: [row], columns: cols}} <-
                   Postgrex.query(conn, sql, [
-                    uuid_to_binary(lease_id),
+                    EffectsAndHandoffs.uuid_to_binary(lease_id),
                     substrate_state,
                     substrate_observed_at
                   ]),
-                lease = row_to_map(cols, row),
-                :ok <- log_event(conn, "renew", lease) do
+                lease = EffectsAndHandoffs.row_to_map(cols, row),
+                :ok <- EffectsAndHandoffs.log_event(conn, "renew", lease) do
              :ok
            else
              {:ok, %{rows: []}} -> Postgrex.rollback(conn, :not_found)
@@ -600,9 +477,17 @@ defmodule UnitaresLeasePlane.Repo do
 
     case Postgrex.transaction(DB, fn conn ->
            with {:ok, %{rows: [row], columns: cols}} <-
-                  Postgrex.query(conn, sql, [uuid_to_binary(lease_id), release_reason]),
-                lease = row_to_map(cols, row),
-                :ok <- log_event(conn, release_event_type(release_reason), lease) do
+                  Postgrex.query(conn, sql, [
+                    EffectsAndHandoffs.uuid_to_binary(lease_id),
+                    release_reason
+                  ]),
+                lease = EffectsAndHandoffs.row_to_map(cols, row),
+                :ok <-
+                  EffectsAndHandoffs.log_event(
+                    conn,
+                    EffectsAndHandoffs.release_event_type(release_reason),
+                    lease
+                  ) do
              :ok
            else
              {:ok, %{rows: []}} -> Postgrex.rollback(conn, :not_found)
@@ -610,461 +495,56 @@ defmodule UnitaresLeasePlane.Repo do
            end
          end) do
       {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, custody_error(reason)}
+      {:error, reason} -> {:error, EffectsAndHandoffs.custody_error(reason)}
     end
   end
 
   # ---------- handoff ----------
 
   @spec active_lease(binary()) :: {:ok, lease} | {:error, :not_found | term()}
-  def active_lease(lease_id) when is_binary(lease_id) do
-    sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
-        "WHERE lease_id = $1 AND released_at IS NULL"
-
-    case Postgrex.query(DB, sql, [uuid_to_binary(lease_id)]) do
-      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
-      {:ok, %{rows: []}} -> {:error, :not_found}
-      {:error, e} -> {:error, e}
-    end
-  end
+  defdelegate active_lease(lease_id), to: EffectsAndHandoffs
 
   @spec log_handoff_offer(lease, map()) :: :ok | {:error, term()}
-  def log_handoff_offer(%{} = lease, %{} = handoff) do
-    payload = %{
-      handoff_id: handoff.handoff_id,
-      from_lease_id: lease.lease_id,
-      from_holder_agent_uuid: lease.holder_agent_uuid,
-      to_holder_agent_uuid: handoff.to_holder_agent_uuid,
-      new_ttl_s: handoff.ttl_s,
-      offer_expires_at: iso(handoff.expires_at),
-      audit_session: lease.audit_session
-    }
-
-    log_event(DB, "handoff_offer", lease, payload)
-  end
+  defdelegate log_handoff_offer(lease, handoff), to: EffectsAndHandoffs
 
   @spec accept_handoff(map()) :: {:ok, lease} | {:error, term()}
-  def accept_handoff(%{} = handoff) do
-    Postgrex.transaction(DB, fn conn ->
-      with {:ok, old_lease} <- lock_active_lease(conn, handoff.lease_id),
-           {:ok, new_lease} <- transition_handoff(conn, old_lease, handoff) do
-        new_lease
-      else
-        {:error, reason} -> Postgrex.rollback(conn, reason)
-      end
-    end)
-    |> case do
-      {:ok, lease} -> {:ok, lease}
-      {:error, reason} -> {:error, custody_error(reason)}
-    end
-  end
-
-  defp lock_active_lease(conn, lease_id) do
-    sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
-        "WHERE lease_id = $1 AND released_at IS NULL FOR UPDATE"
-
-    case Postgrex.query(conn, sql, [uuid_to_binary(lease_id)]) do
-      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
-      {:ok, %{rows: []}} -> {:error, :not_found}
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  # surface_kind dropped from reacquire INSERT per RFC v0.8 §7.2.3 — generated
-  # from surface_id post-026. PR 1 fixed this for acquire; the handoff path was
-  # missed and surfaced when 026-029 were applied to the live DB on 2026-05-02.
-  defp transition_handoff(conn, old_lease, handoff) do
-    release_sql = """
-    UPDATE lease_plane.surface_leases
-    SET released_at = now(), release_reason = 'handoff'
-    WHERE lease_id = $1 AND released_at IS NULL
-    """
-
-    insert_sql = """
-    INSERT INTO lease_plane.surface_leases
-      (surface_id, holder_agent_uuid, holder_class,
-       holder_kind, holder_pid, heartbeat_required, intent,
-       expires_at, original_ttl_s, audit_session, earned_status)
-    VALUES
-      ($1, $2, $3, 'remote_heartbeat', NULL, true, $4,
-       now() + make_interval(secs => $5), $5, $6, 'provisional')
-    RETURNING #{@select_lease_columns}
-    """
-
-    intent = old_lease.intent || "handoff from #{old_lease.lease_id}"
-    audit_session = old_lease.audit_session
-
-    args = [
-      old_lease.surface_id,
-      uuid_to_binary(handoff.to_holder_agent_uuid),
-      old_lease.holder_class,
-      intent,
-      handoff.ttl_s,
-      audit_session
-    ]
-
-    with {:ok, _} <- Postgrex.query(conn, release_sql, [uuid_to_binary(old_lease.lease_id)]),
-         {:ok, %{rows: [row], columns: cols}} <- Postgrex.query(conn, insert_sql, args),
-         new_lease = row_to_map(cols, row),
-         payload = %{
-           handoff_id: handoff.handoff_id,
-           from_lease_id: old_lease.lease_id,
-           from_holder_agent_uuid: old_lease.holder_agent_uuid,
-           to_holder_agent_uuid: handoff.to_holder_agent_uuid,
-           audit_session: audit_session
-         },
-         :ok <- log_event(conn, "handoff_accept", new_lease, payload) do
-      {:ok, new_lease}
-    end
-  end
-
-  # ---------- reaper ----------
+  defdelegate accept_handoff(handoff), to: EffectsAndHandoffs
 
   # ---------- topic messages (migration 069) ----------
 
-  @select_message_columns """
-  message_id::text AS message_id,
-  topic,
-  sender_agent_uuid::text AS sender_agent_uuid,
-  recipient_agent_uuid::text AS recipient_agent_uuid,
-  envelope,
-  response_to_id::text AS response_to_id,
-  reply_depth, delivery_state, created_at, expires_at, delivered_at
-  """
-
   @doc """
   Insert one addressed message.
-
-  `reply_depth` is derived server-side from the parent row rather than trusted
-  from the caller, so a harness cannot reset its own depth to escape the loop
-  bound. A `response_to_id` naming a row that does not exist inserts nothing
-  and returns `:parent_not_found` — silently dropping the thread pointer would
-  turn a reply into a new conversation.
   """
   @spec send_message(map()) :: {:ok, map()} | {:error, term()}
-  def send_message(%{} = p) do
-    # The parent must match on topic as well as exist. Without that a third
-    # agent can reply into an A<->B thread and silently relocate the whole
-    # conversation onto a topic its participants are not reading.
-    sql = """
-    WITH parent AS (
-      SELECT reply_depth, topic FROM lease_plane.topic_messages WHERE message_id = $5
-    )
-    INSERT INTO lease_plane.topic_messages
-      (topic, sender_agent_uuid, recipient_agent_uuid, envelope,
-       response_to_id, reply_depth, expires_at)
-    SELECT $1, $2, $3, $4, $5,
-           COALESCE((SELECT reply_depth + 1 FROM parent), 0),
-           now() + make_interval(secs => $6)
-    WHERE $5::uuid IS NULL OR EXISTS (SELECT 1 FROM parent WHERE topic = $1)
-    RETURNING #{@select_message_columns}
-    """
-
-    params = [
-      p.topic,
-      uuid_to_binary(p.sender_agent_uuid),
-      uuid_to_binary(p.recipient_agent_uuid),
-      p.envelope,
-      p.response_to_id && uuid_to_binary(p.response_to_id),
-      p.ttl_s
-    ]
-
-    case Postgrex.query(DB, sql, params) do
-      {:ok, %{rows: [row], columns: cols}} ->
-        {:ok, row_to_message(cols, row)}
-
-      # Zero rows means the WHERE guard failed, which now has two causes. One
-      # extra query on the error path only, to tell the caller which.
-      {:ok, %{rows: []}} ->
-        classify_missing_parent(p.response_to_id, p.topic)
-
-      {:error, %Postgrex.Error{postgres: %{constraint: constraint}}} ->
-        {:error, message_constraint_reason(constraint)}
-
-      {:error, e} ->
-        {:error, e}
-    end
-  end
+  defdelegate send_message(params), to: Messaging
 
   @doc """
   Atomically claim and return one recipient's pending, unexpired mail.
-
-  The claim and the read are ONE statement with `FOR UPDATE SKIP LOCKED`: two
-  concurrent pollers for the same agent get disjoint sets, never the same
-  message twice. The gate doc names this missing primitive explicitly ("Spawn
-  needs an ATOMIC claim so two pollers cannot launch duplicate responders") —
-  it is a property of the transport, so it holds here whether or not anything
-  is ever built on top.
-
-  Expired mail is never delivered and never counted; it is filtered here and
-  removed later by `purge_expired_messages/1`.
   """
   @spec inbox(String.t(), pos_integer()) :: {:ok, [map()]} | {:error, term()}
-  def inbox(recipient_agent_uuid, limit)
-      when is_binary(recipient_agent_uuid) and is_integer(limit) and limit > 0 do
-    sql = """
-    WITH claimed AS (
-      -- Aliased to claim_id: an unqualified `message_id` in RETURNING is
-      -- ambiguous once the CTE joins the target table.
-      SELECT message_id AS claim_id
-      FROM lease_plane.topic_messages
-      WHERE recipient_agent_uuid = $1
-        AND delivery_state = 'pending'
-        AND expires_at > now()
-      ORDER BY created_at
-      LIMIT $2
-      FOR UPDATE SKIP LOCKED
-    ),
-    updated AS (
-      UPDATE lease_plane.topic_messages m
-      SET delivery_state = 'delivered', delivered_at = now()
-      FROM claimed c
-      WHERE m.message_id = c.claim_id
-      RETURNING #{@select_message_columns}
-    )
-    -- UPDATE ... RETURNING has NO defined row order, so the ORDER BY inside
-    -- `claimed` only decides WHICH rows are taken, not the order they come
-    -- back in. Ordering the outer SELECT is what actually makes the inbox
-    -- oldest-first; without it a caller reconstructing a thread from a batch
-    -- can see a reply before the message it answers.
-    SELECT * FROM updated ORDER BY created_at
-    """
-
-    case Postgrex.query(DB, sql, [uuid_to_binary(recipient_agent_uuid), limit]) do
-      {:ok, %{rows: rows, columns: cols}} ->
-        {:ok, Enum.map(rows, &row_to_message(cols, &1))}
-
-      {:error, e} ->
-        {:error, e}
-    end
-  end
+  defdelegate inbox(recipient_agent_uuid, limit), to: Messaging
 
   @doc """
   Delete expired messages, delivered or not.
-
-  Expiry is the property that keeps this table from becoming what it replaced:
-  45 of 59 governance-KG channel notes were still `status='open'` because a
-  note has no natural end. A message that outlived its TTL is gone.
   """
   @spec purge_expired_messages(pos_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def purge_expired_messages(limit \\ 1_000) when is_integer(limit) and limit > 0 do
-    sql = """
-    WITH doomed AS (
-      SELECT message_id FROM lease_plane.topic_messages
-      WHERE expires_at <= now()
-      ORDER BY expires_at
-      LIMIT $1
-    )
-    DELETE FROM lease_plane.topic_messages m
-    USING doomed d
-    WHERE m.message_id = d.message_id
-    """
+  def purge_expired_messages(limit \\ 1_000), do: Messaging.purge_expired_messages(limit)
 
-    case Postgrex.query(DB, sql, [limit]) do
-      {:ok, %{num_rows: n}} -> {:ok, n}
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp classify_missing_parent(response_to_id, topic) do
-    sql = "SELECT topic FROM lease_plane.topic_messages WHERE message_id = $1"
-
-    case Postgrex.query(DB, sql, [uuid_to_binary(response_to_id)]) do
-      {:ok, %{rows: [[parent_topic]]}} when parent_topic != topic -> {:error, :topic_mismatch}
-      {:ok, %{rows: []}} -> {:error, :parent_not_found}
-      # The parent exists on this topic yet the insert matched nothing: it was
-      # deleted or its topic changed between the two statements. Report the
-      # honest race rather than guessing which.
-      {:ok, _} -> {:error, :parent_not_found}
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp row_to_message(columns, row) do
-    columns
-    |> Enum.zip(row)
-    |> Enum.into(%{}, fn
-      {"envelope", val} -> {:envelope, decode_payload(val)}
-      {col, val} -> {String.to_atom(col), val}
-    end)
-  end
-
-  # Constraint names are the typed vocabulary here: a CHECK violation is a
-  # caller error (422), never a transient outage (503), so it must not fall
-  # through to the generic error arm.
-  defp message_constraint_reason("topic_messages_reply_depth_bounded"), do: :reply_depth_exceeded
-  defp message_constraint_reason("topic_messages_ttl_bounded"), do: :ttl_out_of_range
-  defp message_constraint_reason("topic_messages_topic_grammar"), do: :invalid_topic
-  defp message_constraint_reason("topic_messages_not_self_addressed"), do: :self_addressed
-  defp message_constraint_reason("topic_messages_envelope_is_object"), do: :envelope_not_object
-  defp message_constraint_reason(other), do: {:constraint_violation, other}
+  # ---------- reaper ----------
 
   @spec expired_active_leases(pos_integer()) :: {:ok, [lease]} | {:error, term()}
-  def expired_active_leases(limit) when is_integer(limit) and limit > 0 do
-    sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
-        "WHERE released_at IS NULL AND effect_fence IS NULL AND expires_at < now() " <>
-        "ORDER BY expires_at ASC LIMIT $1"
-
-    case Postgrex.query(DB, sql, [limit]) do
-      {:ok, %{rows: rows, columns: cols}} -> {:ok, Enum.map(rows, &row_to_map(cols, &1))}
-      {:error, e} -> {:error, e}
-    end
-  end
+  defdelegate expired_active_leases(limit), to: EffectsAndHandoffs
 
   @spec release_if_expired(binary(), String.t()) :: :ok | {:error, term()}
-  def release_if_expired(lease_id, release_reason) when is_binary(release_reason) do
-    sql = """
-    UPDATE lease_plane.surface_leases
-    SET released_at = now(), release_reason = $2
-    WHERE lease_id = $1 AND released_at IS NULL AND expires_at < now()
-    RETURNING #{@select_lease_columns}
-    """
-
-    case Postgrex.transaction(DB, fn conn ->
-           with {:ok, %{rows: [row], columns: cols}} <-
-                  Postgrex.query(conn, sql, [uuid_to_binary(lease_id), release_reason]),
-                lease = row_to_map(cols, row),
-                :ok <- log_event(conn, release_event_type(release_reason), lease) do
-             :ok
-           else
-             {:ok, %{rows: []}} -> Postgrex.rollback(conn, :not_found)
-             {:error, e} -> Postgrex.rollback(conn, e)
-           end
-         end) do
-      {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, custody_error(reason)}
-    end
-  end
+  defdelegate release_if_expired(lease_id, release_reason), to: EffectsAndHandoffs
 
   # ---------- audit outbox ----------
 
   @spec unforwarded_events(pos_integer(), keyword()) :: {:ok, [event]} | {:error, term()}
-  def unforwarded_events(limit, opts \\ []) when is_integer(limit) and limit > 0 do
-    {where, args} =
-      case Keyword.fetch(opts, :surface_id) do
-        {:ok, surface_id} -> {"forwarded_at IS NULL AND surface_id = $2", [limit, surface_id]}
-        :error -> {"forwarded_at IS NULL", [limit]}
-      end
-
-    # forward_attempts ASC before ts ASC: rows that keep failing sink behind
-    # fresh work instead of head-of-line blocking the batch, but are still
-    # retried once fresher rows drain — so a repaired downstream (e.g. the
-    # 2026-06 audit partition gap, migration 045) self-heals with no operator
-    # action and no parked/dead-letter state. The wedge this fixes: 2,199
-    # rows stuck on a partition hole monopolized every ORDER BY ts ASC batch
-    # for 11 days — zero forwards, 31k attempts per row.
-    sql = """
-    SELECT
-      event_id::text AS event_id,
-      ts, event_type, lease_id::text AS lease_id,
-      surface_id, surface_kind,
-      holder_agent_uuid::text AS holder_agent_uuid,
-      holder_class, advisory_mode, payload, earned_status
-    FROM lease_plane.lease_plane_events
-    WHERE #{where}
-    ORDER BY forward_attempts ASC, ts ASC
-    LIMIT $1
-    """
-
-    case Postgrex.query(DB, sql, args) do
-      {:ok, %{rows: rows, columns: cols}} -> {:ok, Enum.map(rows, &row_to_map(cols, &1))}
-      {:error, e} -> {:error, e}
-    end
-  end
+  def unforwarded_events(limit, opts \\ []), do: Messaging.unforwarded_events(limit, opts)
 
   @spec forward_outbox_event(binary()) :: :ok | {:error, term()}
-  def forward_outbox_event(event_id) when is_binary(event_id) do
-    result =
-      Postgrex.transaction(DB, fn conn ->
-        with {:ok, event} <- lock_unforwarded_event(conn, event_id),
-             :ok <- insert_tool_usage(conn, event),
-             :ok <- mark_forwarded(conn, event.event_id) do
-          :ok
-        else
-          {:error, reason} -> Postgrex.rollback(conn, reason)
-        end
-      end)
-
-    case result do
-      {:ok, :ok} ->
-        :ok
-
-      {:error, reason} ->
-        _ = bump_forward_attempts(event_id)
-        {:error, reason}
-    end
-  end
-
-  defp lock_unforwarded_event(conn, event_id) do
-    sql = """
-    SELECT
-      event_id::text AS event_id,
-      ts, event_type, lease_id::text AS lease_id,
-      surface_id, surface_kind,
-      holder_agent_uuid::text AS holder_agent_uuid,
-      holder_class, advisory_mode, payload, earned_status
-    FROM lease_plane.lease_plane_events
-    WHERE event_id = $1 AND forwarded_at IS NULL
-    FOR UPDATE
-    """
-
-    case Postgrex.query(conn, sql, [uuid_to_binary(event_id)]) do
-      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
-      {:ok, %{rows: []}} -> {:error, :not_found}
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp insert_tool_usage(conn, event) do
-    sql = """
-    INSERT INTO audit.tool_usage
-      (ts, agent_id, session_id, tool_name, latency_ms, success, error_type, payload)
-    VALUES ($1, $2, $3, $4, NULL, $5, $6, ($7::text)::jsonb)
-    """
-
-    success = event.event_type != "service_unavailable"
-    error_type = if success, do: nil, else: "service_unavailable"
-    payload = tool_usage_payload(event)
-
-    args = [
-      event.ts,
-      event.holder_agent_uuid,
-      UnitaresLeasePlane.SessionRef.reference(Map.get(payload, "audit_session")),
-      "lease.#{event.event_type}",
-      success,
-      error_type,
-      Jason.encode!(payload)
-    ]
-
-    case Postgrex.query(conn, sql, args) do
-      {:ok, _} -> :ok
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp mark_forwarded(conn, event_id) do
-    sql = """
-    UPDATE lease_plane.lease_plane_events
-    SET forwarded_at = now(), forward_attempts = forward_attempts + 1
-    WHERE event_id = $1
-    """
-
-    case Postgrex.query(conn, sql, [uuid_to_binary(event_id)]) do
-      {:ok, _} -> :ok
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp bump_forward_attempts(event_id) do
-    Postgrex.query(
-      DB,
-      "UPDATE lease_plane.lease_plane_events SET forward_attempts = forward_attempts + 1 WHERE event_id = $1",
-      [uuid_to_binary(event_id)]
-    )
-  end
+  defdelegate forward_outbox_event(event_id), to: Messaging
 
   # ---------- governed-effect durable recording (contract §8) ----------
 
@@ -1141,7 +621,8 @@ defmodule UnitaresLeasePlane.Repo do
         {:ok, nil}
 
       {:ok, %{rows: [[digest, payload_text]]}} ->
-        {:ok, %{idempotency_digest: digest, payload: decode_payload(payload_text)}}
+        {:ok,
+         %{idempotency_digest: digest, payload: EffectsAndHandoffs.decode_payload(payload_text)}}
 
       {:error, e} ->
         {:error, e}
@@ -1170,167 +651,8 @@ defmodule UnitaresLeasePlane.Repo do
 
     case Postgrex.query(DB, sql, [effect_id]) do
       {:ok, %{rows: []}} -> {:ok, nil}
-      {:ok, %{rows: [[payload_text]]}} -> {:ok, decode_payload(payload_text)}
+      {:ok, %{rows: [[payload_text]]}} -> {:ok, EffectsAndHandoffs.decode_payload(payload_text)}
       {:error, reason} -> {:error, reason}
     end
   end
-
-  # ---------- helpers ----------
-
-  defp log_event(conn, event_type, lease, payload \\ nil) do
-    sql = """
-    INSERT INTO lease_plane.lease_plane_events
-      (event_type, lease_id, surface_id, surface_kind,
-       holder_agent_uuid, holder_class, advisory_mode,
-       payload, earned_status)
-    VALUES ($1, $2, $3, $4, $5, $6, true, ($7::text)::jsonb, $8)
-    """
-
-    args = [
-      event_type,
-      uuid_to_binary(lease.lease_id),
-      lease.surface_id,
-      lease.surface_kind,
-      uuid_to_binary(lease.holder_agent_uuid),
-      lease.holder_class,
-      Jason.encode!(payload || lease_payload(lease)),
-      lease.earned_status
-    ]
-
-    case Postgrex.query(conn, sql, args) do
-      {:ok, _} -> :ok
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp log_conflict(conn, p, existing) do
-    sql = """
-    INSERT INTO lease_plane.lease_plane_events
-      (event_type, lease_id, surface_id, surface_kind,
-       holder_agent_uuid, holder_class, advisory_mode,
-       payload, earned_status)
-    VALUES ($1, $2, $3, $4, $5, $6, true, ($7::text)::jsonb, $8)
-    """
-
-    payload = %{
-      requested_holder_agent_uuid: p.holder_agent_uuid,
-      held_by_uuid: existing.holder_agent_uuid,
-      expires_at: iso(existing.expires_at),
-      audit_session: Map.get(p, :audit_session)
-    }
-
-    args = [
-      "conflict_held_by_other",
-      uuid_to_binary(existing.lease_id),
-      existing.surface_id,
-      existing.surface_kind,
-      uuid_to_binary(p.holder_agent_uuid),
-      Map.get(p, :holder_class, "process_instance"),
-      Jason.encode!(payload),
-      existing.earned_status
-    ]
-
-    case Postgrex.query(conn, sql, args) do
-      {:ok, _} -> :ok
-      {:error, e} -> {:error, e}
-    end
-  end
-
-  defp lease_payload(lease) do
-    %{
-      "lease_id" => lease.lease_id,
-      "surface_id" => lease.surface_id,
-      "surface_kind" => lease.surface_kind,
-      "holder_agent_uuid" => lease.holder_agent_uuid,
-      "holder_class" => lease.holder_class,
-      "holder_kind" => lease.holder_kind,
-      "holder_pid" => lease.holder_pid,
-      "heartbeat_required" => lease.heartbeat_required,
-      "intent" => lease.intent,
-      "acquired_at" => iso(lease.acquired_at),
-      "expires_at" => iso(lease.expires_at),
-      "last_heartbeat_at" => iso(lease.last_heartbeat_at),
-      "released_at" => iso(lease.released_at),
-      "release_reason" => lease.release_reason,
-      "audit_session" => lease.audit_session,
-      "original_ttl_s" => lease.original_ttl_s,
-      "earned_status" => lease.earned_status
-    }
-  end
-
-  defp tool_usage_payload(event) do
-    # A lease recorded before acquire ingest hashed keyed ids may still hold
-    # one raw; audit.tool_usage is readable by other callers (SessionRef).
-    event_payload =
-      case decode_payload(event.payload) do
-        %{"audit_session" => session} = decoded ->
-          Map.put(decoded, "audit_session", UnitaresLeasePlane.SessionRef.reference(session))
-
-        decoded ->
-          decoded
-      end
-
-    %{
-      "lease_event_id" => event.event_id,
-      "lease_id" => event.lease_id,
-      "surface_id" => event.surface_id,
-      "surface_kind" => event.surface_kind,
-      "holder_agent_uuid" => event.holder_agent_uuid,
-      "holder_class" => event.holder_class,
-      "advisory_mode" => event.advisory_mode,
-      "earned_status" => event.earned_status,
-      "audit_session" => Map.get(event_payload, "audit_session"),
-      "lease_payload" => event_payload
-    }
-  end
-
-  defp decode_payload(%{} = payload), do: stringify_keys(payload)
-
-  defp decode_payload(payload) when is_binary(payload) do
-    case Jason.decode(payload) do
-      {:ok, %{} = decoded} -> stringify_keys(decoded)
-      _ -> %{"raw_payload" => payload}
-    end
-  end
-
-  defp decode_payload(_), do: %{}
-
-  defp stringify_keys(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
-      {key, value} -> {key, value}
-    end)
-  end
-
-  defp release_event_type(reason)
-       when reason in ["reaped_remote_ttl", "reaped_local_ttl", "down_local", "forced"],
-       do: reason
-
-  defp release_event_type(_reason), do: "release"
-
-  defp iso(nil), do: nil
-  defp iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
-  defp row_to_map(columns, row) do
-    columns
-    |> Enum.zip(row)
-    |> Enum.into(%{}, fn {col, val} -> {String.to_atom(col), val} end)
-  end
-
-  # SELECT casts uuid columns to text so the boundary always sees 36-char strings.
-  # For parameter binding (INSERT/UPDATE/WHERE), Postgrex requires the canonical
-  # 16-byte binary form — uuid_to_binary/1 handles the conversion.
-
-  defp uuid_to_binary(uuid) when is_binary(uuid) and byte_size(uuid) == 16, do: uuid
-
-  defp uuid_to_binary(
-         <<a::binary-size(8), "-", b::binary-size(4), "-", c::binary-size(4), "-",
-           d::binary-size(4), "-", e::binary-size(12)>>
-       ) do
-    Base.decode16!(a <> b <> c <> d <> e, case: :mixed)
-  end
-
-  defp normalize_tx_result({:ok, {:ok, lease, kind}}), do: {:ok, lease, kind}
-  defp normalize_tx_result({:ok, {:error, code, detail}}), do: {:error, code, detail}
-  defp normalize_tx_result({:error, reason}), do: {:error, custody_error(reason)}
 end
