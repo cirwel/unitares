@@ -620,6 +620,10 @@ class _LiveSessionSqlBackend:
 
         # 1. `DialecticDB.probe_inflight_saga`
         if norm.startswith("SELECT 1 FROM coordination.session_resolution_sagas"):
+            assert (
+                "AND state IN ('reserved', 'paused_agent_applied', 'both_agents_applied', 'reverting')"
+                in norm
+            )
             if not self.probe_healthy:
                 raise RuntimeError("simulated saga table read failure")
             assert args[0] == self.session_id
@@ -627,6 +631,10 @@ class _LiveSessionSqlBackend:
 
         # 2. `DialecticDB.probe_saga_since`
         if norm.startswith("SELECT saga_id, state, created_at, pg_committed_at, reverted_at"):
+            assert (
+                "state IN ('reserved', 'paused_agent_applied', 'both_agents_applied', 'reverting')"
+                in norm
+            )
             assert (
                 "OR ($2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)"
                 in norm
@@ -649,6 +657,7 @@ class _LiveSessionSqlBackend:
         # 3. `DialecticDB.resolve_session` (`WITH terminal AS (UPDATE core.dialectic_sessions ...)`)
         if "WITH terminal AS ( UPDATE core.dialectic_sessions" in norm:
             assert "awaiting_facilitation = false" in norm
+            assert "AND status NOT IN ('resolved', 'failed')" in norm
             target_status, target_phase, res_json, session_id = (
                 args[0],
                 args[1],
@@ -657,7 +666,10 @@ class _LiveSessionSqlBackend:
             )
             assert session_id == self.session_id
 
-            if self.row["status"] in ("resolved", "failed"):
+            if (
+                "AND status NOT IN ('resolved', 'failed')" in norm
+                and self.row["status"] in ("resolved", "failed")
+            ):
                 return None
 
             # Evaluate CAS predicates bound in the SQL query
@@ -757,9 +769,11 @@ class _LiveSessionSqlBackend:
                     and self.row["awaiting_facilitation"] is True
                 ):
                     return None
-            else:
+            elif "status NOT IN ('resolved', 'failed', 'escalated')" in norm:
                 if self.row["status"] in ("resolved", "failed", "escalated"):
                     return None
+            else:
+                raise AssertionError(f"Missing status guard in add_message SQL: {norm}")
 
             where_part = norm.split("WHERE", 1)[1]
             set_part = norm.split("WHERE", 1)[0]
