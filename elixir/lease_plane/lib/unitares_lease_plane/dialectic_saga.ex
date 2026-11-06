@@ -419,6 +419,14 @@ defmodule UnitaresLeasePlane.DialecticSaga do
         # The guarded UPDATE matched nothing. Either the session is gone, or it
         # exists and is terminal — the WHERE clause excludes resolved/failed/
         # escalated rows deliberately (the dual-writer guard).
+        #
+        # ⛔This branch returned `:ok` for the terminal case until 2026-08-22,
+        # which reported a successful reviewer write when NOTHING was written.
+        # Python's caller treats 200/ok as persisted and emits
+        # `dialectic_reviewer_reassigned` on it, so a terminal row inflated the
+        # §11 criterion-10 reassignment count with reassignments that never
+        # happened — the same over-count #1804 fixed on the Python write tail,
+        # still open here. Existence is not a write.
         case Postgrex.query(
                DB,
                "SELECT status, paused_agent_id, paused_agent_state_json FROM core.dialectic_sessions WHERE session_id = $1",
@@ -478,6 +486,11 @@ defmodule UnitaresLeasePlane.DialecticSaga do
             end
 
           {:error, reason} = error when reason in @deterministic_post_claim_refusals ->
+            # The claim committed in an earlier transaction, but this refusal
+            # proves the terminal statement wrote nothing. Release this exact
+            # reservation immediately so a corrected decision does not sit
+            # behind the orphan-reclaim timeout. Unknown database/transport
+            # errors stay reserved for conservative recovery.
             case Claims.revert_reserved_claim(saga_id) do
               :ok -> error
               {:error, cleanup_error} -> {:error, cleanup_error}
@@ -488,9 +501,17 @@ defmodule UnitaresLeasePlane.DialecticSaga do
         end
 
       {:error, {:session_terminal, existing}} ->
+        # Already terminal: nothing to write. claim/1 cleaned stale reserved
+        # generations in the same transaction that observed terminal state,
+        # while still holding the session-row lock.
         {:ok, %{status: existing, saga_id: nil, origin: :already_terminal}}
 
       {:error, reason} = error when reason in @deterministic_preclaim_refusals ->
+        # No reservation was returned to this invocation, so it owns nothing
+        # to clean up. Same-payload generations are intentionally repeatable;
+        # selecting by payload/participants here could revoke a different
+        # invocation's current generation. Exact post-claim cleanup is keyed
+        # by the saga_id returned above.
         error
 
       {:error, reason} ->
@@ -498,6 +519,16 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
+  # Guarded terminal write of the session row — BEAM is the sole writer for both
+  # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
+  # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
+  # A resolved write and its Python runtime-effect handoff are one PostgreSQL
+  # statement on the versioned route. The legacy route remains a genuinely
+  # separate query for application rollback compatibility after migration 075:
+  # PostgreSQL resolves every relation while parsing a query, so a conditional
+  # CTE that merely skips the INSERT is not a compatibility boundary. Migrations
+  # 075 (effect outbox), 077 (transcript frontier), and 078 (saga generation)
+  # are hard prerequisites for deploying this versioned writer.
   defp commit_session_row(
          params,
          session_id,
@@ -687,6 +718,12 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   @doc """
   Compatibility boundary retained for callers compiled against the former
   split claim/commit API.
+
+  A saga is not terminal merely because its reservation row can be marked
+  `pg_committed`: the session row must become terminal in the *same database
+  transaction*. Freeing the in-flight slot while the session remains active
+  permits a second, contradictory resolution to claim it. Use `resolve/1`,
+  which owns both writes atomically.
   """
   @spec commit(String.t()) :: {:error, :terminal_commit_requires_resolve}
   def commit(saga_id) when is_binary(saga_id) do
@@ -695,7 +732,10 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   @doc """
   Periodic recovery: revert every orphaned (old, still-`reserved`) saga across
-  ALL sessions. Run by `DialecticSagaReaper` under the PeriodicWorker.
+  ALL sessions. The on-claim `reclaim_stale_reserved` only frees a session being
+  re-claimed; this sweep frees an orphan even if its session is never resolved
+  again, so a crashed resolver can never permanently wedge a session. Returns
+  `{:ok, count}`. Run by `DialecticSagaReaper` under the PeriodicWorker.
   """
   @spec reclaim_all_stale() :: {:ok, non_neg_integer()} | {:error, term()}
   defdelegate reclaim_all_stale(), to: Claims
@@ -739,6 +779,21 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   """
   @spec get_session_liveness(String.t()) :: {:ok, map() | nil} | {:error, term()}
   def get_session_liveness(session_id) when is_binary(session_id) do
+    # The standing-verdict block is READ, never derived. A dialectic outcome is
+    # decided in core.dialectic_messages; the sweeper's job is to carry that
+    # forward into the row it writes, not to form a judgment of its own. So:
+    #
+    #   standing_verdict     -- the reviewer's last agrees=false, or none
+    #   verdict_message_id   -- which message it was, so the claim is checkable
+    #   verdict_acceptance   -- accepted | contested | no_reply, from whether the
+    #                           paused agent posted after that verdict, and how
+    #
+    # `verdict_acceptance` is an OBSERVATION of the transcript, not a protocol
+    # transition. Nothing may terminate a session on it. That distinction is the
+    # condition this came from: inferring acceptance from silence is unsound
+    # even when the record contains no counterexample, and at the time of
+    # writing it contains none — 0 of 25 rejected-then-swept sessions had the
+    # paused agent still contesting; 20 never replied and 5 replied agreeing.
     sql = """
     WITH v AS (
       SELECT m.message_id, m.timestamp

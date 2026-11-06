@@ -45,6 +45,11 @@ defmodule UnitaresLeasePlane.DialecticSaga.Claims do
   # `($N::text)::jsonb`, never a bare `$N::jsonb`: Postgrex infers a bare jsonb
   # param as jsonb and runs its own Jason encoder over the value, so an
   # already-encoded binary lands as a jsonb *string* rather than an object.
+  # That double-encoding silently corrupted every jsonb this module wrote
+  # between 2026-06-28 and 2026-08-10 (`resolution_json`, `paused_agent_state_json`,
+  # `resolution_payload_json` — 90 rows; `->>` on them returned NULL). The
+  # `::text` hop forces the binary in as text so Postgres parses it. Same idiom
+  # as `UnitaresLeasePlane.Repo.insert_tool_usage/2`.
   @doc false
   def encode_json(nil), do: nil
   def encode_json(v), do: Jason.encode!(v)
