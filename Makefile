@@ -44,7 +44,10 @@ test-smoke: ## Run fast critical-path tests
 		tests/test_dialectic_protocol_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_session \
 		tests/test_saga_cas_protocol_state_machine.py::test_lean4_saga_cas_spec_structure_and_zero_sorry \
 		tests/test_saga_cas_protocol_state_machine.py::test_lean4_kernel_typechecks_saga_cas_protocol \
-		tests/test_saga_cas_protocol_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_code
+		tests/test_saga_cas_protocol_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_code \
+		tests/test_resolution_effects_state_machine.py::test_lean4_resolution_effects_spec_structure_and_zero_sorry \
+		tests/test_resolution_effects_state_machine.py::test_lean4_kernel_typechecks_resolution_effects \
+		tests/test_resolution_effects_state_machine.py::test_lean4_guard_scenarios_match_python_mirror_and_live_code
 
 # ── Server ───────────────────────────────────────────────
 
