@@ -90,6 +90,11 @@ _REMEDIATIONS = {
 }
 
 _REMEDIATION_NOTES = {
+    "schema_migrations":
+        "This command previews SQL only. Missing schema does not prove database "
+        "ownership. For a deliberately new source-install database, follow the "
+        "creation and ownership-marking commands in docs/install/PLAYBOOK.md "
+        "before applying bootstrap. Use migrations for an existing installation.",
     "pg_extensions":
         "AGE + pgvector require a database superuser. Homebrew PostgreSQL makes "
         "the current macOS user the local superuser; it does not create a "
@@ -138,7 +143,7 @@ def _build_migrations_command() -> str:
     migrations, partition functions, and the AGE graph. Reconstructing that
     order here previously created a second, incomplete install path.
     """
-    return './scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"'
+    return "./scripts/install/bootstrap_postgres.sh --dry-run"
 
 
 SECRETS_TEMPLATE = """\

@@ -179,6 +179,43 @@ def test_config_publication_interruption_preserves_credentials(installation, mon
     assert i.calls.count('bootstrap') == 1
 
 
+def test_redis_changed_during_bootstrap_blocks_configuration_publication(installation, monkeypatch):
+    i = installation
+    calls = []
+    def bind(self):
+        calls.append('binding')
+        if 'bootstrap' in i.calls:
+            raise native.Refusal('foreign key arrived during bootstrap')
+    monkeypatch.setattr(type(i.new()), 'bind_redis', bind)
+    with pytest.raises(native.Refusal, match='foreign key'):
+        i.new().setup(apply=True)
+    assert len(calls) == 2
+    assert not i.brew.config.exists()
+    assert provision.read_journal(i.new().path)['stage'] == 'bootstrapped'
+
+
+def test_directory_sync_failure_keeps_journal_incomplete_and_resume_syncs_again(installation, monkeypatch):
+    i = installation
+    sync = i.brew.sync_configuration
+    calls = []
+    def interrupted():
+        calls.append('sync')
+        raise OSError('directory sync failed')
+    monkeypatch.setattr(i.brew, 'sync_configuration', interrupted)
+    with pytest.raises(OSError, match='directory sync failed'):
+        i.new().setup(apply=True)
+    assert i.brew.config.exists()
+    assert provision.read_journal(i.new().path)['stage'] == 'bootstrapped'
+    def resumed_sync():
+        calls.append('sync')
+        sync()
+    monkeypatch.setattr(i.brew, 'sync_configuration', resumed_sync)
+    i.new().setup(apply=True, resume=True)
+    assert calls == ['sync', 'sync']
+    assert provision.read_journal(i.new().path)['stage'] == 'complete'
+    assert i.calls.count('bootstrap') == 1
+
+
 @pytest.mark.parametrize('change', ['cluster', 'privileges', 'config', 'files', 'extensions'])
 def test_resume_refuses_changed_evidence(installation, change, monkeypatch):
     i = installation

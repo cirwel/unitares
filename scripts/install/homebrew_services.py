@@ -230,6 +230,16 @@ class Homebrew:
             os.link(temporary, self.config)
         finally:
             os.unlink(temporary)
+        self.sync_configuration()
+
+    def sync_configuration(self):
+        """Persist the published link and any newly created config directories."""
+        for directory in (self.config.parent, self.config.parent.parent, self.prefix):
+            fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     def check_setup_barrier(self):
         try:

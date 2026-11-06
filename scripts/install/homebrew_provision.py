@@ -376,10 +376,15 @@ return 0
                          database='unitares', application=True)
         if probe != '1':
             raise Refusal('Application-role AGE probe failed; configuration was not published.')
+        self.bind_redis()
         if not os.path.lexists(self.brew.config):
             self.brew.write_configuration(self.state['config'])
         elif read_config(self.brew.config) != self.state['config']:
             raise Refusal('Configuration changed during verification; refusing to replace it.')
+        else:
+            # A previous attempt may have linked native.env and crashed before
+            # syncing its directory. Resume must make that link durable too.
+            self.brew.sync_configuration()
         self.save('complete')
         print('Provisioned and verified the dedicated unitares database. Private configuration saved; writers remain stopped. '
               'Next: unitares start --homebrew --check, then unitares start --homebrew.')

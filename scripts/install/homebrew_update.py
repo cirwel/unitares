@@ -1303,6 +1303,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             return updater.begin(check=True, assume_yes=args.yes)
         with brew.lock():
+            brew.check_setup_barrier()
             if args.resume:
                 return updater.resume(
                     accept_identity_change=args.accept_identity_change,
