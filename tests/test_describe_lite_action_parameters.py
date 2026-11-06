@@ -194,7 +194,7 @@ def test_lite_view_names_only_what_the_alias_wire_carries(alias_name):
 
 def test_update_finding_lite_view_names_what_the_tool_exists_for():
     lite = _lite("update_finding")
-    assert lite["discovery_id"] == "discovery_id (required at call time)"
+    assert lite["discovery_id"] == "discovery_id (required)"
     # The class is stored and the alias's wire declares it (contract 1.20.0),
     # so closing with a standard is one of the things the tool exists for.
     assert {"status", "resolution_notes", "closure_class", "closure_evidence"} <= set(
