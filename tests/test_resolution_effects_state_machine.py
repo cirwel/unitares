@@ -1327,6 +1327,12 @@ def _parse_lean_resolution_effects_scenarios(
                 (k for k, v in OWNER_TOKENS.items() if v == d["owner_token"]),
                 None,
             )
+            res_payload_obj = d["resolution_payload_json"]
+            if isinstance(res_payload_obj, str):
+                res_payload_obj = json.loads(res_payload_obj)
+            res_int = next(
+                k for k, v in RESOLUTION_PAYLOADS.items() if v == res_payload_obj
+            )
             exec_json = d.get("execution_result_json")
             if isinstance(exec_json, str):
                 exec_json = json.loads(exec_json)
@@ -1350,7 +1356,7 @@ def _parse_lean_resolution_effects_scenarios(
                 reviewer=rev_int,
                 effect_required=bool(d["effect_required"]),
                 pause_token=ptok_int,
-                resolution_payload=1,
+                resolution_payload=res_int,
                 state=d["state"],
                 owner_token=otok_int,
                 attempt_count=d["attempt_count"],
@@ -1795,6 +1801,11 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
             updated_at=_ts_to_int(d["updated_at"]) or 100,
         )
 
+    def _fetch_live_spec_row(self) -> SpecResolutionEffectRow:
+        live_d = asyncio.run(self.db.get_resolution_effect(self.session_id))
+        assert live_d is not None
+        return self._live_effect_to_spec(live_d)
+
     @initialize(
         pause_binding=st.sampled_from(
             ["explicitTrue", "explicitFalse", "legacyUnbound"]
@@ -1840,13 +1851,18 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
             )
         )
         assert ok is True
-
-        # Theorem 1: Non-required pause effect enqueues directly as `.applied`
+        # Theorem 1: Non-required pause effect enqueues directly as `.applied` on live DB
+        live_row = self._fetch_live_spec_row()
         if pause_binding in ("explicitFalse", "legacyUnbound"):
-            assert self.spec_effect.state == "applied"
-            assert self.spec_effect.effect_required is False
-            assert self.spec_effect.has_execution_evidence is True
-            assert self.spec_effect.applied_at == now
+            assert live_row.state == "applied"
+            assert live_row.effect_required is False
+            assert live_row.has_execution_evidence is True
+            assert live_row.applied_at == now
+            assert live_row.no_op_reason == (
+                "legacy_unbound_session"
+                if pause_binding == "legacyUnbound"
+                else "active_at_session_open"
+            )
 
     @rule(
         pause_binding=st.sampled_from(
@@ -1898,6 +1914,17 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
             )
         )
         assert ok is True
+        live_row = self._fetch_live_spec_row()
+        if pause_binding in ("explicitFalse", "legacyUnbound"):
+            assert live_row.state == "applied"
+            assert live_row.effect_required is False
+            assert live_row.has_execution_evidence is True
+            assert live_row.applied_at == now
+            assert live_row.no_op_reason == (
+                "legacy_unbound_session"
+                if pause_binding == "legacyUnbound"
+                else "active_at_session_open"
+            )
 
     @rule(
         owner=st.sampled_from([101, 202, 303]),
@@ -1977,17 +2004,16 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
 
         assert live_res is not None
         assert bool(live_res["claimed"]) == spec_out.claimed
+        live_row = self._live_effect_to_spec(live_res)
 
-        # Theorem 2 & 3: Claim requires `.pending`; competing claim against `.applying` loses
+        # Theorem 2 & 3: Claim requires `.pending`; subsequent claim against `.applying` loses on live DB
         if pre_eff.state != "pending":
-            assert spec_out.claimed is False
-            assert spec_out.row == pre_eff
+            assert live_res["claimed"] is False
+            assert live_row == pre_eff
         if pre_eff.state == "applying":
-            assert live_res["owner_token"] == (
-                OWNER_TOKENS[pre_eff.owner_token]
-                if pre_eff.owner_token is not None
-                else None
-            )
+            assert live_row.state == "applying"
+            assert live_row.owner_token == pre_eff.owner_token
+            assert live_row.attempt_count == pre_eff.attempt_count
 
     @rule(
         status_resolved=st.booleans(),
@@ -2063,11 +2089,16 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 )
             )
         assert written == spec_out.written
+        live_row = self._fetch_live_spec_row()
 
-        # Theorem 4, 5, 7: Owner-token fencing, unknown_partial block, applied absorbing
+        # Theorem 4, 5, 7: Owner-token fencing, unknown_partial block, applied absorbing on live DB
         if pre_eff.owner_token != owner or pre_eff.state != "applying":
             assert written is False
-            assert self.spec_effect == pre_eff
+            assert live_row == pre_eff
+        else:
+            assert live_row.state == "applied"
+            assert live_row.has_execution_evidence is True
+            assert live_row.applied_at == now
 
     @rule(
         owner=st.sampled_from([101, 202, 303]),
@@ -2101,10 +2132,13 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 )
             )
         assert written == spec_out.written
+        live_row = self._fetch_live_spec_row()
         if written:
-            assert self.spec_effect.state == "unknown_partial"
-            assert self.spec_effect.last_error == err_msg
-            assert self.spec_effect.uncertain_at == now
+            assert live_row.state == "unknown_partial"
+            assert live_row.last_error == err_msg
+            assert live_row.uncertain_at == now
+        else:
+            assert live_row == pre_eff
 
     @rule(
         owner=st.sampled_from([101, 202, 303]),
@@ -2134,9 +2168,13 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 )
             )
         assert written == spec_out.written
+        live_row = self._fetch_live_spec_row()
         if written:
-            assert self.spec_effect.state == "unknown_partial"
-            assert self.spec_effect.last_error == reason
+            assert live_row.state == "unknown_partial"
+            assert live_row.last_error == reason
+            assert live_row.uncertain_at == now
+        else:
+            assert live_row == pre_eff
 
     @rule(
         use_exact_updated_at=st.booleans(),
@@ -2179,17 +2217,20 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 )
             )
         assert written == spec_out.written
+        live_row = self._fetch_live_spec_row()
 
-        # Theorem 6: Acknowledge requires `.unknownPartial` & exact `updatedAt`, preserving evidence
+        # Theorem 6 & 7: Acknowledge requires `.unknownPartial` & exact `updatedAt`, preserving evidence on live DB
         if written:
             assert pre_eff.state == "unknown_partial"
             assert exp_upd == pre_eff.updated_at
-            assert self.spec_effect.state == "applied"
-            assert self.spec_effect.manually_reconciled is True
-            assert self.spec_effect.reconciliation_reason == reason
-            assert self.spec_effect.last_error == pre_eff.last_error
-            assert self.spec_effect.uncertain_at == pre_eff.uncertain_at
-            assert self.spec_effect.owner_token == pre_eff.owner_token
+            assert live_row.state == "applied"
+            assert live_row.manually_reconciled is True
+            assert live_row.reconciliation_reason == reason
+            assert live_row.last_error == pre_eff.last_error
+            assert live_row.uncertain_at == pre_eff.uncertain_at
+            assert live_row.owner_token == pre_eff.owner_token
+        else:
+            assert live_row == pre_eff
 
     @rule(
         status=st.sampled_from(
@@ -2258,19 +2299,6 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
 
         self.spec_counts = spec_record_outcome(pre_counts, spec_cls)
 
-        # Theorem 11: Non-quality outcomes preserve `resolution_rate` numerator & denominator
-        if spec_cls in (
-            CANARY,
-            OPEN,
-            RESOLVED_EFFECT_PENDING,
-            UNRESOLVED_AWAITING_FACILITATION,
-        ):
-            assert self.spec_counts.resolved == pre_counts.resolved
-            assert self.spec_counts.failed == pre_counts.failed
-            assert spec_rate_denominator(
-                self.spec_counts
-            ) == spec_rate_denominator(pre_counts)
-
         # Seed into a dedicated analytics backend to verify `get_outcome_breakdown` SQL parity
         self.outcome_session_counter += 1
         sid = f"sess-analytics-{self.outcome_session_counter}"
@@ -2295,6 +2323,20 @@ class ResolutionEffectsStateMachine(RuleBasedStateMachine):
                 "session_id": sid,
                 "state": effect_state,
             }
+
+        # Theorem 11: Non-quality outcomes preserve `resolution_rate` numerator & denominator on live DB
+        if live_cls in (
+            CANARY,
+            OPEN,
+            RESOLVED_EFFECT_PENDING,
+            UNRESOLVED_AWAITING_FACILITATION,
+        ):
+            live_bd = asyncio.run(self.analytics_db.get_outcome_breakdown())
+            assert live_bd["counts"][RESOLVED] == pre_counts.resolved
+            assert live_bd["counts"][FAILED] == pre_counts.failed
+            assert live_bd["resolution_rate_denominator"] == spec_rate_denominator(
+                pre_counts
+            )
 
     @invariant()
     def invariant_bisimulation_spec_vs_live(self) -> None:
