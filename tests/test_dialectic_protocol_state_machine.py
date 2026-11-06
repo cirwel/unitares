@@ -116,7 +116,17 @@ PHASE_RANK: Dict[str, int] = {
 
 
 def _find_lean_binary() -> Optional[str]:
-    """Locate the Lean 4 binary on PATH or standard elan/Homebrew locations."""
+    """Locate the Lean 4 binary, preferring the direct toolchain binary under
+    `~/.elan/toolchains/.../bin/lean` so read-only sandboxes never invoke the
+    `elan` proxy's settings write."""
+    elan_toolchains = Path.home() / ".elan" / "toolchains"
+    toolchain_file = REPO_ROOT / "formal" / "lean-toolchain"
+    if toolchain_file.is_file() and elan_toolchains.is_dir():
+        raw_tc = toolchain_file.read_text(encoding="utf-8").strip()
+        sanitized = raw_tc.replace("/", "--").replace(":", "---")
+        direct = elan_toolchains / sanitized / "bin" / "lean"
+        if direct.is_file():
+            return str(direct)
     from_path = shutil.which("lean")
     if from_path:
         return from_path
