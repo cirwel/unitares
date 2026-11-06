@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-11-06
 
+<!-- plugin-bundle-recut: v0.4.29 -->
+
 ### Breaking
 - **Policy actuation is explicit opt-in.** EISV, risk, basin, void, coherence,
   and CIRS remain recorded as proprioceptive policy inputs, but the default
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#3131).
 
 ### Added
+- **Formal verification:** add Lean 4 proofs and a Hypothesis state-machine refinement suite for resolution-effect ownership, fencing, quarantine acknowledgement, terminal outcome classification, and resolution-rate denominators (#3214).
 - **Per-agent REST credentials:** digest-configured tokens admit only their bound agent's check-ins through `/v1/tools/call`; an expired binding reports `AgentTokenUnbound` with the operator recovery route (#3116, #3121).
 - **Promotion receipts:** server-verifiable transition receipts bind knowledge promotion evidence to stored durable projections (#3142).
 - **SDK 0.6.2:** `GovernanceClient.onboard(retry=False)` makes a single transport attempt, with a hosted-execution example and contract for reconciling ambiguous timeouts before minting again. The default retry behavior remains unchanged (#3147).
@@ -77,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python runtime:** promote container and development defaults to Python 3.15 while retaining server support for 3.14 and SDK support for 3.12. Run the full suite on both server interpreters and require every exact interpreter/shard pair; check both images and the hosted Glama runtime declaration and parameterize native installation acceptance (#3165).
 
 ### Fixed
+- **Lazy identity persistence:** register newly minted active identities in the runtime registry so metrics and strict check-ins can find them, without rehydrating existing or inactive identities (#3218).
 - **Lifecycle authorization:** require operator authority for `detect_stuck_agents(auto_recover=true)` and archival mutations; preserve count previews while withholding registry IDs from nonoperators (#3138, #3140).
 - **Database safety:** delimit AGE queries with collision-checked random dollar-quote tags so `$$` in values cannot terminate the SQL literal; redact PostgreSQL credentials from connection errors and traceback causes (#3135, #3136).
 - **Durability:** publish agent deletion only after persistence succeeds, expose truthful check-in state-persistence receipts, and persist calibration delivery work with canonical outcomes so retries can recover pending delivery (#3139, #3155, #3170).
