@@ -12,12 +12,17 @@ import re
 AUTO_OUTCOME_RULE_VERSION = "guarded_clauses.v1"
 
 _QUOTED = re.compile(
-    r"```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$)|"
-    r'"[^"\n]*(?:"|$)|“[^”\n]*(?:”|$)|'
-    r"(?<!\w)'[^'\n]*(?:'|$)|‘[^’\n]*(?:’|$)"
+    r"```[\s\S]*?(?:```|$)|`[^`]*(?:`|$)|"
+    r'"[^"]*(?:"|$)|“[^”]*(?:”|$)|'
+    r"(?<!\w)'[\s\S]*?(?:'(?!\w)|$)|‘[\s\S]*?(?:’(?!\w)|$)"
 )
-_SENTENCES = re.compile(r"[^.!?;\n]+[.!?;\n]?")
-_CLAUSES = re.compile(r",|\b(?:but|however|although)\b")
+_BLOCKQUOTE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
+# Soft wraps and version/decimal dots must not shed a sentence's frame.
+# Keep question marks so the resulting sentence can still be rejected.
+_SENTENCES = re.compile(r"(?<!\d)\.(?!\d)|(?<=[!?;])")
+# Commas can introduce lists sharing a negation, so only explicit contrast
+# begins a new polarity scope. 'and'/'or' keep their inherited negation too.
+_CLAUSES = re.compile(r"\b(?:but|however|although)\b")
 # A reported/example/hypothetical statement is not the author's task result.
 # Reject at sentence scope, so a comma or conjunction cannot shed its frame.
 _INDIRECT = re.compile(
@@ -28,7 +33,15 @@ _INDIRECT = re.compile(
     r"plan(?:s|ned|ning)?|intend\w*|expect\w*|hope\w*)\b|\b\w+['’]ll\b"
 )
 _NEGATED = re.compile(
-    r"\b(?:no|not|never|without|neither|none|zero)\b|\b\w+n['’]t\b|\b0\b"
+    r"\b(?:no|not|never|without|neither|none)\b|\b\w+n['’]t\b"
+)
+_ZERO_COUNT = re.compile(
+    r"\b(?:0|zero)\s+(?:errors?|crashes|failures?|regressions?|"
+    r"(?:completed|failed|resolved)\s+(?:tasks?|checks?|tests?|findings?)|"
+    r"(?:tasks?|checks?|tests?|findings?)\s+(?:completed|failed|resolved))\b|"
+    r"\b(?:errors?|crashes|failures?|regressions?)\s*:\s*(?:0|zero)\b|"
+    # Terse count lists ('12 passed, 0 failed'), but not 'worker 0 failed'.
+    r"(?:^|[,(:]|\band\b)\s*(?:0|zero)\s+(?:failed|completed|resolved)\b"
 )
 COMPLETION_SIGNAL_RE = re.compile(
     r"\b(?:completed|implemented|deployed|finished|fixed|resolved|shipped|"
@@ -48,13 +61,12 @@ def infer_outcome_label(text: str) -> str | None:
     elsewhere, e.g. 'No errors occurred, but deployment failed'.
     """
     labels = set()
-    unquoted = _QUOTED.sub(" ", text.lower())
-    for match in _SENTENCES.finditer(unquoted):
-        sentence = match.group()
+    unquoted = _QUOTED.sub(" ", _BLOCKQUOTE.sub(" ", text.lower()))
+    for sentence in _SENTENCES.split(unquoted):
         if sentence.rstrip().endswith("?") or _INDIRECT.search(sentence):
             continue
         for clause in _CLAUSES.split(sentence):
-            if _NEGATED.search(clause):
+            if _NEGATED.search(clause) or _ZERO_COUNT.search(clause):
                 continue
             if COMPLETION_SIGNAL_RE.search(clause):
                 labels.add("task_completed")
