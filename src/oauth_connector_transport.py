@@ -29,6 +29,8 @@ class ConnectorAuthenticator(ClientAuthenticator):
         client_id = str(fields.get("client_id") or "")
         if not managed_client_id(client_id):
             return await super().authenticate_request(request)
+        if not _is_urlencoded(request.scope):
+            raise AuthenticationError("Managed connectors require form-encoded token requests")
         record = await self.provider.managed_connector(client_id)
         supplied = fields.get("client_secret")
         if (record is None or not isinstance(supplied, str)
@@ -61,12 +63,14 @@ class ConnectorCompatibility:
             # All token requests are bounded, including unknown clients. Reject
             # ambiguous encodings instead of letting the authenticator and shim
             # interpret different credentials.
-            if not _is_urlencoded(scope):
-                return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
             _, body, complete, replay = await _peek_body(receive, _MAX_TOKEN_BODY)
             if not complete:
                 return await JSONResponse({"error": "invalid_request"}, 413)(scope, receive, send)
             receive = replay
+            if not _is_urlencoded(scope):
+                # Preserve SDK-supported encodings for legacy clients. The
+                # managed authenticator independently requires urlencoding.
+                return await self.app(scope, receive, send)
             if b";" in body:
                 return await JSONResponse({"error": "invalid_request"}, 400)(scope, receive, send)
             fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)

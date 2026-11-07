@@ -56,9 +56,10 @@
         ${field("Client ID", created.client_id)}
         ${field("Client secret", created.client_secret, true)}
         ${field("Token authentication method", settings.token_auth_method)}
-        <p class="security-note">Choose HTTP Basic if your app uses that name. Keep discovered endpoints, or use these:</p>
+        <p class="security-note">Choose HTTP Basic if your app uses that name.</p>
+        <details><summary>Only if your app asks: endpoints and scopes</summary>
         ${field("Authorization endpoint", settings.authorization_endpoint)}
-        ${field("Token endpoint", settings.token_endpoint)}${field("Scopes", settings.scopes)}
+        ${field("Token endpoint", settings.token_endpoint)}${field("Scopes", settings.scopes)}</details>
         <p class="security-note">Return to your app and start its connection again. If you lose the secret, disable this connector and add a replacement.</p>
         <button class="security-btn" type="button" id="connector-done">Done — clear credentials</button>`;
       result.hidden = false;
@@ -114,5 +115,6 @@
     await refresh();
   }
   window.addEventListener("hashchange", () => { if (location.hash !== "#connectors") clearSecret(); });
+  window.addEventListener("pagehide", clearSecret);
   window.Connectors = { load, clearCredentials: clearSecret };
 })();

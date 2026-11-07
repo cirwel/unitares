@@ -25,7 +25,14 @@ def _gate(request):
     if origin:
         issuer = str(getattr(request.state, "oauth_issuer", "") or "")
         parsed = urlsplit(issuer)
-        allowed = {dashboard_auth.DASHBOARD_EXPECTED_ORIGIN, f"{parsed.scheme}://{parsed.netloc}"}
+        allowed = {
+            dashboard_auth.DASHBOARD_EXPECTED_ORIGIN,
+            f"{parsed.scheme}://{parsed.netloc}",
+            # A local or alternate dashboard origin need not be the OAuth
+            # issuer. Browser Origin and request authority must agree; this
+            # still requires operator auth (or a fresh session + CSRF).
+            f"{request.url.scheme}://{request.url.netloc}",
+        }
         if origin not in allowed or origin == "null":
             return _reply({"error": "Cross-origin connector management is not allowed."}, 403)
     if request.method != "GET" and not operator:

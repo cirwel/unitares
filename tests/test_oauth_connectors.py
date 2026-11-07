@@ -220,3 +220,83 @@ def test_management_storage_failure_never_claims_success(monkeypatch):
     response = client.post("/auth/connectors", json={"name": "App", "redirect_uris": [CALLBACK]})
     assert response.status_code == 503
     assert "client_secret" not in response.text
+
+
+def test_local_dashboard_operator_origin_is_accepted(monkeypatch):
+    client = management_client(monkeypatch, Registry(), operator=True)
+    response = client.post("/auth/connectors", headers={"Origin": "http://testserver"},
+                           json={"name": "App", "redirect_uris": [CALLBACK]})
+    assert response.status_code == 201
+
+
+def test_legacy_client_multipart_token_requests_still_reach_sdk():
+    from src.oauth_provider import build_static_client
+    p = GovernanceOAuthProvider(auto_approve=False, connector_registry=Registry(),
+        static_clients=[build_static_client("legacy", "legacy-secret", [CALLBACK])])
+    client = client_app(p)
+    response = client.post("/token", files={key: (None, value) for key, value in {
+        "client_id": "legacy", "client_secret": "legacy-secret",
+        "grant_type": "refresh_token", "refresh_token": "unknown",
+    }.items()})
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"  # authenticated, SDK processed grant
+
+
+def test_managed_multipart_cannot_bypass_client_authentication():
+    client = client_app(provider(Registry()))
+    response = client.post("/token", files={key: (None, value) for key, value in {
+        "client_id": ID, "client_secret": secret_digest(SECRET),
+        "grant_type": "refresh_token", "refresh_token": "unknown",
+    }.items()})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_persisted_tokens_after_restart_are_denied_on_connector_revocation():
+    from tests.test_oauth_persistence import _DictStore
+    registry, store = Registry(), _DictStore()
+    first = GovernanceOAuthProvider(auto_approve=False, connector_registry=registry, store=store)
+    client = client_app(first)
+    tokens = exchange(client, code(client)).json()
+    restarted = GovernanceOAuthProvider(auto_approve=False, connector_registry=registry, store=store)
+    info = await restarted.get_client(ID)
+    assert await restarted.load_access_token(tokens["access_token"])
+    assert await restarted.load_refresh_token(info, tokens["refresh_token"])
+    assert f"client:{ID}" not in store.data  # no alternate DCR authority
+    await registry.revoke(ID, "operator")
+    assert await restarted.load_access_token(tokens["access_token"]) is None
+    assert await restarted.load_refresh_token(info, tokens["refresh_token"]) is None
+
+
+def test_management_through_real_session_and_operator_middleware(monkeypatch):
+    from datetime import timedelta
+    from src import dashboard_auth, http_api
+    cookie = "synthetic-dashboard-session"
+    row = {"created_at": datetime.now(timezone.utc), "last_seen_at": datetime.now(timezone.utc)}
+    class Connection:
+        async def fetchrow(self, query, digest):
+            assert digest == dashboard_auth._sha256(cookie)
+            return row
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+    monkeypatch.setattr(dashboard_auth, "get_db", lambda: SimpleNamespace(acquire=Connection))
+    monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", "synthetic-operator-token")
+    app = Starlette()
+    http_api.register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0,
+        server_version="test", has_streamable_http=True, mount_route_packs=False,
+        oauth_provider=provider(Registry()), oauth_settings=SimpleNamespace(
+            issuer_url="https://server.example", resource_server_url="https://server.example/mcp/"))
+    client = TestClient(app)
+    payload = {"name": "App", "redirect_uris": [CALLBACK]}
+    assert client.post("/auth/connectors", json=payload).status_code == 403
+    assert client.post("/auth/connectors", headers={"Authorization": "Bearer synthetic-operator-token"}, json=payload).status_code == 403
+    assert client.post("/auth/connectors", headers={"X-Unitares-Operator": "synthetic-operator-token", "Origin": "http://testserver"}, json=payload).status_code == 201
+    client.cookies.set(dashboard_auth.SESSION_COOKIE, cookie)
+    assert client.get("/auth/connectors").json()["server_url"] == "https://server.example/mcp/"
+    assert client.post("/auth/connectors", json=payload).status_code == 403
+    headers = {"X-Unitares-Csrf": "1", "Origin": "http://testserver"}
+    assert client.post("/auth/connectors", headers=headers, json=payload).status_code == 201
+    row["created_at"] -= timedelta(seconds=dashboard_auth.STEP_UP_TTL_SECONDS + 1)
+    assert client.post("/auth/connectors", headers=headers, json=payload).status_code == 403
+    row = None
+    assert client.get("/auth/connectors").status_code == 403

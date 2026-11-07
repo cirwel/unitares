@@ -88,7 +88,7 @@ class ConnectorRegistry:
         async with asyncio.timeout(5), get_db().acquire() as conn:
             rows = await conn.fetch(
                 "SELECT client_id, name, redirect_uris, created_at, revoked_at "
-                "FROM core.oauth_connectors ORDER BY created_at DESC LIMIT 200"
+                "FROM core.oauth_connectors ORDER BY created_at DESC"
             )
         return [public_record(row) for row in rows]
 
