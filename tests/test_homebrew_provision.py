@@ -51,6 +51,9 @@ def installation(tmp_path, monkeypatch):
                 fault['sql'] = None
                 raise native.Refusal('injected before mutation')
             if kind == 'role':
+                from urllib.parse import urlsplit
+                assert urlsplit(self.state['config']['DB_POSTGRES_URL']).password not in sql
+                assert 'PASSWORD \'SCRAM-SHA-256$' in sql
                 db['role'] = {'safe': True, 'marker': self.marker + ':role'}
             elif kind == 'database':
                 db['database'] = {'owner': 'unitares', 'marker': None}
@@ -91,6 +94,12 @@ def test_dry_run_is_read_only(installation):
     assert not i.calls
     assert not i.brew.config.exists()
     assert not (i.brew.prefix / 'var/unitares').exists()
+
+
+@pytest.mark.parametrize('password', ['', 'non ascii é', 'has space', "quote'"])
+def test_scram_refuses_passwords_outside_generated_alphabet(password):
+    with pytest.raises(native.Refusal, match='URL-safe'):
+        provision.scram_verifier(password)
 
 
 @pytest.mark.parametrize('occupied', ['role', 'database'])

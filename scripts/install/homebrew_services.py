@@ -495,4 +495,10 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    # Use one importable module for both the controller and its provisioning
+    # helper; a second Refusal class under __main__ would escape main's handler.
+    if __package__:
+        from .homebrew_services import main as script_main
+    else:
+        from homebrew_services import main as script_main
+    raise SystemExit(script_main())
