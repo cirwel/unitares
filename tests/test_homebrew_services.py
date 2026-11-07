@@ -48,7 +48,8 @@ def test_cli_catches_provisioning_refusals(tmp_path, entrypoint, action):
         args = ['setup'] if action == 'setup' else ['start', '--check']
         expected = 'Invalid setup journal'
     # Exercise the installed file entrypoint and python -m on every CI OS.
-    runner = '''import os, runpy, sys
+    runner = '''import os, runpy, sys, urllib.request
+# Import native stdlib proxy support before simulating the controller's OS gate.
 sys.platform = 'darwin'
 os.geteuid = lambda: 501
 mode, script = sys.argv[1:3]
