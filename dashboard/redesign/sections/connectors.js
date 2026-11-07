@@ -77,7 +77,13 @@
     if (copy) {
       const input = copy.parentElement.querySelector("input");
       try { await navigator.clipboard.writeText(input.value); message("Copied."); }
-      catch { input.focus(); input.select(); message("Clipboard unavailable. Copy the selected field manually."); }
+      catch {
+        // Password inputs cannot be copied manually in some browsers.
+        input.type = "text";
+        input.focus();
+        input.select();
+        message("Clipboard unavailable. The field is visible and selected; copy it manually, then choose Done to clear credentials.");
+      }
     }
     const button = event.target.closest("[data-revoke]");
     if (button && window.confirm("Disable this connector? Its existing tokens will stop working too.")) {

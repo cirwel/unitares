@@ -28,6 +28,26 @@ describe("connector setup", () => {
     dom.window.Connectors.clearCredentials();
     expect(result.innerHTML).toBe("");
   });
+  it.each(["unavailable", "denied"])("allows manual secret copy when clipboard access is %s", async (mode) => {
+    const dom = boot();
+    if (mode === "denied") {
+      Object.defineProperty(dom.window.navigator, "clipboard", {
+        value: { writeText: vi.fn().mockRejectedValue(new Error("Permission denied")) },
+      });
+    }
+    await dom.window.Connectors.load();
+    await submit(dom);
+    const input = dom.window.document.querySelector("[data-secret]");
+    expect(input.type).toBe("password");
+    input.parentElement.querySelector("[data-copy]").click();
+    await vi.waitFor(() => expect(input.type).toBe("text"));
+    expect(dom.window.document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    expect(dom.window.localStorage.length).toBe(0);
+    dom.window.document.getElementById("connector-done").click();
+    expect(dom.window.document.querySelector("[data-secret]")).toBeNull();
+  });
   it("shows a failed save without a success card", async () => {
     const dom = boot({ createConnector: vi.fn().mockRejectedValue(new Error("Storage unavailable")) });
     await dom.window.Connectors.load();
