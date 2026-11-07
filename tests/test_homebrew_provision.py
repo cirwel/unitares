@@ -309,7 +309,7 @@ def test_sql_redacts_credentials_and_rechecks_cluster_on_mutating_connection(ins
 
 
 @pytest.mark.parametrize('problem', ['writer', 'postgres-command', 'redis-command', 'process',
-                                   'docker', 'docker-unreadable', 'redis-data', 'redis-unreadable', 'port'])
+                                   'docker', 'docker-compose-name', 'docker-unreadable', 'redis-data', 'redis-unreadable', 'port'])
 def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypatch, problem):
     i = installation
     p = provision.NativeProvisioner(i.brew)
@@ -330,7 +330,8 @@ def test_preflight_refuses_conflicts_before_any_mutation(installation, monkeypat
         if args[0] == 'ps':
             return SimpleNamespace(returncode=0, stdout='/foreign/postgres' if problem == 'process' else postgres)
         if args[0] == 'docker':
-            return SimpleNamespace(returncode=1 if problem == 'docker-unreadable' else 0, stdout='postgres-age\n')
+            container = 'unitares-postgres-age\n' if problem == 'docker-compose-name' else 'postgres-age\n'
+            return SimpleNamespace(returncode=1 if problem == 'docker-unreadable' else 0, stdout=container)
         return SimpleNamespace(returncode=0, stdout='7' if problem == 'redis-data' else 'NOAUTH')
     monkeypatch.setattr(provision, 'run', run)
     if problem == 'writer':
