@@ -26,6 +26,48 @@ UNITARES_MODEL_ID=
 '''
 
 
+@pytest.mark.parametrize('entrypoint', ['script', 'module'])
+@pytest.mark.parametrize('action', ['provision', 'setup', 'start'])
+def test_cli_catches_provisioning_refusals(tmp_path, entrypoint, action):
+    prefix = tmp_path / 'brew-prefix'
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake_brew = bin_dir / 'brew'
+    fake_brew.write_text('#!/bin/sh\n[ "$1" = --prefix ] || exit 99\nprintf "%s\\n" "$TEST_BREW_PREFIX"\n')
+    fake_brew.chmod(0o755)
+    env = dict(os.environ, PATH=str(bin_dir), TEST_BREW_PREFIX=str(prefix),
+               DB_POSTGRES_URL='fixture-database-secret')
+    if action == 'provision':
+        args = ['setup', '--provision-db']
+        expected = 'Provisioning requires no existing'
+    else:
+        journal = prefix / 'var/unitares/native-setup.json'
+        journal.parent.mkdir(parents=True, mode=0o700)
+        journal.write_text('{}')
+        journal.chmod(0o600)
+        args = ['setup'] if action == 'setup' else ['start', '--check']
+        expected = 'Invalid setup journal'
+    # Exercise the installed file entrypoint and python -m on every CI OS.
+    runner = '''import os, runpy, sys
+sys.platform = 'darwin'
+os.geteuid = lambda: 501
+mode, script = sys.argv[1:3]
+sys.argv = [script, *sys.argv[3:]]
+if mode == 'script':
+    sys.path.insert(0, os.path.dirname(script))
+    runpy.run_path(script, run_name='__main__')
+else:
+    runpy.run_module('scripts.install.homebrew_services', run_name='__main__')
+'''
+    result = subprocess.run([sys.executable, '-c', runner, entrypoint,
+                             str(ROOT / 'scripts/install/homebrew_services.py'), *args],
+                            env=env, cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr.startswith('error: ' + expected)
+    assert 'Traceback' not in result.stderr
+    assert 'fixture-database-secret' not in result.stderr
+
+
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     brew = native.Homebrew.__new__(native.Homebrew)

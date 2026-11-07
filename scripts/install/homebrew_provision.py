@@ -7,8 +7,10 @@ Bootstrap similarly marks itself running before DDL and refuses unsafe replay.
 """
 from __future__ import annotations
 
+import base64
 import getpass
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -75,6 +77,25 @@ def check_setup_barrier(prefix: Path) -> None:
 def literal(value: str) -> str:
     # All SQL is sent on stdin, never through a shell or credential-bearing argv.
     return "'" + value.replace("'", "''") + "'"
+
+
+def scram_verifier(password: str) -> str:
+    """Encode our generated ASCII secret without sending it in SQL statements.
+
+    PostgreSQL accepts this verifier as-is (pg_authid format; RFC 5802/7677).
+    Restrict input to the journal's URL-safe alphabet, for which SASLprep is
+    the identity transformation. This is not a general password encoder.
+    """
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', password):
+        raise Refusal('Provisioning requires a generated URL-safe password.')
+    salt = secrets.token_bytes(16)
+    iterations = 4096
+    salted = hashlib.pbkdf2_hmac('sha256', password.encode('ascii'), salt, iterations)
+    client_key = hmac.digest(salted, b'Client Key', 'sha256')
+    stored_key = hashlib.sha256(client_key).digest()
+    server_key = hmac.digest(salted, b'Server Key', 'sha256')
+    encoded = [base64.b64encode(value).decode('ascii') for value in (salt, stored_key, server_key)]
+    return f'SCRAM-SHA-256${iterations}:{encoded[0]}${encoded[1]}:{encoded[2]}'
 
 
 class NativeProvisioner:
@@ -333,7 +354,7 @@ return 0
                 self.save('role_pending')
                 self.sql('BEGIN; SET LOCAL standard_conforming_strings=on; '
                          'CREATE ROLE unitares LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '
-                         + literal(password) + '; COMMENT ON ROLE unitares IS ' + literal(self.marker + ':role') + '; COMMIT;')
+                         + literal(scram_verifier(password)) + '; COMMENT ON ROLE unitares IS ' + literal(self.marker + ':role') + '; COMMIT;')
             self.save('role_created')
         elif not snapshot['role']:
             raise Refusal('The journal’s role disappeared; refusing to recreate credentials.')

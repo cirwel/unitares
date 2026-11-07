@@ -36,6 +36,12 @@ def cluster(tmp_path, monkeypatch):
     def command(args, **kwargs):
         return execute(args, env=env, text=True, capture_output=True, check=True, **kwargs)
     command([str(binaries / 'initdb'), '-D', str(data), '-A', 'trust', '--no-locale'])
+    # Require password authentication for the provisioned role while keeping
+    # the private-cluster administrator on local trust for setup/cleanup.
+    hba = data / 'pg_hba.conf'
+    hba.write_text('local all unitares scram-sha-256\n' + hba.read_text())
+    with (data / 'postgresql.conf').open('a') as config:
+        config.write("\nlog_statement = 'all'\n")
     with tempfile.TemporaryDirectory(prefix='unit-pg-', dir='/tmp') as socket:
         command([str(binaries / 'pg_ctl'), '-D', str(data), '-l', str(tmp_path / 'postgres.log'),
                  '-o', f'-k {socket} -p 15437 -h ""', 'start'])
@@ -88,6 +94,18 @@ def test_real_provisioning_nonsuperuser_graph_and_no_bootstrap_replay(cluster, m
     provision.NativeProvisioner(brew).setup(apply=True)
     state = provision.read_journal(prefix / 'var/unitares/native-setup.json')
     assert state['stage'] == 'complete'
+    from urllib.parse import urlsplit
+    password = urlsplit(state['config']['DB_POSTGRES_URL']).password
+    env['PGPASSWORD'] = password
+    log = (prefix.parent / 'postgres.log').read_text()
+    assert 'CREATE ROLE unitares' in log
+    assert 'SCRAM-SHA-256$' in log
+    assert password not in log
+    rejected = execute([str(binaries / 'psql'), '-X', '-w', '-h', socket, '-p', '15437',
+                        '-U', 'unitares', '-d', 'unitares', '-c', 'SELECT 1'],
+                       env=dict(env, PGPASSWORD='incorrect-password'), capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert 'password authentication failed' in rejected.stderr
     assert sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname='unitares'") == 'f'
     assert sql("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname IN ('core','audit','knowledge','governance_graph')", 'unitares') == 'unitares'
     assert sql("SET search_path=ag_catalog,public; SELECT * FROM cypher('governance_graph', $$ CREATE (n:Acceptance {value: 7}) RETURN n.value $$) AS (v agtype)", 'unitares', 'unitares') == '7'
@@ -96,7 +114,7 @@ def test_real_provisioning_nonsuperuser_graph_and_no_bootstrap_replay(cluster, m
         from src.db.mixins.graph import GraphMixin
         graph = GraphMixin()
         graph._age_graph = 'governance_graph'
-        conn = await asyncpg.connect(host=socket, port=15437, user='unitares', database='unitares')
+        conn = await asyncpg.connect(host=socket, port=15437, user='unitares', database='unitares', password=password)
         try:
             async with conn.transaction():
                 await graph._prepare_age_connection(conn)
