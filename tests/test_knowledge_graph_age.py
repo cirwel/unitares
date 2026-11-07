@@ -338,6 +338,21 @@ class TestExecuteAgeSql:
         assert "search_path" in calls[1]
         assert "CREATE INDEX" in calls[2]
 
+    @pytest.mark.asyncio
+    async def test_skips_load_age_when_non_superuser(self):
+        """Non-superuser role relies on administrator preload instead of LOAD 'age'."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.fetchval = AsyncMock(return_value=True)
+
+        await kg._execute_age_sql("CREATE INDEX test_idx ON test_table(col)")
+
+        calls = [c.args[0] for c in mock_conn.execute.await_args_list]
+        assert "LOAD 'age'" not in calls
+        assert len(calls) == 2
+        assert "search_path" in calls[0]
+        assert "CREATE INDEX" in calls[1]
+
 
 # ============================================================================
 # add_discovery
