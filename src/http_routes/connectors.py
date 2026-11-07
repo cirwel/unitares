@@ -16,7 +16,7 @@ def _reply(body, status=200):
     return JSONResponse(body, status_code=status, headers=NO_STORE)
 
 
-def _gate(request):
+def _connector_management_gate(request):
     operator = dashboard_auth._operator_token_authorized(request)
     session = dashboard_auth.dashboard_session_authenticated(request)
     if not operator and not session:
@@ -54,7 +54,7 @@ def _actor(request):
 
 
 async def http_connectors(request):
-    if denied := _gate(request):
+    if denied := _connector_management_gate(request):
         return denied
     provider = getattr(request.state, "oauth_provider", None)
     registry = getattr(provider, "connector_registry", None)
