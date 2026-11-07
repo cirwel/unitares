@@ -418,7 +418,13 @@ psql "${DB_POSTGRES_ADMIN_URL:-postgresql://localhost:5432/postgres}" -c "CREATE
 # Reinitialize explicitly. The server refuses an uninitialized schema; it does
 # not auto-create one.
 export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
-./scripts/install/bootstrap_postgres.sh --apply
+# Mark only the database just created successfully above, never an existing DB.
+export UNITARES_INSTALL_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+psql -X "$DB_POSTGRES_URL" -v ON_ERROR_STOP=1 -v install_id="$UNITARES_INSTALL_ID" <<'SQL'
+SELECT format('COMMENT ON DATABASE %I IS %L', current_database(),
+              'unitares-install:' || :'install_id' || ':prepared') \gexec
+SQL
+./scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"
 python3 scripts/dev/unitares_doctor.py --mode local --db-url "$DB_POSTGRES_URL"
 
 # Restart only after the bootstrap and doctor succeed

@@ -1600,9 +1600,10 @@ Install (Docker Compose install in this checkout):
   logs [service]                    Follow this installation's logs
 
 Homebrew service control (automatic from a Homebrew package):
-  setup --homebrew [--apply] [--non-interactive]
+  setup --homebrew [--apply] [--non-interactive] [--provision-db [--resume]]
                                     Inspect native configuration and database
                                     readiness; --apply creates missing config
+                                    --provision-db explicitly creates a new DB
   start --homebrew [--check]         Start missing services; verify the schema
                                     before starting either writer
   stop --homebrew [--check]          Stop both writers; retain PostgreSQL/Redis

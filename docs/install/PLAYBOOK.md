@@ -140,6 +140,7 @@ initialization stops after applying some SQL, preserve the log and follow
 instead of repeating this step.
 
 ```bash
+set -e
 git clone https://github.com/cirwel/unitares.git
 cd unitares
 
@@ -148,7 +149,13 @@ createdb -h localhost -p 5432 governance
 export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
 export DB_AGE_GRAPH=governance_graph
 
-./scripts/install/bootstrap_postgres.sh --apply
+# Mark only the database just created successfully above, never an existing DB.
+export UNITARES_INSTALL_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+psql -X "$DB_POSTGRES_URL" -v ON_ERROR_STOP=1 -v install_id="$UNITARES_INSTALL_ID" <<'SQL'
+SELECT format('COMMENT ON DATABASE %I IS %L', current_database(),
+              'unitares-install:' || :'install_id' || ':prepared') \gexec
+SQL
+./scripts/install/bootstrap_postgres.sh --apply --install-id "$UNITARES_INSTALL_ID"
 ```
 
 **Expected:** each `psql` prints zero errors. Verify:

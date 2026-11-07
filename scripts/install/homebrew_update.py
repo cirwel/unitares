@@ -1298,10 +1298,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--retain-backups and --older-than-days require --cleanup-backups")
     try:
         brew = Homebrew()
+        brew.check_setup_barrier()
         updater = NativeUpdater(brew)
         if args.check:
             return updater.begin(check=True, assume_yes=args.yes)
         with brew.lock():
+            brew.check_setup_barrier()
             if args.resume:
                 return updater.resume(
                     accept_identity_change=args.accept_identity_change,
